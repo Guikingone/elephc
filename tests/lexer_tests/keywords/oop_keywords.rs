@@ -69,6 +69,21 @@ fn test_keyword_insteadof() {
 }
 
 #[test]
+fn test_keyword_clone() {
+    let t = tokens("<?php clone $obj;");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Clone,
+            Token::Variable("obj".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
 fn test_lex_class_keyword() {
     let t = tokens("<?php class Point { public $x; private $y; public readonly $id; } $p = new Point();");
     assert!(t.contains(&Token::Class));

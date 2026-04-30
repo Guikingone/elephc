@@ -84,6 +84,21 @@ fn test_error_throw_expression_requires_object() {
 }
 
 #[test]
+fn test_error_clone_requires_object_int() {
+    expect_error("<?php $x = clone 42;", "clone requires an object value");
+}
+
+#[test]
+fn test_error_clone_requires_object_string() {
+    expect_error("<?php $x = clone \"hello\";", "clone requires an object value");
+}
+
+#[test]
+fn test_error_clone_requires_object_null() {
+    expect_error("<?php $x = clone null;", "clone requires an object value");
+}
+
+#[test]
 fn test_error_magic_tostring_must_be_public() {
     expect_error(
         "<?php class User { private function __toString() { return \"x\"; } }",

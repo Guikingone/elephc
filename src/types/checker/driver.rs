@@ -520,7 +520,8 @@ impl Checker {
             | crate::parser::ast::ExprKind::Spread(object)
             | crate::parser::ast::ExprKind::ErrorSuppress(object)
             | crate::parser::ast::ExprKind::Print(object)
-            | crate::parser::ast::ExprKind::Throw(object) => Self::expr_contains_method_call(object),
+            | crate::parser::ast::ExprKind::Throw(object)
+            | crate::parser::ast::ExprKind::Clone(object) => Self::expr_contains_method_call(object),
             crate::parser::ast::ExprKind::ArrayAccess { array, index } => {
                 Self::expr_contains_method_call(array) || Self::expr_contains_method_call(index)
             }

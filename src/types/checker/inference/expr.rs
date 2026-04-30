@@ -218,6 +218,16 @@ impl Checker {
                     )),
                 }
             }
+            ExprKind::Clone(inner) => {
+                let inner_ty = self.infer_type(inner, env)?;
+                match inner_ty {
+                    PhpType::Object(name) => Ok(PhpType::Object(name)),
+                    _ => Err(CompileError::new(
+                        expr.span,
+                        "Type error: clone requires an object value",
+                    )),
+                }
+            }
             ExprKind::Cast { target, expr } => {
                 self.infer_type(expr, env)?;
                 use crate::parser::ast::CastType;

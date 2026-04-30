@@ -302,8 +302,38 @@ Pure and backed enums. `->value`, `::from()`, `::tryFrom()`, `::cases()`. Only `
 - `__get($name)` — reading undefined property
 - `__set($name, $value)` — writing undefined property
 
+## Cloning objects
+The `clone` keyword performs a shallow copy of an object: a new instance is allocated, every property slot is copied from the source, and refcounted payloads (arrays, objects, mixed) are retained so that source and clone share child storage until one of them mutates it.
+
+```php
+<?php
+class Point {
+    public int $x;
+    public int $y;
+    public function __construct(int $x, int $y) { $this->x = $x; $this->y = $y; }
+}
+
+$a = new Point(3, 4);
+$b = clone $a;
+$b->x = 99;
+echo $a->x;   // 3
+echo $b->x;   // 99
+```
+
+Semantics:
+- `__construct` is **not** invoked on the clone — properties are copied verbatim.
+- Scalar properties (`int`, `float`, `bool`) are independent after clone.
+- `string` properties are persisted into a fresh heap allocation per clone, so reassigning the clone's slot never dangles the source.
+- `array` properties share storage with copy-on-write, matching PHP semantics.
+- Object properties are aliased: mutating a nested object is visible from both the source and the clone (PHP's shallow-clone behavior).
+
+The operand of `clone` must evaluate to an object value; `clone 42`, `clone "x"`, and `clone null` are rejected at compile time.
+
+Limitation: `__clone` magic method hooks are not yet supported.
+
 ## Limitations
 - No abstract properties
 - No `readonly static` properties
 - No `readonly` or default-valued by-reference promoted properties
 - No instance property redeclaration across inheritance chain
+- No `__clone` magic method (clone copies properties verbatim, no hook is invoked)

@@ -72,6 +72,9 @@ pub fn emit_expr(
         ExprKind::Throw(inner) => {
             variables::emit_throw(inner, emitter, ctx, data)
         }
+        ExprKind::Clone(inner) => {
+            objects::emit_clone(inner, emitter, ctx, data)
+        }
         ExprKind::ErrorSuppress(inner) => {
             diagnostics::emit_error_suppress(inner, emitter, ctx, data)
         }

@@ -20,6 +20,41 @@ fn test_parse_error_control_expression() {
 }
 
 #[test]
+fn test_parse_clone_expression() {
+    let stmts = parse_source("<?php $b = clone $a;");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Assign { name, value } => {
+            assert_eq!(name, "b");
+            match &value.kind {
+                ExprKind::Clone(inner) => {
+                    assert_eq!(inner.kind, ExprKind::Variable("a".into()));
+                }
+                other => panic!("expected clone expression, got {:?}", other),
+            }
+        }
+        other => panic!("expected assign, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_clone_property_access() {
+    // `clone $this->now` must group the clone over the property access,
+    // not just the receiver.
+    let stmts = parse_source("<?php $x = clone $this->now;");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::Clone(inner) => {
+                assert!(matches!(inner.kind, ExprKind::PropertyAccess { .. }));
+            }
+            other => panic!("expected clone, got {:?}", other),
+        },
+        other => panic!("expected assign, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_error_control_has_unary_precedence() {
     let stmts = parse_source("<?php echo @$x + 1;");
     assert_eq!(stmts.len(), 1);

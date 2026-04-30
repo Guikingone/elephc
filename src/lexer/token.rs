@@ -102,6 +102,7 @@ pub enum Token {
     This,           // $this
     Extern,         // extern
     Packed,         // packed
+    Clone,          // clone
 
     // Operators
     Assign,         // =

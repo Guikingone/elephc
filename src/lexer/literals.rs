@@ -449,6 +449,7 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         "readonly" => Ok(Token::ReadOnly),
         "extern" => Ok(Token::Extern),
         "packed" => Ok(Token::Packed),
+        "clone" => Ok(Token::Clone),
         "PHP_EOL" => Ok(Token::PhpEol),
         "PHP_OS" => Ok(Token::PhpOs),
         "DIRECTORY_SEPARATOR" => Ok(Token::DirectorySeparator),

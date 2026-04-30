@@ -1,5 +1,6 @@
 mod access;
 mod allocation;
+mod clone;
 mod dispatch;
 mod instanceof;
 mod nullsafe;
@@ -23,6 +24,15 @@ pub(super) fn emit_new_object(
     data: &mut DataSection,
 ) -> PhpType {
     allocation::emit_new_object(class_name, args, emitter, ctx, data)
+}
+
+pub(super) fn emit_clone(
+    inner: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    clone::emit_clone(inner, emitter, ctx, data)
 }
 
 /// Resolve a non-late-bound `StaticReceiver` to a concrete class FQN at codegen time.

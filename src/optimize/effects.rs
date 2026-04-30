@@ -180,6 +180,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::BinaryOp { left, right, .. } => expr_effect(left).combine(expr_effect(right)),
         ExprKind::InstanceOf { value, .. } => expr_effect(value),
         ExprKind::Throw(inner) => expr_effect(inner).with_side_effects().with_may_throw(),
+        ExprKind::Clone(inner) => expr_effect(inner).with_side_effects(),
         ExprKind::NullCoalesce { value, default } => expr_effect(value).combine(expr_effect(default)),
         ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)
