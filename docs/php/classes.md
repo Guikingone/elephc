@@ -329,11 +329,28 @@ Semantics:
 
 The operand of `clone` must evaluate to an object value; `clone 42`, `clone "x"`, and `clone null` are rejected at compile time.
 
-Limitation: `__clone` magic method hooks are not yet supported.
+If the class — or any of its ancestors — declares `__clone()`, elephc invokes it on the new instance after the property copy completes. The hook takes no arguments, returns void implicitly, and may use any visibility:
+
+```php
+<?php
+class Counter {
+    public int $value;
+    public function __construct(int $value) { $this->value = $value; }
+    public function __clone(): void {
+        $this->value = $this->value * 10;
+    }
+}
+
+$a = new Counter(5);
+$b = clone $a;
+echo $a->value; // 5
+echo $b->value; // 50
+```
+
+`__clone` runs only on the freshly cloned object, never on the source. Inherited implementations are dispatched: `clone $child` calls the closest `__clone` in the inheritance chain. The `__construct` body is still skipped — only `__clone` is fired by `clone`.
 
 ## Limitations
 - No abstract properties
 - No `readonly static` properties
 - No `readonly` or default-valued by-reference promoted properties
 - No instance property redeclaration across inheritance chain
-- No `__clone` magic method (clone copies properties verbatim, no hook is invoked)

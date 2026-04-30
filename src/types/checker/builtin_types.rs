@@ -290,6 +290,24 @@ pub(crate) fn validate_magic_method_contracts(checker: &Checker) -> Result<(), C
                         ));
                     }
                 }
+                "__clone" => {
+                    // PHP allows __clone to use any visibility and an
+                    // implicit void return type, so we only enforce that it
+                    // is an instance method that takes no arguments.
+                    if method.is_static {
+                        errors.push(CompileError::new(
+                            method.span,
+                            &format!("Magic method must be non-static: {}::__clone", class_name),
+                        ));
+                        continue;
+                    }
+                    if !method.params.is_empty() || method.variadic.is_some() {
+                        errors.push(CompileError::new(
+                            method.span,
+                            &format!("Magic method must take 0 arguments: {}::__clone", class_name),
+                        ));
+                    }
+                }
                 _ => {}
             }
         }

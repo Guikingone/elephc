@@ -99,6 +99,22 @@ fn test_error_clone_requires_object_null() {
 }
 
 #[test]
+fn test_error_magic_clone_must_take_zero_arguments() {
+    expect_error(
+        "<?php class C { public function __clone(int $x) { } }",
+        "Magic method must take 0 arguments: C::__clone",
+    );
+}
+
+#[test]
+fn test_error_magic_clone_must_be_non_static() {
+    expect_error(
+        "<?php class C { public static function __clone() { } }",
+        "Magic method must be non-static: C::__clone",
+    );
+}
+
+#[test]
 fn test_error_magic_tostring_must_be_public() {
     expect_error(
         "<?php class User { private function __toString() { return \"x\"; } }",

@@ -3,10 +3,13 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::names::method_symbol;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
-use super::super::emit_expr;
+use super::super::{
+    emit_expr, restore_concat_offset_after_nested_call, save_concat_offset_before_nested_call,
+};
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
@@ -129,6 +132,30 @@ pub(super) fn emit_clone(
                 }
             }
         }
+    }
+
+    // Invoke __clone on the cloned object if the class (or an ancestor)
+    // declares it. Matches PHP semantics: the magic method runs on the new
+    // instance only and lets user code finish a deep copy if needed.
+    if class_info.methods.contains_key("__clone") {
+        let impl_class = class_info
+            .method_impl_classes
+            .get("__clone")
+            .map(String::as_str)
+            .unwrap_or(class_name.as_str())
+            .to_string();
+        emitter.comment(&format!("call {}::__clone on the cloned object", impl_class));
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("ldr x0, [sp]");                            // load dest pointer (top of stack) into the AArch64 first-arg register as $this
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov rdi, QWORD PTR [rsp]");                // load dest pointer into the SysV first-arg register as $this
+            }
+        }
+        save_concat_offset_before_nested_call(emitter, ctx);
+        abi::emit_call_label(emitter, &method_symbol(&impl_class, "__clone"));  // invoke the resolved __clone implementation for the cloned object
+        restore_concat_offset_after_nested_call(emitter, ctx, &PhpType::Void);
     }
 
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // pop dest pointer into the result register

@@ -119,3 +119,77 @@ echo $b->built;
     );
     assert_eq!(out, "7");
 }
+
+#[test]
+fn test_clone_invokes_clone_magic_method() {
+    // PHP semantics: after the property copy, `__clone` runs on the new
+    // instance. The source must remain untouched, the clone must reflect
+    // every mutation done inside `__clone`.
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public int $x;
+    public function __construct(int $x) { $this->x = $x; }
+    public function __clone(): void {
+        $this->x = $this->x * 10;
+    }
+}
+$a = new Box(5);
+$b = clone $a;
+echo $a->x;
+echo " ";
+echo $b->x;
+"#,
+    );
+    assert_eq!(out, "5 50");
+}
+
+#[test]
+fn test_clone_does_not_invoke_clone_on_source() {
+    // `__clone` must run exactly once per `clone` expression, on the new
+    // instance only. We assert this by counting invocations through a
+    // static property — a single clone must increment the counter by one,
+    // not two.
+    let out = compile_and_run(
+        r#"<?php
+class Counter {
+    public static int $calls = 0;
+    public int $x;
+    public function __construct(int $x) { $this->x = $x; }
+    public function __clone(): void {
+        Counter::$calls = Counter::$calls + 1;
+    }
+}
+$a = new Counter(1);
+$b = clone $a;
+echo Counter::$calls;
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_clone_inherited_clone_method_runs() {
+    // When the child class does not override `__clone`, the inherited
+    // implementation from the parent must still execute on the cloned
+    // child instance.
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public int $n;
+    public function __construct(int $n) { $this->n = $n; }
+    public function __clone(): void {
+        $this->n = $this->n + 100;
+    }
+}
+class Child extends Base {
+}
+$a = new Child(7);
+$b = clone $a;
+echo $a->n;
+echo " ";
+echo $b->n;
+"#,
+    );
+    assert_eq!(out, "7 107");
+}
