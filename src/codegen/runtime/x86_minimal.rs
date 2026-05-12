@@ -115,6 +115,7 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_array_push_str(emitter);
     arrays::emit_array_to_mixed(emitter);
     arrays::emit_array_union(emitter);
+    arrays::emit_array_to_hash(emitter);
     arrays::emit_array_merge_into(emitter);
     arrays::emit_array_merge_into_refcounted(emitter);
     arrays::emit_range(emitter);

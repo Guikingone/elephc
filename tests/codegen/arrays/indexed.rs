@@ -13,6 +13,8 @@ use crate::support::*;
 mod aggregates;
 #[path = "indexed/heterogeneous.rs"]
 mod heterogeneous;
+#[path = "indexed/mixed_union.rs"]
+mod mixed_union;
 #[path = "indexed/search_merge_union.rs"]
 mod search_merge_union;
 #[path = "indexed/slice_stack_range.rs"]

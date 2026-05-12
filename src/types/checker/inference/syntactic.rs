@@ -159,6 +159,32 @@ fn array_union_type_syntactic(a: &PhpType, b: &PhpType) -> Option<PhpType> {
             };
             Some(PhpType::AssocArray { key, value })
         }
+        (
+            PhpType::Array(indexed_elem),
+            PhpType::AssocArray {
+                key: assoc_key,
+                value: assoc_value,
+            },
+        )
+        | (
+            PhpType::AssocArray {
+                key: assoc_key,
+                value: assoc_value,
+            },
+            PhpType::Array(indexed_elem),
+        ) => {
+            let key = if **assoc_key == PhpType::Int {
+                assoc_key.clone()
+            } else {
+                Box::new(PhpType::Mixed)
+            };
+            let value = if assoc_value.as_ref() == indexed_elem.as_ref() {
+                assoc_value.clone()
+            } else {
+                Box::new(PhpType::Mixed)
+            };
+            Some(PhpType::AssocArray { key, value })
+        }
         _ => None,
     }
 }

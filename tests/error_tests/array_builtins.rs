@@ -18,10 +18,14 @@ fn test_assoc_array_mixed_type_checks() {
 }
 
 #[test]
-fn test_error_array_union_requires_same_container_kind() {
-    expect_error(
-        r#"<?php $result = [1, 2] + ["a" => 3];"#,
-        "Array union requires both operands to be arrays of the same kind",
+fn test_mixed_kind_array_union_is_accepted() {
+    assert!(
+        check_source(r#"<?php $result = [1, 2] + ["a" => 3];"#).is_ok(),
+        "indexed + associative array union should type-check (v0.21 mixed-kind union)",
+    );
+    assert!(
+        check_source(r#"<?php $result = ["a" => 3] + [1, 2];"#).is_ok(),
+        "associative + indexed array union should type-check (v0.21 mixed-kind union)",
     );
 }
 

@@ -81,6 +81,23 @@ echo $result[1]; // 20
 echo $result[2]; // 77
 ```
 
+Mixing indexed and associative arrays is supported. The result is always associative-shaped (because a string key may have entered), left-key precedence still applies, and numeric-string keys collide with the matching integer keys after the same normalization PHP uses for hash insertion.
+
+```php
+<?php
+// indexed + associative
+$result = [1, 2, 3] + ["a" => 10];
+// result: [0 => 1, 1 => 2, 2 => 3, "a" => 10]
+
+// associative + indexed — left-key precedence keeps "0" => "x"
+$result = ["a" => 1, 0 => "x"] + [10, 20, 30];
+// result: ["a" => 1, 0 => "x", 1 => 20, 2 => 30]
+
+// numeric-string keys collapse onto their integer form
+$result = ["0" => "first"] + [10, 20];
+// result: [0 => "first", 1 => 20]
+```
+
 ## Copy-on-write semantics
 Arrays are shared until modified, matching PHP's by-value behavior:
 ```php

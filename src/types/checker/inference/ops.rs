@@ -212,6 +212,42 @@ impl Checker {
                     value: Box::new(value),
                 })
             }
+            (PhpType::Array(indexed_elem), PhpType::AssocArray { key: assoc_key, value: assoc_value }) => {
+                if is_empty_indexed_array_literal(left) {
+                    return Ok(PhpType::AssocArray {
+                        key: assoc_key.clone(),
+                        value: assoc_value.clone(),
+                    });
+                }
+                let key = self
+                    .merge_array_element_type(&PhpType::Int, assoc_key)
+                    .unwrap_or_else(|| merge_array_key_types(PhpType::Int, *assoc_key.clone()));
+                let value = self
+                    .merge_array_element_type(indexed_elem, assoc_value)
+                    .unwrap_or(PhpType::Mixed);
+                Ok(PhpType::AssocArray {
+                    key: Box::new(key),
+                    value: Box::new(value),
+                })
+            }
+            (PhpType::AssocArray { key: assoc_key, value: assoc_value }, PhpType::Array(indexed_elem)) => {
+                if is_empty_indexed_array_literal(right) {
+                    return Ok(PhpType::AssocArray {
+                        key: assoc_key.clone(),
+                        value: assoc_value.clone(),
+                    });
+                }
+                let key = self
+                    .merge_array_element_type(assoc_key, &PhpType::Int)
+                    .unwrap_or_else(|| merge_array_key_types(*assoc_key.clone(), PhpType::Int));
+                let value = self
+                    .merge_array_element_type(assoc_value, indexed_elem)
+                    .unwrap_or(PhpType::Mixed);
+                Ok(PhpType::AssocArray {
+                    key: Box::new(key),
+                    value: Box::new(value),
+                })
+            }
             _ => Err(CompileError::new(
                 expr.span,
                 "Array union requires both operands to be arrays of the same kind",
