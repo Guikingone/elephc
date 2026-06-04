@@ -231,11 +231,36 @@ pub(super) fn update_callable_assignment_metadata(
 ) -> Result<(), CompileError> {
     update_callable_array_assignment_metadata(checker, name, callable_source, env)?;
 
+    // Reset per-closure tracking for this variable; it is re-established below only when the new
+    // value is a closure literal (or an alias of a variable that holds one). Every other rebinding
+    // (callable array, first-class callable, non-callable, or a failed resolve) leaves it cleared,
+    // so call-site specialization never mirrors a stale signature into `closure_sigs_by_span`.
+    checker.var_to_closure_span.remove(name);
+
     if *ty == PhpType::Callable {
         if let Some(sig) = checker.resolve_expr_callable_sig(callable_source, env)? {
             checker
                 .closure_return_types
                 .insert(name.to_string(), sig.return_type.clone());
+            // Track which closure literal this variable holds, keyed by the literal's span, so
+            // call-site specialization can persist the widened signature per closure (not per
+            // variable name) into `closure_sigs_by_span` for codegen.
+            match &callable_source.kind {
+                ExprKind::Closure { .. } => {
+                    checker
+                        .closure_sigs_by_span
+                        .insert(callable_source.span, sig.clone());
+                    checker
+                        .var_to_closure_span
+                        .insert(name.to_string(), callable_source.span);
+                }
+                ExprKind::Variable(src_name) => {
+                    if let Some(span) = checker.var_to_closure_span.get(src_name).copied() {
+                        checker.var_to_closure_span.insert(name.to_string(), span);
+                    }
+                }
+                _ => {}
+            }
             checker.callable_sigs.insert(name.to_string(), sig);
             if let ExprKind::Closure {
                 captures,
@@ -686,6 +711,11 @@ fn copy_callable_metadata(checker: &mut Checker, dest: &str, src: &str) {
     } else {
         checker.callable_sigs.remove(dest);
     }
+    if let Some(span) = checker.var_to_closure_span.get(src).copied() {
+        checker.var_to_closure_span.insert(dest.to_string(), span);
+    } else {
+        checker.var_to_closure_span.remove(dest);
+    }
     if let Some(captures) = checker.callable_captures.get(src).cloned() {
         checker.callable_captures.insert(dest.to_string(), captures);
     } else {
@@ -711,6 +741,7 @@ fn copy_callable_metadata(checker: &mut Checker, dest: &str, src: &str) {
 fn clear_callable_metadata(checker: &mut Checker, dest: &str) {
     checker.closure_return_types.remove(dest);
     checker.callable_sigs.remove(dest);
+    checker.var_to_closure_span.remove(dest);
     checker.callable_captures.remove(dest);
     checker.callable_array_targets.remove(dest);
     checker.first_class_callable_targets.remove(dest);

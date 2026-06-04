@@ -27,6 +27,10 @@ use super::{
 pub struct CheckResult {
     pub global_env: TypeEnv,
     pub functions: HashMap<String, FunctionSig>,
+    /// Inferred signatures of closure literals keyed by source span. Codegen uses these so a
+    /// closure parameter the checker widened to a union (heterogeneous call sites) is laid out
+    /// consistently in the closure body and at its call sites.
+    pub closure_sigs_by_span: HashMap<crate::span::Span, FunctionSig>,
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
     pub callable_return_sigs: HashMap<String, FunctionSig>,
     pub callable_array_return_sigs: HashMap<String, FunctionSig>,

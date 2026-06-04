@@ -1064,11 +1064,24 @@ impl Checker {
                     .copied()
                     .unwrap_or(false)
                 && !sig.ref_params.get(param_idx).copied().unwrap_or(false)
-                && sig.params[param_idx].1 == PhpType::Mixed
                 && actual_ty != PhpType::Never
             {
-                sig.params[param_idx].1 = actual_ty;
-                changed = true;
+                let current = sig.params[param_idx].1.clone();
+                if current == PhpType::Mixed {
+                    // First observed call: adopt its argument type (closure params start from a
+                    // `Mixed` sentinel, so this specializes the inferred parameter).
+                    sig.params[param_idx].1 = actual_ty;
+                    changed = true;
+                } else if current != actual_ty {
+                    // A later call with a different type: widen to a union so each call's argument
+                    // keeps its own runtime type. Codegen reads this widened signature from
+                    // `closure_sigs_by_span` so the body and call sites agree.
+                    let widened = self.normalize_union_type(vec![current, actual_ty]);
+                    if widened != sig.params[param_idx].1 {
+                        sig.params[param_idx].1 = widened;
+                        changed = true;
+                    }
+                }
             }
             param_idx += 1;
         }
@@ -1076,6 +1089,10 @@ impl Checker {
             self.closure_return_types
                 .insert(var.to_string(), sig.return_type.clone());
             self.callable_sigs.insert(var.to_string(), sig.clone());
+            // Mirror the widened signature into the persistent per-closure map so codegen sees it.
+            if let Some(span) = self.var_to_closure_span.get(var).copied() {
+                self.closure_sigs_by_span.insert(span, sig.clone());
+            }
         }
         Ok(sig)
     }

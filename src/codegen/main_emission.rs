@@ -48,6 +48,7 @@ pub(super) fn emit_main_and_finalize(
     global_env: &TypeEnv,
     functions: &HashMap<String, FunctionSig>,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
+    closure_sigs_by_span: &HashMap<crate::span::Span, FunctionSig>,
     callable_return_sigs: &HashMap<String, FunctionSig>,
     callable_array_return_sigs: &HashMap<String, FunctionSig>,
     fiber_return_sigs: &HashMap<String, FunctionSig>,
@@ -70,6 +71,7 @@ pub(super) fn emit_main_and_finalize(
     let mut ctx = build_main_context(
         functions,
         callable_param_sigs,
+        closure_sigs_by_span,
         callable_return_sigs,
         callable_array_return_sigs,
         fiber_return_sigs,
@@ -146,6 +148,7 @@ pub(super) fn emit_main_and_finalize(
 fn build_main_context(
     functions: &HashMap<String, FunctionSig>,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
+    closure_sigs_by_span: &HashMap<crate::span::Span, FunctionSig>,
     callable_return_sigs: &HashMap<String, FunctionSig>,
     callable_array_return_sigs: &HashMap<String, FunctionSig>,
     fiber_return_sigs: &HashMap<String, FunctionSig>,
@@ -165,6 +168,7 @@ fn build_main_context(
     let mut ctx = Context::new();
     ctx.functions = functions.clone();
     ctx.callable_param_sigs = callable_param_sigs.clone();
+    ctx.closure_sigs_by_span = closure_sigs_by_span.clone();
     ctx.callable_return_sigs = callable_return_sigs.clone();
     ctx.callable_array_return_sigs = callable_array_return_sigs.clone();
     ctx.fiber_return_sigs = fiber_return_sigs.clone();

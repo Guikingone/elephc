@@ -70,6 +70,8 @@ impl Checker {
             constants,
             closure_return_types: HashMap::new(),
             callable_sigs: HashMap::new(),
+            closure_sigs_by_span: HashMap::new(),
+            var_to_closure_span: HashMap::new(),
             callable_param_names: HashSet::new(),
             callable_param_sigs: HashMap::new(),
             callable_return_sigs: HashMap::new(),

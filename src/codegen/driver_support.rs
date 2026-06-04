@@ -252,6 +252,7 @@ pub(super) fn emit_deferred_closures(
                     &closure.body,
                     closure.current_class.as_deref(),
                     &ctx.functions,
+                    &ctx.closure_sigs_by_span,
                     &ctx.callable_return_sigs,
                     &ctx.callable_array_return_sigs,
                     &ctx.fiber_return_sigs,

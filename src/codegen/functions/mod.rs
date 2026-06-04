@@ -55,6 +55,7 @@ pub fn emit_function(
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
+    closure_sigs_by_span: &HashMap<crate::span::Span, FunctionSig>,
     callable_return_sigs: &HashMap<String, FunctionSig>,
     callable_array_return_sigs: &HashMap<String, FunctionSig>,
     fiber_return_sigs: &HashMap<String, FunctionSig>,
@@ -92,6 +93,7 @@ pub fn emit_function(
         body,
         all_functions,
         callable_param_sigs,
+        closure_sigs_by_span,
         callable_return_sigs,
         callable_array_return_sigs,
         fiber_return_sigs,
@@ -121,6 +123,7 @@ pub fn emit_closure(
     body: &[crate::parser::ast::Stmt],
     current_class: Option<&str>,
     all_functions: &HashMap<String, FunctionSig>,
+    closure_sigs_by_span: &HashMap<crate::span::Span, FunctionSig>,
     callable_return_sigs: &HashMap<String, FunctionSig>,
     callable_array_return_sigs: &HashMap<String, FunctionSig>,
     fiber_return_sigs: &HashMap<String, FunctionSig>,
@@ -164,6 +167,7 @@ pub fn emit_closure(
         body,
         all_functions,
         &empty_callable_param_sigs,
+        closure_sigs_by_span,
         callable_return_sigs,
         callable_array_return_sigs,
         fiber_return_sigs,
@@ -194,6 +198,7 @@ pub fn emit_method(
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
+    closure_sigs_by_span: &HashMap<crate::span::Span, FunctionSig>,
     callable_return_sigs: &HashMap<String, FunctionSig>,
     callable_array_return_sigs: &HashMap<String, FunctionSig>,
     fiber_return_sigs: &HashMap<String, FunctionSig>,
@@ -222,6 +227,7 @@ pub fn emit_method(
         body,
         all_functions,
         callable_param_sigs,
+        closure_sigs_by_span,
         callable_return_sigs,
         callable_array_return_sigs,
         fiber_return_sigs,
@@ -253,6 +259,7 @@ fn emit_function_with_label(
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
+    closure_sigs_by_span: &HashMap<crate::span::Span, FunctionSig>,
     callable_return_sigs: &HashMap<String, FunctionSig>,
     callable_array_return_sigs: &HashMap<String, FunctionSig>,
     fiber_return_sigs: &HashMap<String, FunctionSig>,
@@ -281,6 +288,7 @@ fn emit_function_with_label(
         body,
         all_functions,
         callable_param_sigs,
+        closure_sigs_by_span,
         callable_return_sigs,
         callable_array_return_sigs,
         fiber_return_sigs,
@@ -383,6 +391,7 @@ fn emit_function_with_label_and_class(
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
+    closure_sigs_by_span: &HashMap<crate::span::Span, FunctionSig>,
     callable_return_sigs: &HashMap<String, FunctionSig>,
     callable_array_return_sigs: &HashMap<String, FunctionSig>,
     fiber_return_sigs: &HashMap<String, FunctionSig>,
@@ -404,6 +413,7 @@ fn emit_function_with_label_and_class(
     ctx.return_type = sig.return_type.clone();
     ctx.functions = all_functions.clone();
     ctx.callable_param_sigs = callable_param_sigs.clone();
+    ctx.closure_sigs_by_span = closure_sigs_by_span.clone();
     ctx.callable_return_sigs = callable_return_sigs.clone();
     ctx.callable_array_return_sigs = callable_array_return_sigs.clone();
     ctx.fiber_return_sigs = fiber_return_sigs.clone();
@@ -567,6 +577,7 @@ fn emit_function_with_label_and_class(
                     &closure.body,
                     closure.current_class.as_deref(),
                     all_functions,
+                    closure_sigs_by_span,
                     &ctx.callable_return_sigs,
                     &ctx.callable_array_return_sigs,
                     &ctx.fiber_return_sigs,

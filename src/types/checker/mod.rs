@@ -72,6 +72,15 @@ pub(crate) struct Checker {
     /// Tracks known callable signatures for variables holding first-class callables,
     /// keyed by variable name.
     pub callable_sigs: HashMap<String, FunctionSig>,
+    /// Inferred signatures of closure literals, keyed by the closure's source span. Unlike
+    /// `callable_sigs` (variable-keyed and removed when variables leave scope), this persists
+    /// every closure literal's final signature for codegen, so a parameter widened to a union
+    /// from heterogeneous call sites reaches the closure body and call sites consistently.
+    pub closure_sigs_by_span: HashMap<crate::span::Span, FunctionSig>,
+    /// Maps a variable currently holding a closure to that closure literal's span, so call-site
+    /// specialization of `callable_sigs[var]` can mirror the widened signature into
+    /// `closure_sigs_by_span`. Transient (follows the variable, like `callable_sigs`).
+    pub var_to_closure_span: HashMap<String, crate::span::Span>,
     /// Tracks source-declared callable parameters in the active function body.
     pub callable_param_names: HashSet<String>,
     /// Tracks callable signatures inferred for user-function callable parameters,
@@ -170,6 +179,7 @@ pub fn check_types(program: &Program, target_platform: Platform) -> Result<Check
     Ok(CheckResult {
         global_env,
         functions: checker.functions,
+        closure_sigs_by_span: checker.closure_sigs_by_span,
         callable_param_sigs: checker.callable_param_sigs,
         callable_return_sigs: checker.callable_return_sigs,
         callable_array_return_sigs: checker.callable_array_return_sigs,

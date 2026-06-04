@@ -188,6 +188,7 @@ pub fn emit_expr(
             body,
             captures,
             capture_refs,
+            expr.span,
             emitter,
             ctx,
             data,

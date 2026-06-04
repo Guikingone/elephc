@@ -195,6 +195,7 @@ pub(crate) fn compile(config: CliConfig) {
         &check_result.global_env,
         &check_result.functions,
         &check_result.callable_param_sigs,
+        &check_result.closure_sigs_by_span,
         &check_result.callable_return_sigs,
         &check_result.callable_array_return_sigs,
         &check_result.interfaces,

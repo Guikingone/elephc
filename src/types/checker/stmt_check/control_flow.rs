@@ -537,6 +537,11 @@ impl Checker {
         } else {
             self.callable_sigs.remove(dest);
         }
+        if let Some(span) = self.var_to_closure_span.get(src).copied() {
+            self.var_to_closure_span.insert(dest.to_string(), span);
+        } else {
+            self.var_to_closure_span.remove(dest);
+        }
         if let Some(captures) = self.callable_captures.get(src).cloned() {
             self.callable_captures.insert(dest.to_string(), captures);
         } else {
@@ -560,6 +565,7 @@ impl Checker {
     fn clear_foreach_callable_metadata(&mut self, dest: &str) {
         self.closure_return_types.remove(dest);
         self.callable_sigs.remove(dest);
+        self.var_to_closure_span.remove(dest);
         self.callable_captures.remove(dest);
         self.callable_array_targets.remove(dest);
         self.first_class_callable_targets.remove(dest);

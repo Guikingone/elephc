@@ -135,3 +135,31 @@ fn test_overload_pattern_int_or_object() {
     );
     assert_eq!(out, "5|42");
 }
+
+/// Verifies `is_int` narrowing inside a closure body whose parameter is a union (the closure is
+/// called with both an int and a string). The closure signature is sourced from the checker by
+/// span, so the parameter is laid out as boxed Mixed and `is_int` narrows it in each branch.
+#[test]
+fn test_is_int_narrowing_in_closure() {
+    let out = compile_and_run(
+        r#"<?php
+        $f = function($x): string { return is_int($x) ? "int:" . $x : "other"; };
+        echo $f(5), "|", $f("hi");
+        "#,
+    );
+    assert_eq!(out, "int:5|other");
+}
+
+/// Verifies a closure parameter called with incompatible types is widened to a union end-to-end:
+/// each argument keeps its own runtime type at the call site and inside the body. Before the fix
+/// the closure parameter was frozen to the first-seen type and the second call was rejected.
+#[test]
+fn test_untyped_closure_parameter_heterogeneous_calls_keep_runtime_type() {
+    let out = compile_and_run(
+        r#"<?php
+        $f = function($x): string { return gettype($x); };
+        echo $f(5), "|", $f("hi");
+        "#,
+    );
+    assert_eq!(out, "integer|string");
+}

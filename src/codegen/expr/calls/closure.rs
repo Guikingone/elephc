@@ -147,6 +147,7 @@ pub(super) fn emit_closure(
     body: &[Stmt],
     captures: &[String],
     capture_refs: &[String],
+    closure_span: crate::span::Span,
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
@@ -192,6 +193,29 @@ pub(super) fn emit_closure(
             let is_by_ref = params.get(idx).map(|(_, _, _, is_ref)| *is_ref).unwrap_or(false);
             if !has_declared_type && !is_by_ref && *actual_ty == PhpType::Int {
                 *actual_ty = expected_ty.clone();
+            }
+        }
+    }
+    // For a closure literal the checker tracked by span (e.g. assigned to a variable and called
+    // with heterogeneous argument types), adopt its inferred parameter types so an undeclared
+    // parameter widened to a union is laid out as the boxed Mixed it really is — matching the call
+    // sites, which box their arguments against the same signature.
+    if let Some(checker_params) = ctx
+        .closure_sigs_by_span
+        .get(&closure_span)
+        .map(|sig| sig.params.clone())
+    {
+        for (idx, (_, checker_ty)) in checker_params.iter().enumerate() {
+            let Some((_, actual_ty)) = param_types.get_mut(idx) else {
+                break;
+            };
+            let has_declared_type = params
+                .get(idx)
+                .and_then(|(_, type_ann, _, _)| type_ann.as_ref())
+                .is_some();
+            let is_by_ref = params.get(idx).map(|(_, _, _, is_ref)| *is_ref).unwrap_or(false);
+            if !has_declared_type && !is_by_ref {
+                *actual_ty = checker_ty.clone();
             }
         }
     }
@@ -429,6 +453,12 @@ pub(super) fn emit_closure_call(
                             .copied()
                             .unwrap_or(false)
                         && !deferred.sig.ref_params.get(i).copied().unwrap_or(false)
+                        // Don't overwrite a parameter the checker widened to a union (boxed
+                        // Mixed): the closure body and the other call sites are laid out for it.
+                        && !matches!(
+                            deferred.sig.params[i].1,
+                            PhpType::Mixed | PhpType::Union(_)
+                        )
                     {
                         deferred.sig.params[i].1 = ty.clone();
                     }
@@ -441,6 +471,7 @@ pub(super) fn emit_closure_call(
                 if i < cached.params.len()
                     && !cached.declared_params.get(i).copied().unwrap_or(false)
                     && !cached.ref_params.get(i).copied().unwrap_or(false)
+                    && !matches!(cached.params[i].1, PhpType::Mixed | PhpType::Union(_))
                 {
                     cached.params[i].1 = ty.clone();
                 }

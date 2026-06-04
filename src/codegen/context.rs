@@ -203,6 +203,10 @@ pub struct Context {
     pub expected_first_class_callable_sig: Option<FunctionSig>,
     /// Callable signatures inferred for user-function callable parameters.
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
+    /// Inferred signatures of closure literals keyed by source span (from the checker). Lets
+    /// `emit_closure` lay out an undeclared closure parameter the checker widened to a union
+    /// (heterogeneous call sites) as the boxed `Mixed` it really is, consistently with call sites.
+    pub closure_sigs_by_span: HashMap<Span, FunctionSig>,
     /// Callable-typed parameters in the current emitted function or method.
     pub callable_param_names: HashSet<String>,
     /// Callable signatures inferred for user-function callable returns.
@@ -365,6 +369,7 @@ impl Context {
             runtime_callable_vars: HashSet::new(),
             expected_first_class_callable_sig: None,
             callable_param_sigs: HashMap::new(),
+            closure_sigs_by_span: HashMap::new(),
             callable_param_names: HashSet::new(),
             callable_return_sigs: HashMap::new(),
             callable_array_return_sigs: HashMap::new(),
