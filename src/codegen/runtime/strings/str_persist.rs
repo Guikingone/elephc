@@ -26,8 +26,12 @@ pub fn emit_str_persist(emitter: &mut Emitter) {
     emitter.comment("--- runtime: str_persist ---");
     emitter.label_global("__rt_str_persist");
 
-    // -- handle zero-length strings (no allocation needed) --
-    emitter.instruction("cbz x2, __rt_str_persist_done");                       // empty string, return as-is
+    // -- Empty strings must still get their own owned heap block. Returning the
+    //    source pointer as-is aliases a possibly-borrowed pointer: explode() stores
+    //    an empty segment (from a leading/trailing/double delimiter) as a pointer
+    //    into the subject string, so persisting and later freeing that element would
+    //    free into the subject's live block and corrupt the heap. Fall through to
+    //    allocate + copy; the copy loop below is a no-op for zero length. --
 
     // -- set up stack frame (we call heap_alloc which may clobber regs) --
     emitter.instruction("sub sp, sp, #32");                                     // allocate 32 bytes on the stack
@@ -90,9 +94,11 @@ fn emit_str_persist_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: str_persist ---");
     emitter.label_global("__rt_str_persist");
 
-    // -- empty strings can be returned without taking ownership --
-    emitter.instruction("test rdx, rdx");                                       // check whether the input string has any payload bytes to duplicate
-    emitter.instruction("jz __rt_str_persist_done");                            // empty strings do not need heap-backed ownership
+    // -- Empty strings must still get their own owned heap block (see the ARM64
+    //    note): returning the source as-is would alias a borrowed pointer such as
+    //    explode()'s empty segment that points into the subject string, and freeing
+    //    the result would corrupt that live block. Fall through to allocate + copy;
+    //    the copy loop is a no-op for zero length. --
 
     // -- preserve the source payload across the heap allocation helper call --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving spill slots
