@@ -50,7 +50,24 @@ pub fn emit(
     // -- save glue, evaluate array --
     let (glue_ptr_reg, glue_len_reg) = abi::string_result_regs(emitter);
     abi::emit_push_reg_pair(emitter, glue_ptr_reg, glue_len_reg);               // preserve the glue string while evaluating the indexed array argument
-    let arr_ty = emit_expr(&args[1], emitter, ctx, data);
+    // implode() joins an array's VALUES. For an associative array, first convert it to a packed
+    // indexed values array (reusing array_values(), which evaluates the argument exactly once);
+    // passing the hash straight to __rt_implode would read it as an indexed array and crash.
+    let arr_ty = if matches!(
+        crate::codegen::functions::infer_contextual_type(&args[1], ctx),
+        PhpType::AssocArray { .. }
+    ) {
+        crate::codegen::builtins::arrays::array_values::emit(
+            "array_values",
+            std::slice::from_ref(&args[1]),
+            emitter,
+            ctx,
+            data,
+        )
+        .unwrap_or(PhpType::Array(Box::new(PhpType::Mixed)))
+    } else {
+        emit_expr(&args[1], emitter, ctx, data)
+    };
     if matches!(arr_ty, PhpType::Mixed | PhpType::Union(_)) {
         abi::emit_call_label(emitter, "__rt_mixed_unbox");                      // unwrap a mixed array argument before passing its payload to implode
         match emitter.target.arch {

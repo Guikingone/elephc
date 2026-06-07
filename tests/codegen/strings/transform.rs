@@ -180,6 +180,22 @@ echo implode(" ", $arr);
     assert_eq!(out, "Hello World");
 }
 
+/// Regression: implode() on an associative array joins its values (PHP semantics) instead of
+/// crashing. The hash is converted to an indexed values array first; indexed arrays are unaffected.
+#[test]
+fn test_implode_associative_array() {
+    let out = compile_and_run(
+        r#"<?php
+$ints = ["x" => 3, "y" => 1, "z" => 2];
+$strs = ["a" => "foo", "b" => "bar"];
+echo implode(",", $ints);
+echo "|" . implode("-", $strs);
+echo "|" . implode(",", [10, 20, 30]);
+"#,
+    );
+    assert_eq!(out, "3,1,2|foo-bar|10,20,30");
+}
+
 /// Verifies explode followed by implode produces the expected string transformation.
 #[test]
 fn test_explode_implode_roundtrip() {
