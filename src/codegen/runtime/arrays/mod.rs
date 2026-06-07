@@ -57,6 +57,7 @@ mod array_reduce;
 mod array_reverse;
 mod array_reverse_refcounted;
 mod array_search;
+mod array_search_str;
 mod array_shift;
 mod array_slice;
 mod array_slice_refcounted;
@@ -229,6 +230,8 @@ pub use array_reverse::emit_array_reverse;
 pub use array_reverse_refcounted::emit_array_reverse_refcounted;
 /// Emit refcounted array reverse helper.
 pub use array_search::emit_array_search;
+/// Emit string-element array search helper (returns the matching index or -1).
+pub use array_search_str::emit_array_search_str;
 /// Emit array search helper.
 pub use array_shift::emit_array_shift;
 /// Emit array shift (remove first) helper.

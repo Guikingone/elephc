@@ -130,3 +130,21 @@ echo count($result) . ":" . $result[0] . "," . $result[1];
     );
     assert_eq!(out, "2:first,second");
 }
+
+/// Regression: array_search() on a string-element array returns the matching index (or false when
+/// absent). The indexed path previously always used the scalar integer search helper, so a string
+/// needle compared its pointer against string elements and never matched.
+#[test]
+fn test_array_search_string_element_array_returns_index() {
+    let out = compile_and_run(
+        r#"<?php
+$s = ["apple", "banana", "cherry"];
+$ok = array_search("banana", $s) === 1
+   && array_search("apple", $s) === 0
+   && array_search("cherry", $s) === 2
+   && array_search("missing", $s) === false;
+echo $ok ? "ok" : "bad";
+"#,
+    );
+    assert_eq!(out, "ok");
+}

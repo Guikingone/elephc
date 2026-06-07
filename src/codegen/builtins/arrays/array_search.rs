@@ -270,8 +270,25 @@ pub fn emit(
     }
 
     // -- indexed array: use runtime for linear search --
+    // A string-element array needs byte-exact string comparison (the scalar __rt_array_search would
+    // compare the needle's pointer, never matching). Route those to the string-aware search helper.
+    let elem_is_str = matches!(&arr_ty, PhpType::Array(inner) if matches!(**inner, PhpType::Str));
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the indexed-array pointer while evaluating the searched needle
     emit_expr(&args[0], emitter, ctx, data);
+    if elem_is_str {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_pop_reg(emitter, "x0");                               // restore the array pointer; the needle ptr/len stay in the string result registers x1/x2
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov rsi, rax");                           // move the needle string pointer into the second SysV argument register
+                abi::emit_pop_reg(emitter, "rdi");                             // restore the array pointer; the needle length stays in rdx
+            }
+        }
+        abi::emit_call_label(emitter, "__rt_array_search_str");                // string-aware linear search returning the first matching index or -1
+        box_index_search_result(emitter, ctx);
+        return Some(PhpType::Mixed);
+    }
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x1, x0");                                  // move the indexed-array needle into the second helper argument register
