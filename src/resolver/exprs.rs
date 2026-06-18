@@ -93,6 +93,14 @@ pub(super) fn resolve_expr(
             state,
             function_variants,
         )?)),
+        ExprKind::Clone(inner) => ExprKind::Clone(Box::new(resolve_expr(
+            *inner,
+            base_dir,
+            declared_once,
+            include_chain,
+            state,
+            function_variants,
+        )?)),
         ExprKind::Print(inner) => ExprKind::Print(Box::new(resolve_expr(
             *inner,
             base_dir,
