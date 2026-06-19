@@ -852,6 +852,99 @@ run();
     );
 }
 
+/// Regression test: `isset()` on a Mixed-valued associative hash must not leak the
+/// boxed Mixed cell that the `hash_get` lowering allocates for the probe. `isset`
+/// re-derives the lookup in codegen and never reads the produced value, so the
+/// owned temporary has to be released. Covers both a missing and a present key and
+/// loops 200 times so a one-cell-per-call leak would be obvious.
+#[test]
+fn test_isset_on_mixed_hash_releases_temporaries() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$m = ["x" => 1, "y" => "two"];
+$present = 0;
+$absent = 0;
+for ($i = 0; $i < 200; $i++) {
+    $present += isset($m["x"]) ? 1 : 0;
+    $absent += isset($m["missing"]) ? 1 : 0;
+}
+echo $present . "|" . $absent;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "200|0");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
+/// Regression test: `empty()` on a Mixed-valued associative hash consumes the boxed
+/// Mixed temporary via `__rt_mixed_is_empty`; that owned cell must be released after
+/// the call so repeated probes do not leak.
+#[test]
+fn test_empty_on_mixed_hash_releases_temporaries() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$m = ["x" => 1, "y" => "two"];
+$empties = 0;
+for ($i = 0; $i < 200; $i++) {
+    $empties += empty($m["x"]) ? 1 : 0;
+    $empties += empty($m["missing"]) ? 1 : 0;
+}
+echo $empties;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "200");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
+/// Regression test: a Mixed hash read passed straight into a plain builtin
+/// (`is_int($m["x"])`) is an owned temporary that the call lowering must release.
+/// Before the fix, plain builtin/user calls only released method-call arguments, so
+/// the boxed Mixed cell leaked one per call.
+#[test]
+fn test_builtin_arg_mixed_hash_read_releases_temporaries() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$m = ["x" => 1, "y" => "two"];
+$ints = 0;
+for ($i = 0; $i < 200; $i++) {
+    $ints += is_int($m["x"]) ? 1 : 0;
+}
+echo $ints;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "200");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
+/// Regression test for the call-argument release / alias-guard interaction: a user
+/// function that accepts an array and returns it typed as `iterable`
+/// (`function id(iterable $x): iterable`) aliases its argument. Releasing owned
+/// call-argument temporaries must not free that shared payload, or the returned
+/// value would be corrupted (read back as null/garbage). This asserts correctness
+/// only — the conservative alias guard intentionally keeps the argument alive when
+/// it might be the return value, which leaves a pre-existing passthrough leak that
+/// is out of scope for the call-argument-release fix.
+#[test]
+fn test_iterable_passthrough_arg_not_freed() {
+    let out = compile_and_run(
+        r#"<?php
+function id(iterable $x): iterable { return $x; }
+$total = 0;
+for ($i = 0; $i < 100; $i++) {
+    $v = id([1, 2, 3]);
+    foreach ($v as $x) { $total += $x; }
+}
+echo $total;
+"#,
+    );
+    assert_eq!(out, "600");
+}
+
 /// Regression test for the array-to-string echo fix: echoing an owned temporary array
 /// stringifies to "Array" and releases the temporary, keeping GC allocs and frees balanced
 /// (no leak from the discarded array, no premature/double free).

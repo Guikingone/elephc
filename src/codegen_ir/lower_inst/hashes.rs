@@ -918,18 +918,22 @@ fn emit_hash_get_success_x86_64(
 /// runtime tag in `x3`. A Mixed hash stores concrete values (int/float/bool/null)
 /// *inline* with their concrete tag, and only already-boxed Mixed cells carry tag
 /// 7. This helper normalizes both shapes into a single boxed Mixed cell pointer
-/// in `x0`: already-boxed entries (tag 7) pass through, inline entries are boxed
-/// on demand via `__rt_mixed_from_value`. Note that an inline concrete value's
-/// `x1` is the raw payload (e.g. `1` for an int), not a cell pointer, so callers
-/// that only need the value's tag (such as the `isset` null-check) must not
-/// unbox `x1` directly — they should inspect `x3` and, for tag 7, the inner tag
-/// at `[x1]` instead.
+/// in `x0`: already-boxed entries (tag 7) are retained (`__rt_incref`) so the
+/// returned pointer is owned by the caller, and inline entries are boxed on demand
+/// via `__rt_mixed_from_value` (a fresh owned cell). Returning a *uniformly owned*
+/// cell lets `Op::HashGet` count as an owning temporary in EIR lowering, so the
+/// shared acquire/release machinery balances the box like any other heap producer.
+/// Note that an inline concrete value's `x1` is the raw payload (e.g. `1` for an
+/// int), not a cell pointer, so callers that only need the value's tag (such as
+/// the `isset` null-check) must not unbox `x1` directly — they should inspect `x3`
+/// and, for tag 7, the inner tag at `[x1]` instead.
 fn emit_hash_get_mixed_success_aarch64(ctx: &mut FunctionContext<'_>) {
     let box_label = ctx.next_label("hash_get_mixed_box");
     let done_label = ctx.next_label("hash_get_mixed_done");
     ctx.emitter.instruction("cmp x3, #7");                                      // check whether the entry already stores a boxed Mixed cell
     ctx.emitter.instruction(&format!("b.ne {}", box_label));                    // box concrete per-entry payloads before returning them as Mixed
-    ctx.emitter.instruction("mov x0, x1");                                      // return the boxed Mixed pointer stored in the hash entry
+    ctx.emitter.instruction("mov x0, x1");                                      // load the boxed Mixed pointer stored in the hash entry
+    abi::emit_call_label(ctx.emitter, "__rt_incref");                           // retain it so the returned Mixed cell is owned, not borrowed
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip on-demand boxing for already boxed entries
     ctx.emitter.label(&box_label);
     ctx.emitter.instruction("mov x0, x3");                                      // pass the concrete entry tag to the Mixed boxing helper
@@ -941,14 +945,16 @@ fn emit_hash_get_mixed_success_aarch64(ctx: &mut FunctionContext<'_>) {
 ///
 /// Mirrors `emit_hash_get_mixed_success_aarch64`: `__rt_hash_get` leaves the raw
 /// payload in `rdi`/`rsi` and the runtime tag in `rcx`; already-boxed cells (tag
-/// 7) pass through while inline concrete values are boxed via
-/// `__rt_mixed_from_value`, yielding a single boxed Mixed cell pointer in `rax`.
+/// 7) are retained via `__rt_incref` while inline concrete values are boxed via
+/// `__rt_mixed_from_value`, yielding a single *owned* boxed Mixed cell pointer in
+/// `rax` so the result behaves as an owning temporary in EIR lowering.
 fn emit_hash_get_mixed_success_x86_64(ctx: &mut FunctionContext<'_>) {
     let box_label = ctx.next_label("hash_get_mixed_box");
     let done_label = ctx.next_label("hash_get_mixed_done");
     ctx.emitter.instruction("cmp rcx, 7");                                      // check whether the entry already stores a boxed Mixed cell
     ctx.emitter.instruction(&format!("jne {}", box_label));                     // box concrete per-entry payloads before returning them as Mixed
-    ctx.emitter.instruction("mov rax, rdi");                                    // return the boxed Mixed pointer stored in the hash entry
+    ctx.emitter.instruction("mov rax, rdi");                                    // load the boxed Mixed pointer stored in the hash entry
+    abi::emit_call_label(ctx.emitter, "__rt_incref");                           // retain it so the returned Mixed cell is owned, not borrowed
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip on-demand boxing for already boxed entries
     ctx.emitter.label(&box_label);
     ctx.emitter.instruction("mov rax, rcx");                                    // pass the concrete entry tag to the Mixed boxing helper

@@ -779,6 +779,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_owning_builtin_temporary(value.value) {
             return true;
         }
+        // A Mixed hash read returns an *owned* cell: inline scalar entries are
+        // boxed on demand and already-boxed (tag-7) entries are retained by
+        // `emit_hash_get_mixed_success_*`. Other element types (Str, Array,
+        // Object, …) are borrowed pass-throughs that the hash still owns, so
+        // only the Mixed result counts as an owning temporary.
+        if matches!(self.builder.value_defining_op(value.value), Some(Op::HashGet)) {
+            return php_type.codegen_repr() == PhpType::Mixed;
+        }
         matches!(
             self.builder.value_defining_op(value.value),
             Some(

@@ -1533,37 +1533,28 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
         call_return_type_for_args(ctx, canonical, args, &operands)
             .unwrap_or_else(|| call_return_type(ctx, canonical, &operands))
     };
-    if is_extern {
-        let data = ctx.intern_function_name(canonical);
-        return ctx.emit_value(
-            Op::ExternCall,
-            operands,
-            Some(Immediate::Data(data)),
-            php_type,
-            Op::ExternCall.default_effects(),
-            Some(expr.span),
-        );
-    }
-    if is_user_function {
-        let data = ctx.intern_function_name(canonical);
-        return ctx.emit_value(
-            Op::Call,
-            operands,
-            Some(Immediate::Data(data)),
-            php_type,
-            effects_lookup::user_call_effects(canonical),
-            Some(expr.span),
-        );
-    }
     let data = ctx.intern_function_name(canonical);
-    ctx.emit_value(
-        Op::BuiltinCall,
-        operands,
+    let (op, effects) = if is_extern {
+        (Op::ExternCall, Op::ExternCall.default_effects())
+    } else if is_user_function {
+        (Op::Call, effects_lookup::user_call_effects(canonical))
+    } else {
+        (Op::BuiltinCall, effects_lookup::builtin_effects(canonical))
+    };
+    let call = ctx.emit_value(
+        op,
+        operands.clone(),
         Some(Immediate::Data(data)),
         php_type,
-        effects_lookup::builtin_effects(canonical),
+        effects,
         Some(expr.span),
-    )
+    );
+    // Plain builtin/user/extern calls release owned argument temporaries the same
+    // way method calls already do, so a value like `is_int($h[$k])` does not leak
+    // the Mixed cell boxed for the subscript. The alias guard keeps pass-through
+    // results (e.g. a builtin returning its own Mixed argument) from being freed.
+    release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), expr.span);
+    call
 }
 
 /// Lowers `isset()` as a lazy language construct instead of an eager builtin call.
@@ -1589,17 +1580,25 @@ fn lower_lazy_isset(
     let data = ctx.intern_function_name(name);
 
     for (idx, arg) in args.iter().enumerate() {
-        let checked = lower_lazy_isset_operand(ctx, arg).unwrap_or_else(|| {
-            let value = lower_expr(ctx, arg);
-            ctx.emit_value(
-                Op::BuiltinCall,
-                vec![value.value],
-                Some(Immediate::Data(data)),
-                PhpType::Int,
-                effects_lookup::builtin_effects(name),
-                Some(arg.span),
-            )
-        });
+        let checked = match lower_lazy_isset_operand(ctx, arg) {
+            Some(checked) => checked,
+            None => {
+                let value = lower_expr(ctx, arg);
+                let checked = ctx.emit_value(
+                    Op::BuiltinCall,
+                    vec![value.value],
+                    Some(Immediate::Data(data)),
+                    PhpType::Int,
+                    effects_lookup::builtin_effects(name),
+                    Some(arg.span),
+                );
+                // `isset` re-derives the lookup in codegen and never reads the
+                // operand value, so release the owned temporary it produced
+                // (e.g. a Mixed hash read's boxed cell) to avoid leaking it.
+                release_owned_call_arg_temporaries(ctx, &[value.value], Some(checked.value), arg.span);
+                checked
+            }
+        };
         let then_target = if idx + 1 == args.len() {
             ctx.builder.create_named_block("isset.lazy_true", Vec::new())
         } else {
@@ -7429,6 +7428,17 @@ fn call_result_may_alias_arg(
             PhpType::AssocArray { .. },
             PhpType::AssocArray { .. } | PhpType::Array(_) | PhpType::Iterable,
         ) => true,
+        // `iterable` is a supertype of arrays and Traversable objects, so a
+        // function can accept one container shape and return the same payload
+        // typed as `iterable` (e.g. `function id(iterable $x): iterable`
+        // returning an array argument). Treat container/iterable pairings in
+        // either direction as a possible alias so the shared payload is not
+        // released while the callee still returns it.
+        (
+            PhpType::Iterable,
+            PhpType::Iterable | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_),
+        ) => true,
+        (PhpType::Array(_) | PhpType::Object(_), PhpType::Iterable) => true,
         (PhpType::Str, PhpType::Str) => true,
         (PhpType::Callable, PhpType::Callable) => true,
         (PhpType::Buffer(_), PhpType::Buffer(_)) => true,
