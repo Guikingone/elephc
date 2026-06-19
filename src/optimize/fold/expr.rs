@@ -149,6 +149,10 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                     callable: Box::new(callable),
                 })
         }
+        ExprKind::ListUnpack { vars, value } => ExprKind::ListUnpack {
+            vars,
+            value: Box::new(fold_expr(*value)),
+        },
         ExprKind::Assignment {
             target,
             value,

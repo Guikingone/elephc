@@ -351,6 +351,7 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
             value,
             callable: default,
         } => expr_has_regex_call(value) || expr_has_regex_call(default),
+        ExprKind::ListUnpack { value, .. } => expr_has_regex_call(value),
         ExprKind::Assignment {
             target,
             value,
@@ -662,6 +663,7 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
             value,
             callable: default,
         } => expr_needs_descriptor_invoker(value) || expr_needs_descriptor_invoker(default),
+        ExprKind::ListUnpack { value, .. } => expr_needs_descriptor_invoker(value),
         ExprKind::Assignment {
             target,
             value,
