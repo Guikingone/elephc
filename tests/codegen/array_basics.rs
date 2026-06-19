@@ -599,6 +599,73 @@ fn test_isset_null_variable_is_false() {
     assert_eq!(out, "01");
 }
 
+/// Regression: `isset` on a heterogeneous associative array, which lowers to
+/// `array<mixed, mixed>` (a Mixed-valued hash). A Mixed hash entry stores
+/// concrete values inline with their runtime tag, but the `isset` null-check
+/// used to unbox the raw payload register directly — for an inline value that
+/// register holds the payload (e.g. `1` for an int), not a boxed cell pointer,
+/// so `__rt_mixed_unbox` dereferenced it and crashed (SIGSEGV). This exercises
+/// every inline scalar tag (int, float, bool, string) plus null and a missing
+/// key, and must match PHP exactly.
+#[test]
+fn test_isset_on_mixed_assoc_hash_inline_values() {
+    let out = compile_and_run(
+        r#"<?php
+$r = ["i" => 1, "f" => 2.5, "s" => "str", "b" => true, "n" => null];
+echo isset($r["i"]) ? 1 : 0;
+echo isset($r["f"]) ? 1 : 0;
+echo isset($r["s"]) ? 1 : 0;
+echo isset($r["b"]) ? 1 : 0;
+echo isset($r["n"]) ? 1 : 0;
+echo isset($r["missing"]) ? 1 : 0;
+"#,
+    );
+    assert_eq!(out, "111100");
+}
+
+/// Regression: the same `isset`-on-Mixed-hash crash also reproduced when the
+/// hash was read out of an object property (directly or via a local snapshot),
+/// which was the originally reported trigger. Guards the property-origin path.
+#[test]
+fn test_isset_on_mixed_assoc_hash_property_snapshot() {
+    let out = compile_and_run(
+        r#"<?php
+class B { public array $i = []; function a($k, $v) { $this->i[$k] = $v; } }
+$b = new B();
+$b->a("x", 1);
+$b->a("y", "two");
+$b->a("z", null);
+echo isset($b->i["x"]) ? 1 : 0;
+$r = $b->i;
+echo isset($r["x"]) ? 1 : 0;
+echo isset($r["y"]) ? 1 : 0;
+echo isset($r["z"]) ? 1 : 0;
+echo isset($r["missing"]) ? 1 : 0;
+"#,
+    );
+    assert_eq!(out, "11100");
+}
+
+/// Regression: `empty()` on a Mixed-valued hash shares the same inline-vs-boxed
+/// null-check lowering as `isset`, so it crashed identically before the fix.
+/// Verifies `empty` semantics (true for missing, null, `""`, `"0"`, false) on a
+/// heterogeneous associative array.
+#[test]
+fn test_empty_on_mixed_assoc_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$r = ["i" => 1, "s" => "str", "e" => "", "z" => "", "z0" => "0", "n" => null];
+echo empty($r["i"]) ? 1 : 0;
+echo empty($r["s"]) ? 1 : 0;
+echo empty($r["e"]) ? 1 : 0;
+echo empty($r["z0"]) ? 1 : 0;
+echo empty($r["n"]) ? 1 : 0;
+echo empty($r["missing"]) ? 1 : 0;
+"#,
+    );
+    assert_eq!(out, "001111");
+}
+
 /// Verifies array values.
 #[test]
 fn test_array_values() {

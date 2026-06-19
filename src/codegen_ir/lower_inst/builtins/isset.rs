@@ -245,10 +245,22 @@ fn emit_isset_hash_found_null_check_aarch64(
     missing: &str,
 ) -> Result<()> {
     if matches!(value_ty.codegen_repr(), PhpType::Mixed) {
-        ctx.emitter.instruction("mov x0, x1");                                  // pass the boxed Mixed hash value to the unbox helper
-        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-        ctx.emitter.instruction("cmp x0, #8");                                  // runtime tag 8 means the found hash value is PHP null
+        // A Mixed hash entry stores its value either inline (concrete runtime
+        // tag in x3, raw payload in x1) or as a boxed Mixed cell (tag 7, cell
+        // pointer in x1 with the inner tag at [x1]). `isset` only needs to know
+        // whether the value is PHP null, so inspect the tag directly rather than
+        // unboxing x1 — an inline concrete value's x1 is the raw payload (e.g.
+        // `1` for an int), not a cell pointer, and unboxing it would crash. This
+        // also avoids allocating a transient boxed cell per probe.
+        let present = ctx.next_label("isset_hash_mixed_present");
+        ctx.emitter.instruction("cmp x3, #8");                                  // inline null tag means the entry is PHP null
         ctx.emitter.instruction(&format!("b.eq {}", missing));                  // null hash values make isset return false
+        ctx.emitter.instruction("cmp x3, #7");                                  // tag 7 means the entry stores a boxed Mixed cell
+        ctx.emitter.instruction(&format!("b.ne {}", present));                  // any other inline tag is a concrete non-null value
+        ctx.emitter.instruction("ldr x0, [x1]");                                // load the boxed Mixed cell's inner runtime tag
+        ctx.emitter.instruction("cmp x0, #8");                                  // boxed null means the entry is PHP null
+        ctx.emitter.instruction(&format!("b.eq {}", missing));                  // null hash values make isset return false
+        ctx.emitter.label(&present);
         return Ok(());
     }
     ctx.emitter.instruction("cmp x3, #8");                                      // runtime tag 8 means the found hash value is PHP null
@@ -263,10 +275,19 @@ fn emit_isset_hash_found_null_check_x86_64(
     missing: &str,
 ) -> Result<()> {
     if matches!(value_ty.codegen_repr(), PhpType::Mixed) {
-        ctx.emitter.instruction("mov rax, rdi");                                // pass the boxed Mixed hash value to the unbox helper
-        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-        ctx.emitter.instruction("cmp rax, 8");                                  // runtime tag 8 means the found hash value is PHP null
+        // Same inline-vs-boxed hazard as the AArch64 path: a Mixed hash entry's
+        // raw payload (rdi) is not necessarily a boxed cell pointer, so unboxing
+        // it directly crashes on an inline concrete value. Inspect the tag in rcx
+        // directly and, for boxed entries (tag 7), the inner tag at [rdi].
+        let present = ctx.next_label("isset_hash_mixed_present");
+        ctx.emitter.instruction("cmp rcx, 8");                                  // inline null tag means the entry is PHP null
         ctx.emitter.instruction(&format!("je {}", missing));                    // null hash values make isset return false
+        ctx.emitter.instruction("cmp rcx, 7");                                  // tag 7 means the entry stores a boxed Mixed cell
+        ctx.emitter.instruction(&format!("jne {}", present));                   // any other inline tag is a concrete non-null value
+        ctx.emitter.instruction("mov rax, QWORD PTR [rdi]");                    // load the boxed Mixed cell's inner runtime tag
+        ctx.emitter.instruction("cmp rax, 8");                                  // boxed null means the entry is PHP null
+        ctx.emitter.instruction(&format!("je {}", missing));                    // null hash values make isset return false
+        ctx.emitter.label(&present);
         return Ok(());
     }
     ctx.emitter.instruction("cmp rcx, 8");                                      // runtime tag 8 means the found hash value is PHP null

@@ -913,6 +913,17 @@ fn emit_hash_get_success_x86_64(
 }
 
 /// Materializes a successful AArch64 Mixed hash lookup as a boxed Mixed result.
+///
+/// `__rt_hash_get` leaves the found entry's raw payload in `x1`/`x2` and its
+/// runtime tag in `x3`. A Mixed hash stores concrete values (int/float/bool/null)
+/// *inline* with their concrete tag, and only already-boxed Mixed cells carry tag
+/// 7. This helper normalizes both shapes into a single boxed Mixed cell pointer
+/// in `x0`: already-boxed entries (tag 7) pass through, inline entries are boxed
+/// on demand via `__rt_mixed_from_value`. Note that an inline concrete value's
+/// `x1` is the raw payload (e.g. `1` for an int), not a cell pointer, so callers
+/// that only need the value's tag (such as the `isset` null-check) must not
+/// unbox `x1` directly — they should inspect `x3` and, for tag 7, the inner tag
+/// at `[x1]` instead.
 fn emit_hash_get_mixed_success_aarch64(ctx: &mut FunctionContext<'_>) {
     let box_label = ctx.next_label("hash_get_mixed_box");
     let done_label = ctx.next_label("hash_get_mixed_done");
@@ -927,6 +938,11 @@ fn emit_hash_get_mixed_success_aarch64(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Materializes a successful x86_64 Mixed hash lookup as a boxed Mixed result.
+///
+/// Mirrors `emit_hash_get_mixed_success_aarch64`: `__rt_hash_get` leaves the raw
+/// payload in `rdi`/`rsi` and the runtime tag in `rcx`; already-boxed cells (tag
+/// 7) pass through while inline concrete values are boxed via
+/// `__rt_mixed_from_value`, yielding a single boxed Mixed cell pointer in `rax`.
 fn emit_hash_get_mixed_success_x86_64(ctx: &mut FunctionContext<'_>) {
     let box_label = ctx.next_label("hash_get_mixed_box");
     let done_label = ctx.next_label("hash_get_mixed_done");
