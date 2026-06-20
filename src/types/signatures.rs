@@ -115,6 +115,7 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             Some(sig)
         }
         "function_exists" => Some(fixed(&["function"])),
+        "extension_loaded" => Some(fixed(&["extension"])),
         "is_callable" => Some(fixed(&["value"])),
         "defined" => Some(fixed(&["constant_name"])),
         "class_alias" => Some(optional(
@@ -702,7 +703,7 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         | "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" => {
             Some(typed_first_class_builtin_sig(name, &[PhpType::Mixed], PhpType::Bool))
         }
-        "defined" => Some(typed_first_class_builtin_sig(
+        "defined" | "extension_loaded" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Str],
             PhpType::Bool,
