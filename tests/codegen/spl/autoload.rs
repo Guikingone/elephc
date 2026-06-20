@@ -9,6 +9,11 @@
 
 use crate::support::*;
 
+use std::collections::HashSet;
+
+use elephc::errors::{CompileError, CompileWarning};
+use elephc::parser::ast::Program;
+
 /// Verifies PSR-4 single namespace autoload.
 #[test]
 fn test_psr4_single_namespace_autoload() {
@@ -1662,4 +1667,106 @@ fn test_spl_autoload_call_with_literal_loads_class() {
         "main.php",
     );
     assert_eq!(out, "forced");
+}
+
+/// Builds the AOT autoload registry from in-memory composer files and runs the
+/// autoload pass, returning its `Result` (the expanded program plus warnings, or the
+/// first hard error). Used by the polyfill-prune regression tests below.
+fn autoload_run_result(
+    files: &[(&str, &str)],
+    main_file: &str,
+) -> Result<(Program, Vec<CompileWarning>), CompileError> {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+    for (path, content) in files {
+        let full_path = dir.join(path);
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&full_path, content).unwrap();
+    }
+    let php_path = dir.join(main_file);
+    let source = fs::read_to_string(&php_path).unwrap();
+    let base_dir = php_path.parent().unwrap();
+    let result = (|| -> Result<(Program, Vec<CompileWarning>), CompileError> {
+        let tokens = elephc::lexer::tokenize(&source)?;
+        let ast = elephc::parser::parse(&tokens)?;
+        let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &php_path);
+        let define_set: HashSet<String> = HashSet::new();
+        let ast = elephc::conditional::apply(ast, &define_set);
+        let (autoload_registry, ast) = elephc::autoload::Registry::build(base_dir, ast);
+        let resolved = elephc::resolver::resolve(ast, base_dir)?;
+        let resolved = elephc::autoload::collect_aliases(resolved);
+        let resolved = elephc::name_resolver::resolve(resolved)?;
+        elephc::autoload::run(resolved, base_dir, &autoload_registry)
+    })();
+    let _ = fs::remove_dir_all(&dir);
+    result
+}
+
+/// Verifies that a provided-function polyfill guard is pruned before the autoload
+/// reference graph is collected, so the class its wrapper body delegates to is
+/// never pulled into the compile. The `deepclone_to_array` wrapper references
+/// `App\HeavyDelegate`, whose PSR-4 target `src/HeavyDelegate.php` is unparseable;
+/// because elephc provides `deepclone_to_array`, the whole guard is removed and the
+/// broken class is never loaded, so autoload succeeds.
+#[test]
+fn test_provided_function_polyfill_guard_is_pruned_before_class_load() {
+    let result = autoload_run_result(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"},"files":["bootstrap.php"]}}"#,
+            ),
+            (
+                "bootstrap.php",
+                "<?php\nif (!function_exists('deepclone_to_array')) {\n    function deepclone_to_array() { return \\App\\HeavyDelegate::run(); }\n}\n",
+            ),
+            (
+                "src/HeavyDelegate.php",
+                "<?php\nnamespace App;\n$x = \"unterminated;\n",
+            ),
+            ("main.php", "<?php\necho \"ok\";\n"),
+        ],
+        "main.php",
+    );
+    assert!(
+        result.is_ok(),
+        "provided-function guard should be pruned so the broken delegate class is never loaded, got {:?}",
+        result.err(),
+    );
+}
+
+/// Control for the prune: a guard for a function elephc does NOT provide is left
+/// intact, so its wrapper body still references `App\HeavyDelegate` and the
+/// unparseable `src/HeavyDelegate.php` is loaded and hard-fails. This confirms the
+/// prune is specific to the provided allowlist rather than dropping every
+/// `function_exists` guard.
+#[test]
+fn test_unprovided_function_polyfill_guard_still_loads_referenced_class() {
+    let result = autoload_run_result(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"},"files":["bootstrap.php"]}}"#,
+            ),
+            (
+                "bootstrap.php",
+                "<?php\nif (!function_exists('some_app_helper')) {\n    function some_app_helper() { return \\App\\HeavyDelegate::run(); }\n}\n",
+            ),
+            (
+                "src/HeavyDelegate.php",
+                "<?php\nnamespace App;\n$x = \"unterminated;\n",
+            ),
+            ("main.php", "<?php\necho \"ok\";\n"),
+        ],
+        "main.php",
+    );
+    assert!(
+        result.is_err(),
+        "an unprovided-function guard must keep its class reference and fail to load the broken class",
+    );
 }
