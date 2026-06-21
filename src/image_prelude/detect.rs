@@ -250,7 +250,9 @@ fn expr_refs_image(expr: &Expr) -> bool {
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::YieldFrom(inner) => expr_refs_image(inner),
+        ExprKind::ListUnpack { value, .. } => expr_refs_image(value),
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ShortTernary { value, default } => {
             expr_refs_image(value) || expr_refs_image(default)

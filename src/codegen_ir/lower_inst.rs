@@ -4049,7 +4049,7 @@ fn class_method_already_emitted(
 }
 
 /// Stores a call result, boxing concrete returns for generic EIR result slots.
-fn store_call_result(
+pub(super) fn store_call_result(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     return_ty: &PhpType,

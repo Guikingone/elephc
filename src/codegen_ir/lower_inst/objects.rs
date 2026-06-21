@@ -32,7 +32,7 @@ use super::{
     emit_ref_arg_writebacks, expect_operand, iterators, load_value_to_first_int_arg,
     materialize_direct_call_args_with_refs,
     materialize_method_call_args_with_receiver_reg_and_refs, resolve_method_call_target,
-    store_if_result, store_method_call_result,
+    store_call_result, store_if_result, store_method_call_result,
 };
 use crate::codegen_ir::fibers;
 use crate::codegen_ir::literal_defaults::{
