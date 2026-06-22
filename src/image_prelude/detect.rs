@@ -258,6 +258,7 @@ fn expr_refs_image(expr: &Expr) -> bool {
             expr_refs_image(value) || expr_refs_image(default)
         }
         ExprKind::Pipe { value, callable } => expr_refs_image(value) || expr_refs_image(callable),
+        ExprKind::ListUnpack { value, .. } => expr_refs_image(value),
         ExprKind::Assignment {
             target,
             value,
@@ -375,6 +376,8 @@ fn stmt_refs_image(stmt: &Stmt) -> bool {
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::Label(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }
         | StmtKind::FunctionVariantMark { .. }
@@ -435,6 +438,7 @@ fn stmt_refs_image(stmt: &Stmt) -> bool {
         StmtKind::NestedArrayAssign { target, value } => {
             expr_refs_image(target) || expr_refs_image(value)
         }
+        StmtKind::RefAssignTarget { target, .. } => expr_refs_image(target),
         StmtKind::ArrayPush { value, .. } => expr_refs_image(value),
         StmtKind::TypedAssign {
             type_expr, value, ..

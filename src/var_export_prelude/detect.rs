@@ -169,6 +169,7 @@ fn expr_refs_ve(expr: &Expr) -> bool {
             expr_refs_ve(value) || expr_refs_ve(default)
         }
         ExprKind::Pipe { value, callable } => expr_refs_ve(value) || expr_refs_ve(callable),
+        ExprKind::ListUnpack { value, .. } => expr_refs_ve(value),
         ExprKind::Assignment {
             target,
             value,
@@ -245,6 +246,8 @@ fn stmt_refs_ve(stmt: &Stmt) -> bool {
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::Label(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }
         | StmtKind::FunctionVariantMark { .. }
@@ -301,6 +304,7 @@ fn stmt_refs_ve(stmt: &Stmt) -> bool {
         StmtKind::NestedArrayAssign { target, value } => {
             expr_refs_ve(target) || expr_refs_ve(value)
         }
+        StmtKind::RefAssignTarget { target, .. } => expr_refs_ve(target),
         StmtKind::ArrayPush { value, .. } => expr_refs_ve(value),
         StmtKind::TypedAssign { value, .. } => expr_refs_ve(value),
         StmtKind::Foreach { array, body, .. } => {
