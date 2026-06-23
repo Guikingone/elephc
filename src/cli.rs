@@ -90,10 +90,10 @@ Output modes:
   --check                 Type-check only, no codegen (mutually exclusive with --emit-ir/--emit-asm)
   --emit-ir               Emit EIR text instead of compiling
   --emit-asm              Emit assembly (.s) instead of linking
-  --emit KIND             Output kind: executable (default) | cdylib
+  --emit KIND             Output kind: executable (default) | cdylib | npm (WASM only)
 
 Target:
-  --target TARGET         macos-aarch64 | linux-aarch64 | linux-x86_64 (default: host)
+  --target TARGET         macos-aarch64 | linux-aarch64 | linux-x86_64 | windows-x86_64 | wasm32-wasi (default: host)
   --php-version VERSION   8.2 | 8.3 | 8.4 | 8.5 (default: 8.5)
 
 Codegen:
@@ -381,6 +381,11 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     if output_modes > 1 {
         fail("--emit-ir, --emit-asm, and --check are mutually exclusive");
     }
+    // NPM packaging wraps a `.wasm` module, so it is only meaningful for the
+    // WebAssembly target.
+    if matches!(emit, Emit::NpmPackage) && !target.is_wasm() {
+        fail("--emit npm requires --target wasm32-wasi");
+    }
     if web && check_only {
         fail("--web cannot be combined with --check");
     }
@@ -465,17 +470,22 @@ fn parse_required_emit(args: &[String], index: usize) -> Emit {
     if index < args.len() {
         parse_emit(&args[index])
     } else {
-        fail("Missing emit kind after --emit (expected: executable, cdylib)")
+        fail("Missing emit kind after --emit (expected: executable, cdylib, npm)")
     }
 }
 
 /// Parse an emit-kind string into an `Emit` value, or fail with an error message.
+///
+/// `npm`/`npm-package` selects WebAssembly NPM-package output and is only valid
+/// with `--target wasm32-wasi`; that cross-flag constraint is enforced in
+/// `parse_args` once the target is known.
 fn parse_emit(value: &str) -> Emit {
     match value {
         "executable" | "exe" | "bin" => Emit::Executable,
         "cdylib" | "dylib" | "shared" => Emit::Cdylib,
+        "npm" | "npm-package" => Emit::NpmPackage,
         other => fail(&format!(
-            "Invalid --emit kind '{}': expected one of: executable, cdylib",
+            "Invalid --emit kind '{}': expected one of: executable, cdylib, npm",
             other
         )),
     }
@@ -600,6 +610,7 @@ mod tests {
     fn emit_kind_parses_canonical_spellings() {
         assert_eq!(parse_emit("executable"), Emit::Executable);
         assert_eq!(parse_emit("cdylib"), Emit::Cdylib);
+        assert_eq!(parse_emit("npm"), Emit::NpmPackage);
     }
 
     /// Verifies the accepted aliases map to their canonical variants so users coming
@@ -610,6 +621,7 @@ mod tests {
         assert_eq!(parse_emit("bin"), Emit::Executable);
         assert_eq!(parse_emit("dylib"), Emit::Cdylib);
         assert_eq!(parse_emit("shared"), Emit::Cdylib);
+        assert_eq!(parse_emit("npm-package"), Emit::NpmPackage);
     }
 
     /// Verifies the canonical `--ir-opt=` spellings toggle the EIR optimization
