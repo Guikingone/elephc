@@ -1578,4 +1578,3 @@ fn test_in_array_strict_distinguishes_bool_int_membership() {
         "<?php echo in_array(true, [2]) ? '1' : '0'; echo in_array(true, [2], true) ? '1' : '0'; echo in_array(false, [0]) ? '1' : '0'; echo in_array(false, [0], true) ? '1' : '0'; echo in_array(2, [true]) ? '1' : '0'; echo in_array(2, [true], true) ? '1' : '0';",
     );
     assert_eq!(out, "101010");
-}
