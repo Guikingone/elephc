@@ -594,7 +594,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let slot = self.declare_local(name, php_type.clone());
         // Backend frame layout uses the final widened slot type for every load
         // and store, so cleanup loads must be typed after this store's widening.
-        self.builder.widen_local_storage_type(slot, php_type.clone());
+        // For ref-bound locals, keep the existing slot type to avoid widening
+        // Int→Mixed mid-function (which would break earlier loads that expect I64).
+        // The codegen narrows Mixed→Int at the store point instead.
+        let is_ref_bound = self.is_ref_bound_local(name);
+        let widen_type = if is_ref_bound {
+            previous_type.clone()
+        } else {
+            php_type.clone()
+        };
+        self.builder.widen_local_storage_type(slot, widen_type);
         let source = value;
         let source_is_owning_temporary = self.value_is_owning_temporary(value);
         let release_source_after_store = self.value_needs_release_after_retaining_store(value);
@@ -1296,6 +1305,11 @@ fn builtin_call_result_owns_storage_as_temporary(name: &str) -> bool {
             | "ptr_read_string"
             | "strpos"
             | "strrpos"
+            // zval bridge: `zval_unpack` rebuilds a fresh owned value (scalars box a
+            // new Mixed cell; strings persist an owned copy; arrays own-transfer the
+            // freshly rebuilt array into the cell with refcount 1), so its Mixed result
+            // is an owning temporary that must be released after a retaining insert.
+            | "zval_unpack"
     )
 }
 

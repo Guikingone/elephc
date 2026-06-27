@@ -1484,15 +1484,18 @@ fn lower_assignment_expr(
         .unwrap_or_else(|| lower_expr(ctx, value));
     let mut result = lowered;
     if let ExprKind::Variable(name) = &target.kind {
-        // For static locals, keep the declared type to avoid widening Int→Mixed.
-        // The codegen will narrow Mixed→Int when the slot is Int-typed.
+        // For static locals and ref-bound locals, keep the declared type to
+        // avoid widening Int→Mixed. The codegen narrows Mixed→Int when the slot
+        // is Int-typed. Without this, ref cells would hold Mixed boxes instead
+        // of raw ints, breaking the ref cell ownership model.
         let value_php_type = ctx.builder.value_php_type(lowered.value);
         let is_static = matches!(
             ctx.local_kinds.get(name).copied(),
             Some(crate::ir::LocalKind::StaticLocal)
         );
+        let is_ref_bound = ctx.is_ref_bound_local(name);
         let existing_type = ctx.local_types.get(name).cloned();
-        let php_type = if is_static {
+        let php_type = if is_static || is_ref_bound {
             existing_type.unwrap_or(value_php_type)
         } else {
             value_php_type
@@ -1674,7 +1677,11 @@ fn lower_inc_dec(
         checked_op.default_effects(),
         Some(expr.span),
     );
-    ctx.store_local(name, new, PhpType::Mixed, Some(expr.span));
+    // For ref-bound locals, keep the slot type as the existing type (e.g. Int)
+    // and let the codegen narrow Mixed→Int. This avoids widening the slot to
+    // Mixed mid-function, which would break earlier I64 loads.
+    let existing_type = ctx.local_type(name);
+    ctx.store_local(name, new, existing_type, Some(expr.span));
     if post { old } else { new }
 }
 

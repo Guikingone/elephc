@@ -357,21 +357,35 @@ impl<'a> FunctionContext<'a> {
         }
         // Narrow Mixed to Int when the local slot is typed Int but the value
         // is Mixed (from checked integer arithmetic that may overflow to float).
-        // The runtime cast helper truncates floats and extracts ints.
+        // The runtime cast helper truncates floats and extracts ints. The
+        // original Mixed box is released after narrowing to avoid leaks.
         if matches!(target_ty.codegen_repr(), PhpType::Int)
             && matches!(source_ty.codegen_repr(), PhpType::Mixed)
         {
+            let result_reg = abi::int_result_reg(self.emitter);
+            let arg_reg = abi::int_arg_reg_name(self.emitter.target, 0);
+            // Move the Mixed pointer to the argument register for the cast call.
+            if result_reg != arg_reg {
+                abi::emit_reg_move(self.emitter, arg_reg, result_reg);
+            }
+            // Push a placeholder for the int result, push the Mixed pointer.
+            abi::emit_push_reg(self.emitter, result_reg);
+            abi::emit_push_reg(self.emitter, arg_reg);
+            abi::emit_call_label(self.emitter, "__rt_mixed_cast_int");
+            // Save int result to placeholder (at sp+16).
             match self.emitter.target.arch {
                 Arch::AArch64 => {
-                    // x0 already holds the Mixed pointer from load_value_to_result
-                    abi::emit_call_label(self.emitter, "__rt_mixed_cast_int");
+                    self.emitter.instruction("str x0, [sp, #16]");              // save the int result to the placeholder slot
                 }
                 Arch::X86_64 => {
-                    // rax holds the Mixed pointer; __rt_mixed_cast_int expects it in rdi
-                    self.emitter.instruction("mov rdi, rax");                       // move the Mixed pointer into the first SysV argument register
-                    abi::emit_call_label(self.emitter, "__rt_mixed_cast_int");
+                    self.emitter.instruction("mov QWORD PTR [rsp + 16], rax");    // save the int result to the placeholder slot
                 }
             }
+            // Pop the saved Mixed pointer into result_reg for decref.
+            abi::emit_pop_reg(self.emitter, result_reg);
+            abi::emit_call_label(self.emitter, "__rt_decref_mixed");
+            // Restore the int result from the placeholder.
+            abi::emit_pop_reg(self.emitter, result_reg);
         }
         coerce_current_result_for_target_store(self.emitter, &source_ty, &target_ty)?;
         let offset = self.local_offset(slot)?;
