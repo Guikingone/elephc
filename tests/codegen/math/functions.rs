@@ -292,3 +292,69 @@ try {
     );
     assert_eq!(out, "ValueError:ValueError");
 }
+
+/// Regression test for issue #369: integer overflow for int + int must
+/// promote to float like PHP, not wrap as two's-complement.
+#[test]
+fn test_int_overflow_add_promotes_to_float() {
+    let out = compile_and_run(
+        "<?php
+        $x = 9223372036854775807;
+        var_dump($x + 1);
+        ",
+    );
+    assert_eq!(out, "float(9.2233720368548E+18)\n");
+}
+
+/// Regression test for issue #369: constant literal overflow is folded
+/// to float at compile time.
+#[test]
+fn test_int_overflow_add_constant_folds_to_float() {
+    let out = compile_and_run(
+        "<?php
+        var_dump(9223372036854775807 + 1);
+        ",
+    );
+    assert_eq!(out, "float(9.2233720368548E+18)\n");
+}
+
+/// Regression test for issue #369: integer subtraction overflow must
+/// promote to float.
+#[test]
+fn test_int_overflow_sub_promotes_to_float() {
+    let out = compile_and_run(
+        "<?php
+        $x = -9223372036854775808;
+        var_dump($x - 1);
+        ",
+    );
+    assert_eq!(out, "float(-9.2233720368548E+18)\n");
+}
+
+/// Regression test for issue #369: integer multiplication overflow must
+/// promote to float.
+#[test]
+fn test_int_overflow_mul_promotes_to_float() {
+    let out = compile_and_run(
+        "<?php
+        $x = 9223372036854775807;
+        var_dump($x * 2);
+        ",
+    );
+    assert_eq!(out, "float(1.844674407371E+19)\n");
+}
+
+/// Regression test for issue #369: normal integer arithmetic must still
+/// produce int results (no spurious float promotion).
+#[test]
+fn test_normal_int_arithmetic_stays_int() {
+    let out = compile_and_run(
+        "<?php
+        $a = 1 + 2;
+        $b = 7 * 8;
+        $c = 10 - 5;
+        echo $a, '|', $b, '|', $c;
+        ",
+    );
+    assert_eq!(out, "3|56|5");
+}

@@ -94,7 +94,27 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         ExprKind::PreDecrement(name) => ExprKind::PreDecrement(name),
         ExprKind::PostDecrement(name) => ExprKind::PostDecrement(name),
         ExprKind::FunctionCall { name, args } => {
-            let arg_env = (!function_call_effect(name.as_str()).has_side_effects).then_some(env);
+            // Propagate constants into call arguments for builtins that
+            // never pass scalar arguments by reference to user callbacks.
+            // Some builtins like call_user_func/call_user_func_array forward
+            // arguments to user-defined functions which may take them by
+            // reference, so propagating a constant would lose the write-back
+            // slot.
+            let is_builtin = crate::types::checker::builtins
+                ::is_supported_builtin_function(name.as_str());
+            let forwards_to_user_callback = matches!(
+                name.as_str(),
+                "call_user_func" | "call_user_func_array"
+                    | "array_map" | "array_filter" | "array_walk"
+                    | "array_walk_recursive" | "array_reduce"
+                    | "usort" | "uasort" | "uksort"
+                    | "preg_replace_callback"
+            );
+            let arg_env = if is_builtin && !forwards_to_user_callback {
+                Some(env)
+            } else {
+                (!function_call_effect(name.as_str()).has_side_effects).then_some(env)
+            };
             ExprKind::FunctionCall {
                 name,
                 args: propagate_args(args, arg_env),
