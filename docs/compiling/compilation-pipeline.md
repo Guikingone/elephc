@@ -117,6 +117,11 @@ plan for the final binary. This resolution does not install or repair packages
 and is folded into the untimed setup immediately before the `assemble`/`link`
 timing labels.
 
+The `wasm32-wasi` target ([Targets](targets.md#webassembly-partial-parity))
+bypasses this native `as`/`ld` tail entirely. Instead of emitting native
+assembly, the `src/codegen_wasm` backend emits a WebAssembly module
+(`.wat`/`.wasm`) from the same EIR, so no system assembler or linker runs.
+
 ## Inspecting intermediate stages
 
 You do not have to run the whole pipeline. Several flags stop early or dump an

@@ -54,7 +54,7 @@ selection, toolchain overrides, and transactional behavior.
 | Flag | Values | Default | Description |
 |---|---|---|---|
 | `<source-file>` | path | — | Required. A tagged `.php` or tagless `.lfc` file to compile. Other suffixes retain tagged-PHP behavior. |
-| `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`) | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library. |
+| `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`), `npm` (`npm-package`) | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library. `npm` packages the compiled WebAssembly module as an NPM package and requires `--target wasm32-wasi`. |
 | `--emit-asm` | — | off | Write generated assembly instead of a binary. |
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
 | `--check` | — | off | Run front-end checks only; write nothing. |
@@ -65,7 +65,8 @@ selection, toolchain overrides, and transactional behavior.
 | `--web` | — | off | Compile a prefork HTTP server binary instead of a CLI executable. See [Web Server](../beyond-php/web.md). |
 
 `--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive. `--web` cannot
-be combined with `--check`, `--emit cdylib`, `--emit-asm`, or `--emit-ir`. See
+be combined with `--check`, `--emit cdylib`, `--emit-asm`, or `--emit-ir`.
+`--emit npm` requires `--target wasm32-wasi`. See
 [Output formats and diagnostics](output-and-diagnostics.md).
 
 ## Web server binary runtime arguments
@@ -103,10 +104,14 @@ status and headers with `http_response_code()` and `header()`. See
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--target TARGET` / `--target=TARGET` | `macos-aarch64`, `linux-aarch64`, `linux-x86_64` (plus alias spellings; recognized future targets produce an unsupported-backend diagnostic) | host platform | Select the compilation target. |
+| `--target TARGET` / `--target=TARGET` | `macos-aarch64`, `linux-aarch64`, `linux-x86_64`, `wasm32-wasi` (plus alias spellings; recognized future native targets produce an unsupported-backend diagnostic) | host platform | Select the compilation target. |
 
 See [Targets and cross-compilation](targets.md) for the full list of accepted
 spellings.
+
+The `wasm32-wasi` target compiles the active EIR module to WebAssembly instead
+of native machine code. `--emit npm` is only valid together with
+`--target wasm32-wasi`.
 
 ## Optimization and code generation
 
