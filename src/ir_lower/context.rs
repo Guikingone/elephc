@@ -1081,6 +1081,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             );
         let store_retains_value = uses_global
             || previous_kind == LocalKind::PhpLocal
+            || previous_kind == LocalKind::ClosureCapture
             || static_local_store_needs_string_retain;
         // Retain before cleanup because a borrowed result can alias the old slot.
         let value = if store_retains_value
@@ -1184,6 +1185,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && !ref_cell_narrowed_mixed_to_int
         {
             crate::ir_lower::ownership::release_if_owned(self, source, span);
+        }
+        // This was the FIRST reassignment of a by-value closure capture: the slot's
+        // descriptor borrow was intentionally not released, and the slot now owns the
+        // value just stored. Demote it to `PhpLocal` so subsequent writes release the
+        // prior owned value, and record it so every function exit releases the final
+        // owned value (the epilogue otherwise excludes capture-param-named slots).
+        if previous_kind == LocalKind::ClosureCapture && !uses_global && !is_ref_bound {
+            self.local_kinds.insert(name.to_string(), LocalKind::PhpLocal);
+            self.builder.set_local_kind(slot, LocalKind::PhpLocal);
+            self.builder.mark_reassigned_capture_slot(slot);
         }
         value
     }
