@@ -232,6 +232,7 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_array_set ---");
     emitter.label_global("__rt_mixed_array_set");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     // Inputs (SysV): rdi = mixed_ptr, rsi = key_lo, rdx = key_hi, rcx = value_mixed_ptr.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
@@ -398,5 +399,6 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_array_set_done");
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return to generated code
 }

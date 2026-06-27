@@ -1477,15 +1477,13 @@ disjoint from every register those volatile-safe lowerings touch:
 | Class | aarch64 int | aarch64 float | x86_64 int | x86_64 float |
 |---|---|---|---|---|
 | Caller-saved | `x12`–`x15` | `d16`–`d23` | `rsi`,`rdi`,`r8`,`r9` | `xmm2`–`xmm7` |
-| Callee-saved | `x21`–`x28` | `d8`–`d14` | `rbx` | (none) |
+| Callee-saved | `x21`–`x28` | `d8`–`d14` | `rbx`,`r12`–`r15` | (none) |
 
-This is especially valuable on x86_64, where the callee-saved integer pool is
-just `rbx` and there are no callee-saved XMM registers at all: call-free integer
-and float values can now use the caller-saved pools instead of always spilling.
-On x86_64 `r14` and `r15` are still never allocated — they are used as scratch by
-hand-written runtime routines and shared heap-marker codegen without
-ABI-compliant save/restore. A float that lives across a call on x86_64 still
-spills, because no XMM register survives the call.
+This is especially valuable on x86_64, where the callee-saved integer pool now
+includes `rbx`, `r12`, `r13`, `r14`, and `r15`. All hand-written `__rt_*` runtime
+routines save and restore any callee-saved registers they clobber, so the full
+SysV callee-saved set is safe for the allocator. There are no callee-saved XMM
+registers on x86_64, so a float that lives across a call still spills.
 
 The spill heuristic is use-weighted: under pressure the allocator evicts the
 interval with the lowest use count, breaking ties toward the furthest end (the

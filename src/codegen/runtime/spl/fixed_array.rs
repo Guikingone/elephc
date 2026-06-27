@@ -747,6 +747,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
 /// Clobbers: rax, r9, r10, r11, r12. Preserves rbp.
 fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_new");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for constructor spills
     emitter.instruction("mov rbp, rsp");                                        // establish constructor frame
     emitter.instruction("sub rsp, 24");                                         // reserve class id, size, and object spills
@@ -792,6 +793,7 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r11");                                        // return initialized SplFixedArray object
     emitter.instruction("add rsp, 24");                                         // release constructor spills
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return object pointer
 }
 
@@ -810,6 +812,8 @@ fn emit_count_x86_64(emitter: &mut Emitter) {
 /// zero-fills newly exposed slots. Throws ValueError if size is negative.
 fn emit_set_size_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_set_size");
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for resize state
     emitter.instruction("mov rbp, rsp");                                        // establish resize frame
     emitter.instruction("sub rsp, 48");                                         // reserve receiver, size, storage, old size, and cursor spills
@@ -874,6 +878,8 @@ fn emit_set_size_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r9], r10");                             // store new logical fixed size
     emitter.instruction("add rsp, 48");                                         // release resize frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
     emitter.instruction("ret");                                                 // return void
 }
 
@@ -883,6 +889,7 @@ fn emit_set_size_x86_64(emitter: &mut Emitter) {
 /// Throws TypeError if offset is not an integer.
 fn emit_offset_exists_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_exists");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
     emit_offset_prefix_x86_64(
         emitter,
         "__rt_spl_fixed_offset_exists_type_throw",
@@ -897,11 +904,13 @@ fn emit_offset_exists_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx rax, al");                                       // widen boolean result
     emitter.instruction("add rsp, 48");                                         // release offset frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return boolean result
     emitter.label("__rt_spl_fixed_offset_exists_false");
     emitter.instruction("xor rax, rax");                                        // invalid/unset offsets return false
     emitter.instruction("add rsp, 48");                                         // release offset frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return false
     emitter.label("__rt_spl_fixed_offset_exists_type_throw");
     emitter.instruction("add rsp, 48");                                         // release offset frame before throwing
@@ -964,6 +973,8 @@ fn emit_offset_get_x86_64(emitter: &mut Emitter) {
 /// Throws TypeError if offset is not an integer; throws OutOfBoundsException if out of range.
 fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_set");
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for offsetSet
     emitter.instruction("mov rbp, rsp");                                        // establish offsetSet frame
     emitter.instruction("sub rsp, 64");                                         // reserve receiver, offset, value, tag, payload, and cursor spills
@@ -1018,6 +1029,8 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_fixed_offset_set_done");
     emitter.instruction("add rsp, 64");                                         // release offsetSet frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
     emitter.instruction("ret");                                                 // return void
 }
 
@@ -1027,6 +1040,7 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
 /// Throws TypeError if offset is not an integer; throws OutOfBoundsException if out of range.
 fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_unset");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
     emit_offset_prefix_x86_64(
         emitter,
         "__rt_spl_fixed_offset_unset_type_throw",
@@ -1043,6 +1057,7 @@ fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_fixed_offset_unset_done");
     emitter.instruction("add rsp, 48");                                         // release offset frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return void
     emitter.label("__rt_spl_fixed_offset_unset_type_throw");
     emitter.instruction("add rsp, 48");                                         // release offset frame before throwing
@@ -1238,6 +1253,7 @@ fn emit_unserialize_x86_64(emitter: &mut Emitter) {
 /// entries at their preserved offsets. Releases any overwritten destination cells via `__rt_decref_mixed`.
 fn emit_copy_from_array_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_copy_from_array");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for import
     emitter.instruction("mov rbp, rsp");                                        // establish import frame
     emitter.instruction("sub rsp, 96");                                         // reserve receiver, source, preserve flag, size, storage, cursor, and value spills
@@ -1380,6 +1396,7 @@ fn emit_copy_from_array_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_fixed_copy_from_array_done");
     emitter.instruction("add rsp, 96");                                         // release import frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return void
 }
 

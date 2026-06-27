@@ -591,6 +591,10 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: apply_stream_filter ---");
     emitter.label_global("__rt_apply_stream_filter");
+    emitter.instruction("push r15");                                                     // save callee-saved r15 across runtime routine
+    emitter.instruction("push r14");                                                     // save callee-saved r14 across runtime routine
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     emitter.instruction("xor r9, r9");                                          // r9 = current byte index
     emitter.label("__rt_asf_loop_x86");
@@ -661,6 +665,10 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_asf_loop_x86");                               // continue the transform loop
     emitter.label("__rt_asf_done_x86");
     // rdx already holds the input (and output) length for stateless transforms.
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
+    emitter.instruction("pop r15");                                                      // restore callee-saved r15 before returning
     emitter.instruction("ret");                                                 // return to the stream-filter caller
 
     // -- string.strip_tags: state-machine compaction. --
@@ -691,6 +699,10 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_asf_strip_loop_x86");                         // continue the strip-tags loop
     emitter.label("__rt_asf_strip_done_x86");
     emitter.instruction("mov rdx, r10");                                        // return compacted length via the same register fread/fwrite use for length
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
+    emitter.instruction("pop r15");                                                      // restore callee-saved r15 before returning
     emitter.instruction("ret");                                                 // return to the stream-filter caller
 
     // -- convert.base64-decode (x86_64) --
@@ -781,6 +793,10 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc r10");                                             // advance the write cursor
     emitter.label("__rt_asf_b64_finish_x86");
     emitter.instruction("mov rdx, r10");                                        // return the transformed output length
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
+    emitter.instruction("pop r15");                                                      // restore callee-saved r15 before returning
     emitter.instruction("ret");                                                 // return to the stream-filter caller
 
     // -- dechunk (x86_64) — HTTP/1.1 chunked transfer-encoding parser --
@@ -863,6 +879,10 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_asf_dc_size_loop_x86");                       // continue the dechunk loop
     emitter.label("__rt_asf_dc_done_x86");
     emitter.instruction("mov rdx, r10");                                        // return the transformed output length
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
+    emitter.instruction("pop r15");                                                      // restore callee-saved r15 before returning
     emitter.instruction("ret");                                                 // return to the stream-filter caller
 
     // -- convert.quoted-printable-decode (x86_64) --
@@ -952,6 +972,10 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_asf_qp_loop_x86");                            // continue the quoted-printable decoder loop
     emitter.label("__rt_asf_qp_done_x86");
     emitter.instruction("mov rdx, r10");                                        // return the transformed output length
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
+    emitter.instruction("pop r15");                                                      // restore callee-saved r15 before returning
     emitter.instruction("ret");                                                 // return to the stream-filter caller
 
     // -- convert.base64-encode (x86_64) --
@@ -1072,6 +1096,10 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_asf_b64e_cb_loop_x86");                       // continue the base64 encoder loop
     emitter.label("__rt_asf_b64e_done_x86");
     emitter.instruction("mov rdx, r10");                                        // return the transformed output length
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
+    emitter.instruction("pop r15");                                                      // restore callee-saved r15 before returning
     emitter.instruction("ret");                                                 // return to the stream-filter caller
 
     // -- convert.quoted-printable-encode (x86_64) --
@@ -1136,5 +1164,9 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_asf_qpe_cb_loop_x86");                        // continue the quoted-printable encoder loop
     emitter.label("__rt_asf_qpe_done_x86");
     emitter.instruction("mov rdx, r10");                                        // return the transformed output length
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
+    emitter.instruction("pop r15");                                                      // restore callee-saved r15 before returning
     emitter.instruction("ret");                                                 // return to the stream-filter caller
 }

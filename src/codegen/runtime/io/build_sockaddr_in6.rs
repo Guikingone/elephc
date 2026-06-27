@@ -165,6 +165,7 @@ fn emit_build_sockaddr_in6_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: build_sockaddr_in6 ---");
     emitter.label_global("__rt_build_sockaddr_in6");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     // Frame (rbp-relative): [-8) addr ptr, [-16) addr len, [-24) out buffer,
     //   [-40..-24) sin6_addr scratch (16), [-48) close-bracket scratch,
@@ -273,11 +274,13 @@ fn emit_build_sockaddr_in6_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 28");                                         // success: sockaddr_in6 addrlen
     emitter.instruction("add rsp, 64");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return the addrlen
 
     emitter.label("__rt_bsi6_fail_x86");
     emitter.instruction("mov rax, -1");                                         // -1 reports a failed sockaddr_in6 build
     emitter.instruction("add rsp, 64");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return the failure result
 }

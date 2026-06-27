@@ -1401,6 +1401,9 @@ fn emit_pop_x86_64(emitter: &mut Emitter) {
 /// to the caller. Throws RuntimeException on an empty list.
 fn emit_shift_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_shift");
+    emitter.instruction("push r14");                                                     // save callee-saved r14 across runtime routine
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
     emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // read current storage length
     emitter.instruction("test r10, r10");                                       // is the list empty?
@@ -1421,6 +1424,9 @@ fn emit_shift_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10, 1");                                          // compute new storage length
     emitter.instruction("mov QWORD PTR [r9], r10");                             // persist shortened length
     emitter.instruction("mov QWORD PTR [r11 + r10 * 8], 0");                    // clear stale tail slot
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
     emitter.instruction("ret");                                                 // return removed Mixed cell
     emitter.label("__rt_spl_dll_shift_empty");
     emit_throw_exception_x86_64(
@@ -1447,6 +1453,10 @@ fn emit_unshift_x86_64(emitter: &mut Emitter) {
 /// and throws OutOfRangeException on invalid index.
 fn emit_insert_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_insert");
+    emitter.instruction("push r15");                                                     // save callee-saved r15 across runtime routine
+    emitter.instruction("push r14");                                                     // save callee-saved r14 across runtime routine
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for insertion state
     emitter.instruction("mov rbp, rsp");                                        // establish insertion frame
     emitter.instruction("sub rsp, 48");                                         // reserve receiver, index, value, storage, and length spills
@@ -1504,6 +1514,10 @@ fn emit_insert_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r9], r10");                             // persist new storage length
     emitter.instruction("add rsp, 48");                                         // release insertion state
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
+    emitter.instruction("pop r15");                                                      // restore callee-saved r15 before returning
     emitter.instruction("ret");                                                 // return void
     emitter.label("__rt_spl_dll_insert_range_throw");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload rejected Mixed value before throwing
@@ -1658,6 +1672,7 @@ fn emit_serialize_array_x86_64(emitter: &mut Emitter) {
 /// global `_concat_buf` and updates `_concat_off`.
 fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_serialize");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for legacy serialization
     emitter.instruction("mov rbp, rsp");                                        // establish legacy serialization frame
     emitter.instruction("sub rsp, 96");                                         // reserve receiver, cursor, payload, and loop spills
@@ -1792,6 +1807,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rdx, rax");                                        // return serialized string length
     emitter.instruction("add rsp, 96");                                         // release legacy serialization spills
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return serialized pointer/length pair
     emit_write_dec_x86_64(emitter);
 }
@@ -1835,6 +1851,7 @@ fn emit_write_dec_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_dll_write_dec_done_x86");
     emitter.instruction("mov rdi, r8");                                         // return advanced output cursor
     emitter.instruction("add rsp, 32");                                         // release temporary reversed digit storage
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return to serializer
 }
 
@@ -2188,6 +2205,7 @@ fn emit_valid_x86_64(emitter: &mut Emitter) {
 /// null (via `emit_tail_boxed_null_x86_64`) when the index is out of range.
 fn emit_current_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_current");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
     emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // read storage length
     emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", SPL_DLL_ITER_INDEX_OFFSET)); // read iterator index
@@ -2196,6 +2214,7 @@ fn emit_current_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea r12, [r9 + 24]");                                  // point at first storage element
     emitter.instruction("mov rax, QWORD PTR [r12 + r11 * 8]");                  // load current Mixed cell
     emitter.instruction("call __rt_incref");                                    // retain current Mixed cell for caller
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return retained Mixed cell
     emitter.label("__rt_spl_dll_current_null");
     emit_tail_boxed_null_x86_64(emitter);
@@ -2257,6 +2276,7 @@ fn emit_offset_exists_x86_64(emitter: &mut Emitter) {
 /// on invalid offset.
 fn emit_offset_get_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_get");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
     emit_offset_index_prefix_x86_64(
         emitter,
         "__rt_spl_dll_offset_get_type_throw",
@@ -2268,6 +2288,7 @@ fn emit_offset_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_incref");                                    // retain selected Mixed cell for caller
     emitter.instruction("add rsp, 48");                                         // release offset helper frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return retained Mixed cell
     emitter.label("__rt_spl_dll_offset_get_type_throw");
     emitter.instruction("add rsp, 48");                                         // release offset helper frame before throwing
@@ -2338,6 +2359,9 @@ fn emit_offset_index_prefix_x86_64(
 /// logical offset to physical slot. Throws TypeError or OutOfRangeException on invalid offset.
 fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_set");
+    emitter.instruction("push r14");                                                     // save callee-saved r14 across runtime routine
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for offsetSet
     emitter.instruction("mov rbp, rsp");                                        // establish offsetSet frame
     emitter.instruction("sub rsp, 64");                                         // reserve receiver, offset, value, tag, payload, and storage spills
@@ -2411,6 +2435,9 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_dll_offset_set_done");
     emitter.instruction("add rsp, 64");                                         // release offsetSet frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
     emitter.instruction("ret");                                                 // return void
 }
 
@@ -2420,6 +2447,10 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
 /// Throws TypeError or OutOfRangeException on invalid offset.
 fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_unset");
+    emitter.instruction("push r15");                                                     // save callee-saved r15 across runtime routine
+    emitter.instruction("push r14");                                                     // save callee-saved r14 across runtime routine
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
     emit_offset_index_prefix_x86_64(
         emitter,
         "__rt_spl_dll_offset_unset_type_throw",
@@ -2452,6 +2483,10 @@ fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_dll_offset_unset_done");
     emitter.instruction("add rsp, 48");                                         // release offset helper frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
+    emitter.instruction("pop r15");                                                      // restore callee-saved r15 before returning
     emitter.instruction("ret");                                                 // return void
     emitter.label("__rt_spl_dll_offset_unset_type_throw");
     emitter.instruction("add rsp, 48");                                         // release offset helper frame before throwing

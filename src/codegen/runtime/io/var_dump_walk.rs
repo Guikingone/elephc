@@ -80,6 +80,7 @@ fn emit_var_dump_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_array_int ---");
     emitter.label_global("__rt_var_dump_array_int");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     // rbp-relative scratch:
     //   [rbp - 8]  array pointer
@@ -117,6 +118,7 @@ fn emit_var_dump_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_vd_arr_int_done_x86");
     emitter.instruction("add rsp, 16");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return to the var_dump builtin caller
 }
 
@@ -177,6 +179,7 @@ fn emit_var_dump_array_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_array_str ---");
     emitter.label_global("__rt_var_dump_array_str");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish runtime frame pointer
@@ -212,6 +215,7 @@ fn emit_var_dump_array_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_vd_arr_str_done_x86");
     emitter.instruction("add rsp, 16");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -685,6 +689,7 @@ fn emit_var_dump_array_float_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_array_float ---");
     emitter.label_global("__rt_var_dump_array_float");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish runtime frame pointer
@@ -717,6 +722,7 @@ fn emit_var_dump_array_float_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_vd_arr_float_done_x86");
     emitter.instruction("add rsp, 16");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -840,6 +846,9 @@ fn emit_var_dump_array_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_array_mixed ---");
     emitter.label_global("__rt_var_dump_array_mixed");
+    emitter.instruction("push r14");                                                     // save callee-saved r14 across runtime routine
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     // Defensive stamp check (see ARM64 prologue): only walk arrays
     // whose value_type stamp says Mixed (=7).
@@ -913,6 +922,9 @@ fn emit_var_dump_array_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 16");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.label("__rt_vd_arr_mixed_skip_x86");                                // wrong stamp → return without any body
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -921,6 +933,7 @@ fn emit_var_dump_array_bool_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_array_bool ---");
     emitter.label_global("__rt_var_dump_array_bool");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish runtime frame pointer
@@ -953,6 +966,7 @@ fn emit_var_dump_array_bool_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_vd_arr_bool_done_x86");
     emitter.instruction("add rsp, 16");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return to caller
 }
 

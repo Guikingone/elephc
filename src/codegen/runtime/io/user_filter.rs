@@ -664,6 +664,9 @@ fn emit_user_filter_release_fd_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: user_filter_release_fd ---");
     emitter.label_global("__rt_user_filter_release_fd");
+    emitter.instruction("push r14");                                                     // save callee-saved r14 across runtime routine
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish runtime frame pointer
@@ -707,5 +710,8 @@ fn emit_user_filter_release_fd_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // preserve fd
     emitter.instruction("add rsp, 16");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
     emitter.instruction("ret");                                                 // return to caller
 }

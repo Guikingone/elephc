@@ -102,6 +102,7 @@ fn emit_mixed_count_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_count ---");
     emitter.label_global("__rt_mixed_count");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     // rax = Mixed* receiver (single-arg int-result ABI). Output: rax = count.
     emitter.instruction("test rax, rax");                                       // null Mixed → 0
@@ -120,6 +121,7 @@ fn emit_mixed_count_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // defensive null guard
     emitter.instruction("je __rt_mixed_count_zero");                            // branch on the current mixed count helper condition
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // count lives at offset 0 of both array and hash headers
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return count in rax
 
     emitter.label("__rt_mixed_count_object");
@@ -149,5 +151,6 @@ fn emit_mixed_count_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_count_zero");
     emitter.instruction("xor rax, rax");                                        // not a container → return 0
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return 0 in rax
 }

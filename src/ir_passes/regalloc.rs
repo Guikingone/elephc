@@ -325,10 +325,11 @@ fn spill_cost(weight: u32, end: u32) -> (u32, std::cmp::Reverse<u32>) {
 fn callee_int_pool(target: Target) -> &'static [&'static str] {
     match target.arch {
         Arch::AArch64 => &["x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28"],
-        // Only rbx is reliably preserved across the hand-written x86_64 runtime
-        // routines and shared heap-marker codegen; r14/r15 are used there as
-        // scratch without ABI-compliant save/restore, so they are not allocated.
-        Arch::X86_64 => &["rbx"],
+        // rbx, r12, r13, r14, and r15 are callee-saved under the SysV ABI.
+        // All hand-written x86_64 __rt_* runtime routines now save/restore
+        // any callee-saved registers they clobber (push/pop at routine
+        // boundaries), so the full pool is safe for the register allocator.
+        Arch::X86_64 => &["rbx", "r12", "r13", "r14", "r15"],
     }
 }
 

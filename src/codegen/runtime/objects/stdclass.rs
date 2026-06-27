@@ -570,6 +570,7 @@ fn emit_mixed_property_get_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_property_get ---");
     emitter.label_global("__rt_mixed_property_get");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     // Inputs (SysV): rdi = mixed_ptr, rsi = name_ptr, rdx = name_len.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
@@ -598,6 +599,7 @@ fn emit_mixed_property_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_stdclass_get");                              // delegate to the dynamic-property reader
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return Mixed* in rax
 
     emitter.label("__rt_mixed_property_get_null");
@@ -607,6 +609,7 @@ fn emit_mixed_property_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // box null into a fresh Mixed cell
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return Mixed* in rax
 }
 
@@ -620,6 +623,7 @@ fn emit_mixed_property_set_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_property_set ---");
     emitter.label_global("__rt_mixed_property_set");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     // Inputs (SysV): rdi = mixed_ptr, rsi = name_ptr, rdx = name_len, rcx = value_mixed_ptr.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
@@ -652,6 +656,7 @@ fn emit_mixed_property_set_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_property_set_done");
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return (no return value)
 }
 

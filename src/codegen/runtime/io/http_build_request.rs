@@ -423,6 +423,8 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: http_build_request ---");
     emitter.label_global("__rt_http_build_request");
+    emitter.instruction("push r15");                                                     // save callee-saved r15 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     // rbp-relative frame (240 bytes — accommodates all Phase B HTTP options):
     //   [rbp -   8..104] existing slots (host, path, method, write, header, content)
@@ -775,6 +777,8 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("add rsp, 240");                                        // must match the prologue's sub rsp, 240
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r15");                                                      // restore callee-saved r15 before returning
     emitter.instruction("ret");                                                 // return to caller
 
     // inline byte-copy helper:

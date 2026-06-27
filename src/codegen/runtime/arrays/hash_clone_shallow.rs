@@ -145,6 +145,10 @@ fn emit_hash_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_clone_shallow ---");
     emitter.label_global("__rt_hash_clone_shallow");
+    emitter.instruction("push r15");                                                     // save callee-saved r15 across runtime routine
+    emitter.instruction("push r14");                                                     // save callee-saved r14 across runtime routine
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving clone-state spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved source hash, clone hash, and iterator state
@@ -236,5 +240,9 @@ fn emit_hash_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r12, QWORD PTR [rbp - 72]");                       // restore r12 after using it as the long-lived source associative-array pointer
     emitter.instruction("add rsp, 128");                                        // release the clone-state spill area before returning to the caller
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the cloned associative-array pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
+    emitter.instruction("pop r15");                                                      // restore callee-saved r15 before returning
     emitter.instruction("ret");                                                 // return to the caller with rax holding the cloned associative-array pointer
 }

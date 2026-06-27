@@ -173,6 +173,10 @@ fn emit_user_wrapper_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: user_wrapper_opendir ---");
     emitter.label_global("__rt_user_wrapper_opendir");
+    emitter.instruction("push r15");                                                     // save callee-saved r15 across runtime routine
+    emitter.instruction("push r14");                                                     // save callee-saved r14 across runtime routine
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     // Frame: [rbp-8] path ptr, [rbp-16] path len, [rbp-24] obj.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
@@ -290,6 +294,10 @@ fn emit_user_wrapper_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_uwod_ret_x86");
     emitter.instruction("add rsp, 48");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
+    emitter.instruction("pop r15");                                                      // restore callee-saved r15 before returning
     emitter.instruction("ret");                                                 // return fd / -1 / -2
 }
 

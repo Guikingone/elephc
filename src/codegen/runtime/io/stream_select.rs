@@ -220,6 +220,8 @@ fn emit_stream_select_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stream_select ---");
     emitter.label_global("__rt_stream_select");
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     // Frame (rbp-relative): [-8]=read_arr [-16]=write_arr [-24]=except_arr
     //   [-32]=read_fds [-40]=write_fds [-48]=except_fds
@@ -264,6 +266,8 @@ fn emit_stream_select_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // return the ready descriptor count
     emitter.instruction("add rsp, 160");                                        // release the select state frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
     emitter.instruction("ret");                                                 // return to the caller
 }
 

@@ -147,6 +147,7 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fread ---");
     emitter.label_global("__rt_fread");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     // -- user-wrapper synthetic fd path (Phase 10 step 4) --
     emitter.instruction("mov r9d, 0x40000000");                                 // USER_WRAPPER_FD_BASE
@@ -157,6 +158,7 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_fread_fd_ok_x86");                            // continue to the normal read path when the file descriptor is valid
     emitter.instruction("xor eax, eax");                                        // return an empty string pointer immediately when fopen() failed
     emitter.instruction("xor edx, edx");                                        // return an empty string length immediately when fopen() failed
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // skip the stream read path entirely for invalid file descriptors
 
     emitter.label("__rt_fread_fd_ok_x86");
@@ -220,6 +222,7 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fread_ret_x86");
     emitter.instruction("add rsp, 32");                                         // release the fread() spill slots before returning the successful string slice
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the successful fread() path
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return the borrowed concat-buffer string slice to the caller
 
     emitter.label("__rt_fread_read_failed_x86");
@@ -234,6 +237,7 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor edx, edx");                                        // return a zero-length read result without setting EOF
     emitter.instruction("add rsp, 32");                                         // release the fread() spill slots before returning the empty string
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the would-block fread() path
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return the empty non-EOF read result
 
     emitter.label("__rt_fread_eof_x86");
@@ -244,5 +248,6 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor edx, edx");                                        // return an empty string length when libc read() reports EOF or failure
     emitter.instruction("add rsp, 32");                                         // release the fread() spill slots before returning the empty-string result
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the EOF/error fread() path
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return the empty string result for the exhausted or failed stream read
 }

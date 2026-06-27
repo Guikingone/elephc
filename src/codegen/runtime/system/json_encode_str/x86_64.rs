@@ -34,6 +34,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_str ---");
     emitter.label_global("__rt_json_encode_str");
+    emitter.instruction("push r15");                                                     // save callee-saved r15 across runtime routine
+    emitter.instruction("push r14");                                                     // save callee-saved r14 across runtime routine
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving JSON-string scratch space
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the source slice and concat-buffer cursors
@@ -84,6 +88,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov r15, QWORD PTR [rbp - 80]");                       // restore the callee-saved register
     emitter.instruction("mov rsp, rbp");                                        // unwind the scratch frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
+    emitter.instruction("pop r15");                                                      // restore callee-saved r15 before returning
     emitter.instruction("ret");                                                 // return the unquoted numeric slice
 
     emitter.label("__rt_json_str_quoted_x");
@@ -530,6 +538,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r11 + 5], al");                          // load or prepare JSON string encoder state
     emitter.instruction("add r11, 6");                                          // advance the write pointer past the escape
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // persist the updated write pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
+    emitter.instruction("pop r15");                                                      // restore callee-saved r15 before returning
     emitter.instruction("ret");                                                 // return to the caller
 
     // -- helper: classify a string as a JSON number per RFC 8259 --
@@ -638,9 +650,17 @@ pub(super) fn emit(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_str_is_numeric_x_ok");
     emitter.instruction("mov rax, 1");                                          // signal numeric
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
+    emitter.instruction("pop r15");                                                      // restore callee-saved r15 before returning
     emitter.instruction("ret");                                                 // return from the JSON string encoder helper
     emitter.label("__rt_json_str_is_numeric_x_fail");
     emitter.instruction("xor rax, rax");                                        // signal non-numeric
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
+    emitter.instruction("pop r15");                                                      // restore callee-saved r15 before returning
     emitter.instruction("ret");                                                 // return from the JSON string encoder helper
 
     emitter.label("__rt_json_str_close");
@@ -657,5 +677,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov r15, QWORD PTR [rbp - 80]");                       // restore the callee-saved register
     emitter.instruction("add rsp, 80");                                         // release the local JSON-string scratch frame before returning to generated code
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
+    emitter.instruction("pop r15");                                                      // restore callee-saved r15 before returning
     emitter.instruction("ret");                                                 // return the encoded JSON string slice in the x86_64 string result registers
 }

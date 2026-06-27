@@ -265,6 +265,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_array_get ---");
     emitter.label_global("__rt_mixed_array_get");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     // Inputs (SysV): rdi = mixed_ptr, rsi = key_lo, rdx = key_hi.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
@@ -314,6 +315,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // box the typed indexed-array element into a Mixed cell
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return Mixed* in rax
     emitter.label("__rt_mixed_array_get_indexed_boxed");
     emitter.instruction("mov rax, QWORD PTR [r10 + r8 * 8]");                   // load the boxed Mixed pointer from the indexed slot
@@ -324,6 +326,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     abi::emit_pop_reg(emitter, "rax");
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return Mixed* in rax
     emitter.label("__rt_mixed_array_get_indexed_string");
     emitter.instruction("shl r8, 4");                                           // convert the element index to a 16-byte string slot offset
@@ -334,6 +337,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // box the string indexed-array element into a Mixed cell
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return Mixed* in rax
     emitter.label("__rt_mixed_array_get_indexed_null");
     emitter.instruction("mov rax, 8");                                          // rax = null runtime value_type tag
@@ -342,6 +346,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // box the null indexed-array element into a Mixed cell
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return Mixed* in rax
     emitter.label("__rt_mixed_array_get_indexed_missing");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the missing integer key for the PHP warning
@@ -370,6 +375,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     abi::emit_pop_reg(emitter, "rax");
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return Mixed* in rax
     emitter.label("__rt_mixed_array_get_assoc_box");
     // mixed_from_value(tag, lo, hi). Helper expects rax=tag, rdi=lo, rsi=hi.
@@ -378,6 +384,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // box the typed entry into a Mixed cell
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return Mixed* in rax
 
     emitter.label("__rt_mixed_array_get_object");
@@ -409,6 +416,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_stdclass_get");                              // delegate to the dynamic-property reader
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return Mixed* in rax
     emitter.label("__rt_mixed_array_get_spl_fixed");
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save unboxed SplFixedArray receiver while boxing the key
@@ -430,6 +438,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_spl_fixed_offset_get");                      // read through SplFixedArray::offsetGet
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return Mixed* in rax
     emitter.label("__rt_mixed_array_get_spl_dll");
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save unboxed SPL list receiver while boxing the key
@@ -451,6 +460,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_spl_dll_offset_get");                        // read through the shared SPL list offsetGet helper
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return Mixed* in rax
 
     emitter.label("__rt_mixed_array_get_null");
@@ -460,5 +470,6 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // box null into a fresh Mixed cell
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return Mixed* in rax
 }

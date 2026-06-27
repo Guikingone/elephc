@@ -91,6 +91,8 @@ fn emit_hash_grow_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_grow ---");
     emitter.label_global("__rt_hash_grow");
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     // -- set up stack frame --
     // Frame layout:
@@ -147,5 +149,7 @@ fn emit_hash_grow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r12, QWORD PTR [rbp - 32]");                       // restore caller r12
     emitter.instruction("add rsp, 48");                                         // release the grow spill frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
     emitter.instruction("ret");                                                 // return with rax = new table
 }

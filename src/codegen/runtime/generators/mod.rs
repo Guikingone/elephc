@@ -299,9 +299,11 @@ fn emit_gen_send_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_gen_send_done");
     emitter.instruction("xor rax, rax");                                        // return null when terminated
     emitter.label_global("__rt_gen_send_epilogue");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
     emitter.instruction("add rsp, 8");                                          // release the alignment pad
     emitter.instruction("pop r12");                                             // restore caller's r12
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return to caller
 }
 

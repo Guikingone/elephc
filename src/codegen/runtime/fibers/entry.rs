@@ -131,6 +131,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_entry ---");
     emitter.label_global("__rt_fiber_entry");
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     // -- establish a tiny frame on this fiber's fresh stack --
     emitter.instruction("push rbp");                                            // preserve a zero-equivalent caller frame pointer slot for walkers

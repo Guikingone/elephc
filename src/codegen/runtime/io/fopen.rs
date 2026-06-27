@@ -249,6 +249,10 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fopen ---");
     emitter.label_global("__rt_fopen");
+    emitter.instruction("push r15");                                                     // save callee-saved r15 across runtime routine
+    emitter.instruction("push r14");                                                     // save callee-saved r14 across runtime routine
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while fopen() uses stack locals for path and mode parsing
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the temporary pathname and mode spill slots
@@ -454,6 +458,10 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("add rsp, 32");                                         // release the temporary pathname and mode spill slots before returning the file descriptor
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the x86_64 fopen() helper completes
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
+    emitter.instruction("pop r15");                                                      // restore callee-saved r15 before returning
     emitter.instruction("ret");                                                 // return the libc open() file descriptor or negative error value in rax
 }
 

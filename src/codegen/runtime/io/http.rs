@@ -441,6 +441,9 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: http_open ---");
     emitter.label_global("__rt_http_open");
+    emitter.instruction("push r14");                                                     // save callee-saved r14 across runtime routine
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     // Frame (rbp-relative, 64 bytes used + 16 padding = 80):
     //   [rbp -  8] socket fd
@@ -799,6 +802,9 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // return the rewound body descriptor
     emitter.instruction("add rsp, 80");                                         // release the helper frame (matches the prologue's sub rsp, 80)
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
     emitter.instruction("ret");                                                 // return the http:// stream descriptor
 
     emitter.label("__rt_http_open_fail_x86");
@@ -813,5 +819,8 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, -1");                                         // -1 signals a failed http:// open
     emitter.instruction("add rsp, 80");                                         // release the helper frame (matches the prologue's sub rsp, 80)
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
     emitter.instruction("ret");                                                 // return the failure result
 }

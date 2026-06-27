@@ -373,6 +373,7 @@ pub(super) fn emit_state_getter_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_state_eq ---");
     emitter.label_global("__rt_fiber_state_eq");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     emitter.instruction("test rdi, rdi");                                       // a NULL fiber pointer never matches any state predicate
     emitter.instruction("je __rt_fiber_state_eq_false");                        // return false for NULL receivers
@@ -380,9 +381,11 @@ pub(super) fn emit_state_getter_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, rsi");                                        // compare current state to the requested predicate value
     emitter.instruction("sete al");                                             // materialize the boolean result in the low result byte
     emitter.instruction("movzx eax, al");                                       // widen the boolean result to the canonical integer register
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return the predicate result
     emitter.label("__rt_fiber_state_eq_false");
     emitter.instruction("xor eax, eax");                                        // NULL fiber pointer always evaluates to false
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return false to the caller
 }
 

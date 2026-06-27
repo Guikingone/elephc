@@ -99,6 +99,7 @@ fn emit_exception_matches_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: exception_matches ---");
     emitter.label_global("__rt_exception_matches");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     emitter.instruction("test rdi, rdi");                                       // null exceptions never match any catch target
     emitter.instruction("je __rt_exception_matches_no");                        // there is no active exception object to test
@@ -140,9 +141,11 @@ fn emit_exception_matches_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_exception_matches_yes");
     emitter.instruction("mov eax, 1");                                          // return true when the thrown object is an instance of the catch type
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // finish the instanceof-style catch test
 
     emitter.label("__rt_exception_matches_no");
     emitter.instruction("xor eax, eax");                                        // return false when the catch type does not match the thrown object
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // finish the instanceof-style catch test
 }

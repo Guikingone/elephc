@@ -139,6 +139,9 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: vsprintf ---");
     emitter.label_global("__rt_vsprintf");
+    emitter.instruction("push r14");                                                     // save callee-saved r14 across runtime routine
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     // Frame: [rbp-8] fmt ptr, [rbp-16] fmt len, [rbp-24] count, [rbp-32] slot
     //   base, [rbp-40] value_type, [rbp-48] slot size, [rbp-56] loop index.
@@ -236,5 +239,8 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // format length
     emitter.instruction("call __rt_sprintf");                                   // format; pops the count*16 records, returns rax/rdx
     emitter.instruction("leave");                                               // restore rsp/rbp (records already discarded by __rt_sprintf)
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
     emitter.instruction("ret");                                                 // return the formatted string (rax/rdx)
 }

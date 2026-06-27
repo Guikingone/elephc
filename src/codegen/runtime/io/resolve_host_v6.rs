@@ -118,6 +118,7 @@ fn emit_resolve_host_v6_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: resolve_host_v6 ---");
     emitter.label_global("__rt_resolve_host_v6");
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     // rbp-relative layout:
     //   [rbp - 48]  struct addrinfo hints (48 bytes)
@@ -173,6 +174,7 @@ fn emit_resolve_host_v6_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // success
     emitter.instruction("add rsp, 80");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return to caller
 
     emitter.label("__rt_rhv6_free_fail_x86");
@@ -183,5 +185,6 @@ fn emit_resolve_host_v6_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // failure
     emitter.instruction("add rsp, 80");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
     emitter.instruction("ret");                                                 // return to caller
 }

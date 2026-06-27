@@ -170,6 +170,10 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: user_wrapper_url_stat ---");
     emitter.label_global("__rt_user_wrapper_url_stat");
+    emitter.instruction("push r15");                                                     // save callee-saved r15 across runtime routine
+    emitter.instruction("push r14");                                                     // save callee-saved r14 across runtime routine
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     // Frame: [rbp-8] path ptr, [rbp-16] path len, [rbp-24] flags, [rbp-32] obj,
     //   [rbp-40] boxed result. push rbp then sub rsp,64 keeps rsp 16-aligned.
@@ -282,6 +286,10 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_uus_ret_x86");
     emitter.instruction("add rsp, 64");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
+    emitter.instruction("pop r14");                                                      // restore callee-saved r14 before returning
+    emitter.instruction("pop r15");                                                      // restore callee-saved r15 before returning
     emitter.instruction("ret");                                                 // return the boxed Mixed result (or 0 on no match)
 }
 

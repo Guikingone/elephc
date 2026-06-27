@@ -565,6 +565,8 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: preg_split ---");
     emitter.label_global("__rt_preg_split");
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving regex-split scratch storage
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for regex object and split bookkeeping
@@ -734,6 +736,8 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_split_ret_linux_x86_64");
     emitter.instruction(&format!("add rsp, {}", stack_size));                   // release local regex_t, regmatch buffer, and split spill storage
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
     emitter.instruction("ret");                                                 // return preg_split result in rax
 }
 

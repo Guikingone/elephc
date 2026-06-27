@@ -443,6 +443,7 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_assoc ---");
     emitter.label_global("__rt_json_encode_assoc");
+    emitter.instruction("push r15");                                                     // save callee-saved r15 across runtime routine
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving JSON-assoc scratch space
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for hash iteration state and concat-buffer cursors
@@ -789,5 +790,6 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r15, QWORD PTR [rbp - 104]");                      // restore caller r15 after using it as the flag cache
     emitter.instruction("add rsp, 112");                                        // release the local JSON-assoc scratch frame before returning to generated code
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
+    emitter.instruction("pop r15");                                                      // restore callee-saved r15 before returning
     emitter.instruction("ret");                                                 // return the encoded JSON object slice in the x86_64 string result registers
 }

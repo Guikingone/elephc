@@ -313,6 +313,8 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: preg_replace ---");
     emitter.label_global("__rt_preg_replace");
+    emitter.instruction("push r13");                                                     // save callee-saved r13 across runtime routine
+    emitter.instruction("push r12");                                                     // save callee-saved r12 across runtime routine
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving regex-replace scratch storage
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the regex object, regmatch buffer, and replace spill slots
@@ -492,6 +494,8 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_ret_linux_x86_64");
     emitter.instruction(&format!("add rsp, {}", stack_size));                   // release the local regex_t, regmatch_t, and replacement spill storage before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the regex-replace helper completes
+    emitter.instruction("pop r12");                                                      // restore callee-saved r12 before returning
+    emitter.instruction("pop r13");                                                      // restore callee-saved r13 before returning
     emitter.instruction("ret");                                                 // return the preg_replace() string result in rax/rdx
 }
 
