@@ -631,8 +631,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         let value = if (uses_global || previous_kind == LocalKind::PhpLocal)
             && !transfer_callable_source_to_store
+            && !self.is_ref_bound_local(name)
         {
             crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
+        } else if (uses_global || previous_kind == LocalKind::PhpLocal)
+            && !transfer_callable_source_to_store
+        {
+            // For ref-bound locals, acquire only when NOT narrowing Mixed→Int.
+            // When the source is Mixed and the ref cell's previous type is Int,
+            // the ref cell store narrows via __rt_mixed_cast_int, consuming the
+            // Mixed box. The release_if_owned at the end frees the original
+            // without a paired incref, which is correct for narrowing.
+            let source_is_mixed = matches!(
+                self.builder.value_php_type(value.value).codegen_repr(),
+                PhpType::Mixed
+            );
+            let target_is_int = matches!(previous_type.codegen_repr(), PhpType::Int);
+            if !(source_is_mixed && target_is_int) {
+                crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
+            } else {
+                value
+            }
         } else {
             value
         };
@@ -650,6 +669,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             (false, LocalKind::StaticLocal) => Op::StoreStaticLocal,
             _ => Op::StoreLocal,
         };
+        // Track whether the ref cell store narrows Mixed→Int and releases the
+        // source Mixed box in the codegen, so we skip the release_if_owned below.
+        let ref_cell_narrowed_mixed_to_int = is_ref_bound
+            && matches!(
+                self.builder.value_php_type(value.value).codegen_repr(),
+                PhpType::Mixed
+            )
+            && matches!(previous_type.codegen_repr(), PhpType::Int);
         if is_ref_bound {
             self.store_ref_cell_slot(slot, value, previous_type, span);
         } else {
@@ -658,7 +685,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if !is_ref_bound {
             self.set_local_type(name, php_type);
         }
-        if release_source_after_store && !transfer_callable_source_to_store {
+        if release_source_after_store && !transfer_callable_source_to_store && !ref_cell_narrowed_mixed_to_int {
             crate::ir_lower::ownership::release_if_owned(self, source, span);
         }
         value
@@ -915,6 +942,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::HashToMixed
                     | Op::InvokerRefArg
                     | Op::MixedNumericBinop
+                    | Op::ICheckedAdd
+                    | Op::ICheckedSub
+                    | Op::ICheckedMul
                     | Op::MixedCastString
                     | Op::StrConcat
                     | Op::StrPersist

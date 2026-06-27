@@ -355,6 +355,24 @@ impl<'a> FunctionContext<'a> {
                 emit_box_current_value_as_mixed(self.emitter, &source_ty);
             }
         }
+        // Narrow Mixed to Int when the local slot is typed Int but the value
+        // is Mixed (from checked integer arithmetic that may overflow to float).
+        // The runtime cast helper truncates floats and extracts ints.
+        if matches!(target_ty.codegen_repr(), PhpType::Int)
+            && matches!(source_ty.codegen_repr(), PhpType::Mixed)
+        {
+            match self.emitter.target.arch {
+                Arch::AArch64 => {
+                    // x0 already holds the Mixed pointer from load_value_to_result
+                    abi::emit_call_label(self.emitter, "__rt_mixed_cast_int");
+                }
+                Arch::X86_64 => {
+                    // rax holds the Mixed pointer; __rt_mixed_cast_int expects it in rdi
+                    self.emitter.instruction("mov rdi, rax");                       // move the Mixed pointer into the first SysV argument register
+                    abi::emit_call_label(self.emitter, "__rt_mixed_cast_int");
+                }
+            }
+        }
         coerce_current_result_for_target_store(self.emitter, &source_ty, &target_ty)?;
         let offset = self.local_offset(slot)?;
         self.store_current_result_at_offset(&target_ty, offset);
