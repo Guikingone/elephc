@@ -118,10 +118,13 @@ fn collect_return_types_syntactic(stmt: &Stmt, types: &mut Vec<PhpType>) {
 
 /// Computes the wider of two `PhpType` values for union-type heuristics.
 ///
-/// Takes two types and returns the more general type according to PHP coercion rules:
-/// `Str` dominates numeric and void types; `Float` dominates `Int`; `Never` is identity;
-/// `Void` passes through. Used when merging types from different branches (e.g., ternary,
-/// match arms, coalesce defaults).
+/// Takes two types and returns the more general type according to PHP coercion rules.
+/// Same types return unchanged; `Never` is identity; `Void` passes through; compatible
+/// numeric scalars (`Int` + `Float`) widen to `Float`; incompatible scalar kinds
+/// (e.g. `Int` + `Str`, `Bool` + `Str`) widen to `Mixed` so that heterogeneous
+/// associative-array literals and ternary branches do not silently coerce to a
+/// type that cannot hold all values at runtime. Used when merging types from
+/// different branches (e.g., ternary, match arms, coalesce defaults).
 pub(crate) fn wider_type_syntactic(a: &PhpType, b: &PhpType) -> PhpType {
     if a == b {
         return a.clone();
@@ -132,19 +135,18 @@ pub(crate) fn wider_type_syntactic(a: &PhpType, b: &PhpType) -> PhpType {
     if *b == PhpType::Never {
         return a.clone();
     }
-    if *a == PhpType::Str || *b == PhpType::Str {
-        return PhpType::Str;
-    }
-    if *a == PhpType::Float || *b == PhpType::Float {
-        return PhpType::Float;
-    }
     if *a == PhpType::Void {
         return b.clone();
     }
     if *b == PhpType::Void {
         return a.clone();
     }
-    a.clone()
+    // Compatible numeric scalars widen to Float.
+    if matches!(a, PhpType::Int | PhpType::Float) && matches!(b, PhpType::Int | PhpType::Float) {
+        return PhpType::Float;
+    }
+    // Incompatible scalar kinds (e.g. Int + Str, Bool + Str) widen to Mixed.
+    PhpType::Mixed
 }
 
 /// Computes the union of two array types when one operand is an empty indexed array literal.

@@ -420,3 +420,65 @@ fn test_example_asymmetric_visibility_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/asymmetric-visibility/main.php"));
     assert_eq!(out, "balance: 120\ninsufficient funds\nbalance: 120\n");
 }
+
+/// Regression test for issue #413: a typed `array` property initialized with an
+/// associative literal default whose values have different types (int + string)
+/// must compile and produce correct runtime output.
+#[test]
+fn test_heterogeneous_assoc_property_default_typed() {
+    let out = compile_and_run(
+        "<?php
+        class C {
+            public array $data = ['n' => 1, 's' => 'hi'];
+            public function get(string $k): mixed { return $this->data[$k]; }
+        }
+        $c = new C();
+        echo $c->get('n'), '|', $c->get('s');
+        ",
+    );
+    assert_eq!(out, "1|hi");
+}
+
+/// Regression test for issue #413: an untyped property initialized with an
+/// associative literal default whose values have different types must also
+/// compile and produce correct runtime output.
+#[test]
+fn test_heterogeneous_assoc_property_default_untyped() {
+    let out = compile_and_run(
+        "<?php
+        class C {
+            public $data = ['n' => 1, 's' => 'hi'];
+            public function get(string $k): mixed { return $this->data[$k]; }
+        }
+        $c = new C();
+        echo $c->get('n'), '|', $c->get('s');
+        ",
+    );
+    assert_eq!(out, "1|hi");
+}
+
+/// Regression test for issue #413: ternary expression with incompatible scalar
+/// branches (int + string) must widen to Mixed, not coerce to string.
+#[test]
+fn test_ternary_incompatible_scalars_widen_to_mixed() {
+    let out = compile_and_run(
+        "<?php
+        $x = true ? 1 : 'hello';
+        echo $x;
+        ",
+    );
+    assert_eq!(out, "1");
+}
+
+/// Regression test for issue #413: int + float ternary must still widen to float
+/// (compatible numeric scalars preserve their precision).
+#[test]
+fn test_ternary_int_float_widen_to_float() {
+    let out = compile_and_run(
+        "<?php
+        $x = false ? 1 : 2.5;
+        echo $x;
+        ",
+    );
+    assert_eq!(out, "2.5");
+}
