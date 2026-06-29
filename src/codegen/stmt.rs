@@ -157,6 +157,10 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                 assignments::emit_ref_assign_stmt(target, source_name, emitter, ctx);
             }
         }
+        StmtKind::RefAssignToTarget { .. } => {
+            // Reference assignment into a property/array-element lvalue is EIR-only;
+            // the frozen legacy AST backend does not implement it.
+        }
         StmtKind::TypedAssign {
             type_expr,
             name,

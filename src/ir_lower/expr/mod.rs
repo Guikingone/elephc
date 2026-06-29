@@ -7920,6 +7920,50 @@ pub(crate) fn lower_ref_assign_property(
     ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
 }
 
+/// Lowers `$obj->prop = &$src->q`: stores the source property's reference-cell pointer
+/// into the target property's slot so both properties alias the same cell (forward bind).
+///
+/// Both properties were promoted to reference properties by the checker, so the source slot
+/// holds a live cell pointer (loaded with `LoadPropRefCell`) and the target slot is a
+/// reference slot that `BindPropRefCell` overwrites with that pointer. The cell stays owned
+/// by the source object's property; the target only aliases it.
+pub(crate) fn lower_bind_prop_ref_cell(
+    ctx: &mut LoweringContext<'_, '_>,
+    target_object: &Expr,
+    target_property: &str,
+    source: &Expr,
+    span: Span,
+) {
+    let ExprKind::PropertyAccess {
+        object: src_object,
+        property: src_property,
+    } = &source.kind
+    else {
+        return;
+    };
+    let src_object = lower_expr(ctx, src_object);
+    let cell_type =
+        property_get_result_type(ctx, src_object.value, src_property, Op::PropGet, source);
+    let src_data = ctx.intern_string(src_property);
+    let cell_ptr = ctx.emit_value(
+        Op::LoadPropRefCell,
+        vec![src_object.value],
+        Some(Immediate::Data(src_data)),
+        cell_type,
+        Op::LoadPropRefCell.default_effects(),
+        Some(span),
+    );
+    let target_object = lower_expr(ctx, target_object);
+    let target_data = ctx.intern_string(target_property);
+    ctx.emit_void(
+        Op::BindPropRefCell,
+        vec![target_object.value, cell_ptr.value],
+        Some(Immediate::Data(target_data)),
+        Op::BindPropRefCell.default_effects(),
+        Some(span),
+    );
+}
+
 /// Lowers `$target = &call()`: binds `$target` to the reference cell returned by a
 /// by-reference-returning callee. The call yields the cell pointer; the target shares it
 /// non-owning (the owner is the object property the callee returned a reference to).

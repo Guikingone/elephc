@@ -2155,6 +2155,46 @@ pub(super) fn lower_load_prop_ref_cell(
     store_ref_cell_pointer_result(ctx, inst)
 }
 
+/// Lowers `BindPropRefCell`: stores a source ref-cell pointer into the target
+/// reference-property's slot so the property aliases the same cell (`$obj->prop = &$src`).
+///
+/// Operand 0 is the target object; operand 1 denotes the source cell pointer — either a
+/// `load_prop_ref_cell` result (already a cell pointer) or a `load_ref_cell`/`load_local`
+/// of the source's promoted ref-cell local (whose cell address is materialized here). The
+/// cell is owned by the source; the property only aliases it, so the trailing length/tag
+/// word of the slot is cleared.
+pub(super) fn lower_bind_prop_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    let source = expect_operand(inst, 1)?;
+    let property = property_name_immediate(ctx, inst)?.to_string();
+    let slot = resolve_property_slot(ctx, object, &property, inst)?;
+    if !slot.is_reference {
+        return Err(CodegenIrError::unsupported(format!(
+            "bind_prop_ref_cell on non-reference property {}::${}",
+            slot.class_name, slot.property
+        )));
+    }
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, base_reg)?;
+    // Materializing the source cell pointer can evaluate another receiver and clobber
+    // `base_reg`, so preserve the target object pointer across the source load.
+    abi::emit_push_reg(ctx.emitter, base_reg);
+    if loaded_local_source(ctx, source)?.is_some() {
+        // The source is a ref-cell local: materialize its cell address into the result reg.
+        super::materialize_local_ref_arg_address(ctx, source)?;
+    } else {
+        // The source value is already a ref-cell pointer (e.g. a load_prop_ref_cell result).
+        ctx.load_value_to_reg(source, abi::int_result_reg(ctx.emitter))?;
+    }
+    abi::emit_pop_reg(ctx.emitter, base_reg);
+    abi::emit_store_to_address(ctx.emitter, abi::int_result_reg(ctx.emitter), base_reg, slot.offset); // store the shared cell pointer into the target reference-property slot
+    abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8); // clear the reference-property trailing length/tag word
+    Ok(())
+}
+
 /// Stores the materialized reference-cell pointer (in the integer result register) into the
 /// instruction's result value as a single machine word.
 ///

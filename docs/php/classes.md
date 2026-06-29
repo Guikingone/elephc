@@ -507,6 +507,15 @@ echo \App\Logger::class;             // "App\Logger"
 
 Supported receivers: `Class::class`, `\Vendor\Class::class`, `self::class`, `parent::class`, `static::class`.
 
+An object expression receiver (`$obj::class`) is also supported and resolves to the object's
+runtime class name, exactly like `get_class($obj)`:
+
+```php
+<?php
+$logger = new Logger();
+echo $logger::class;                 // "App\Logger"
+```
+
 `static::class` follows PHP late static binding and resolves to the called class.
 For named receivers, elephc preserves PHP's written/imported spelling for the
 `::class` string while still using case-insensitive class lookup for executable

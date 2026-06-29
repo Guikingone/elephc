@@ -351,3 +351,87 @@ fn test_two_locals_aliasing_same_property() {
     );
     assert_eq!(out, "3\n8\n");
 }
+
+/// `$obj->prop = &$v` (property LHS, variable source) makes the property alias the local's
+/// storage: writing the local after the alias is observed through the property. This is the
+/// G5 reverse-bind path (value copied into the property's owned cell, local rebound to it).
+#[test]
+fn test_reference_assign_into_property_from_variable() {
+    let out = compile_and_run(
+        "<?php
+        class C { public $x; }
+        $c = new C();
+        $v = 5;
+        $c->x = &$v;
+        $v = 9;
+        echo $c->x, \"\\n\";",
+    );
+    assert_eq!(out, "9\n");
+}
+
+/// `$this->prop = &$other` inside a method aliases a typed property to a parameter-held
+/// local; writes through either name are observed through the other.
+#[test]
+fn test_reference_assign_into_typed_property_writes_through_both_ways() {
+    let out = compile_and_run(
+        "<?php
+        class C { public int $v = 0; }
+        $c = new C();
+        $n = 4;
+        $c->v = &$n;
+        echo $c->v, \"\\n\";
+        $n = 7;
+        echo $c->v, \"\\n\";
+        $c->v = 11;
+        echo $n, \"\\n\";",
+    );
+    assert_eq!(out, "4\n7\n11\n");
+}
+
+/// `$obj->prop = &$other->prop` (property LHS, property source) makes both properties share
+/// one reference cell — the G5 forward-bind path (`BindPropRefCell`). A write through one
+/// object's property is observed through the other's. This is the shape symfony/yaml uses
+/// (`$parser->refs = &$this->refs`).
+#[test]
+fn test_reference_assign_property_to_property_shares_cell() {
+    let out = compile_and_run(
+        "<?php
+        class C { public array $refs = []; }
+        $a = new C();
+        $b = new C();
+        $b->refs = &$a->refs;
+        $a->refs[\"x\"] = 1;
+        echo count($b->refs), \"\\n\";
+        $b->refs[\"y\"] = 2;
+        echo count($a->refs), \"\\n\";",
+    );
+    assert_eq!(out, "1\n2\n");
+}
+
+/// Regression: the property-to-property forward bind must preserve the target object pointer
+/// across materializing the source cell pointer. Evaluating the source (`$left->items`) can
+/// clobber the scratch register holding the target object (`$right`), which previously made
+/// `BindPropRefCell` store the cell pointer into the wrong object's slot, so `$right->items`
+/// read its own empty cell. The mixed prior reference activity (reassigning an array reference
+/// to a typed literal, then a variable-source property bind) reproduces the register pressure.
+#[test]
+fn test_reference_assign_property_to_property_preserves_target_register() {
+    let out = compile_and_run(
+        "<?php
+        class Bag { public array $items = []; }
+        class Box { public $value; }
+        $bag = new Bag();
+        $entries = &$bag->items;
+        $entries = [10, 20, 30];
+        $box = new Box();
+        $n = 5;
+        $box->value = &$n;
+        $n = 9;
+        $left = new Bag();
+        $right = new Bag();
+        $right->items = &$left->items;
+        $left->items[] = \"shared\";
+        echo implode(\",\", $right->items), \"|\", implode(\",\", $left->items), \"\\n\";",
+    );
+    assert_eq!(out, "shared|shared\n");
+}

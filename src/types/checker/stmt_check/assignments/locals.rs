@@ -208,6 +208,77 @@ pub(super) fn check_ref_assign(
     }
 }
 
+/// Type-checks a reference assignment whose left-hand side is a property access
+/// (`$obj->prop = &$src`) or an array element (`$arr[$k] = &$src`).
+///
+/// The target lvalue becomes an alias to `source`'s storage. For a property target,
+/// the property is promoted to a reference property program-wide so every access lowers
+/// through its ref-cell; a property source is promoted too (the cell is shared). For a
+/// plain-variable source, the variable is rebound to the property type and marked as
+/// by-reference storage (it will alias the property's cell). Array-element targets are
+/// not yet supported (PHP references inside arrays need runtime support that does not
+/// exist yet) and produce a diagnostic.
+pub(super) fn check_ref_assign_to_target(
+    checker: &mut Checker,
+    target: &Expr,
+    source: &Expr,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    match &target.kind {
+        ExprKind::PropertyAccess { object, property } => {
+            let object_ty = checker.infer_type(object, env)?;
+            if let Some(class) =
+                crate::types::checker::single_object_class_name(&object_ty)
+            {
+                checker
+                    .reference_property_promotions
+                    .insert((class, property.clone()));
+            }
+            // A property source shares its ref-cell, so promote it as well.
+            if let ExprKind::PropertyAccess {
+                object: src_object,
+                property: src_property,
+            } = &source.kind
+            {
+                let src_object_ty = checker.infer_type(src_object, env)?;
+                if let Some(class) =
+                    crate::types::checker::single_object_class_name(&src_object_ty)
+                {
+                    checker
+                        .reference_property_promotions
+                        .insert((class, src_property.clone()));
+                }
+            }
+            let target_ty = checker.infer_type(target, env)?;
+            // A plain-variable source will alias the property's cell (reverse-bind), so
+            // its type follows the property and it becomes by-reference storage.
+            if let ExprKind::Variable(source_name) = &source.kind {
+                if !env.contains_key(source_name) {
+                    return Err(CompileError::new(
+                        span,
+                        &format!("Undefined variable: ${}", source_name),
+                    ));
+                }
+                env.insert(source_name.clone(), target_ty);
+                checker.active_ref_params.insert(source_name.clone());
+                clear_callable_metadata(checker, source_name);
+            } else {
+                checker.infer_type(source, env)?;
+            }
+            Ok(())
+        }
+        ExprKind::ArrayAccess { .. } => Err(CompileError::new(
+            span,
+            "Reference assignment into an array element is not supported",
+        )),
+        _ => Err(CompileError::new(
+            span,
+            "Reference assignment target must be a variable, array element, or object property",
+        )),
+    }
+}
+
 /// Type-checks `$target =& $source` where the source is a plain variable.
 fn check_ref_assign_variable(
     checker: &mut Checker,

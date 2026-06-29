@@ -128,6 +128,19 @@ pub(crate) fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
             }
             Some(writes)
         }
+        StmtKind::RefAssignToTarget { target, source } => {
+            // The target is a property/array lvalue (writes no local); a plain-variable
+            // source is aliased to that storage, so it can change invisibly and counts
+            // as written. Nested writes inside the target/source expressions are collected too.
+            let mut writes = expr_local_writes(target)?;
+            match &source.kind {
+                ExprKind::Variable(source_name) => {
+                    writes.insert(source_name.clone());
+                }
+                _ => writes.extend(expr_local_writes(source)?),
+            }
+            Some(writes)
+        }
         StmtKind::ListUnpack { vars, value } => {
             let mut writes = expr_local_writes(value)?;
             writes.extend(vars.iter().cloned());

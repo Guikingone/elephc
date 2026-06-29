@@ -240,6 +240,7 @@ fn stmt_refs_tz(stmt: &Stmt) -> bool {
     match &stmt.kind {
         // Statements with no call position and no child expr/stmt.
         StmtKind::RefAssign { .. }
+        | StmtKind::RefAssignToTarget { .. }
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)

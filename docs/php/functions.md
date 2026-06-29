@@ -415,6 +415,31 @@ $items = [1, 2, 3];                  // typed literal, boxed to match the proper
 echo implode(", ", $bag->items);     // 1, 2, 3
 ```
 
+The reference can also flow the other way: an object property can be made an alias of
+another value with `$obj->prop = &$source`. The source may be a variable or another
+object property; writing through either name is observed through the other:
+
+```php
+<?php
+class Box { public $value; }
+
+$box = new Box();
+$n = 5;
+$box->value = &$n;      // the property aliases the local variable
+$n = 9;
+echo $box->value;       // 9 (writes to $n are seen through the property)
+
+class Node { public array $refs = []; }
+$a = new Node();
+$b = new Node();
+$b->refs = &$a->refs;   // both properties now share one storage cell
+$a->refs["x"] = 1;
+echo count($b->refs);   // 1
+```
+
+Reference assignment into an array element (`$arr[$key] = &$source`) is not supported and
+is reported as a compile-time error.
+
 ## Reference returns
 
 A function or method declared with `&` before its name returns a reference to the

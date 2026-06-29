@@ -395,6 +395,13 @@ fn collect_written_names(stmt: &Stmt, written: &mut Vec<String>) {
                 push_written_name(written, source_name);
             }
         }
+        StmtKind::RefAssignToTarget { source, .. } => {
+            // The target is a property/array lvalue (writes no local). A plain-variable
+            // source is aliased to that storage, so it can change invisibly afterwards.
+            if let ExprKind::Variable(source_name) = &source.kind {
+                push_written_name(written, source_name);
+            }
+        }
         StmtKind::ArrayAssign { array, .. } | StmtKind::ArrayPush { array, .. } => {
             push_written_name(written, array)
         }

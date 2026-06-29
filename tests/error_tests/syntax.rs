@@ -669,3 +669,15 @@ fn test_error_keyed_list_unpack_in_expression() {
         "Invalid assignment target",
     );
 }
+
+/// Reference assignment into an array element (`$a[$k] = &$v`) parses but is rejected by the
+/// checker: PHP references inside arrays need runtime support elephc does not yet have, so the
+/// diagnostic is explicit rather than a silent miscompile. Property targets (`$o->p = &$v`) are
+/// supported; only array-element targets are gated here.
+#[test]
+fn test_error_reference_assign_into_array_element() {
+    expect_error(
+        "<?php $a = []; $v = 1; $a[\"k\"] = &$v;",
+        "Reference assignment into an array element is not supported",
+    );
+}

@@ -55,6 +55,37 @@ fn test_parse_reference_assignment() {
     }
 }
 
+/// Verifies that reference assignment into a property lvalue (`$o->p = &$v`) parses as a
+/// `RefAssignToTarget` statement carrying the property access target and the variable source.
+#[test]
+fn test_parse_reference_assignment_into_property() {
+    let stmts = parse_source("<?php $o->p = &$v;");
+    match &stmts[0].kind {
+        StmtKind::RefAssignToTarget { target, source } => {
+            assert!(matches!(
+                &target.kind,
+                ExprKind::PropertyAccess { property, .. } if property == "p"
+            ));
+            assert!(matches!(&source.kind, ExprKind::Variable(name) if name == "v"));
+        }
+        other => panic!("expected RefAssignToTarget, got {:?}", other),
+    }
+}
+
+/// Verifies that reference assignment into an array element (`$a[$k] = &$v`) parses as a
+/// `RefAssignToTarget` with an array-access target (the checker later rejects it).
+#[test]
+fn test_parse_reference_assignment_into_array_element() {
+    let stmts = parse_source("<?php $a[$k] = &$v;");
+    match &stmts[0].kind {
+        StmtKind::RefAssignToTarget { target, source } => {
+            assert!(matches!(&target.kind, ExprKind::ArrayAccess { .. }));
+            assert!(matches!(&source.kind, ExprKind::Variable(name) if name == "v"));
+        }
+        other => panic!("expected RefAssignToTarget, got {:?}", other),
+    }
+}
+
 /// Verifies that `<?php $items[0] += 3;` parses to an `ArrayAssign` (not a generic `Assign`).
 /// Compound assignment on an array element must produce the correct AST shape.
 #[test]

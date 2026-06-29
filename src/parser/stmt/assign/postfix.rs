@@ -15,7 +15,9 @@ use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
 
 use super::super::expect_semicolon;
-use super::compound::{assignment_operator, assignment_value, AssignmentOperator};
+use super::compound::{
+    assignment_operator, assignment_value, is_valid_reference_source, AssignmentOperator,
+};
 
 /// Parses a postfix assignment where the target involves property access, array access,
 /// or other complex expressions. Detects `+=` append style via `[]` in the target.
@@ -73,6 +75,15 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     }
 
     *pos = assign_pos + 1;
+    // `$obj->prop = &$src` / `$arr[$k] = &$src`: reference assignment into a
+    // property or array-element lvalue. The plain-variable form is handled by the
+    // simple-variable assignment parser; here the LHS is a complex lvalue.
+    if op == AssignmentOperator::Assign
+        && !is_append
+        && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
+    {
+        return parse_postfix_ref_assign(lhs_expr, tokens, pos, span).map(Some);
+    }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
@@ -142,6 +153,47 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     };
 
     Ok(Some(Stmt::new(stmt, span)))
+}
+
+/// Parses reference assignment into a complex lvalue (`$obj->prop = &$src` or
+/// `$arr[$k] = &$src`) after the leading `&` has been detected.
+///
+/// `lhs_expr` is the already-parsed target lvalue. Consumes the `&`, parses the
+/// reference source, validates that the source is a legal reference source and
+/// that the target is a property or array-element lvalue, then returns a
+/// `RefAssignToTarget` statement. Plain-variable reference assignment is handled
+/// by the simple-variable assignment parser instead.
+fn parse_postfix_ref_assign(
+    lhs_expr: Expr,
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume the `&`
+    let source = parse_expr(tokens, pos)?;
+    if !is_valid_reference_source(&source.kind) {
+        return Err(CompileError::new(
+            span,
+            "Reference assignment source must be a variable, array/property element, or a by-reference call",
+        ));
+    }
+    if !matches!(
+        lhs_expr.kind,
+        ExprKind::PropertyAccess { .. } | ExprKind::ArrayAccess { .. }
+    ) {
+        return Err(CompileError::new(
+            span,
+            "Reference assignment target must be a variable, array element, or object property",
+        ));
+    }
+    expect_semicolon(tokens, pos)?;
+    Ok(Stmt::new(
+        StmtKind::RefAssignToTarget {
+            target: lhs_expr,
+            source,
+        },
+        span,
+    ))
 }
 
 /// Lowers an append through a nested array target (`$a[0][] = $value`) into a

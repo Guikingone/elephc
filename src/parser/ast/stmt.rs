@@ -85,6 +85,18 @@ pub enum StmtKind {
         /// by-reference-returning callee (`f()`, `$o->m()`, `($c)()`).
         source: Expr,
     },
+    /// Reference assignment whose left-hand side is a property access
+    /// (`$obj->prop = &$src`) or an array element (`$arr[$k] = &$src`), aliasing
+    /// the target lvalue's storage to `source`. The plain-variable form lives in
+    /// `RefAssign`; this variant carries the full lvalue as an expression.
+    RefAssignToTarget {
+        /// The target lvalue: a `PropertyAccess` (`$obj->prop`) or an
+        /// `ArrayAccess` (`$arr[$k]`) that becomes an alias to `source`.
+        target: Expr,
+        /// The reference source lvalue: a plain `Variable`, a `PropertyAccess`,
+        /// an `ArrayAccess`, or a by-reference-returning call.
+        source: Expr,
+    },
     If {
         condition: Expr,
         then_body: Vec<Stmt>,

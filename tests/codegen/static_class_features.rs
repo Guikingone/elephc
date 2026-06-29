@@ -20,6 +20,16 @@ fn test_class_class_named() {
     assert_eq!(out, "C");
 }
 
+/// Verifies `$obj::class` on an object expression resolves to the runtime class name,
+/// equivalent to `get_class($obj)` (PHP 8 dynamic `::class`).
+#[test]
+fn test_class_class_dynamic_object_receiver() {
+    let out = compile_and_run(
+        "<?php class C {} $o = new C(); echo $o::class;",
+    );
+    assert_eq!(out, "C");
+}
+
 /// Verifies `ClassName::class` inside a namespace resolves to the fully-qualified name `App\C`.
 #[test]
 fn test_class_class_namespaced() {

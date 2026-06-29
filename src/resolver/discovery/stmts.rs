@@ -356,6 +356,7 @@ fn discover_stmt(
         | StmtKind::FunctionVariantGroup { .. }
         | StmtKind::FunctionVariantMark { .. }
         | StmtKind::RefAssign { .. }
+        | StmtKind::RefAssignToTarget { .. }
         | StmtKind::IfDef { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)

@@ -140,6 +140,10 @@ pub(super) fn resolve_regular_stmt(
             target: target.clone(),
             source: source.clone(),
         },
+        StmtKind::RefAssignToTarget { target, source } => StmtKind::RefAssignToTarget {
+            target: ctx.expr(target),
+            source: ctx.expr(source),
+        },
         StmtKind::TypedAssign {
             type_expr,
             name,

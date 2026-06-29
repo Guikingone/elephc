@@ -226,6 +226,7 @@ fn visit_stmt(stmt: &Stmt, st: &mut State) {
         | StmtKind::Goto(_)
         | StmtKind::Label(_)
         | StmtKind::RefAssign { .. }
+        | StmtKind::RefAssignToTarget { .. }
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
         | StmtKind::EnumDecl { .. }

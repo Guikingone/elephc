@@ -44,6 +44,9 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         StmtKind::Echo(expr) => lower_echo(ctx, expr, stmt.span),
         StmtKind::Assign { name, value } => lower_assign(ctx, name, value, stmt.span),
         StmtKind::RefAssign { target, source } => lower_ref_assign(ctx, target, source, stmt.span),
+        StmtKind::RefAssignToTarget { target, source } => {
+            lower_ref_assign_to_target(ctx, target, source, stmt.span)
+        }
         StmtKind::If {
             condition,
             then_body,
@@ -318,6 +321,42 @@ fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, source: &Ex
         _ => {
             // Other source shapes (e.g. array elements) are rejected by the checker;
             // evaluate for side effects to keep lowering total.
+            lower_expr(ctx, source);
+        }
+    }
+}
+
+/// Lowers a by-reference assignment whose left-hand side is a property or array element.
+///
+/// - `$obj->prop = &$src->q` (property source): the source property's ref-cell pointer is
+///   stored into the target property's slot, so both properties share one cell (forward bind).
+/// - `$obj->prop = &$src` (variable/call source): the value is first written into the
+///   target property's owned cell, then the source local is aliased to that cell (reverse
+///   bind), matching `$obj->prop = $src; $src = &$obj->prop;`. This keeps the cell owned by
+///   the object (freed at destruction) while the local borrows it, avoiding a double free.
+/// - Array-element targets are rejected by the checker; lowering only evaluates the source
+///   for side effects to stay total.
+fn lower_ref_assign_to_target(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    source: &Expr,
+    span: Span,
+) {
+    match &target.kind {
+        ExprKind::PropertyAccess { object, property } => match &source.kind {
+            ExprKind::PropertyAccess { .. } => {
+                crate::ir_lower::expr::lower_bind_prop_ref_cell(ctx, object, property, source, span);
+            }
+            ExprKind::Variable(source_name) => {
+                lower_property_assign(ctx, object, property, source, span);
+                crate::ir_lower::expr::lower_ref_assign_property(ctx, source_name, target, span);
+            }
+            _ => {
+                // A by-reference call source: write its value through the property cell.
+                lower_property_assign(ctx, object, property, source, span);
+            }
+        },
+        _ => {
             lower_expr(ctx, source);
         }
     }
