@@ -102,3 +102,68 @@ fn test_example_v017_trio_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/v017-trio/main.php"));
     assert_eq!(out, "health:[ok]:missing");
 }
+
+/// Regression for #371: `new Foo` without constructor parentheses should be
+/// equivalent to `new Foo()`. PHP allows omitting the argument list when the
+/// constructor takes no arguments.
+#[test]
+fn test_new_without_parens() {
+    let out = compile_and_run(
+        r#"<?php
+class Foo {
+    public int $x = 42;
+}
+$o = new Foo;
+echo $o->x;
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// Regression for #371: `new Foo` without parens followed by a method call
+/// using parentheses around the new expression: `(new Foo)->method()`.
+#[test]
+fn test_new_without_parens_then_method_call() {
+    let out = compile_and_run(
+        r#"<?php
+class Foo {
+    public function bar(): int { return 99; }
+}
+echo (new Foo)->bar();
+"#,
+    );
+    assert_eq!(out, "99");
+}
+
+/// Regression for #371: `new $var` without parens should create an instance
+/// from a variable class name.
+#[test]
+fn test_new_dynamic_without_parens() {
+    let out = compile_and_run(
+        r#"<?php
+class Bar {
+    public int $x = 10;
+}
+$name = "Bar";
+$o = new $name;
+echo $o->x;
+"#,
+    );
+    assert_eq!(out, "10");
+}
+
+/// Regression for #371: `new Foo` with args still works (no regression).
+#[test]
+fn test_new_with_parens_still_works() {
+    let out = compile_and_run(
+        r#"<?php
+class Foo {
+    public int $x;
+    public function __construct(int $v) { $this->x = $v; }
+}
+$o = new Foo(77);
+echo $o->x;
+"#,
+    );
+    assert_eq!(out, "77");
+}

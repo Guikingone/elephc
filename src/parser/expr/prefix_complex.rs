@@ -812,14 +812,12 @@ pub(super) fn parse_new_object(
     };
     if let Some(receiver) = scoped_receiver {
         *pos += 1;
-        if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
-            return Err(CompileError::new(
-                span,
-                "Expected '(' after self/static/parent",
-            ));
-        }
-        *pos += 1;
-        let args = parse_args(tokens, pos, span)?;
+        let args = if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
+            *pos += 1;
+            parse_args(tokens, pos, span)?
+        } else {
+            Vec::new()
+        };
         return Ok(Expr::new(
             ExprKind::NewScopedObject { receiver, args },
             span,
@@ -831,14 +829,12 @@ pub(super) fn parse_new_object(
     if let Some((Token::Variable(name), _)) = tokens.get(*pos) {
         let var_name = name.clone();
         *pos += 1;
-        if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
-            return Err(CompileError::new(
-                span,
-                "Expected '(' after class-name variable in 'new $var('",
-            ));
-        }
-        *pos += 1;
-        let args = parse_args(tokens, pos, span)?;
+        let args = if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
+            *pos += 1;
+            parse_args(tokens, pos, span)?
+        } else {
+            Vec::new()
+        };
         return Ok(Expr::new(
             ExprKind::NewDynamic {
                 name_expr: Box::new(Expr::new(ExprKind::Variable(var_name), span)),
@@ -849,10 +845,11 @@ pub(super) fn parse_new_object(
     }
 
     let class_name = parse_name(tokens, pos, span, "Expected class name after 'new'")?;
-    if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
-        return Err(CompileError::new(span, "Expected '(' after class name"));
-    }
-    *pos += 1;
-    let args = parse_args(tokens, pos, span)?;
+    let args = if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
+        *pos += 1;
+        parse_args(tokens, pos, span)?
+    } else {
+        Vec::new()
+    };
     Ok(Expr::new(ExprKind::NewObject { class_name, args }, span))
 }
