@@ -6727,7 +6727,19 @@ fn lower_array_access_from_value(
     index: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
-    let mut index_value = lower_expr(ctx, index);
+    let index_value = lower_expr(ctx, index);
+    // Gradual typing: a non-integer (runtime string / Mixed / union) key into an array the
+    // checker inferred packed/int-keyed is a PHP associative read. Box the array as a Mixed
+    // cell and route to the shared boxed-Mixed reader (`__rt_mixed_array_get`), which
+    // normalizes numeric-string keys to integer offsets, returns the element for integer
+    // keys, and yields null for genuine string keys — matching PHP — instead of doing
+    // unsound packed pointer math on a key coerced to integer `0`.
+    if matches!(array_value.ir_type, IrType::Heap(IrHeapKind::Array))
+        && packed_array_key_needs_associative_get(index, index_value.ir_type)
+    {
+        return lower_packed_array_associative_get(ctx, array_value, index_value, expr);
+    }
+    let mut index_value = index_value;
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
             index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
@@ -6750,6 +6762,60 @@ fn lower_array_access_from_value(
         op.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Returns true when a key indexing a packed indexed array must be read associatively.
+///
+/// PHP coerces array keys: integer/float/bool keys index the packed offset directly, a
+/// canonical-integer string literal (`"0"`, `"12"`) is normalized to that integer offset by
+/// the checker and stays on the fast packed path, and any other key — a runtime `string`, a
+/// non-canonical/non-numeric string literal, a boxed `Mixed`, or a union — is an associative
+/// read whose key normalization (numeric-string→int, else a string key that misses to null)
+/// must happen at runtime. The latter cases are routed through the boxed-Mixed reader.
+fn packed_array_key_needs_associative_get(index: &Expr, index_ir_type: IrType) -> bool {
+    match index_ir_type {
+        IrType::Heap(IrHeapKind::Mixed) | IrType::Heap(IrHeapKind::Union) => true,
+        IrType::Str => !matches!(
+            &index.kind,
+            ExprKind::StringLiteral(value)
+                if crate::types::is_php_integer_array_key(value)
+        ),
+        _ => false,
+    }
+}
+
+/// Lowers an associative read of a `string`/`Mixed`/union key against a packed indexed array.
+///
+/// The borrowed array is boxed into an owned `Mixed` cell (`Op::MixedBox`, which retains the
+/// array child), then read through the shared boxed-Mixed reader (`Op::RuntimeCall` →
+/// `__rt_mixed_array_get`). That helper coerces numeric-string keys to integer offsets, returns
+/// the element for integer keys, and yields a boxed `Mixed(null)` for genuine string keys —
+/// exactly PHP's behavior for a list indexed by a string. The transient box is released after
+/// the read so the array's retained reference is balanced; the owned `Mixed` result is returned.
+fn lower_packed_array_associative_get(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    index_value: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let mixed_array = ctx.emit_value(
+        Op::MixedBox,
+        vec![array_value.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedBox.default_effects(),
+        Some(expr.span),
+    );
+    let result = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![mixed_array.value, index_value.value],
+        None,
+        PhpType::Mixed,
+        Op::RuntimeCall.default_effects(),
+        Some(expr.span),
+    );
+    crate::ir_lower::ownership::release_if_owned(ctx, mixed_array, Some(expr.span));
+    result
 }
 
 /// Lowers nullable receiver indexing without evaluating the index on a null receiver.

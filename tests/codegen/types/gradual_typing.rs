@@ -119,3 +119,100 @@ fn test_reassign_widening_conditional_compiles_and_runs() {
     );
     assert_eq!(out, "taken");
 }
+
+/// A `Mixed` value (read from a heterogeneous associative array) used as a string offset is
+/// accepted under gradual typing and unboxed/coerced to an integer index at the access
+/// boundary, reading the character at that offset.
+#[test]
+fn test_mixed_index_into_string_offset_is_coerced() {
+    let out = compile_and_run(
+        "<?php
+        $a = [];
+        $a[\"n\"] = 2;
+        $a[\"s\"] = \"hi\";
+        $i = $a[\"n\"];
+        $s = \"hello\";
+        echo $s[$i];
+        ",
+    );
+    assert_eq!(out, "l");
+}
+
+/// A union (`int|false`) string-offset index — here a `strpos` result kept runtime-unknown by a
+/// `string` parameter — is accepted under gradual typing and coerced to an integer at the
+/// boundary, for both the bare index and an arithmetic offset of it.
+#[test]
+fn test_union_index_into_string_offset_is_coerced() {
+    let out = compile_and_run(
+        "<?php
+        function f(string $m): string {
+            $i = strpos($m, \":\", 0);
+            return $m[$i] . $m[$i + 1];
+        }
+        echo f(\"ab:cd\");
+        ",
+    );
+    assert_eq!(out, ":c");
+}
+
+/// A genuine `string` key into an array the checker inferred packed/int-keyed is accepted as a
+/// PHP associative read: a non-numeric key misses to null, a canonical numeric-string key
+/// coerces to the integer offset. The `array` parameter keeps the receiver packed and the key
+/// runtime-unknown, so codegen routes through the boxed-Mixed reader, never packed pointer math.
+#[test]
+fn test_string_key_into_packed_array_reads_associatively() {
+    let out = compile_and_run(
+        "<?php
+        function lk(array $a, string $k): string {
+            $v = $a[$k];
+            return is_null($v) ? \"null\" : (string)$v;
+        }
+        $a = [10, 20, 30];
+        echo lk($a, \"foo\");
+        echo \"|\";
+        echo lk($a, \"1\");
+        ",
+    );
+    assert_eq!(out, "null|20");
+}
+
+/// A `Mixed` key (read from a heterogeneous associative array) into a packed array is accepted
+/// and dispatched at runtime: an integer payload hits the offset and reads the element.
+#[test]
+fn test_mixed_key_into_packed_array_reads_associatively() {
+    let out = compile_and_run(
+        "<?php
+        $h = [];
+        $h[\"x\"] = 2;
+        $h[\"y\"] = \"s\";
+        $k = $h[\"x\"];
+        $a = [10, 20, 30];
+        echo $a[$k];
+        ",
+    );
+    assert_eq!(out, "30");
+}
+
+/// Reading a packed array with `string`/`Mixed` keys inside a loop stays heap-balanced: the
+/// transient `Mixed` box created to route the associative read retains and then releases the
+/// array exactly once per access, leaving no leaked cells.
+#[test]
+fn test_packed_array_associative_read_is_heap_balanced() {
+    let out = compile_and_run(
+        "<?php
+        function lk(array $a, string $k): void {
+            $v = $a[$k];
+            echo is_null($v) ? \"n\" : $v;
+        }
+        $a = [\"alpha\", \"beta\", \"gamma\"];
+        $i = 0;
+        while ($i < 3) {
+            lk($a, \"x\");
+            lk($a, \"1\");
+            $i = $i + 1;
+        }
+        echo $a[1];
+        ",
+    );
+    assert_eq!(out, "nbetanbetanbetabeta");
+}

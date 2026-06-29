@@ -191,7 +191,7 @@ impl Checker {
                 let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
                 match &arr_ty {
                     PhpType::Str => {
-                        if !is_valid_string_offset_index(index, &idx_ty) {
+                        if !string_offset_index_is_gradually_acceptable(index, &idx_ty) {
                             return Err(CompileError::new(
                                 expr.span,
                                 "String index must be integer",
@@ -200,13 +200,20 @@ impl Checker {
                         Ok(PhpType::Str)
                     }
                     PhpType::Array(elem_ty) => {
-                        if normalized_idx_ty != PhpType::Int {
-                            return Err(CompileError::new(
+                        if normalized_idx_ty == PhpType::Int {
+                            Ok(*elem_ty.clone())
+                        } else if array_key_is_gradually_acceptable(&idx_ty, &normalized_idx_ty) {
+                            // Gradual typing: a string/Mixed/coercible key into an array the
+                            // checker inferred packed/int-keyed is accepted as an associative
+                            // read. The key unboxes/normalizes at the access boundary and may
+                            // miss (PHP null) or hit, so the value widens to `Mixed`.
+                            Ok(PhpType::Mixed)
+                        } else {
+                            Err(CompileError::new(
                                 expr.span,
                                 "Array index must be integer",
-                            ));
+                            ))
                         }
-                        Ok(*elem_ty.clone())
                     }
                     PhpType::AssocArray { value, .. } => {
                         // Assoc arrays accept string or int keys
@@ -228,7 +235,7 @@ impl Checker {
                                 PhpType::Void => result_members.push(PhpType::Void),
                                 PhpType::Str => {
                                     saw_indexable_member = true;
-                                    if !is_valid_string_offset_index(index, &idx_ty) {
+                                    if !string_offset_index_is_gradually_acceptable(index, &idx_ty) {
                                         first_index_error =
                                             first_index_error.or(Some("String index must be integer"));
                                         continue;
@@ -237,12 +244,18 @@ impl Checker {
                                 }
                                 PhpType::Array(elem_ty) => {
                                     saw_indexable_member = true;
-                                    if normalized_idx_ty != PhpType::Int {
+                                    if normalized_idx_ty == PhpType::Int {
+                                        result_members.push(*elem_ty.clone());
+                                    } else if array_key_is_gradually_acceptable(
+                                        &idx_ty,
+                                        &normalized_idx_ty,
+                                    ) {
+                                        result_members.push(PhpType::Mixed);
+                                    } else {
                                         first_index_error =
                                             first_index_error.or(Some("Array index must be integer"));
                                         continue;
                                     }
-                                    result_members.push(*elem_ty.clone());
                                 }
                                 PhpType::AssocArray { value, .. } => {
                                     saw_indexable_member = true;
@@ -720,6 +733,71 @@ fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
             ExprKind::StringLiteral(value)
                 if crate::types::parse_php_string_offset_literal(value).is_some()
         )
+}
+
+/// Returns true when `idx_ty` may index a string offset under elephc's gradual-typing
+/// boundary model.
+///
+/// Beyond a statically-`int` index (or a parseable numeric string literal), this accepts the
+/// gradual top type `Mixed`, the scalar families PHP coerces to an integer offset (`bool`,
+/// `float`, `string`), the null-like `Void`/`Never` tags, and a union composed solely of
+/// those coercible members. EIR codegen emits the same unbox + coerce-to-int guard the
+/// typed-parameter path uses (`coerce_to_int_at_span` before `Op::StrCharAt`). Array, object,
+/// buffer, resource, pointer, and callable index types stay rejected as real type errors.
+fn string_offset_index_is_gradually_acceptable(index: &Expr, idx_ty: &PhpType) -> bool {
+    is_valid_string_offset_index(index, idx_ty) || php_type_is_int_offset_coercible(idx_ty)
+}
+
+/// Returns true when a value of `ty` can be coerced to an integer string offset at the
+/// gradual-typing access boundary: `Mixed`, the scalar families PHP unambiguously casts to an
+/// integer offset (`int`, `float`, `bool`), the null-like `Void`/`Never` tags, and unions
+/// composed only of those.
+///
+/// `Str` is deliberately excluded: PHP coerces only a *numeric* string offset, throwing a
+/// `TypeError` on a non-numeric one, so a statically-`string` index (a non-numeric string
+/// literal, or a `string` variable whose contents are unknown) stays a compile error. A
+/// numeric string literal is still accepted earlier through `is_valid_string_offset_index`.
+/// Heap container types (`Array`, `Object`, `Buffer`, …) are also rejected.
+fn php_type_is_int_offset_coercible(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Int
+        | PhpType::Float
+        | PhpType::Bool
+        | PhpType::Mixed
+        | PhpType::Void
+        | PhpType::Never => true,
+        PhpType::Union(members) => members.iter().all(php_type_is_int_offset_coercible),
+        _ => false,
+    }
+}
+
+/// Returns true when an array key typed `idx_ty` (normalized form `normalized_idx_ty`) may
+/// index an array the checker inferred packed/int-keyed, under the gradual-typing model.
+///
+/// A `string`/`Mixed`/coercible-scalar key (or a union of those) is accepted and treated as
+/// an associative read: PHP coerces or hashes the key at runtime, so the array is interpreted
+/// associatively rather than erroring. A clearly non-key type (`array`/`object`/buffer/…) is
+/// still rejected. The `int` case is handled by the caller before this predicate runs.
+fn array_key_is_gradually_acceptable(idx_ty: &PhpType, normalized_idx_ty: &PhpType) -> bool {
+    php_type_is_array_key_coercible(normalized_idx_ty) || php_type_is_array_key_coercible(idx_ty)
+}
+
+/// Returns true when a value of `ty` can act as a PHP array key at the gradual-typing
+/// boundary: `int`, `string`, `Mixed`, the scalar families PHP casts to a key (`bool`,
+/// `float`), the null-like `Void`/`Never` tags (PHP treats a null key as `""`), and unions
+/// composed only of those. Heap container types are rejected.
+fn php_type_is_array_key_coercible(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Int
+        | PhpType::Str
+        | PhpType::Mixed
+        | PhpType::Bool
+        | PhpType::Float
+        | PhpType::Void
+        | PhpType::Never => true,
+        PhpType::Union(members) => members.iter().all(php_type_is_array_key_coercible),
+        _ => false,
+    }
 }
 
 /// Returns true when a value of `ty` could be a PHP object instance at runtime,

@@ -36,6 +36,28 @@ fn test_error_string_index_requires_integer() {
     );
 }
 
+/// Verifies that an object index into a string offset stays rejected under gradual typing.
+/// Input: `$s = "hi"; $o = new stdClass(); echo $s[$o];` — an object is not a coercible offset,
+/// so the safety boundary still reports a type error rather than accepting/miscompiling it.
+#[test]
+fn test_error_object_string_offset_is_rejected() {
+    expect_error(
+        "<?php $s = \"hi\"; $o = new stdClass(); echo $s[$o];",
+        "String index must be integer",
+    );
+}
+
+/// Verifies that an object key into an array inferred packed/int-keyed stays rejected under
+/// gradual typing. Input: `$a = [1, 2, 3]; $o = new stdClass(); echo $a[$o];` — an object is not
+/// a coercible array key, so the safety boundary still reports a type error.
+#[test]
+fn test_error_object_array_key_is_rejected() {
+    expect_error(
+        "<?php $a = [1, 2, 3]; $o = new stdClass(); echo $a[$o];",
+        "Array index must be integer",
+    );
+}
+
 /// Verifies that assigning to a string offset (character replacement) is rejected.
 /// Input: `$s = "hello"; $s[0] = "H";` — offset assignment on a string is unsupported.
 #[test]

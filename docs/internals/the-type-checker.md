@@ -119,6 +119,11 @@ For every accepted `Mixed`/`Union` → concrete flow, codegen emits a **runtime 
 
 Passing a variable by reference is an alias assignment: when a by-reference parameter is `mixed`/union/nullable and the caller variable's storage cannot hold such a value, the caller variable is promoted (its type joined with the parameter type) so the writeback is sound and codegen holds it in a boxed cell for the call.
 
+The same boundary model applies to **index access**:
+
+- **String offsets** (`$s[$i]`) accept an `int`, `Mixed`, `float`/`bool`, or a union of those scalars as the index; the offset is unboxed and coerced to an integer at the access boundary (the same `coerce-to-int` guard the typed-parameter path uses). A statically-`string` index keeps being rejected — PHP coerces only a *numeric* string offset and throws a `TypeError` on a non-numeric one — and an `array`/`object` index is always a real type error.
+- **Array keys** (`$a[$k]`) on an array the checker inferred packed/int-keyed accept a `string`, `Mixed`, or union key and treat the read associatively: the value widens to `Mixed` (the key may miss to PHP `null` or hit). An `array`/`object` key is still rejected. Codegen routes such a read through the boxed-`Mixed` reader (`__rt_mixed_array_get`) — which normalizes a numeric-string key to its integer offset, returns the element for an integer key, and yields `null` for a genuine string key — instead of doing packed pointer math on a coerced-to-`0` key.
+
 **Lowering limitation.** The widened type computed here is the type checker's flow-insensitive join, but EIR lowering still types each local slot from the first value stored and widens it lazily as it walks statements. So two newly-accepted shapes type-check but are not yet fully boxed at runtime: a local first stored as a concrete scalar that only *later* widens to `Mixed` under a conditional branch renders with the wrong runtime tag when observed on the path that kept the original value (straight-line reassignment, where the final store boxes, is correct); and a scalar variable promoted for a `mixed`/nullable by-reference parameter is not re-boxed at the call, so a `null` writeback reads back as the scalar null sentinel. Closing this requires the lowering to pre-declare such locals as boxed from the checker's join rather than from the first store.
 
 ## Statement checks
