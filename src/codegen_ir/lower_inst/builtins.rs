@@ -410,7 +410,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "strpbrk" => strings::lower_strpbrk(ctx, inst),
         "hexdec" => strings::lower_hexdec(ctx, inst),
         "str_contains" => strings::lower_str_contains(ctx, inst),
-        "strpos" => strings::lower_string_position(ctx, inst, "strpos", "__rt_strpos"),
+        "strpos" => strings::lower_strpos(ctx, inst),
         "strrpos" => strings::lower_string_position(ctx, inst, "strrpos", "__rt_strrpos"),
         "str_starts_with" => strings::lower_binary_string_runtime(
             ctx,
@@ -424,6 +424,8 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
             "str_ends_with",
             "__rt_str_ends_with",
         ),
+        "octdec" => strings::lower_unary_string_runtime(ctx, inst, "octdec", "__rt_octdec"),
+        "substr_count" => strings::lower_substr_count(ctx, inst),
         "ord" => strings::lower_ord(ctx, inst),
         "chr" => strings::lower_chr(ctx, inst),
         "addslashes" => strings::lower_unary_string_runtime(

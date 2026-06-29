@@ -65,11 +65,23 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Str))
         }
-        "strpos" | "strrpos" => {
+        "strpos" => {
+            if args.len() < 2 || args.len() > 3 {
+                return Err(CompileError::new(
+                    span,
+                    "strpos() takes 2 or 3 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Union(vec![PhpType::Int, PhpType::Bool])))
+        }
+        "strrpos" => {
             if args.len() != 2 {
                 return Err(CompileError::new(
                     span,
-                    &format!("{}() takes exactly 2 arguments", name),
+                    "strrpos() takes exactly 2 arguments",
                 ));
             }
             for arg in args {
@@ -78,8 +90,8 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Union(vec![PhpType::Int, PhpType::Bool])))
         }
         "strstr" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(span, "strstr() takes exactly 2 arguments"));
+            if args.len() < 2 || args.len() > 3 {
+                return Err(CompileError::new(span, "strstr() takes 2 or 3 arguments"));
             }
             for arg in args {
                 checker.infer_type(arg, env)?;
@@ -212,6 +224,25 @@ pub(super) fn check_builtin(
                 checker.infer_type(arg, env)?;
             }
             Ok(Some(PhpType::Str))
+        }
+        "octdec" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "octdec() takes exactly 1 argument"));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Int))
+        }
+        "substr_count" => {
+            if args.len() < 2 || args.len() > 4 {
+                return Err(CompileError::new(
+                    span,
+                    "substr_count() takes 2 to 4 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Int))
         }
         "ord" => {
             if args.len() != 1 {

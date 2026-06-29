@@ -272,10 +272,10 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Bool))
         }
         "array_search" => {
-            if args.len() != 2 {
+            if args.len() < 2 || args.len() > 3 {
                 return Err(CompileError::new(
                     span,
-                    "array_search() takes exactly 2 arguments",
+                    "array_search() takes 2 or 3 arguments",
                 ));
             }
             checker.infer_type(&args[0], env)?;

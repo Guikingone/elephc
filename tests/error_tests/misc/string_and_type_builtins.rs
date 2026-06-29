@@ -34,7 +34,7 @@ expect_builtin_arity_error!(
 expect_builtin_arity_error!(
     test_error_strstr_wrong_args,
     "<?php strstr(\"abc\");",
-    "strstr() takes exactly 2 arguments"
+    "strstr() takes 2 or 3 arguments"
 );
 
 // Tests strtolower() arity error when called with no arguments.

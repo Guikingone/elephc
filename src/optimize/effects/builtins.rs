@@ -114,6 +114,8 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "str_ends_with"
             | "hash_equals"
             | "hash_algos"
+            | "octdec"
+            | "substr_count"
             | "ord"
             | "chr"
             | "nl2br"

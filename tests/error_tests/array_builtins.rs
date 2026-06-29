@@ -70,7 +70,16 @@ fn test_error_array_sum_wrong_args() {
 fn test_error_array_search_wrong_args() {
     expect_error(
         "<?php $a = [1]; array_search($a);",
-        "array_search() takes exactly 2 arguments",
+        "array_search() takes 2 or 3 arguments",
+    );
+}
+
+/// Verifies that `array_search()` with four arguments produces the correct arity error.
+#[test]
+fn test_error_array_search_too_many_args() {
+    expect_error(
+        "<?php $a = [1]; array_search(1, $a, true, 1);",
+        "array_search() takes 2 or 3 arguments",
     );
 }
 

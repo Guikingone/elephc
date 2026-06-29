@@ -815,22 +815,88 @@ pub(super) fn lower_str_repeat(ctx: &mut FunctionContext<'_>, inst: &Instruction
     store_if_result(ctx, inst)
 }
 
-/// Lowers `strstr(haystack, needle)` by searching and returning the matching suffix.
+/// Lowers `strstr(haystack, needle[, before_needle])`.
+///
+/// With `before_needle = false` (default) returns the matching suffix starting at the first
+/// occurrence of the needle.  With `before_needle = true` returns the prefix that precedes
+/// the first occurrence.  The `before_needle` argument must be a compile-time constant.
 pub(super) fn lower_strstr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    if inst.operands.len() != 2 {
+    if inst.operands.len() < 2 || inst.operands.len() > 3 {
         return Err(CodegenIrError::invalid_module(format!(
-            "strstr expected 2 args, got {}",
+            "strstr expected 2-3 args, got {}",
             inst.operands.len()
         )));
     }
+    let before_needle = if inst.operands.len() == 3 {
+        let flag_val = expect_operand(inst, 2)?;
+        match static_const_bool(ctx, flag_val)? {
+            Some(v) => v,
+            None => {
+                return Err(CodegenIrError::unsupported(
+                    "strstr() $before_needle must be a compile-time constant in AOT mode"
+                        .to_string(),
+                ))
+            }
+        }
+    } else {
+        false
+    };
     let found_label = ctx.next_label("strstr_found");
     let end_label = ctx.next_label("strstr_end");
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_strstr_aarch64(ctx, inst, &found_label, &end_label)?,
-        Arch::X86_64 => lower_strstr_x86_64(ctx, inst, &found_label, &end_label)?,
+        Arch::AArch64 => lower_strstr_aarch64(ctx, inst, &found_label, &end_label, before_needle)?,
+        Arch::X86_64 => lower_strstr_x86_64(ctx, inst, &found_label, &end_label, before_needle)?,
     }
     ctx.emitter.label(&end_label);
     store_if_result(ctx, inst)
+}
+
+/// Lowers `strpos(haystack, needle[, offset])` with optional starting offset.
+///
+/// The 2-arg form delegates to the shared binary-string-runtime path.  The 3-arg form
+/// adjusts the haystack pointer and length by the given offset, calls `__rt_strpos`, and
+/// then adds the offset back to the returned position so the result is absolute.
+pub(super) fn lower_strpos(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() < 2 || inst.operands.len() > 3 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "strpos expected 2-3 args, got {}",
+            inst.operands.len()
+        )));
+    }
+    if inst.operands.len() == 2 {
+        load_binary_string_args(ctx, inst, "strpos")?;
+        abi::emit_call_label(ctx.emitter, "__rt_strpos");
+        box_search_result(ctx, "strpos");
+        return store_if_result(ctx, inst);
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_strpos_with_offset_aarch64(ctx, inst)?,
+        Arch::X86_64 => lower_strpos_with_offset_x86_64(ctx, inst)?,
+    }
+    box_search_result(ctx, "strpos");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `substr_count(haystack, needle[, offset[, length]])`.
+///
+/// The 2-arg form counts all non-overlapping occurrences via `__rt_substr_count`.
+/// The 3- and 4-arg forms (offset/length) are not yet supported in AOT mode.
+pub(super) fn lower_substr_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    match inst.operands.len() {
+        2 => {
+            load_binary_string_args(ctx, inst, "substr_count")?;
+            abi::emit_call_label(ctx.emitter, "__rt_substr_count");
+            store_if_result(ctx, inst)
+        }
+        n @ 3..=4 => Err(CodegenIrError::unsupported(format!(
+            "substr_count() with {} arguments (offset/length) is not yet supported in AOT mode",
+            n
+        ))),
+        n => Err(CodegenIrError::invalid_module(format!(
+            "substr_count expected 2-4 args, got {}",
+            n
+        ))),
+    }
 }
 
 /// Lowers `str_replace()`/`str_ireplace()` with three string operands.
@@ -1616,12 +1682,16 @@ fn lower_str_repeat_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     Ok(())
 }
 
-/// Emits AArch64 `strstr()` search and suffix reconstruction.
+/// Emits AArch64 `strstr()` search and result reconstruction.
+///
+/// When `before_needle` is false (the default), returns the suffix starting at the first
+/// occurrence.  When true, returns the prefix that precedes the first occurrence.
 fn lower_strstr_aarch64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     found_label: &str,
     end_label: &str,
+    before_needle: bool,
 ) -> Result<()> {
     load_string_arg_to_regs(ctx, inst, 0, "strstr", "x1", "x2")?;
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the haystack while materializing the needle string
@@ -1631,24 +1701,32 @@ fn lower_strstr_aarch64(
     ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the haystack into primary string argument registers
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the haystack while strpos() returns the match offset
     abi::emit_call_label(ctx.emitter, "__rt_strpos");
-    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the haystack for suffix reconstruction
+    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the haystack for result reconstruction
     ctx.emitter.instruction("cmp x0, #0");                                      // check whether strpos() returned a valid match offset
-    ctx.emitter.instruction(&format!("b.ge {}", found_label));                  // build the matching suffix when the needle was found
+    ctx.emitter.instruction(&format!("b.ge {}", found_label));                  // build the result string when the needle was found
     ctx.emitter.instruction("mov x1, #0");                                      // return a null pointer for the empty not-found string
     ctx.emitter.instruction("mov x2, #0");                                      // return zero length for the empty not-found string
-    ctx.emitter.instruction(&format!("b {}", end_label));                       // skip suffix pointer adjustment for a miss
+    ctx.emitter.instruction(&format!("b {}", end_label));                       // skip result pointer adjustment for a miss
     ctx.emitter.label(found_label);
-    ctx.emitter.instruction("add x1, x1, x0");                                  // advance the haystack pointer to the matching suffix
-    ctx.emitter.instruction("sub x2, x2, x0");                                  // shrink the haystack length to the matching suffix length
+    if before_needle {
+        ctx.emitter.instruction("mov x2, x0");                                  // prefix length equals the match offset; x1 stays at haystack start
+    } else {
+        ctx.emitter.instruction("add x1, x1, x0");                              // advance the haystack pointer to the matching suffix
+        ctx.emitter.instruction("sub x2, x2, x0");                              // shrink the haystack length to the matching suffix length
+    }
     Ok(())
 }
 
-/// Emits x86_64 `strstr()` search and suffix reconstruction.
+/// Emits x86_64 `strstr()` search and result reconstruction.
+///
+/// When `before_needle` is false (the default), returns the suffix starting at the first
+/// occurrence.  When true, returns the prefix that precedes the first occurrence.
 fn lower_strstr_x86_64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     found_label: &str,
     end_label: &str,
+    before_needle: bool,
 ) -> Result<()> {
     load_string_arg_to_regs(ctx, inst, 0, "strstr", "rax", "rdx")?;
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
@@ -1665,13 +1743,89 @@ fn lower_strstr_x86_64(
     ctx.emitter.instruction("mov r8, rax");                                     // preserve the signed match offset while restoring the haystack
     abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
     ctx.emitter.instruction("cmp r8, 0");                                       // check whether strpos() returned a valid match offset
-    ctx.emitter.instruction(&format!("jge {}", found_label));                   // build the matching suffix when the needle was found
+    ctx.emitter.instruction(&format!("jge {}", found_label));                   // build the result string when the needle was found
     ctx.emitter.instruction("xor eax, eax");                                    // return a null pointer for the empty not-found string
     ctx.emitter.instruction("xor edx, edx");                                    // return zero length for the empty not-found string
-    ctx.emitter.instruction(&format!("jmp {}", end_label));                     // skip suffix pointer adjustment for a miss
+    ctx.emitter.instruction(&format!("jmp {}", end_label));                     // skip result pointer adjustment for a miss
     ctx.emitter.label(found_label);
-    ctx.emitter.instruction("add rax, r8");                                     // advance the haystack pointer to the matching suffix
-    ctx.emitter.instruction("sub rdx, r8");                                     // shrink the haystack length to the matching suffix length
+    if before_needle {
+        ctx.emitter.instruction("mov rdx, r8");                                 // prefix length equals the match offset; rax stays at haystack start
+    } else {
+        ctx.emitter.instruction("add rax, r8");                                 // advance the haystack pointer to the matching suffix
+        ctx.emitter.instruction("sub rdx, r8");                                 // shrink the haystack length to the matching suffix length
+    }
+    Ok(())
+}
+
+/// Emits AArch64 `strpos(haystack, needle, offset)` with adjusted haystack start.
+///
+/// Loads the offset, saves it to the stack, adjusts the haystack by that amount, calls
+/// `__rt_strpos`, and then adds the offset back so the returned position is absolute.
+fn lower_strpos_with_offset_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let offset_val = expect_operand(inst, 2)?;
+    load_as_int(ctx, offset_val, "strpos")?;                                     // x0 = offset
+    abi::emit_push_reg_pair(ctx.emitter, "x0", "x0");                            // save offset (both slots hold the same value; 16-byte aligned)
+
+    load_string_arg_to_regs(ctx, inst, 0, "strpos", "x1", "x2")?;               // x1=hay_ptr, x2=hay_len
+    ctx.emitter.instruction("ldr x0, [sp]");                                     // reload saved offset before adjusting the haystack
+    ctx.emitter.instruction("add x1, x1, x0");                                   // advance the haystack pointer past the starting offset
+    ctx.emitter.instruction("sub x2, x2, x0");                                   // shrink the haystack length by the starting offset
+
+    abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                            // save the adjusted haystack while loading the needle
+    load_string_arg_to_regs(ctx, inst, 1, "strpos", "x1", "x2")?;               // x1=needle_ptr, x2=needle_len
+    ctx.emitter.instruction("mov x3, x1");                                       // move needle pointer to the secondary string argument register
+    ctx.emitter.instruction("mov x4, x2");                                       // move needle length to the secondary string argument register
+    abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");                             // restore the adjusted haystack into the primary argument registers
+    abi::emit_call_label(ctx.emitter, "__rt_strpos");                             // x0 = match position relative to adjusted start, or -1
+
+    let add_label = ctx.next_label("strpos_add_offset");
+    let done_label = ctx.next_label("strpos_offset_done");
+    abi::emit_pop_reg_pair(ctx.emitter, "x5", "x6");                             // restore saved offset into x5 (x6 holds the same value, unused)
+    ctx.emitter.instruction("cmp x0, #0");                                       // check whether strpos found a match within the adjusted range
+    ctx.emitter.instruction(&format!("b.ge {}", add_label));                     // translate relative offset to absolute when a match was found
+    ctx.emitter.instruction(&format!("b {}", done_label));                       // not found: leave the -1 sentinel unchanged
+    ctx.emitter.label(&add_label);
+    ctx.emitter.instruction("add x0, x0, x5");                                   // convert relative position to absolute haystack offset
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits x86_64 `strpos(haystack, needle, offset)` with adjusted haystack start.
+///
+/// Loads the offset, saves it to the stack, adjusts the haystack by that amount, calls
+/// `__rt_strpos`, and then adds the offset back so the returned position is absolute.
+fn lower_strpos_with_offset_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let offset_val = expect_operand(inst, 2)?;
+    load_as_int(ctx, offset_val, "strpos")?;                                     // rax = offset
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rax");                          // save offset (both slots hold the same value; 16-byte aligned)
+
+    load_string_arg_to_regs(ctx, inst, 0, "strpos", "rax", "rdx")?;             // rax=hay_ptr, rdx=hay_len
+    ctx.emitter.instruction("mov r8, QWORD PTR [rsp]");                          // reload saved offset before adjusting the haystack
+    ctx.emitter.instruction("add rax, r8");                                      // advance the haystack pointer past the starting offset
+    ctx.emitter.instruction("sub rdx, r8");                                      // shrink the haystack length by the starting offset
+
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                          // save the adjusted haystack while loading the needle
+    load_string_arg_to_regs(ctx, inst, 1, "strpos", "rax", "rdx")?;             // rax=needle_ptr, rdx=needle_len
+    ctx.emitter.instruction("mov rcx, rdx");                                     // move needle length to the fourth SysV argument register
+    ctx.emitter.instruction("mov rdx, rax");                                     // move needle pointer to the third SysV argument register
+    abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");                           // restore the adjusted haystack into the first two SysV argument registers
+    abi::emit_call_label(ctx.emitter, "__rt_strpos");                             // rax = match position relative to adjusted start, or -1
+
+    let add_label = ctx.next_label("strpos_add_offset");
+    let done_label = ctx.next_label("strpos_offset_done");
+    abi::emit_pop_reg_pair(ctx.emitter, "r8", "r9");                             // restore saved offset into r8 (r9 holds the same value, unused)
+    ctx.emitter.instruction("cmp rax, 0");                                       // check whether strpos found a match within the adjusted range
+    ctx.emitter.instruction(&format!("jge {}", add_label));                      // translate relative offset to absolute when a match was found
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                     // not found: leave the -1 sentinel unchanged
+    ctx.emitter.label(&add_label);
+    ctx.emitter.instruction("add rax, r8");                                      // convert relative position to absolute haystack offset
+    ctx.emitter.label(&done_label);
     Ok(())
 }
 
@@ -3279,5 +3433,30 @@ fn load_as_int(ctx: &mut FunctionContext<'_>, value: ValueId, name: &str) -> Res
             "{} for PHP type {:?}",
             name, other
         ))),
+    }
+}
+
+/// Extracts a constant boolean from an EIR `ValueId` at compile time.
+///
+/// Returns `Some(true/false)` when the defining instruction is a `ConstBool`, a `ConstI64`
+/// (non-zero = true), or a `ConstNull` (false).  Returns `Ok(None)` when the value is
+/// runtime-dynamic.  Callers that require a constant should convert `None` into an
+/// `unsupported` error.
+fn static_const_bool(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<bool>> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    match (inst_ref.op, inst_ref.immediate.as_ref()) {
+        (Op::ConstBool, Some(Immediate::Bool(v))) => Ok(Some(*v)),
+        (Op::ConstI64, Some(Immediate::I64(v))) => Ok(Some(*v != 0)),
+        (Op::ConstNull, _) => Ok(Some(false)),
+        _ => Ok(None),
     }
 }

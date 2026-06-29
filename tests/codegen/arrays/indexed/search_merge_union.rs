@@ -60,6 +60,45 @@ echo array_search(10, $a) === false ? "miss" : "zero";
     assert_eq!(out, "zero");
 }
 
+/// Verifies `array_search` with a numeric-string needle uses PHP loose comparison
+/// by default, matching the equivalent integer element.
+#[test]
+fn test_array_search_loose_string_needle_in_int_array() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_search("2", [1, 2, 3]);
+echo $r;
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// Verifies `array_search` with strict=true returns strict `false` when the needle
+/// type differs from the element type (string needle vs integer elements).
+#[test]
+fn test_array_search_strict_type_mismatch_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_search("2", [1, 2, 3], true);
+echo $r === false ? "miss" : "hit";
+"#,
+    );
+    assert_eq!(out, "miss");
+}
+
+/// Verifies `array_search` with strict=true still finds an element when both the
+/// needle and the elements are the same integer type.
+#[test]
+fn test_array_search_strict_same_type_found() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_search(20, [10, 20, 30], true);
+echo $r;
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
 /// Verifies `array_key_exists` returns true for an existing integer key and false for a missing key.
 #[test]
 fn test_array_key_exists() {

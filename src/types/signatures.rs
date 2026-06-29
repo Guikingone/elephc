@@ -94,8 +94,14 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "gzdeflate" => Some(optional(&["data", "level"], 1, vec![int_lit(-1)])),
         "gzinflate" => Some(optional(&["data", "max_length"], 1, vec![int_lit(0)])),
         "gzuncompress" => Some(optional(&["data", "max_length"], 1, vec![int_lit(0)])),
+        "octdec" => Some(fixed(&["octal_string"])),
         "ord" => Some(fixed(&["character"])),
         "chr" => Some(fixed(&["codepoint"])),
+        "substr_count" => Some(optional(
+            &["haystack", "needle", "offset", "length"],
+            2,
+            vec![int_lit(0), null_lit()],
+        )),
 
         "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" => {
             Some(fixed(&["text"]))
@@ -191,11 +197,12 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             vec![string_lit(" \t\r\n\u{0c}\u{0b}")],
         )),
         "substr" => Some(optional(&["string", "offset", "length"], 2, vec![null_lit()])),
-        "strpos" | "strrpos" => Some(optional(
+        "strpos" => Some(optional(
             &["haystack", "needle", "offset"],
             2,
             vec![int_lit(0)],
         )),
+        "strrpos" => Some(fixed(&["haystack", "needle"])),
         "strstr" => Some(optional(
             &["haystack", "needle", "before_needle"],
             2,

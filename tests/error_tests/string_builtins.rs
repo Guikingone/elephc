@@ -116,7 +116,58 @@ fn test_error_substr_wrong_args() {
 fn test_error_strpos_wrong_args() {
     expect_error(
         "<?php strpos(\"hi\");",
-        "strpos() takes exactly 2 arguments",
+        "strpos() takes 2 or 3 arguments",
+    );
+}
+
+/// Verifies that `strpos()` with four arguments produces the correct arity error.
+#[test]
+fn test_error_strpos_too_many_args() {
+    expect_error(
+        "<?php strpos(\"hi\", \"i\", 0, 1);",
+        "strpos() takes 2 or 3 arguments",
+    );
+}
+
+/// Verifies that `strstr()` with four arguments produces the correct arity error.
+#[test]
+fn test_error_strstr_too_many_args() {
+    expect_error(
+        "<?php strstr(\"hi\", \"i\", true, 1);",
+        "strstr() takes 2 or 3 arguments",
+    );
+}
+
+/// Verifies that `octdec()` with no arguments produces the correct arity error.
+#[test]
+fn test_error_octdec_wrong_args() {
+    expect_error("<?php octdec();", "octdec() takes exactly 1 argument");
+}
+
+/// Verifies that `octdec()` with two arguments produces the correct arity error.
+#[test]
+fn test_error_octdec_too_many_args() {
+    expect_error(
+        "<?php octdec(\"17\", \"77\");",
+        "octdec() takes exactly 1 argument",
+    );
+}
+
+/// Verifies that `substr_count()` with only one argument produces the correct arity error.
+#[test]
+fn test_error_substr_count_wrong_args() {
+    expect_error(
+        "<?php substr_count(\"hi\");",
+        "substr_count() takes 2 to 4 arguments",
+    );
+}
+
+/// Verifies that `substr_count()` with five arguments produces the correct arity error.
+#[test]
+fn test_error_substr_count_too_many_args() {
+    expect_error(
+        "<?php substr_count(\"hi\", \"i\", 0, 1, 2);",
+        "substr_count() takes 2 to 4 arguments",
     );
 }
 

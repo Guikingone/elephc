@@ -108,6 +108,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_rtrim_mask(emitter);
     strings::emit_ltrim_mask(emitter);
     strings::emit_trim_mask(emitter);
+    strings::emit_octdec(emitter);
+    strings::emit_substr_count(emitter);
 
     // Callable introspection runtime functions
     callables::emit_is_callable_runtime(emitter);

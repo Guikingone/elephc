@@ -1137,13 +1137,46 @@ pub(super) fn lower_array_key_exists(ctx: &mut FunctionContext<'_>, inst: &Instr
     key_exists::lower_array_key_exists(ctx, inst)
 }
 
-/// Lowers `array_search()` for indexed arrays with integer-like payloads.
+/// Lowers `array_search(needle, haystack[, strict])` for indexed arrays.
+///
+/// When `strict` is a compile-time `true` constant and the needle type differs from the
+/// element type, returns `false` immediately without searching (PHP strict-comparison
+/// semantics: a string needle never equals an integer element).  For `strict=false` (the
+/// default) or same-type strict comparisons the existing loose-comparison path is used.
+/// A runtime-dynamic `strict` argument emits an `unsupported` error.
 pub(super) fn lower_array_search(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count(inst, "array_search", 2)?;
+    ensure_arg_count_between(inst, "array_search", 2, 3)?;
     let needle = expect_operand(inst, 0)?;
     let array = expect_operand(inst, 1)?;
     let needle_ty = ctx.value_php_type(needle)?;
     let array_ty = ctx.value_php_type(array)?;
+
+    if inst.operands.len() == 3 {
+        let strict_val = expect_operand(inst, 2)?;
+        let strict = match static_const_bool(ctx, strict_val)? {
+            Some(v) => v,
+            None => {
+                return Err(CodegenIrError::unsupported(
+                    "array_search() $strict must be a compile-time constant in AOT mode"
+                        .to_string(),
+                ))
+            }
+        };
+        if strict {
+            let elem_ty: Option<PhpType> = match &array_ty {
+                PhpType::Array(inner) => Some(inner.as_ref().clone()),
+                PhpType::AssocArray { value, .. } => Some(value.as_ref().clone()),
+                _ => None,
+            };
+            if let Some(elem) = elem_ty {
+                if elem != needle_ty {
+                    box_array_search_miss(ctx);
+                    return store_if_result(ctx, inst);
+                }
+            }
+        }
+    }
+
     if search::try_lower_assoc_array_search(ctx, needle, array, needle_ty.clone(), array_ty.clone())? {
         store_if_result(ctx, inst)?;
         return Ok(());
@@ -1152,6 +1185,9 @@ pub(super) fn lower_array_search(ctx: &mut FunctionContext<'_>, inst: &Instructi
         ArraySearchCase::Empty => box_array_search_miss(ctx),
         ArraySearchCase::Scalar => lower_array_search_scalar(ctx, needle, array)?,
         ArraySearchCase::String => lower_array_search_string(ctx, needle, array)?,
+        ArraySearchCase::StringNeedleInIntArray => {
+            lower_array_search_string_needle_in_int_array(ctx, needle, array)?
+        }
     }
     store_if_result(ctx, inst)
 }
@@ -3132,6 +3168,31 @@ fn require_range_endpoint(ty: PhpType, name: &str) -> Result<()> {
     }
 }
 
+/// Extracts a constant boolean from an EIR `ValueId` at compile time.
+///
+/// Returns `Some(true/false)` when the defining instruction is a `ConstBool`, a `ConstI64`
+/// (non-zero = true), or a `ConstNull` (false).  Returns `Ok(None)` when the value is
+/// runtime-dynamic.  Callers that require a constant should convert `None` into an
+/// `unsupported` error.
+fn static_const_bool(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<bool>> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    match (inst_ref.op, inst_ref.immediate.as_ref()) {
+        (Op::ConstBool, Some(Immediate::Bool(v))) => Ok(Some(*v)),
+        (Op::ConstI64, Some(Immediate::I64(v))) => Ok(Some(*v != 0)),
+        (Op::ConstNull, _) => Ok(Some(false)),
+        _ => Ok(None),
+    }
+}
+
 /// Verifies `range()` is represented as an indexed integer array.
 fn require_range_result_type(result_ty: &PhpType) -> Result<()> {
     match result_ty {
@@ -4507,6 +4568,10 @@ enum ArraySearchCase {
     Empty,
     Scalar,
     String,
+    /// PHP loose comparison: numeric string needle compared against an integer-element array.
+    ///
+    /// Requires converting the string needle through `__rt_str_to_int` before the scalar search.
+    StringNeedleInIntArray,
 }
 
 /// Verifies that an indexed-array `array_search()` call can use the scalar search helper.
@@ -4519,6 +4584,9 @@ fn supported_array_search_case(needle_ty: PhpType, array_ty: PhpType) -> Result<
                 Ok(ArraySearchCase::Scalar)
             }
             PhpType::Str if needle_ty == PhpType::Str => Ok(ArraySearchCase::String),
+            PhpType::Int if needle_ty == PhpType::Str => {
+                Ok(ArraySearchCase::StringNeedleInIntArray)
+            }
             elem_ty => Err(CodegenIrError::unsupported(format!(
                 "array_search needle PHP type {:?} for indexed-array element PHP type {:?}",
                 needle_ty,
@@ -4563,6 +4631,37 @@ fn lower_array_search_string(
         Arch::AArch64 => lower_array_search_string_aarch64(ctx, needle, array),
         Arch::X86_64 => lower_array_search_string_x86_64(ctx, needle, array),
     }
+}
+
+/// Lowers `array_search(string_needle, int_array)` with PHP loose comparison.
+///
+/// Converts the string needle to an integer via `__rt_str_to_int` then delegates to the
+/// existing integer scalar search path.  This implements PHP 8 loose semantics where a
+/// numeric string (e.g. `"2"`) compares equal to the matching integer element.
+fn lower_array_search_string_needle_in_int_array(
+    ctx: &mut FunctionContext<'_>,
+    needle: ValueId,
+    array: ValueId,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_string_value_to_regs(needle, "x1", "x2")?;                 // load needle string (x1=ptr, x2=len) from frame slot
+            abi::emit_call_label(ctx.emitter, "__rt_str_to_int");                // convert string (x1/x2) to integer result in x0
+            ctx.emitter.instruction("mov x9, x0");                               // save the converted integer while loading the array
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.emitter.instruction("mov x1, x9");                               // restore the converted integer as the scalar needle argument
+        }
+        Arch::X86_64 => {
+            ctx.load_string_value_to_regs(needle, "rax", "rdx")?;               // load needle string (rax=ptr, rdx=len) from frame slot
+            abi::emit_call_label(ctx.emitter, "__rt_str_to_int");                // convert string (rax/rdx) to integer result in rax
+            ctx.emitter.instruction("mov r9, rax");                              // save the converted integer while loading the array
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.emitter.instruction("mov rsi, r9");                              // restore the converted integer as the scalar needle argument
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_search");
+    box_array_search_result(ctx);
+    Ok(())
 }
 
 /// Emits the AArch64 string-array search loop.

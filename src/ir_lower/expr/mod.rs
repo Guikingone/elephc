@@ -6182,7 +6182,8 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "stream_set_read_buffer" | "stream_set_write_buffer"
         | "__elephc_strtotime_raw" | "time"
         | "strcspn" | "strspn" | "hexdec"
-        | "umask" | "vfprintf" | "vprintf" | "realpath_cache_size" => {
+        | "umask" | "vfprintf" | "vprintf" | "realpath_cache_size"
+        | "octdec" | "substr_count" => {
             Some(PhpType::Int)
         }
         // strtotime() is `int|false`: a real timestamp (including a valid -1 pre-epoch) on success,

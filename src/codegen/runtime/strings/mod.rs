@@ -82,6 +82,8 @@ mod ltrim_mask;
 mod trim_mask;
 mod resource_to_string;
 mod resource_write_stdout;
+mod octdec;
+mod substr_count;
 
 pub use itoa::emit_itoa;
 /// Emit integer-to-string conversion helper.
@@ -227,3 +229,7 @@ pub use trim_mask::emit_trim_mask;
 pub use resource_to_string::emit_resource_to_string;
 /// Emit resource-to-string conversion.
 pub use resource_write_stdout::emit_resource_write_stdout;
+/// Emit octal-string-to-integer conversion helper.
+pub use octdec::emit_octdec;
+/// Emit non-overlapping substring occurrence count helper.
+pub use substr_count::emit_substr_count;

@@ -263,3 +263,111 @@ fn test_strcspn_strspn_case_insensitive() {
     let out = compile_and_run(r#"<?php echo StrCsPn("hello", "l"), "|", STRSPN("aaab", "a");"#);
     assert_eq!(out, "2|3");
 }
+
+/// Verifies octdec converts octal string "17" to decimal 15 (1*8 + 7).
+#[test]
+fn test_octdec_basic() {
+    let out = compile_and_run(r#"<?php echo octdec("17");"#);
+    assert_eq!(out, "15");
+}
+
+/// Verifies octdec converts "777" (3 octal sevens) to decimal 511.
+#[test]
+fn test_octdec_three_digits() {
+    let out = compile_and_run(r#"<?php echo octdec("777");"#);
+    assert_eq!(out, "511");
+}
+
+/// Verifies octdec stops parsing at the first non-octal character.
+/// Fixture: "18" stops at '8' (not an octal digit), returning 1.
+#[test]
+fn test_octdec_stops_at_non_octal() {
+    let out = compile_and_run(r#"<?php echo octdec("18");"#);
+    assert_eq!(out, "1");
+}
+
+/// Verifies octdec returns 0 for an empty string.
+#[test]
+fn test_octdec_empty_string() {
+    let out = compile_and_run(r#"<?php echo octdec("");"#);
+    assert_eq!(out, "0");
+}
+
+/// Verifies substr_count counts all non-overlapping occurrences of the needle.
+/// Fixture: "hello world hello" contains "hello" twice.
+#[test]
+fn test_substr_count_basic() {
+    let out = compile_and_run(r#"<?php echo substr_count("hello world hello", "hello");"#);
+    assert_eq!(out, "2");
+}
+
+/// Verifies substr_count returns 1 when there is exactly one occurrence.
+#[test]
+fn test_substr_count_single() {
+    let out = compile_and_run(r#"<?php echo substr_count("abcdef", "cd");"#);
+    assert_eq!(out, "1");
+}
+
+/// Verifies substr_count returns 0 when the needle is absent.
+#[test]
+fn test_substr_count_not_found() {
+    let out = compile_and_run(r#"<?php echo substr_count("hello", "xyz");"#);
+    assert_eq!(out, "0");
+}
+
+/// Verifies substr_count does not count overlapping occurrences.
+/// Fixture: "aaaa" has two non-overlapping "aa" occurrences (positions 0 and 2).
+#[test]
+fn test_substr_count_non_overlapping() {
+    let out = compile_and_run(r#"<?php echo substr_count("aaaa", "aa");"#);
+    assert_eq!(out, "2");
+}
+
+/// Verifies strstr with before_needle=true returns the prefix before the first occurrence.
+/// Fixture: "user@example.com" split on "@" returns "user".
+#[test]
+fn test_strstr_before_needle_true() {
+    let out = compile_and_run(r#"<?php echo strstr("user@example.com", "@", true);"#);
+    assert_eq!(out, "user");
+}
+
+/// Verifies strstr with before_needle=false returns the suffix starting at the needle.
+/// Fixture: "user@example.com" split on "@" returns "@example.com".
+#[test]
+fn test_strstr_before_needle_false() {
+    let out = compile_and_run(r#"<?php echo strstr("user@example.com", "@", false);"#);
+    assert_eq!(out, "@example.com");
+}
+
+/// Verifies strstr with before_needle=true returns the empty (not-found) result when the
+/// needle is absent. elephc models strstr as `Str`, so the miss path yields an empty string
+/// (mirroring `test_strpos_not_found`); the prefix reconstruction must not corrupt that path.
+#[test]
+fn test_strstr_before_needle_miss() {
+    let out = compile_and_run(r#"<?php echo "[", strstr("hello", "@", true), "]";"#);
+    assert_eq!(out, "[]");
+}
+
+/// Verifies strpos with a starting offset skips the first occurrence and finds the second.
+/// Fixture: "abcabc" contains "c" at both offset 2 and 5; starting from offset 3 finds offset 5.
+#[test]
+fn test_strpos_with_offset() {
+    let out = compile_and_run(r#"<?php echo strpos("abcabc", "c", 3);"#);
+    assert_eq!(out, "5");
+}
+
+/// Verifies strpos with an offset past all occurrences returns strict false.
+#[test]
+fn test_strpos_with_offset_not_found() {
+    let out = compile_and_run(
+        r#"<?php echo strpos("abcabc", "c", 6) === false ? "miss" : "hit";"#,
+    );
+    assert_eq!(out, "miss");
+}
+
+/// Verifies strpos with offset 0 behaves identically to the 2-arg form.
+#[test]
+fn test_strpos_with_zero_offset() {
+    let out = compile_and_run(r#"<?php echo strpos("abcabc", "c", 0);"#);
+    assert_eq!(out, "2");
+}
