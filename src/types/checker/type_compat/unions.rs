@@ -48,6 +48,14 @@ impl Checker {
             return true;
         }
 
+        // Union covariance: a union actual is accepted if every member is accepted by expected.
+        // This enables `?\BackedEnum → ?\UnitEnum` and similar nullable-interface covariance.
+        if let PhpType::Union(actual_members) = actual {
+            return actual_members
+                .iter()
+                .all(|m| self.type_accepts(expected, m));
+        }
+
         match expected {
             PhpType::Mixed => true,
             PhpType::Union(members) => members

@@ -2,7 +2,7 @@
 title: "printf()"
 description: "Lowers `printf(format, values...)` as `sprintf()` followed by stdout emission."
 sidebar:
-  order: 356
+  order: 363
 ---
 
 ## printf()

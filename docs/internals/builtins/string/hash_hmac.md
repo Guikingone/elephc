@@ -2,7 +2,7 @@
 title: "hash_hmac() — internals"
 description: "Compiler internals for hash_hmac(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 340
+  order: 344
 ---
 
 ## `hash_hmac()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:285](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L285) (`lower_hash_hmac`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:322](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L322) (`lower_hash_hmac`)
 - **Function symbol**: `lower_hash_hmac()`
 
 

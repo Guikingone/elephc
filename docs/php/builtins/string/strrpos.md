@@ -2,13 +2,13 @@
 title: "strrpos()"
 description: "Lowers `strpos()`/`strrpos()` and boxes position-or-false results as Mixed."
 sidebar:
-  order: 379
+  order: 386
 ---
 
 ## strrpos()
 
 ```php
-function strrpos(string $haystack, string $needle, int $offset): mixed
+function strrpos(string $haystack, string $needle, int $value): mixed
 ```
 
 Lowers `strpos()`/`strrpos()` and boxes position-or-false results as Mixed.
@@ -16,7 +16,7 @@ Lowers `strpos()`/`strrpos()` and boxes position-or-false results as Mixed.
 **Parameters**:
 - `$haystack` (`string`)
 - `$needle` (`string`)
-- `$offset` (`int`), optional
+- `$value` (`int`)
 
 **Returns**: `mixed`
 

@@ -2,7 +2,7 @@
 title: "strspn()"
 description: "Lowers `strcspn()`/`strspn()` initial-segment-span builtins to a runtime helper."
 sidebar:
-  order: 380
+  order: 387
 ---
 
 ## strspn()

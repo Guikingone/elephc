@@ -1,8 +1,8 @@
 ---
 title: "strpos()"
-description: "Lowers `strpos()`/`strrpos()` and boxes position-or-false results as Mixed."
+description: "Lowers `strpos(haystack, needle[, offset])` with optional starting offset."
 sidebar:
-  order: 377
+  order: 384
 ---
 
 ## strpos()
@@ -11,7 +11,7 @@ sidebar:
 function strpos(string $haystack, string $needle, int $offset): mixed
 ```
 
-Lowers `strpos()`/`strrpos()` and boxes position-or-false results as Mixed.
+Lowers `strpos(haystack, needle[, offset])` with optional starting offset.
 
 **Parameters**:
 - `$haystack` (`string`)

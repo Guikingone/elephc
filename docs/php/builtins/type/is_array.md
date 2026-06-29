@@ -2,7 +2,7 @@
 title: "is_array()"
 description: "Lowers `is_array()`: true for statically-known arrays/hashes, or a boxed Mixed/Union value"
 sidebar:
-  order: 404
+  order: 412
 ---
 
 ## is_array()

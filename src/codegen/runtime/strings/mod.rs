@@ -83,6 +83,11 @@ mod trim_mask;
 mod resource_to_string;
 mod resource_write_stdout;
 mod octdec;
+mod bindec;
+mod dechex;
+mod decoct;
+mod decbin;
+mod preg_last_error_msg;
 mod substr_count;
 
 pub use itoa::emit_itoa;
@@ -231,5 +236,15 @@ pub use resource_to_string::emit_resource_to_string;
 pub use resource_write_stdout::emit_resource_write_stdout;
 /// Emit octal-string-to-integer conversion helper.
 pub use octdec::emit_octdec;
+/// Emit binary-string-to-integer conversion helper.
+pub use bindec::emit_bindec;
+/// Emit integer-to-hex-string conversion helper.
+pub use dechex::emit_dechex;
+/// Emit integer-to-octal-string conversion helper.
+pub use decoct::emit_decoct;
+/// Emit integer-to-binary-string conversion helper.
+pub use decbin::emit_decbin;
+/// Emit preg_last_error_msg and preg_last_error stubs.
+pub use preg_last_error_msg::{emit_preg_last_error_msg, emit_preg_last_error};
 /// Emit non-overlapping substring occurrence count helper.
 pub use substr_count::emit_substr_count;

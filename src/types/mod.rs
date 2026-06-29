@@ -26,6 +26,8 @@ pub(crate) mod call_args;
 pub(crate) mod fibers;
 /// `ext/date` integer constants (e.g. `SUNFUNCS_RET_*`).
 pub(crate) mod date_constants;
+/// POSIX locale category integer constants (LC_ALL, LC_NUMERIC, etc.).
+pub(crate) mod locale_constants;
 /// C FFI type mapping utilities.
 mod ffi;
 /// JSON literal constant type inference.

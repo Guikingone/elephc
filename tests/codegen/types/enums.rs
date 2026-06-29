@@ -535,3 +535,17 @@ fn test_enum_name_in_interpolation() {
     );
     assert_eq!(out, "name=High value=9");
 }
+
+/// Verifies that `BackedEnum` and `UnitEnum` are accepted as type annotations, that a function
+/// parameterised as `?BackedEnum` can return `?UnitEnum`, and that passing null produces NULL.
+/// This is the minimal acceptance test needed so Symfony/YAML's enum type hints compile.
+#[test]
+fn test_backed_enum_and_unit_enum_type_acceptance() {
+    let out = compile_and_run(
+        "<?php
+function f(?BackedEnum $b = null): ?UnitEnum { return $b; }
+var_dump(f());
+",
+    );
+    assert_eq!(out, "NULL\n");
+}

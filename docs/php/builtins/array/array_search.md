@@ -1,6 +1,6 @@
 ---
 title: "array_search()"
-description: "Lowers `array_search()` for indexed arrays with integer-like payloads."
+description: "Lowers `array_search(needle, haystack[, strict])` for indexed arrays."
 sidebar:
   order: 23
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_search(mixed $needle, array $haystack, bool $strict): mixed
 ```
 
-Lowers `array_search()` for indexed arrays with integer-like payloads.
+Lowers `array_search(needle, haystack[, strict])` for indexed arrays.
 
 **Parameters**:
 - `$needle` (`mixed`)

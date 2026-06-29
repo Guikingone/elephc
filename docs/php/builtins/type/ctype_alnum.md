@@ -2,7 +2,7 @@
 title: "ctype_alnum()"
 description: "Lowers `ctype_alnum(string)` by checking every byte against ASCII alpha or digit ranges."
 sidebar:
-  order: 395
+  order: 403
 ---
 
 ## ctype_alnum()

@@ -2,7 +2,7 @@
 title: "str_replace() — internals"
 description: "Compiler internals for str_replace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 371
+  order: 378
 ---
 
 ## `str_replace()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:837](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L837) (`lower_string_replace`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:940](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L940) (`lower_string_replace`)
 - **Function symbol**: `lower_string_replace()`
 
 

@@ -2,7 +2,7 @@
 title: "implode()"
 description: "Lowers `implode(glue, array)` by selecting the string or integer array helper."
 sidebar:
-  order: 345
+  order: 349
 ---
 
 ## implode()

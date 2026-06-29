@@ -46,6 +46,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _php_tz_utc\n");
     out.push_str("_php_tz_utc:\n");
     out.push_str("    .ascii \"UTC\"\n");
+    // Static string returned by preg_last_error_msg() — always "No error" in this implementation.
+    out.push_str(".globl _rt_preg_no_error_str\n");
+    out.push_str("_rt_preg_no_error_str:\n");
+    out.push_str("    .ascii \"No error\"\n");
     // Property name used by the `(object)` cast when wrapping a scalar value
     // (`(object)5` → stdClass with a single `scalar` property holding the value).
     out.push_str(".globl _objcast_scalar_prop\n");

@@ -95,6 +95,12 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "gzinflate" => Some(optional(&["data", "max_length"], 1, vec![int_lit(0)])),
         "gzuncompress" => Some(optional(&["data", "max_length"], 1, vec![int_lit(0)])),
         "octdec" => Some(fixed(&["octal_string"])),
+        "bindec" => Some(fixed(&["binary_string"])),
+        "dechex" => Some(fixed(&["value"])),
+        "decoct" => Some(fixed(&["value"])),
+        "decbin" => Some(fixed(&["value"])),
+        "preg_last_error_msg" => Some(fixed(&[])),
+        "preg_last_error" => Some(fixed(&[])),
         "ord" => Some(fixed(&["character"])),
         "chr" => Some(fixed(&["codepoint"])),
         "substr_count" => Some(optional(

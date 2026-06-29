@@ -10,13 +10,18 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1141](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1141) (`lower_array_search`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1147](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1147) (`lower_array_search`)
 - **Function symbol**: `lower_array_search()`
 
 
 ### Lowering notes
 
-- Lowers `array_search()` for indexed arrays with integer-like payloads.
+- Lowers `array_search(needle, haystack[, strict])` for indexed arrays.
+- When `strict` is a compile-time `true` constant and the needle type differs from the
+- element type, returns `false` immediately without searching (PHP strict-comparison
+- semantics: a string needle never equals an integer element).  For `strict=false` (the
+- default) or same-type strict comparisons the existing loose-comparison path is used.
+- A runtime-dynamic `strict` argument emits an `unsupported` error.
 
 ## Runtime helpers
 

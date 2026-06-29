@@ -2,7 +2,7 @@
 title: "strpbrk() — internals"
 description: "Compiler internals for strpbrk(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 379
+  order: 386
 ---
 
 ## `strpbrk()` — internals
@@ -25,7 +25,6 @@ sidebar:
 ## Runtime helpers
 
 The following runtime helpers are referenced:
-- `__rt_explode`
 - `__rt_hexdec`
 - `__rt_strpbrk`
 

@@ -409,3 +409,33 @@ fn test_error_vprintf_wrong_args() {
         "vprintf() takes exactly 2 arguments",
     );
 }
+
+expect_builtin_arity_error!(
+    test_error_bindec_wrong_args,
+    "<?php bindec();",
+    "bindec() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_dechex_wrong_args,
+    "<?php dechex();",
+    "dechex() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_decoct_wrong_args,
+    "<?php decoct();",
+    "decoct() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_decbin_wrong_args,
+    "<?php decbin();",
+    "decbin() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_preg_last_error_msg_wrong_args,
+    "<?php preg_last_error_msg(1);",
+    "preg_last_error_msg() takes exactly 0 arguments"
+);

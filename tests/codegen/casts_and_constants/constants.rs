@@ -146,3 +146,26 @@ fn test_php_version_string() {
     let out = compile_and_run("<?php echo strlen(PHP_VERSION) > 0 ? 1 : 0;");
     assert_eq!(out, "1");
 }
+
+/// Verifies `LC_NUMERIC` has the PHP-standard value 4 on supported targets.
+#[test]
+fn test_lc_numeric_constant() {
+    let out = compile_and_run("<?php echo LC_NUMERIC;");
+    assert_eq!(out, "4");
+}
+
+/// Verifies `LC_ALL` has the PHP-standard value 0 on supported targets.
+#[test]
+fn test_lc_all_constant() {
+    let out = compile_and_run("<?php echo LC_ALL;");
+    assert_eq!(out, "0");
+}
+
+/// Verifies all LC_* constants are reachable and have the expected PHP values.
+#[test]
+fn test_lc_all_constants() {
+    let out = compile_and_run(
+        "<?php echo LC_ALL,\"|\",LC_COLLATE,\"|\",LC_CTYPE,\"|\",LC_MONETARY,\"|\",LC_NUMERIC,\"|\",LC_TIME,\"|\",LC_MESSAGES;",
+    );
+    assert_eq!(out, "0|1|2|3|4|5|6");
+}

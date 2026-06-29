@@ -2,7 +2,7 @@
 title: "html_entity_decode()"
 description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
 sidebar:
-  order: 342
+  order: 346
 ---
 
 ## html_entity_decode()

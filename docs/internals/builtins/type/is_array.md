@@ -2,7 +2,7 @@
 title: "is_array() — internals"
 description: "Compiler internals for is_array(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 407
+  order: 415
 ---
 
 ## `is_array()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:1625](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L1625) (`lower_is_array`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:1633](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L1633) (`lower_is_array`)
 - **Function symbol**: `lower_is_array()`
 
 

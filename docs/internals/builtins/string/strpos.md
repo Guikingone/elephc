@@ -2,7 +2,7 @@
 title: "strpos() — internals"
 description: "Compiler internals for strpos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 380
+  order: 387
 ---
 
 ## `strpos()` — internals
@@ -10,17 +10,22 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:757](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L757) (`lower_string_position`)
-- **Function symbol**: `lower_string_position()`
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:896](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L896) (`lower_strpos`)
+- **Function symbol**: `lower_strpos()`
 
 
 ### Lowering notes
 
-- Lowers `strpos()`/`strrpos()` and boxes position-or-false results as Mixed.
+- Lowers `strpos(haystack, needle[, offset])` with optional starting offset.
+- The 2-arg form delegates to the shared binary-string-runtime path.  The 3-arg form
+- adjusts the haystack pointer and length by the given offset, calls `__rt_strpos`, and
+- then adds the offset back to the returned position so the result is absolute.
 
 ## Runtime helpers
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+The following runtime helpers are referenced:
+- `__rt_strpos`
+- `__rt_substr_count`
 
 ## Signature summary
 

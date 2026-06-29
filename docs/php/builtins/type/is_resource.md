@@ -2,7 +2,7 @@
 title: "is_resource()"
 description: "Lowers `is_resource(value)` for static resources and boxed Mixed resource cells."
 sidebar:
-  order: 413
+  order: 421
 ---
 
 ## is_resource()

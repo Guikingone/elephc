@@ -51,6 +51,8 @@ const BUILTIN_CLASS_LIKE_SYMBOLS: &[&str] = &[
     "SplSubject",
     "Stringable",
     "Traversable",
+    "UnitEnum",
+    "BackedEnum",
 ];
 
 impl Symbols {

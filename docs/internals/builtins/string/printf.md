@@ -2,7 +2,7 @@
 title: "printf() — internals"
 description: "Compiler internals for printf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 359
+  order: 366
 ---
 
 ## `printf()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:574](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L574) (`lower_printf`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:611](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L611) (`lower_printf`)
 - **Function symbol**: `lower_printf()`
 
 

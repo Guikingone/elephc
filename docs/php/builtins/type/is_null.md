@@ -2,7 +2,7 @@
 title: "is_null()"
 description: "is_null() — type builtin supported by Elephc."
 sidebar:
-  order: 410
+  order: 418
 ---
 
 ## is_null()

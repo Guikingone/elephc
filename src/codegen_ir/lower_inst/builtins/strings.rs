@@ -204,6 +204,43 @@ pub(super) fn lower_hexdec(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     store_if_result(ctx, inst)
 }
 
+/// Lowers an integer-valued builtin that delegates directly to a named runtime helper.
+///
+/// Loads the first operand into the integer result register (the int ABI input for the helper),
+/// calls the runtime, and stores the string-typed result (ptr/len in string result registers).
+pub(super) fn lower_int_to_base_string(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 1)?;
+    let value = expect_operand(inst, 0)?;
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, runtime_label);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `preg_last_error_msg()` — always returns the static string `"No error"`.
+pub(super) fn lower_preg_last_error_msg(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "preg_last_error_msg", 0)?;
+    abi::emit_call_label(ctx.emitter, "__rt_preg_last_error_msg");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `preg_last_error()` — always returns 0 (PREG_NO_ERROR) in this implementation.
+pub(super) fn lower_preg_last_error(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "preg_last_error", 0)?;
+    abi::emit_call_label(ctx.emitter, "__rt_preg_last_error");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `explode(delimiter, string)` into the shared string-array splitter helper.
 pub(super) fn lower_explode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let cleanups = plan_split_string_temp_cleanups(ctx, inst)?;

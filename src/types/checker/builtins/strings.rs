@@ -232,6 +232,16 @@ pub(super) fn check_builtin(
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Int))
         }
+        "dechex" | "decoct" | "decbin" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 1 argument", name),
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Str))
+        }
         "substr_count" => {
             if args.len() < 2 || args.len() > 4 {
                 return Err(CompileError::new(

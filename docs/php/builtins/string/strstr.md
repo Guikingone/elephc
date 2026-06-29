@@ -1,8 +1,8 @@
 ---
 title: "strstr()"
-description: "Lowers `strstr(haystack, needle)` by searching and returning the matching suffix."
+description: "Lowers `strstr(haystack, needle[, before_needle])`."
 sidebar:
-  order: 381
+  order: 388
 ---
 
 ## strstr()
@@ -11,7 +11,7 @@ sidebar:
 function strstr(string $haystack, string $needle, bool $before_needle): string
 ```
 
-Lowers `strstr(haystack, needle)` by searching and returning the matching suffix.
+Lowers `strstr(haystack, needle[, before_needle])`.
 
 **Parameters**:
 - `$haystack` (`string`)

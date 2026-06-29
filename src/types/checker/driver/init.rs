@@ -17,6 +17,7 @@ use crate::types::error_constants::ERROR_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::php_runtime_constants::PHP_RUNTIME_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
+use crate::types::locale_constants::LOCALE_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::PhpType;
 
@@ -74,6 +75,9 @@ impl Checker {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         for (name, _value) in PHP_RUNTIME_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in LOCALE_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         // PHP_SAPI, PHP_VERSION, and PHP_OS_FAMILY are string constants.

@@ -6181,9 +6181,9 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "pclose" | "spl_object_id" | "stream_select" | "stream_set_chunk_size"
         | "stream_set_read_buffer" | "stream_set_write_buffer"
         | "__elephc_strtotime_raw" | "time"
-        | "strcspn" | "strspn" | "hexdec"
+        | "strcspn" | "strspn" | "hexdec" | "bindec"
         | "umask" | "vfprintf" | "vprintf" | "realpath_cache_size"
-        | "octdec" | "substr_count" => {
+        | "octdec" | "substr_count" | "preg_last_error" => {
             Some(PhpType::Int)
         }
         // strtotime() is `int|false`: a real timestamp (including a valid -1 pre-epoch) on success,
@@ -6197,7 +6197,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         // `call_return_type_for_args` (Float / Str), so this entry is only reached for a
         // non-literal flag.
         "microtime" => Some(PhpType::Union(vec![PhpType::Str, PhpType::Float])),
-        "spl_object_hash" => Some(PhpType::Str),
+        "spl_object_hash" | "dechex" | "decoct" | "decbin" | "preg_last_error_msg" => Some(PhpType::Str),
         "spl_autoload" | "spl_autoload_call" | "usleep" => Some(PhpType::Void),
         "stream_context_create" | "stream_context_get_default" | "stream_context_set_default" => {
             Some(PhpType::stream_resource())

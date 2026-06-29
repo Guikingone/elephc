@@ -109,6 +109,12 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_ltrim_mask(emitter);
     strings::emit_trim_mask(emitter);
     strings::emit_octdec(emitter);
+    strings::emit_bindec(emitter);
+    strings::emit_dechex(emitter);
+    strings::emit_decoct(emitter);
+    strings::emit_decbin(emitter);
+    strings::emit_preg_last_error_msg(emitter);
+    strings::emit_preg_last_error(emitter);
     strings::emit_substr_count(emitter);
 
     // Callable introspection runtime functions

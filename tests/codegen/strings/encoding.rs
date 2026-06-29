@@ -483,3 +483,98 @@ echo inet_pton("nonsense") === false ? "F" : "S";
     );
     assert_eq!(out, "SF");
 }
+
+// --- base conversion builtins: bindec, dechex, decoct, decbin ---
+
+/// Verifies `bindec()` converts the binary string "101" to integer 5.
+#[test]
+fn test_bindec_basic() {
+    let out = compile_and_run(r#"<?php echo bindec("101");"#);
+    assert_eq!(out, "5");
+}
+
+/// Verifies `bindec()` ignores non-binary characters (matching PHP behaviour).
+#[test]
+fn test_bindec_ignores_non_binary_chars() {
+    let out = compile_and_run(r#"<?php echo bindec("1a0b1");"#);
+    assert_eq!(out, "5");
+}
+
+/// Verifies `bindec()` returns 0 for an empty string.
+#[test]
+fn test_bindec_empty_string() {
+    let out = compile_and_run(r#"<?php echo bindec("");"#);
+    assert_eq!(out, "0");
+}
+
+/// Verifies `dechex()` converts 255 to "ff".
+#[test]
+fn test_dechex_basic() {
+    let out = compile_and_run(r#"<?php echo dechex(255);"#);
+    assert_eq!(out, "ff");
+}
+
+/// Verifies `dechex()` converts 0 to "0".
+#[test]
+fn test_dechex_zero() {
+    let out = compile_and_run(r#"<?php echo dechex(0);"#);
+    assert_eq!(out, "0");
+}
+
+/// Verifies `dechex()` converts 16 to "10".
+#[test]
+fn test_dechex_sixteen() {
+    let out = compile_and_run(r#"<?php echo dechex(16);"#);
+    assert_eq!(out, "10");
+}
+
+/// Verifies `decoct()` converts 8 to "10".
+#[test]
+fn test_decoct_basic() {
+    let out = compile_and_run(r#"<?php echo decoct(8);"#);
+    assert_eq!(out, "10");
+}
+
+/// Verifies `decoct()` converts 0 to "0".
+#[test]
+fn test_decoct_zero() {
+    let out = compile_and_run(r#"<?php echo decoct(0);"#);
+    assert_eq!(out, "0");
+}
+
+/// Verifies `decbin()` converts 5 to "101".
+#[test]
+fn test_decbin_basic() {
+    let out = compile_and_run(r#"<?php echo decbin(5);"#);
+    assert_eq!(out, "101");
+}
+
+/// Verifies `decbin()` converts 0 to "0".
+#[test]
+fn test_decbin_zero() {
+    let out = compile_and_run(r#"<?php echo decbin(0);"#);
+    assert_eq!(out, "0");
+}
+
+/// Verifies the combined base-conversion acceptance: bindec|dechex|decoct|decbin together.
+#[test]
+fn test_base_conversion_combined() {
+    let out = compile_and_run(
+        r#"<?php echo bindec("101"),"|",dechex(255),"|",decoct(8),"|",decbin(5);"#,
+    );
+    assert_eq!(out, "5|ff|10|101");
+}
+
+/// Verifies `preg_last_error_msg()` returns "No error" (stub implementation).
+#[test]
+fn test_preg_last_error_msg_no_error() {
+    let out = compile_and_run(r#"<?php echo preg_last_error_msg();"#);
+    assert_eq!(out, "No error");
+}
+
+/// Verifies `preg_last_error()` returns 0 (PREG_NO_ERROR, stub implementation).
+#[test]
+fn test_preg_last_error_zero() {
+    let out = compile_and_run(r#"<?php echo preg_last_error();"#);
+    assert_eq!(out, "0");
+}

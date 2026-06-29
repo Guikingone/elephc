@@ -2,7 +2,7 @@
 title: "gettype()"
 description: "Lowers `gettype(value)` for statically concrete PHP types."
 sidebar:
-  order: 402
+  order: 410
 ---
 
 ## gettype()

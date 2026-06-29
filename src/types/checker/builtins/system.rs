@@ -525,6 +525,24 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Str))
         }
+        "preg_last_error_msg" => {
+            if !args.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "preg_last_error_msg() takes exactly 0 arguments",
+                ));
+            }
+            Ok(Some(PhpType::Str))
+        }
+        "preg_last_error" => {
+            if !args.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "preg_last_error() takes exactly 0 arguments",
+                ));
+            }
+            Ok(Some(PhpType::Int))
+        }
         "preg_match" => {
             // PHP: preg_match(string $pattern, string $subject, array &$matches = [],
             // int $flags = 0, int $offset = 0): int|false. `$matches` is a by-ref

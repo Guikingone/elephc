@@ -228,6 +228,13 @@ pub(super) fn check_builtin(
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Int))
         }
+        "bindec" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "bindec() takes exactly 1 argument"));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Int))
+        }
         "fmod" | "fdiv" => {
             if args.len() != 2 {
                 return Err(CompileError::new(

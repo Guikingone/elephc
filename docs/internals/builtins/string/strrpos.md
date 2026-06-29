@@ -2,7 +2,7 @@
 title: "strrpos() — internals"
 description: "Compiler internals for strrpos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 382
+  order: 389
 ---
 
 ## `strrpos()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:757](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L757) (`lower_string_position`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:794](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L794) (`lower_string_position`)
 - **Function symbol**: `lower_string_position()`
 
 
@@ -25,12 +25,12 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function strrpos(string $haystack, string $needle, int $offset): mixed
+function strrpos(string $haystack, string $needle, int $value): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–3 arguments (1 optional).
+- **Arity**: takes exactly 3 arguments.
 
 ## Cross-references
 

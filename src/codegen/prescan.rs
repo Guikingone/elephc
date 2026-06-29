@@ -18,6 +18,7 @@ use crate::types::error_constants::ERROR_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::php_runtime_constants::{PHP_RUNTIME_INT_CONSTANTS, PHP_SAPI_STR, PHP_VERSION_STR};
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
+use crate::types::locale_constants::LOCALE_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::{PhpType, TypeEnv};
 
@@ -147,6 +148,12 @@ pub(crate) fn collect_constants(
         );
     }
     for (name, value) in PHP_RUNTIME_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in LOCALE_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),
             (ExprKind::IntLiteral(*value), PhpType::Int),

@@ -331,9 +331,13 @@ sidebar:
 | [`base64_decode()`](./builtins/string/base64_decode.md) | `(string $string, bool $strict): string` | `string` |
 | [`base64_encode()`](./builtins/string/base64_encode.md) | `(string $string): string` | `string` |
 | [`bin2hex()`](./builtins/string/bin2hex.md) | `(string $string): string` | `string` |
+| [`bindec()`](./builtins/string/bindec.md) | `(mixed $binary_string): int` | `int` |
 | [`chop()`](./builtins/string/chop.md) | `(string $string, string $characters): string` | `string` |
 | [`chr()`](./builtins/string/chr.md) | `(int $codepoint): string` | `string` |
 | [`crc32()`](./builtins/string/crc32.md) | `(string $string): int` | `int` |
+| [`decbin()`](./builtins/string/decbin.md) | `(mixed $value): string` | `string` |
+| [`dechex()`](./builtins/string/dechex.md) | `(mixed $value): string` | `string` |
+| [`decoct()`](./builtins/string/decoct.md) | `(mixed $value): string` | `string` |
 | [`explode()`](./builtins/string/explode.md) | `(string $separator, string $string, int $limit): array` | `array` |
 | [`grapheme_strrev()`](./builtins/string/grapheme_strrev.md) | `(string $string): mixed` | `mixed` |
 | [`gzcompress()`](./builtins/string/gzcompress.md) | `(string $data, int $level, int $encoding): string` | `string` |
@@ -363,7 +367,10 @@ sidebar:
 | [`md5()`](./builtins/string/md5.md) | `(string $string, bool $binary): string` | `string` |
 | [`nl2br()`](./builtins/string/nl2br.md) | `(string $string, bool $use_xhtml): string` | `string` |
 | [`number_format()`](./builtins/string/number_format.md) | `(float $num, int $decimals, string $decimal_separator, string $thousands_separator): string` | `string` |
+| [`octdec()`](./builtins/string/octdec.md) | `(mixed $octal_string): int` | `int` |
 | [`ord()`](./builtins/string/ord.md) | `(string $character): int` | `int` |
+| [`preg_last_error()`](./builtins/string/preg_last_error.md) | `(): int` | `int` |
+| [`preg_last_error_msg()`](./builtins/string/preg_last_error_msg.md) | `(): string` | `string` |
 | [`printf()`](./builtins/string/printf.md) | `(string $format, ...$values): int` | `int` |
 | [`rawurldecode()`](./builtins/string/rawurldecode.md) | `(string $string): string` | `string` |
 | [`rawurlencode()`](./builtins/string/rawurlencode.md) | `(string $string): string` | `string` |
@@ -387,12 +394,13 @@ sidebar:
 | [`strpbrk()`](./builtins/string/strpbrk.md) | `(string $string, string $characters): mixed` | `mixed` |
 | [`strpos()`](./builtins/string/strpos.md) | `(string $haystack, string $needle, int $offset): mixed` | `mixed` |
 | [`strrev()`](./builtins/string/strrev.md) | `(string $string): string` | `string` |
-| [`strrpos()`](./builtins/string/strrpos.md) | `(string $haystack, string $needle, int $offset): mixed` | `mixed` |
+| [`strrpos()`](./builtins/string/strrpos.md) | `(string $haystack, string $needle, int $value): mixed` | `mixed` |
 | [`strspn()`](./builtins/string/strspn.md) | `(mixed $string, mixed $characters, mixed $offset, mixed $length): int` | `int` |
 | [`strstr()`](./builtins/string/strstr.md) | `(string $haystack, string $needle, bool $before_needle): string` | `string` |
 | [`strtolower()`](./builtins/string/strtolower.md) | `(string $string): string` | `string` |
 | [`strtoupper()`](./builtins/string/strtoupper.md) | `(string $string): string` | `string` |
 | [`substr()`](./builtins/string/substr.md) | `(string $string, int $offset, int $length): string` | `string` |
+| [`substr_count()`](./builtins/string/substr_count.md) | `(string $haystack, string $needle, mixed $offset, mixed $length): int` | `int` |
 | [`substr_replace()`](./builtins/string/substr_replace.md) | `(string $string, string $replace, int $offset, int $length): string` | `string` |
 | [`trim()`](./builtins/string/trim.md) | `(string $string, string $characters): string` | `string` |
 | [`ucfirst()`](./builtins/string/ucfirst.md) | `(string $string): string` | `string` |

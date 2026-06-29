@@ -2,7 +2,7 @@
 title: "hexdec() — internals"
 description: "Compiler internals for hexdec(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 344
+  order: 348
 ---
 
 ## `hexdec()` — internals
@@ -23,7 +23,6 @@ sidebar:
 ## Runtime helpers
 
 The following runtime helpers are referenced:
-- `__rt_explode`
 - `__rt_hexdec`
 
 ## Signature summary
