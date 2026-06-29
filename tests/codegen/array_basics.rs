@@ -278,6 +278,23 @@ foreach ($a as $x) {
     assert_eq!(out, "246");
 }
 
+/// Regression for #345: foreach by reference then by value with `unset($v)`
+/// between the loops must not segfault. The by-ref loop mutates the indexed
+/// array; `unset($v)` breaks the reference; the by-value loop reads the
+/// mutated values.
+#[test]
+fn test_foreach_ref_then_value_with_unset_no_segfault() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2, 3];
+foreach ($a as &$v) { $v *= 2; }
+unset($v);
+foreach ($a as $v) { echo $v; }
+"#,
+    );
+    assert_eq!(out, "246");
+}
+
 /// Verifies foreach value by reference reuse value name in next loop.
 #[test]
 fn test_foreach_value_by_reference_reuse_value_name_in_next_loop() {
