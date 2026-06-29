@@ -293,6 +293,7 @@ fn validate_instruction_immediate(inst_id: InstId, inst: &Instruction) -> Result
         Cast => require_immediate(inst_id, inst, "cast target", |imm| {
             matches!(imm, Imm::CastTarget(_))
         }),
+        ObjectCast => check_count(inst_id, inst, 1, "1"),
         Nop => {
             if matches!(inst.immediate, None | Some(Imm::Data(_))) {
                 Ok(())

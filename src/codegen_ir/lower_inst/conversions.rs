@@ -51,6 +51,20 @@ pub(super) fn lower_str_to_float(ctx: &mut FunctionContext<'_>, inst: &Instructi
     store_if_result(ctx, inst)
 }
 
+/// Lowers the PHP `(object)` cast by dispatching to the runtime stdClass builder.
+///
+/// The single operand is always a boxed `Mixed` cell (the EIR lowering boxes any
+/// non-object source). `__rt_object_from_mixed` inspects the runtime tag and
+/// returns a freshly allocated owned `stdClass`, so this lowering only needs to
+/// place the Mixed pointer in the first integer-argument register, call the
+/// helper, and store the returned object pointer into the instruction result.
+pub(super) fn lower_object_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    load_value_to_first_int_arg(ctx, value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_object_from_mixed");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers explicit scalar casts based on the target storage immediate and result PHP type.
 pub(super) fn lower_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     match expect_cast_target(inst)? {

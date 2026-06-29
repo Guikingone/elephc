@@ -7057,6 +7057,9 @@ fn lower_ternary(
 
 /// Lowers a cast expression.
 fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, inner: &Expr, expr: &Expr) -> LoweredValue {
+    if matches!(target, CastType::Object) {
+        return lower_object_cast(ctx, inner, expr);
+    }
     let value = lower_expr(ctx, inner);
     let php_type = cast_php_type(target);
     let result = ctx.emit_value(
@@ -7070,6 +7073,44 @@ fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, inner: &Expr
     if matches!(target, CastType::String) {
         release_stringified_source_if_owned(ctx, value, Some(expr.span));
     }
+    result
+}
+
+/// Lowers the PHP `(object)` cast to a freshly allocated `stdClass`.
+///
+/// An existing object (or packed value) is returned unchanged so the cast keeps
+/// PHP's same-instance semantics. Every other source is boxed into a single
+/// `Mixed` cell and handed to the runtime dispatcher `__rt_object_from_mixed`,
+/// which builds the `stdClass` from an array's entries, wraps a scalar in a
+/// `scalar` property, or returns an empty object for `null`. The boxed temporary
+/// and the original source temporary are released after the conversion has
+/// retained whatever the new object keeps.
+fn lower_object_cast(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
+    let value = lower_expr(ctx, inner);
+    // An object/packed source is returned as the same instance (PHP passthrough).
+    if matches!(
+        ctx.builder.value_php_type(value.value).codegen_repr(),
+        PhpType::Object(_) | PhpType::Packed(_)
+    ) {
+        return value;
+    }
+    // Box the source into one Mixed cell so a single runtime dispatcher can
+    // inspect the runtime tag and build the stdClass accordingly.
+    let boxed = coerce_descriptor_invoker_mixed_value(ctx, value, expr.span);
+    let result = ctx.emit_value(
+        Op::ObjectCast,
+        vec![boxed.value],
+        None,
+        PhpType::Object("stdClass".to_string()),
+        Op::ObjectCast.default_effects(),
+        Some(expr.span),
+    );
+    // Release the temporary box (when distinct) and the original source temp; the
+    // runtime helper already retained everything the new object owns.
+    if boxed.value != value.value {
+        crate::ir_lower::ownership::release_if_owned(ctx, boxed, Some(expr.span));
+    }
+    crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
     result
 }
 
@@ -7098,6 +7139,7 @@ fn cast_php_type(target: &CastType) -> PhpType {
         CastType::String => PhpType::Str,
         CastType::Bool => PhpType::Bool,
         CastType::Array => PhpType::Array(Box::new(PhpType::Mixed)),
+        CastType::Object => PhpType::Object("stdClass".to_string()),
     }
 }
 

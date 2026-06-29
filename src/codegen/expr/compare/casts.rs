@@ -181,6 +181,12 @@ pub(in crate::codegen::expr) fn emit_cast(
             }
             PhpType::Array(Box::new(PhpType::Int))
         }
+        CastType::Object => {
+            // The legacy direct AST backend is frozen; the `(object)` cast is
+            // implemented on the active EIR backend only. This arm exists solely
+            // to keep the shared `CastType` match exhaustive and the build clean.
+            PhpType::Object("stdClass".to_string())
+        }
     }
 }
 

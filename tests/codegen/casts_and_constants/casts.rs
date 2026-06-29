@@ -223,4 +223,63 @@ echo (BOOLEAN)0 ? "true" : "false";
     assert_eq!(out, "3:2.5:42:false");
 }
 
+// --- (object) cast ---
+
+/// `(object)` on an associative array turns each entry into a stdClass property
+/// (string keys become property names). Cross-checked against PHP.
+#[test]
+fn test_cast_object_from_assoc_array() {
+    let out = compile_and_run("<?php $o = (object)[\"a\"=>1,\"b\"=>\"x\"]; echo $o->a, $o->b;");
+    assert_eq!(out, "1x");
+}
+
+/// `(object)` on an indexed array names the properties after the integer keys
+/// rendered as strings (`0`, `1`, `2`), accessible via `$o->{'0'}`.
+#[test]
+fn test_cast_object_from_indexed_array() {
+    let out = compile_and_run(
+        "<?php $o = (object)[10,20,30]; echo $o->{\"0\"}, $o->{\"1\"}, $o->{\"2\"};",
+    );
+    assert_eq!(out, "102030");
+}
+
+/// `(object)` on an integer scalar wraps the value in a single `scalar` property.
+#[test]
+fn test_cast_object_from_int_scalar() {
+    let out = compile_and_run("<?php $o = (object)5; echo $o->scalar;");
+    assert_eq!(out, "5");
+}
+
+/// `(object)` on a string scalar wraps the value in a single `scalar` property.
+#[test]
+fn test_cast_object_from_string_scalar() {
+    let out = compile_and_run("<?php $o = (object)\"hi\"; echo $o->scalar;");
+    assert_eq!(out, "hi");
+}
+
+/// `(object)null` yields an empty stdClass — like `new stdClass()`, it has no
+/// properties yet remains mutable, so a freshly assigned property reads back.
+#[test]
+fn test_cast_object_from_null_is_empty_stdclass() {
+    let out = compile_and_run("<?php $o = (object)null; $o->set = 7; echo $o->set;");
+    assert_eq!(out, "7");
+}
+
+/// `(object)` on an existing object returns the same instance (PHP passthrough):
+/// mutating the cast result is observable through the original variable.
+#[test]
+fn test_cast_object_passthrough_same_instance() {
+    let out = compile_and_run(
+        "<?php $a = new stdClass(); $a->z = 1; $b = (object)$a; $b->z = 2; echo $a->z;",
+    );
+    assert_eq!(out, "2");
+}
+
+/// `(object)` keyword is case-insensitive like the other PHP cast keywords.
+#[test]
+fn test_cast_object_keyword_is_case_insensitive() {
+    let out = compile_and_run("<?php $o = (OBJECT)[\"k\"=>9]; echo $o->k;");
+    assert_eq!(out, "9");
+}
+
 // --- gettype ---

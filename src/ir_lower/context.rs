@@ -1038,6 +1038,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ArrayHashUnion
                     | Op::HashArrayUnion
                     | Op::ArrayToHash
+                    | Op::ObjectCast
                     | Op::ObjectNew
                     | Op::DynamicObjectNew
                     | Op::DynamicObjectNewMixed

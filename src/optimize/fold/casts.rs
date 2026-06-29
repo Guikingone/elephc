@@ -25,6 +25,8 @@ pub(super) fn try_fold_cast(target: &CastType, expr: &Expr) -> Option<ExprKind> 
         CastType::String => try_fold_cast_string(value),
         CastType::Bool => Some(ExprKind::BoolLiteral(value.truthy())),
         CastType::Array => None,
+        // `(object)` allocates a stdClass at runtime; never fold to a literal.
+        CastType::Object => None,
     }
 }
 

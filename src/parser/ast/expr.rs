@@ -265,6 +265,10 @@ pub enum CastType {
     String,
     Bool,
     Array,
+    /// PHP `(object)` cast. Converts arrays to `stdClass` (keys become property
+    /// names), wraps scalars in a `stdClass` with a single `scalar` property,
+    /// turns `null` into an empty `stdClass`, and returns objects unchanged.
+    Object,
 }
 
 #[derive(Debug, Clone, PartialEq)]

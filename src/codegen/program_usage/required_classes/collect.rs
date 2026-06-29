@@ -281,6 +281,14 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
                 _ => {}
             }
         }
+        // `(object)` allocates a stdClass, so the class must be registered even
+        // when the program never names `stdClass` explicitly.
+        ExprKind::Cast { target, expr } => {
+            if matches!(target, crate::parser::ast::CastType::Object) {
+                names.insert("stdClass".to_string());
+            }
+            collect_required_class_names_in_expr(expr, names);
+        }
         ExprKind::Negate(expr)
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
@@ -289,7 +297,6 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
         | ExprKind::Print(expr)
         | ExprKind::Spread(expr)
         | ExprKind::Clone(expr)
-        | ExprKind::Cast { expr, .. }
         | ExprKind::PtrCast { expr, .. } => collect_required_class_names_in_expr(expr, names),
         ExprKind::NullCoalesce { value, default } => {
             collect_required_class_names_in_expr(value, names);

@@ -222,6 +222,11 @@ pub enum Op {
     StrToNumber,
     ResourceToStr,
     Cast,
+    /// PHP `(object)` cast. Takes a single boxed `Mixed` operand and produces a
+    /// freshly allocated owned `stdClass`: arrays become property maps, scalars
+    /// become a `scalar` property, `null` becomes an empty object, and an
+    /// object payload is returned (retained) unchanged.
+    ObjectCast,
     MixedBox,
     InvokerRefArg,
     MixedUnbox,
@@ -401,6 +406,9 @@ impl Op {
             | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
             ConcatReset => E::WRITES_GLOBAL,
             Cast => E::READS_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL,
+            // `(object)` reads the boxed source, allocates a fresh stdClass and its
+            // property hash, and retains the inserted/passed-through payloads.
+            ObjectCast => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
             MixedBox | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | BufferNew | GeneratorNew => {
@@ -551,6 +559,7 @@ impl Op {
             StrToNumber => "str_to_number",
             ResourceToStr => "resource_to_str",
             Cast => "cast",
+            ObjectCast => "object_cast",
             MixedBox => "mixed_box",
             InvokerRefArg => "invoker_ref_arg",
             MixedUnbox => "mixed_unbox",

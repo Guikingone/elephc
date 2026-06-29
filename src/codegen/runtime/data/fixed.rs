@@ -46,6 +46,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _php_tz_utc\n");
     out.push_str("_php_tz_utc:\n");
     out.push_str("    .ascii \"UTC\"\n");
+    // Property name used by the `(object)` cast when wrapping a scalar value
+    // (`(object)5` → stdClass with a single `scalar` property holding the value).
+    out.push_str(".globl _objcast_scalar_prop\n");
+    out.push_str("_objcast_scalar_prop:\n");
+    out.push_str("    .ascii \"scalar\"\n");
     // getdate() associative-array key strings (read by __rt_getdate).
     for (sym, key) in [
         ("_gd_k_seconds", "seconds"),

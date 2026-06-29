@@ -176,12 +176,23 @@ $f = (float)42;      // 42.0
 $s = (string)42;     // "42"
 $b = (bool)0;        // false
 $a = (array)42;      // [42]
+$o = (object)["a" => 1];   // stdClass with property $o->a === 1
 ```
 
 Cast names and aliases are case-insensitive, matching PHP. For example,
 `(INT)`, `(Integer)`, and `(integer)` are equivalent.
 
 Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
+
+The `(object)` cast converts a value to a `stdClass`:
+
+- An **array** becomes a `stdClass` whose properties are the array entries.
+  String keys become property names; integer keys become the integer rendered as
+  a string (`(object)[10, 20]` has properties `0` and `1`).
+- A **scalar** (`int`, `float`, `string`, `bool`) is wrapped in a single
+  `scalar` property: `(object)5` yields `$o->scalar === 5`.
+- **`null`** becomes an empty `stdClass`, identical to `new stdClass()`.
+- An **object** is returned unchanged (the same instance, not a copy).
 
 ### Type functions
 
