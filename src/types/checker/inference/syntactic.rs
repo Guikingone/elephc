@@ -357,7 +357,13 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             PhpType::Object(fallback_class.as_str().to_string())
         }
         ExprKind::NewScopedObject { .. } => PhpType::Object(String::new()),
-        ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => PhpType::Str,
+        // `::class` (e.g. `Foo::class`, `self::class`) is always a class-name string.
+        ExprKind::ClassConstant { .. } => PhpType::Str,
+        // A user-declared class constant (`Foo::BAR`) has the constant's own type. Resolvable
+        // references are folded to their literal value before this runs (see
+        // `resolve_property_const_defaults`); anything still unresolved here falls back to `Mixed`
+        // rather than misreporting the value as a string.
+        ExprKind::ScopedConstantAccess { .. } => PhpType::Mixed,
         ExprKind::This => PhpType::Object(String::new()),
         ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => PhpType::Callable,
         ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),

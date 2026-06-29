@@ -12,9 +12,11 @@ pub(crate) mod validation;
 mod attribute_refs;
 mod interfaces;
 mod classes;
+mod const_default_refs;
 mod enums;
 
 pub(crate) use attribute_refs::drop_unresolvable_attribute_arg_refs;
 pub(crate) use interfaces::*;
 pub(crate) use classes::*;
+pub(crate) use const_default_refs::resolve_const_default_references;
 pub(crate) use enums::*;

@@ -137,6 +137,18 @@ fn test_error_typed_property_rejects_invalid_default() {
     );
 }
 
+/// Verifies the error diagnostic for a typed property whose class-constant default resolves to an
+/// incompatible type. The class-constant reference is folded to its literal value, so the
+/// mismatch is reported the same as for a literal default.
+#[test]
+fn test_error_typed_property_rejects_incompatible_class_constant_default() {
+    // `int $value = A::S` where `const S = "bad"` resolves to a string literal, which is rejected.
+    expect_error(
+        "<?php class Box { const S = \"bad\"; public int $value = Box::S; }",
+        "Property Box::$value default expects Int, got Str",
+    );
+}
+
 /// Verifies the error diagnostic for typed property rejects invalid assignment.
 #[test]
 fn test_error_typed_property_rejects_invalid_assignment() {

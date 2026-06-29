@@ -40,7 +40,7 @@ use super::builtin_stdclass::inject_builtin_stdclass;
 use super::builtin_user_filter::inject_builtin_user_filter;
 use super::schema::{
     build_class_info_recursive, build_enum_info, build_interface_info_recursive,
-    drop_unresolvable_attribute_arg_refs,
+    drop_unresolvable_attribute_arg_refs, resolve_const_default_references,
 };
 use super::yield_validation::validate_yield_contexts;
 use super::Checker;
@@ -189,6 +189,13 @@ pub(super) fn check_types_impl(
     }
     checker.declared_classes = class_map.keys().cloned().collect();
     checker.declared_interfaces = interface_map.keys().cloned().collect();
+
+    // Fold class-constant references used as defaults — property defaults (`public int $y = A::X;`)
+    // and method/constructor parameter defaults (`__construct(int $n = self::MAX)`) — into the
+    // referenced constant's literal value. Runs on the complete `class_map` so it is independent of
+    // class declaration order, and rewrites in place so both type inference and codegen default
+    // emission see a literal instead of a `ScopedConstantAccess`.
+    resolve_const_default_references(&mut class_map);
 
     let mut next_interface_id = 0u64;
     let mut building_interfaces = HashSet::new();
