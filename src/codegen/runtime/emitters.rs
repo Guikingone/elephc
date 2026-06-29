@@ -61,6 +61,10 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_chr(emitter);
     strings::emit_strcmp(emitter);
     strings::emit_strcasecmp(emitter);
+    strings::emit_strcspn(emitter);
+    strings::emit_strspn(emitter);
+    strings::emit_strpbrk(emitter);
+    strings::emit_hexdec(emitter);
     strings::emit_str_starts_with(emitter);
     strings::emit_str_ends_with(emitter);
     strings::emit_str_replace(emitter);

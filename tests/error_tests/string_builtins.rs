@@ -16,6 +16,36 @@ expect_builtin_arity_error!(
 );
 
 expect_builtin_arity_error!(
+    test_error_strcspn_wrong_args,
+    "<?php strcspn(\"abc\");",
+    "strcspn() takes 2 to 4 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_strspn_wrong_args,
+    "<?php strspn(\"abc\");",
+    "strspn() takes 2 to 4 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_strpbrk_wrong_args,
+    "<?php strpbrk(\"abc\");",
+    "strpbrk() takes exactly 2 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_hexdec_wrong_args,
+    "<?php hexdec();",
+    "hexdec() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_hexdec_too_many_args,
+    "<?php hexdec(\"ff\", \"00\");",
+    "hexdec() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
     test_error_rawurlencode_wrong_args,
     "<?php rawurlencode();",
     "rawurlencode() takes exactly 1 argument"

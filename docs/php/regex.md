@@ -85,9 +85,9 @@ Common linker failures mean the native PCRE2 libraries were not found:
 
 | Function | Signature | Description |
 |---|---|---|
-| `preg_match()` | `preg_match($pattern, $subject, &$matches = null): int` | Test regex match (1 or 0); optional `$matches` receives the full match and capture groups |
+| `preg_match()` | `preg_match($pattern, $subject, &$matches = null, $flags = 0, $offset = 0): int` | Test regex match (1 or 0); optional `$matches` receives the full match and capture groups. The optional `$flags` and `$offset` arguments are accepted for signature compatibility but currently behave as their defaults |
 | `preg_match_all()` | `preg_match_all($pattern, $subject): int` | Count all non-overlapping matches |
-| `preg_replace()` | `preg_replace($pattern, $replacement, $subject): string` | Replace all regex matches; `$0`..`$99` and `\0`..`\99` replacement backreferences expand captured groups |
+| `preg_replace()` | `preg_replace($pattern, $replacement, $subject, $limit = -1, &$count = null): string` | Replace all regex matches; `$0`..`$99` and `\0`..`\99` replacement backreferences expand captured groups. The optional by-reference `$count` receives the number of replacements; `$limit` is accepted but replacement always processes every match |
 | `preg_replace_callback()` | `preg_replace_callback($pattern, $callback, $subject): string` | Replace all regex matches with the callback return value; callback receives `array<string>` matches |
 | `preg_split()` | `preg_split($pattern, $subject, $limit = -1, $flags = 0): array` | Split string by regex; supports no-empty, delimiter-capture, offset-capture, and positive limits |
 

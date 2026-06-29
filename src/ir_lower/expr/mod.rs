@@ -3935,10 +3935,12 @@ fn lower_builtin_call_args(
         {
             lower_preg_replace_callback_args(ctx, sig, args)
         }
-        "preg_match" | "preg_split"
+        "preg_match" | "preg_split" | "preg_replace"
             if !crate::types::call_args::has_named_args(args)
                 && !args.iter().any(is_spread_arg) =>
         {
+            // Lower positional args verbatim so the EIR backend can resolve the
+            // by-ref `$matches`/`$count` out-parameter operand to its local slot.
             lower_args(ctx, args)
         }
         "usort" | "uasort"
@@ -6179,6 +6181,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "pclose" | "spl_object_id" | "stream_select" | "stream_set_chunk_size"
         | "stream_set_read_buffer" | "stream_set_write_buffer"
         | "__elephc_strtotime_raw" | "time"
+        | "strcspn" | "strspn" | "hexdec"
         | "umask" | "vfprintf" | "vprintf" | "realpath_cache_size" => {
             Some(PhpType::Int)
         }
@@ -6213,7 +6216,8 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "stream_filter_prepend" | "stream_resolve_include_path" | "stream_socket_accept"
         | "stream_socket_client" | "stream_socket_pair" | "stream_copy_to_stream"
         | "stream_socket_get_name" | "stream_socket_recvfrom" | "stream_socket_sendto"
-        | "stream_socket_server" | "tmpfile" | "gzinflate" | "gzuncompress" | "strpos" | "strrpos" => {
+        | "stream_socket_server" | "tmpfile" | "gzinflate" | "gzuncompress" | "strpos" | "strrpos"
+        | "strpbrk" => {
             Some(PhpType::Mixed)
         }
         "spl_autoload_functions" => Some(PhpType::Array(Box::new(PhpType::Int))),

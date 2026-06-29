@@ -10,13 +10,18 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1160](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1160) (`lower_in_array`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1166](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1166) (`lower_in_array`)
 - **Function symbol**: `lower_in_array()`
 
 
 ### Lowering notes
 
 - Lowers `in_array()` for indexed arrays with scalar or string payloads.
+- Accepts the optional 3rd `strict` argument. When `strict` is statically true
+- and the needle can never be `===` an element (disjoint scalar/string types),
+- the result is unconditionally `false`. For the supported same-type
+- scalar/string cases, strict (`===`) membership reduces to the existing exact
+- comparison, so the strict flag does not change the lowering otherwise.
 
 ## Runtime helpers
 

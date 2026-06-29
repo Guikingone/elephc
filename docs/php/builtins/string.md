@@ -31,6 +31,7 @@ sidebar:
 | [`hash_init()`](./string/hash_init.md) | `(string $algo, int $flags = 0, string $key = '', array $options = []): mixed` | `mixed` |
 | [`hash_update()`](./string/hash_update.md) | `(resource $context, string $data): bool` | `bool` |
 | [`hex2bin()`](./string/hex2bin.md) | `(string $string): string` | `string` |
+| [`hexdec()`](./string/hexdec.md) | `(mixed $hex_string): int` | `int` |
 | [`html_entity_decode()`](./string/html_entity_decode.md) | `(string $string, int $flags, string $encoding): string` | `string` |
 | [`htmlentities()`](./string/htmlentities.md) | `(string $string, int $flags, string $encoding, bool $double_encode): string` | `string` |
 | [`htmlspecialchars()`](./string/htmlspecialchars.md) | `(string $string, int $flags, string $encoding, bool $double_encode): string` | `string` |
@@ -62,11 +63,14 @@ sidebar:
 | [`str_starts_with()`](./string/str_starts_with.md) | `(string $haystack, string $needle): bool` | `bool` |
 | [`strcasecmp()`](./string/strcasecmp.md) | `(string $string1, string $string2): int` | `int` |
 | [`strcmp()`](./string/strcmp.md) | `(string $string1, string $string2): int` | `int` |
+| [`strcspn()`](./string/strcspn.md) | `(mixed $string, mixed $characters, mixed $offset, mixed $length): int` | `int` |
 | [`stripslashes()`](./string/stripslashes.md) | `(string $string): string` | `string` |
 | [`strlen()`](./string/strlen.md) | `(string $string): int` | `int` |
+| [`strpbrk()`](./string/strpbrk.md) | `(string $string, string $characters): mixed` | `mixed` |
 | [`strpos()`](./string/strpos.md) | `(string $haystack, string $needle, int $offset): mixed` | `mixed` |
 | [`strrev()`](./string/strrev.md) | `(string $string): string` | `string` |
 | [`strrpos()`](./string/strrpos.md) | `(string $haystack, string $needle, int $offset): mixed` | `mixed` |
+| [`strspn()`](./string/strspn.md) | `(mixed $string, mixed $characters, mixed $offset, mixed $length): int` | `int` |
 | [`strstr()`](./string/strstr.md) | `(string $haystack, string $needle, bool $before_needle): string` | `string` |
 | [`strtolower()`](./string/strtolower.md) | `(string $string): string` | `string` |
 | [`strtoupper()`](./string/strtoupper.md) | `(string $string): string` | `string` |

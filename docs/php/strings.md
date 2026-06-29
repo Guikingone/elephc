@@ -150,6 +150,9 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `grapheme_strrev()` | `grapheme_strrev($str): string\|false` | Reverse a UTF-8 string by grapheme clusters, preserving embedded NUL bytes and keeping combining marks, emoji modifiers, and ZWJ sequences with their base cluster. Returns `false` on malformed UTF-8. |
 | `strcmp()` | `strcmp($a, $b): int` | Binary-safe string comparison |
 | `strcasecmp()` | `strcasecmp($a, $b): int` | Case-insensitive comparison |
+| `strcspn()` | `strcspn($str, $chars): int` | Length of the initial segment of `$str` containing none of the bytes in `$chars` |
+| `strspn()` | `strspn($str, $chars): int` | Length of the initial segment of `$str` consisting entirely of bytes in `$chars` |
+| `strpbrk()` | `strpbrk($str, $chars): string\|false` | Returns the substring of `$str` starting at the first byte found in `$chars`, or `false` if none occur |
 | `str_contains()` | `str_contains($hay, $needle): bool` | Check if string contains substring |
 | `str_starts_with()` | `str_starts_with($hay, $prefix): bool` | Check prefix |
 | `str_ends_with()` | `str_ends_with($hay, $suffix): bool` | Check suffix |

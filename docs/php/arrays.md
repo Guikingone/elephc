@@ -238,7 +238,7 @@ By-reference destructuring targets (`foreach ($arr as [&$a, $b])` and `[&$a, $b]
 | `count()` | `count($arr_or_countable): int` | Number of elements; on objects implementing `Countable`, dispatches to `count()` |
 | `array_push()` | `array_push($arr, $val): void` | Add element to end |
 | `array_pop()` | `array_pop($arr): mixed` | Remove and return last element |
-| `in_array()` | `in_array($needle, $arr): int` | Search for value (0/1) |
+| `in_array()` | `in_array($needle, $arr [, $strict]): bool` | Search for value. Pass `$strict = true` for identity (`===`) comparison so a value only matches an element of the same type |
 | `array_keys()` | `array_keys($arr): array` | Returns the array keys |
 | `array_values()` | `array_values($arr): array` | Returns copy of values |
 | `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists |

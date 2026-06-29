@@ -32,6 +32,10 @@ mod strrev;
 mod chr;
 mod strcmp;
 mod strcasecmp;
+mod strcspn;
+mod strspn;
+mod strpbrk;
+mod hexdec;
 mod str_starts_with;
 mod str_ends_with;
 mod str_replace;
@@ -127,6 +131,14 @@ pub use strcmp::emit_strcmp;
 /// Emit case-sensitive string comparison.
 pub use strcasecmp::emit_strcasecmp;
 /// Emit case-insensitive string comparison.
+pub use strcspn::emit_strcspn;
+/// Emit the strcspn initial-segment-span helper (bytes not in the set).
+pub use strspn::emit_strspn;
+/// Emit the strspn initial-segment-span helper (bytes in the set).
+pub use strpbrk::emit_strpbrk;
+/// Emit the strpbrk first-character-class search helper.
+pub use hexdec::emit_hexdec;
+/// Emit the hexdec hexadecimal-string-to-integer parser.
 pub use str_starts_with::emit_str_starts_with;
 /// Emit check for string prefix match.
 pub use str_ends_with::emit_str_ends_with;

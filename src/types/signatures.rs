@@ -203,6 +203,13 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         )),
         "str_repeat" => Some(fixed(&["string", "times"])),
         "strcmp" | "strcasecmp" => Some(fixed(&["string1", "string2"])),
+        "strcspn" | "strspn" => Some(optional(
+            &["string", "characters", "offset", "length"],
+            2,
+            vec![int_lit(0), null_lit()],
+        )),
+        "strpbrk" => Some(fixed(&["string", "characters"])),
+        "hexdec" => Some(fixed(&["hex_string"])),
         "str_contains" | "str_starts_with" | "str_ends_with" => {
             Some(fixed(&["haystack", "needle"]))
         }
@@ -363,16 +370,28 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         )),
         "preg_match" => {
             let mut sig = optional(
-                &["pattern", "subject", "matches"],
+                &["pattern", "subject", "matches", "flags", "offset"],
                 2,
-                vec![Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy())],
+                vec![
+                    Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy()),
+                    int_lit(0),
+                    int_lit(0),
+                ],
             );
             sig.ref_params[2] = true;
             Some(sig)
         }
         "preg_match_all" => Some(fixed(&["pattern", "subject"])),
         "preg_replace_callback" => Some(fixed(&["pattern", "callback", "subject"])),
-        "preg_replace" => Some(fixed(&["pattern", "replacement", "subject"])),
+        "preg_replace" => {
+            let mut sig = optional(
+                &["pattern", "replacement", "subject", "limit", "count"],
+                3,
+                vec![int_lit(-1), null_lit()],
+            );
+            sig.ref_params[4] = true;
+            Some(sig)
+        }
         "preg_split" => Some(optional(
             &["pattern", "subject", "limit", "flags"],
             2,
@@ -738,6 +757,12 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             &[PhpType::Str],
             PhpType::Int,
         )),
+        // strcspn/strspn/strpbrk/hexdec are intentionally absent here: they are
+        // lowered only by the active EIR backend, so the frozen legacy direct
+        // backend that emits dynamic first-class-callable wrapper bodies cannot
+        // resolve them (it would emit an unresolved `bl _fn_<name>`). They remain
+        // fully supported as direct calls; first-class-callable syntax is not
+        // offered for them.
         "str_contains" | "str_starts_with" | "str_ends_with" | "hash_equals" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Str, PhpType::Str],

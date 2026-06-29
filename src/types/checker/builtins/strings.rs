@@ -232,6 +232,30 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Int))
         }
+        "strcspn" | "strspn" => {
+            // PHP: strcspn/strspn(string $string, string $characters,
+            // int $offset = 0, ?int $length = null): int.
+            if args.len() < 2 || args.len() > 4 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes 2 to 4 arguments", name),
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Int))
+        }
+        "strpbrk" => {
+            // PHP: strpbrk(string $string, string $characters): string|false.
+            if args.len() != 2 {
+                return Err(CompileError::new(span, "strpbrk() takes exactly 2 arguments"));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(checker.normalize_union_type(vec![PhpType::Str, PhpType::Bool])))
+        }
         "str_contains" | "str_starts_with" | "str_ends_with" => {
             if args.len() != 2 {
                 return Err(CompileError::new(

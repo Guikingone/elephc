@@ -31,6 +31,29 @@ echo round(sin(M_PI_2), 4) . "|" . round(cos(M_PI), 1) . "|" . round(tan(M_PI_4)
     assert_eq!(out, "1|-1|1");
 }
 
+/// Tests `hexdec` parsing uppercase and lowercase hexadecimal strings into integers.
+/// Fixture: "1A" -> 26, "ff" -> 255.
+#[test]
+fn test_hexdec_basic() {
+    let out = compile_and_run(r#"<?php echo hexdec("1A"), "|", hexdec("ff");"#);
+    assert_eq!(out, "26|255");
+}
+
+/// Tests `hexdec` ignores non-hexadecimal bytes, matching PHP.
+/// Fixture: "1g2" -> 0x12 = 18, "xyz" -> 0.
+#[test]
+fn test_hexdec_ignores_non_hex() {
+    let out = compile_and_run(r#"<?php echo hexdec("1g2"), "|", hexdec("xyz");"#);
+    assert_eq!(out, "18|0");
+}
+
+/// Tests `hexdec` resolves case-insensitively (PHP builtin names are case-insensitive).
+#[test]
+fn test_hexdec_case_insensitive() {
+    let out = compile_and_run(r#"<?php echo HexDec("100");"#);
+    assert_eq!(out, "256");
+}
+
 /// Tests asin, acos, and atan with boundary inputs (0, 1) — verifies inverse trig rounding to 4 decimals (1.5708 for 𝜋/2).
 #[test]
 fn test_math_inverse_trig() {

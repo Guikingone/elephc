@@ -268,6 +268,8 @@ sidebar:
 | [`define()`](./builtins/misc/define.md) | `(string $constant_name, mixed $value, bool $case_insensitive): bool` | `bool` |
 | [`defined()`](./builtins/misc/defined.md) | `(string $constant_name): bool` | `bool` |
 | [`empty()`](./builtins/misc/empty.md) | `(mixed $value): bool` | `bool` |
+| [`extension_loaded()`](./builtins/misc/extension_loaded.md) | `(mixed $extension): bool` | `bool` |
+| [`get_debug_type()`](./builtins/misc/get_debug_type.md) | `(mixed $value): string` | `string` |
 | [`header()`](./builtins/misc/header.md) | `(mixed $header, mixed $replace, mixed $response_code): void` | `void` |
 | [`http_response_code()`](./builtins/misc/http_response_code.md) | `(mixed $response_code): int` | `int` |
 | [`isset()`](./builtins/misc/isset.md) | `(mixed $var, ...$vars): bool` | `bool` |
@@ -302,7 +304,7 @@ sidebar:
 | [`sleep()`](./builtins/process/sleep.md) | `(int $seconds): int` | `int` |
 | [`system()`](./builtins/process/system.md) | `(string $command, int $result_code): string` | `string` |
 | [`usleep()`](./builtins/process/usleep.md) | `(int $microseconds): void` | `void` |
-| [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches): int` | `int` |
+| [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches, mixed $flags, mixed $offset): int` | `int` |
 | [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject, array $matches): int` | `int` |
 | [`preg_replace()`](./builtins/regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject, int $limit = -1, int $count = null): string` | `string` |
 | [`preg_replace_callback()`](./builtins/regex/preg_replace_callback.md) | `(string $pattern, callable $callback, string $subject, int $limit = -1, int $count = null, int $flags = 0): array` | `array` |
@@ -347,6 +349,7 @@ sidebar:
 | [`hash_init()`](./builtins/string/hash_init.md) | `(string $algo, int $flags = 0, string $key = '', array $options = []): mixed` | `mixed` |
 | [`hash_update()`](./builtins/string/hash_update.md) | `(resource $context, string $data): bool` | `bool` |
 | [`hex2bin()`](./builtins/string/hex2bin.md) | `(string $string): string` | `string` |
+| [`hexdec()`](./builtins/string/hexdec.md) | `(mixed $hex_string): int` | `int` |
 | [`html_entity_decode()`](./builtins/string/html_entity_decode.md) | `(string $string, int $flags, string $encoding): string` | `string` |
 | [`htmlentities()`](./builtins/string/htmlentities.md) | `(string $string, int $flags, string $encoding, bool $double_encode): string` | `string` |
 | [`htmlspecialchars()`](./builtins/string/htmlspecialchars.md) | `(string $string, int $flags, string $encoding, bool $double_encode): string` | `string` |
@@ -378,11 +381,14 @@ sidebar:
 | [`str_starts_with()`](./builtins/string/str_starts_with.md) | `(string $haystack, string $needle): bool` | `bool` |
 | [`strcasecmp()`](./builtins/string/strcasecmp.md) | `(string $string1, string $string2): int` | `int` |
 | [`strcmp()`](./builtins/string/strcmp.md) | `(string $string1, string $string2): int` | `int` |
+| [`strcspn()`](./builtins/string/strcspn.md) | `(mixed $string, mixed $characters, mixed $offset, mixed $length): int` | `int` |
 | [`stripslashes()`](./builtins/string/stripslashes.md) | `(string $string): string` | `string` |
 | [`strlen()`](./builtins/string/strlen.md) | `(string $string): int` | `int` |
+| [`strpbrk()`](./builtins/string/strpbrk.md) | `(string $string, string $characters): mixed` | `mixed` |
 | [`strpos()`](./builtins/string/strpos.md) | `(string $haystack, string $needle, int $offset): mixed` | `mixed` |
 | [`strrev()`](./builtins/string/strrev.md) | `(string $string): string` | `string` |
 | [`strrpos()`](./builtins/string/strrpos.md) | `(string $haystack, string $needle, int $offset): mixed` | `mixed` |
+| [`strspn()`](./builtins/string/strspn.md) | `(mixed $string, mixed $characters, mixed $offset, mixed $length): int` | `int` |
 | [`strstr()`](./builtins/string/strstr.md) | `(string $haystack, string $needle, bool $before_needle): string` | `string` |
 | [`strtolower()`](./builtins/string/strtolower.md) | `(string $string): string` | `string` |
 | [`strtoupper()`](./builtins/string/strtoupper.md) | `(string $string): string` | `string` |

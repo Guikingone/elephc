@@ -205,6 +205,11 @@ impl Checker {
                         if builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2 {
                             continue;
                         }
+                        // `preg_replace()`'s 5th argument is a by-ref `$count`
+                        // out-parameter: it may be undefined before the call.
+                        if builtin_name.eq_ignore_ascii_case("preg_replace") && idx == 4 {
+                            continue;
+                        }
                         // The user-sort comparator is type-checked by `check_builtin`
                         // with its parameters typed from the array element (so an
                         // unannotated object comparator type-checks). Skip the eager
@@ -225,6 +230,13 @@ impl Checker {
                     if let Some(arg) = expanded_args.get(2) {
                         if let Some(name) = preg_match_output_var(arg) {
                             env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Str)));
+                        }
+                    }
+                }
+                if builtin_name.eq_ignore_ascii_case("preg_replace") {
+                    if let Some(arg) = expanded_args.get(4) {
+                        if let Some(name) = preg_match_output_var(arg) {
+                            env.insert(name.clone(), PhpType::Int);
                         }
                     }
                 }

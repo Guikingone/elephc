@@ -1,22 +1,24 @@
 ---
 title: "preg_match()"
-description: "Lowers `preg_match(pattern, subject)` through the shared regex runtime helper."
+description: "Lowers `preg_match(pattern, subject, &matches?, flags?, offset?)` via the regex runtime."
 sidebar:
-  order: 294
+  order: 296
 ---
 
 ## preg_match()
 
 ```php
-function preg_match(string $pattern, string $subject, array $matches): int
+function preg_match(string $pattern, string $subject, array $matches, mixed $flags, mixed $offset): int
 ```
 
-Lowers `preg_match(pattern, subject)` through the shared regex runtime helper.
+Lowers `preg_match(pattern, subject, &matches?, flags?, offset?)` via the regex runtime.
 
 **Parameters**:
 - `$pattern` (`string`)
 - `$subject` (`string`)
 - `$matches` (`array`), passed by reference, optional
+- `$flags` (`mixed`), optional
+- `$offset` (`mixed`), optional
 
 **Returns**: `int`
 

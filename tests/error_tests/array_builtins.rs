@@ -137,10 +137,19 @@ fn test_error_array_pop_wrong_args() {
     expect_error("<?php array_pop();", "array_pop() takes exactly 1 argument");
 }
 
-/// Verifies that error in array wrong args.
+/// Verifies that error in array wrong args (too few).
 #[test]
 fn test_error_in_array_wrong_args() {
-    expect_error("<?php in_array(1);", "in_array() takes exactly 2 arguments");
+    expect_error("<?php in_array(1);", "in_array() takes 2 or 3 arguments");
+}
+
+/// Verifies that `in_array()` rejects more than the three supported arguments.
+#[test]
+fn test_error_in_array_too_many_args() {
+    expect_error(
+        "<?php in_array(1, [1], true, 2);",
+        "in_array() takes 2 or 3 arguments",
+    );
 }
 
 /// Verifies that error array keys wrong args.

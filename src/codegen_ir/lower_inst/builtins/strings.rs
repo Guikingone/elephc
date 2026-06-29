@@ -147,6 +147,63 @@ pub(super) fn lower_binary_string_runtime(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `strcspn()`/`strspn()` initial-segment-span builtins to a runtime helper.
+///
+/// Both builtins scan `string` for the longest leading run of bytes that are
+/// (`strspn`) or are not (`strcspn`) members of `characters`, returning that
+/// run's length. The optional `offset`/`length` arguments are accepted by the
+/// type checker but are not yet supported in the EIR backend.
+pub(super) fn lower_span(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+) -> Result<()> {
+    if inst.operands.len() < 2 || inst.operands.len() > 4 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expected 2 to 4 args, got {}",
+            name,
+            inst.operands.len()
+        )));
+    }
+    if inst.operands.len() > 2 {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} with offset/length arguments",
+            name
+        )));
+    }
+    load_binary_string_args(ctx, inst, name)?;
+    abi::emit_call_label(ctx.emitter, runtime_label);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `strpbrk(string, characters)` and boxes its `string|false` result as Mixed.
+///
+/// `__rt_strpbrk` returns the suffix of `string` starting at the first byte that
+/// occurs in `characters` (pointer/length in the string-result registers), or a
+/// null pointer when no character matches. The null sentinel is boxed as PHP
+/// `false`, mirroring `strstr`/`grapheme_strrev` search builtins.
+pub(super) fn lower_strpbrk(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    load_binary_string_args(ctx, inst, "strpbrk")?;
+    abi::emit_call_label(ctx.emitter, "__rt_strpbrk");
+    box_strpbrk_result(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `hexdec(hex_string)` through the runtime hex-string parser.
+///
+/// The runtime helper ignores non-hexadecimal bytes (matching PHP) and folds the
+/// hex digits into a 64-bit integer returned in the int result register.
+pub(super) fn lower_hexdec(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "hexdec", 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => load_string_arg_to_regs(ctx, inst, 0, "hexdec", "x1", "x2")?,
+        Arch::X86_64 => load_string_arg_to_regs(ctx, inst, 0, "hexdec", "rdi", "rsi")?,
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hexdec");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `explode(delimiter, string)` into the shared string-array splitter helper.
 pub(super) fn lower_explode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let cleanups = plan_split_string_temp_cleanups(ctx, inst)?;
@@ -2967,6 +3024,41 @@ fn box_grapheme_strrev_result(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after a successful grapheme reversal
             ctx.emitter.label(&false_label);
             ctx.emitter.instruction("xor edi, edi");                            // false payload = 0 for grapheme_strrev() failure
+            ctx.emitter.instruction("xor esi, esi");                            // bool mixed payloads do not use a high word
+            ctx.emitter.instruction("mov eax, 3");                              // runtime tag 3 = bool false
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+    }
+}
+
+/// Boxes the raw `strpbrk()` runtime result as PHP `string|false`.
+///
+/// A null string pointer (no `characters` byte found in `string`) is boxed as a
+/// boolean `false`; otherwise the matched suffix is boxed as a Mixed string.
+fn box_strpbrk_result(ctx: &mut FunctionContext<'_>) {
+    let false_label = ctx.next_label("strpbrk_false");
+    let done_label = ctx.next_label("strpbrk_done");
+
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {}", false_label));       // box false when no characters byte was found in the subject
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip false boxing after a successful strpbrk match
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("mov x1, #0");                              // false payload = 0 for strpbrk() miss
+            ctx.emitter.instruction("mov x2, #0");                              // bool mixed payloads do not use a high word
+            ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = bool false
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // test the returned string pointer for the miss sentinel
+            ctx.emitter.instruction(&format!("jz {}", false_label));            // box false when no characters byte was found in the subject
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after a successful strpbrk match
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("xor edi, edi");                            // false payload = 0 for strpbrk() miss
             ctx.emitter.instruction("xor esi, esi");                            // bool mixed payloads do not use a high word
             ctx.emitter.instruction("mov eax, 3");                              // runtime tag 3 = bool false
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");

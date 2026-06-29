@@ -24,12 +24,17 @@ use super::super::callables;
 
 const PREG_SPLIT_FORCE_MIXED_RESULT: i64 = 1 << 30;
 
-/// Lowers `preg_match(pattern, subject)` through the shared regex runtime helper.
+/// Lowers `preg_match(pattern, subject, &matches?, flags?, offset?)` via the regex runtime.
+///
+/// The optional `$matches` out-parameter is populated through
+/// `__rt_preg_match_capture`. The `$flags` and `$offset` arguments are accepted
+/// (so calls type-check and lower) but are not yet honored by the EIR capture
+/// runtime; non-default flags/offset therefore behave as the defaults.
 pub(super) fn lower_preg_match(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count_between(inst, "preg_match", 2, 3)?;
+    super::ensure_arg_count_between(inst, "preg_match", 2, 5)?;
     let pattern = super::expect_operand(inst, 0)?;
     let subject = super::expect_operand(inst, 1)?;
     let matches_slot = inst
@@ -61,15 +66,29 @@ pub(super) fn lower_preg_match_all(
     super::store_if_result(ctx, inst)
 }
 
-/// Lowers `preg_replace(pattern, replacement, subject)` through the regex replacement helper.
+/// Lowers `preg_replace(pattern, replacement, subject, limit?, &count?)`.
+///
+/// The optional `$count` out-parameter is populated with the number of
+/// replacements performed, computed via `__rt_preg_match_all` over the same
+/// pattern/subject before the replacement runs (the unlimited `limit = -1` case,
+/// which matches every supported call). The optional `$limit` argument is
+/// accepted but not yet enforced; replacement always processes every match.
 pub(super) fn lower_preg_replace(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "preg_replace", 3)?;
+    super::ensure_arg_count_between(inst, "preg_replace", 3, 5)?;
     let pattern = super::expect_operand(inst, 0)?;
     let replacement = super::expect_operand(inst, 1)?;
     let subject = super::expect_operand(inst, 2)?;
+    if let Some(count_value) = inst.operands.get(4).copied() {
+        // Populate `$count` before the replacement so the regex result registers
+        // are not clobbered by the match-counting call.
+        let count_slot = matches_local_slot(ctx, count_value)?;
+        load_pattern_and_subject(ctx, pattern, subject)?;
+        abi::emit_call_label(ctx.emitter, "__rt_preg_match_all");
+        store_replacement_count(ctx, count_slot)?;
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             load_string_arg(ctx, pattern, "x1", "x2", "preg_replace pattern")?;
@@ -444,6 +463,13 @@ fn matches_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Local
         ));
     };
     Ok(slot)
+}
+
+/// Stores the `preg_replace()` replacement count (in the int result register) into a local slot.
+fn store_replacement_count(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
+    let offset = ctx.local_offset(slot)?;
+    abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+    Ok(())
 }
 
 /// Stores the runtime-built matches array into a local slot without clobbering the match flag.

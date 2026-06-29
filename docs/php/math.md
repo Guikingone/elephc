@@ -42,6 +42,7 @@ sidebar:
 | `deg2rad()` | `deg2rad($degrees): float` | Degrees to radians |
 | `rad2deg()` | `rad2deg($radians): float` | Radians to degrees |
 | `pi()` | `pi(): float` | Returns M_PI |
+| `hexdec()` | `hexdec($hex_string): int` | Parse a hexadecimal string to an integer; non-hex characters are ignored |
 
 `clamp()` validates the bounds before selecting a result. It throws `ValueError` if `$min > $max` or if either bound is `NAN`. Selection checks the upper bound first, then the lower bound.
 

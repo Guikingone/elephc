@@ -2,7 +2,7 @@
 title: "is_bool()"
 description: "is_bool() — type builtin supported by Elephc."
 sidebar:
-  order: 399
+  order: 405
 ---
 
 ## is_bool()

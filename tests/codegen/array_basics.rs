@@ -485,6 +485,36 @@ var_dump(in_array(99, $a) === false);
     assert_eq!(out, "bool(true)\nbool(false)\nbool(true)\n");
 }
 
+/// Verifies strict `in_array` matches a same-type integer needle (`===` over an int array).
+#[test]
+fn test_in_array_strict_int_match() {
+    let out = compile_and_run("<?php var_dump(in_array(2, [1, 2, 3], true));");
+    assert_eq!(out, "bool(true)\n");
+}
+
+/// Verifies strict `in_array` rejects a string needle against an int array because `===`
+/// requires identical types, so `"2"` is never identical to `2`.
+#[test]
+fn test_in_array_strict_string_needle_int_array_false() {
+    let out = compile_and_run(r#"<?php var_dump(in_array("2", [1, 2, 3], true));"#);
+    assert_eq!(out, "bool(false)\n");
+}
+
+/// Verifies strict `in_array` over a same-type string array still matches by exact value.
+#[test]
+fn test_in_array_strict_string_match() {
+    let out = compile_and_run(r#"<?php var_dump(in_array("b", ["a", "b", "c"], true));"#);
+    assert_eq!(out, "bool(true)\n");
+}
+
+/// Verifies the strict flag is honored through named arguments (`strict: true`).
+#[test]
+fn test_in_array_strict_named_argument() {
+    let out =
+        compile_and_run("<?php var_dump(in_array(needle: 2, haystack: [1, 2, 3], strict: true));");
+    assert_eq!(out, "bool(true)\n");
+}
+
 /// Verifies sort.
 #[test]
 fn test_sort() {

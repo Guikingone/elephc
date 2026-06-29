@@ -118,3 +118,16 @@ echo "\n--- Parsing ---\n";
 $parsed = sscanf("X=42 Y=99", "X=%d Y=%d");
 echo "sscanf count: " . count($parsed) . "\n";
 echo "sscanf values: " . $parsed[0] . ", " . $parsed[1] . "\n";
+
+// Scanning — initial-segment spans, character-class search, hex parsing
+echo "\n--- Scanning ---\n";
+// strcspn: length of the leading run with NO character from the set ('o' stops it)
+echo "strcspn('hello world', 'wo'): " . strcspn("hello world", "wo") . "\n";
+// strspn: length of the leading run made ENTIRELY of characters from the set
+echo "strspn('42px', '0123456789'): " . strspn("42px", "0123456789") . "\n";
+// strpbrk: suffix from the first character found in the set, or false if none
+$brk = strpbrk("user@example.com", "@.");
+echo "strpbrk('user@example.com', '@.'): " . ($brk === false ? "false" : $brk) . "\n";
+// hexdec: parse a hexadecimal string into an integer
+echo "hexdec('1A'): " . hexdec("1A") . "\n";
+echo "hexdec('ff'): " . hexdec("ff") . "\n";

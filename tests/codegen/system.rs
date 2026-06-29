@@ -1866,6 +1866,54 @@ fn test_preg_replace_no_match() {
     assert_eq!(out, "hello world");
 }
 
+/// Verifies the optional `$limit` argument is accepted (unlimited `-1`) and replacement still
+/// processes every match.
+#[test]
+fn test_preg_replace_accepts_limit_argument() {
+    let out = compile_and_run(r##"<?php echo preg_replace("/\d/", "#", "a1b2", -1);"##);
+    assert_eq!(out, "a#b#");
+}
+
+/// Verifies the optional by-reference `&$count` argument is populated with the number of
+/// replacements performed and defines the variable for later use.
+#[test]
+fn test_preg_replace_populates_count_argument() {
+    let out = compile_and_run(
+        r##"<?php
+$n = 0;
+$result = preg_replace("/\d/", "#", "a1b2", -1, $n);
+echo $result . "|" . $n;
+"##,
+    );
+    assert_eq!(out, "a#b#|2");
+}
+
+/// Verifies `&$count` reports zero replacements when the pattern never matches the subject.
+#[test]
+fn test_preg_replace_count_zero_on_no_match() {
+    let out = compile_and_run(
+        r##"<?php
+$n = 5;
+preg_replace("/\d/", "#", "abc", -1, $n);
+echo $n;
+"##,
+    );
+    assert_eq!(out, "0");
+}
+
+/// Verifies `preg_match()` accepts the optional `$flags` argument (4-argument form) and still
+/// populates the `$matches` capture array.
+#[test]
+fn test_preg_match_accepts_flags_argument() {
+    let out = compile_and_run(
+        r#"<?php
+$ok = preg_match("/(\d+)/", "id=42", $matches, 0);
+echo $ok . "|" . $matches[1];
+"#,
+    );
+    assert_eq!(out, "1|42");
+}
+
 /// Verifies `preg_replace_callback` invokes the closure for each match and the callback return
 /// value replaces the matched text; captures are accessible via `$matches[0]`.
 #[test]

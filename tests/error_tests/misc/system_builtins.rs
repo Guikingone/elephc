@@ -332,7 +332,7 @@ fn test_error_json_last_error_msg_with_args() {
 fn test_error_preg_match_no_args() {
     expect_error(
         "<?php preg_match();",
-        "preg_match() takes 2 or 3 arguments",
+        "preg_match() takes 2 to 5 arguments",
     );
 }
 
@@ -341,7 +341,7 @@ fn test_error_preg_match_no_args() {
 fn test_error_preg_match_one_arg() {
     expect_error(
         r#"<?php preg_match("/test/");"#,
-        "preg_match() takes 2 or 3 arguments",
+        "preg_match() takes 2 to 5 arguments",
     );
 }
 
@@ -354,12 +354,12 @@ fn test_error_preg_match_matches_must_be_variable() {
     );
 }
 
-/// Verifies that `preg_match()` rejects arguments beyond the supported `$matches` parameter.
+/// Verifies that `preg_match()` rejects more than the five supported arguments.
 #[test]
-fn test_error_preg_match_four_args() {
+fn test_error_preg_match_too_many_args() {
     expect_error(
-        r#"<?php preg_match("/test/", "test", $matches, 0);"#,
-        "preg_match() takes 2 or 3 arguments",
+        r#"<?php preg_match("/test/", "test", $matches, 0, 0, 0);"#,
+        "preg_match() takes 2 to 5 arguments",
     );
 }
 
@@ -377,7 +377,25 @@ fn test_error_preg_match_all_no_args() {
 fn test_error_preg_replace_wrong_args() {
     expect_error(
         r#"<?php preg_replace("/a/", "b");"#,
-        "preg_replace() takes exactly 3 arguments",
+        "preg_replace() takes 3 to 5 arguments",
+    );
+}
+
+/// Verifies that `preg_replace()` rejects more than the five supported arguments.
+#[test]
+fn test_error_preg_replace_too_many_args() {
+    expect_error(
+        r#"<?php preg_replace("/a/", "b", "c", -1, $count, 0);"#,
+        "preg_replace() takes 3 to 5 arguments",
+    );
+}
+
+/// Verifies that `preg_replace()` rejects a non-variable `$count` output argument.
+#[test]
+fn test_error_preg_replace_count_must_be_variable() {
+    expect_error(
+        r#"<?php preg_replace("/a/", "b", "c", -1, 5);"#,
+        "preg_replace() parameter $count must be passed a variable",
     );
 }
 

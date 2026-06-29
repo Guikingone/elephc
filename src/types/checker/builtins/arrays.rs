@@ -76,8 +76,9 @@ pub(super) fn check_builtin(
             }
         }
         "in_array" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(span, "in_array() takes exactly 2 arguments"));
+            // PHP: in_array(mixed $needle, array $haystack, bool $strict = false): bool.
+            if args.len() < 2 || args.len() > 3 {
+                return Err(CompileError::new(span, "in_array() takes 2 or 3 arguments"));
             }
             checker.infer_type(&args[0], env)?;
             let arr_ty = checker.infer_type(&args[1], env)?;
@@ -86,6 +87,9 @@ pub(super) fn check_builtin(
                     span,
                     "in_array() second argument must be array",
                 ));
+            }
+            if let Some(strict) = args.get(2) {
+                checker.infer_type(strict, env)?;
             }
             // PHP `in_array()` returns bool. The runtime result is 0/1 either way, but
             // the static type drives echo/var_dump: `echo false` is "" (not "0").

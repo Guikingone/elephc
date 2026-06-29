@@ -526,19 +526,26 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Str))
         }
         "preg_match" => {
-            if !(2..=3).contains(&args.len()) {
+            // PHP: preg_match(string $pattern, string $subject, array &$matches = [],
+            // int $flags = 0, int $offset = 0): int|false. `$matches` is a by-ref
+            // out-parameter, so it must be a variable and is not eagerly inferred.
+            if !(2..=5).contains(&args.len()) {
                 return Err(CompileError::new(
                     span,
-                    "preg_match() takes 2 or 3 arguments",
+                    "preg_match() takes 2 to 5 arguments",
                 ));
             }
             checker.infer_type(&args[0], env)?;
             checker.infer_type(&args[1], env)?;
-            if args.len() == 3 && !matches!(args[2].kind, ExprKind::Variable(_)) {
+            if args.len() >= 3 && !matches!(args[2].kind, ExprKind::Variable(_)) {
                 return Err(CompileError::new(
                     args[2].span,
                     "preg_match() parameter $matches must be passed a variable",
                 ));
+            }
+            // `$flags` and `$offset` are read-only inputs.
+            for arg in args.iter().skip(3) {
+                checker.infer_type(arg, env)?;
             }
             Ok(Some(PhpType::Int))
         }
@@ -555,14 +562,25 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Int))
         }
         "preg_replace" => {
-            if args.len() != 3 {
+            // PHP: preg_replace(string|array $pattern, string|array $replacement,
+            // string|array $subject, int $limit = -1, int &$count = null). `$count`
+            // is a by-ref out-parameter: it must be a variable and is not eagerly
+            // inferred (its value is produced by the call).
+            if !(3..=5).contains(&args.len()) {
                 return Err(CompileError::new(
                     span,
-                    "preg_replace() takes exactly 3 arguments",
+                    "preg_replace() takes 3 to 5 arguments",
                 ));
             }
-            for arg in args {
+            // pattern, replacement, subject, and the read-only $limit are inputs.
+            for arg in args.iter().take(4) {
                 checker.infer_type(arg, env)?;
+            }
+            if args.len() == 5 && !matches!(args[4].kind, ExprKind::Variable(_)) {
+                return Err(CompileError::new(
+                    args[4].span,
+                    "preg_replace() parameter $count must be passed a variable",
+                ));
             }
             Ok(Some(PhpType::Str))
         }

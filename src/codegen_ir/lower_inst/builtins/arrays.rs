@@ -1157,12 +1157,31 @@ pub(super) fn lower_array_search(ctx: &mut FunctionContext<'_>, inst: &Instructi
 }
 
 /// Lowers `in_array()` for indexed arrays with scalar or string payloads.
+///
+/// Accepts the optional 3rd `strict` argument. When `strict` is statically true
+/// and the needle can never be `===` an element (disjoint scalar/string types),
+/// the result is unconditionally `false`. For the supported same-type
+/// scalar/string cases, strict (`===`) membership reduces to the existing exact
+/// comparison, so the strict flag does not change the lowering otherwise.
 pub(super) fn lower_in_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count(inst, "in_array", 2)?;
+    if inst.operands.len() < 2 || inst.operands.len() > 3 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "in_array expected 2 or 3 args, got {}",
+            inst.operands.len()
+        )));
+    }
     let needle = expect_operand(inst, 0)?;
     let array = expect_operand(inst, 1)?;
     let needle_ty = ctx.value_php_type(needle)?;
     let array_ty = ctx.value_php_type(array)?;
+    if let Some(strict) = inst.operands.get(2).copied() {
+        if strict_flag_is_true(ctx, strict)?
+            && in_array_strict_types_disjoint(&needle_ty, &array_ty)
+        {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0); // strict === can never match across disjoint types
+            return store_if_result(ctx, inst);
+        }
+    }
     if search::try_lower_assoc_in_array(ctx, needle, array, needle_ty.clone(), array_ty.clone())? {
         store_if_result(ctx, inst)?;
         return Ok(());
@@ -4681,6 +4700,48 @@ fn box_array_search_miss(ctx: &mut FunctionContext<'_>) {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
         }
     }
+}
+
+/// Returns true when an EIR value is a statically-known truthy boolean/integer constant.
+///
+/// Used by `in_array()` to resolve a literal `strict` flag (`true`, a non-zero
+/// integer) at compile time. Non-constant or falsy flags return `false`.
+fn strict_flag_is_true(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+    let value_ref = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(false);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    Ok(match (inst_ref.op, inst_ref.immediate.as_ref()) {
+        (Op::ConstBool, Some(Immediate::Bool(value))) => *value,
+        (Op::ConstI64, Some(Immediate::I64(value))) => *value != 0,
+        _ => false,
+    })
+}
+
+/// Returns true when a strict (`===`) `in_array()` needle can never match any element.
+///
+/// PHP `===` requires identical types, so a string needle can never be identical
+/// to a numeric (int/bool/float) element and vice versa. Only these statically
+/// disjoint concrete scalar/string combinations are reported; `Mixed`, unions,
+/// and same-family types fall through to the regular comparison path.
+fn in_array_strict_types_disjoint(needle_ty: &PhpType, array_ty: &PhpType) -> bool {
+    let needle = needle_ty.codegen_repr();
+    let elem = match array_ty.codegen_repr() {
+        PhpType::Array(elem) => elem.codegen_repr(),
+        PhpType::AssocArray { value, .. } => value.codegen_repr(),
+        _ => return false,
+    };
+    let str_vs_numeric = |a: &PhpType, b: &PhpType| {
+        matches!(a, PhpType::Str) && matches!(b, PhpType::Int | PhpType::Bool | PhpType::Float)
+    };
+    str_vs_numeric(&needle, &elem) || str_vs_numeric(&elem, &needle)
 }
 
 /// Describes which indexed-array `in_array()` lowering path applies.

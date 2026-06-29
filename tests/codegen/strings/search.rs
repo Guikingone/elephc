@@ -211,3 +211,55 @@ fn test_substr_replace_no_length() {
     let out = compile_and_run(r#"<?php echo substr_replace("hello world", "!", 5);"#);
     assert_eq!(out, "hello!");
 }
+
+/// Verifies `strcspn` returns the length of the leading run not containing any listed character.
+/// Fixture: "hello world" stops at the 'o' (index 4) found in "wo".
+#[test]
+fn test_strcspn_basic() {
+    let out = compile_and_run(r#"<?php echo strcspn("hello world", "wo");"#);
+    assert_eq!(out, "4");
+}
+
+/// Verifies `strcspn` returns the full length when no listed character is present.
+#[test]
+fn test_strcspn_no_match_returns_full_length() {
+    let out = compile_and_run(r#"<?php echo strcspn("abc", "xyz");"#);
+    assert_eq!(out, "3");
+}
+
+/// Verifies `strspn` returns the length of the leading run consisting entirely of listed characters.
+/// Fixture: "42 is the answer" matches "42" against the digit set, stopping at the space.
+#[test]
+fn test_strspn_basic() {
+    let out = compile_and_run(r#"<?php echo strspn("42 is the answer", "1234567890");"#);
+    assert_eq!(out, "2");
+}
+
+/// Verifies `strspn` returns 0 when the first byte is not in the character set.
+#[test]
+fn test_strspn_no_leading_match() {
+    let out = compile_and_run(r#"<?php echo strspn("abc", "0123456789");"#);
+    assert_eq!(out, "0");
+}
+
+/// Verifies `strpbrk` returns the suffix beginning at the first character found in the set.
+/// Fixture: "hello" with set "lo" first matches 'l' at index 2, yielding "llo".
+#[test]
+fn test_strpbrk_found() {
+    let out = compile_and_run(r#"<?php var_dump(strpbrk("hello", "lo"));"#);
+    assert_eq!(out, "string(3) \"llo\"\n");
+}
+
+/// Verifies `strpbrk` returns boolean `false` when no character in the set occurs in the string.
+#[test]
+fn test_strpbrk_not_found_returns_false() {
+    let out = compile_and_run(r#"<?php var_dump(strpbrk("hello", "xyz"));"#);
+    assert_eq!(out, "bool(false)\n");
+}
+
+/// Verifies `strcspn`/`strspn` resolve case-insensitively (PHP builtin names are case-insensitive).
+#[test]
+fn test_strcspn_strspn_case_insensitive() {
+    let out = compile_and_run(r#"<?php echo StrCsPn("hello", "l"), "|", STRSPN("aaab", "a");"#);
+    assert_eq!(out, "2|3");
+}

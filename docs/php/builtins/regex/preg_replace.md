@@ -1,8 +1,8 @@
 ---
 title: "preg_replace()"
-description: "Lowers `preg_replace(pattern, replacement, subject)` through the regex replacement helper."
+description: "Lowers `preg_replace(pattern, replacement, subject, limit?, &count?)`."
 sidebar:
-  order: 296
+  order: 298
 ---
 
 ## preg_replace()
@@ -11,7 +11,7 @@ sidebar:
 function preg_replace(string $pattern, string $replacement, string $subject, int $limit = -1, int $count = null): string
 ```
 
-Lowers `preg_replace(pattern, replacement, subject)` through the regex replacement helper.
+Lowers `preg_replace(pattern, replacement, subject, limit?, &count?)`.
 
 **Parameters**:
 - `$pattern` (`string`)

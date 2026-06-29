@@ -15,6 +15,8 @@ sidebar:
 | [`define()`](./misc/define.md) | `(string $constant_name, mixed $value, bool $case_insensitive): bool` | `bool` |
 | [`defined()`](./misc/defined.md) | `(string $constant_name): bool` | `bool` |
 | [`empty()`](./misc/empty.md) | `(mixed $value): bool` | `bool` |
+| [`extension_loaded()`](./misc/extension_loaded.md) | `(mixed $extension): bool` | `bool` |
+| [`get_debug_type()`](./misc/get_debug_type.md) | `(mixed $value): string` | `string` |
 | [`header()`](./misc/header.md) | `(mixed $header, mixed $replace, mixed $response_code): void` | `void` |
 | [`http_response_code()`](./misc/http_response_code.md) | `(mixed $response_code): int` | `int` |
 | [`isset()`](./misc/isset.md) | `(mixed $var, ...$vars): bool` | `bool` |
