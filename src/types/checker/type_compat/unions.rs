@@ -102,6 +102,75 @@ impl Checker {
         }
     }
 
+    /// Returns true when a value statically typed `actual` may flow into a position whose
+    /// declared concrete target type is `expected`, under elephc's gradual-typing boundary
+    /// model. This is deliberately looser than `type_accepts`/`types_compatible`: a `Mixed`
+    /// source is accepted for every target (Mixed is the gradual top type), and a union
+    /// source is accepted when one member matches the target and the remaining members are
+    /// coercible to the target's value family. EIR codegen emits a runtime boundary guard
+    /// (unbox + coercive cast, or unbox + null/heap-tag assert) for every flow accepted here.
+    ///
+    /// A concrete source type that is disjoint from `expected` (non-Mixed, non-union) is NOT
+    /// accepted, so genuine type errors — e.g. passing a statically-`int` value to a `string`
+    /// parameter — keep being reported by the strict predicates that call this as a fallback.
+    pub(crate) fn gradual_boundary_accepts(&self, expected: &PhpType, actual: &PhpType) -> bool {
+        match actual {
+            // Mixed is the gradual top type. A boundary guard coerces the boxed payload to
+            // the target representation at runtime, so any concrete target accepts it.
+            PhpType::Mixed => true,
+            PhpType::Union(src_members) if matches!(expected, PhpType::Union(_)) => {
+                // Union source into a union target: accept when every source member is
+                // acceptable to the target union (order-independent set compatibility).
+                // Mixed was already normalized out of both unions.
+                src_members
+                    .iter()
+                    .all(|member| self.type_accepts(expected, member))
+            }
+            PhpType::Union(src_members) => self.gradual_union_flows_into(expected, src_members),
+            _ => false,
+        }
+    }
+
+    /// Returns true when a union source (`src_members`) may flow into the concrete target
+    /// `expected`: one member must match the target (equal, a sub/supertype in the class
+    /// hierarchy, or numeric-widening compatible) and every other member must be coercible
+    /// to the target's value family (scalar targets accept any scalar plus null; class and
+    /// array/iterable targets accept only null among the extra members).
+    fn gradual_union_flows_into(&self, expected: &PhpType, src_members: &[PhpType]) -> bool {
+        // The gradual rule only loosens flows into a single concrete target. Union and Mixed
+        // targets are already handled by the strict predicates that call this as a fallback.
+        if matches!(expected, PhpType::Union(_) | PhpType::Mixed) {
+            return false;
+        }
+        let mut has_match = false;
+        for member in src_members {
+            if self.type_accepts(expected, member) || self.type_accepts(member, expected) {
+                has_match = true;
+            } else if !self.gradual_other_member_coercible(expected, member) {
+                return false;
+            }
+        }
+        has_match
+    }
+
+    /// Returns true when `member` — a non-matching member of a union source — is acceptable
+    /// alongside the matching member when the union flows into the concrete `target`. Null
+    /// and void map to the boxed-null tag and are accepted for any target family; an extra
+    /// scalar is accepted only for a scalar target (PHP coercive cast), while class and array
+    /// targets reject any non-null extra member as a real type error.
+    fn gradual_other_member_coercible(&self, target: &PhpType, member: &PhpType) -> bool {
+        if matches!(member, PhpType::Void | PhpType::Never | PhpType::Mixed) {
+            return true;
+        }
+        match target {
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str => matches!(
+                member,
+                PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str
+            ),
+            _ => false,
+        }
+    }
+
     /// Returns true if `ty` is a `PhpType::Union` that contains `PhpType::Void`.
     pub(crate) fn union_contains_void(ty: &PhpType) -> bool {
         matches!(ty, PhpType::Union(members) if members.iter().any(|member| *member == PhpType::Void))

@@ -1849,6 +1849,16 @@ fn emit_dynamic_new_fatal(ctx: &mut FunctionContext<'_>, required_parent: &str) 
     emit_fatal_message(ctx, message.as_bytes());
 }
 
+/// Emits a fatal `TypeError` diagnostic for a null value reaching a typed object, array, or
+/// iterable argument boundary, then terminates the process. Used by the gradual Mixed/union
+/// argument boundary guard when an unboxed payload is the PHP null tag.
+pub(super) fn emit_typed_null_argument_fatal(ctx: &mut FunctionContext<'_>) {
+    emit_fatal_message(
+        ctx,
+        b"Fatal error: Uncaught TypeError: typed argument must not be null\n",
+    );
+}
+
 /// Writes a fatal diagnostic to stderr and exits.
 fn emit_fatal_message(ctx: &mut FunctionContext<'_>, message: &[u8]) {
     let (message_label, message_len) = ctx.data.add_string(message);

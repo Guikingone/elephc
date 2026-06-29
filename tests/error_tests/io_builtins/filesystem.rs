@@ -18,16 +18,21 @@ fn test_error_file_get_contents_wrong_args() {
     );
 }
 
-/// Verifies `file_get_contents()` returning `false` is incompatible with declared `string` return type.
+/// Verifies the gradual-typing boundary model accepts returning `file_get_contents()` (typed
+/// `Str|Bool`) from a `: string` function: `Bool` is PHP-coercible to `string` (weak mode coerces
+/// `false` to `""`), so the union flows into the scalar return with a runtime boundary guard.
 #[test]
-fn test_error_file_get_contents_false_return_rejects_string_return_type() {
-    expect_error(
-        r#"<?php
+fn test_file_get_contents_false_return_into_string_return_type_accepted() {
+    assert!(
+        check_source(
+            r#"<?php
 function read_file(): string {
     return file_get_contents("missing.txt");
 }
-"#,
-        "Function 'read_file' return type expects Str, got Union([Str, Bool])",
+"#
+        )
+        .is_ok(),
+        "Str|Bool should flow into a string return under gradual typing (bool coerces to string)",
     );
 }
 
@@ -46,16 +51,21 @@ fn test_error_readfile_wrong_args() {
     expect_error("<?php readfile();", "readfile() takes exactly 1 argument");
 }
 
-/// Verifies `readfile()` returning `false` is incompatible with declared `int` return type.
+/// Verifies the gradual-typing boundary model accepts returning `readfile()` (typed `Int|Bool`)
+/// from an `: int` function: `Bool` is PHP-coercible to `int` (weak mode coerces `false` to `0`),
+/// so the union flows into the scalar return with a runtime boundary guard instead of erroring.
 #[test]
-fn test_error_readfile_false_return_rejects_int_return_type() {
-    expect_error(
-        r#"<?php
+fn test_readfile_false_return_into_int_return_type_accepted() {
+    assert!(
+        check_source(
+            r#"<?php
 function dump_file(): int {
     return readfile("missing.txt");
 }
-"#,
-        "Function 'dump_file' return type expects Int, got Union([Int, Bool])",
+"#
+        )
+        .is_ok(),
+        "Int|Bool should flow into an int return under gradual typing (bool coerces to int)",
     );
 }
 

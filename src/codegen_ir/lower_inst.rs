@@ -4708,6 +4708,19 @@ fn materialize_direct_call_arg_for_param(
             emit_box_current_value_as_mixed(ctx.emitter, source_ty);
             Ok(PhpType::Mixed)
         }
+        // Gradual boundary guard: a boxed Mixed/Union value flowing into a typed object, array,
+        // or iterable parameter is unboxed to its concrete heap pointer (fatal on a null payload),
+        // so the callee receives a real heap pointer instead of a Mixed cell pointer.
+        PhpType::Object(_)
+        | PhpType::Packed(_)
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Iterable
+            if matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) =>
+        {
+            emit_unbox_mixed_arg_to_concrete_heap(ctx);
+            Ok(param_ty.codegen_repr())
+        }
         PhpType::Array(param_elem) if param_elem.codegen_repr() == PhpType::Mixed => {
             if let PhpType::Array(source_elem) = source_ty.codegen_repr() {
                 let source_elem = source_elem.codegen_repr();
@@ -5366,6 +5379,34 @@ fn emit_unbox_mixed_to_owned_refcounted_result(ctx: &mut FunctionContext<'_>, re
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
     abi::emit_incref_if_refcounted(ctx.emitter, result_ty);
+}
+
+/// Unboxes a boxed `Mixed`/`Union` call argument into the concrete heap pointer (object, array,
+/// or iterable) required by the callee parameter, under the gradual-typing boundary model.
+///
+/// On entry the Mixed cell pointer is in the integer result register. The cell is unboxed; a PHP
+/// null payload (runtime tag 8) takes a runtime `TypeError` fatal because a typed object/array
+/// parameter cannot receive null, while a real heap payload is moved into the argument staging
+/// register. The payload is passed *borrowed* — exactly like a statically-typed object/array
+/// argument — so the owning `Mixed` cell, not this call, releases it. This reuses the shared
+/// `__rt_mixed_unbox` machinery rather than introducing a parallel unbox path.
+fn emit_unbox_mixed_arg_to_concrete_heap(ctx: &mut FunctionContext<'_>) {
+    let non_null = ctx.next_label("mixed_arg_unbox_non_null");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                      // unbox the Mixed cell: runtime tag → result reg, payload → low payload reg
+    let tag_reg = abi::int_result_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #8", tag_reg));           // runtime tag 8 = PHP null is invalid for a typed object/array parameter
+            ctx.emitter.instruction(&format!("b.ne {}", non_null));             // skip the fatal when the boxed value is a real heap payload
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, 8", tag_reg));            // runtime tag 8 = PHP null is invalid for a typed object/array parameter
+            ctx.emitter.instruction(&format!("jne {}", non_null));              // skip the fatal when the boxed value is a real heap payload
+        }
+    }
+    objects::emit_typed_null_argument_fatal(ctx);
+    ctx.emitter.label(&non_null);
+    move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));              // move the borrowed unboxed heap pointer into the argument staging register
 }
 
 /// Stores an unboxed scalar Mixed payload back through the original by-reference source.

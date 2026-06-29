@@ -197,7 +197,10 @@ impl Checker {
         span: crate::span::Span,
         context: &str,
     ) -> Result<(), CompileError> {
-        if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
+        if Self::types_compatible(expected, actual)
+            || self.type_accepts(expected, actual)
+            || self.gradual_boundary_accepts(expected, actual)
+        {
             Ok(())
         } else {
             Err(CompileError::new(

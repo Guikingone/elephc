@@ -79,35 +79,47 @@ $ok = true;       // $ok: Bool
 $nothing = null;   // $nothing: Void
 ```
 
-The first assignment determines a variable's type. After that, reassignment is only allowed to the same type (with some exceptions):
+A local variable's static type is the flow-insensitive **join** of every value assigned to it in its scope. When successive assignments merge cleanly (e.g. `Int` then `Bool`) the variable keeps that single concrete type; when they do not (e.g. `Int` then `Str`) the variable widens to their least-upper-bound `Union`, which lowers to the same boxed `Mixed` storage for the whole scope. Reassignment is never rejected — PHP locals are gradually typed.
 
-### Type compatibility rules
+### Type merge rules
 
-| From | To | Allowed? |
+These rules describe how two assigned types **merge into a single concrete type**. When they do not merge, the variable widens to a `Union` (boxed `Mixed`) rather than producing an error.
+
+| From | To | Merges to one concrete type? |
 |---|---|---|
 | `Int` | `Int` | Yes |
 | `Int` | `Float` | Yes (numeric types are interchangeable) |
 | `Int` | `Bool` | Yes (numeric/bool interchangeable) |
-| `Int` | `Str` | **No** — compile error |
+| `Int` | `Str` | No — widens to `Union([Int, Str])` (boxed `Mixed`) |
 | `Void` | anything | Yes (null can become any type) |
 | anything | `Void` | Yes (any variable can become null) |
 | `Array(T)` | `Array(U)` | Yes, if `T` and `U` merge; heterogeneous indexed values widen to `Array(Mixed)` |
 | `AssocArray(_, T)` | `AssocArray(_, U)` | Yes, if `T` and `U` merge; heterogeneous values widen to `Mixed` |
 | `Pointer(None)` | `Pointer(Some("T"))` | Yes (merged to the more specific pointer tag) |
 | `Pointer(Some("A"))` | `Pointer(Some("B"))` | Yes, but merged to opaque `Pointer(None)` if tags differ |
-| `Pointer(*)` | `Int` / `Str` / `Array` | **No** — compile error |
 | `Resource(None)` | `Resource(Some("stream"))` (or vice versa) | Yes (generic resource accepts typed resources) |
-| `Resource(Some("stream"))` | `Int` | **No** — stream handles are not plain numeric descriptors |
 | `Array(_)` / `AssocArray(_, _)` / object implementing `Iterator` or `IteratorAggregate` | `Iterable` parameter | Yes (PHP `iterable` accepts arrays and Traversable objects at the call boundary) |
 
-This means elephc rejects code that PHP would allow:
+So code that PHP allows now type-checks, with the variable widening instead of erroring:
 
 ```php
 $x = 42;
-$x = "hello";  // ← Type error: cannot reassign $x from Int to Str
+$x = "hello";  // ← $x widens to Union([Int, Str]); lowered as boxed Mixed
 ```
 
-This is intentional — it lets the compiler know exactly what `$x` is at every point, without needing runtime type tags.
+### The gradual boundary model
+
+elephc's checker is otherwise concrete-typed, but PHP is gradually typed. To bridge the two, a value whose static type is `Mixed` or a `Union` is accepted where a concrete type is declared (a parameter, return, property, or typed assignment), as long as the flow is sound:
+
+- A `Mixed` source is accepted for **any** concrete target — `Mixed` is the gradual top type.
+- A `Union` source is accepted into a concrete target when one member matches the target (equal, a sub/supertype, or numeric-widening compatible) and the remaining members are coercible to the target's value family: scalar targets accept any other scalar plus null; class and array/iterable targets accept only null among the extra members.
+- A **concrete** source type that is disjoint from the target (e.g. statically-`Int` into a `string` parameter) is still rejected — that is a real type error.
+
+For every accepted `Mixed`/`Union` → concrete flow, codegen emits a **runtime boundary guard** so native code never treats an arbitrary boxed payload as an unboxed value: a scalar target unboxes and applies the PHP coercive cast (`__rt_mixed_cast_*`), while an object/array/iterable target unboxes the heap pointer and fatals with a `TypeError` when the payload is null. When the value is already statically the concrete type, no guard is emitted.
+
+Passing a variable by reference is an alias assignment: when a by-reference parameter is `mixed`/union/nullable and the caller variable's storage cannot hold such a value, the caller variable is promoted (its type joined with the parameter type) so the writeback is sound and codegen holds it in a boxed cell for the call.
+
+**Lowering limitation.** The widened type computed here is the type checker's flow-insensitive join, but EIR lowering still types each local slot from the first value stored and widens it lazily as it walks statements. So two newly-accepted shapes type-check but are not yet fully boxed at runtime: a local first stored as a concrete scalar that only *later* widens to `Mixed` under a conditional branch renders with the wrong runtime tag when observed on the path that kept the original value (straight-line reassignment, where the final store boxes, is correct); and a scalar variable promoted for a `mixed`/nullable by-reference parameter is not re-boxed at the call, so a `null` writeback reads back as the scalar null sentinel. Closing this requires the lowering to pre-declare such locals as boxed from the checker's join rather than from the first store.
 
 ## Statement checks
 

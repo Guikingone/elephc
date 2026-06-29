@@ -174,6 +174,19 @@ impl Checker {
         Ok(())
     }
 
+    /// Returns true when a by-reference parameter needs boxed/nullable storage that the
+    /// caller variable's current type cannot provide. Passing a variable by reference is an
+    /// alias assignment: the callee may write any value the by-reference parameter permits,
+    /// so when the parameter is `mixed`/union/nullable and the caller variable is a plain
+    /// concrete scalar, the caller slot must be promoted to boxed storage before the call.
+    pub(crate) fn by_ref_param_needs_storage_promotion(
+        &self,
+        param_ty: &PhpType,
+        var_ty: &PhpType,
+    ) -> bool {
+        requires_by_ref_boxed_storage(param_ty) && !supports_by_ref_boxed_storage(var_ty)
+    }
+
     /// Validates that a default value expression is compatible with the declared type it is
     /// being assigned to. Checks using `require_compatible_arg_type`.
     pub(crate) fn validate_declared_default_type(
@@ -287,6 +300,7 @@ impl Checker {
         let saved_globals = self.active_globals.clone();
         let saved_statics = self.active_statics.clone();
         let saved_foreach_keys = self.foreach_key_locals.clone();
+        let saved_declared_typed_locals = self.declared_typed_locals.clone();
         let saved_break_continue_depth = self.break_continue_depth;
         let saved_finally_break_continue_bases = self.finally_break_continue_bases.clone();
         let saved_in_callable_body = self.in_callable_body;
@@ -295,6 +309,7 @@ impl Checker {
         self.active_globals.clear();
         self.active_statics.clear();
         self.foreach_key_locals.clear();
+        self.declared_typed_locals.clear();
         self.break_continue_depth = 0;
         self.finally_break_continue_bases.clear();
         self.in_callable_body = true;
@@ -305,6 +320,7 @@ impl Checker {
         self.active_globals = saved_globals;
         self.active_statics = saved_statics;
         self.foreach_key_locals = saved_foreach_keys;
+        self.declared_typed_locals = saved_declared_typed_locals;
         self.break_continue_depth = saved_break_continue_depth;
         self.finally_break_continue_bases = saved_finally_break_continue_bases;
         self.in_callable_body = saved_in_callable_body;

@@ -397,13 +397,16 @@ fn test_error_dynamic_method_call_rejects_named_arguments() {
     );
 }
 
-/// Verifies that a nullable by-reference parameter (e.g., `?int &$x`) requires
-/// boxed storage (mixed/union/nullable) when passed by reference.
+/// Verifies the gradual-typing model accepts passing a plain `int` variable to a nullable
+/// by-reference parameter (`?int &$x`): this is valid PHP (the callee may write null, after which
+/// the caller variable is null). The caller variable is promoted to boxed/nullable storage rather
+/// than the call being rejected for storage-mismatch.
 #[test]
-fn test_error_nullable_by_ref_parameter_requires_boxed_storage() {
-    expect_error(
-        "<?php function bump(?int &$x) { $x = null; } $value = 1; bump($value);",
-        "requires a variable with mixed/union/nullable storage when passed by reference",
+fn test_nullable_by_ref_parameter_promotes_caller_storage() {
+    assert!(
+        check_source("<?php function bump(?int &$x) { $x = null; } $value = 1; bump($value);")
+            .is_ok(),
+        "passing an int variable to a ?int by-ref parameter is valid PHP and should promote it",
     );
 }
 

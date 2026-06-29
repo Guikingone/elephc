@@ -171,18 +171,21 @@ fn test_error_substr_count_too_many_args() {
     );
 }
 
-/// Verifies that a function returning `int` that returns `strpos()` directly is rejected,
-/// because `strpos()` returns `Int|Bool` (false on miss), not `int`. This is a type
-/// incompatibility regression test.
+/// Verifies the gradual-typing boundary model accepts returning `strpos()` (typed `Int|Bool`)
+/// from an `: int` function: `Bool` is PHP-coercible to `int` (weak mode coerces `false` to `0`),
+/// so the union flows into the scalar return with a runtime boundary guard instead of erroring.
 #[test]
-fn test_error_strpos_false_return_rejects_int_return_type() {
-    expect_error(
-        r#"<?php
+fn test_strpos_false_return_into_int_return_type_accepted() {
+    assert!(
+        check_source(
+            r#"<?php
 function pos(): int {
     return strpos("abc", "z");
 }
-"#,
-        "Function 'pos' return type expects Int, got Union([Int, Bool])",
+"#
+        )
+        .is_ok(),
+        "Int|Bool should flow into an int return under gradual typing (bool coerces to int)",
     );
 }
 

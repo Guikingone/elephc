@@ -122,11 +122,15 @@ fn test_error_undefined_variable() {
     expect_error("<?php echo $x;", "Undefined variable: $x");
 }
 
-/// Verifies that reassigning a typed variable to a different type is rejected.
-/// Input: `$x = 42; $x = "hello";` — `$x` is int, reassignment to string fails.
+/// Verifies that reassigning an *inferred* local to an incompatible type is accepted under the
+/// gradual-typing model: the local widens to a boxed union instead of erroring.
+/// Input: `$x = 42; $x = "hello";` — `$x` widens from `Int` to `Union([Int, Str])`.
 #[test]
-fn test_error_type_mismatch_reassign() {
-    expect_error("<?php $x = 42; $x = \"hello\";", "cannot reassign $x");
+fn test_inferred_local_reassign_widens_instead_of_error() {
+    assert!(
+        check_source("<?php $x = 42; $x = \"hello\"; echo $x;").is_ok(),
+        "reassigning an inferred local to an incompatible type should widen, not reject",
+    );
 }
 
 /// Verifies that arithmetic on a string operand produces an error.
@@ -689,5 +693,61 @@ fn test_error_nullable_intersection_type_rejected() {
         check_source("<?php interface A {} interface B {} function f(?A&B $x): int { return 1; }")
             .is_err(),
         "?A&B should be rejected, not silently accepted",
+    );
+}
+
+/// Verifies the gradual-typing boundary model still rejects a statically-`int` argument flowing
+/// into a `string` parameter: a concrete source type that is disjoint from the target is a real
+/// type error and must NOT be loosened (only Mixed/union sources are accepted gradually).
+#[test]
+fn test_error_concrete_int_into_string_param_still_rejected() {
+    expect_error(
+        "<?php function f(string $s) {} f(5);",
+        "parameter $s expects Str, got Int",
+    );
+}
+
+/// Verifies a concrete `array` argument flowing into an unrelated class parameter is still a real
+/// type error under the gradual model (array is not Mixed and the target is not in any union).
+#[test]
+fn test_error_concrete_array_into_class_param_still_rejected() {
+    expect_error(
+        "<?php class C {} function f(C $c) {} f([1, 2]);",
+        "parameter $c expects",
+    );
+}
+
+/// Verifies a concrete `bool` argument flowing into a class parameter is still a real type error;
+/// the gradual loosening only applies to Mixed sources and union-containing-target shapes.
+#[test]
+fn test_error_concrete_bool_into_class_param_still_rejected() {
+    expect_error(
+        "<?php class C {} function f(C $c) {} f(true);",
+        "parameter $c expects",
+    );
+}
+
+/// Verifies the gradual model accepts a `Mixed` source (associative-array read) flowing into a
+/// `string` parameter — the boundary the type checker previously rejected. This is the positive
+/// counterpart to the concrete-disjoint rejections above.
+#[test]
+fn test_gradual_mixed_into_string_param_accepted() {
+    assert!(
+        check_source(
+            "<?php function f(string $s): string { return $s; } \
+             $m = []; $m[\"k\"] = \"hi\"; $v = $m[\"k\"]; echo f($v);"
+        )
+        .is_ok(),
+        "Mixed value should be accepted into a string parameter under gradual typing",
+    );
+}
+
+/// Verifies the gradual model accepts a local reassigned to an incompatible type (`int` then
+/// `string`) instead of reporting "cannot reassign"; the local widens to a boxed union.
+#[test]
+fn test_gradual_reassign_widening_accepted() {
+    assert!(
+        check_source("<?php $x = 1; $x = \"a\"; echo $x;").is_ok(),
+        "reassigning a local to an incompatible type should widen, not reject",
     );
 }

@@ -92,6 +92,159 @@ impl Checker {
         Self::sig_undefined_by_ref_variable_outputs(sig, args, env)
     }
 
+    /// Returns `(name, type)` promotions for already-defined plain `$variable` arguments a user
+    /// function call passes to a declared by-reference parameter whose boxed/nullable storage the
+    /// variable's current type cannot provide. The caller scope must promote each variable so the
+    /// by-reference writeback is sound (the callee may store any value the parameter permits).
+    pub(crate) fn function_call_by_ref_boxed_promotions(
+        &self,
+        name: &Name,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Vec<(String, PhpType)> {
+        // Resolve through `fn_decls` (a complete table populated before body checking), not
+        // `self.functions`, which is filled incrementally as bodies are checked and so would
+        // miss a callee declared later in source order.
+        let canonical = self
+            .canonical_function_name_folded(name.as_str())
+            .unwrap_or_else(|| name.as_str().to_string());
+        let Some(decl) = self.fn_decls.get(&canonical) else {
+            return Vec::new();
+        };
+        if !decl.ref_params.iter().any(|is_ref| *is_ref) {
+            return Vec::new();
+        }
+        if args
+            .iter()
+            .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)))
+        {
+            return Vec::new();
+        }
+        let mut promotions = Vec::new();
+        for (index, arg) in args.iter().enumerate() {
+            let ExprKind::Variable(var_name) = &arg.kind else {
+                continue;
+            };
+            if !decl.ref_params.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            let Some(type_ann) = decl.param_types.get(index).and_then(|ann| ann.as_ref()) else {
+                continue;
+            };
+            let Some(current_ty) = env.get(var_name) else {
+                continue;
+            };
+            let Ok(param_ty) = self.resolve_declared_param_type_hint(
+                type_ann,
+                decl.span,
+                "by-reference parameter",
+            ) else {
+                continue;
+            };
+            if self.by_ref_param_needs_storage_promotion(&param_ty, current_ty) {
+                let promoted = self.normalize_union_type(vec![current_ty.clone(), param_ty]);
+                promotions.push((var_name.clone(), promoted));
+            }
+        }
+        promotions
+    }
+
+    /// Returns by-reference storage promotions for already-defined `$variable` arguments of a
+    /// static method call (`Class::method(...)`, `self::`/`static::`/`parent::`), mirroring
+    /// `function_call_by_ref_boxed_promotions`. Empty when the receiver class or method is unknown.
+    pub(crate) fn static_method_call_by_ref_boxed_promotions(
+        &self,
+        receiver: &StaticReceiver,
+        method: &str,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Vec<(String, PhpType)> {
+        let Some(class_name) = self.resolve_static_receiver_class_for_by_ref(receiver) else {
+            return Vec::new();
+        };
+        let Some(class_info) = self.classes.get(&class_name) else {
+            return Vec::new();
+        };
+        let method_key = php_symbol_key(method);
+        let Some(sig) = class_info
+            .static_methods
+            .get(&method_key)
+            .or_else(|| class_info.methods.get(&method_key))
+        else {
+            return Vec::new();
+        };
+        self.sig_defined_by_ref_boxed_promotions(sig, args, env)
+    }
+
+    /// Returns by-reference storage promotions for already-defined `$variable` arguments of an
+    /// instance method call (`$obj->method(...)`), using the already-inferred receiver type.
+    /// Empty for non-object or unknown receivers.
+    pub(crate) fn method_call_by_ref_boxed_promotions(
+        &self,
+        object_type: &PhpType,
+        method: &str,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Vec<(String, PhpType)> {
+        let PhpType::Object(class_name) = object_type else {
+            return Vec::new();
+        };
+        let Some(class_info) = self.classes.get(class_name) else {
+            return Vec::new();
+        };
+        let method_key = php_symbol_key(method);
+        let Some(sig) = class_info.methods.get(&method_key) else {
+            return Vec::new();
+        };
+        self.sig_defined_by_ref_boxed_promotions(sig, args, env)
+    }
+
+    /// Collects `(name, join-type)` promotions for already-defined plain `$variable` arguments
+    /// bound to a declared by-reference parameter that requires boxed/nullable storage the
+    /// variable cannot currently provide. The promotion type is the least-upper-bound JOIN of the
+    /// variable's current type and the parameter's declared type, which lowers to boxed `Mixed`
+    /// (or inline nullable) storage. Bails on named/spread arguments (positional mapping only).
+    fn sig_defined_by_ref_boxed_promotions(
+        &self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Vec<(String, PhpType)> {
+        if !sig.ref_params.iter().any(|is_ref| *is_ref) {
+            return Vec::new();
+        }
+        if args
+            .iter()
+            .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)))
+        {
+            return Vec::new();
+        }
+        let mut promotions = Vec::new();
+        for (index, arg) in args.iter().enumerate() {
+            let ExprKind::Variable(var_name) = &arg.kind else {
+                continue;
+            };
+            if !sig.ref_params.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            if !sig.declared_params.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            let Some(current_ty) = env.get(var_name) else {
+                continue;
+            };
+            let Some((_, param_ty)) = sig.params.get(index) else {
+                continue;
+            };
+            if self.by_ref_param_needs_storage_promotion(param_ty, current_ty) {
+                let promoted =
+                    self.normalize_union_type(vec![current_ty.clone(), param_ty.clone()]);
+                promotions.push((var_name.clone(), promoted));
+            }
+        }
+        promotions
+    }
+
     /// Returns a best-effort static return type for a call or `new` expression used as an
     /// assignment right-hand side that failed to type-check, so error recovery can bind the
     /// assigned variable to an accurate type instead of the infectious `Mixed`.

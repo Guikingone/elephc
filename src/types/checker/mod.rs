@@ -152,6 +152,11 @@ pub(crate) struct Checker {
     /// promoting to `AssocArray` like a statically-known string key would. Mirrors
     /// the lowering's `foreach_int_key_locals` lifetime (per function, not popped).
     pub foreach_key_locals: HashSet<String>,
+    /// Locals declared with an explicit type hint (`Type $x = ...`). Unlike inferred locals,
+    /// which gradually widen to a `Union`/`Mixed` join on incompatible reassignment, a declared
+    /// local enforces its hint: a later concrete-disjoint assignment is a real type error. Scoped
+    /// per function/closure body and reset by `with_local_storage_context`.
+    pub declared_typed_locals: HashSet<String>,
     /// Active break/continue target depth in the current function or closure body.
     pub break_continue_depth: usize,
     /// Stacks of break/continue depths at each enclosing `finally` block boundary,

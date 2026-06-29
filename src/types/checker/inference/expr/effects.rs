@@ -219,6 +219,12 @@ impl Checker {
                 for (var, ty) in self.function_call_by_ref_outputs(name, &expanded_args, env) {
                     env.entry(var).or_insert(ty);
                 }
+                // Promote already-defined caller variables whose storage cannot hold the
+                // boxed/nullable value a by-reference parameter may write back.
+                for (var, ty) in self.function_call_by_ref_boxed_promotions(name, &expanded_args, env)
+                {
+                    env.insert(var, ty);
+                }
                 let builtin_name = name.trim_start_matches('\\');
                 // `isset`/`unset` are lazy language constructs: an operand may be
                 // an undeclared property routed to `__isset`/`__unset`, which must
@@ -298,6 +304,16 @@ impl Checker {
                 {
                     env.entry(var).or_insert(ty);
                 }
+                // Promote already-defined caller variables whose storage cannot hold the
+                // boxed/nullable value a by-reference parameter may write back.
+                for (var, ty) in self.static_method_call_by_ref_boxed_promotions(
+                    receiver,
+                    method,
+                    &expanded_args,
+                    env,
+                ) {
+                    env.insert(var, ty);
+                }
                 for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
@@ -362,6 +378,13 @@ impl Checker {
                     self.method_call_by_ref_outputs(&object_type, method, &expanded_args, env)
                 {
                     env.entry(var).or_insert(ty);
+                }
+                // Promote already-defined caller variables whose storage cannot hold the
+                // boxed/nullable value a by-reference parameter may write back.
+                for (var, ty) in
+                    self.method_call_by_ref_boxed_promotions(&object_type, method, &expanded_args, env)
+                {
+                    env.insert(var, ty);
                 }
                 for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;

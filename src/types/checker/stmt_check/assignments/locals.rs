@@ -675,12 +675,16 @@ fn resolve_class_name<'a>(checker: &'a Checker, class_name: &str) -> Option<&'a 
 
 /// Merges the assigned type into the type environment for the given variable.
 ///
-/// If `name` already exists in `env`, attempts to merge the new type with the existing
-/// type using `checker.merged_assignment_type()`. If merging is not possible, returns
-/// a type incompatibility error. If `name` does not exist, inserts the type directly.
+/// For an **inferred** local, the resulting type is the flow-insensitive JOIN of the existing
+/// type and the newly assigned type: a single concrete type when they merge (e.g. `int` then
+/// `bool`), otherwise their least-upper-bound union (which lowers to boxed `Mixed` storage).
+/// Reassignment of an inferred local is never rejected — PHP locals are gradually typed.
 ///
-/// The merge operation supports widening (e.g., `Int | Float` from separate assignments)
-/// and preserves type specificity where possible.
+/// For a **declared-typed** local (`Type $x = ...`), the declared hint is enforced: a
+/// merge-compatible value or a gradual `Mixed`/union source keeps the declared type, while a
+/// concrete-disjoint value (e.g. assigning a `string` to a `?int` local) is a real type error.
+///
+/// If `name` does not exist, the type is inserted directly.
 fn merge_local_assignment_type(
     checker: &Checker,
     name: &str,
@@ -688,9 +692,15 @@ fn merge_local_assignment_type(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    if let Some(existing) = env.get(name) {
-        let merged_ty = checker.merged_assignment_type(existing, ty);
-        if merged_ty.is_none() {
+    if let Some(existing) = env.get(name).cloned() {
+        if checker.declared_typed_locals.contains(name) {
+            // Declared-typed local: a merge-compatible value or a gradual Mixed/union source
+            // keeps the declared hint; a concrete-disjoint value is a real type error.
+            if checker.merged_assignment_type(&existing, ty).is_some()
+                || checker.gradual_boundary_accepts(&existing, ty)
+            {
+                return Ok(());
+            }
             return Err(CompileError::new(
                 span,
                 &format!(
@@ -699,10 +709,14 @@ fn merge_local_assignment_type(
                 ),
             ));
         }
-        if let Some(merged_ty) = merged_ty {
-            if &merged_ty != existing {
-                env.insert(name.to_string(), merged_ty);
-            }
+        // Inferred local: gradual reassignment widens to the least-upper-bound join instead of
+        // rejecting. A union join lowers to a boxed `Mixed` slot for the whole scope, so the
+        // backend stores and loads stay representation-consistent.
+        let resolved = checker
+            .merged_assignment_type(&existing, ty)
+            .unwrap_or_else(|| checker.normalize_union_type(vec![existing.clone(), ty.clone()]));
+        if resolved != existing {
+            env.insert(name.to_string(), resolved);
         }
     } else {
         env.insert(name.to_string(), ty.clone());
@@ -732,7 +746,9 @@ pub(super) fn check_typed_assign(
         &format!("Typed local ${}", name),
     )?;
     let value_ty = checker.infer_type(value, env)?;
-    if !checker.type_accepts(&declared_ty, &value_ty) {
+    if !checker.type_accepts(&declared_ty, &value_ty)
+        && !checker.gradual_boundary_accepts(&declared_ty, &value_ty)
+    {
         return Err(CompileError::new(
             span,
             &format!(
@@ -741,6 +757,9 @@ pub(super) fn check_typed_assign(
             ),
         ));
     }
+    // Record the declared hint so later reassignments enforce it (a concrete-disjoint value is a
+    // real type error) instead of gradually widening like an inferred local.
+    checker.declared_typed_locals.insert(name.to_string());
     env.insert(name.to_string(), declared_ty);
     Ok(())
 }

@@ -168,16 +168,21 @@ fn test_error_tmpfile_rejects_nonempty_static_spread() {
     expect_error("<?php tmpfile(...[1]);", "tmpfile() takes no arguments");
 }
 
-/// Verifies a function with string return type annotation produces an error when returning fgetc() which can return false.
+/// Verifies the gradual-typing boundary model accepts returning `fgetc()` (typed `Str|Bool`) from
+/// a `: string` function: `Bool` is PHP-coercible to `string` (weak mode coerces `false` to `""`),
+/// so the union flows into the scalar return with a runtime boundary guard instead of erroring.
 #[test]
-fn test_error_fgetc_false_return_rejects_string_return_type() {
-    expect_error(
-        r#"<?php
+fn test_fgetc_false_return_into_string_return_type_accepted() {
+    assert!(
+        check_source(
+            r#"<?php
 function read_char(): string {
     return fgetc(STDIN);
 }
-"#,
-        "Function 'read_char' return type expects Str, got Union([Str, Bool])",
+"#
+        )
+        .is_ok(),
+        "Str|Bool should flow into a string return under gradual typing (bool coerces to string)",
     );
 }
 
