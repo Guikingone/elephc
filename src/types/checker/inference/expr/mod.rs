@@ -14,6 +14,7 @@ use crate::types::{
     merge_array_key_types, normalized_array_key_type, packed_type_size, PhpType, TypeEnv,
 };
 mod assignments;
+mod by_ref_outputs;
 mod class_refs;
 mod effects;
 mod static_closure;
