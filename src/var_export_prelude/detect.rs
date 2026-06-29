@@ -163,7 +163,6 @@ fn expr_refs_ve(expr: &Expr) -> bool {
         | ExprKind::Spread(inner)
         | ExprKind::Clone(inner)
         | ExprKind::YieldFrom(inner) => expr_refs_ve(inner),
-        ExprKind::ListUnpack { value, .. } => expr_refs_ve(value),
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ShortTernary { value, default } => {
             expr_refs_ve(value) || expr_refs_ve(default)
@@ -304,7 +303,6 @@ fn stmt_refs_ve(stmt: &Stmt) -> bool {
         StmtKind::NestedArrayAssign { target, value } => {
             expr_refs_ve(target) || expr_refs_ve(value)
         }
-        StmtKind::RefAssignTarget { target, .. } => expr_refs_ve(target),
         StmtKind::ArrayPush { value, .. } => expr_refs_ve(value),
         StmtKind::TypedAssign { value, .. } => expr_refs_ve(value),
         StmtKind::Foreach { array, body, .. } => {

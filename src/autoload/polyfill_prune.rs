@@ -440,6 +440,7 @@ mod tests {
                 variadic: None,
                 variadic_type: None,
                 return_type: None,
+                by_ref_return: false,
                 body: Vec::new(),
             },
             Span::dummy(),

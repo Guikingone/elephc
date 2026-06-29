@@ -161,7 +161,6 @@ fn expr_refs_tz(expr: &Expr) -> bool {
         | ExprKind::Spread(inner)
         | ExprKind::Clone(inner)
         | ExprKind::YieldFrom(inner) => expr_refs_tz(inner),
-        ExprKind::ListUnpack { value, .. } => expr_refs_tz(value),
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ShortTernary { value, default } => {
             expr_refs_tz(value) || expr_refs_tz(default)
@@ -302,7 +301,6 @@ fn stmt_refs_tz(stmt: &Stmt) -> bool {
         StmtKind::NestedArrayAssign { target, value } => {
             expr_refs_tz(target) || expr_refs_tz(value)
         }
-        StmtKind::RefAssignTarget { target, .. } => expr_refs_tz(target),
         StmtKind::ArrayPush { value, .. } => expr_refs_tz(value),
         StmtKind::TypedAssign { value, .. } => expr_refs_tz(value),
         StmtKind::Foreach { array, body, .. } => {

@@ -185,7 +185,6 @@ fn collect_and_recurse_stmt(
             scan_expr_for_closures(target, errors);
             scan_expr_for_closures(value, errors);
         }
-        StmtKind::RefAssignTarget { target, .. } => scan_expr_for_closures(target, errors),
         StmtKind::Return(Some(expr)) => scan_expr_for_closures(expr, errors),
         StmtKind::Include { path, .. } => scan_expr_for_closures(path, errors),
         // Leaves with no labels, sub-bodies, or closure-bearing expressions.

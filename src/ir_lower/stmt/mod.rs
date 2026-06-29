@@ -1750,7 +1750,10 @@ fn lower_continue(ctx: &mut LoweringContext<'_, '_>, level: usize) {
 /// the label block reloads them from the same slots.
 fn lower_goto(ctx: &mut LoweringContext<'_, '_>, label: &str) {
     let target = ctx.label_block(label);
-    terminate_branch(ctx, target);
+    // A `goto` keeps the current loop frames live: it never closes an enclosing loop the way a
+    // `break`/`continue` does, so no innermost loop cleanups are emitted here (count `0`). Pending
+    // `finally` bodies are still run by `terminate_branch` itself.
+    terminate_branch(ctx, target, 0);
 }
 
 /// Lowers a `label:` marker by closing the current straight-line block with a fall-through branch
