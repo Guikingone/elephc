@@ -108,6 +108,7 @@ impl Checker {
             current_method_is_static: false,
             current_by_ref_return: false,
             closure_depth: 0,
+            in_callable_body: false,
             extern_functions: HashMap::new(),
             extern_classes: HashMap::new(),
             packed_classes: HashMap::new(),

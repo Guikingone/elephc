@@ -289,6 +289,7 @@ impl Checker {
         let saved_foreach_keys = self.foreach_key_locals.clone();
         let saved_break_continue_depth = self.break_continue_depth;
         let saved_finally_break_continue_bases = self.finally_break_continue_bases.clone();
+        let saved_in_callable_body = self.in_callable_body;
 
         self.active_ref_params = ref_param_names.into_iter().collect();
         self.active_globals.clear();
@@ -296,6 +297,7 @@ impl Checker {
         self.foreach_key_locals.clear();
         self.break_continue_depth = 0;
         self.finally_break_continue_bases.clear();
+        self.in_callable_body = true;
 
         let result = f(self);
 
@@ -305,6 +307,7 @@ impl Checker {
         self.foreach_key_locals = saved_foreach_keys;
         self.break_continue_depth = saved_break_continue_depth;
         self.finally_break_continue_bases = saved_finally_break_continue_bases;
+        self.in_callable_body = saved_in_callable_body;
 
         result
     }

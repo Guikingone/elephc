@@ -80,3 +80,34 @@ fn test_type_checker_recovery_collects_multiple_method_return_errors() {
         all.iter().map(|error| error.message.clone()).collect::<Vec<_>>(),
     );
 }
+
+/// Verifies that when an assignment's right-hand side fails to type-check inside a function
+/// body, the assigned variable is still bound (error recovery), so later uses do not produce
+/// spurious "Undefined variable" cascades behind the real right-hand-side error. The real
+/// error is still reported; only the cascade is suppressed.
+#[test]
+fn test_assignment_rhs_error_does_not_cascade_undefined_variable() {
+    let error = check_source_full(
+        "<?php
+        function needs_str(string $s): bool { return strlen($s) > 0; }
+        function probe(int $argc): string {
+            $flag = needs_str($argc);
+            if ($flag) { return \"a\"; }
+            return $flag ? \"b\" : \"c\";
+        }",
+    )
+    .unwrap_err();
+    let all = error.flatten();
+    assert!(
+        all.iter().any(|error| error.message.contains("expects Str, got Int")),
+        "expected the real right-hand-side type error, got {:?}",
+        all.iter().map(|error| error.message.clone()).collect::<Vec<_>>(),
+    );
+    assert!(
+        !all
+            .iter()
+            .any(|error| error.message.contains("Undefined variable: $flag")),
+        "the recovered binding must suppress the undefined-variable cascade, got {:?}",
+        all.iter().map(|error| error.message.clone()).collect::<Vec<_>>(),
+    );
+}

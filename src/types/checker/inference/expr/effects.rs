@@ -82,6 +82,12 @@ impl Checker {
                 if matches!(op, BinOp::And | BinOp::Or) {
                     let mut right_env = env.clone();
                     self.infer_type_with_assignment_effects(right, &mut right_env)?;
+                    // The right operand is evaluated in a cloned environment so its ordinary
+                    // assignments cannot leak past the short-circuit. By-reference call outputs,
+                    // however, follow PHP's non-flow-sensitive undefined-variable behavior: a call
+                    // appearing here defines its out-parameter for code that runs after the
+                    // condition (and inside a guarded `if`/`while` body). Re-surface those.
+                    self.define_nested_by_ref_outputs(right, env);
                     Ok(PhpType::Bool)
                 } else {
                     self.infer_type_with_assignment_effects(right, env)?;
@@ -96,6 +102,9 @@ impl Checker {
                     let mut default_env = env.clone();
                     self.infer_type_with_assignment_effects(default, &mut default_env)?
                 };
+                // By-reference call outputs in the (possibly cloned) default branch define their
+                // out-parameters for later code, mirroring PHP's undefined-variable behavior.
+                self.define_nested_by_ref_outputs(default, env);
                 if Self::union_contains_void(&value_ty) {
                     Ok(wider_type_syntactic(
                         &self.strip_void_from_union(&value_ty),
@@ -113,6 +122,9 @@ impl Checker {
                     let mut default_env = env.clone();
                     self.infer_type_with_assignment_effects(default, &mut default_env)?
                 };
+                // By-reference call outputs in the (possibly cloned) default branch define their
+                // out-parameters for later code, mirroring PHP's undefined-variable behavior.
+                self.define_nested_by_ref_outputs(default, env);
                 Ok(wider_type_syntactic(&value_ty, &default_ty))
             }
             ExprKind::Ternary {
@@ -125,6 +137,10 @@ impl Checker {
                 let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
                 let mut else_env = env.clone();
                 let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
+                // By-reference call outputs in the cloned branches define their out-parameters for
+                // later code, mirroring PHP's undefined-variable behavior.
+                self.define_nested_by_ref_outputs(then_expr, env);
+                self.define_nested_by_ref_outputs(else_expr, env);
                 Ok(wider_type_syntactic(&then_ty, &else_ty))
             }
             ExprKind::ArrayLiteral(elems) => {
@@ -151,8 +167,13 @@ impl Checker {
                     let mut arm_env = env.clone();
                     for condition in conditions {
                         self.infer_type_with_assignment_effects(condition, &mut arm_env)?;
+                        // By-reference call outputs in cloned arm conditions define their
+                        // out-parameters for later code, mirroring PHP's undefined-variable
+                        // behavior.
+                        self.define_nested_by_ref_outputs(condition, env);
                     }
                     let arm_ty = self.infer_type_with_assignment_effects(result, &mut arm_env)?;
+                    self.define_nested_by_ref_outputs(result, env);
                     result_ty = Some(match result_ty {
                         Some(current) => wider_type_syntactic(&current, &arm_ty),
                         None => arm_ty,
@@ -162,6 +183,7 @@ impl Checker {
                     let mut default_env = env.clone();
                     let default_ty =
                         self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    self.define_nested_by_ref_outputs(default, env);
                     result_ty = Some(match result_ty {
                         Some(current) => wider_type_syntactic(&current, &default_ty),
                         None => default_ty,

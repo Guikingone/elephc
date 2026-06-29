@@ -119,6 +119,12 @@ pub(crate) struct Checker {
     /// depth means `$this` is allowed even outside a class method: such a
     /// closure can be bound to an object later via `Closure::bind` / `bindTo`.
     pub closure_depth: usize,
+    /// Whether type-checking is currently inside a function, method, or closure body
+    /// (set while `with_local_storage_context` runs). Top-level statement checking mutates
+    /// the shared `global_env`, which method bodies clone, so assignment error-recovery must
+    /// only synthesize a fallback binding inside a body — a top-level synthetic binding would
+    /// otherwise leak into every method body and corrupt unrelated typed code.
+    pub in_callable_body: bool,
     /// Extern function declarations (e.g. `extern "C" { function foo(): void; }`).
     pub extern_functions: HashMap<String, ExternFunctionSig>,
     /// Extern class (C struct) declarations keyed by canonical name.

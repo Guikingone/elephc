@@ -435,3 +435,73 @@ fn test_reference_assign_property_to_property_preserves_target_register() {
     );
     assert_eq!(out, "shared|shared\n");
 }
+
+/// A user static method by-reference out-parameter used directly as an `if` condition defines
+/// the caller's argument variable for the guarded block (PHP definite-assignment semantics).
+#[test]
+fn test_by_ref_output_in_if_condition_defines_variable() {
+    let out = compile_and_run(
+        "<?php
+        class P { static function pm($s, &$m = null) { $m = [$s]; return 1; } }
+        if (P::pm(\"hi\", $x)) { echo $x[0]; }",
+    );
+    assert_eq!(out, "hi");
+}
+
+/// A by-reference out-parameter call nested as the right operand of `&&` inside an `if`
+/// condition still defines the caller's variable: the call ran (the whole condition was
+/// truthy), so the guarded block sees the variable. The right operand is otherwise evaluated
+/// in a discarded clone, so this exercises the re-surfacing of by-reference outputs.
+#[test]
+fn test_by_ref_output_nested_in_and_condition_defines_variable() {
+    let out = compile_and_run(
+        "<?php
+        class P { static function pm($s, &$m = null) { $m = [$s]; return 1; } }
+        $cond = true;
+        if ($cond && P::pm(\"hey\", $x)) { echo $x[0]; }",
+    );
+    assert_eq!(out, "hey");
+}
+
+/// A by-reference out-parameter call inside a `while` condition (nested through `&&`) defines
+/// the caller's variable inside the loop body.
+#[test]
+fn test_by_ref_output_in_while_condition_defines_variable() {
+    let out = compile_and_run(
+        "<?php
+        class P { static function pm($s, &$m = null) { $m = [$s]; return 1; } }
+        $n = 1;
+        while ($n-- > 0 && P::pm(\"loop\", $m)) { echo $m[0]; }",
+    );
+    assert_eq!(out, "loop");
+}
+
+/// A by-reference out-parameter call used as a `switch` case label defines the caller's
+/// variable inside the matching case body.
+#[test]
+fn test_by_ref_output_in_switch_case_label_defines_variable() {
+    let out = compile_and_run(
+        "<?php
+        class P { static function pm($s, &$m = null) { $m = [$s]; return true; } }
+        switch (true) {
+            case P::pm(\"z\", $m):
+                echo $m[0];
+                break;
+        }",
+    );
+    assert_eq!(out, "z");
+}
+
+/// A previously-undefined plain variable passed to a user function's by-reference parameter
+/// becomes defined after the call (PHP defines the variable through the reference), so a later
+/// read sees the written value.
+#[test]
+fn test_user_function_by_ref_output_defines_previously_undefined_variable() {
+    let out = compile_and_run(
+        "<?php
+        function fill(&$out) { $out = 42; return 1; }
+        fill($z);
+        echo $z;",
+    );
+    assert_eq!(out, "42");
+}

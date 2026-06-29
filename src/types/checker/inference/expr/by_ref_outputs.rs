@@ -92,6 +92,46 @@ impl Checker {
         Self::sig_undefined_by_ref_variable_outputs(sig, args, env)
     }
 
+    /// Returns a best-effort static return type for a call or `new` expression used as an
+    /// assignment right-hand side that failed to type-check, so error recovery can bind the
+    /// assigned variable to an accurate type instead of the infectious `Mixed`.
+    ///
+    /// Binding the declared return type (rather than defaulting to `Mixed`) keeps a recovered
+    /// binding from spuriously widening unrelated typed code that later observes the variable —
+    /// e.g. an object handle that would otherwise become `Mixed` and trip a typed-parameter check.
+    /// Returns `None` when the callee or its return type cannot be resolved, in which case the
+    /// caller falls back to `Mixed`.
+    pub(crate) fn assignment_recovery_call_return_type(&self, value: &Expr) -> Option<PhpType> {
+        match &value.kind {
+            ExprKind::FunctionCall { name, .. } => {
+                let canonical = self.canonical_function_name_folded(name.as_str())?;
+                self.functions
+                    .get(&canonical)
+                    .map(|sig| sig.return_type.clone())
+            }
+            ExprKind::StaticMethodCall {
+                receiver, method, ..
+            } => {
+                let class_name = self.resolve_static_receiver_class_for_by_ref(receiver)?;
+                let class_info = self.classes.get(&class_name)?;
+                let method_key = php_symbol_key(method);
+                class_info
+                    .static_methods
+                    .get(&method_key)
+                    .or_else(|| class_info.methods.get(&method_key))
+                    .map(|sig| sig.return_type.clone())
+            }
+            ExprKind::NewObject { class_name, .. } => {
+                let class_key = php_symbol_key(class_name.as_str().trim_start_matches('\\'));
+                self.classes
+                    .keys()
+                    .find(|existing| php_symbol_key(existing) == class_key)
+                    .map(|class| PhpType::Object(class.clone()))
+            }
+            _ => None,
+        }
+    }
+
     /// Resolves a static-call receiver to a concrete class name for by-reference output lookup,
     /// mirroring static method metadata resolution: `Named` resolves case-insensitively,
     /// `self`/`static` use the enclosing class, and `parent` uses its parent.
@@ -113,6 +153,193 @@ impl Checker {
                 .as_ref()
                 .and_then(|current| self.classes.get(current))
                 .and_then(|class_info| class_info.parent.clone()),
+        }
+    }
+
+    /// Defines, in `env`, every by-reference output variable produced by a call appearing
+    /// anywhere within `expr`, inserting each currently-undefined caller variable.
+    ///
+    /// `infer_type_with_assignment_effects` evaluates the right operand of `&&`/`||` and each
+    /// ternary/`match`/`??` branch in a cloned environment so ordinary assignments cannot leak
+    /// past a short-circuit boundary. By-reference out-parameters, however, follow PHP's
+    /// (non-flow-sensitive) undefined-variable behavior: once such a call appears in an
+    /// expression, the bound variable is treated as defined in the code that runs afterwards
+    /// (and inside the guarded body of an `if`/`while`). This re-surfaces those definitions from
+    /// the cloned branches into the real environment so later uses are not reported as undefined.
+    pub(crate) fn define_nested_by_ref_outputs(&self, expr: &Expr, env: &mut TypeEnv) {
+        let mut outputs = Vec::new();
+        self.collect_nested_by_ref_outputs(expr, env, &mut outputs);
+        for (var, ty) in outputs {
+            env.entry(var).or_insert(ty);
+        }
+    }
+
+    /// Recursively collects `(name, type)` definitions for currently-undefined by-reference
+    /// output variables of every call within `expr`, appending them to `out`.
+    ///
+    /// User functions and static methods resolve their outputs through the shared signature
+    /// helpers; the builtin `preg_match`/`preg_replace` output arguments are handled inline to
+    /// mirror the dedicated builtin paths. Instance-method receivers are not resolved here (that
+    /// would require mutable inference), but their sub-expressions are still scanned. Closure
+    /// bodies are intentionally skipped: their by-reference calls bind variables in the closure
+    /// scope, not the caller's.
+    fn collect_nested_by_ref_outputs(
+        &self,
+        expr: &Expr,
+        env: &TypeEnv,
+        out: &mut Vec<(String, PhpType)>,
+    ) {
+        match &expr.kind {
+            ExprKind::FunctionCall { name, args } => {
+                let expanded = crate::types::call_args::expand_static_assoc_spread_args(args);
+                out.extend(self.function_call_by_ref_outputs(name, &expanded, env));
+                let builtin = name.trim_start_matches('\\');
+                if builtin.eq_ignore_ascii_case("preg_match") {
+                    push_builtin_preg_output(
+                        expanded.get(2),
+                        PhpType::Array(Box::new(PhpType::Str)),
+                        env,
+                        out,
+                    );
+                } else if builtin.eq_ignore_ascii_case("preg_replace") {
+                    push_builtin_preg_output(expanded.get(4), PhpType::Int, env, out);
+                }
+                for arg in &expanded {
+                    self.collect_nested_by_ref_outputs(arg, env, out);
+                }
+            }
+            ExprKind::StaticMethodCall {
+                receiver,
+                method,
+                args,
+            } => {
+                let expanded = crate::types::call_args::expand_static_assoc_spread_args(args);
+                out.extend(self.static_method_call_by_ref_outputs(receiver, method, &expanded, env));
+                for arg in &expanded {
+                    self.collect_nested_by_ref_outputs(arg, env, out);
+                }
+            }
+            ExprKind::MethodCall { object, args, .. }
+            | ExprKind::NullsafeMethodCall { object, args, .. } => {
+                self.collect_nested_by_ref_outputs(object, env, out);
+                for arg in args {
+                    self.collect_nested_by_ref_outputs(arg, env, out);
+                }
+            }
+            ExprKind::BinaryOp { left, right, .. }
+            | ExprKind::NullCoalesce {
+                value: left,
+                default: right,
+            }
+            | ExprKind::ShortTernary {
+                value: left,
+                default: right,
+            }
+            | ExprKind::Pipe {
+                value: left,
+                callable: right,
+            } => {
+                self.collect_nested_by_ref_outputs(left, env, out);
+                self.collect_nested_by_ref_outputs(right, env, out);
+            }
+            ExprKind::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                self.collect_nested_by_ref_outputs(condition, env, out);
+                self.collect_nested_by_ref_outputs(then_expr, env, out);
+                self.collect_nested_by_ref_outputs(else_expr, env, out);
+            }
+            ExprKind::Match {
+                subject,
+                arms,
+                default,
+            } => {
+                self.collect_nested_by_ref_outputs(subject, env, out);
+                for (conditions, result) in arms {
+                    for condition in conditions {
+                        self.collect_nested_by_ref_outputs(condition, env, out);
+                    }
+                    self.collect_nested_by_ref_outputs(result, env, out);
+                }
+                if let Some(default) = default {
+                    self.collect_nested_by_ref_outputs(default, env, out);
+                }
+            }
+            ExprKind::InstanceOf { value, .. } => {
+                self.collect_nested_by_ref_outputs(value, env, out);
+            }
+            ExprKind::Negate(inner)
+            | ExprKind::Not(inner)
+            | ExprKind::BitNot(inner)
+            | ExprKind::Throw(inner)
+            | ExprKind::ErrorSuppress(inner)
+            | ExprKind::Print(inner)
+            | ExprKind::Clone(inner)
+            | ExprKind::Spread(inner)
+            | ExprKind::Cast { expr: inner, .. }
+            | ExprKind::PtrCast { expr: inner, .. }
+            | ExprKind::BufferNew { len: inner, .. }
+            | ExprKind::YieldFrom(inner) => {
+                self.collect_nested_by_ref_outputs(inner, env, out);
+            }
+            ExprKind::Assignment {
+                target,
+                value,
+                result_target,
+                ..
+            } => {
+                self.collect_nested_by_ref_outputs(target, env, out);
+                self.collect_nested_by_ref_outputs(value, env, out);
+                if let Some(result_target) = result_target {
+                    self.collect_nested_by_ref_outputs(result_target, env, out);
+                }
+            }
+            ExprKind::ListUnpack { value, .. } => {
+                self.collect_nested_by_ref_outputs(value, env, out);
+            }
+            ExprKind::ArrayAccess { array, index } => {
+                self.collect_nested_by_ref_outputs(array, env, out);
+                self.collect_nested_by_ref_outputs(index, env, out);
+            }
+            ExprKind::ArrayLiteral(elems) => {
+                for elem in elems {
+                    self.collect_nested_by_ref_outputs(elem, env, out);
+                }
+            }
+            ExprKind::ArrayLiteralAssoc(pairs) => {
+                for (key, value) in pairs {
+                    self.collect_nested_by_ref_outputs(key, env, out);
+                    self.collect_nested_by_ref_outputs(value, env, out);
+                }
+            }
+            ExprKind::NamedArg { value, .. } => {
+                self.collect_nested_by_ref_outputs(value, env, out);
+            }
+            ExprKind::PropertyAccess { object, .. }
+            | ExprKind::NullsafePropertyAccess { object, .. } => {
+                self.collect_nested_by_ref_outputs(object, env, out);
+            }
+            ExprKind::DynamicPropertyAccess { object, property }
+            | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+                self.collect_nested_by_ref_outputs(object, env, out);
+                self.collect_nested_by_ref_outputs(property, env, out);
+            }
+            ExprKind::ExprCall { callee, args } => {
+                self.collect_nested_by_ref_outputs(callee, env, out);
+                for arg in args {
+                    self.collect_nested_by_ref_outputs(arg, env, out);
+                }
+            }
+            ExprKind::ClosureCall { args, .. }
+            | ExprKind::NewObject { args, .. }
+            | ExprKind::NewScopedObject { args, .. } => {
+                for arg in args {
+                    self.collect_nested_by_ref_outputs(arg, env, out);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -158,5 +385,30 @@ impl Checker {
             outputs.push((var_name.clone(), inserted_ty));
         }
         outputs
+    }
+}
+
+/// Pushes the by-reference output of a builtin `preg_match`/`preg_replace` argument when it is a
+/// plain `$variable` (or a named argument wrapping one) that is not yet defined in `env`.
+fn push_builtin_preg_output(
+    arg: Option<&Expr>,
+    ty: PhpType,
+    env: &TypeEnv,
+    out: &mut Vec<(String, PhpType)>,
+) {
+    if let Some(var) = arg.and_then(builtin_preg_output_var) {
+        if !env.contains_key(var) {
+            out.push((var.clone(), ty));
+        }
+    }
+}
+
+/// Returns the variable name used as a builtin `preg_match`/`preg_replace` output argument,
+/// unwrapping a named-argument wrapper.
+fn builtin_preg_output_var(arg: &Expr) -> Option<&String> {
+    match &arg.kind {
+        ExprKind::Variable(name) => Some(name),
+        ExprKind::NamedArg { value, .. } => builtin_preg_output_var(value),
+        _ => None,
     }
 }

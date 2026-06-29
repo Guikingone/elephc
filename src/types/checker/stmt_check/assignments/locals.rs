@@ -152,7 +152,28 @@ pub(super) fn check_assign(
             }
         }
     }
-    let ty = ty_result?;
+    let ty = match ty_result {
+        Ok(ty) => ty,
+        Err(err) => {
+            // Error recovery: a plain `$name = <rhs>` assignment unconditionally binds `$name`
+            // in PHP, even when `<rhs>` fails to type-check (the right-hand-side error is a
+            // separate, already-reported problem). Bind the variable so later uses are not
+            // reported as spurious "Undefined variable" cascades behind the real error, which is
+            // still propagated here. Prefer the callee's declared return type over the infectious
+            // `Mixed` so the recovered binding does not spuriously widen unrelated typed code that
+            // later observes the variable. Only fill in a missing binding; never clobber an
+            // existing type narrowed by an earlier assignment. Restricted to function/method/
+            // closure bodies: a top-level synthetic binding would leak into the shared `global_env`
+            // that every method body clones and corrupt unrelated typed code there.
+            if checker.in_callable_body && !env.contains_key(name) {
+                let fallback = checker
+                    .assignment_recovery_call_return_type(value)
+                    .unwrap_or(PhpType::Mixed);
+                env.insert(name.to_string(), fallback);
+            }
+            return Err(err);
+        }
+    };
     metadata_result?;
     merge_local_assignment_type(checker, name, &ty, span, env)
 }
