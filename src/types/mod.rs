@@ -16,6 +16,10 @@ pub mod traits;
 mod array_keys;
 /// PHP array extension integer constants.
 pub(crate) mod array_constants;
+/// PHP error-level and debug-backtrace integer constants (E_ERROR, E_ALL, DEBUG_BACKTRACE_*).
+pub(crate) mod error_constants;
+/// PHP runtime and version integer constants (PHP_MAJOR_VERSION, PHP_INT_SIZE, etc.).
+pub(crate) mod php_runtime_constants;
 /// Call argument planning: named, positional, and spread semantics.
 pub(crate) mod call_args;
 /// Fiber/stack introspection for async and coroutine analysis.

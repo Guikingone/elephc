@@ -368,9 +368,15 @@ fn is_builtin_global_constant(name: &str) -> bool {
     ) {
         return true;
     }
-    // Shared source-of-truth slices for JSON and stream/socket constants.
+    // Shared source-of-truth slices for JSON, stream/socket, error-level, and PHP runtime constants.
     crate::types::json_constants::JSON_INT_CONSTANTS
         .iter()
         .chain(crate::types::stream_constants::STREAM_INT_CONSTANTS.iter())
+        .chain(crate::types::error_constants::ERROR_INT_CONSTANTS.iter())
+        .chain(crate::types::php_runtime_constants::PHP_RUNTIME_INT_CONSTANTS.iter())
         .any(|(constant_name, _)| *constant_name == name)
+        || matches!(
+            name,
+            "PHP_SAPI" | "PHP_VERSION" | "PHP_OS_FAMILY"
+        )
 }

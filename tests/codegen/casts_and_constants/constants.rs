@@ -88,3 +88,61 @@ fn test_fq_infinity() {
     let out = compile_and_run("<?php $x = \\INF; echo is_infinite($x) ? \"inf\" : \"finite\";");
     assert_eq!(out, "inf");
 }
+
+/// Verifies `E_USER_DEPRECATED` error-level constant equals 16384 (PHP standard value).
+/// Fixture: `<?php echo E_USER_DEPRECATED;` → expects `16384`.
+#[test]
+fn test_e_user_deprecated() {
+    let out = compile_and_run("<?php echo E_USER_DEPRECATED;");
+    assert_eq!(out, "16384");
+}
+
+/// Verifies `E_WARNING` error-level constant equals 2 and `E_ALL` is a positive integer.
+/// Fixture tests both in one shot.
+#[test]
+fn test_e_warning_and_e_all() {
+    let out = compile_and_run("<?php echo E_WARNING, \"|\", E_ALL > 0 ? 1 : 0;");
+    assert_eq!(out, "2|1");
+}
+
+/// Verifies several error-level constants: E_ERROR=1, E_NOTICE=8, E_USER_ERROR=256.
+#[test]
+fn test_error_level_constants() {
+    let out = compile_and_run("<?php echo E_ERROR, \"|\", E_NOTICE, \"|\", E_USER_ERROR;");
+    assert_eq!(out, "1|8|256");
+}
+
+/// Verifies `DEBUG_BACKTRACE_IGNORE_ARGS=2` and `DEBUG_BACKTRACE_PROVIDE_OBJECT=1`.
+#[test]
+fn test_debug_backtrace_constants() {
+    let out = compile_and_run("<?php echo DEBUG_BACKTRACE_IGNORE_ARGS, \"|\", DEBUG_BACKTRACE_PROVIDE_OBJECT;");
+    assert_eq!(out, "2|1");
+}
+
+/// Verifies `PHP_SAPI` equals `"cli"` for elephc-compiled programs.
+#[test]
+fn test_php_sapi() {
+    let out = compile_and_run("<?php echo PHP_SAPI;");
+    assert_eq!(out, "cli");
+}
+
+/// Verifies `PHP_MAJOR_VERSION=8`, `PHP_MINOR_VERSION=4`, `PHP_VERSION_ID=80400`.
+#[test]
+fn test_php_version_constants() {
+    let out = compile_and_run("<?php echo PHP_MAJOR_VERSION, \"|\", PHP_MINOR_VERSION, \"|\", PHP_VERSION_ID;");
+    assert_eq!(out, "8|4|80400");
+}
+
+/// Verifies `PHP_INT_SIZE` equals 8 (64-bit LP64 target).
+#[test]
+fn test_php_int_size() {
+    let out = compile_and_run("<?php echo PHP_INT_SIZE;");
+    assert_eq!(out, "8");
+}
+
+/// Verifies `PHP_VERSION` is a non-empty string starting with "8.".
+#[test]
+fn test_php_version_string() {
+    let out = compile_and_run("<?php echo strlen(PHP_VERSION) > 0 ? 1 : 0;");
+    assert_eq!(out, "1");
+}

@@ -13,7 +13,9 @@ use std::collections::{HashMap, HashSet};
 use crate::codegen::platform::Platform;
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::date_constants::DATE_INT_CONSTANTS;
+use crate::types::error_constants::ERROR_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
+use crate::types::php_runtime_constants::PHP_RUNTIME_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::PhpType;
@@ -68,6 +70,17 @@ impl Checker {
         for (name, _value) in DATE_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
+        for (name, _value) in ERROR_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in PHP_RUNTIME_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        // PHP_SAPI, PHP_VERSION, and PHP_OS_FAMILY are string constants.
+        // Their type is registered here; their values are materialized in prescan.
+        constants.insert("PHP_SAPI".to_string(), PhpType::Str);
+        constants.insert("PHP_VERSION".to_string(), PhpType::Str);
+        constants.insert("PHP_OS_FAMILY".to_string(), PhpType::Str);
 
         Self {
             target_platform,

@@ -14,7 +14,9 @@ use crate::codegen::platform::Platform;
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::date_constants::DATE_INT_CONSTANTS;
+use crate::types::error_constants::ERROR_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
+use crate::types::php_runtime_constants::{PHP_RUNTIME_INT_CONSTANTS, PHP_SAPI_STR, PHP_VERSION_STR};
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::{PhpType, TypeEnv};
@@ -138,6 +140,33 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    for (name, value) in ERROR_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in PHP_RUNTIME_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    constants.insert(
+        "PHP_SAPI".to_string(),
+        (ExprKind::StringLiteral(PHP_SAPI_STR.to_string()), PhpType::Str),
+    );
+    constants.insert(
+        "PHP_VERSION".to_string(),
+        (ExprKind::StringLiteral(PHP_VERSION_STR.to_string()), PhpType::Str),
+    );
+    constants.insert(
+        "PHP_OS_FAMILY".to_string(),
+        (
+            ExprKind::StringLiteral(target_platform.php_os_family().to_string()),
+            PhpType::Str,
+        ),
+    );
     collect_constant_decls(program, &mut constants);
     constants
 }
