@@ -2,7 +2,7 @@
 title: "str_repeat()"
 description: "Lowers `str_repeat(string, times)` through the shared runtime helper."
 sidebar:
-  order: 378
+  order: 380
 ---
 
 ## str_repeat()

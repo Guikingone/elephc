@@ -320,6 +320,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "time" => system::lower_time(ctx, inst),
         "usleep" => system::lower_usleep(ctx, inst),
         "exit" | "die" => system::lower_exit(ctx, inst),
+        "serialize" | "unserialize" => system::lower_serialize_unsupported(ctx, inst),
         "getenv" => system::lower_getenv(ctx, inst),
         "putenv" => system::lower_putenv(ctx, inst),
         "php_uname" => system::lower_php_uname(ctx, inst),

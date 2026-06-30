@@ -6404,6 +6404,11 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         // non-literal flag.
         "microtime" => Some(PhpType::Union(vec![PhpType::Str, PhpType::Float])),
         "spl_object_hash" | "dechex" | "decoct" | "decbin" | "preg_last_error_msg" => Some(PhpType::Str),
+        // serialize() returns string; unserialize() returns mixed. Both lower to a deferred
+        // runtime fatal stub, but the materialized result type must still be correct so callers
+        // type-check and the EIR backend places the result value consistently.
+        "serialize" => Some(PhpType::Str),
+        "unserialize" => Some(PhpType::Mixed),
         "spl_autoload" | "spl_autoload_call" | "usleep" => Some(PhpType::Void),
         "stream_context_create" | "stream_context_get_default" | "stream_context_set_default" => {
             Some(PhpType::stream_resource())

@@ -278,8 +278,10 @@ sidebar:
 | [`php_uname()`](./builtins/misc/php_uname.md) | `(string $mode): string` | `string` |
 | [`phpversion()`](./builtins/misc/phpversion.md) | `(string $extension = null): string` | `string` |
 | [`print_r()`](./builtins/misc/print_r.md) | `(...$values): void` | `void` |
+| [`serialize()`](./builtins/misc/serialize.md) | `(mixed $value): string` | `string` |
 | [`setlocale()`](./builtins/misc/setlocale.md) | `(int $category, string $locales, ...$rest): mixed` | `mixed` |
 | [`trigger_deprecation()`](./builtins/misc/trigger_deprecation.md) | `(mixed $package, mixed $version, mixed $message, ...$args): void` | `void` |
+| [`unserialize()`](./builtins/misc/unserialize.md) | `(mixed $data, mixed $options): mixed` | `mixed` |
 | [`unset()`](./builtins/misc/unset.md) | `(mixed $var, ...$vars): void` | `void` |
 | [`var_dump()`](./builtins/misc/var_dump.md) | `(...$values): void` | `void` |
 | [`ptr()`](./builtins/pointer/ptr.md) | `(mixed $value): mixed` | `mixed` |

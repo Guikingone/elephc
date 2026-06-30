@@ -169,6 +169,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
         system::emit_preg_split(emitter);
     }
     system::emit_match_unhandled(emitter);
+    system::emit_serialize_unsupported(emitter);
 
     // Closed-world constant/enum registry lookups backing non-literal
     // defined()/constant()/enum_exists(). The shared binary search and the three

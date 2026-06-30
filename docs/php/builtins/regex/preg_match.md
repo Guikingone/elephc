@@ -2,7 +2,7 @@
 title: "preg_match()"
 description: "Lowers `preg_match(pattern, subject, &matches?, flags?, offset?)` via the regex runtime."
 sidebar:
-  order: 300
+  order: 302
 ---
 
 ## preg_match()

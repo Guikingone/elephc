@@ -78,18 +78,41 @@ impl Checker {
                 Ok(value_ty)
             }
             ExprKind::BinaryOp { left, op, right } => {
-                self.infer_type_with_assignment_effects(left, env)?;
                 if matches!(op, BinOp::And | BinOp::Or) {
-                    let mut right_env = env.clone();
-                    self.infer_type_with_assignment_effects(right, &mut right_env)?;
-                    // The right operand is evaluated in a cloned environment so its ordinary
-                    // assignments cannot leak past the short-circuit. By-reference call outputs,
-                    // however, follow PHP's non-flow-sensitive undefined-variable behavior: a call
-                    // appearing here defines its out-parameter for code that runs after the
-                    // condition (and inside a guarded `if`/`while` body). Re-surface those.
-                    self.define_nested_by_ref_outputs(right, env);
+                    // PHP evaluates a short-circuit chain left-to-right, so an assignment in an
+                    // earlier operand is visible to every later operand of the same chain (e.g.
+                    // `... && ($w = strspn(...)) < n && '#' !== $line[$w]`). The chain is
+                    // left-associative, so the naive "clone the env for the right operand" approach
+                    // hides a nested operand's assignments from the operands that run after it.
+                    //
+                    // Flatten the chain into its source-order operands instead. Only operands joined
+                    // by the *same* operator are flattened: in a pure `&&` chain every earlier
+                    // operand definitely ran when a later one runs, and likewise for a pure `||`
+                    // chain (each later operand runs only after the earlier ones evaluated to
+                    // false). Mixing `&&` and `||` is left as a nested boundary, handled by the
+                    // recursive call, so we never treat a conditionally-skipped operand's
+                    // assignment as visible.
+                    //
+                    // The first operand always runs, so it is processed into `env` and its ordinary
+                    // assignments stay definitely-assigned past the chain. The remaining operands
+                    // are threaded through a single cloned `chain_env` for left-to-right visibility
+                    // without leaking their (conditionally evaluated) assignments to the outer
+                    // scope. By-reference call outputs in later operands are still surfaced to `env`,
+                    // matching PHP's non-flow-sensitive undefined-variable behavior for out-params.
+                    let mut operands = Vec::new();
+                    flatten_short_circuit_operands(expr, op, &mut operands);
+                    let mut iter = operands.into_iter();
+                    if let Some(first) = iter.next() {
+                        self.infer_type_with_assignment_effects(first, env)?;
+                    }
+                    let mut chain_env = env.clone();
+                    for operand in iter {
+                        self.infer_type_with_assignment_effects(operand, &mut chain_env)?;
+                        self.define_nested_by_ref_outputs(operand, env);
+                    }
                     Ok(PhpType::Bool)
                 } else {
+                    self.infer_type_with_assignment_effects(left, env)?;
                     self.infer_type_with_assignment_effects(right, env)?;
                     self.infer_type(expr, env)
                 }
@@ -163,15 +186,24 @@ impl Checker {
             } => {
                 self.infer_type_with_assignment_effects(subject, env)?;
                 let mut result_ty = None;
+                // PHP evaluates match-arm conditions top-to-bottom in a single shared scope, so an
+                // assignment in one arm's condition (e.g. `!$length = strlen(...) => ...`) is visible
+                // to the conditions of every later arm (`$length < 4 => ...`). Thread one
+                // `condition_env` through all arm conditions in source order to model that, instead
+                // of giving each arm a fresh clone of the outer env. Each arm body then sees the
+                // conditions evaluated up to and including its own arm, but body assignments stay in
+                // a per-arm clone so they do not leak to sibling arms (only one body ever runs) or
+                // past the match. Ordinary condition assignments are likewise not surfaced to the
+                // outer `env`, keeping post-match definite-assignment conservative.
+                let mut condition_env = env.clone();
                 for (conditions, result) in arms {
-                    let mut arm_env = env.clone();
                     for condition in conditions {
-                        self.infer_type_with_assignment_effects(condition, &mut arm_env)?;
-                        // By-reference call outputs in cloned arm conditions define their
-                        // out-parameters for later code, mirroring PHP's undefined-variable
-                        // behavior.
+                        self.infer_type_with_assignment_effects(condition, &mut condition_env)?;
+                        // By-reference call outputs in arm conditions define their out-parameters
+                        // for later code, mirroring PHP's undefined-variable behavior.
                         self.define_nested_by_ref_outputs(condition, env);
                     }
+                    let mut arm_env = condition_env.clone();
                     let arm_ty = self.infer_type_with_assignment_effects(result, &mut arm_env)?;
                     self.define_nested_by_ref_outputs(result, env);
                     result_ty = Some(match result_ty {
@@ -180,7 +212,7 @@ impl Checker {
                     });
                 }
                 if let Some(default) = default {
-                    let mut default_env = env.clone();
+                    let mut default_env = condition_env.clone();
                     let default_ty =
                         self.infer_type_with_assignment_effects(default, &mut default_env)?;
                     self.define_nested_by_ref_outputs(default, env);
@@ -431,6 +463,30 @@ fn callable_target_is_preg_replace_callback(target: &CallableTarget) -> bool {
         target,
         CallableTarget::Function(name) if php_symbol_key(name.as_str()) == "preg_replace_callback"
     )
+}
+
+/// Collects, in source order, the operands of a left-associative short-circuit chain joined by `op`.
+///
+/// `op` is the chain's logical operator (`&&` or `||`). The function recurses into nested
+/// `BinaryOp` nodes only while they use the *same* operator, appending every other expression as a
+/// leaf operand. Mixing `&&` and `||` therefore stops the flattening at the operator boundary: a
+/// differently-joined sub-expression becomes a single leaf, so a conditionally-skipped operand's
+/// assignments are never threaded into operands that run after it. The resulting order matches
+/// PHP's left-to-right evaluation order, which the caller relies on for definite-assignment.
+fn flatten_short_circuit_operands<'a>(expr: &'a Expr, op: &BinOp, out: &mut Vec<&'a Expr>) {
+    if let ExprKind::BinaryOp {
+        left,
+        op: inner_op,
+        right,
+    } = &expr.kind
+    {
+        if inner_op == op {
+            flatten_short_circuit_operands(left, op, out);
+            flatten_short_circuit_operands(right, op, out);
+            return;
+        }
+    }
+    out.push(expr);
 }
 
 /// Returns the variable name used as `preg_match()`'s output `$matches` argument.

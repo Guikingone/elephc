@@ -2,7 +2,7 @@
 title: "trigger_deprecation() — internals"
 description: "Compiler internals for trigger_deprecation(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 274
+  order: 275
 ---
 
 ## `trigger_deprecation()` — internals

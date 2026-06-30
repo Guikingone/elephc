@@ -2,7 +2,7 @@
 title: "iterator_to_array()"
 description: "Lowers `iterator_to_array()` over arrays, `iterable`, and Traversable objects."
 sidebar:
-  order: 307
+  order: 309
 ---
 
 ## iterator_to_array()

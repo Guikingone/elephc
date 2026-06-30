@@ -2,7 +2,7 @@
 title: "strcspn() — internals"
 description: "Compiler internals for strcspn(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 387
+  order: 389
 ---
 
 ## `strcspn()` — internals

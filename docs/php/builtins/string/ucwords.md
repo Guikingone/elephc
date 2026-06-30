@@ -2,7 +2,7 @@
 title: "ucwords()"
 description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
 sidebar:
-  order: 400
+  order: 402
 ---
 
 ## ucwords()

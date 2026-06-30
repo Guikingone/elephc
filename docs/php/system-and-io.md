@@ -340,3 +340,14 @@ var_export(['a' => 1, 'b' => [2, 3]]);
 //   ),
 // )
 ```
+
+## Serialization
+
+| Function | Signature | Description |
+|---|---|---|
+| `serialize()` | `serialize($value): string` | Recognized but not yet fully implemented. |
+| `unserialize()` | `unserialize($data, $options = []): mixed` | Recognized but not yet fully implemented. |
+
+`serialize()` and `unserialize()` are recognized as global builtins so that code referencing them — including unqualified calls inside a namespace that fall back to the global functions, the exact pattern used by `symfony/yaml` — type-checks and compiles. `function_exists("serialize")` and `function_exists("unserialize")` return `true`, and both names resolve case-insensitively.
+
+The PHP serialization format itself is **not yet implemented**. Actually calling either function at runtime terminates the process with `Fatal error: serialize()/unserialize() is not yet supported`. This is a deferred follow-up; until it lands, only reference these functions on code paths that are not executed (e.g. behind an opt-in flag that your program never enables).

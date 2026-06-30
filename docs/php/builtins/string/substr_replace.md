@@ -2,7 +2,7 @@
 title: "substr_replace()"
 description: "Lowers `substr_replace(string, replacement, start, length?)`."
 sidebar:
-  order: 397
+  order: 399
 ---
 
 ## substr_replace()

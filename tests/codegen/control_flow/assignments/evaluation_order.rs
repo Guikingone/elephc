@@ -239,3 +239,66 @@ echo ":" . Registry::$items[1] . ":" . $i;
     assert_eq!(out, "1:1:1");
 }
 
+/// Verifies that a variable assigned in one `match` arm condition is visible (with the
+/// correct value) to the conditions of later arms. PHP evaluates match-arm conditions
+/// top-to-bottom in a single scope, so `$len`, assigned in the first arm's condition, must
+/// resolve in the `$len < 0` and `$len < 10` conditions of the following arms. This is the
+/// symfony/yaml `Inline::dump()` pattern (`!$length = \strlen(...) => 'c', $length < 4 => ...`).
+#[test]
+fn test_match_arm_condition_assignment_visible_in_later_arms() {
+    let out = compile_and_run(
+        r#"<?php
+function classify(int $n): string {
+    return match (true) {
+        ($len = $n) > 100 => 'huge',
+        $len < 0 => 'neg',
+        $len < 10 => 'small',
+        default => 'mid',
+    };
+}
+echo classify(5), "|", classify(-3), "|", classify(200), "|", classify(50);
+"#,
+    );
+    assert_eq!(out, "small|neg|huge|mid");
+}
+
+/// Verifies that a variable assigned in an earlier operand of a short-circuit `&&` chain is
+/// visible (with the correct value) to later operands of the same chain. PHP evaluates `&&`
+/// left-to-right, so `$sum`, assigned in the second operand, must resolve in the third operand
+/// `$sum < 100`. This is the symfony/yaml `Parser` pattern
+/// (`... && ($whitespaces = strspn(...)) < n && '#' !== $line[$whitespaces]`).
+#[test]
+fn test_and_chain_operand_assignment_visible_in_later_operand() {
+    let out = compile_and_run(
+        r#"<?php
+function check(int $a, int $b): string {
+    if ($a > 0 && ($sum = $a + $b) > 5 && $sum < 100) {
+        return "in-range";
+    }
+    return "out";
+}
+echo check(3, 4), "|", check(3, 1), "|", check(50, 60);
+"#,
+    );
+    assert_eq!(out, "in-range|out|out");
+}
+
+/// Verifies the same left-to-right visibility for a `||` chain: in a pure `||` chain each later
+/// operand runs only after the earlier operands have been evaluated, so `$d`, assigned in the
+/// second operand, must resolve (with the right value) in the third operand `$d === 30`.
+#[test]
+fn test_or_chain_operand_assignment_visible_in_later_operand() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $a): string {
+    if ($a < 0 || ($d = $a * 10) > 50 || $d === 30) {
+        return "hit";
+    }
+    return "miss";
+}
+echo pick(-1), "|", pick(6), "|", pick(3), "|", pick(1);
+"#,
+    );
+    assert_eq!(out, "hit|hit|hit|miss");
+}
+

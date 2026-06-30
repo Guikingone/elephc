@@ -21,6 +21,30 @@ expect_builtin_arity_error!(
     "exit() takes 0 or 1 arguments"
 );
 
+expect_builtin_arity_error!(
+    test_error_serialize_no_args,
+    "<?php serialize();",
+    "serialize() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_serialize_too_many_args,
+    "<?php $a = 1; $b = 2; serialize($a, $b);",
+    "serialize() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_unserialize_no_args,
+    "<?php unserialize();",
+    "unserialize() takes 1 or 2 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_unserialize_too_many_args,
+    "<?php $a = \"x\"; unserialize($a, [], 3);",
+    "unserialize() takes 1 or 2 arguments"
+);
+
 /// Verifies that referencing an undefined constant produces the expected "Undefined constant" error.
 #[test]
 fn test_error_undefined_constant() {

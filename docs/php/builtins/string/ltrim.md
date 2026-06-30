@@ -2,7 +2,7 @@
 title: "ltrim()"
 description: "Lowers `trim()`/`ltrim()`/`rtrim()`/`chop()` for default and explicit masks."
 sidebar:
-  order: 359
+  order: 361
 ---
 
 ## ltrim()

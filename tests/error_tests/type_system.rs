@@ -144,6 +144,46 @@ fn test_error_undefined_variable() {
     expect_error("<?php echo $x;", "Undefined variable: $x");
 }
 
+/// Verifies the short-circuit flow analysis stays sound: a variable assigned only in the
+/// right operand of a `||` chain is NOT definitely-assigned after the chain (the left operand
+/// may be true, skipping the assignment), so reading it afterwards must still error.
+#[test]
+fn test_error_or_right_operand_assignment_not_defined_after_chain() {
+    expect_error(
+        "<?php function f(bool $c): void { if ($c || ($y = 5)) {} echo $y; }",
+        "Undefined variable: $y",
+    );
+}
+
+/// Verifies the same soundness for `&&`: a variable assigned only in the right operand of an
+/// `&&` chain is not definitely-assigned after the chain (the left operand may be false,
+/// short-circuiting before the assignment), so reading it afterwards must still error.
+#[test]
+fn test_error_and_right_operand_assignment_not_defined_after_chain() {
+    expect_error(
+        "<?php function f(bool $c): void { if ($c && ($z = 5)) {} echo $z; }",
+        "Undefined variable: $z",
+    );
+}
+
+/// Verifies that a variable assigned in one `match` arm's body is not visible in a sibling
+/// arm's body: only one arm body ever runs, so the assignment is not definitely-assigned in
+/// the other arms. Reading it in a sibling arm must still error.
+#[test]
+fn test_error_match_arm_body_assignment_not_visible_in_sibling_arm() {
+    expect_error(
+        r#"<?php
+function g(int $n): string {
+    return match ($n) {
+        1 => ($x = 'a'),
+        2 => $x,
+        default => 'd',
+    };
+}"#,
+        "Undefined variable: $x",
+    );
+}
+
 /// Verifies that reassigning an *inferred* local to an incompatible type is accepted under the
 /// gradual-typing model: the local widens to a boxed union instead of erroring.
 /// Input: `$x = 42; $x = "hello";` — `$x` widens from `Int` to `Union([Int, Str])`.

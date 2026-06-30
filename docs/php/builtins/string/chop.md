@@ -2,7 +2,7 @@
 title: "chop()"
 description: "chop() — string builtin supported by Elephc."
 sidebar:
-  order: 328
+  order: 330
 ---
 
 ## chop()

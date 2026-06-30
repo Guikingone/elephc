@@ -2,7 +2,7 @@
 title: "usleep() — internals"
 description: "Compiler internals for usleep(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 302
+  order: 304
 ---
 
 ## `usleep()` — internals
@@ -21,7 +21,7 @@ sidebar:
 ## Runtime helpers
 
 The following runtime helpers are referenced:
-- `__rt_getenv`
+- `__rt_serialize_unsupported`
 
 ## Signature summary
 

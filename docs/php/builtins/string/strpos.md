@@ -2,7 +2,7 @@
 title: "strpos()"
 description: "Lowers `strpos(haystack, needle[, offset])` with optional starting offset."
 sidebar:
-  order: 388
+  order: 390
 ---
 
 ## strpos()

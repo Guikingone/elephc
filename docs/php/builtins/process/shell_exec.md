@@ -2,7 +2,7 @@
 title: "shell_exec()"
 description: "Lowers `shell_exec(command)` by capturing shell stdout through the shared runtime helper."
 sidebar:
-  order: 296
+  order: 298
 ---
 
 ## shell_exec()

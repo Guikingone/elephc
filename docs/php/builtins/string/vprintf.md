@@ -2,7 +2,7 @@
 title: "vprintf()"
 description: "Lowers `vprintf(format, values)` as `vsprintf()` followed by stdout emission."
 sidebar:
-  order: 403
+  order: 405
 ---
 
 ## vprintf()

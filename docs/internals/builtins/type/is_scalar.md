@@ -2,7 +2,7 @@
 title: "is_scalar() — internals"
 description: "Compiler internals for is_scalar(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 429
+  order: 431
 ---
 
 ## `is_scalar()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:1802](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L1802) (`lower_is_scalar`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:1803](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L1803) (`lower_is_scalar`)
 - **Function symbol**: `lower_is_scalar()`
 
 

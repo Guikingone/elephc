@@ -91,6 +91,16 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         | "urlencode" | "urldecode" | "rawurlencode" | "rawurldecode"
         | "base64_encode" => Some(fixed(&["string"])),
         "base64_decode" => Some(optional(&["string", "strict"], 1, vec![bool_lit(false)])),
+        // serialize(mixed $value): string and unserialize(string $data, array $options = []): mixed.
+        // The signatures must match PHP so named arguments and the optional `$options` default
+        // resolve correctly. The runtime lowering is a deferred fatal stub (see the EIR backend),
+        // but the call surface is fully recognized so call sites type-check and resolve.
+        "serialize" => Some(fixed(&["value"])),
+        "unserialize" => Some(optional(
+            &["data", "options"],
+            1,
+            vec![Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy())],
+        )),
         "gzcompress" => Some(optional(&["data", "level"], 1, vec![int_lit(-1)])),
         "gzdeflate" => Some(optional(&["data", "level"], 1, vec![int_lit(-1)])),
         "gzinflate" => Some(optional(&["data", "max_length"], 1, vec![int_lit(0)])),
@@ -760,6 +770,11 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             &[PhpType::Mixed],
             PhpType::Str,
         )),
+        // NOTE: serialize/unserialize are intentionally NOT first-class callable. They lower to a
+        // deferred runtime fatal stub with no `_fn_serialize`/`_fn_unserialize` callable wrapper, so
+        // listing them here would emit an undefined invoker reference in any program that materializes
+        // builtin callable wrappers (same constraint as is_array/is_object/is_scalar above). Direct
+        // calls are fully recognized; first-class/string-callback use is not.
         "printf" => return_typed_first_class_builtin_sig(name, PhpType::Int),
         "grapheme_strrev" => Some(typed_first_class_builtin_sig(
             name,

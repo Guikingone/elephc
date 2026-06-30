@@ -2,7 +2,7 @@
 title: "system()"
 description: "Lowers `system(command)` through libc `system()` and returns the legacy empty string result."
 sidebar:
-  order: 298
+  order: 300
 ---
 
 ## system()

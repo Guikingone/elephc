@@ -52,6 +52,37 @@ pub(super) fn check_builtin(
             }
             Ok(Some(checker.normalize_union_type(vec![PhpType::Str, PhpType::Bool])))
         }
+        "serialize" => {
+            // `serialize(mixed $value): string`. elephc recognizes the call so symfony/yaml
+            // and similar code type-check, but the runtime lowering is a deferred fatal stub
+            // (the full PHP serialization format is not yet implemented). In symfony/yaml the
+            // only call site is gated behind the opt-in `Yaml::DUMP_OBJECT` dump flag, so a
+            // normal parse never reaches it. The argument is accepted as `mixed`.
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "serialize() takes exactly 1 argument",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Str))
+        }
+        "unserialize" => {
+            // `unserialize(string $data, array $options = []): mixed`. Recognized for the same
+            // reason as serialize(): the only symfony/yaml call site is the opt-in `!php/object`
+            // parse tag, which a normal parse never reaches. The runtime lowering is a deferred
+            // fatal stub. Accepts the serialized string plus the optional options array.
+            if args.is_empty() || args.len() > 2 {
+                return Err(CompileError::new(
+                    span,
+                    "unserialize() takes 1 or 2 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Mixed))
+        }
         "trigger_deprecation" => {
             // `trigger_deprecation(string $package, string $version, string $message,
             // mixed ...$args): void` is Symfony's symfony/deprecation-contracts global.

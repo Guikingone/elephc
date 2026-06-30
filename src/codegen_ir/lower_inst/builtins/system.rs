@@ -654,6 +654,24 @@ pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     Ok(())
 }
 
+/// Lowers `serialize()`/`unserialize()` as a deferred runtime fatal stub.
+///
+/// elephc recognizes these PHP builtins so call sites type-check and resolve (notably the
+/// namespace-fallback calls in symfony/yaml), but the full PHP serialization format is not yet
+/// implemented. Both call sites in symfony/yaml are runtime-dead under a normal parse — `serialize`
+/// only fires under the opt-in `Yaml::DUMP_OBJECT` dump flag and `unserialize` only under the
+/// opt-in `!php/object` parse tag — so lowering to a process-terminating fatal helper is sound:
+/// reaching it means the program exercised an unsupported path. `__rt_serialize_unsupported` writes
+/// a diagnostic to stderr and exits, so the call never returns; the trailing result store is dead
+/// code kept only to satisfy the result-placement contract for the SSA value.
+pub(super) fn lower_serialize_unsupported(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    abi::emit_call_label(ctx.emitter, "__rt_serialize_unsupported");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `getenv(name)` through the target-aware environment lookup helper.
 pub(super) fn lower_getenv(
     ctx: &mut FunctionContext<'_>,

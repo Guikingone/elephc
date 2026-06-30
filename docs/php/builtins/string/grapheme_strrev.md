@@ -2,7 +2,7 @@
 title: "grapheme_strrev()"
 description: "Lowers `grapheme_strrev()` and boxes its `string|false` result as `Mixed`."
 sidebar:
-  order: 335
+  order: 337
 ---
 
 ## grapheme_strrev()

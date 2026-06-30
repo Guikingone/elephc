@@ -2,7 +2,7 @@
 title: "base64_decode()"
 description: "Lowers `base64_decode(string $string, bool $strict = false)`."
 sidebar:
-  order: 324
+  order: 326
 ---
 
 ## base64_decode()

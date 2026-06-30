@@ -2,7 +2,7 @@
 title: "setlocale()"
 description: "Lowers `setlocale($category, $locale, ...)` as a minimal sound stub."
 sidebar:
-  order: 270
+  order: 271
 ---
 
 ## setlocale()

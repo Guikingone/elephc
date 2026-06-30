@@ -2,7 +2,7 @@
 title: "iterator_count()"
 description: "Lowers `iterator_count()` over arrays, `iterable`, and Traversable objects."
 sidebar:
-  order: 306
+  order: 308
 ---
 
 ## iterator_count()

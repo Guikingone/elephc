@@ -2,7 +2,7 @@
 title: "decbin()"
 description: "Lowers an integer-valued builtin that delegates directly to a named runtime helper."
 sidebar:
-  order: 331
+  order: 333
 ---
 
 ## decbin()

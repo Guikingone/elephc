@@ -2,7 +2,7 @@
 title: "dechex()"
 description: "Lowers an integer-valued builtin that delegates directly to a named runtime helper."
 sidebar:
-  order: 332
+  order: 334
 ---
 
 ## dechex()

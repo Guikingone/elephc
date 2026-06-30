@@ -2,7 +2,7 @@
 title: "preg_last_error_msg()"
 description: "Lowers `preg_last_error_msg()` — always returns the static string `\"No error\"`."
 sidebar:
-  order: 366
+  order: 368
 ---
 
 ## preg_last_error_msg()

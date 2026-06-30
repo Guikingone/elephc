@@ -2582,7 +2582,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_boolval",
-      "codegen_line": 1355,
+      "codegen_line": 1356,
       "notes": [
         "Lowers `boolval()` using the same concrete scalar PHP truthiness rules as `IsTruthy`."
       ],
@@ -3256,7 +3256,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_constant",
-      "codegen_line": 888,
+      "codegen_line": 889,
       "notes": [
         "Lowers `constant($name)` against the closed-world constant registry.",
         "Literal names that resolve at compile time are folded during EIR lowering and",
@@ -3428,7 +3428,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_count",
-      "codegen_line": 1153,
+      "codegen_line": 1154,
       "notes": [
         "Lowers `count(array)` for concrete array values by reading the runtime length header."
       ],
@@ -3790,7 +3790,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_define",
-      "codegen_line": 565,
+      "codegen_line": 566,
       "notes": [
         "Lowers `define(\"NAME\", value)` with the legacy duplicate-name runtime guard."
       ],
@@ -3841,7 +3841,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_defined",
-      "codegen_line": 869,
+      "codegen_line": 870,
       "notes": [
         "Lowers `defined($name)` against the closed-world constant registry.",
         "A constant string name folds to a static boolean (the cheap literal path",
@@ -4129,7 +4129,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_empty",
-      "codegen_line": 1387,
+      "codegen_line": 1388,
       "notes": [
         "Lowers `empty()` for concrete scalar and array-like operands."
       ],
@@ -4168,7 +4168,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_end",
-      "codegen_line": 1193,
+      "codegen_line": 1194,
       "notes": [
         "Lowers `end($array)` by reading the last element of a boxed Mixed array.",
         "The IR lowering boxes the array argument into a Mixed cell (or passes an",
@@ -4214,7 +4214,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/system.rs",
       "codegen_function": "lower_exec",
-      "codegen_line": 703,
+      "codegen_line": 721,
       "notes": [
         "Lowers `exec(command)` by capturing shell stdout through the shared runtime helper."
       ],
@@ -5441,7 +5441,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_floatval",
-      "codegen_line": 1325,
+      "codegen_line": 1326,
       "notes": [
         "Lowers `floatval()` for concrete scalar operands."
       ],
@@ -6521,7 +6521,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_extension_loaded",
-      "codegen_line": 994,
+      "codegen_line": 995,
       "notes": [
         "Lowers `extension_loaded(\"name\")` to a compile-time constant boolean.",
         "In the closed-world AOT model the loaded-extension set is fixed at compile",
@@ -6563,7 +6563,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_function_exists",
-      "codegen_line": 952,
+      "codegen_line": 953,
       "notes": [
         "Lowers `function_exists(\"name\")` for compile-time string names.",
         "Recognizes user functions, externs, catalog builtins, and the date/time procedural aliases",
@@ -6675,7 +6675,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_get_debug_type",
-      "codegen_line": 752,
+      "codegen_line": 753,
       "notes": [
         "Lowers `get_debug_type(value)` \u2014 PHP 8's type-name helper. Like `gettype()` but with the short",
         "scalar spellings (`int`/`float`/`string`/`bool`/`null`) and an object's class name in place of",
@@ -7082,7 +7082,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/system.rs",
       "codegen_function": "lower_getenv",
-      "codegen_line": 658,
+      "codegen_line": 676,
       "notes": [
         "Lowers `getenv(name)` through the target-aware environment lookup helper."
       ],
@@ -7128,7 +7128,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_gettype",
-      "codegen_line": 628,
+      "codegen_line": 629,
       "notes": [
         "Lowers `gettype(value)` for statically concrete PHP types."
       ],
@@ -8417,7 +8417,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_intval",
-      "codegen_line": 1292,
+      "codegen_line": 1293,
       "notes": [
         "Lowers `intval()` for concrete scalar operands."
       ],
@@ -8631,7 +8631,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_callable",
-      "codegen_line": 1038,
+      "codegen_line": 1039,
       "notes": [
         "Lowers `is_callable(value)` through static lookup or runtime callable-shape helpers."
       ],
@@ -8859,7 +8859,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_array",
-      "codegen_line": 1771,
+      "codegen_line": 1772,
       "notes": [
         "Lowers `is_array()`: true for statically-known arrays/hashes, or a boxed Mixed/Union value",
         "whose runtime tag is an indexed (4) or associative (5) array. An `iterable`-typed value is",
@@ -8898,7 +8898,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_object",
-      "codegen_line": 1786,
+      "codegen_line": 1787,
       "notes": [
         "Lowers `is_object()`: true for statically-known objects, or a boxed Mixed/Union value whose",
         "runtime tag is an object (6)."
@@ -8936,7 +8936,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_scalar",
-      "codegen_line": 1802,
+      "codegen_line": 1803,
       "notes": [
         "Lowers `is_scalar()`: true for int/float/string/bool, a non-null tagged scalar, or a boxed",
         "Mixed/Union value whose runtime tag is int (0), string (1), float (2), or bool (3). Null,",
@@ -9168,7 +9168,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_iterable",
-      "codegen_line": 1563,
+      "codegen_line": 1564,
       "notes": [
         "Lowers `is_iterable()` for concrete values and boxed Mixed payloads."
       ],
@@ -10997,7 +10997,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/system.rs",
       "codegen_function": "lower_passthru",
-      "codegen_line": 727,
+      "codegen_line": 745,
       "notes": [
         "Lowers `passthru(command)` through libc `system()` for direct stdout passthrough."
       ],
@@ -11090,7 +11090,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/system.rs",
       "codegen_function": "lower_php_uname",
-      "codegen_line": 685,
+      "codegen_line": 703,
       "notes": [
         "Lowers `php_uname(mode?)` through the target-aware uname runtime helper."
       ],
@@ -11129,7 +11129,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_phpversion",
-      "codegen_line": 855,
+      "codegen_line": 856,
       "notes": [
         "Lowers `phpversion()` as the compiler package version string."
       ],
@@ -11168,7 +11168,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_pi",
-      "codegen_line": 612,
+      "codegen_line": 613,
       "notes": [
         "Lowers `pi()` as the same data-section float constant used by the legacy backend."
       ],
@@ -12315,7 +12315,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/system.rs",
       "codegen_function": "lower_putenv",
-      "codegen_line": 670,
+      "codegen_line": 688,
       "notes": [
         "Lowers `putenv(assignment)` by copying the environment string into persistent heap storage."
       ],
@@ -13112,6 +13112,41 @@
   },
   {
     "area": "Misc",
+    "canonical_name": "serialize",
+    "description": "",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": null,
+      "codegen_function": null,
+      "codegen_line": null,
+      "notes": [],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/types/signatures.rs",
+      "sig_line": null
+    },
+    "name": "serialize",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "serialize",
+    "sub_area": "Misc"
+  },
+  {
+    "area": "Misc",
     "canonical_name": "setlocale",
     "description": "Lowers `setlocale($category, $locale, ...)` as a minimal sound stub.",
     "in_catalog": true,
@@ -13121,7 +13156,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_setlocale",
-      "codegen_line": 1208,
+      "codegen_line": 1209,
       "notes": [
         "Lowers `setlocale($category, $locale, ...)` as a minimal sound stub.",
         "elephc has no locale machinery, so the call changes nothing and returns the",
@@ -13263,7 +13298,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/system.rs",
       "codegen_function": "lower_shell_exec",
-      "codegen_line": 711,
+      "codegen_line": 729,
       "notes": [
         "Lowers `shell_exec(command)` by capturing shell stdout through the shared runtime helper."
       ],
@@ -14596,7 +14631,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_strlen",
-      "codegen_line": 1262,
+      "codegen_line": 1263,
       "notes": [
         "Lowers `strlen()` by coercing string-like values and returning the byte length."
       ],
@@ -15337,7 +15372,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/system.rs",
       "codegen_function": "lower_system",
-      "codegen_line": 719,
+      "codegen_line": 737,
       "notes": [
         "Lowers `system(command)` through libc `system()` and returns the legacy empty string result."
       ],
@@ -18640,6 +18675,48 @@
   },
   {
     "area": "Misc",
+    "canonical_name": "unserialize",
+    "description": "",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": null,
+      "codegen_function": null,
+      "codegen_line": null,
+      "notes": [],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/types/signatures.rs",
+      "sig_line": null
+    },
+    "name": "unserialize",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "options",
+          "optional": true,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "unserialize",
+    "sub_area": "Misc"
+  },
+  {
+    "area": "Misc",
     "canonical_name": "unset",
     "description": "Unsets the given variables.",
     "in_catalog": true,
@@ -18769,7 +18846,7 @@
         "Lowers `usleep(microseconds)` through the target's C library symbol."
       ],
       "runtime_helpers": [
-        "__rt_getenv"
+        "__rt_serialize_unsupported"
       ],
       "sig_arm": null,
       "sig_file": null,

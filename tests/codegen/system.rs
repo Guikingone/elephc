@@ -3199,3 +3199,52 @@ echo "done";
     );
     assert_eq!(out, "fx|done");
 }
+
+/// Verifies that `serialize()` and `unserialize()` are recognized as global builtins:
+/// `function_exists()` reports both, and an unqualified call inside a namespace resolves
+/// through the namespace-to-global builtin fallback (the exact symfony/yaml scenario) so
+/// the program compiles. The actual calls are guarded behind a runtime-unknown branch so
+/// the deferred fatal stub is never executed.
+#[test]
+fn test_serialize_unserialize_recognized_and_namespaced_resolution() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Symfony\Component\Yaml;
+
+echo function_exists("serialize") ? "1" : "0";
+echo function_exists("unserialize") ? "1" : "0";
+if ($argc === 999999) {
+    echo serialize($argc);
+    $r = unserialize("payload");
+    echo $r;
+}
+echo "|ok";
+"#,
+    );
+    assert_eq!(out, "11|ok");
+}
+
+/// Verifies that actually calling `serialize()` terminates the process with the deferred
+/// fatal diagnostic. `$argc` is runtime-unknown so the optimizer cannot prune the call,
+/// forcing the `__rt_serialize_unsupported` fatal stub to run and exit non-zero.
+#[test]
+fn test_serialize_runtime_fatal_stub() {
+    let err = compile_and_run_expect_failure("<?php $x = serialize($argc); echo $x;");
+    assert!(
+        err.contains("serialize()/unserialize() is not yet supported"),
+        "unexpected stderr: {err}"
+    );
+}
+
+/// Verifies that calling `unserialize()` triggers the same deferred fatal stub, including
+/// through case-insensitive builtin lookup (`UnSerialize`), which PHP allows for function names.
+#[test]
+fn test_unserialize_runtime_fatal_stub_case_insensitive() {
+    let err = compile_and_run_expect_failure(
+        "<?php $s = $argv[0]; $r = UnSerialize($s); echo $r;",
+    );
+    assert!(
+        err.contains("serialize()/unserialize() is not yet supported"),
+        "unexpected stderr: {err}"
+    );
+}

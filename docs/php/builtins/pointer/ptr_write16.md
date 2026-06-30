@@ -2,7 +2,7 @@
 title: "ptr_write16()"
 description: "Lowers `ptr_write16(pointer, value)` by writing one 16-bit word through a checked pointer."
 sidebar:
-  order: 285
+  order: 287
 ---
 
 ## ptr_write16()

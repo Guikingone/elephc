@@ -2,7 +2,7 @@
 title: "sleep()"
 description: "Lowers `sleep(seconds)` through the target's C library symbol."
 sidebar:
-  order: 297
+  order: 299
 ---
 
 ## sleep()

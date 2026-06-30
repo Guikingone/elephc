@@ -2,7 +2,7 @@
 title: "trigger_deprecation()"
 description: "Lowers `trigger_deprecation(package, version, message, ...args)` as a sound no-op."
 sidebar:
-  order: 271
+  order: 272
 ---
 
 ## trigger_deprecation()

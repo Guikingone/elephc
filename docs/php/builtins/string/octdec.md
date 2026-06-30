@@ -2,7 +2,7 @@
 title: "octdec()"
 description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
 sidebar:
-  order: 363
+  order: 365
 ---
 
 ## octdec()

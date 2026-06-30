@@ -2,7 +2,7 @@
 title: "setlocale() — internals"
 description: "Compiler internals for setlocale(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 273
+  order: 274
 ---
 
 ## `setlocale()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:1208](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L1208) (`lower_setlocale`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:1209](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L1209) (`lower_setlocale`)
 - **Function symbol**: `lower_setlocale()`
 
 

@@ -2,7 +2,7 @@
 title: "is_iterable()"
 description: "Lowers `is_iterable()` for concrete values and boxed Mixed payloads."
 sidebar:
-  order: 421
+  order: 423
 ---
 
 ## is_iterable()

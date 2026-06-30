@@ -2,7 +2,7 @@
 title: "hexdec()"
 description: "Lowers `hexdec(hex_string)` through the runtime hex-string parser."
 sidebar:
-  order: 349
+  order: 351
 ---
 
 ## hexdec()

@@ -2,7 +2,7 @@
 title: "vsprintf()"
 description: "Lowers `vsprintf(format, values)` through the array-to-sprintf runtime bridge."
 sidebar:
-  order: 404
+  order: 406
 ---
 
 ## vsprintf()
