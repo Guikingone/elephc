@@ -31,34 +31,48 @@ pub(super) fn lower_print_r(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     store_if_result(ctx, inst)
 }
 
-/// Lowers `var_dump(value)` for concrete scalar/resource values and array/hash shells.
+/// Lowers `var_dump(value, ...values)` for concrete scalar/resource values and array/hash shells.
+///
+/// PHP's `var_dump` is variadic: each argument is dumped independently in source order.
+/// Each operand is loaded and rendered through the same per-value dump path used by the
+/// single-argument form, so `var_dump(1, "two", 3.5)` emits three separate dump outputs.
 pub(super) fn lower_var_dump(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "var_dump", 1)?;
+    if inst.operands.is_empty() {
+        return Err(CodegenIrError::invalid_module(
+            "var_dump expected at least 1 arg, got 0".to_string(),
+        ));
+    }
     ctx.emitter.blank();
     ctx.emitter.comment("var_dump()");
-    let value = expect_operand(inst, 0)?;
-    let ty = loaded_php_semantic_type(ctx, value)?;
-    match &ty {
-        PhpType::Int => emit_var_dump_int(ctx),
-        PhpType::TaggedScalar => emit_var_dump_tagged_scalar(ctx),
-        PhpType::Float => emit_var_dump_float(ctx),
-        PhpType::Str => emit_var_dump_string(ctx),
-        PhpType::Bool => emit_var_dump_bool(ctx),
-        PhpType::Resource(_) => emit_var_dump_resource(ctx),
-        PhpType::Void | PhpType::Never => {
-            emit_var_dump_null(ctx);
-            Ok(())
+    for (index, operand) in inst.operands.iter().enumerate() {
+        let value = *operand;
+        if index > 0 {
+            ctx.emitter.blank();
+            ctx.emitter.comment("var_dump() next argument");
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
-            emit_var_dump_array(ctx, &ty)
-        }
-        PhpType::Object(_) => emit_var_dump_dynamic_object(ctx),
-        PhpType::Mixed | PhpType::Union(_) => emit_var_dump_mixed(ctx),
-        other => Err(CodegenIrError::unsupported(format!(
-            "var_dump for PHP type {:?}",
-            other
-        ))),
-    }?;
+        let ty = loaded_php_semantic_type(ctx, value)?;
+        match &ty {
+            PhpType::Int => emit_var_dump_int(ctx),
+            PhpType::TaggedScalar => emit_var_dump_tagged_scalar(ctx),
+            PhpType::Float => emit_var_dump_float(ctx),
+            PhpType::Str => emit_var_dump_string(ctx),
+            PhpType::Bool => emit_var_dump_bool(ctx),
+            PhpType::Resource(_) => emit_var_dump_resource(ctx),
+            PhpType::Void | PhpType::Never => {
+                emit_var_dump_null(ctx);
+                Ok(())
+            }
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+                emit_var_dump_array(ctx, &ty)
+            }
+            PhpType::Object(_) => emit_var_dump_dynamic_object(ctx),
+            PhpType::Mixed | PhpType::Union(_) => emit_var_dump_mixed(ctx),
+            other => Err(CodegenIrError::unsupported(format!(
+                "var_dump for PHP type {:?}",
+                other
+            ))),
+        }?;
+    }
     store_if_result(ctx, inst)
 }
 

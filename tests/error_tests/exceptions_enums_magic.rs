@@ -417,3 +417,30 @@ fn test_error_enum_method_undefined_variable() {
         "Undefined variable: $missing",
     );
 }
+
+/// Verifies that passing an array to a backed enum `from()` is rejected at compile time.
+#[test]
+fn test_error_enum_from_rejects_array() {
+    expect_error(
+        "<?php enum Color: int { case Red = 1; } Color::from([1]);",
+        "Type error: Color::from expects int, got array<int>",
+    );
+}
+
+/// Verifies that passing null to a backed enum `from()` is rejected at compile time.
+#[test]
+fn test_error_enum_from_rejects_null() {
+    expect_error(
+        "<?php enum Color: int { case Red = 1; } Color::from(null);",
+        "Type error: Color::from expects int, got null",
+    );
+}
+
+/// Verifies that passing an object to a backed enum `tryFrom()` is rejected at compile time.
+#[test]
+fn test_error_enum_try_from_rejects_object() {
+    expect_error(
+        "<?php enum Color: int { case Red = 1; } class O {} Color::tryFrom(new O());",
+        "Type error: Color::tryfrom expects int, got O",
+    );
+}

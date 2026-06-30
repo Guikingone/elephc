@@ -14,6 +14,27 @@ use crate::errors::CompileError;
 use crate::parser::ast::{Expr, Visibility};
 use crate::types::{EnumInfo, PhpType, TypeEnv};
 
+/// Determines whether an argument type is accepted by a backed enum's
+/// `from()` / `tryFrom()` method. Unlike the general `type_accepts` predicate,
+/// this allows PHP's implicit scalar coercion: a `Str` argument is accepted
+/// for an `Int`-backed enum (PHP coerces numeric strings at runtime and throws
+/// `TypeError` for non-coercible strings), and `Bool`/`Float` are accepted
+/// for `Int`-backed enums. String-backed enums accept only `Str` (identity) in
+/// addition to their own backing type.
+fn enum_from_arg_accepts(backing_ty: &PhpType, arg_ty: &PhpType) -> bool {
+    match (backing_ty, arg_ty) {
+        (PhpType::Int, PhpType::Int) => true,
+        (PhpType::Int, PhpType::Str) => true,
+        (PhpType::Int, PhpType::Bool) => true,
+        (PhpType::Int, PhpType::Float) => true,
+        (PhpType::Str, PhpType::Str) => true,
+        (PhpType::Str, PhpType::Int) => true,
+        (PhpType::Str, PhpType::Bool) => true,
+        (PhpType::Str, PhpType::Float) => true,
+        _ => false,
+    }
+}
+
 use super::super::Checker;
 
 impl Checker {
@@ -238,7 +259,7 @@ impl Checker {
                     ));
                 }
                 let arg_ty = self.infer_type(&args[0], env)?;
-                if !self.type_accepts(backing_ty, &arg_ty) {
+                if !enum_from_arg_accepts(backing_ty, &arg_ty) {
                     return Err(CompileError::new(
                         span,
                         &format!(

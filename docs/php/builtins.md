@@ -273,11 +273,11 @@ sidebar:
 | [`isset()`](./builtins/misc/isset.md) | `(mixed $var, ...$vars): bool` | `bool` |
 | [`php_uname()`](./builtins/misc/php_uname.md) | `(string $mode): string` | `string` |
 | [`phpversion()`](./builtins/misc/phpversion.md) | `(string $extension = null): string` | `string` |
-| [`print_r()`](./builtins/misc/print_r.md) | `(...$values): void` | `void` |
+| [`print_r()`](./builtins/misc/print_r.md) | `(mixed $value): void` | `void` |
 | [`serialize()`](./builtins/misc/serialize.md) | `(mixed $value): string` | `string` |
 | [`unserialize()`](./builtins/misc/unserialize.md) | `(mixed $data, mixed $options): mixed` | `mixed` |
 | [`unset()`](./builtins/misc/unset.md) | `(mixed $var, ...$vars): void` | `void` |
-| [`var_dump()`](./builtins/misc/var_dump.md) | `(...$values): void` | `void` |
+| [`var_dump()`](./builtins/misc/var_dump.md) | `(mixed $value, mixed ...$values): void` | `void` |
 | [`ptr()`](./builtins/pointer/ptr.md) | `(mixed $value): mixed` | `mixed` |
 | [`ptr_get()`](./builtins/pointer/ptr_get.md) | `(pointer $pointer): int` | `int` |
 | [`ptr_is_null()`](./builtins/pointer/ptr_is_null.md) | `(pointer $pointer): bool` | `bool` |

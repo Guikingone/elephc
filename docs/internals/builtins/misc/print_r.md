@@ -25,13 +25,13 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function print_r(...$values): void
+function print_r(mixed $value): void
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes no arguments.
-- **Variadic**: collects excess arguments into `$values`.
+- **Arity**: takes exactly 1 argument.
+- The optional `bool $return` second argument (PHP's string-return mode) is not yet supported.
 
 ## Cross-references
 

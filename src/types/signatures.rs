@@ -104,9 +104,10 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "intval" | "floatval" | "boolval" | "gettype" | "is_bool" | "is_null"
         | "is_float" | "is_int" | "is_iterable" | "is_string" | "is_numeric"
         | "is_array" | "is_object" | "is_scalar"
-        | "empty" | "var_dump" | "print_r" => {
+        | "empty" | "print_r" => {
             Some(fixed(&["value"]))
         }
+        "var_dump" => Some(variadic(&["value"], "values")),
         "isset" => Some(variadic(&["var"], "vars")),
         "unset" => Some(variadic(&["var"], "vars")),
         "settype" => {

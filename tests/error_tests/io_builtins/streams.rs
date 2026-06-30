@@ -12,7 +12,7 @@ use super::*;
 /// Verifies var_dump() produces correct error when called with no arguments.
 #[test]
 fn test_error_var_dump_wrong_args() {
-    expect_error("<?php var_dump();", "var_dump() takes exactly 1 argument");
+    expect_error("<?php var_dump();", "var_dump() takes at least 1 argument");
 }
 
 /// Verifies print_r() produces correct error when called with no arguments.

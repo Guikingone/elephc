@@ -16,7 +16,8 @@ sidebar:
 
 ### Lowering notes
 
-- Lowers `var_dump(value)` for concrete scalar/resource values and array/hash shells.
+- Lowers `var_dump(value, ...values)` for concrete scalar/resource values and array/hash shells.
+- Each operand is dumped independently in source order through the per-value dump path, so a variadic call emits one dump output per argument.
 
 ## Runtime helpers
 
@@ -25,12 +26,12 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function var_dump(...$values): void
+function var_dump(mixed $value, mixed ...$values): void
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes no arguments.
+- **Arity**: takes at least 1 argument.
 - **Variadic**: collects excess arguments into `$values`.
 
 ## Cross-references

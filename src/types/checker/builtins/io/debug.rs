@@ -17,7 +17,9 @@ use super::super::super::Checker;
 
 /// Type-checks `var_dump` and `print_r`.
 ///
-/// Both take exactly one argument of any type and return `void`.
+/// `var_dump` is variadic (`mixed $value, mixed ...$values`) and accepts one or more
+/// arguments, dumping each in source order. `print_r` accepts a single value and
+/// returns `void` (the optional `$return` mode is not yet supported).
 pub(super) fn check_builtin(
     checker: &mut Checker,
     name: &str,
@@ -26,11 +28,23 @@ pub(super) fn check_builtin(
     env: &TypeEnv,
 ) -> BuiltinResult {
     match name {
-        "var_dump" | "print_r" => {
+        "var_dump" => {
+            if args.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "var_dump() takes at least 1 argument",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Void))
+        }
+        "print_r" => {
             if args.len() != 1 {
                 return Err(CompileError::new(
                     span,
-                    &format!("{}() takes exactly 1 argument", name),
+                    "print_r() takes exactly 1 argument",
                 ));
             }
             checker.infer_type(&args[0], env)?;

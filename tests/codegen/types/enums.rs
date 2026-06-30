@@ -535,3 +535,115 @@ fn test_enum_name_in_interpolation() {
     );
     assert_eq!(out, "name=High value=9");
 }
+
+/// Verifies `Color::from('1')` coerces a numeric string to int and returns `Color::Red`.
+#[test]
+fn test_enum_from_numeric_string_coercion() {
+    let out = compile_and_run(
+        "<?php
+        enum Color: int {
+            case Red = 1;
+            case Green = 2;
+        }
+        $c = Color::from('1');
+        echo $c === Color::Red;
+        ",
+    );
+    assert_eq!(out, "1");
+}
+
+/// Verifies `Color::from('x')` throws a catchable `TypeError` for a non-numeric string.
+#[test]
+fn test_enum_from_non_numeric_string_throws_type_error() {
+    let out = compile_and_run(
+        "<?php
+        enum Color: int {
+            case Red = 1;
+        }
+        try {
+            Color::from('x');
+        } catch (TypeError $e) {
+            echo get_class($e);
+        }
+        ",
+    );
+    assert_eq!(out, "TypeError");
+}
+
+/// Verifies `Color::tryFrom('x')` returns null (no throw) for a non-numeric string.
+#[test]
+fn test_enum_try_from_non_numeric_string_returns_null() {
+    let out = compile_and_run(
+        "<?php
+        enum Color: int {
+            case Red = 1;
+        }
+        echo is_null(Color::tryFrom('x')) ? \"null\" : \"found\";
+        ",
+    );
+    assert_eq!(out, "null");
+}
+
+/// Verifies `Color::tryFrom('1')` coerces a numeric string and returns the matching case.
+#[test]
+fn test_enum_try_from_numeric_string_coercion() {
+    let out = compile_and_run(
+        "<?php
+        enum Color: int {
+            case Red = 1;
+            case Green = 2;
+        }
+        $c = Color::tryFrom('2');
+        echo is_null($c) ? \"null\" : \"found\";
+        echo $c === Color::Green;
+        ",
+    );
+    assert_eq!(out, "found1");
+}
+
+/// Verifies a string-backed `S::from(1)` coerces the int to string `"1"` and matches case A.
+#[test]
+fn test_string_enum_from_int_coercion() {
+    let out = compile_and_run(
+        "<?php
+        enum Status: string {
+            case Draft = \"draft\";
+            case One = \"1\";
+        }
+        $c = Status::from(1);
+        echo $c === Status::One;
+        ",
+    );
+    assert_eq!(out, "1");
+}
+
+/// Verifies `Color::from(1.0)` coerces a float to int and returns the matching case.
+#[test]
+fn test_enum_from_float_coercion() {
+    let out = compile_and_run(
+        "<?php
+        enum Color: int {
+            case Red = 1;
+            case Green = 2;
+        }
+        $c = Color::from(2.0);
+        echo $c === Color::Green;
+        ",
+    );
+    assert_eq!(out, "1");
+}
+
+/// Verifies `Color::from(true)` coerces bool to int (true → 1) and returns the matching case.
+#[test]
+fn test_enum_from_bool_coercion() {
+    let out = compile_and_run(
+        "<?php
+        enum Color: int {
+            case Red = 1;
+        }
+        $c = Color::from(true);
+        echo $c === Color::Red;
+        ",
+    );
+    assert_eq!(out, "1");
+}

@@ -1,6 +1,7 @@
 //! Purpose:
 //! Emits the `@<timestamp>` epoch parser sub-routine consumed by the `__rt_strtotime` dispatcher.
-//! Accepts `@`, an optional sign, decimal digits, and an optional fractional part (truncated).
+//! Accepts `@`, an optional sign, decimal digits, an optional fractional part (truncated), and
+//! PHP-style trailing junk that timelib tolerates (a letter, or whitespace + non-digit token).
 //!
 //! Called from:
 //! - `crate::codegen::runtime::system::strtotime::mod::emit_strtotime()` via the dispatcher's
@@ -10,6 +11,9 @@
 //! - Entry label `__rt_strtotime_epoch_entry` (ARM64) / `_linux_x86_64` (x86_64); the dispatcher
 //!   frame is already set up, with the trimmed ptr at `[sp+48]` and trimmed len at `[sp+56]`.
 //! - The value is a literal UNIX timestamp (UTC), so it is returned directly without `mktime`.
+//! - Trailing junk after the numeric part is accepted per PHP timelib rules: a letter directly
+//!   after the digits, or whitespace followed by end-of-input or a non-digit token. Whitespace
+//!   followed by a digit, a second `.`, or other non-alphanumeric non-whitespace is rejected.
 //! - All exits branch to the shared `__rt_strtotime_ret` / `__rt_strtotime_fail` epilogues.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
@@ -29,7 +33,11 @@ pub(crate) fn emit_epoch(emitter: &mut Emitter) {
 /// Entry label: `__rt_strtotime_epoch_entry`. Skips the leading `@`, reads an optional `+`/`-`
 /// sign, accumulates decimal digits into a signed 64-bit value, and truncates at a `.` (any
 /// fractional part is discarded, matching PHP). Requires at least one digit; otherwise fails.
-/// The accumulated value is the result timestamp (returned via `__rt_strtotime_ret`).
+/// Trailing junk after the numeric part is accepted when it matches PHP's timelib rules:
+/// a letter immediately after the digits, or whitespace followed by a non-digit token or
+/// end-of-input. Whitespace followed by a digit, a second `.`, or other non-alphanumeric
+/// non-whitespace characters cause failure. The accumulated value is the result timestamp
+/// (returned via `__rt_strtotime_ret`).
 fn emit_epoch_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: @<timestamp> epoch sub-routine ---");
@@ -63,16 +71,56 @@ fn emit_epoch_arm64(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_strtotime_epoch_finish");                    // done scanning digits
     emitter.instruction("ldrb w9, [x1, x3]");                                   // load current char
     emitter.instruction("cmp w9, #46");                                         // '.' (fractional part) ?
-    emitter.instruction("b.eq __rt_strtotime_epoch_finish");                    // truncate any fractional seconds
+    emitter.instruction("b.eq __rt_strtotime_epoch_dot");                       // consume fractional digits then check tail
     emitter.instruction("sub w9, w9, #48");                                     // convert ASCII to digit value
     emitter.instruction("cmp w9, #9");                                          // is it a decimal digit?
-    emitter.instruction("b.hi __rt_strtotime_fail");                            // non-digit → invalid epoch
+    emitter.instruction("b.hi __rt_strtotime_epoch_tail");                      // non-digit → check trailing tail (PHP)
     emitter.instruction("mov x10, #10");                                        // decimal base
     emitter.instruction("mul x0, x0, x10");                                     // shift accumulator left one decimal place
     emitter.instruction("add x0, x0, x9");                                      // add the new digit
     emitter.instruction("add x5, x5, #1");                                      // count the digit
     emitter.instruction("add x3, x3, #1");                                      // advance to the next char
     emitter.instruction("b __rt_strtotime_epoch_loop");                         // continue scanning
+
+    // -- '.' branch: skip fractional digits, then run the trailing-tail check --
+    emitter.label("__rt_strtotime_epoch_dot");
+    emitter.instruction("add x3, x3, #1");                                      // consume the '.'
+    emitter.label("__rt_strtotime_epoch_frac_loop");
+    emitter.instruction("cmp x3, x2");                                          // reached end of input?
+    emitter.instruction("b.ge __rt_strtotime_epoch_tail");                      // end after fractional digits → check tail
+    emitter.instruction("ldrb w9, [x1, x3]");                                   // load current fractional char
+    emitter.instruction("sub w9, w9, #48");                                     // convert ASCII to digit value
+    emitter.instruction("cmp w9, #9");                                          // is it a decimal digit?
+    emitter.instruction("b.hi __rt_strtotime_epoch_tail");                      // non-digit → check trailing tail (PHP)
+    emitter.instruction("add x3, x3, #1");                                      // advance past the fractional digit
+    emitter.instruction("b __rt_strtotime_epoch_frac_loop");                    // continue skipping fractional digits
+
+    // -- trailing-tail check: accept letters/whitespace+non-digit, reject digit-after-space --
+    emitter.label("__rt_strtotime_epoch_tail");
+    emitter.instruction("cmp x3, x2");                                          // reached end of input?
+    emitter.instruction("b.ge __rt_strtotime_epoch_finish");                    // clean end → finish
+    emitter.instruction("ldrb w9, [x1, x3]");                                   // load the trailing char
+    // -- letter (A-Z, a-z) directly after digits → accepted --
+    emitter.instruction("cmp w9, #65");                                         // < 'A' ?
+    emitter.instruction("b.lt __rt_strtotime_epoch_tail_space");                // not a letter → check space
+    emitter.instruction("cmp w9, #90");                                         // <= 'Z' ?
+    emitter.instruction("b.le __rt_strtotime_epoch_finish");                    // uppercase letter → accept
+    emitter.instruction("cmp w9, #97");                                         // < 'a' ?
+    emitter.instruction("b.lt __rt_strtotime_epoch_tail_space");                // not a letter → check space
+    emitter.instruction("cmp w9, #122");                                        // <= 'z' ?
+    emitter.instruction("b.le __rt_strtotime_epoch_finish");                    // lowercase letter → accept
+    emitter.label("__rt_strtotime_epoch_tail_space");
+    emitter.instruction("cmp w9, #32");                                         // ASCII space ?
+    emitter.instruction("b.ne __rt_strtotime_fail");                            // other junk → invalid epoch
+    // -- whitespace followed by end-of-input or a non-digit token is accepted --
+    emitter.instruction("add x3, x3, #1");                                      // step past the space
+    emitter.instruction("cmp x3, x2");                                          // end-of-input after the space?
+    emitter.instruction("b.ge __rt_strtotime_epoch_finish");                    // trailing space → accept
+    emitter.instruction("ldrb w9, [x1, x3]");                                   // load the char after the space
+    emitter.instruction("sub w9, w9, #48");                                     // convert ASCII to digit value
+    emitter.instruction("cmp w9, #9");                                          // is it a decimal digit?
+    emitter.instruction("b.ls __rt_strtotime_fail");                            // space + digit → invalid (PHP)
+    emitter.instruction("b __rt_strtotime_epoch_finish");                       // space + non-digit token → accept
 
     emitter.label("__rt_strtotime_epoch_finish");
     emitter.instruction("cbz x5, __rt_strtotime_fail");                         // no digits parsed → invalid
@@ -84,6 +132,10 @@ fn emit_epoch_arm64(emitter: &mut Emitter) {
 ///
 /// Entry label: `__rt_strtotime_epoch_entry_linux_x86_64`. Mirrors the ARM64 logic using SysV
 /// register/stack conventions: trimmed ptr at `[rsp+48]`, trimmed len at `[rsp+56]`.
+/// Trailing junk after the numeric part is accepted when it matches PHP's timelib rules:
+/// a letter immediately after the digits, or whitespace followed by a non-digit token or
+/// end-of-input. Whitespace followed by a digit, a second `.`, or other non-alphanumeric
+/// non-whitespace characters cause failure.
 fn emit_epoch_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: @<timestamp> epoch sub-routine ---");
@@ -117,15 +169,55 @@ fn emit_epoch_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_strtotime_epoch_finish_linux_x86_64");        // done scanning digits
     emitter.instruction("movzx edx, BYTE PTR [rdi + rcx]");                     // load current char
     emitter.instruction("cmp edx, 46");                                         // '.' (fractional part) ?
-    emitter.instruction("je __rt_strtotime_epoch_finish_linux_x86_64");         // truncate any fractional seconds
+    emitter.instruction("je __rt_strtotime_epoch_dot_linux_x86_64");            // consume fractional digits then check tail
     emitter.instruction("sub edx, 48");                                         // convert ASCII to digit value
     emitter.instruction("cmp edx, 9");                                          // is it a decimal digit?
-    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // non-digit → invalid epoch
+    emitter.instruction("ja __rt_strtotime_epoch_tail_linux_x86_64");           // non-digit → check trailing tail (PHP)
     emitter.instruction("imul rax, rax, 10");                                   // shift accumulator left one decimal place
     emitter.instruction("add rax, rdx");                                        // add the new digit
     emitter.instruction("add r9, 1");                                           // count the digit
     emitter.instruction("add rcx, 1");                                          // advance to the next char
     emitter.instruction("jmp __rt_strtotime_epoch_loop_linux_x86_64");          // continue scanning
+
+    // -- '.' branch: skip fractional digits, then run the trailing-tail check --
+    emitter.label("__rt_strtotime_epoch_dot_linux_x86_64");
+    emitter.instruction("add rcx, 1");                                          // consume the '.'
+    emitter.label("__rt_strtotime_epoch_frac_loop_linux_x86_64");
+    emitter.instruction("cmp rcx, rsi");                                        // reached end of input?
+    emitter.instruction("jae __rt_strtotime_epoch_tail_linux_x86_64");          // end after fractional digits → check tail
+    emitter.instruction("movzx edx, BYTE PTR [rdi + rcx]");                     // load current fractional char
+    emitter.instruction("sub edx, 48");                                         // convert ASCII to digit value
+    emitter.instruction("cmp edx, 9");                                          // is it a decimal digit?
+    emitter.instruction("ja __rt_strtotime_epoch_tail_linux_x86_64");           // non-digit → check trailing tail (PHP)
+    emitter.instruction("add rcx, 1");                                          // advance past the fractional digit
+    emitter.instruction("jmp __rt_strtotime_epoch_frac_loop_linux_x86_64");     // continue skipping fractional digits
+
+    // -- trailing-tail check: accept letters/whitespace+non-digit, reject digit-after-space --
+    emitter.label("__rt_strtotime_epoch_tail_linux_x86_64");
+    emitter.instruction("cmp rcx, rsi");                                        // reached end of input?
+    emitter.instruction("jae __rt_strtotime_epoch_finish_linux_x86_64");        // clean end → finish
+    emitter.instruction("movzx edx, BYTE PTR [rdi + rcx]");                     // load the trailing char
+    // -- letter (A-Z, a-z) directly after digits → accepted --
+    emitter.instruction("cmp edx, 65");                                         // < 'A' ?
+    emitter.instruction("jb __rt_strtotime_epoch_tail_space_linux_x86_64");     // not a letter → check space
+    emitter.instruction("cmp edx, 90");                                         // <= 'Z' ?
+    emitter.instruction("jbe __rt_strtotime_epoch_finish_linux_x86_64");        // uppercase letter → accept
+    emitter.instruction("cmp edx, 97");                                         // < 'a' ?
+    emitter.instruction("jb __rt_strtotime_epoch_tail_space_linux_x86_64");     // not a letter → check space
+    emitter.instruction("cmp edx, 122");                                        // <= 'z' ?
+    emitter.instruction("jbe __rt_strtotime_epoch_finish_linux_x86_64");        // lowercase letter → accept
+    emitter.label("__rt_strtotime_epoch_tail_space_linux_x86_64");
+    emitter.instruction("cmp edx, 32");                                         // ASCII space ?
+    emitter.instruction("jne __rt_strtotime_fail_linux_x86_64");                // other junk → invalid epoch
+    // -- whitespace followed by end-of-input or a non-digit token is accepted --
+    emitter.instruction("add rcx, 1");                                          // step past the space
+    emitter.instruction("cmp rcx, rsi");                                        // end-of-input after the space?
+    emitter.instruction("jae __rt_strtotime_epoch_finish_linux_x86_64");        // trailing space → accept
+    emitter.instruction("movzx edx, BYTE PTR [rdi + rcx]");                     // load the char after the space
+    emitter.instruction("sub edx, 48");                                         // convert ASCII to digit value
+    emitter.instruction("cmp edx, 9");                                          // is it a decimal digit?
+    emitter.instruction("jbe __rt_strtotime_fail_linux_x86_64");                // space + digit → invalid (PHP)
+    emitter.instruction("jmp __rt_strtotime_epoch_finish_linux_x86_64");        // space + non-digit token → accept
 
     emitter.label("__rt_strtotime_epoch_finish_linux_x86_64");
     emitter.instruction("test r9, r9");                                         // any digits parsed?

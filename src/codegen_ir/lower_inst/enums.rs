@@ -137,6 +137,13 @@ fn emit_enum_case_store(
 }
 
 /// Lowers `EnumName::from(value)` or `EnumName::tryFrom(value)` for backed enums.
+///
+/// PHP coerces scalar arguments to the backing type at runtime:
+/// - `Int`-backed enums accept `Int`, `Bool`, `Float`, and `Str`. Numeric strings are
+///   coerced to int via `__rt_str_to_int`; non-numeric strings throw `TypeError` for
+///   `from()` and return boxed null for `tryFrom()`.
+/// - `Str`-backed enums accept `Str`, `Int`, `Bool`, and `Float`. Non-string scalars are
+///   stringified via `__rt_itoa`/`__rt_ftoa` and then scanned.
 fn lower_enum_from_like(
     ctx: &mut FunctionContext<'_>,
     enum_name: &str,
@@ -161,17 +168,143 @@ fn lower_enum_from_like(
         CodegenIrError::unsupported(format!("{}::from on pure enum", enum_name))
     })?;
     let input = inst.operands[0];
-    let input_ty = ctx.load_value_to_result(input)?;
-    if input_ty.codegen_repr() != backing_ty.codegen_repr() {
-        return Err(CodegenIrError::unsupported(format!(
-            "{}::{} backing input PHP type {:?}",
-            enum_name,
-            if is_try { "tryFrom" } else { "from" },
-            input_ty
-        )));
+    let raw_input_ty = ctx.raw_value_php_type(input)?;
+    let input_repr_ty = ctx.load_value_to_result(input)?;
+    match (&backing_ty, &input_repr_ty) {
+        (PhpType::Int, PhpType::Int) | (PhpType::Int, PhpType::Bool) => {
+            emit_enum_from_scan(ctx, enum_name, &enum_info, &backing_ty, is_try)?;
+        }
+        (PhpType::Int, PhpType::Float) => {
+            abi::emit_float_result_to_int_result(ctx.emitter);
+            emit_enum_from_scan(ctx, enum_name, &enum_info, &backing_ty, is_try)?;
+        }
+        (PhpType::Int, PhpType::Str) => {
+            emit_int_enum_from_string_input(ctx, enum_name, &enum_info, is_try)?;
+        }
+        (PhpType::Str, PhpType::Str) => {
+            emit_enum_from_scan(ctx, enum_name, &enum_info, &backing_ty, is_try)?;
+        }
+        (PhpType::Str, PhpType::Int) | (PhpType::Str, PhpType::Bool) => {
+            emit_string_enum_from_int_like_input(ctx, enum_name, &enum_info, is_try, &raw_input_ty)?;
+        }
+        (PhpType::Str, PhpType::Float) => {
+            emit_string_enum_from_float_input(ctx, enum_name, &enum_info, is_try)?;
+        }
+        _ => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{}::{} backing input PHP type {:?}",
+                enum_name,
+                if is_try { "tryFrom" } else { "from" },
+                input_repr_ty
+            )));
+        }
     }
-    emit_enum_from_scan(ctx, enum_name, &enum_info, &backing_ty, is_try)?;
     store_if_result(ctx, inst)
+}
+
+/// Lowers an `Int`-backed `from`/`tryFrom` call when the argument is a string.
+///
+/// The string is checked with `__rt_str_is_numeric`; numeric strings are coerced to int
+/// with `__rt_str_to_int` and scanned. Non-numeric strings throw `TypeError` for `from()`
+/// or return boxed null for `tryFrom()`.
+fn emit_int_enum_from_string_input(
+    ctx: &mut FunctionContext<'_>,
+    enum_name: &str,
+    enum_info: &EnumInfo,
+    is_try: bool,
+) -> Result<()> {
+    let numeric_label = ctx.next_label("enum_from_str_numeric");
+    let done_label = ctx.next_label("enum_from_done");
+    abi::emit_call_label(ctx.emitter, "__rt_str_is_numeric");
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &numeric_label);
+    if is_try {
+        emit_enum_try_from_null(ctx, &PhpType::Int);
+    } else {
+        emit_enum_from_type_error_from_string_result(ctx, enum_name)?;
+    }
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&numeric_label);
+    abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
+    emit_enum_from_scan(ctx, enum_name, enum_info, &PhpType::Int, is_try)?;
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Lowers a `Str`-backed `from`/`tryFrom` call when the argument is `Int` or `Bool`.
+///
+/// The integer-like value is stringified with `__rt_itoa` (respecting PHP's `false` → empty
+/// string rule), then the normal string-backed scan runs.
+fn emit_string_enum_from_int_like_input(
+    ctx: &mut FunctionContext<'_>,
+    enum_name: &str,
+    enum_info: &EnumInfo,
+    is_try: bool,
+    raw_input_ty: &PhpType,
+) -> Result<()> {
+    emit_loaded_int_like_to_string(ctx, raw_input_ty)?;
+    emit_enum_from_scan(ctx, enum_name, enum_info, &PhpType::Str, is_try)
+}
+
+/// Lowers a `Str`-backed `from`/`tryFrom` call when the argument is `Float`.
+///
+/// The float is stringified with `__rt_ftoa`, then the normal string-backed scan runs.
+fn emit_string_enum_from_float_input(
+    ctx: &mut FunctionContext<'_>,
+    enum_name: &str,
+    enum_info: &EnumInfo,
+    is_try: bool,
+) -> Result<()> {
+    abi::emit_call_label(ctx.emitter, "__rt_ftoa");
+    emit_enum_from_scan(ctx, enum_name, enum_info, &PhpType::Str, is_try)
+}
+
+/// Stringifies an already-loaded integer-like value (Int or Bool) into the string result
+/// registers using `__rt_itoa`, mirroring the boolean-to-string coercion in `strings.rs`.
+fn emit_loaded_int_like_to_string(
+    ctx: &mut FunctionContext<'_>,
+    raw_input_ty: &PhpType,
+) -> Result<()> {
+    match raw_input_ty.codegen_repr() {
+        PhpType::Bool => emit_loaded_bool_to_string_inline(ctx),
+        _ => {
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");
+            Ok(())
+        }
+    }
+}
+
+/// Converts the loaded boolean result to PHP string ABI registers.
+///
+/// `true` stringifies to `"1"` through `__rt_itoa`; `false` stringifies to an empty string.
+fn emit_loaded_bool_to_string_inline(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            let false_label = ctx.next_label("enum_bool_to_str_false");
+            let done_label = ctx.next_label("enum_bool_to_str_done");
+            ctx.emitter
+                .instruction(&format!("cbz x0, {}", false_label));              // false stringifies to an empty string
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");
+            ctx.emitter
+                .instruction(&format!("b {}", done_label));                       // skip the empty-string fallback after true conversion
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("mov x2, #0");                              // false has zero string length
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            let false_label = ctx.next_label("enum_bool_to_str_false");
+            let done_label = ctx.next_label("enum_bool_to_str_done");
+            ctx.emitter.instruction("test rax, rax");                           // test whether the boolean payload is false
+            ctx.emitter
+                .instruction(&format!("je {}", false_label));                    // false stringifies to an empty string
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");
+            ctx.emitter
+                .instruction(&format!("jmp {}", done_label));                    // skip the empty-string fallback after true conversion
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("mov rdx, 0");                              // false has zero string length
+            ctx.emitter.label(&done_label);
+        }
+    }
+    Ok(())
 }
 
 /// Emits the backing-value scan and no-match behavior for enum `from` helpers.
@@ -346,6 +479,33 @@ fn emit_enum_from_value_error(
     Ok(())
 }
 
+/// Builds and throws a `TypeError` for a non-coercible string argument to an `Int`-backed
+/// `Enum::from()` call. Mirrors `emit_enum_from_value_error` but stamps a `TypeError` class id
+/// and uses a static PHP-style message describing the rejected argument.
+fn emit_enum_from_type_error_from_string_result(
+    ctx: &mut FunctionContext<'_>,
+    enum_name: &str,
+) -> Result<()> {
+    let message = format!(
+        "{}::from(): Argument #1 ($value) must be of type int, string given",
+        enum_name
+    );
+    let (label, len) = ctx.data.add_string(message.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rax", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    emit_throw_type_error_from_string_result(ctx);
+    Ok(())
+}
+
 /// Emits the dynamic error message for an unmatched integer-backed enum value.
 fn emit_enum_from_int_value_error_message(ctx: &mut FunctionContext<'_>, enum_name: &str) {
     abi::emit_call_label(ctx.emitter, "__rt_itoa");
@@ -453,4 +613,54 @@ fn emit_null_into_result(ctx: &mut FunctionContext<'_>) {
         abi::int_result_reg(ctx.emitter),
         0x7fff_ffff_ffff_fffe_u64 as i64,
     );
+}
+
+/// Allocates a `TypeError` from the current persisted string result and throws it.
+///
+/// Mirrors `emit_throw_value_error_from_string_result` but stamps the `_spl_type_error_class_id`
+/// header instead of `_spl_value_error_class_id`, used when a non-coercible string is passed to an
+/// `Int`-backed `Enum::from()`.
+fn emit_throw_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
+    let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => emit_throw_type_error_from_string_result_aarch64(ctx),
+        Arch::X86_64 => emit_throw_type_error_from_string_result_x86_64(ctx),
+    }
+}
+
+/// Emits the AArch64 `TypeError` allocation and unwinder handoff.
+fn emit_throw_type_error_from_string_result_aarch64(ctx: &mut FunctionContext<'_>) {
+    abi::emit_load_int_immediate(ctx.emitter, "x0", 32);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    ctx.emitter.instruction("mov x9, #6");                                      // heap kind 6 = throwable object instance
+    ctx.emitter.instruction("str x9, [x0, #-8]");                               // stamp allocation as a runtime object
+    abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_spl_type_error_class_id", 0);
+    ctx.emitter.instruction("str x9, [x0]");                                    // store TypeError class id at object header
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 0);
+    ctx.emitter.instruction("str x9, [x0, #8]");                                // store dynamic exception message pointer
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 8);
+    ctx.emitter.instruction("str x9, [x0, #16]");                               // store dynamic exception message length
+    ctx.emitter.instruction("str xzr, [x0, #24]");                              // exception code defaults to zero
+    abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_jump(ctx.emitter, "__rt_throw_current");
+}
+
+/// Emits the x86_64 `TypeError` allocation and unwinder handoff.
+fn emit_throw_type_error_from_string_result_x86_64(ctx: &mut FunctionContext<'_>) {
+    abi::emit_load_int_immediate(ctx.emitter, "rax", 32);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    ctx.emitter.instruction("mov r10, 0x4548504c00000006");                     // x86_64 heap-kind word: HE LP magic + kind 6 object
+    ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp allocation as a runtime object
+    abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_type_error_class_id", 0);
+    ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // store TypeError class id at object header
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 0);
+    ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");                    // store dynamic exception message pointer
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 8);
+    ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");                   // store dynamic exception message length
+    ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");                     // exception code defaults to zero
+    abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_jump(ctx.emitter, "__rt_throw_current");
 }

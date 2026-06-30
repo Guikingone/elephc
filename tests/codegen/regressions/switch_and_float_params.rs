@@ -206,3 +206,51 @@ echo pick(2), "|", pick(3);
     );
     assert_eq!(out, "two|none");
 }
+
+/// Verifies that a by-reference call used as a `match` subject preserves the
+/// write-back side effect on the caller's variable (issue #384).
+#[test]
+fn test_match_subject_by_ref_call_preserves_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$i) { $i++; return $i; }
+$i = 0;
+echo match (bump($i)) {
+    1 => 'one',
+    default => 'other',
+} . '|' . $i;
+"#,
+    );
+    assert_eq!(out, "one|1");
+}
+
+/// Verifies that a by-reference call in a binary concat expression also
+/// preserves the write-back (the same root cause as #384, not match-specific).
+#[test]
+fn test_by_ref_call_in_concat_preserves_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$i) { $i++; return $i; }
+$i = 0;
+echo bump($i) . '|' . $i;
+"#,
+    );
+    assert_eq!(out, "1|1");
+}
+
+/// Verifies that `switch` with a by-ref subject already works correctly (guard
+/// against regressions in the already-correct statement-scoped path).
+#[test]
+fn test_switch_subject_by_ref_call_preserves_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$i) { $i++; return $i; }
+$i = 0;
+switch (bump($i)) {
+    case 1: echo 'one|' . $i; break;
+    default: echo 'other|' . $i; break;
+}
+"#,
+    );
+    assert_eq!(out, "one|1");
+}

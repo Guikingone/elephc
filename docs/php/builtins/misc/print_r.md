@@ -8,13 +8,15 @@ sidebar:
 ## print_r()
 
 ```php
-function print_r(...$values): void
+function print_r(mixed $value): void
 ```
 
 Prints human-readable information about a variable.
 
+> **Note**: PHP also accepts an optional `bool $return` second argument that returns the output as a string instead of printing it. This `$return` mode is not yet supported by elephc; only the single-argument form that writes to stdout is implemented.
+
 **Parameters**:
-- `...$values` — variadic: collects excess arguments into `$values`.
+- `$value` — `mixed`: the value to print.
 
 **Returns**: `void`
 

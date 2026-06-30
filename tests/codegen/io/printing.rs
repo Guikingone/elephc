@@ -130,6 +130,37 @@ var_dump($map["o"]);
     );
 }
 
+/// Verifies `var_dump` accepts multiple variadic arguments and dumps each in source order.
+#[test]
+fn test_var_dump_variadic_literals() {
+    let out = compile_and_run(r#"<?php var_dump(1, "two", 3.5, true, null);"#);
+    assert_eq!(
+        out,
+        "int(1)\nstring(3) \"two\"\nfloat(3.5)\nbool(true)\nNULL\n"
+    );
+}
+
+/// Verifies `var_dump` accepts multiple variadic variable arguments and dumps each in source order.
+#[test]
+fn test_var_dump_variadic_variables() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 7;
+$b = "hi";
+$c = false;
+var_dump($a, $b, $c);
+"#,
+    );
+    assert_eq!(out, "int(7)\nstring(2) \"hi\"\nbool(false)\n");
+}
+
+/// Verifies `var_dump` still works with a single argument (the pre-variadic form).
+#[test]
+fn test_var_dump_single_arg_unchanged() {
+    let out = compile_and_run("<?php var_dump(42);");
+    assert_eq!(out, "int(42)\n");
+}
+
 /// Verifies `print_r` outputs a bare integer as its decimal string representation (no type label), no trailing newline.
 #[test]
 fn test_print_r_int() {

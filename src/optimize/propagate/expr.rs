@@ -29,11 +29,12 @@ pub(crate) fn captured_constant_env(
 /// substitutions applied, followed by constant folding.
 pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
     let empty_env;
-    let env = if expr_local_writes(&expr).is_some_and(|writes| !writes.is_empty()) {
-        empty_env = HashMap::new();
-        &empty_env
-    } else {
-        env
+    let env = match expr_local_writes(&expr) {
+        Some(writes) if writes.is_empty() => env,
+        _ => {
+            empty_env = HashMap::new();
+            &empty_env
+        }
     };
     let span = expr.span;
     let kind = match expr.kind {

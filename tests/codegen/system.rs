@@ -531,6 +531,61 @@ fn test_strtotime_epoch_invalid() {
     assert_eq!(out, "F");
 }
 
+/// Verifies the `@<timestamp>` epoch form ignores trailing letters after the digits, matching
+/// PHP timelib (`@123abc` → 123).
+#[test]
+fn test_strtotime_epoch_trailing_letters_ignored() {
+    let out = compile_and_run("<?php echo strtotime(\"@123abc\");");
+    assert_eq!(out, "123");
+}
+
+/// Verifies the `@<timestamp>` epoch form ignores a trailing space plus a non-digit token such
+/// as a timezone keyword (`@1579089600 UTC` → 1579089600), matching PHP timelib.
+#[test]
+fn test_strtotime_epoch_trailing_space_and_keyword_ignored() {
+    let out = compile_and_run("<?php echo strtotime(\"@1579089600 UTC\");");
+    assert_eq!(out, "1579089600");
+}
+
+/// Verifies the `@<timestamp>` epoch form accepts a trailing space alone (`@123 ` → 123).
+#[test]
+fn test_strtotime_epoch_trailing_space_only() {
+    let out = compile_and_run("<?php echo strtotime(\"@123 \");");
+    assert_eq!(out, "123");
+}
+
+/// Verifies the `@<timestamp>` epoch form accepts trailing letters after a fractional part
+/// (`@123.45abc` → 123), matching PHP timelib.
+#[test]
+fn test_strtotime_epoch_fractional_then_trailing_letters() {
+    let out = compile_and_run("<?php echo strtotime(\"@123.45abc\");");
+    assert_eq!(out, "123");
+}
+
+/// Verifies the `@<timestamp>` epoch form rejects whitespace followed by a digit (`@123 456`
+/// → false), matching PHP timelib.
+#[test]
+fn test_strtotime_epoch_rejects_space_then_digit() {
+    let out = compile_and_run("<?php echo strtotime(\"@123 456\") === false ? \"F\" : \"x\";");
+    assert_eq!(out, "F");
+}
+
+/// Verifies the `@<timestamp>` epoch form rejects a second `.` after the fractional digits
+/// (`@12.9.9` → false), matching PHP timelib.
+#[test]
+fn test_strtotime_epoch_rejects_second_dot() {
+    let out = compile_and_run("<?php echo strtotime(\"@12.9.9\") === false ? \"F\" : \"x\";");
+    assert_eq!(out, "F");
+}
+
+/// Verifies the `@<timestamp>` epoch form rejects non-alphanumeric non-whitespace trailing
+/// junk (`@123!` → false), matching PHP timelib.
+#[test]
+fn test_strtotime_epoch_rejects_punctuation_junk() {
+    let out = compile_and_run("<?php echo strtotime(\"@123!\") === false ? \"F\" : \"x\";");
+    assert_eq!(out, "F");
+}
+
 /// Verifies the American `MM/DD/YYYY` slash-date form. The result is built with `mktime` and
 /// reformatted with `date()`, so the date round-trips through the local zone (machine-independent).
 #[test]
