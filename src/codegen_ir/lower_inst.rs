@@ -5221,8 +5221,14 @@ fn plan_ref_arg_writebacks(
         if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
             continue;
         }
+        // A non-local by-reference argument (e.g. an omitted `&$ref = null` parameter whose
+        // default lowers to `const_null`, or a temporary expression) has no caller variable to
+        // update, so it needs no writeback. It is materialized as a throwaway Mixed ref cell by
+        // `materialize_temporary_ref_arg_cell`; only locals are written back here.
+        let Ok(source) = local_ref_arg_source(ctx, *value) else {
+            continue;
+        };
         reject_unsupported_mixed_ref_writeback_source(&source_ty)?;
-        let source = local_ref_arg_source(ctx, *value)?;
         writebacks.push(RefArgWriteback {
             param_index,
             source_value: *value,
@@ -5236,8 +5242,16 @@ fn plan_ref_arg_writebacks(
 }
 
 /// Rejects scalar-to-Mixed temporary ref cells whose writeback shape is not supported yet.
+///
+/// `Void`/`Never` cover a caller local that is statically PHP null at the call site (e.g.
+/// `$x = null; f($x)` into an `&$x` Mixed parameter). The null source boxes into a Mixed cell
+/// through the canonical null tag and writes back through the shared int-register store, exactly
+/// like an `Int`/`Bool` source, so the callee always receives a valid `{payload, tag}` cell.
 fn reject_unsupported_mixed_ref_writeback_source(source_ty: &PhpType) -> Result<()> {
-    if matches!(source_ty.codegen_repr(), PhpType::Int | PhpType::Bool) {
+    if matches!(
+        source_ty.codegen_repr(),
+        PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never
+    ) {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(

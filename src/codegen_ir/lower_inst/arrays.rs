@@ -769,7 +769,11 @@ fn lower_array_push_aarch64(
         PhpType::TaggedScalar if elem_ty.codegen_repr() == PhpType::TaggedScalar => {
             lower_array_push_tagged_scalar_aarch64(ctx, array, value)?;
         }
-        PhpType::Int | PhpType::Bool => {
+        PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never => {
+            // `Void`/`Never` is a statically PHP-null element (e.g. `$a[] = null` into an
+            // `array<never>`): the loaded value is the canonical 8-byte null sentinel, stored in
+            // an int-shaped slot. Reads of such arrays are statically null-typed, so the sentinel
+            // never needs to round-trip back to a concrete value.
             ctx.load_value_to_reg(value, "x1")?;
             ctx.load_value_to_reg(array, "x9")?;
             ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the append helper
@@ -837,7 +841,11 @@ fn lower_array_push_x86_64(
         PhpType::TaggedScalar if elem_ty.codegen_repr() == PhpType::TaggedScalar => {
             lower_array_push_tagged_scalar_x86_64(ctx, array, value)?;
         }
-        PhpType::Int | PhpType::Bool => {
+        PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never => {
+            // `Void`/`Never` is a statically PHP-null element (e.g. `$a[] = null` into an
+            // `array<never>`): the loaded value is the canonical 8-byte null sentinel, stored in
+            // an int-shaped slot. Reads of such arrays are statically null-typed, so the sentinel
+            // never needs to round-trip back to a concrete value.
             ctx.load_value_to_reg(array, "r11")?;
             ctx.load_value_to_reg(value, "rsi")?;
             ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the append helper

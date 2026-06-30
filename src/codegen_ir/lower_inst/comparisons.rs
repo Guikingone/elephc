@@ -296,6 +296,8 @@ pub(super) fn lower_loose_eq(
     } else if loose_intish_comparable(&lhs_ty, &rhs_ty) {
         let compare_truthiness = lhs_ty == PhpType::Bool || rhs_ty == PhpType::Bool;
         emit_intish_compare(ctx, lhs, rhs, is_equal, compare_truthiness)?;
+    } else if is_mixed_like(&lhs_ty) || is_mixed_like(&rhs_ty) {
+        emit_mixed_loose_eq(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
     } else {
         return Err(CodegenIrError::unsupported(format!(
             "{} for PHP types {:?} and {:?}",
@@ -305,6 +307,44 @@ pub(super) fn lower_loose_eq(
         )));
     }
     store_if_result(ctx, inst)
+}
+
+/// Emits PHP 8 loose equality/inequality for operands where at least one side is a boxed Mixed.
+///
+/// PHP 8 `==`/`!=` are consistent with `<=>`: `$a == $b` iff `compare($a, $b) === 0`. Both
+/// operands are boxed to Mixed (concrete sides through temporary boxes that are released by
+/// `emit_php_compare_sign`) and compared with `__rt_php_compare`; the signed `-1`/`0`/`+1`
+/// result is then folded to a boolean (`== 0` for equality, `!= 0` for inequality).
+fn emit_mixed_loose_eq(
+    ctx: &mut FunctionContext<'_>,
+    lhs: ValueId,
+    lhs_ty: &PhpType,
+    rhs: ValueId,
+    rhs_ty: &PhpType,
+    is_equal: bool,
+) -> Result<()> {
+    emit_php_compare_sign(ctx, lhs, lhs_ty, rhs, rhs_ty)?;
+    fold_compare_sign_to_equality(ctx, is_equal);
+    Ok(())
+}
+
+/// Folds the `-1`/`0`/`+1` comparison sign in the integer result register to a `0`/`1` boolean.
+///
+/// For loose equality the boolean is set when the sign is zero (operands compared equal); for
+/// inequality it is set when the sign is non-zero. Leaves the boolean in the integer result
+/// register on both supported targets.
+fn fold_compare_sign_to_equality(ctx: &mut FunctionContext<'_>, is_equal: bool) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                              // test the PHP comparison sign for equality with zero
+            ctx.emitter.instruction(&format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize loose equality from the comparison sign
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 0");                              // test the PHP comparison sign for equality with zero
+            ctx.emitter.instruction(&format!("set{} al", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize loose equality in the low byte
+            ctx.emitter.instruction("movzx rax, al");                           // widen the loose equality byte into the integer result register
+        }
+    }
 }
 
 /// Returns true when loose equality must compare a bool with a string by PHP truthiness.

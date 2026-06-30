@@ -1105,3 +1105,21 @@ fn test_end_on_mixed_array_argument() {
     );
     assert_eq!(out, "30");
 }
+
+/// Verifies appending a statically PHP-null (`Void`) value into an `array<never>` indexed
+/// array: the null is stored as an 8-byte sentinel slot, the length grows, and the element
+/// reads back as null. Regression for the symfony/yaml `array_push for PHP type Void` gap.
+#[test]
+fn test_array_push_null_into_empty_array() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$x = null;
+$a[] = $x;
+echo count($a);
+echo "|";
+echo is_null($a[0]) ? "null" : "set";
+"#,
+    );
+    assert_eq!(out, "1|null");
+}

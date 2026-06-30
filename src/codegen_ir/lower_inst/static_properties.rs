@@ -515,6 +515,9 @@ fn ensure_static_property_value_supported(
     if can_store_value_as_tagged_scalar_static_property(value_ty, &slot.php_type) {
         return Ok(());
     }
+    if can_coerce_tagged_scalar_to_int_static_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
     if matches!(slot.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         return Ok(());
     }
@@ -540,6 +543,15 @@ fn is_empty_array_for_array_static_property(value_ty: &PhpType, slot_ty: &PhpTyp
         return false;
     }
     matches!(value_elem.codegen_repr(), PhpType::Never | PhpType::Void)
+}
+
+/// Returns true when a nullable inline scalar can be narrowed into int static-property storage.
+///
+/// Mirrors the instance-property rule in `objects.rs`: a `?int` (TaggedScalar) value assigned
+/// into a plain-`int` static slot is narrowed by the canonical tagged-scalar coercion
+/// (null becomes zero) before the int slot store.
+fn can_coerce_tagged_scalar_to_int_static_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    value_ty.codegen_repr() == PhpType::TaggedScalar && slot_ty.codegen_repr() == PhpType::Int
 }
 
 /// Returns true when a value can materialize the inline nullable-int static-property shape.
@@ -593,6 +605,11 @@ fn load_static_property_store_value_to_result(
                 )))
             }
         }
+        return Ok(());
+    }
+    if can_coerce_tagged_scalar_to_int_static_property(&value_ty, slot_ty) {
+        ctx.load_value_to_result(value)?;
+        crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
         return Ok(());
     }
     ctx.load_value_to_result(value)?;

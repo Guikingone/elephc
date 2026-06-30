@@ -130,3 +130,29 @@ fn test_static_arrow_function_runs() {
     let out = compile_and_run("<?php $g = static fn($x) => $x * 2; echo $g(5);");
     assert_eq!(out, "10");
 }
+
+/// Verifies a nullable-int (`?int`, TaggedScalar) value stored into a plain-`int` static
+/// property slot narrows correctly. The `if (null !== $v)` guard is not narrowed by the
+/// checker, so `$v` reaches the store still typed `?int`; the backend must unwrap the tagged
+/// scalar (null→0) before the int slot store. Regression for the symfony/yaml
+/// `Inline::$parsedLineNumber` static-property gap.
+#[test]
+fn test_tagged_scalar_value_into_int_static_property() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public static int $n = 0;
+    public static function init(?int $v): void {
+        if (null !== $v) {
+            self::$n = $v;
+        }
+    }
+}
+C::init(7);
+echo C::$n;
+C::init(null);
+echo "|", C::$n;
+"#,
+    );
+    assert_eq!(out, "7|7");
+}

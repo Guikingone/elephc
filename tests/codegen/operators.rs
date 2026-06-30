@@ -564,3 +564,29 @@ echo sp("10", "9"), "|", sp("abc", "abd"), "|", sp("5", "5");
     );
     assert_eq!(out, "1|-1|0");
 }
+
+/// Verifies PHP 8 loose equality (`==`/`!=`) between a string and a Mixed operand, matching
+/// `$a == $b` ⟺ `($a <=> $b) === 0`: numeric strings compare numerically, non-numeric
+/// strings lexicographically, and `"" == null` is true. Regression for the symfony/yaml
+/// `loose_eq for PHP types Str and Mixed` backend gap.
+#[test]
+fn test_string_vs_mixed_loose_equality() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $n): mixed {
+    if ($n === 1) return "1";
+    if ($n === 2) return 5;
+    if ($n === 3) return "abc";
+    return null;
+}
+$m1 = pick(1); $m2 = pick(2); $m3 = pick(3); $m4 = pick(4);
+echo ("1" == $m1) ? "T" : "F";
+echo ("5" == $m2) ? "T" : "F";
+echo ("abc" == $m3) ? "T" : "F";
+echo ("x" == $m3) ? "T" : "F";
+echo ("" == $m4) ? "T" : "F";
+echo ("abc" != $m2) ? "T" : "F";
+"#,
+    );
+    assert_eq!(out, "TTTFTT");
+}

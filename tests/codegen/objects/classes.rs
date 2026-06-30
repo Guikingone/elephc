@@ -590,3 +590,19 @@ echo get_class($registry["w"]);
     );
     assert_eq!(out, "Widget");
 }
+
+/// Verifies that a statically-typed object used in a boolean context is always truthy in PHP
+/// (there is no `__toBool`), so a ternary or `!` on a non-null object folds to `true`/`false`.
+/// Regression for the symfony/yaml `is_truthy for PHP type Object(...)` backend gap.
+#[test]
+fn test_object_is_always_truthy() {
+    let out = compile_and_run(
+        r#"<?php
+class C {}
+$o = new C();
+echo $o ? "t" : "f";
+echo "|", (!$o) ? "no" : "yes";
+"#,
+    );
+    assert_eq!(out, "t|yes");
+}

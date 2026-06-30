@@ -44,6 +44,12 @@ pub(super) fn lower_is_truthy(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         PhpType::Resource(_) => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
         }
+        PhpType::Object(_) => {
+            // A non-null object is always truthy in PHP boolean context (there is no
+            // `__toBool`); a nullable receiver would lower as Mixed/Union and take the branch
+            // above. Statically known objects fold straight to `true`.
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "{} for PHP type {:?}",

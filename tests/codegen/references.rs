@@ -613,3 +613,47 @@ fn test_by_ref_property_throw_keeps_precall_value() {
     );
     assert_eq!(out, "caught:boom\n1,2\n2\n");
 }
+
+/// Verifies a statically-null (`Void`) local passed to a by-reference Mixed parameter
+/// (`?bool &$q`) compiles: the null source boxes into a Mixed cell so the callee receives a
+/// valid `{payload, tag}` cell, and the call returns its normal value. Regression for the
+/// symfony/yaml `Inline::parseScalar($..., $isQuoted, ...)` by-ref writeback gap.
+#[test]
+fn test_byref_mixed_param_from_null_local() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public static function inner(?bool &$q = null): int {
+        $q = true;
+        return 7;
+    }
+}
+$x = null;
+echo C::inner($x);
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies an omitted by-reference parameter that defaults to `null` (`?bool &$q = null`)
+/// compiles: the omitted default lowers to `const_null`, a non-local value that is materialized
+/// as a throwaway temporary Mixed ref cell (no caller writeback). The callee observes the null
+/// default. Regression for the symfony/yaml `Inline::parseScalar(..., $i, false)` omitted-ref gap.
+#[test]
+fn test_byref_mixed_param_omitted_null_default() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public static function inner(int $a, ?bool &$q = null): string {
+        if ($q === null) {
+            $q = true;
+            return "wasnull:" . $a;
+        }
+        return "wasset";
+    }
+}
+echo C::inner(5);
+"#,
+    );
+    assert_eq!(out, "wasnull:5");
+}
