@@ -959,7 +959,12 @@ pub(super) fn lower_substr_count(ctx: &mut FunctionContext<'_>, inst: &Instructi
     }
 }
 
-/// Lowers `str_replace()`/`str_ireplace()` with three string operands.
+/// Lowers `str_replace()`/`str_ireplace()` with three operands.
+///
+/// Handles the common all-string form directly, and the PHP array-`$search` form (with an array or
+/// single-string `$replace`) against a string `$subject` through the `__rt_*_array` runtime helpers.
+/// Array operands must currently be indexed `Array(Str)` (string slots); other array shapes return a
+/// clear unsupported error rather than miscompiling.
 pub(super) fn lower_string_replace(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -973,12 +978,56 @@ pub(super) fn lower_string_replace(
             inst.operands.len()
         )));
     }
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_string_replace_aarch64(ctx, inst, name)?,
-        Arch::X86_64 => lower_string_replace_x86_64(ctx, inst, name)?,
+    let search = expect_operand(inst, 0)?;
+    match ctx.value_php_type(search)?.codegen_repr() {
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str => {
+            let replace_is_array = string_replace_array_replacement(ctx, inst, name)?;
+            let array_label = format!("{}_array", runtime_label);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    lower_string_replace_array_aarch64(ctx, inst, name, replace_is_array)?
+                }
+                Arch::X86_64 => {
+                    lower_string_replace_array_x86_64(ctx, inst, name, replace_is_array)?
+                }
+            }
+            abi::emit_call_label(ctx.emitter, &array_label);
+            store_if_result(ctx, inst)
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } => Err(CodegenIrError::unsupported(format!(
+            "{} with a non-string-element array search argument",
+            name
+        ))),
+        _ => {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => lower_string_replace_aarch64(ctx, inst, name)?,
+                Arch::X86_64 => lower_string_replace_x86_64(ctx, inst, name)?,
+            }
+            abi::emit_call_label(ctx.emitter, runtime_label);
+            store_if_result(ctx, inst)
+        }
     }
-    abi::emit_call_label(ctx.emitter, runtime_label);
-    store_if_result(ctx, inst)
+}
+
+/// Reports whether the `$replace` operand of an array-search `str_replace` is itself an array.
+///
+/// Returns `Ok(true)` for an indexed `Array(Str)` replacement, `Ok(false)` for a scalar replacement
+/// (which is stringified per element), and an unsupported error for array replacements whose elements
+/// are not string slots, which the array runtime helper cannot read.
+fn string_replace_array_replacement(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+) -> Result<bool> {
+    let replace = expect_operand(inst, 1)?;
+    match ctx.value_php_type(replace)?.codegen_repr() {
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str => Ok(true),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => Err(CodegenIrError::unsupported(format!(
+            "{} with a non-string-element array replacement argument",
+            name
+        ))),
+        _ => Ok(false),
+    }
 }
 
 /// Lowers `wordwrap(string, width?, break?, cut?)` through the shared runtime helper.
@@ -2723,6 +2772,62 @@ fn lower_string_replace_x86_64(
     ctx.emitter.instruction("mov r8, rdx");                                     // pass the subject string length as the third runtime string argument
     abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
     abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+    Ok(())
+}
+
+/// Materializes AArch64 `__rt_*_array` runtime arguments for an array `$search`.
+///
+/// Loads the search array base into x1, the replacement pointer into x2 with a length/sentinel in x3
+/// (`-1` for an array replacement, otherwise the single-string length), and the subject pointer/length
+/// into x4/x5. The subject and replacement are spilled while the search base is materialized.
+fn lower_string_replace_array_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    replace_is_array: bool,
+) -> Result<()> {
+    let search = expect_operand(inst, 0)?;
+    let replace = expect_operand(inst, 1)?;
+    load_string_arg_to_regs(ctx, inst, 2, name, "x4", "x5")?;
+    ctx.emitter.instruction("stp x4, x5, [sp, #-16]!");                         // preserve the subject pointer/length while materializing replacement and search
+    if replace_is_array {
+        ctx.load_value_to_reg(replace, "x2")?;
+        abi::emit_load_int_immediate(ctx.emitter, "x3", -1);
+    } else {
+        load_string_arg_to_regs(ctx, inst, 1, name, "x2", "x3")?;
+    }
+    ctx.emitter.instruction("stp x2, x3, [sp, #-16]!");                         // preserve the replacement pointer + length/sentinel while materializing search
+    ctx.load_value_to_reg(search, "x1")?;
+    ctx.emitter.instruction("ldp x2, x3, [sp], #16");                           // restore the replacement pointer + length/sentinel
+    ctx.emitter.instruction("ldp x4, x5, [sp], #16");                           // restore the subject pointer/length
+    Ok(())
+}
+
+/// Materializes x86_64 `__rt_*_array` runtime arguments for an array `$search`.
+///
+/// Loads the search array base into rdi, the replacement pointer into rsi with a length/sentinel in
+/// rdx (`-1` for an array replacement, otherwise the single-string length), and the subject
+/// pointer/length into rcx/r8. The subject and replacement are spilled while the search base loads.
+fn lower_string_replace_array_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    replace_is_array: bool,
+) -> Result<()> {
+    let search = expect_operand(inst, 0)?;
+    let replace = expect_operand(inst, 1)?;
+    load_string_arg_to_regs(ctx, inst, 2, name, "rcx", "r8")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rcx", "r8");
+    if replace_is_array {
+        ctx.load_value_to_reg(replace, "rsi")?;
+        abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
+    } else {
+        load_string_arg_to_regs(ctx, inst, 1, name, "rsi", "rdx")?;
+    }
+    abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+    ctx.load_value_to_reg(search, "rdi")?;
+    abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+    abi::emit_pop_reg_pair(ctx.emitter, "rcx", "r8");
     Ok(())
 }
 

@@ -154,6 +154,51 @@ fn test_str_replace_multiple() {
     assert_eq!(out, "Hell0 W0rld");
 }
 
+/// Verifies str_replace with an array `$search` and a single-string `$replace` replaces every
+/// search needle with the one replacement, processing search elements in order.
+#[test]
+fn test_str_replace_array_search_single_replace() {
+    let out = compile_and_run(r#"<?php echo str_replace(["a", "b"], "X", "abc");"#);
+    assert_eq!(out, "XXc");
+}
+
+/// Verifies str_replace with array `$search`/`$replace` pairs each needle with its replacement.
+#[test]
+fn test_str_replace_array_search_array_replace() {
+    let out = compile_and_run(r#"<?php echo str_replace(["a", "b"], ["1", "2"], "abc");"#);
+    assert_eq!(out, "12c");
+}
+
+/// Verifies str_replace treats missing array-replacement elements as the empty string when the
+/// replacement array is shorter than the search array.
+#[test]
+fn test_str_replace_array_replace_shorter() {
+    let out = compile_and_run(r#"<?php echo str_replace(["a", "b", "c"], ["1"], "abc");"#);
+    assert_eq!(out, "1");
+}
+
+/// Verifies str_replace applies array search elements iteratively, so a replacement introduced by an
+/// earlier element is itself matched by a later search element (matching PHP ordering).
+#[test]
+fn test_str_replace_array_iterative_ordering() {
+    let out = compile_and_run(r#"<?php echo str_replace(["a", "b"], ["b", "c"], "a");"#);
+    assert_eq!(out, "c");
+}
+
+/// Verifies str_replace skips empty search-array elements as no-ops, matching PHP.
+#[test]
+fn test_str_replace_array_empty_search_element_skipped() {
+    let out = compile_and_run(r#"<?php echo str_replace(["", "a"], ["X", "Y"], "abc");"#);
+    assert_eq!(out, "Ybc");
+}
+
+/// Verifies str_ireplace supports the case-insensitive array-search/array-replace form.
+#[test]
+fn test_str_ireplace_array_search_array_replace() {
+    let out = compile_and_run(r#"<?php echo str_ireplace(["A", "B"], ["1", "2"], "abAB");"#);
+    assert_eq!(out, "1212");
+}
+
 /// Verifies explode splits a string on a delimiter and returns an indexed array.
 #[test]
 fn test_explode() {

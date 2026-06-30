@@ -69,6 +69,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_str_starts_with(emitter);
     strings::emit_str_ends_with(emitter);
     strings::emit_str_replace(emitter);
+    strings::emit_str_replace_array(emitter);
     strings::emit_explode(emitter);
     strings::emit_implode(emitter);
     strings::emit_implode_int(emitter);

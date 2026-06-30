@@ -3120,7 +3120,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_chr",
-      "codegen_line": 1041,
+      "codegen_line": 1090,
       "notes": [
         "Lowers `chr()` by converting an integer code point into a one-byte string."
       ],
@@ -10861,7 +10861,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_number_format",
-      "codegen_line": 1058,
+      "codegen_line": 1107,
       "notes": [
         "Lowers `number_format()` by arranging its runtime helper arguments."
       ],
@@ -10960,7 +10960,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_ord",
-      "codegen_line": 1017,
+      "codegen_line": 1066,
       "notes": [
         "Lowers `ord()` by returning the first byte of a string or zero for empty input."
       ],
@@ -14188,7 +14188,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_str_pad",
-      "codegen_line": 1001,
+      "codegen_line": 1050,
       "notes": [
         "Lowers `str_pad(string, length, pad_string?, pad_type?)` through the shared runtime helper."
       ],
@@ -14286,7 +14286,7 @@
   {
     "area": "String",
     "canonical_name": "str_replace",
-    "description": "Lowers `str_replace()`/`str_ireplace()` with three string operands.",
+    "description": "Lowers `str_replace()`/`str_ireplace()` with three operands.",
     "in_catalog": true,
     "is_internal": false,
     "lowering": {
@@ -14294,9 +14294,13 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_string_replace",
-      "codegen_line": 963,
+      "codegen_line": 968,
       "notes": [
-        "Lowers `str_replace()`/`str_ireplace()` with three string operands."
+        "Lowers `str_replace()`/`str_ireplace()` with three operands.",
+        "Handles the common all-string form directly, and the PHP array-`$search` form (with an array or",
+        "single-string `$replace`) against a string `$subject` through the `__rt_*_array` runtime helpers.",
+        "Array operands must currently be indexed `Array(Str)` (string slots); other array shapes return a",
+        "clear unsupported error rather than miscompiling."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -19099,7 +19103,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins/strings.rs",
       "codegen_function": "lower_wordwrap",
-      "codegen_line": 985,
+      "codegen_line": 1034,
       "notes": [
         "Lowers `wordwrap(string, width?, break?, cut?)` through the shared runtime helper."
       ],

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:1058](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L1058) (`lower_number_format`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:1107](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L1107) (`lower_number_format`)
 - **Function symbol**: `lower_number_format()`
 
 

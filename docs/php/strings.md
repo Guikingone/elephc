@@ -131,8 +131,8 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `strpos()` | `strpos($hay, $needle): int\|false` | Find first occurrence. Returns `false` if not found |
 | `strrpos()` | `strrpos($hay, $needle): int\|false` | Find last occurrence. Returns `false` if not found |
 | `strstr()` | `strstr($hay, $needle): string` | Find first occurrence and return rest |
-| `str_replace()` | `str_replace($search, $replace, $subject): string` | Replace all occurrences |
-| `str_ireplace()` | `str_ireplace($search, $replace, $subject): string` | Case-insensitive replace |
+| `str_replace()` | `str_replace($search, $replace, $subject): string` | Replace all occurrences. `$search`/`$replace` may be arrays: each search element is applied in order (a later element sees earlier replacements), and missing replacement elements become `""` |
+| `str_ireplace()` | `str_ireplace($search, $replace, $subject): string` | Case-insensitive replace. Supports the same array `$search`/`$replace` form as `str_replace()` |
 | `substr_replace()` | `substr_replace($str, $repl, $start [, $len]): string` | Replace substring |
 | `strtolower()` | `strtolower($str): string` | Convert to lowercase |
 | `strtoupper()` | `strtoupper($str): string` | Convert to uppercase |

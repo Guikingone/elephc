@@ -1,6 +1,6 @@
 ---
 title: "str_replace()"
-description: "Lowers `str_replace()`/`str_ireplace()` with three string operands."
+description: "Lowers `str_replace()`/`str_ireplace()` with three operands."
 sidebar:
   order: 381
 ---
@@ -11,7 +11,7 @@ sidebar:
 function str_replace(string $search, string $replace, string $subject, int $count): mixed
 ```
 
-Lowers `str_replace()`/`str_ireplace()` with three string operands.
+Lowers `str_replace()`/`str_ireplace()` with three operands.
 
 **Parameters**:
 - `$search` (`string`)
