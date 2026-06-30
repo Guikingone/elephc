@@ -4253,6 +4253,9 @@ fn ensure_property_type_supported(php_type: &PhpType, inst: &Instruction) -> Res
         | PhpType::Str
         | PhpType::Void
         | PhpType::Never => Ok(()),
+        // A nullable-int (`?int`) property lowers to the inline two-word tagged scalar
+        // (`{payload, tag}`), which fits the standard 16-byte property slot.
+        ty if ty.codegen_repr() == PhpType::TaggedScalar => Ok(()),
         ty if is_pointer_sized_property_type(ty) => Ok(()),
         _ => Err(CodegenIrError::unsupported(format!(
             "{} for property PHP type {:?}",
@@ -4288,6 +4291,9 @@ fn ensure_property_value_supported(
         return Ok(());
     }
     if can_coerce_tagged_scalar_to_int_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
+    if can_store_value_as_tagged_scalar_property(value_ty, &slot.php_type) {
         return Ok(());
     }
     if can_store_class_default_in_refined_null_property(ctx, value_ty, &slot.php_type) {
@@ -4453,6 +4459,28 @@ fn can_coerce_tagged_scalar_to_int_property(value_ty: &PhpType, slot_ty: &PhpTyp
     value_ty.codegen_repr() == PhpType::TaggedScalar && slot_ty.codegen_repr() == PhpType::Int
 }
 
+/// Returns true when a value can materialize a nullable-int (`?int`) tagged-scalar property.
+///
+/// Mirrors the static-property rule in `static_properties.rs`: ints/bools/callables tag as a
+/// non-null scalar, null/never produce the tagged null, and an already-tagged scalar or a
+/// boxed Mixed/Union value is reshaped into the `{payload, tag}` pair before the slot store.
+fn can_store_value_as_tagged_scalar_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    if slot_ty.codegen_repr() != PhpType::TaggedScalar {
+        return false;
+    }
+    matches!(
+        value_ty.codegen_repr(),
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Callable
+            | PhpType::Void
+            | PhpType::Never
+            | PhpType::TaggedScalar
+            | PhpType::Mixed
+            | PhpType::Union(_)
+    )
+}
+
 /// Returns true when a class default initializer writes into an untyped property later refined to null.
 fn can_store_class_default_in_refined_null_property(
     ctx: &FunctionContext<'_>,
@@ -4544,6 +4572,20 @@ fn emit_property_load(
         PhpType::Bool | PhpType::Int | PhpType::Void | PhpType::Never => {
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset);
+        }
+        ty if ty.codegen_repr() == PhpType::TaggedScalar => {
+            // A `?int` property holds the inline `{payload, tag}` pair: payload at `offset`,
+            // tag at `offset + 8`. Load the tag first when the base register aliases the
+            // payload result register so the payload load can safely clobber the base.
+            let payload_reg = abi::int_result_reg(ctx.emitter);
+            let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+            if base_reg == payload_reg {
+                abi::emit_load_from_address(ctx.emitter, tag_reg, base_reg, slot.offset + 8);
+                abi::emit_load_from_address(ctx.emitter, payload_reg, base_reg, slot.offset);
+            } else {
+                abi::emit_load_from_address(ctx.emitter, payload_reg, base_reg, slot.offset);
+                abi::emit_load_from_address(ctx.emitter, tag_reg, base_reg, slot.offset + 8);
+            }
         }
         ty if is_pointer_sized_property_type(ty) => {
             let int_reg = abi::int_result_reg(ctx.emitter);
@@ -4680,6 +4722,19 @@ fn emit_property_store(
             abi::emit_pop_reg(ctx.emitter, base_reg);
             abi::emit_store_to_address(ctx.emitter, int_reg, base_reg, slot.offset);
             abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
+        }
+        ty if ty.codegen_repr() == PhpType::TaggedScalar => {
+            // A `?int` property stores the inline `{payload, tag}` pair: payload at `offset`,
+            // tag at `offset + 8`. The tag word doubles as the typed-property marker word, so
+            // it must be written (not zeroed) to clear the uninitialized sentinel. A tagged
+            // scalar is a non-refcounted inline value, so no previous-slot release is needed.
+            let payload_reg = abi::int_result_reg(ctx.emitter);
+            let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+            abi::emit_push_reg(ctx.emitter, base_reg);
+            load_property_store_value_to_result(ctx, value, &slot.php_type)?;
+            abi::emit_pop_reg(ctx.emitter, base_reg);
+            abi::emit_store_to_address(ctx.emitter, payload_reg, base_reg, slot.offset);
+            abi::emit_store_to_address(ctx.emitter, tag_reg, base_reg, slot.offset + 8);
         }
         ty if is_pointer_sized_property_type(ty) => {
             let int_reg = abi::int_result_reg(ctx.emitter);
@@ -4930,6 +4985,16 @@ fn load_property_store_value_to_result(
     slot_ty: &PhpType,
 ) -> Result<()> {
     let value_ty = ctx.value_php_type(value)?;
+    if slot_ty.codegen_repr() == PhpType::TaggedScalar {
+        // Materialize the `{payload, tag}` pair for a nullable-int (`?int`) property store.
+        // Null/never need no source register; everything else is loaded then reshaped by the
+        // canonical tagged-scalar coercion (ints tag as non-null, Mixed/Union unboxes).
+        if !matches!(value_ty.codegen_repr(), PhpType::Void | PhpType::Never) {
+            ctx.load_value_to_result(value)?;
+        }
+        super::coerce_loaded_value_to_tagged_scalar(ctx, &value_ty)?;
+        return Ok(());
+    }
     if can_box_value_for_mixed_property(&value_ty, slot_ty) {
         let loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
         // Property stores do not consume the SSA source; explicit release ops still

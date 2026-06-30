@@ -245,6 +245,75 @@ echo WithoutDefault::$value;
     );
 }
 
+/// Verifies that a nullable-int (`?int`) instance property round-trips through the inline
+/// tagged-scalar slot: a `= null` default reads as null, an int store reads the int back, a
+/// null store reads back null, and the `NULL_SENTINEL` integer `-9223372036854775806` stores
+/// and reads as itself (the tag word distinguishes it from PHP null).
+#[test]
+fn test_nullable_int_instance_property_store_and_read() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public ?int $value = null;
+}
+$b = new Box();
+echo is_null($b->value);
+$b->value = 5;
+echo "|", $b->value;
+$b->value = null;
+echo "|", is_null($b->value) ? "yes" : "no";
+$b->value = -9223372036854775806;
+echo "|", $b->value;
+"#,
+    );
+    assert_eq!(out, "1|5|yes|-9223372036854775806");
+}
+
+/// Verifies a nullable-int (`?int`) instance property used across methods: a constructor
+/// stores a `?int` parameter (null here), a mutator reads the tagged scalar through `?? 0`
+/// and writes an int back, and an accessor returns the tagged scalar unchanged.
+#[test]
+fn test_nullable_int_instance_property_across_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Counter {
+    private ?int $n;
+    public function __construct(?int $start) { $this->n = $start; }
+    public function bump(): void { $this->n = ($this->n ?? 0) + 1; }
+    public function value(): ?int { return $this->n; }
+}
+$c = new Counter(null);
+echo is_null($c->value()) ? "n" : $c->value();
+$c->bump();
+echo "|", $c->value();
+$c->bump();
+echo "|", $c->value();
+"#,
+    );
+    assert_eq!(out, "n|1|2");
+}
+
+/// Verifies that a nullable-int (`?int`) instance property without a default remains
+/// uninitialized: the tagged-scalar tag word doubles as the typed-property marker, so an
+/// undefaulted slot still triggers the uninitialized-property fatal on read.
+#[test]
+fn test_uninitialized_nullable_int_instance_property_is_fatal() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class Box {
+    public ?int $value;
+}
+
+$box = new Box();
+echo $box->value;
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: Typed property Box::$value must not be accessed before initialization"),
+        "{err}"
+    );
+}
+
 /// Verifies that an untyped instance property with a `= null` default is strictly
 /// null (`=== null` is true, `== null` is true) and that `var_dump` emits `NULL`.
 #[test]
