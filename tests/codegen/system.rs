@@ -1786,6 +1786,29 @@ fn test_preg_match_no_digits() {
     assert_eq!(out, "0");
 }
 
+/// Verifies `preg_match()` populates `$matches` when it is a wrapper's by-reference parameter,
+/// writing the captures through the parameter's reference cell into the caller's array.
+///
+/// This is the symfony/yaml `Parser::preg_match` shape: the builtin's `$matches` out-parameter
+/// is itself the wrapper's `&$m` by-reference parameter, so it lowers to a ref-cell load rather
+/// than a direct local. The caller's `$arr` is seeded as a string array so element reads use the
+/// correct stride; the writeback releases that previous value and stores the fresh captures.
+/// Cross-checked against `php -r` (`1|ab|a|b`).
+#[test]
+fn test_preg_match_matches_through_byref_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function w(string $p, string $s, &$m): int {
+    return preg_match($p, $s, $m);
+}
+$arr = ["seed"];
+$n = w("/(a)(b)/", "zab", $arr);
+echo $n . "|" . $arr[0] . "|" . $arr[1] . "|" . $arr[2];
+"#,
+    );
+    assert_eq!(out, "1|ab|a|b");
+}
+
 /// Verifies `preg_match` with the Unicode property escape `\p{L}+` matches a run of letters
 /// including non-ASCII characters (Japanese kana).
 #[test]
