@@ -256,6 +256,14 @@ fn test_base64_roundtrip() {
     assert_eq!(out, "Test 123!");
 }
 
+/// Verifies `base64_decode()` accepts the optional second `$strict` argument
+/// (PHP `base64_decode(string $string, bool $strict = false)`) and still decodes.
+#[test]
+fn test_base64_decode_strict_arg() {
+    let out = compile_and_run(r#"<?php echo base64_decode("SGVsbG8=", true);"#);
+    assert_eq!(out, "Hello");
+}
+
 /// Verifies `ctype_alpha()` returns `"1"` (truthy) for an all-alphabetic string "Hello".
 #[test]
 fn test_gzcompress_roundtrip() {

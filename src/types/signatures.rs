@@ -89,7 +89,8 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         | "grapheme_strrev" | "addslashes" | "stripslashes" | "nl2br" | "bin2hex"
         | "hex2bin" | "htmlspecialchars" | "htmlentities" | "html_entity_decode"
         | "urlencode" | "urldecode" | "rawurlencode" | "rawurldecode"
-        | "base64_encode" | "base64_decode" => Some(fixed(&["string"])),
+        | "base64_encode" => Some(fixed(&["string"])),
+        "base64_decode" => Some(optional(&["string", "strict"], 1, vec![bool_lit(false)])),
         "gzcompress" => Some(optional(&["data", "level"], 1, vec![int_lit(-1)])),
         "gzdeflate" => Some(optional(&["data", "level"], 1, vec![int_lit(-1)])),
         "gzinflate" => Some(optional(&["data", "max_length"], 1, vec![int_lit(0)])),
@@ -294,6 +295,11 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         // category and first locale are required; further locale fallbacks are
         // variadic.
         "setlocale" => Some(variadic(&["category", "locales"], "rest")),
+        // Symfony's symfony/deprecation-contracts global:
+        // `trigger_deprecation(string $package, string $version, string $message,
+        // mixed ...$args): void`. package/version/message are required; the
+        // printf-style arguments are variadic.
+        "trigger_deprecation" => Some(variadic(&["package", "version", "message"], "args")),
         "array_search" => {
             Some(optional(&["needle", "haystack", "strict"], 2, vec![bool_lit(false)]))
         }

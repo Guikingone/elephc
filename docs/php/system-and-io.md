@@ -27,6 +27,7 @@ sidebar:
 | `shell_exec()` | `shell_exec($command): string` | Execute via shell, return output |
 | `system()` | `system($command): string` | Execute, output to stdout |
 | `passthru()` | `passthru($command): void` | Execute, pass raw output |
+| `trigger_deprecation()` | `trigger_deprecation($package, $version, $message, ...$args): void` | Symfony's `symfony/deprecation-contracts` global. Accepts the call and is a sound no-op: deprecation notices are advisory, so elephc evaluates the arguments and emits nothing |
 
 `define()` returns `true` the first time a constant is defined at runtime. Duplicate attempts keep the first value, return `false`, and emit a suppressible runtime warning. `defined()` currently requires a string literal in AOT mode.
 

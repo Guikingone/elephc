@@ -54,7 +54,13 @@ expect_builtin_arity_error!(
 expect_builtin_arity_error!(
     test_error_base64_decode_wrong_args,
     "<?php base64_decode();",
-    "base64_decode() takes exactly 1 argument"
+    "base64_decode() expects 1 or 2 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_base64_decode_too_many_args,
+    "<?php base64_decode(\"aGk=\", true, 1);",
+    "base64_decode() expects 1 or 2 arguments"
 );
 
 /// Verifies that `grapheme_strrev()` with no arguments produces the correct arity error.

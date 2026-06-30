@@ -6374,7 +6374,8 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         }
         "disk_free_space" | "disk_total_space" => Some(PhpType::Float),
         "clearstatcache" | "closedir" | "exit" | "die" | "passthru" | "rewinddir"
-        | "stream_bucket_append" | "stream_bucket_prepend" | "unset" => Some(PhpType::Void),
+        | "stream_bucket_append" | "stream_bucket_prepend" | "trigger_deprecation"
+        | "unset" => Some(PhpType::Void),
         "fclose" | "feof" | "rewind" => Some(PhpType::Bool),
         "printf" | "array_rand" | "array_unshift" | "file_put_contents" | "filemtime"
         | "filesize" | "fprintf" | "fpassthru" | "fputcsv" | "fseek" | "ftell" | "fwrite"

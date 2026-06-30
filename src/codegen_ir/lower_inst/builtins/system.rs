@@ -313,6 +313,19 @@ pub(super) fn lower_header(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     store_if_result(ctx, inst)
 }
 
+/// Lowers `trigger_deprecation(package, version, message, ...args)` as a sound no-op.
+///
+/// elephc suppresses Symfony deprecation notices: the call's arguments are already
+/// evaluated (for their side effects) during argument lowering, so this emitter emits
+/// no instructions and produces no value. Any owning argument temporaries are released
+/// by the shared call-argument cleanup, exactly as for any other builtin call.
+pub(super) fn lower_trigger_deprecation(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    store_if_result(ctx, inst)
+}
+
 /// Moves the string-result registers (AArch64 `x1`=ptr/`x2`=len, x86_64 `rax`=ptr/
 /// `rdx`=len) into the first two C-ABI integer argument registers (ptr→arg0, len→arg1).
 fn emit_move_string_result_to_first_two_args(ctx: &mut FunctionContext<'_>) {

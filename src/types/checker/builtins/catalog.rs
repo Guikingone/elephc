@@ -423,6 +423,7 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "stream_filter_append",
     "stream_filter_prepend",
     "stream_filter_remove",
+    "trigger_deprecation",
     "trim",
     "uasort",
     "ucfirst",

@@ -319,6 +319,18 @@ fn test_error_catch_requires_throwable_type() {
     );
 }
 
+/// Verifies that the builtin exception constructor still rejects more than three
+/// arguments after the optional third `?Throwable $previous` parameter was added.
+/// PHP's `Exception::__construct(string $message = "", int $code = 0,
+/// ?Throwable $previous = null)` takes at most three arguments.
+#[test]
+fn test_error_builtin_exception_rejects_four_arguments() {
+    expect_error(
+        "<?php $e = new RuntimeException(\"a\", 0, null, \"extra\");",
+        "expects 0 to 3 arguments, got 4",
+    );
+}
+
 /// Verifies that redeclaring the built-in `Exception` class
 /// reports "Cannot redeclare built-in type: Exception".
 #[test]

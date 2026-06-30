@@ -796,13 +796,20 @@ fn emit_iterator_inner_property_from_result(
 }
 
 /// Lowers builtin Throwable allocation using the compact runtime payload layout.
+///
+/// PHP's `Exception::__construct` accepts an optional third `?Throwable $previous`
+/// argument. The compact 32-byte runtime payload only stores the class id, message,
+/// and code, so a supplied `previous` operand is accepted but not retained: it has
+/// already been evaluated during argument lowering, and `getPrevious()` is hard-coded
+/// to return null (`lower_throwable_null_previous`). A fourth or later operand is still
+/// rejected as malformed.
 fn lower_builtin_throwable_new(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     class_name: &str,
     class_id: u64,
 ) -> Result<()> {
-    if inst.operands.len() > 2 {
+    if inst.operands.len() > 3 {
         return Err(CodegenIrError::unsupported(format!(
             "{}::__construct with {} EIR operands",
             class_name,

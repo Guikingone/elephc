@@ -196,7 +196,7 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `rawurlencode()` | `rawurlencode($str): string` | URL-encode (spaces as %20) |
 | `rawurldecode()` | `rawurldecode($str): string` | URL-decode (RFC 3986) |
 | `base64_encode()` | `base64_encode($str): string` | Base64 encode |
-| `base64_decode()` | `base64_decode($str): string` | Base64 decode |
+| `base64_decode()` | `base64_decode($str, $strict = false): string` | Base64 decode; the optional `$strict` flag is accepted (decoding is unaffected) |
 | `gzcompress()` | `gzcompress(string $data, int $level = -1): string` | Compress a string with zlib (system `libz`); `$level` is `-1` (default) or `0`–`9` |
 | `gzuncompress()` | `gzuncompress(string $data): string\|false` | Decompress a `gzcompress()`-produced string; `false` on a zlib error |
 | `gzdeflate()` | `gzdeflate(string $data, int $level = -1): string` | Compress a string into raw DEFLATE — no zlib header or trailer; `$level` is `-1` (default) or `0`–`9` |

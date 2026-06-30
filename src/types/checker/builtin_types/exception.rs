@@ -42,7 +42,12 @@ pub(super) fn builtin_exception_message_property() -> ClassProperty {
 }
 
 /// Returns a synthetic `ClassMethod` AST node for the `__construct` method of builtin Exception classes.
-/// Takes `message` (string, default `""`) and `code` (int, default `0`) parameters and assigns them to the corresponding properties.
+/// Takes `message` (string, default `""`), `code` (int, default `0`), and `previous`
+/// (`?Throwable`, default `null`) parameters. `message` and `code` are stored; `previous`
+/// is accepted to match PHP's `Exception::__construct(string $message = "", int $code = 0,
+/// ?Throwable $previous = null)` signature and PHP exception-chaining `parent::__construct`
+/// calls, but is not retained — the compact runtime Throwable payload has no previous slot,
+/// so `getPrevious()` always returns null (see `lower_throwable_null_previous`).
 pub(super) fn builtin_exception_constructor_method() -> ClassMethod {
     ClassMethod {
         name: "__construct".to_string(),
@@ -68,6 +73,12 @@ pub(super) fn builtin_exception_constructor_method() -> ClassMethod {
                     ExprKind::IntLiteral(0),
                     crate::span::Span::dummy(),
                 )),
+                false,
+            ),
+            (
+                "previous".to_string(),
+                None,
+                Some(Expr::new(ExprKind::Null, crate::span::Span::dummy())),
                 false,
             ),
         ],
@@ -206,7 +217,9 @@ pub(super) fn builtin_exception_get_trace_as_string_method() -> ClassMethod {
 }
 
 /// Returns a synthetic `ClassMethod` for `Exception::getPrevious()`.
-/// Return type is `?Throwable`; body returns `null` in the dummy AST.
+/// Return type is `?Throwable`; body returns `null` in the dummy AST. The EIR backend
+/// special-cases this method (`lower_throwable_null_previous`) and always returns null,
+/// because the compact runtime Throwable payload does not store a chained previous.
 pub(super) fn builtin_exception_get_previous_method() -> ClassMethod {
     concrete_throwable_method(
         "getPrevious",
@@ -350,6 +363,9 @@ pub(crate) fn patch_builtin_exception_signatures(checker: &mut Checker) {
                 }
                 if let Some(param) = sig.params.get_mut(1) {
                     param.1 = PhpType::Int;
+                }
+                if let Some(param) = sig.params.get_mut(2) {
+                    param.1 = nullable_throwable.clone();
                 }
                 sig.return_type = PhpType::Void;
             }

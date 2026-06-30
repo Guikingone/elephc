@@ -122,6 +122,39 @@ fn test_builtin_throwable_catch_exposes_standard_api() {
     assert_eq!(out, "caught:42::0:0::none:caught");
 }
 
+/// Verifies that the builtin exception constructor accepts PHP's optional third
+/// `?Throwable $previous` argument (`new RuntimeException($msg, $code, $previous)`).
+/// The message and code are stored and read back correctly. The compact runtime
+/// Throwable payload does not retain the chained cause, so `getPrevious()` returns
+/// null even when a previous exception was supplied — this is a documented limitation
+/// (storing `previous` would require expanding the fixed-size Throwable payload).
+#[test]
+fn test_builtin_exception_accepts_previous_constructor_argument() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = new Exception("cause");
+$e = new RuntimeException("outer", 7, $inner);
+echo $e->getMessage(), ":", $e->getCode(), ":";
+echo $e->getPrevious() === null ? "null" : "set";
+"#,
+    );
+    assert_eq!(out, "outer:7:null");
+}
+
+/// Verifies that two-argument builtin exception construction still works after the
+/// optional third `previous` parameter was added, and that `getPrevious()` is null.
+#[test]
+fn test_builtin_exception_two_argument_construction_still_works() {
+    let out = compile_and_run(
+        r#"<?php
+$e = new RuntimeException("msg", 13);
+echo $e->getMessage(), ":", $e->getCode(), ":";
+echo $e->getPrevious() === null ? "null" : "set";
+"#,
+    );
+    assert_eq!(out, "msg:13:null");
+}
+
 /// Tests a user-defined interface (AppThrowable) that extends Throwable and an
 /// Exception implementing it (AppException). Verifies that catching as the
 /// interface type correctly dispatches getMessage() and getCode().

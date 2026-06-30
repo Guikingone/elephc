@@ -84,6 +84,29 @@ pub(super) fn lower_unary_string_runtime(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `base64_decode(string $string, bool $strict = false)`.
+///
+/// PHP accepts an optional second `$strict` argument. elephc decodes the same
+/// way regardless of `$strict`, so the second operand (already evaluated for its
+/// side effects during argument lowering) is ignored here; only the first string
+/// operand is materialized into the runtime call's argument registers.
+pub(super) fn lower_base64_decode(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.is_empty() || inst.operands.len() > 2 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "base64_decode expected 1 or 2 args, got {}",
+            inst.operands.len()
+        )));
+    }
+    let ptr_reg = string_ptr_reg(ctx);
+    let len_reg = string_len_reg(ctx);
+    load_string_arg_to_regs(ctx, inst, 0, "base64_decode", ptr_reg, len_reg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_base64_decode");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `grapheme_strrev()` and boxes its `string|false` result as `Mixed`.
 pub(super) fn lower_grapheme_strrev(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_single_string_arg(ctx, inst, "grapheme_strrev")?;

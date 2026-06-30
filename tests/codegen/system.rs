@@ -3163,3 +3163,39 @@ echo function_exists("mktime") ? "1" : "0", function_exists("gmmktime") ? "1" : 
     );
     assert_eq!(out, "2024-06-15 12:30:45|03-15|same-year|h12|11");
 }
+
+/// Verifies `trigger_deprecation()` (Symfony's symfony/deprecation-contracts global)
+/// is a sound no-op: it compiles, runs, emits no deprecation output, returns nothing,
+/// and execution continues normally. Both the required-only and variadic printf-style
+/// argument forms are accepted.
+#[test]
+fn test_trigger_deprecation_noop() {
+    let out = compile_and_run(
+        r#"<?php
+echo "before|";
+trigger_deprecation("symfony/yaml", "7.2", "Plain deprecation message.");
+trigger_deprecation("symfony/yaml", "7.2", "Key %s on line %d.", "name", 1 + 2);
+echo "after";
+"#,
+    );
+    assert_eq!(out, "before|after");
+}
+
+/// Verifies `trigger_deprecation()` resolves through the namespace-to-global builtin
+/// fallback when called unqualified inside a namespace (as Symfony does), and that a
+/// mixed-case spelling resolves via case-insensitive builtin lookup. Also confirms
+/// `function_exists("trigger_deprecation")` recognizes it.
+#[test]
+fn test_trigger_deprecation_namespaced_and_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Symfony\Component\Yaml;
+
+echo function_exists("trigger_deprecation") ? "fx|" : "no|";
+trigger_deprecation("symfony/yaml", "7.2", "Unqualified in namespace.");
+Trigger_Deprecation("symfony/yaml", "7.2", "Mixed case %s.", "ok");
+echo "done";
+"#,
+    );
+    assert_eq!(out, "fx|done");
+}

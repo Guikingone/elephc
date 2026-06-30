@@ -52,6 +52,23 @@ pub(super) fn check_builtin(
             }
             Ok(Some(checker.normalize_union_type(vec![PhpType::Str, PhpType::Bool])))
         }
+        "trigger_deprecation" => {
+            // `trigger_deprecation(string $package, string $version, string $message,
+            // mixed ...$args): void` is Symfony's symfony/deprecation-contracts global.
+            // In PHP it formats the message and raises an `E_USER_DEPRECATED` notice.
+            // Deprecation notices are advisory, so elephc accepts the call and treats it
+            // as a sound no-op returning void. package/version/message are required.
+            if args.len() < 3 {
+                return Err(CompileError::new(
+                    span,
+                    "trigger_deprecation() takes at least 3 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Void))
+        }
         "microtime" => {
             if args.len() > 1 {
                 return Err(CompileError::new(span, "microtime() takes 0 or 1 arguments"));

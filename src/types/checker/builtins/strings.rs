@@ -486,8 +486,7 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Int))
         }
         "htmlspecialchars" | "htmlentities" | "html_entity_decode" | "urlencode"
-        | "urldecode" | "rawurlencode" | "rawurldecode" | "base64_encode"
-        | "base64_decode" => {
+        | "urldecode" | "rawurlencode" | "rawurldecode" | "base64_encode" => {
             if args.len() != 1 {
                 return Err(CompileError::new(
                     span,
@@ -495,6 +494,21 @@ pub(super) fn check_builtin(
                 ));
             }
             checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Str))
+        }
+        // PHP: base64_decode(string $string, bool $strict = false): string|false.
+        // elephc decodes identically regardless of $strict for now, but must
+        // accept the optional second argument so the call type-checks.
+        "base64_decode" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(CompileError::new(
+                    span,
+                    "base64_decode() expects 1 or 2 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
             Ok(Some(PhpType::Str))
         }
         "gzcompress" | "gzuncompress" | "gzdeflate" | "gzinflate" => {
