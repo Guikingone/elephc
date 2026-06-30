@@ -15,7 +15,8 @@ use crate::ir::{
     Ownership, Terminator, ValueId,
 };
 use crate::ir_lower::context::{
-    value_ir_type, ClosureCapture, LoweredValue, LoweringContext, StaticCallableBinding,
+    value_ir_type, ByRefPropWriteback, ClosureCapture, LoweredValue, LoweringContext,
+    StaticCallableBinding,
 };
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::function;
@@ -36,7 +37,22 @@ mod constants;
 mod nullsafe_chain;
 
 /// Lowers an expression and returns its EIR value.
+///
+/// Wraps the dispatch with by-reference instance-property copy-out flushing: any hidden
+/// copy-in temp registered while lowering a call inside this expression is written back into
+/// its property slot here, after the call op, on the normal-return edge. The per-expression
+/// mark ensures nested calls flush their own writebacks first, so each call's copy-out is
+/// emitted straight after that call. Plain-variable by-reference args register nothing, so the
+/// flush is a no-op and their lowering is unchanged.
 pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue {
+    let writeback_mark = ctx.byref_prop_writeback_mark();
+    let result = lower_expr_dispatch(ctx, expr);
+    flush_byref_prop_writebacks(ctx, writeback_mark);
+    result
+}
+
+/// Dispatches an AST expression node into an EIR value without by-reference writeback flushing.
+fn lower_expr_dispatch(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue {
     if let Some(value) = nullsafe_chain::lower(ctx, expr) {
         return value;
     }
@@ -4389,11 +4405,96 @@ fn lower_arg_with_signature(
     index: usize,
     arg: &Expr,
 ) -> crate::ir::ValueId {
+    if let Some(value) = lower_by_ref_property_arg_with_signature(ctx, sig, index, arg) {
+        return value;
+    }
     if let Some(value) = lower_by_ref_array_arg_with_signature(ctx, sig, index, arg) {
         return value;
     }
     let lowered = lower_expr(ctx, arg);
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
+}
+
+/// Lowers a non-nullsafe instance property fetch passed into a by-reference parameter as
+/// copy-in/copy-out through a hidden caller-frame temp.
+///
+/// Returns `Some(operand)` only when `sig`'s parameter `index` is by-reference and `arg` is a
+/// non-nullsafe `$obj->prop` fetch (the form the checker additionally accepts). The property
+/// value is incref-copied into a fresh owned temp `T` typed as the by-reference parameter's
+/// storage; `&T` is then routed through the existing plain-variable by-reference machinery by
+/// loading `T` (its `LoadLocal` operand makes codegen pass the slot address). The matching
+/// copy-out (move `T` back into the property) is deferred via `push_byref_prop_writeback` and
+/// flushed by the enclosing call site after the call op, on the normal-return edge only.
+///
+/// All other arguments (plain `$var`, non-property exprs, by-value params) return `None` and
+/// keep their existing lowering byte-for-byte.
+fn lower_by_ref_property_arg_with_signature(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) -> Option<crate::ir::ValueId> {
+    if !sig.ref_params.get(index).copied().unwrap_or(false) {
+        return None;
+    }
+    let ExprKind::PropertyAccess { object, property } = &arg.kind else {
+        return None;
+    };
+    // The hidden temp carries the widened storage the callee writes back; copy-out then moves
+    // it into the property without ever widening the object's declared property layout.
+    let (_, param_ty) = sig.params.get(index)?;
+    let temp_ty = param_ty.clone();
+    // Evaluate the receiver base once so a side-effecting base is not re-run on copy-out.
+    let base = lower_expr(ctx, object);
+    // Copy-in: read the property and incref a shared copy into the temp (array rc 1 → 2).
+    let prop_value = lower_property_get_from_value(ctx, base, property, Op::PropGet, arg);
+    let temp_name = ctx.declare_owned_hidden_temp(temp_ty.clone());
+    store_value_into_temp(ctx, &temp_name, temp_ty, prop_value, arg.span);
+    ctx.push_byref_prop_writeback(ByRefPropWriteback {
+        temp_name: temp_name.clone(),
+        base_value: base.value,
+        property: property.clone(),
+        span: arg.span,
+    });
+    // Route `&T` through the existing by-reference path: a plain LoadLocal of the temp slot.
+    Some(ctx.load_local(&temp_name, Some(arg.span)).value)
+}
+
+/// Emits the deferred copy-out writebacks registered since `mark` for by-reference instance
+/// property arguments, after the enclosing call op has been emitted.
+///
+/// Each writeback moves its hidden temp's current value back into the property slot using the
+/// normal retaining property-store path (release old value, retaining store, release the moved
+/// source), leaving the property owning the callee's result at refcount 1. This runs on the
+/// normal-return edge only; on throw/unwind the temp is released by standard cleanup and the
+/// property keeps its pre-call value.
+fn flush_byref_prop_writebacks(ctx: &mut LoweringContext<'_, '_>, mark: usize) {
+    let writebacks = ctx.take_byref_prop_writebacks_since(mark);
+    for writeback in writebacks {
+        // Copy-out runs only here, on the normal-return edge. PHP's true aliasing would expose
+        // the callee's partial writes even when the callee throws; a future, fully faithful
+        // implementation would write the temp back on every cleanup edge. We intentionally do
+        // not implement all-edge writeback now (throw keeps the property's pre-call value).
+        let moved = take_owned_temp(ctx, &writeback.temp_name, writeback.span);
+        let data = ctx.intern_string(&writeback.property);
+        ctx.emit_void(
+            Op::PropSet,
+            vec![writeback.base_value, moved.value],
+            Some(Immediate::Data(data)),
+            Op::PropSet.default_effects(),
+            Some(writeback.span),
+        );
+        if let Some(property_ty) =
+            crate::ir_lower::stmt::object_property_type(ctx, writeback.base_value, &writeback.property)
+        {
+            crate::ir_lower::stmt::release_property_assignment_source_after_retaining_store(
+                ctx,
+                &property_ty,
+                moved,
+                writeback.span,
+            );
+        }
+    }
 }
 
 /// Coerces a positional argument's storage to match a declared scalar parameter type.

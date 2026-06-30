@@ -505,3 +505,111 @@ fn test_user_function_by_ref_output_defines_previously_undefined_variable() {
     );
     assert_eq!(out, "42");
 }
+
+/// Passing a non-nullsafe instance array property (`$this->refs`) into a by-reference parameter
+/// lowers as copy-in/copy-out: the callee's append is visible in the property after the call
+/// (the structural shape of symfony/yaml's `Inline::parse(..., $this->refs, ...)` call sites).
+#[test]
+fn test_by_ref_array_property_reflects_callee_append() {
+    let out = compile_and_run(
+        "<?php
+        class Helper {
+            public static function fill(array &$refs): void {
+                $refs[] = 99;
+                $refs[] = 100;
+            }
+        }
+        class Box {
+            public array $refs = [];
+            public function run(): void {
+                Helper::fill($this->refs);
+            }
+        }
+        $b = new Box();
+        $b->refs[] = 1;
+        $b->run();
+        echo implode(',', $b->refs), \"\\n\";
+        echo count($b->refs), \"\\n\";",
+    );
+    assert_eq!(out, "1,99,100\n3\n");
+}
+
+/// A by-reference instance-property argument whose callee only reads leaves the property's value
+/// unchanged after the call (the copy-out moves the unmodified array back through the property).
+#[test]
+fn test_by_ref_array_property_readonly_callee_leaves_property_unchanged() {
+    let out = compile_and_run(
+        "<?php
+        class Helper {
+            public static function peek(array &$refs): int {
+                return count($refs);
+            }
+        }
+        class Box {
+            public array $refs = [];
+            public function size(): int {
+                return Helper::peek($this->refs);
+            }
+        }
+        $b = new Box();
+        $b->refs[] = 1;
+        $b->refs[] = 2;
+        echo $b->size(), \"\\n\";
+        echo implode(',', $b->refs), \"\\n\";",
+    );
+    assert_eq!(out, "2\n1,2\n");
+}
+
+/// An instance method receiving its own array property by reference (`$this->add($this->data)`)
+/// observes the callee's append after the call, and repeated calls accumulate, confirming the
+/// hidden copy-in temp routes through the existing plain-variable by-reference machinery.
+#[test]
+fn test_by_ref_property_into_instance_method_accumulates() {
+    let out = compile_and_run(
+        "<?php
+        class C {
+            public array $data = [];
+            public function add(array &$a): void { $a[] = 7; }
+            public function go(): void { $this->add($this->data); }
+        }
+        $c = new C();
+        $c->go();
+        $c->go();
+        echo implode(',', $c->data), \"\\n\";",
+    );
+    assert_eq!(out, "7,7\n");
+}
+
+/// When a by-reference callee mutates the property's array and then throws, the caller catches
+/// and the property keeps its PRE-call value: copy-out runs on the normal-return edge only, so
+/// the partial write never reaches the property. (PHP's true aliasing would expose the partial
+/// write; this conservative behavior is intentional and documented at the copy-out site.)
+#[test]
+fn test_by_ref_property_throw_keeps_precall_value() {
+    let out = compile_and_run(
+        "<?php
+        class Helper {
+            public static function fillThenThrow(array &$refs): void {
+                $refs[] = 42;
+                throw new Exception(\"boom\");
+            }
+        }
+        class Box {
+            public array $refs = [];
+            public function run(): void {
+                Helper::fillThenThrow($this->refs);
+            }
+        }
+        $b = new Box();
+        $b->refs[] = 1;
+        $b->refs[] = 2;
+        try {
+            $b->run();
+        } catch (Exception $e) {
+            echo \"caught:\", $e->getMessage(), \"\\n\";
+        }
+        echo implode(',', $b->refs), \"\\n\";
+        echo count($b->refs), \"\\n\";",
+    );
+    assert_eq!(out, "caught:boom\n1,2\n2\n");
+}

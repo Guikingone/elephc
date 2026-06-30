@@ -333,7 +333,7 @@ impl Checker {
             }
             if param_idx < regular_param_count {
                 if sig.ref_params.get(param_idx).copied().unwrap_or(false)
-                    && !matches!(arg.kind, ExprKind::Variable(_))
+                    && !super::is_by_ref_lvalue(arg)
                 {
                     let param_name = sig
                         .params
@@ -351,6 +351,7 @@ impl Checker {
                 if let Some((param_name, expected_ty)) = sig.params.get(param_idx) {
                     if sig.declared_params.get(param_idx).copied().unwrap_or(false)
                         && sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                        && !super::is_by_ref_property_arg(arg)
                     {
                         self.require_boxed_by_ref_storage(
                             expected_ty,

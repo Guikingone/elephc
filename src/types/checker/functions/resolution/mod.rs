@@ -291,7 +291,7 @@ impl Checker {
                     }
                 }
                 if decl.ref_params.get(arg_idx).copied().unwrap_or(false)
-                    && !matches!(arg.kind, ExprKind::Variable(_))
+                    && !super::is_by_ref_lvalue(arg)
                 {
                     let param_name = decl
                         .params
@@ -317,7 +317,9 @@ impl Checker {
                         decl.span,
                         &format!("Function '{}' parameter ${}", name, param_name),
                     )?;
-                    if decl.ref_params.get(arg_idx).copied().unwrap_or(false) {
+                    if decl.ref_params.get(arg_idx).copied().unwrap_or(false)
+                        && !super::is_by_ref_property_arg(arg)
+                    {
                         self.require_boxed_by_ref_storage(
                             &declared_ty,
                             &ty,
@@ -517,7 +519,7 @@ impl Checker {
                     .get(param_idx)
                     .copied()
                     .unwrap_or(false)
-                    && !matches!(arg.kind, ExprKind::Variable(_))
+                    && !super::is_by_ref_lvalue(arg)
                 {
                     let param_name = effective_sig
                         .params
@@ -543,6 +545,7 @@ impl Checker {
                             .get(param_idx)
                             .copied()
                             .unwrap_or(false)
+                        && !super::is_by_ref_property_arg(arg)
                     {
                         self.require_boxed_by_ref_storage(
                             expected_ty,

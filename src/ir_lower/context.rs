@@ -32,6 +32,27 @@ pub(crate) struct LoweredValue {
     pub ir_type: IrType,
 }
 
+/// A by-reference instance-property argument whose hidden copy-in temp must be
+/// written back into the property slot on the call's normal-return edge.
+///
+/// A non-nullsafe `$obj->prop` passed into a by-reference parameter is lowered as
+/// copy-in/copy-out: the property value is incref-copied into `temp_name`, `&temp`
+/// is routed through the existing plain-variable by-reference machinery, and after
+/// the call returns the temp is moved back into the property slot. Throw/unwind
+/// edges skip the copy-out (the property keeps its pre-call value).
+#[derive(Debug, Clone)]
+pub(crate) struct ByRefPropWriteback {
+    /// Synthetic owned-temp local that carried `&temp` through the by-reference ABI.
+    pub temp_name: String,
+    /// SSA value of the receiver object, evaluated once during copy-in and reused
+    /// for copy-out so a side-effecting base is not evaluated twice.
+    pub base_value: ValueId,
+    /// Declared property name on the receiver object.
+    pub property: String,
+    /// Source span of the original property-fetch argument.
+    pub span: Span,
+}
+
 /// Loop-control target pair for `break` and `continue`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LoopFrame {
@@ -138,6 +159,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
     hidden_temp_counter: usize,
+    /// Deferred copy-out writebacks for by-reference instance-property arguments,
+    /// flushed onto the normal-return edge once the enclosing call op is emitted.
+    byref_prop_writebacks: Vec<ByRefPropWriteback>,
 }
 
 impl<'m, 'f> LoweringContext<'m, 'f> {
@@ -201,7 +225,34 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             pending_static_callable_result: None,
             closure_counter: 0,
             hidden_temp_counter: 0,
+            byref_prop_writebacks: Vec::new(),
         }
+    }
+
+    /// Returns the current depth of the by-reference property-writeback stack.
+    ///
+    /// A call-lowering site snapshots this before lowering its arguments and passes
+    /// it to `take_byref_prop_writebacks_since` after emitting the call op, so only
+    /// the writebacks registered for that call are flushed (nested calls flush their
+    /// own first).
+    pub(crate) fn byref_prop_writeback_mark(&self) -> usize {
+        self.byref_prop_writebacks.len()
+    }
+
+    /// Records a deferred copy-out writeback for a by-reference instance-property argument.
+    pub(crate) fn push_byref_prop_writeback(&mut self, writeback: ByRefPropWriteback) {
+        self.byref_prop_writebacks.push(writeback);
+    }
+
+    /// Removes and returns the by-reference property writebacks registered since `mark`.
+    pub(crate) fn take_byref_prop_writebacks_since(
+        &mut self,
+        mark: usize,
+    ) -> Vec<ByRefPropWriteback> {
+        if mark >= self.byref_prop_writebacks.len() {
+            return Vec::new();
+        }
+        self.byref_prop_writebacks.split_off(mark)
     }
 
     /// Interns a string literal or metadata name in the module data pool.

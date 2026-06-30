@@ -68,6 +68,48 @@ fn test_error_closure_ref_param_requires_variable() {
     );
 }
 
+/// Verifies that passing a non-lvalue literal to a by-reference function parameter is still
+/// rejected. Only `$var` and non-nullsafe instance property fetches are accepted by reference.
+#[test]
+fn test_error_function_ref_param_rejects_literal() {
+    expect_error(
+        "<?php function bump(int &$p) { $p = $p + 1; } bump(1);",
+        "Function 'bump' parameter $p must be passed a variable",
+    );
+}
+
+/// Verifies that an array-element argument (`$arr['k']`) is still rejected for a by-reference
+/// parameter. The by-reference property relaxation is scoped to non-nullsafe instance property
+/// fetches only; array elements remain future work.
+#[test]
+fn test_error_function_ref_param_rejects_array_element() {
+    expect_error(
+        "<?php function f(array &$p) { $p[] = 1; } $arr = ['k' => [1]]; f($arr['k']);",
+        "Function 'f' parameter $p must be passed a variable",
+    );
+}
+
+/// Verifies that a static-property argument (`C::$p`) is still rejected for a by-reference
+/// parameter. The relaxation accepts instance properties only, never static properties.
+#[test]
+fn test_error_function_ref_param_rejects_static_property() {
+    expect_error(
+        "<?php class C { public static array $p = []; } function f(array &$p) { $p[] = 1; } f(C::$p);",
+        "Function 'f' parameter $p must be passed a variable",
+    );
+}
+
+/// Verifies that a nullsafe property fetch (`$o?->p`) is still rejected for a by-reference
+/// parameter. Copy-in/copy-out is only sound for a definitely-present instance property, so the
+/// nullsafe form stays rejected.
+#[test]
+fn test_error_function_ref_param_rejects_nullsafe_property() {
+    expect_error(
+        "<?php class C { public array $p = []; } function f(array &$p) { $p[] = 1; } $o = new C(); f($o?->p);",
+        "Function 'f' parameter $p must be passed a variable",
+    );
+}
+
 /// Verifies that a typed parameter rejects a mismatched argument type at the call site.
 #[test]
 fn test_error_function_typed_param_rejects_wrong_argument() {
