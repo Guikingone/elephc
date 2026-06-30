@@ -124,6 +124,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::StrToF => conversions::lower_str_to_float(ctx, &inst),
         Op::Cast => conversions::lower_cast(ctx, &inst),
         Op::ObjectCast => conversions::lower_object_cast(ctx, &inst),
+        Op::ArrayCast => conversions::lower_array_cast(ctx, &inst),
         Op::MixedBox => lower_mixed_box(ctx, &inst),
         Op::InvokerRefArg => lower_invoker_ref_arg(ctx, &inst),
         Op::ArrayToMixed => arrays::lower_array_to_mixed(ctx, &inst),

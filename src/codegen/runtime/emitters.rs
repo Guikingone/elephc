@@ -254,6 +254,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_unshift(emitter);
     arrays::emit_array_merge(emitter);
     arrays::emit_array_merge_refcounted(emitter);
+    arrays::emit_array_merge_str(emitter);
     arrays::emit_array_slice(emitter);
     arrays::emit_array_slice_refcounted(emitter);
     arrays::emit_range(emitter);
@@ -300,6 +301,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_walk(emitter);
     arrays::emit_usort(emitter);
     arrays::emit_array_to_mixed(emitter);
+    arrays::emit_array_from_mixed(emitter);
     arrays::emit_array_merge_into(emitter);
     arrays::emit_array_merge_into_refcounted(emitter);
     arrays::emit_decref_any(emitter);

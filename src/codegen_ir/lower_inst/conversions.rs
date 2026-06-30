@@ -79,6 +79,23 @@ pub(super) fn lower_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     }
 }
 
+/// Lowers the PHP `(array)` cast by dispatching to the runtime array builder.
+///
+/// The single operand is always a boxed `Mixed` cell (the EIR lowering boxes any
+/// non-array source and passes indexed arrays through directly). `__rt_array_from_mixed`
+/// inspects the runtime tag and returns a freshly owned boxed-Mixed array: null becomes an
+/// empty array, an indexed-array payload is rebuilt into boxed-Mixed slots, and scalars
+/// wrap in a single-element `[value]` array. Associative-array and object payloads fatal
+/// because their string keys cannot fit the int-indexed result type. This lowering only
+/// needs to place the Mixed pointer in the first integer-argument register, call the
+/// helper, and store the returned array pointer into the instruction result.
+pub(super) fn lower_array_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    load_value_to_first_int_arg(ctx, value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_array_from_mixed");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers an explicit cast to PHP int for concrete scalar operands.
 fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;

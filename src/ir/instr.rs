@@ -227,6 +227,12 @@ pub enum Op {
     /// become a `scalar` property, `null` becomes an empty object, and an
     /// object payload is returned (retained) unchanged.
     ObjectCast,
+    /// PHP `(array)` cast. Takes a single boxed `Mixed` operand and produces a
+    /// freshly allocated owned boxed-Mixed `array<mixed>`: an indexed array is
+    /// rebuilt element-by-element, a scalar becomes a single-element `[value]`
+    /// array, `null` becomes an empty array, and associative-array/object payloads
+    /// fatal (their string keys cannot fit the int-indexed result type).
+    ArrayCast,
     MixedBox,
     InvokerRefArg,
     MixedUnbox,
@@ -414,6 +420,9 @@ impl Op {
             // `(object)` reads the boxed source, allocates a fresh stdClass and its
             // property hash, and retains the inserted/passed-through payloads.
             ObjectCast => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
+            // `(array)` reads the boxed source, allocates a fresh boxed-Mixed array,
+            // and retains every boxed element it appends.
+            ArrayCast => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
             MixedBox | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | BufferNew | GeneratorNew => {
@@ -568,6 +577,7 @@ impl Op {
             ResourceToStr => "resource_to_str",
             Cast => "cast",
             ObjectCast => "object_cast",
+            ArrayCast => "array_cast",
             MixedBox => "mixed_box",
             InvokerRefArg => "invoker_ref_arg",
             MixedUnbox => "mixed_unbox",

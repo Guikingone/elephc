@@ -33,14 +33,35 @@ pub(super) fn lower_array_key_exists(ctx: &mut FunctionContext<'_>, inst: &Instr
     }
 }
 
-/// Lowers indexed-array key existence through the bounds-check runtime helper.
+/// Lowers indexed-array key existence, dispatching on the key's storage type.
+///
+/// Integer/bool keys index the packed offset directly. A string key follows PHP's
+/// array-key coercion: a canonical-integer string (`"0"`, `"12"`) normalizes to an
+/// integer offset and is bounds-checked, while any other string can never exist in a
+/// packed indexed array and yields `false`.
 fn lower_indexed_array_key_exists(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     key: ValueId,
     array: ValueId,
 ) -> Result<()> {
-    require_indexed_key_type(ctx.value_php_type(key)?)?;
+    match ctx.value_php_type(key)?.codegen_repr() {
+        PhpType::Int | PhpType::Bool => lower_indexed_integer_key_exists(ctx, inst, key, array),
+        PhpType::Str => lower_indexed_string_key_exists(ctx, inst, key, array),
+        other => Err(CodegenIrError::unsupported(format!(
+            "array_key_exists key PHP type {:?}",
+            other
+        ))),
+    }
+}
+
+/// Lowers an integer/bool indexed-array key existence through the bounds-check helper.
+fn lower_indexed_integer_key_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    key: ValueId,
+    array: ValueId,
+) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
@@ -52,6 +73,50 @@ fn lower_indexed_array_key_exists(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_key_exists");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a string indexed-array key existence via PHP numeric-string key coercion.
+///
+/// `__rt_hash_normalize_key` returns `key_hi = -1` when the string is a canonical
+/// integer key; that integer offset is then bounds-checked with `__rt_array_key_exists`.
+/// A string that stays a string key cannot exist in a packed indexed array, so the
+/// result is `false`.
+fn lower_indexed_string_key_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    key: ValueId,
+    array: ValueId,
+) -> Result<()> {
+    let string_miss = ctx.next_label("array_key_exists_str_miss");
+    let done = ctx.next_label("array_key_exists_str_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_string_value_to_regs(key, "x1", "x2")?;
+            abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+            ctx.emitter.instruction("cmn x2, #1");                              // key_hi == -1 marks a normalized integer key
+            ctx.emitter.instruction(&format!("b.ne {}", string_miss));          // genuine string keys never index a packed array
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_key_exists");
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the string-miss fallback after the bounds check
+            ctx.emitter.label(&string_miss);
+            ctx.emitter.instruction("mov x0, #0");                              // a non-integer string key is absent from a packed array
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.load_string_value_to_regs(key, "rax", "rdx")?;
+            abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+            ctx.emitter.instruction("cmp rdx, -1");                             // key_hi == -1 marks a normalized integer key
+            ctx.emitter.instruction(&format!("jne {}", string_miss));           // genuine string keys never index a packed array
+            ctx.emitter.instruction("mov rsi, rax");                            // move the normalized integer key into the key argument register
+            ctx.load_value_to_reg(array, "rdi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_key_exists");
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the string-miss fallback after the bounds check
+            ctx.emitter.label(&string_miss);
+            ctx.emitter.instruction("xor eax, eax");                            // a non-integer string key is absent from a packed array
+            ctx.emitter.label(&done);
+        }
+    }
     store_if_result(ctx, inst)
 }
 
@@ -175,15 +240,4 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction("mov rsi, rax");                                    // move normalized key_lo into the hash lookup ABI register
     ctx.emitter.label(&done);
     Ok(())
-}
-
-/// Verifies indexed-array key existence can use the integer-key runtime helper.
-fn require_indexed_key_type(key_ty: PhpType) -> Result<()> {
-    match key_ty.codegen_repr() {
-        PhpType::Int | PhpType::Bool => Ok(()),
-        other => Err(CodegenIrError::unsupported(format!(
-            "array_key_exists key PHP type {:?}",
-            other
-        ))),
-    }
 }

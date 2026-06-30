@@ -143,6 +143,53 @@ echo $c[0] . $c[1];
     assert_eq!(out, "2:34");
 }
 
+/// Verifies `array_merge` of two string-element arrays uses the 16-byte string-slot
+/// merge path and preserves every string value in order.
+#[test]
+fn test_array_merge_string_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x", "y"];
+$b = ["z"];
+echo implode(",", array_merge($a, $b));
+"#,
+    );
+    assert_eq!(out, "x,y,z");
+}
+
+/// Verifies `array_merge` of an `array<mixed>` and an `array<string>` widens the string
+/// operand to boxed-Mixed slots and produces an `array<mixed>` whose elements read back
+/// correctly (regression for the value_type stamp on the refcounted merge result).
+#[test]
+fn test_array_merge_mixed_and_string() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, "x"];
+$b = ["z"];
+$c = array_merge($a, $b);
+echo count($c), ":", $c[0], $c[1], $c[2];
+"#,
+    );
+    assert_eq!(out, "3:1xz");
+}
+
+/// Verifies `array_key_exists` with a string key on a packed indexed array follows PHP's
+/// numeric-string key coercion: a canonical integer string is bounds-checked, while a
+/// non-numeric string can never exist in an indexed array.
+#[test]
+fn test_array_key_exists_string_key_on_indexed_array() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [10, 20, 30];
+if (array_key_exists("1", $a)) { echo "a"; }
+if (!array_key_exists("foo", $a)) { echo "b"; }
+if (array_key_exists("0", $a)) { echo "c"; }
+if (!array_key_exists("5", $a)) { echo "d"; }
+"#,
+    );
+    assert_eq!(out, "abcd");
+}
+
 /// Verifies the `+` operator keeps the left operand's values when both arrays
 /// have the same numeric key (left wins semantics).
 #[test]

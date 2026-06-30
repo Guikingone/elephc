@@ -282,4 +282,57 @@ fn test_cast_object_keyword_is_case_insensitive() {
     assert_eq!(out, "9");
 }
 
+// --- (array) cast of a Mixed source (`__rt_array_from_mixed`) ---
+
+/// `(array)` of a `Mixed` that holds an indexed array rebuilds a boxed-Mixed array whose
+/// elements read back correctly (the result is typed `array<mixed>`, so reads unbox).
+#[test]
+fn test_cast_array_from_mixed_indexed_array() {
+    let out = compile_and_run(
+        "<?php function m(): mixed { return [10, 20, 30]; } $a = (array)m(); echo count($a), \":\", $a[0], \",\", $a[1], \",\", $a[2];",
+    );
+    assert_eq!(out, "3:10,20,30");
+}
+
+/// `(array)` of a `Mixed` null yields an empty array (`(array)null === []`).
+#[test]
+fn test_cast_array_from_mixed_null_is_empty() {
+    let out = compile_and_run(
+        "<?php function m(): mixed { return null; } $a = (array)m(); echo count($a);",
+    );
+    assert_eq!(out, "0");
+}
+
+/// `(array)` of a `Mixed` int scalar wraps it in a single-element array at key 0.
+#[test]
+fn test_cast_array_from_mixed_int_scalar() {
+    let out = compile_and_run(
+        "<?php function m(): mixed { return 7; } $a = (array)m(); echo count($a), \":\", $a[0];",
+    );
+    assert_eq!(out, "1:7");
+}
+
+/// `(array)` of a `Mixed` string scalar wraps it in a single-element array at key 0.
+#[test]
+fn test_cast_array_from_mixed_string_scalar() {
+    let out = compile_and_run(
+        "<?php function m(): mixed { return \"ab\"; } $a = (array)m(); echo count($a), \":\", $a[0];",
+    );
+    assert_eq!(out, "1:ab");
+}
+
+/// `(array)` of a `Mixed` object fatals: the int-indexed result type cannot hold the
+/// object's string-keyed properties, so the runtime reports a clear diagnostic instead
+/// of silently dropping keys.
+#[test]
+fn test_cast_array_from_mixed_object_fatals() {
+    let err = compile_and_run_expect_failure(
+        "<?php function m(): mixed { $o = new stdClass(); $o->x = 1; return $o; } $a = (array)m(); echo count($a);",
+    );
+    assert!(
+        err.contains("(array) cast of associative array or object is unsupported"),
+        "unexpected stderr: {err}"
+    );
+}
+
 // --- gettype ---

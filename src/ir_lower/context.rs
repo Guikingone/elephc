@@ -1091,6 +1091,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ArrayToHash
                     | Op::MixedToHash
                     | Op::ObjectCast
+                    | Op::ArrayCast
                     | Op::ObjectNew
                     | Op::DynamicObjectNew
                     | Op::DynamicObjectNewMixed

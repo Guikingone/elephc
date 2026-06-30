@@ -851,11 +851,26 @@ pub(super) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instructio
     super::ensure_arg_count(inst, "array_merge", 2)?;
     let first = expect_operand(inst, 0)?;
     let second = expect_operand(inst, 1)?;
-    let elem_ty = compatible_eight_byte_indexed_array_element_type(
-        ctx.value_php_type(first)?,
-        ctx.value_php_type(second)?,
-        "array_merge",
-    )?;
+    let first_ty = ctx.value_php_type(first)?;
+    let second_ty = ctx.value_php_type(second)?;
+    // String-element arrays use 16-byte `(ptr, len)` slots and a dedicated merge
+    // helper that persists each string into the owned result, rather than the
+    // 8-byte refcounted/scalar merge path.
+    if array_merge_has_string_elements(&first_ty, &second_ty) {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.load_value_to_reg(first, "x0")?;
+                ctx.load_value_to_reg(second, "x1")?;
+            }
+            Arch::X86_64 => {
+                ctx.load_value_to_reg(first, "rdi")?;
+                ctx.load_value_to_reg(second, "rsi")?;
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_array_merge_str");
+        return store_if_result(ctx, inst);
+    }
+    let elem_ty = compatible_eight_byte_indexed_array_element_type(first_ty, second_ty, "array_merge")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(first, "x0")?;
@@ -866,8 +881,45 @@ pub(super) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ctx.load_value_to_reg(second, "rsi")?;
         }
     }
-    abi::emit_call_label(ctx.emitter, array_merge_runtime_helper(&elem_ty));
+    let helper = array_merge_runtime_helper(&elem_ty);
+    abi::emit_call_label(ctx.emitter, helper);
+    // The refcounted merge copies element pointers into a freshly allocated array.
+    // Its result therefore needs the element `value_type` stamped so reads unbox the
+    // refcounted payloads correctly: the x86_64 helper derives it via
+    // `__rt_array_push_refcounted`, but the ARM64 helper copies slots directly and
+    // would otherwise leave the default value_type, so stamp it here for both targets.
+    if helper == "__rt_array_merge_refcounted" {
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        crate::codegen::emit_array_value_type_stamp(ctx.emitter, result_reg, &elem_ty);
+    }
     store_if_result(ctx, inst)
+}
+
+/// Returns the indexed-array element type for a value, or `None` for a non-array.
+fn indexed_array_element_repr(ty: &PhpType) -> Option<PhpType> {
+    match ty.codegen_repr() {
+        PhpType::Array(elem) => Some(elem.codegen_repr()),
+        _ => None,
+    }
+}
+
+/// Returns true when `array_merge` should use the string-slot (16-byte) merge path.
+///
+/// PHP `array_merge` of two `string[]` arrays (or a `string[]` and an empty
+/// `array<never>`/`array<void>` literal) produces a string array. Those use the
+/// dedicated `__rt_array_merge_str` helper because their 16-byte `(ptr, len)`
+/// slots are incompatible with the 8-byte scalar/refcounted merge helpers.
+fn array_merge_has_string_elements(first: &PhpType, second: &PhpType) -> bool {
+    let first_elem = indexed_array_element_repr(first);
+    let second_elem = indexed_array_element_repr(second);
+    let is_string_or_empty = |elem: &Option<PhpType>| {
+        matches!(
+            elem,
+            Some(PhpType::Str) | Some(PhpType::Never) | Some(PhpType::Void)
+        )
+    };
+    (matches!(first_elem, Some(PhpType::Str)) && is_string_or_empty(&second_elem))
+        || (matches!(second_elem, Some(PhpType::Str)) && is_string_or_empty(&first_elem))
 }
 
 /// Lowers `array_diff()` for two compatible indexed arrays with pointer-sized payload slots.

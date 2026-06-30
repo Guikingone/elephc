@@ -4058,6 +4058,20 @@ fn lower_builtin_call_args(
             }
             operands
         }
+        // Gradual typing: `array_merge` infers its result element type from the first
+        // operand. When that is `array<mixed>`, any other concrete typed indexed-array
+        // operand (e.g. `array<string>`) is widened to boxed-Mixed slots so the backend
+        // can merge uniform 8-byte refcounted slots instead of failing on a mismatched
+        // 16-byte string-slot operand. The widened temporaries are released by
+        // `release_owned_call_arg_temporaries` after the call.
+        "array_merge"
+            if !crate::types::call_args::has_named_args(args)
+                && !args.iter().any(is_spread_arg) =>
+        {
+            let mut operands = lower_args_with_signature(ctx, sig, args);
+            widen_array_merge_operands_to_mixed(ctx, &mut operands, args);
+            operands
+        }
         // `end($array)` reads the last element. Box a concrete array operand into a
         // Mixed cell so the backend's `__rt_end_boxed` helper can dispatch on the
         // runtime array kind (indexed vs associative); an already-boxed `Mixed`/union
@@ -7075,6 +7089,61 @@ fn convert_mixed_array_to_assoc_hash(
     .value
 }
 
+/// Returns the indexed-array element `codegen_repr` for a value, or `None` for a non-array.
+fn array_operand_element_repr(
+    ctx: &LoweringContext<'_, '_>,
+    value: crate::ir::ValueId,
+) -> Option<PhpType> {
+    match ctx.builder.value_php_type(value).codegen_repr() {
+        PhpType::Array(elem) => Some(elem.codegen_repr()),
+        _ => None,
+    }
+}
+
+/// Widens typed indexed-array `array_merge` operands to `array<mixed>` when the merged
+/// result is `array<mixed>` (i.e. the first operand is already boxed-Mixed).
+///
+/// Every other operand that is a concrete typed indexed array with a non-Mixed, non-empty
+/// element type (`array<string>`, `array<int>`, …) is converted in place via
+/// `Op::ArrayToMixed` so the backend can merge uniform 8-byte refcounted slots through
+/// `__rt_array_merge_refcounted` rather than failing on a 16-byte string-slot operand.
+/// Empty (`array<never>`/`array<void>`) operands are left untouched: they carry no live
+/// slots and the backend already treats them as element-compatible. Each widened operand
+/// is an owning temporary released by `release_owned_call_arg_temporaries` after the call.
+fn widen_array_merge_operands_to_mixed(
+    ctx: &mut LoweringContext<'_, '_>,
+    operands: &mut [crate::ir::ValueId],
+    args: &[Expr],
+) {
+    let first_is_mixed = operands
+        .first()
+        .map(|&value| matches!(array_operand_element_repr(ctx, value), Some(PhpType::Mixed)))
+        .unwrap_or(false);
+    if !first_is_mixed {
+        return;
+    }
+    for index in 0..operands.len() {
+        let needs_widening = matches!(
+            array_operand_element_repr(ctx, operands[index]),
+            Some(elem) if elem != PhpType::Mixed && !matches!(elem, PhpType::Void | PhpType::Never)
+        );
+        if !needs_widening {
+            continue;
+        }
+        let span = args.get(index).map(|arg| arg.span).unwrap_or_else(crate::span::Span::dummy);
+        operands[index] = ctx
+            .emit_value(
+                Op::ArrayToMixed,
+                vec![operands[index]],
+                None,
+                PhpType::Array(Box::new(PhpType::Mixed)),
+                Op::ArrayToMixed.default_effects(),
+                Some(span),
+            )
+            .value;
+    }
+}
+
 /// Lowers nullable receiver indexing without evaluating the index on a null receiver.
 fn lower_nullable_array_access(
     ctx: &mut LoweringContext<'_, '_>,
@@ -7388,6 +7457,9 @@ fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, inner: &Expr
     if matches!(target, CastType::Object) {
         return lower_object_cast(ctx, inner, expr);
     }
+    if matches!(target, CastType::Array) {
+        return lower_array_cast(ctx, inner, expr);
+    }
     let value = lower_expr(ctx, inner);
     let php_type = cast_php_type(target);
     let result = ctx.emit_value(
@@ -7435,6 +7507,49 @@ fn lower_object_cast(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Exp
     );
     // Release the temporary box (when distinct) and the original source temp; the
     // runtime helper already retained everything the new object owns.
+    if boxed.value != value.value {
+        crate::ir_lower::ownership::release_if_owned(ctx, boxed, Some(expr.span));
+    }
+    crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+    result
+}
+
+/// Lowers the PHP `(array)` cast to a freshly owned indexed array.
+///
+/// An indexed-array source is returned unchanged so the cast keeps PHP's identity
+/// semantics (COW-shared). Every other source is boxed into a single `Mixed` cell
+/// and handed to the runtime dispatcher `__rt_array_from_mixed`, which returns an
+/// empty array for `null`, wraps a scalar in a single-element `[value]` array,
+/// retains an indexed-array payload, and fatals on associative-array/object
+/// payloads whose string keys cannot fit the int-indexed result type. The boxed
+/// temporary and the original source temporary are released after the conversion
+/// has retained whatever the new array keeps.
+fn lower_array_cast(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
+    let value = lower_expr(ctx, inner);
+    // An indexed-array source is returned as the same instance (PHP passthrough).
+    if matches!(
+        ctx.builder.value_php_type(value.value).codegen_repr(),
+        PhpType::Array(_)
+    ) {
+        return value;
+    }
+    // Box the source into one Mixed cell so a single runtime dispatcher can inspect
+    // the runtime tag and build the boxed-Mixed array (or fatal on assoc/object).
+    // `Op::ArrayCast` carries heap-allocation/refcount effects (like `Op::ObjectCast`)
+    // so the ownership machinery releases the fresh owned result on reassignment and
+    // at scope exit.
+    let boxed = coerce_descriptor_invoker_mixed_value(ctx, value, expr.span);
+    let array_type = PhpType::Array(Box::new(PhpType::Mixed));
+    let result = ctx.emit_value(
+        Op::ArrayCast,
+        vec![boxed.value],
+        None,
+        array_type,
+        Op::ArrayCast.default_effects(),
+        Some(expr.span),
+    );
+    // Release the temporary box (when distinct) and the original source temp; the
+    // runtime helper already retained everything the new array owns.
     if boxed.value != value.value {
         crate::ir_lower::ownership::release_if_owned(ctx, boxed, Some(expr.span));
     }

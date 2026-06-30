@@ -32,6 +32,7 @@ mod array_filter_refcounted;
 mod array_flip;
 mod array_flip_string;
 mod array_free_deep;
+mod array_from_mixed;
 mod array_grow;
 mod array_hash_union;
 mod array_intersect;
@@ -45,6 +46,7 @@ mod array_merge;
 mod array_merge_into;
 mod array_merge_into_refcounted;
 mod array_merge_refcounted;
+mod array_merge_str;
 mod array_new;
 mod array_pad;
 mod array_pad_refcounted;
@@ -190,6 +192,8 @@ pub use array_flip::emit_array_flip;
 pub use array_flip_string::emit_array_flip_string;
 /// Emit string-only array flip helper.
 pub use array_free_deep::emit_array_free_deep;
+/// Emit the `(array)` cast runtime dispatcher (`__rt_array_from_mixed`).
+pub use array_from_mixed::emit_array_from_mixed;
 /// Emit deep array free helper.
 pub use array_grow::emit_array_grow;
 /// Emit array grow helper.
@@ -215,6 +219,8 @@ pub use array_merge_into::emit_array_merge_into;
 pub use array_merge_into_refcounted::emit_array_merge_into_refcounted;
 /// Emit refcounted merge-into helper.
 pub use array_merge_refcounted::emit_array_merge_refcounted;
+/// Emit the string-element (16-byte slot) array merge helper.
+pub use array_merge_str::emit_array_merge_str;
 /// Emit refcounted array merge helper.
 pub use array_new::emit_array_new;
 /// Emit new empty array helper.
