@@ -216,3 +216,102 @@ fn test_packed_array_associative_read_is_heap_balanced() {
     );
     assert_eq!(out, "nbetanbetanbetabeta");
 }
+
+/// A `Mixed` integer value (read from a heterogeneous associative array) is accepted by the
+/// increment/decrement operators under gradual typing: EIR lowering unboxes and coerces the
+/// boxed cell to an integer before applying `++`/`--`, so the stored result is the correct
+/// incremented/decremented number for both pre- and post-forms.
+#[test]
+fn test_inc_dec_on_mixed_unboxes_and_coerces() {
+    let out = compile_and_run(
+        "<?php
+        $h = [];
+        $h[\"x\"] = 41;
+        $h[\"y\"] = \"s\";
+        $v = $h[\"x\"];
+        $v++;
+        echo $v;
+        echo \"|\";
+        $w = $h[\"x\"];
+        echo ++$w;
+        echo \"|\";
+        $d = $h[\"x\"];
+        $d--;
+        echo $d;
+        ",
+    );
+    assert_eq!(out, "42|42|40");
+}
+
+/// A numeric-coercible union value (`int|false`, here a `strpos` result kept runtime-unknown by a
+/// `string` parameter) is accepted by `++` under gradual typing and coerced to an integer before
+/// the increment, so the false-or-int operand increments as a number.
+#[test]
+fn test_inc_on_numeric_union_coerces() {
+    let out = compile_and_run(
+        "<?php
+        function f(string $m): int {
+            $i = strpos($m, \":\", 0);
+            $i++;
+            return $i;
+        }
+        echo f(\"ab:cd\");
+        ",
+    );
+    assert_eq!(out, "3");
+}
+
+/// A `Mixed`/union-containing-array haystack (read from a heterogeneous associative array) is
+/// accepted by `in_array()` under gradual typing: the boxed array is converted to an owned hash
+/// at the runtime boundary, so a present needle hits and an absent needle misses.
+#[test]
+fn test_gradual_in_array_with_mixed_haystack() {
+    let out = compile_and_run(
+        "<?php
+        $h = [];
+        $h[\"a\"] = [1, 2, 3];
+        $h[\"b\"] = \"s\";
+        $hay = $h[\"a\"];
+        var_dump(in_array(2, $hay));
+        var_dump(in_array(9, $hay));
+        ",
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\n");
+}
+
+/// A `Mixed`/union-containing-array haystack is accepted by `array_key_exists()` under gradual
+/// typing: the boxed array is converted to an owned hash at the runtime boundary, so a present
+/// key hits and an absent key misses.
+#[test]
+fn test_gradual_array_key_exists_with_mixed_haystack() {
+    let out = compile_and_run(
+        "<?php
+        $h = [];
+        $h[\"a\"] = [\"x\" => 1];
+        $h[\"b\"] = \"s\";
+        $hay = $h[\"a\"];
+        var_dump(array_key_exists(\"x\", $hay));
+        var_dump(array_key_exists(\"z\", $hay));
+        ",
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\n");
+}
+
+/// An array union `$a + $b` where one operand is a concrete array literal and the other is a
+/// `Mixed` value (read from a heterogeneous associative array) is accepted under gradual typing:
+/// the boxed operand is unboxed and asserted to be an array, then unioned with left-operand keys
+/// winning, matching PHP's `[1, 2] + [3, 4, 5] == [1, 2, 5]`.
+#[test]
+fn test_gradual_array_union_with_mixed_operand() {
+    let out = compile_and_run(
+        "<?php
+        $h = [];
+        $h[\"a\"] = [1, 2];
+        $h[\"b\"] = \"s\";
+        $m = $h[\"a\"];
+        $r = $m + [3, 4, 5];
+        echo $r[0] . $r[1] . $r[2];
+        ",
+    );
+    assert_eq!(out, "125");
+}

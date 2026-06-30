@@ -1069,3 +1069,39 @@ fn test_long_array_interops_with_short_form() {
     );
     assert_eq!(out, "4:1:4");
 }
+
+/// Verifies `end()` returns the last element of a non-empty array, for both a literal argument
+/// and a variable. elephc models only the last-element read (it has no internal array pointer),
+/// boxing the element through the `__rt_end_boxed` runtime helper.
+#[test]
+fn test_end_returns_last_element() {
+    let out = compile_and_run("<?php echo end([1, 2, 3]);");
+    assert_eq!(out, "3");
+    let out = compile_and_run("<?php $a = [10, 20, 30]; echo end($a);");
+    assert_eq!(out, "30");
+}
+
+/// Verifies `end()` on an empty array returns `false`, matching PHP's empty-array behavior.
+/// `var_dump` renders the boxed `false` result so the bool type is observable.
+#[test]
+fn test_end_on_empty_array_returns_false() {
+    let out = compile_and_run("<?php $a = []; var_dump(end($a));");
+    assert_eq!(out, "bool(false)\n");
+}
+
+/// Verifies `end()` accepts a `Mixed`/union-containing-array argument under the gradual-typing
+/// boundary: an array read from a heterogeneous associative array (boxed as `Mixed`) is unboxed
+/// and its last element returned.
+#[test]
+fn test_end_on_mixed_array_argument() {
+    let out = compile_and_run(
+        "<?php
+        $h = [];
+        $h[\"a\"] = [10, 20, 30];
+        $h[\"b\"] = \"s\";
+        $arr = $h[\"a\"];
+        echo end($arr);
+        ",
+    );
+    assert_eq!(out, "30");
+}

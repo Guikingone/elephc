@@ -92,6 +92,14 @@ impl Checker {
             | ExprKind::PreDecrement(name)
             | ExprKind::PostDecrement(name) => match env.get(name) {
                 Some(PhpType::Int) | Some(PhpType::Bool) | Some(PhpType::Void) => Ok(PhpType::Int),
+                // Gradual typing: a `Mixed` or numeric-coercible union operand is
+                // accepted under the boundary model. EIR lowering unboxes and
+                // coerces the value to a number (`__rt_mixed_cast_int`) before the
+                // increment, so the stored result is an integer. A concretely
+                // non-numeric operand (object, array, concrete string) keeps being
+                // rejected, matching PHP's "Cannot increment" on those types.
+                Some(PhpType::Mixed) => Ok(PhpType::Int),
+                Some(ty @ PhpType::Union(_)) if union_is_increment_coercible(ty) => Ok(PhpType::Int),
                 Some(other) => Err(CompileError::new(
                     expr.span,
                     &format!("Cannot increment/decrement ${} of type {:?}", name, other),
@@ -796,6 +804,27 @@ fn php_type_is_array_key_coercible(ty: &PhpType) -> bool {
         | PhpType::Void
         | PhpType::Never => true,
         PhpType::Union(members) => members.iter().all(php_type_is_array_key_coercible),
+        _ => false,
+    }
+}
+
+/// Returns true when a union `ty` may be incremented/decremented under the gradual-typing
+/// boundary: every member must be a numeric-coercible scalar (`int`, `float`, `bool`,
+/// `Mixed`, or the null-like `Void`/`Never` tags). A union containing an object, array, or
+/// other heap container is rejected so `$obj++` on a `?Object` stays a compile error.
+fn union_is_increment_coercible(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Union(members) => members.iter().all(|member| {
+            matches!(
+                member,
+                PhpType::Int
+                    | PhpType::Float
+                    | PhpType::Bool
+                    | PhpType::Mixed
+                    | PhpType::Void
+                    | PhpType::Never
+            )
+        }),
         _ => false,
     }
 }

@@ -773,3 +773,37 @@ fn test_gradual_reassign_widening_accepted() {
         "reassigning a local to an incompatible type should widen, not reject",
     );
 }
+
+/// Verifies the gradual-typing safety property for `end()`: a concretely non-array argument
+/// (`int`) is still rejected rather than accepted, so genuine type errors keep being reported.
+#[test]
+fn test_error_end_on_non_array_is_rejected() {
+    expect_error("<?php end(5);", "end() argument must be array");
+}
+
+/// Verifies the gradual-typing safety property for `in_array()`: a concretely non-array haystack
+/// (`int`) is still rejected. Only `Mixed`/union-containing-array haystacks are accepted.
+#[test]
+fn test_error_in_array_non_array_haystack_is_rejected() {
+    expect_error("<?php in_array(1, 5);", "in_array() second argument must be array");
+}
+
+/// Verifies the gradual-typing safety property for `array_key_exists()`: a concretely non-array
+/// second argument (`int`) is still rejected.
+#[test]
+fn test_error_array_key_exists_non_array_is_rejected() {
+    expect_error(
+        "<?php array_key_exists(\"k\", 5);",
+        "array_key_exists() second argument must be array",
+    );
+}
+
+/// Verifies the gradual-typing safety property for increment/decrement: a concrete object operand
+/// stays a compile error ("Cannot increment/decrement"), so `$obj++` is not silently accepted.
+#[test]
+fn test_error_increment_on_object_is_rejected() {
+    expect_error(
+        "<?php $o = new stdClass(); $o++;",
+        "Cannot increment/decrement",
+    );
+}

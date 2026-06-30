@@ -267,6 +267,11 @@ pub enum Op {
     ArrayHashUnion,
     HashArrayUnion,
     ArrayToHash,
+    /// Converts a boxed `Mixed`/union array into a freshly cloned owned hash at the
+    /// gradual-typing boundary. The source array is never mutated (it is shallow-cloned
+    /// for tag-5 hashes, or rebuilt for tag-4 indexed arrays); a non-array payload takes
+    /// a runtime `TypeError` fatal. The single owned result is released by the consumer.
+    MixedToHash,
     ArraySetMixedKey,
     ArrayKeyExists,
     OffsetExists,
@@ -439,6 +444,9 @@ impl Op {
             ArrayUnion | HashUnion | ArrayHashUnion | HashArrayUnion | ArrayToHash => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
+            // Unboxes a Mixed array and clones/rebuilds it into an owned hash; a
+            // non-array payload fatals at the boundary.
+            MixedToHash => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
             IterStart | IterCurrentKey | IterCurrentValue | IteratorMethodCall
             | SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed | DynamicPropGet | NullsafePropGet
             | NullsafeMethodCall | MethodLookup | MethodCall | StaticMethodCall
@@ -600,6 +608,7 @@ impl Op {
             ArrayHashUnion => "array_hash_union",
             HashArrayUnion => "hash_array_union",
             ArrayToHash => "array_to_hash",
+            MixedToHash => "mixed_to_hash",
         ArraySetMixedKey => "array_set_mixed_key",
             ArrayKeyExists => "array_key_exists",
             OffsetExists => "offset_exists",

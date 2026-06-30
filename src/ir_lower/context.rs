@@ -1038,6 +1038,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ArrayHashUnion
                     | Op::HashArrayUnion
                     | Op::ArrayToHash
+                    | Op::MixedToHash
                     | Op::ObjectCast
                     | Op::ObjectNew
                     | Op::DynamicObjectNew
@@ -1346,14 +1347,20 @@ fn local_kind_uses_plain_store_cleanup(kind: LocalKind) -> bool {
 /// The result of a `BuiltinCall` is only released as a temporary when the callee OWNS its
 /// storage — i.e. it returns a freshly allocated refcounted value (array/string) whose
 /// lifetime is independent of its arguments. Adding a builtin here must not include any
-/// BORROWING builtin (current/end/reset/next/prev/key/each and similar element-access
+/// BORROWING builtin (current/reset/next/prev/key/each and similar element-access
 /// helpers return a pointer into a live argument array); releasing such a result would
 /// free storage still owned by the caller and corrupt the heap.
+///
+/// `end` is listed because elephc's `__rt_end_boxed` does NOT return a borrowed pointer
+/// into the argument array: it boxes the last element into a freshly allocated owned Mixed
+/// cell (or a boxed `false`), so its result owns independent storage and must be released
+/// when discarded.
 fn builtin_call_result_owns_storage_as_temporary(name: &str) -> bool {
     matches!(
         php_symbol_key(name.trim_start_matches('\\')).as_str(),
         // Array/mixed-returning builtins that allocate fresh result storage.
         "array_chunk"
+            | "end"
             | "array_column"
             | "array_combine"
             | "array_diff"

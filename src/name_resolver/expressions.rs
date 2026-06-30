@@ -368,6 +368,29 @@ pub(super) fn resolve_expr(
             element_type: resolve_type_expr(element_type, current_namespace, imports, symbols),
             len: Box::new(resolve_expr(len, current_namespace, imports, symbols)),
         },
+        // Expression-position assignments (`$x ??= new Foo()`, `$a = bar()`) must
+        // recurse into both the target and value so namespaced names nested in the
+        // RHS — `new`, `::CONST`, calls, static calls — are rewritten to their
+        // fully-qualified form. Without this, the fallthrough below cloned the
+        // assignment verbatim and a class like `new ParserState()` inside a
+        // namespace stayed unqualified and was reported as an undefined class.
+        // `prelude` is populated later during lowering and is empty here, so it is
+        // cloned as-is.
+        ExprKind::Assignment {
+            target,
+            value,
+            result_target,
+            prelude,
+            conditional_value_temp,
+        } => ExprKind::Assignment {
+            target: Box::new(resolve_expr(target, current_namespace, imports, symbols)),
+            value: Box::new(resolve_expr(value, current_namespace, imports, symbols)),
+            result_target: result_target
+                .as_ref()
+                .map(|t| Box::new(resolve_expr(t, current_namespace, imports, symbols))),
+            prelude: prelude.clone(),
+            conditional_value_temp: conditional_value_temp.clone(),
+        },
         _ => expr.kind.clone(),
     };
     Expr::new(kind, expr.span)

@@ -221,6 +221,23 @@ impl Checker {
                     value: Box::new(value),
                 })
             }
+            // Gradual typing: one operand is a concrete array and the other is a
+            // `Mixed` / union-containing-array value. PHP's `+` requires both sides
+            // to be arrays at runtime (an array `+` non-array is a fatal), so a `+`
+            // with a concrete-array operand is unambiguously an array union. The
+            // boxed operand is unboxed and asserted to be an array at the EIR
+            // boundary, then unioned; the result element/key shape is unknown, so it
+            // widens to `array<mixed, mixed>`. A concretely non-array opposite a
+            // concrete array still falls through to the error below.
+            (lt, rt)
+                if (is_array_like_type(lt) && type_may_be_array(rt))
+                    || (type_may_be_array(lt) && is_array_like_type(rt)) =>
+            {
+                Ok(PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::Mixed),
+                })
+            }
             _ => Err(CompileError::new(
                 expr.span,
                 "Array union requires both operands to be arrays",
@@ -1180,6 +1197,18 @@ fn expr_contains_nullsafe_member(expr: &Expr) -> bool {
 /// Returns `true` if `ty` is an array-like type (flat `Array` or `AssocArray`).
 fn is_array_like_type(ty: &PhpType) -> bool {
     matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+}
+
+/// Returns `true` if a value of `ty` may hold an array at runtime under the gradual-typing
+/// boundary: a concrete array, the `Mixed` top type, or a union with at least one array
+/// member. Used by `+` (array union) to accept a boxed operand opposite a concrete array.
+fn type_may_be_array(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Mixed => true,
+        PhpType::Array(_) | PhpType::AssocArray { .. } => true,
+        PhpType::Union(members) => members.iter().any(is_array_like_type),
+        _ => false,
+    }
 }
 
 /// Returns `true` if `ty` is a valid operand type for numeric binary operators

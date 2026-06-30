@@ -286,6 +286,14 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         | "arsort" | "ksort" | "krsort" => Some(first_param_ref(fixed(&["array"]))),
         "in_array" => Some(optional(&["needle", "haystack", "strict"], 2, vec![bool_lit(false)])),
         "array_key_exists" => Some(fixed(&["key", "array"])),
+        // `end(&$array)` takes the array by reference (PHP advances its internal
+        // pointer); elephc only reads the last element, but the by-ref marker keeps
+        // the original storage from being copied into a value temporary.
+        "end" => Some(first_param_ref(fixed(&["array"]))),
+        // `setlocale(int $category, string|array $locales, string ...$rest)`. The
+        // category and first locale are required; further locale fallbacks are
+        // variadic.
+        "setlocale" => Some(variadic(&["category", "locales"], "rest")),
         "array_search" => {
             Some(optional(&["needle", "haystack", "strict"], 2, vec![bool_lit(false)]))
         }

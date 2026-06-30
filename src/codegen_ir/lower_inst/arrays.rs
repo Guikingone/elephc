@@ -19,7 +19,7 @@ use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
-use super::{expect_operand, store_if_result};
+use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
 use crate::codegen_ir::{CodegenIrError, Result};
 
 /// Lowers indexed-array allocation through the shared runtime constructor.
@@ -96,6 +96,25 @@ fn emit_array_to_mixed_operands(ctx: &mut FunctionContext<'_>, array: ValueId) -
 }
 
 /// Lowers indexed-array promotion to associative hash storage.
+/// Lowers `Op::MixedToHash`: converts a boxed `Mixed`/union array into a freshly owned hash.
+///
+/// The single operand is loaded as a boxed Mixed receiver and passed to
+/// `__rt_mixed_to_owned_hash`, which clones (tag 5) or rebuilds (tag 4) the array into an
+/// independent owned hash without mutating the source, and fatals on a non-array payload. The
+/// owned hash result is stored for the consuming gradual array operation to release.
+pub(super) fn lower_mixed_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expects exactly one operand",
+            inst.op.name()
+        )));
+    }
+    let value = expect_operand(inst, 0)?;
+    load_value_to_first_int_arg(ctx, value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_to_owned_hash");
+    store_if_result(ctx, inst)
+}
+
 pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() != 1 {
         return Err(CodegenIrError::invalid_module(format!(

@@ -169,3 +169,12 @@ fn test_lc_all_constants() {
     );
     assert_eq!(out, "0|1|2|3|4|5|6");
 }
+
+/// Verifies `setlocale()` returns the requested locale string. elephc ships a minimal sound stub
+/// with no real locale machinery: it accepts `(int $category, string $locale, ...)` and echoes
+/// back the requested locale, so `setlocale(LC_ALL, "C")` yields `"C"`.
+#[test]
+fn test_setlocale_returns_requested_locale() {
+    let out = compile_and_run("<?php echo setlocale(LC_ALL, \"C\");");
+    assert_eq!(out, "C");
+}

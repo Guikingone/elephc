@@ -314,6 +314,9 @@ fn lower_numeric_binary(
                 Some(expr.span),
             );
         }
+        if let Some(result) = lower_gradual_array_union(ctx, lhs, rhs, expr) {
+            return result;
+        }
     }
     if matches!(op, BinOp::Pow) {
         let lhs = coerce_to_float(ctx, lhs, expr);
@@ -465,6 +468,56 @@ fn array_union_plan(
         }
         _ => None,
     }
+}
+
+/// Lowers a PHP `+` array union where exactly one operand is a concrete array and the other is
+/// a boxed `Mixed`/union value, under the gradual-typing boundary model.
+///
+/// PHP requires both `+` operands to be arrays at runtime (an array `+` non-array is fatal), so
+/// a `+` with one concrete-array operand is unambiguously an array union. The boxed operand is
+/// unboxed and widened to a concrete owned `array<mixed, mixed>` (asserting array-ness at the
+/// boundary), after which the existing concrete `array_union_plan` op performs the union. The
+/// converted operand is an owning temporary that this code releases once the union has consumed
+/// it. Returns `None` when neither operand pairs a concrete array with a `Mixed`/union value
+/// (e.g. two boxed operands), leaving the caller's numeric fallback in charge.
+fn lower_gradual_array_union(
+    ctx: &mut LoweringContext<'_, '_>,
+    lhs: LoweredValue,
+    rhs: LoweredValue,
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let lhs_ty = ctx.builder.value_php_type(lhs.value).codegen_repr();
+    let rhs_ty = ctx.builder.value_php_type(rhs.value).codegen_repr();
+    let lhs_array = matches!(lhs_ty, PhpType::Array(_) | PhpType::AssocArray { .. });
+    let rhs_array = matches!(rhs_ty, PhpType::Array(_) | PhpType::AssocArray { .. });
+    let lhs_boxed = matches!(lhs_ty, PhpType::Mixed | PhpType::Union(_));
+    let rhs_boxed = matches!(rhs_ty, PhpType::Mixed | PhpType::Union(_));
+    // Convert the single boxed operand to a concrete owned hash; remember which value was the
+    // converted temporary so it can be released after the union consumes it.
+    let (left_value, right_value, converted_temp) = if lhs_array && rhs_boxed {
+        let converted = convert_mixed_array_to_assoc_hash(ctx, rhs.value, expr.span);
+        (lhs.value, converted, converted)
+    } else if lhs_boxed && rhs_array {
+        let converted = convert_mixed_array_to_assoc_hash(ctx, lhs.value, expr.span);
+        (converted, rhs.value, converted)
+    } else {
+        return None;
+    };
+    let (union_op, result_ty) = array_union_plan(ctx, left_value, right_value)?;
+    let result = ctx.emit_value(
+        union_op,
+        vec![left_value, right_value],
+        None,
+        result_ty,
+        union_op.default_effects(),
+        Some(expr.span),
+    );
+    let converted = LoweredValue {
+        value: converted_temp,
+        ir_type: value_ir_type(&ctx.builder.value_php_type(converted_temp)),
+    };
+    crate::ir_lower::ownership::release_if_owned(ctx, converted, Some(expr.span));
+    Some(result)
 }
 
 /// Merges indexed-array element types supported by the current EIR storage model.
@@ -3949,6 +4002,54 @@ fn lower_builtin_call_args(
         {
             lower_user_value_sort_args(ctx, sig, args)
         }
+        // Gradual typing: `array_key_exists($key, $array)` and
+        // `in_array($needle, $haystack, …)` accept a `Mixed`/union array argument.
+        // Convert it to a concrete owned `array<mixed, mixed>` so the existing
+        // associative-array codegen handles the lookup; the owning temporary is
+        // released by `release_owned_call_arg_temporaries` after the call.
+        "array_key_exists" | "in_array"
+            if !crate::types::call_args::has_named_args(args)
+                && !args.iter().any(is_spread_arg) =>
+        {
+            let mut operands = lower_args_with_signature(ctx, sig, args);
+            if let Some(&array) = operands.get(1) {
+                if matches!(
+                    ctx.builder.value_php_type(array).codegen_repr(),
+                    PhpType::Mixed | PhpType::Union(_)
+                ) {
+                    operands[1] = convert_mixed_array_to_assoc_hash(ctx, array, args[1].span);
+                }
+            }
+            operands
+        }
+        // `end($array)` reads the last element. Box a concrete array operand into a
+        // Mixed cell so the backend's `__rt_end_boxed` helper can dispatch on the
+        // runtime array kind (indexed vs associative); an already-boxed `Mixed`/union
+        // operand is passed through unchanged. The boxed temporary (when created) is an
+        // owning temporary released by `release_owned_call_arg_temporaries`.
+        "end" if !crate::types::call_args::has_named_args(args)
+            && !args.iter().any(is_spread_arg)
+            && args.len() == 1 =>
+        {
+            let array = lower_expr(ctx, &args[0]);
+            let mixed = if matches!(
+                ctx.builder.value_php_type(array.value).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            ) {
+                array.value
+            } else {
+                ctx.emit_value(
+                    Op::MixedBox,
+                    vec![array.value],
+                    None,
+                    PhpType::Mixed,
+                    Op::MixedBox.default_effects(),
+                    Some(args[0].span),
+                )
+                .value
+            };
+            vec![mixed]
+        }
         _ => lower_args_with_signature(ctx, sig, args),
     }
 }
@@ -6816,6 +6917,35 @@ fn lower_packed_array_associative_get(
     );
     crate::ir_lower::ownership::release_if_owned(ctx, mixed_array, Some(expr.span));
     result
+}
+
+/// Converts a boxed `Mixed`/union array operand into a concrete owned `array<mixed, mixed>`
+/// at the gradual-typing boundary, so an array-taking builtin/operator can reuse the existing
+/// concrete-array codegen path.
+///
+/// `Op::MixedToHash` unboxes the value and produces a freshly cloned/rebuilt owned hash via
+/// `__rt_mixed_to_owned_hash` (asserting array-ness at the boundary; a non-array payload
+/// fatals). The source array is never mutated, and the result is an independent owned hash
+/// with a balanced refcount, so a single release frees it. The caller is responsible for
+/// releasing the returned owning temporary (builtin-call argument cleanup and the array-union
+/// lowering both do this). A concretely non-`Mixed`/union operand must not be passed here.
+fn convert_mixed_array_to_assoc_hash(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: crate::ir::ValueId,
+    span: Span,
+) -> crate::ir::ValueId {
+    ctx.emit_value(
+        Op::MixedToHash,
+        vec![value],
+        None,
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+        Op::MixedToHash.default_effects(),
+        Some(span),
+    )
+    .value
 }
 
 /// Lowers nullable receiver indexing without evaluating the index on a null receiver.

@@ -445,3 +445,48 @@ echo paint("x");
     );
     assert_eq!(out, "ok7<x>");
 }
+
+/// Verifies that a namespaced `new` inside an assignment used in expression position gets its
+/// class reference rewritten to the fully-qualified name. Regression: the name resolver did not
+/// recurse into `ExprKind::Assignment`'s value, so `new ParserState()` nested in an
+/// expression-position assignment stayed unqualified and was reported as an undefined class.
+#[test]
+fn test_namespace_new_in_expression_position_assignment_is_qualified() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Parser;
+
+class ParserState {
+    public int $pos = 5;
+}
+
+echo ($s = new ParserState())->pos;
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies that a namespaced `new` on the right of a `??=` assignment (also expression-position)
+/// is fully qualified by the name resolver, so the null-coalescing assignment constructs the
+/// namespaced class instead of erroring on an undefined class.
+#[test]
+fn test_namespace_new_in_null_coalesce_assignment_is_qualified() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Parser;
+
+class ParserState {
+    public int $pos = 9;
+}
+
+function go(): int {
+    $s = null;
+    $s ??= new ParserState();
+    return $s->pos;
+}
+
+echo go();
+"#,
+    );
+    assert_eq!(out, "9");
+}

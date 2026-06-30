@@ -226,6 +226,20 @@ impl Checker {
         if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
             return Ok(PhpType::Mixed);
         }
+        // The builtin enum interfaces `UnitEnum`/`BackedEnum` are registered as
+        // interfaces, not classes, so a value narrowed to one of them (e.g. via
+        // `$v instanceof \BackedEnum`) misses the `self.classes` lookup below. PHP
+        // exposes a fixed property surface on these interfaces: every enum case has
+        // a string `->name`, and backed-enum cases additionally have a `->value`
+        // typed `int|string`. Resolve those directly instead of reporting the
+        // interface as an undefined class.
+        match (class_name.trim_start_matches('\\'), property) {
+            ("UnitEnum" | "BackedEnum", "name") => return Ok(PhpType::Str),
+            ("BackedEnum", "value") => {
+                return Ok(PhpType::Union(vec![PhpType::Int, PhpType::Str]))
+            }
+            _ => {}
+        }
         if let Some(class_info) = self.classes.get(class_name) {
             if let Some(visibility) = class_info.property_visibilities.get(property) {
                 let declaring_class = class_info

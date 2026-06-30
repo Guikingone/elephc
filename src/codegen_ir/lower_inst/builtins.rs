@@ -18,7 +18,10 @@ use crate::types::checker::builtins::is_php_visible_builtin_function;
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
-use super::{expect_data, expect_operand, load_value_to_first_int_arg, predicates, store_if_result};
+use super::{
+    emit_box_current_value_as_mixed, expect_data, expect_operand, load_value_to_first_int_arg,
+    predicates, store_if_result,
+};
 use crate::codegen_ir::{CodegenIrError, Result};
 
 pub(in crate::codegen_ir::lower_inst) mod attributes;
@@ -74,6 +77,8 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "phpversion" => lower_phpversion(ctx, inst),
         "strlen" => lower_strlen(ctx, inst),
         "count" => lower_count(ctx, inst),
+        "end" => lower_end(ctx, inst),
+        "setlocale" => lower_setlocale(ctx, inst),
         "closure_bind" => lower_closure_bind(ctx, inst),
         "buffer_len" => buffers::lower_buffer_len(ctx, inst),
         "buffer_free" => buffers::lower_buffer_free(ctx, inst),
@@ -1097,6 +1102,61 @@ fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> 
             other
         ))),
     }
+}
+
+/// Lowers `end($array)` by reading the last element of a boxed Mixed array.
+///
+/// The IR lowering boxes the array argument into a Mixed cell (or passes an
+/// already-boxed `Mixed`/union value through), so the single operand is always a
+/// Mixed receiver here. `__rt_end_boxed` dispatches on the runtime array kind and
+/// returns the last element — or boxed `false` for an empty/non-array receiver — as
+/// an owned Mixed cell, matching PHP's `end()` (the internal array pointer is not
+/// modeled, only the value read).
+fn lower_end(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "end", 1)?;
+    let value = expect_operand(inst, 0)?;
+    load_value_to_first_int_arg(ctx, value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_end_boxed");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `setlocale($category, $locale, ...)` as a minimal sound stub.
+///
+/// elephc has no locale machinery, so the call changes nothing and returns the
+/// requested locale string (boxed as a `string|false` Mixed cell, matching PHP's
+/// return type). The locale comes from the second argument: a string is returned
+/// verbatim, a boxed value is coerced to a string, and anything else falls back to
+/// the `"C"` locale.
+fn lower_setlocale(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count_between(inst, "setlocale", 2, usize::MAX)?;
+    let locale = expect_operand(inst, 1)?;
+    let locale_ty = ctx.load_value_to_result(locale)?;
+    match locale_ty.codegen_repr() {
+        PhpType::Str => {
+            emit_box_current_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Str,
+            );
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            emit_box_current_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Str,
+            );
+        }
+        _ => {
+            let (label, len) = ctx.data.add_string(b"C");
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
+            abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+            emit_box_current_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Str,
+            );
+        }
+    }
+    store_if_result(ctx, inst)
 }
 
 /// Lowers the synthetic `closure_bind` call: rebinds a closure's captured

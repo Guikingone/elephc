@@ -82,6 +82,8 @@ mod decref_array;
 mod decref_hash;
 mod decref_mixed;
 mod decref_object;
+mod end_boxed;
+mod mixed_to_owned_hash;
 mod gc_collect_cycles;
 mod gc_collect_cycles_x86_64;
 mod gc_mark_reachable;
@@ -282,6 +284,10 @@ pub use decref_any::emit_decref_any;
 /// Emit generic reference decrement helper.
 pub use decref_mixed::emit_decref_mixed;
 /// Emit Mixed reference decrement helper.
+pub use end_boxed::emit_end_boxed;
+/// Emit the `end()` last-element helper for boxed Mixed arrays.
+pub use mixed_to_owned_hash::emit_mixed_to_owned_hash;
+/// Emit the gradual-boundary Mixed-array to owned-hash conversion helper.
 pub use hash_count::emit_hash_count;
 /// Emit hash count helper.
 pub use hash_append::emit_hash_append;

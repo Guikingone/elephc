@@ -35,6 +35,23 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Int))
         }
+        "setlocale" => {
+            // `setlocale(int $category, string|array $locales, string ...$rest): string|false`.
+            // elephc has no real locale machinery; this is a minimal sound stub that
+            // accepts the arguments, changes nothing, and returns the requested locale
+            // string. The static type is `string|false` to match PHP. At least the
+            // category and one locale are required.
+            if args.len() < 2 {
+                return Err(CompileError::new(
+                    span,
+                    "setlocale() takes at least 2 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(checker.normalize_union_type(vec![PhpType::Str, PhpType::Bool])))
+        }
         "microtime" => {
             if args.len() > 1 {
                 return Err(CompileError::new(span, "microtime() takes 0 or 1 arguments"));

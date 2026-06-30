@@ -75,6 +75,22 @@ pub(super) fn check_builtin(
                 _ => Err(CompileError::new(span, "array_pop() argument must be array")),
             }
         }
+        "end" => {
+            // `end($array): mixed` — returns the last element of the array (or
+            // `false` for an empty array). elephc has no internal-array-pointer
+            // state, so only the last-element read is modeled. The array argument
+            // is accepted under the gradual-typing boundary (concrete array, Mixed,
+            // or union containing array); the boxed `mixed` result covers the
+            // element-or-`false` value space.
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "end() takes exactly 1 argument"));
+            }
+            let ty = checker.infer_type(&args[0], env)?;
+            if !array_arg_is_gradually_acceptable(&ty) {
+                return Err(CompileError::new(span, "end() argument must be array"));
+            }
+            Ok(Some(PhpType::Mixed))
+        }
         "in_array" => {
             // PHP: in_array(mixed $needle, array $haystack, bool $strict = false): bool.
             if args.len() < 2 || args.len() > 3 {
@@ -82,7 +98,7 @@ pub(super) fn check_builtin(
             }
             checker.infer_type(&args[0], env)?;
             let arr_ty = checker.infer_type(&args[1], env)?;
-            if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            if !array_arg_is_gradually_acceptable(&arr_ty) {
                 return Err(CompileError::new(
                     span,
                     "in_array() second argument must be array",
@@ -263,7 +279,7 @@ pub(super) fn check_builtin(
             }
             checker.infer_type(&args[0], env)?;
             let arr_ty = checker.infer_type(&args[1], env)?;
-            if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            if !array_arg_is_gradually_acceptable(&arr_ty) {
                 return Err(CompileError::new(
                     span,
                     "array_key_exists() second argument must be array",
@@ -538,4 +554,23 @@ fn union_member_is_countable_array(ty: &PhpType) -> bool {
         ty,
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
     )
+}
+
+/// Returns true when an array-taking builtin argument is acceptable under the gradual-typing
+/// boundary model.
+///
+/// A concrete `array`/`AssocArray` is always accepted. A `Mixed` value is accepted as the
+/// gradual top type, and a `Union` is accepted when at least one member is an array (the
+/// "union containing array" case). EIR lowering then emits a runtime unbox + assert-array
+/// boundary guard (converting the boxed value to a concrete hash) before the array operation.
+/// A concretely non-array argument (`int`, `string`, object, …) is rejected so genuine type
+/// errors such as `in_array(1, 5)` keep being reported.
+fn array_arg_is_gradually_acceptable(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => true,
+        PhpType::Union(members) => members
+            .iter()
+            .any(|member| matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })),
+        _ => false,
+    }
 }
