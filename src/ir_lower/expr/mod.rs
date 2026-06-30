@@ -1385,9 +1385,13 @@ fn lower_short_ternary(
     expr: &Expr,
 ) -> LoweredValue {
     let condition_span = value.span;
+    // Derive the merge temp type from the actual materialized branch types (like
+    // the full ternary) instead of the purely syntactic `fallback_expr_type`,
+    // which defaults a bare variable to `int` and would wrongly cast a
+    // non-int `$value` (e.g. an object/array in `$data ?: null`) to int.
+    let result_type = branch_merge_result_type(ctx, value, default, expr);
     let value = lower_expr(ctx, value);
     let cond = ctx.truthy(value, Some(condition_span));
-    let result_type = fallback_expr_type(expr);
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let split_initialized = ctx.initialized_slots_snapshot();
     let value_block = ctx.builder.create_named_block("short_ternary.value", Vec::new());

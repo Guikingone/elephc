@@ -253,4 +253,29 @@ fn test_string_empty_falsy() {
     assert_eq!(out, "no");
 }
 
+/// Verifies that `preg_match` with a not-yet-supported Mixed subject still compiles.
+///
+/// The EIR regex bridge does not yet coerce a non-string (Mixed) subject, so it
+/// lowers that case to a runtime fatal instead of failing codegen. This keeps a
+/// runtime-dead branch (here guarded by `$run = false`) compilable; the program
+/// links and runs without firing the fatal. Mirrors Symfony YAML's block-scalar
+/// `preg_replace('#\d+#', '', $modifiers)` path, which the parser never reaches
+/// for a simple mapping.
+#[test]
+fn test_preg_match_mixed_subject_dead_branch_compiles() {
+    let out = compile_and_run(
+        r#"<?php
+function maybe_match(mixed $subject, bool $run): int {
+    $n = 0;
+    if ($run) {
+        $n = preg_match('/x/', $subject);
+    }
+    return $n;
+}
+echo maybe_match("abc", false);
+"#,
+    );
+    assert_eq!(out, "0");
+}
+
 // --- Bug fix: compound assignment in for-loop update ---

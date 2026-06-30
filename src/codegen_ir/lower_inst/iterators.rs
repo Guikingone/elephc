@@ -42,12 +42,24 @@ enum IteratorSourceKind {
         interface_name: String,
         aggregate_class_name: Option<String>,
     },
+    /// A concrete object source that implements neither `Iterator` nor
+    /// `IteratorAggregate`. PHP iterates such an object's accessible (public)
+    /// declared properties in declaration order; the EIR backend does not yet
+    /// emit that property-walk, so iteration lowers to a runtime fatal instead
+    /// of silently producing wrong results. See `emit_plain_object_foreach_fatal`.
+    PlainObject { class_name: String },
 }
 
 /// Lowers iterator initialization by storing the source pointer and initial cursor.
 pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let source = expect_operand(inst, 0)?;
     let source_kind = iterator_source_kind_from_type(ctx, &ctx.value_php_type(source)?, inst)?;
+    if let IteratorSourceKind::PlainObject { class_name } = &source_kind {
+        // No Iterator/IteratorAggregate protocol: emit a runtime fatal instead of
+        // walking public properties (unimplemented). Exits before any iteration.
+        emit_plain_object_foreach_fatal(ctx, class_name);
+        return Ok(());
+    }
     let by_ref = iter_start_is_by_ref(inst);
     let result = inst.result.ok_or_else(|| {
         CodegenIrError::invalid_module("iter_start missing result value".to_string())
@@ -88,6 +100,8 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
         IteratorSourceKind::DynamicMixed => 0,
         IteratorSourceKind::Object { .. } => 0,
         IteratorSourceKind::Interface { .. } => 0,
+        // `PlainObject` already returned via the runtime fatal above this match.
+        IteratorSourceKind::PlainObject { .. } => unreachable!(),
     };
     match &source_kind {
         IteratorSourceKind::Object {
@@ -139,6 +153,9 @@ pub(super) fn lower_iter_next(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         IteratorSourceKind::Interface { interface_name, .. } => {
             lower_interface_iter_next(ctx, offset, &interface_name)?;
         }
+        IteratorSourceKind::PlainObject { class_name } => {
+            emit_plain_object_foreach_fatal(ctx, &class_name);
+        }
     }
     store_if_result(ctx, inst)
 }
@@ -170,6 +187,9 @@ pub(super) fn lower_iter_current_key(
         IteratorSourceKind::Interface { interface_name, .. } => {
             let return_ty = emit_interface_iterator_method_call(ctx, offset, &interface_name, "key")?;
             box_iterator_method_result_if_needed(ctx, inst, &return_ty)?;
+        }
+        IteratorSourceKind::PlainObject { class_name } => {
+            emit_plain_object_foreach_fatal(ctx, &class_name);
         }
     }
     store_if_result(ctx, inst)
@@ -205,6 +225,9 @@ pub(super) fn lower_iter_current_value(
         IteratorSourceKind::Interface { interface_name, .. } => {
             let return_ty = emit_interface_iterator_method_call(ctx, offset, &interface_name, "current")?;
             box_iterator_method_result_if_needed(ctx, inst, &return_ty)?;
+        }
+        IteratorSourceKind::PlainObject { class_name } => {
+            emit_plain_object_foreach_fatal(ctx, &class_name);
         }
     }
     store_if_result(ctx, inst)
@@ -260,6 +283,9 @@ pub(super) fn lower_iter_current_value_ref(
             return Err(CodegenIrError::unsupported(
                 "by-reference foreach over object iterators in EIR backend",
             ))
+        }
+        IteratorSourceKind::PlainObject { class_name } => {
+            emit_plain_object_foreach_fatal(ctx, &class_name);
         }
     }
     Ok(())
@@ -891,7 +917,23 @@ fn lower_interface_iter_next(
     Ok(())
 }
 
-/// Emits a zero-argument Iterator method call against the object stored in iterator state.
+/// Emits a runtime fatal for `foreach` over a plain object (no Iterator/
+/// IteratorAggregate protocol). PHP iterates such an object's accessible public
+/// properties; the EIR backend does not yet emit that property-walk, so rather
+/// than producing wrong iteration this writes a diagnostic to stderr and exits
+/// with `EX_SOFTWARE` (70). Lowering every iterator opcode for a `PlainObject`
+/// source to this fatal keeps a runtime-dead branch (e.g. Symfony YAML's
+/// `PARSE_OBJECT_FOR_MAP` path) compilable while staying sound: the fatal only
+/// fires if such a `foreach` is actually reached at runtime.
+fn emit_plain_object_foreach_fatal(ctx: &mut FunctionContext<'_>, class_name: &str) {
+    let message = format!(
+        "Fatal error: foreach over non-iterable object of type {} is not yet supported by the elephc EIR backend\n",
+        class_name
+    );
+    super::emit_unsupported_feature_fatal(ctx, &message);
+}
+
+/// Emits a zero-argument Iterator method call through runtime class metadata.
 fn emit_object_iterator_method_call(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
@@ -1646,9 +1688,11 @@ fn object_iterator_source(
         };
     }
     if !class_implements_interface(ctx, class_name, "IteratorAggregate") {
-        return IteratorSourceKind::Object {
+        // No Iterator/IteratorAggregate protocol: PHP would walk the object's
+        // accessible public properties. The EIR backend does not implement that
+        // yet, so this lowers to a runtime fatal at iteration time.
+        return IteratorSourceKind::PlainObject {
             class_name: class_name.to_string(),
-            aggregate_class_name: None,
         };
     }
     match iterator_method_return_type(ctx, class_name, "getIterator") {

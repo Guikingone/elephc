@@ -336,3 +336,31 @@ echo (0 ?: fallback());
     );
     assert_eq!(out, "1:rhs7");
 }
+
+/// Verifies the short ternary preserves a non-int value branch instead of casting it to int.
+///
+/// Regression: `lower_short_ternary` previously typed the merge temp from the
+/// purely syntactic `fallback_expr_type`, which defaults a bare variable to
+/// `int`. That cast an object or array value branch to int (`$x ?: null`),
+/// producing wrong results (array → 1) or an "int cast for PHP type Object"
+/// codegen error. The temp type must come from the materialized branch types.
+#[test]
+fn test_short_ternary_preserves_object_and_array_value_branch() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public int $n = 0; }
+function pick_object(Box $b) {
+    return $b ?: null;
+}
+function pick_array(array $a) {
+    return $a ?: null;
+}
+$b = new Box();
+$b->n = 42;
+$obj = pick_object($b);
+$arr = pick_array([7, 8]);
+echo $obj->n, ":", $arr[0], $arr[1];
+"#,
+    );
+    assert_eq!(out, "42:78");
+}

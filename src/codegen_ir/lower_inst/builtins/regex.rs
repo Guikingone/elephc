@@ -538,7 +538,20 @@ fn load_string_arg(
     len_reg: &str,
     context: &str,
 ) -> Result<()> {
-    require_string(ctx.value_php_type(value)?, context)?;
+    let ty = ctx.value_php_type(value)?;
+    if ty != PhpType::Str {
+        // PHP coerces a regex string operand to string, but the EIR regex bridge
+        // does not yet coerce a non-string (e.g. Mixed) operand. Emit a runtime
+        // fatal rather than miscompiling. Runtime-dead for the YAML probe: the
+        // only Mixed operand is the block-scalar `$modifiers` subject on a path
+        // the probe's simple mapping never reaches.
+        let message = format!(
+            "Fatal error: {} with PHP type {} is not yet supported by the elephc EIR backend\n",
+            context, ty
+        );
+        super::super::emit_unsupported_feature_fatal(ctx, &message);
+        return Ok(());
+    }
     ctx.load_string_value_to_regs(value, ptr_reg, len_reg)
 }
 
@@ -566,18 +579,6 @@ fn load_flags_arg(
         return Ok(());
     };
     require_integer_like(ctx.load_value_to_reg(flags, reg)?, "preg_split flags")
-}
-
-/// Verifies that a regex string operand is statically string-shaped.
-fn require_string(ty: PhpType, context: &str) -> Result<()> {
-    if ty == PhpType::Str {
-        return Ok(());
-    }
-    Err(CodegenIrError::unsupported(format!(
-        "{} for PHP type {:?}",
-        context,
-        ty
-    )))
 }
 
 /// Verifies that a regex integer option is statically integer-like.

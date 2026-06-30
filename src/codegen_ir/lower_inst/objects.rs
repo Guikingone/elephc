@@ -2941,6 +2941,25 @@ fn dynamic_property_object_class(
     Ok(class_name.trim_start_matches('\\').to_string())
 }
 
+/// Emits a runtime fatal for a dynamic property write whose runtime name is not
+/// a string (e.g. a `Mixed` foreach key). PHP coerces the name to string; the
+/// EIR backend does not yet, so this writes a diagnostic to stderr and exits
+/// rather than miscompiling. Always returns `Ok(())` so the caller stops emitting.
+fn emit_dynamic_property_name_fatal(
+    ctx: &mut FunctionContext<'_>,
+    property_value: ValueId,
+    inst: &Instruction,
+) -> Result<()> {
+    let property_ty = ctx.value_php_type(property_value)?;
+    let message = format!(
+        "Fatal error: {} with a non-string ({}) dynamic property name is not yet supported by the elephc EIR backend\n",
+        inst.op.name(),
+        property_ty
+    );
+    super::emit_unsupported_feature_fatal(ctx, &message);
+    Ok(())
+}
+
 /// Verifies that the dynamic property name is already materialized as a string.
 fn ensure_runtime_dynamic_property_name(
     ctx: &FunctionContext<'_>,
@@ -3130,6 +3149,14 @@ pub(super) fn lower_dynamic_prop_set(
     let value = expect_operand(inst, 2)?;
     if let Some(property) = const_string_operand(ctx, property_value)? {
         return lower_const_dynamic_prop_set(ctx, object, value, property, inst);
+    }
+    // PHP coerces a dynamic property name to string, but the EIR backend does not
+    // yet coerce a non-string (e.g. Mixed) runtime property name. Emit a runtime
+    // fatal instead of miscompiling. This is runtime-dead for the YAML probe: the
+    // only such site (`$object->$key = $value` under PARSE_OBJECT_FOR_MAP) is
+    // dominated by an unsupported plain-object foreach that already fatals.
+    if ctx.value_php_type(property_value)?.codegen_repr() != PhpType::Str {
+        return emit_dynamic_property_name_fatal(ctx, property_value, inst);
     }
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_runtime_stdclass_prop_set(ctx, object, property_value, value, inst);
