@@ -2,7 +2,7 @@
 title: "strpbrk() — internals"
 description: "Compiler internals for strpbrk(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 386
+  order: 390
 ---
 
 ## `strpbrk()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:186](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L186) (`lower_strpbrk`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:209](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L209) (`lower_strpbrk`)
 - **Function symbol**: `lower_strpbrk()`
 
 

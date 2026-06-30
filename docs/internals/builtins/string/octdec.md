@@ -2,7 +2,7 @@
 title: "octdec() — internals"
 description: "Compiler internals for octdec(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 362
+  order: 366
 ---
 
 ## `octdec()` — internals
@@ -21,8 +21,7 @@ sidebar:
 ## Runtime helpers
 
 The following runtime helpers are referenced:
-- `__rt_grapheme_strrev`
-- `__rt_strcopy`
+- `__rt_base64_decode`
 
 ## Signature summary
 

@@ -15,7 +15,8 @@ use crate::codegen::platform::Target;
 use crate::codegen::RuntimeFeatures;
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{
-    validate_module, ExternDecl, ExternParamDecl, Function, Immediate, IrType, Module, Op,
+    validate_module, ConstScalar, ExternDecl, ExternParamDecl, Function, Immediate, IrType, Module,
+    Op,
 };
 use crate::ir_lower::{builtin_datetime, function, LoweringError};
 use crate::names::php_symbol_key;
@@ -30,6 +31,7 @@ pub(crate) fn lower(
 ) -> Result<Module, LoweringError> {
     let mut module = Module::new(target);
     let constants = crate::codegen::collect_constants(program, target.platform);
+    module.const_registry = build_const_registry(&constants);
     let fiber_return_sigs = crate::ir_lower::fibers::collect_fiber_return_sigs(program);
     populate_metadata(&mut module, program, check_result);
     lower_function_declarations(program, &mut module, check_result, &constants, &fiber_return_sigs);
@@ -47,6 +49,45 @@ pub(crate) fn lower(
     include_lowered_runtime_features(&mut module);
     validate_module(&module)?;
     Ok(module)
+}
+
+/// Builds the closed-world scalar constant registry for runtime lookups.
+///
+/// Converts the prescanned constant map (builtin constants, top-level `const`
+/// declarations, and literal `define()` calls) into a name-sorted list of
+/// scalar entries. Only PHP scalar shapes (int/float/bool/string/null) are
+/// included; class constants, enum-case singletons, and array/composite
+/// constant values are intentionally deferred — a registry miss is correct PHP
+/// behavior (`defined()` → false, `constant()` → throw). Names are canonicalized
+/// by stripping a leading `\` and sorted by bytes so the runtime helper can
+/// binary-search them with `__rt_strcmp` ordering.
+fn build_const_registry(
+    constants: &HashMap<String, (ExprKind, PhpType)>,
+) -> Vec<(String, ConstScalar)> {
+    let mut registry: Vec<(String, ConstScalar)> = constants
+        .iter()
+        .filter_map(|(name, (value, _))| {
+            const_scalar_from_expr(value).map(|scalar| {
+                (name.trim_start_matches('\\').to_string(), scalar)
+            })
+        })
+        .collect();
+    registry.sort_by(|(a, _), (b, _)| a.as_bytes().cmp(b.as_bytes()));
+    registry
+}
+
+/// Maps a constant initializer expression to a runtime scalar, or `None` when it
+/// is not a directly materializable scalar literal (deferred composite/class
+/// constant value).
+fn const_scalar_from_expr(value: &ExprKind) -> Option<ConstScalar> {
+    match value {
+        ExprKind::IntLiteral(v) => Some(ConstScalar::Int(*v)),
+        ExprKind::FloatLiteral(v) => Some(ConstScalar::Float(*v)),
+        ExprKind::BoolLiteral(v) => Some(ConstScalar::Bool(*v)),
+        ExprKind::StringLiteral(v) => Some(ConstScalar::Str(v.clone())),
+        ExprKind::Null => Some(ConstScalar::Null),
+        _ => None,
+    }
 }
 
 /// Copies declaration metadata into the EIR module placeholder tables.
@@ -96,6 +137,7 @@ fn include_lowered_runtime_features(module: &mut Module) {
     module.required_runtime_features.regex |= features.regex;
     module.required_runtime_features.phar_archive |= features.phar_archive;
     module.required_runtime_features.descriptor_invoker |= features.descriptor_invoker;
+    module.required_runtime_features.const_introspection |= features.const_introspection;
 }
 
 /// Derives optional runtime features from the actual EIR instruction stream.
@@ -113,6 +155,9 @@ fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                     }
                     if builtin_call_requires_descriptor_invoker(module, function, inst) {
                         features.descriptor_invoker = true;
+                    }
+                    if builtin_call_requires_const_introspection(module, function, inst) {
+                        features.const_introspection = true;
                     }
                 }
                 Op::ExprCall | Op::CallableDescriptorInvoke => {
@@ -187,6 +232,41 @@ fn builtin_call_requires_descriptor_invoker(
     function
         .value(callback)
         .is_some_and(|value| value.php_type.codegen_repr() == PhpType::Str)
+}
+
+/// Returns true when a lowered builtin call needs the runtime constant/enum registry.
+///
+/// `defined`/`constant` only survive to a `BuiltinCall` when their name argument is
+/// non-literal (literal calls are folded earlier into a boolean/value), so any such
+/// call requires the registry. `enum_exists` reaches EIR for both literal and
+/// non-literal names — the literal case folds to a static boolean in the backend — so
+/// only a non-constant name argument requires the runtime helper.
+fn builtin_call_requires_const_introspection(
+    module: &Module,
+    function: &Function,
+    inst: &crate::ir::Instruction,
+) -> bool {
+    let Some(name) = builtin_call_name(module, inst) else {
+        return false;
+    };
+    match php_symbol_key(name.trim_start_matches('\\')).as_str() {
+        "defined" | "constant" => true,
+        "enum_exists" => inst
+            .operands
+            .first()
+            .copied()
+            .is_some_and(|operand| !value_is_const_string(function, operand)),
+        _ => false,
+    }
+}
+
+/// Returns true when an EIR value is defined by a constant-string opcode.
+fn value_is_const_string(function: &Function, value: crate::ir::ValueId) -> bool {
+    function
+        .instructions
+        .iter()
+        .find(|inst| inst.result == Some(value))
+        .is_some_and(|inst| inst.op == Op::ConstStr)
 }
 
 /// Returns the canonical builtin name attached to a lowered builtin instruction.

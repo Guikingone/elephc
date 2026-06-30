@@ -2,7 +2,7 @@
 title: "strrpos()"
 description: "Lowers `strpos()`/`strrpos()` and boxes position-or-false results as Mixed."
 sidebar:
-  order: 386
+  order: 390
 ---
 
 ## strrpos()

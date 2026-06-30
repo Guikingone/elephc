@@ -170,6 +170,16 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     }
     system::emit_match_unhandled(emitter);
 
+    // Closed-world constant/enum registry lookups backing non-literal
+    // defined()/constant()/enum_exists(). The shared binary search and the three
+    // entry points are emitted together; their data tables live in user data.
+    if features.const_introspection {
+        system::emit_rt_sorted_name_search(emitter);
+        system::emit_rt_defined(emitter);
+        system::emit_rt_enum_exists(emitter);
+        system::emit_rt_constant(emitter);
+    }
+
     // Exception runtime functions
     exceptions::emit_exception_cleanup_frames(emitter);
     exceptions::emit_class_implements_interface(emitter);

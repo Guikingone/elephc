@@ -2,7 +2,7 @@
 title: "floatval()"
 description: "Lowers `floatval()` for concrete scalar operands."
 sidebar:
-  order: 407
+  order: 411
 ---
 
 ## floatval()

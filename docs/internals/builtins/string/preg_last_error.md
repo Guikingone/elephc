@@ -2,7 +2,7 @@
 title: "preg_last_error() — internals"
 description: "Compiler internals for preg_last_error(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 364
+  order: 368
 ---
 
 ## `preg_last_error()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:235](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L235) (`lower_preg_last_error`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:258](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L258) (`lower_preg_last_error`)
 - **Function symbol**: `lower_preg_last_error()`
 
 

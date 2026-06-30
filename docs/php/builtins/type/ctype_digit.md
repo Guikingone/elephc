@@ -2,7 +2,7 @@
 title: "ctype_digit()"
 description: "Lowers `ctype_digit(string)` by checking every byte against the ASCII digit range."
 sidebar:
-  order: 405
+  order: 409
 ---
 
 ## ctype_digit()

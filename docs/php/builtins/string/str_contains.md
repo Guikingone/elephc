@@ -2,7 +2,7 @@
 title: "str_contains()"
 description: "Lowers `str_contains()` through `strpos()` and converts found positions to bool."
 sidebar:
-  order: 370
+  order: 374
 ---
 
 ## str_contains()

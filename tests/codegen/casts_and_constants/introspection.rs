@@ -246,3 +246,148 @@ echo get_debug_type($o) . "|" . GET_DEBUG_TYPE(7);
 }
 
 // --- Missing type function tests ---
+
+// --- Non-literal defined()/constant()/enum_exists() registry lookups ---
+
+/// Verifies a non-literal `defined($name)` resolves a builtin constant name
+/// through the runtime registry and reports it as present. The name is derived
+/// from `$argc` so it stays non-literal and is not folded at compile time.
+#[test]
+fn test_defined_nonliteral_known_constant_is_true() {
+    let out = compile_and_run(
+        r#"<?php
+$name = $argc > 0 ? "PHP_INT_SIZE" : "NOPE";
+echo defined($name) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
+/// Verifies a non-literal `defined($name)` reports an undefined constant as
+/// absent via the runtime registry lookup.
+#[test]
+fn test_defined_nonliteral_unknown_constant_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+$name = $argc > 0 ? "ELEPHC_TOTALLY_UNDEFINED_XYZ" : "NOPE";
+echo defined($name) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "no");
+}
+
+/// Verifies a non-literal `constant($name)` returns the value of a user-declared
+/// scalar constant resolved through the runtime registry.
+#[test]
+fn test_constant_nonliteral_returns_scalar_value() {
+    let out = compile_and_run(
+        r#"<?php
+const ELEPHC_ANSWER = 42;
+$name = $argc > 0 ? "ELEPHC_ANSWER" : "NOPE";
+echo constant($name);
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// Verifies a non-literal `constant($name)` returns the value of a user-declared
+/// string constant, exercising the boxed-string registry payload and runtime
+/// `__rt_str_persist` ownership path.
+#[test]
+fn test_constant_nonliteral_returns_string_value() {
+    let out = compile_and_run(
+        r#"<?php
+const ELEPHC_GREETING = "hi there";
+$name = $argc > 0 ? "ELEPHC_GREETING" : "NOPE";
+echo constant($name);
+"#,
+    );
+    assert_eq!(out, "hi there");
+}
+
+/// Verifies a non-literal `constant($name)` for an undefined constant throws a
+/// catchable `\Error` carrying the PHP 8 `Undefined constant "X"` message.
+#[test]
+fn test_constant_nonliteral_miss_throws_error() {
+    let out = compile_and_run(
+        r#"<?php
+$name = $argc > 0 ? "ELEPHC_NO_SUCH_CONST" : "NOPE";
+try {
+    echo constant($name);
+} catch (\Error $e) {
+    echo "caught:" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "caught:Undefined constant \"ELEPHC_NO_SUCH_CONST\"");
+}
+
+/// Verifies a non-literal `enum_exists($name)` finds a declared enum through the
+/// runtime registry lookup.
+#[test]
+fn test_enum_exists_nonliteral_known_enum_is_true() {
+    let out = compile_and_run(
+        r#"<?php
+enum Suit { case Hearts; case Spades; }
+$name = $argc > 0 ? "Suit" : "NOPE";
+echo enum_exists($name) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
+/// Verifies a non-literal `enum_exists($name)` reports an undeclared enum as
+/// absent.
+#[test]
+fn test_enum_exists_nonliteral_unknown_enum_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+enum Suit { case Hearts; }
+$name = $argc > 0 ? "ElephcNoSuchEnum" : "NOPE";
+echo enum_exists($name) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "no");
+}
+
+/// Verifies the string-literal `defined('PHP_INT_SIZE')` fast path still folds to
+/// a compile-time boolean (true) with no behavior change.
+#[test]
+fn test_defined_literal_known_constant_still_folds_true() {
+    let out = compile_and_run("<?php echo defined('PHP_INT_SIZE') ? 'yes' : 'no';");
+    assert_eq!(out, "yes");
+}
+
+/// Verifies the string-literal `defined('UNKNOWN')` fast path still folds to a
+/// compile-time boolean (false).
+#[test]
+fn test_defined_literal_unknown_constant_still_folds_false() {
+    let out = compile_and_run("<?php echo defined('ELEPHC_NOPE_LITERAL') ? 'yes' : 'no';");
+    assert_eq!(out, "no");
+}
+
+/// Verifies the string-literal `enum_exists('Suit')` fast path still folds to a
+/// compile-time boolean (true).
+#[test]
+fn test_enum_exists_literal_still_folds_true() {
+    let out = compile_and_run(
+        r#"<?php
+enum Suit { case Hearts; }
+echo enum_exists('Suit') ? 'yes' : 'no';
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
+/// Verifies a string-literal `constant('NAME')` for a user-declared scalar folds
+/// to its value during lowering without a runtime registry lookup.
+#[test]
+fn test_constant_literal_folds_scalar_value() {
+    let out = compile_and_run(
+        r#"<?php
+const ELEPHC_SEVEN = 7;
+echo constant('ELEPHC_SEVEN');
+"#,
+    );
+    assert_eq!(out, "7");
+}

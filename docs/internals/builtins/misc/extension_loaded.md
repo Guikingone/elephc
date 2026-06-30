@@ -2,7 +2,7 @@
 title: "extension_loaded() — internals"
 description: "Compiler internals for extension_loaded(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 263
+  order: 265
 ---
 
 ## `extension_loaded()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:920](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L920) (`lower_extension_loaded`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:994](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L994) (`lower_extension_loaded`)
 - **Function symbol**: `lower_extension_loaded()`
 
 
@@ -23,7 +23,8 @@ sidebar:
 
 ## Runtime helpers
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+The following runtime helpers are referenced:
+- `__rt_enum_exists`
 
 ## Signature summary
 

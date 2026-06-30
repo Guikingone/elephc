@@ -84,6 +84,7 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "chr",
     "clearstatcache",
     "clamp",
+    "constant",
     "copy",
     "cos",
     "cosh",

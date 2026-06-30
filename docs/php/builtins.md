@@ -265,9 +265,11 @@ sidebar:
 | [`buffer_new()`](./builtins/misc/buffer_new.md) | `(int $length): mixed` | `mixed` |
 | [`call_user_func()`](./builtins/misc/call_user_func.md) | `(callable $callback, ...$args): mixed` | `mixed` |
 | [`call_user_func_array()`](./builtins/misc/call_user_func_array.md) | `(callable $callback, array $args): mixed` | `mixed` |
+| [`constant()`](./builtins/misc/constant.md) | `(string $name): mixed` | `mixed` |
 | [`define()`](./builtins/misc/define.md) | `(string $constant_name, mixed $value, bool $case_insensitive): bool` | `bool` |
 | [`defined()`](./builtins/misc/defined.md) | `(string $constant_name): bool` | `bool` |
 | [`empty()`](./builtins/misc/empty.md) | `(mixed $value): bool` | `bool` |
+| [`end()`](./builtins/misc/end.md) | `(array $array): mixed` | `mixed` |
 | [`extension_loaded()`](./builtins/misc/extension_loaded.md) | `(mixed $extension): bool` | `bool` |
 | [`get_debug_type()`](./builtins/misc/get_debug_type.md) | `(mixed $value): string` | `string` |
 | [`header()`](./builtins/misc/header.md) | `(mixed $header, mixed $replace, mixed $response_code): void` | `void` |
@@ -276,6 +278,8 @@ sidebar:
 | [`php_uname()`](./builtins/misc/php_uname.md) | `(string $mode): string` | `string` |
 | [`phpversion()`](./builtins/misc/phpversion.md) | `(string $extension = null): string` | `string` |
 | [`print_r()`](./builtins/misc/print_r.md) | `(...$values): void` | `void` |
+| [`setlocale()`](./builtins/misc/setlocale.md) | `(int $category, string $locales, ...$rest): mixed` | `mixed` |
+| [`trigger_deprecation()`](./builtins/misc/trigger_deprecation.md) | `(mixed $package, mixed $version, mixed $message, ...$args): void` | `void` |
 | [`unset()`](./builtins/misc/unset.md) | `(mixed $var, ...$vars): void` | `void` |
 | [`var_dump()`](./builtins/misc/var_dump.md) | `(...$values): void` | `void` |
 | [`ptr()`](./builtins/pointer/ptr.md) | `(mixed $value): mixed` | `mixed` |

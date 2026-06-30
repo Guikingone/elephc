@@ -57,6 +57,34 @@ pub(super) fn lower_static_defined_call(
     ))
 }
 
+/// Folds a literal `constant("NAME")` to its value when the name resolves at
+/// compile time, returning `None` for non-literal or unresolved names.
+///
+/// A bare global-constant name is resolved through the prescanned constant table;
+/// a `Class::CONST` form is resolved through PHP class/interface constant lookup.
+/// Returning `None` defers the call to the generic builtin path, which lowers to
+/// the `__rt_constant` runtime registry lookup (a runtime miss throws `\Error`).
+pub(super) fn lower_static_constant_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &Name,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(name.as_str().trim_start_matches('\\')) != "constant" || args.len() != 1 {
+        return None;
+    }
+    let ExprKind::StringLiteral(const_name) = &args[0].kind else {
+        return None;
+    };
+    let canonical = const_name.trim_start_matches('\\');
+    if let Some((class_name, member)) = canonical.split_once("::") {
+        let value = ctx.scoped_constant_value(class_name, member)?;
+        return Some(super::lower_expr(ctx, &value));
+    }
+    let (value, php_type) = ctx.constant_value(canonical)?;
+    Some(lower_constant_value(ctx, value, php_type, expr))
+}
+
 /// Lowers a constant reference through prescanned metadata or global storage fallback.
 pub(super) fn lower_const_ref(
     ctx: &mut LoweringContext<'_, '_>,

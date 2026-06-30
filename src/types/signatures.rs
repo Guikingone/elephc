@@ -131,6 +131,7 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "extension_loaded" => Some(fixed(&["extension"])),
         "is_callable" => Some(fixed(&["value"])),
         "defined" => Some(fixed(&["constant_name"])),
+        "constant" => Some(fixed(&["name"])),
         "class_alias" => Some(optional(
             &["class", "alias", "autoload"],
             2,

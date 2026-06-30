@@ -2,7 +2,7 @@
 title: "get_debug_type()"
 description: "Lowers `get_debug_type(value)` — PHP 8's type-name helper. Like `gettype()` but with the short"
 sidebar:
-  order: 261
+  order: 263
 ---
 
 ## get_debug_type()

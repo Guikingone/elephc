@@ -2,7 +2,7 @@
 title: "html_entity_decode() — internals"
 description: "Compiler internals for html_entity_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 349
+  order: 353
 ---
 
 ## `html_entity_decode()` — internals
@@ -21,8 +21,7 @@ sidebar:
 ## Runtime helpers
 
 The following runtime helpers are referenced:
-- `__rt_grapheme_strrev`
-- `__rt_strcopy`
+- `__rt_base64_decode`
 
 ## Signature summary
 

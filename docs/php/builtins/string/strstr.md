@@ -2,7 +2,7 @@
 title: "strstr()"
 description: "Lowers `strstr(haystack, needle[, before_needle])`."
 sidebar:
-  order: 388
+  order: 392
 ---
 
 ## strstr()

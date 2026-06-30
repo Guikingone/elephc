@@ -2,7 +2,7 @@
 title: "decoct() — internals"
 description: "Compiler internals for decoct(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 332
+  order: 336
 ---
 
 ## `decoct()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:211](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L211) (`lower_int_to_base_string`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:234](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L234) (`lower_int_to_base_string`)
 - **Function symbol**: `lower_int_to_base_string()`
 
 

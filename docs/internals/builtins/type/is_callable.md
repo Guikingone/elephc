@@ -2,7 +2,7 @@
 title: "is_callable() — internals"
 description: "Compiler internals for is_callable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 417
+  order: 421
 ---
 
 ## `is_callable()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:955](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L955) (`lower_is_callable`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:1038](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L1038) (`lower_is_callable`)
 - **Function symbol**: `lower_is_callable()`
 
 

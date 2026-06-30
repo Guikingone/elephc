@@ -48,12 +48,14 @@ fn test_error_defined_wrong_args() {
     expect_error("<?php defined();", "defined() takes exactly 1 argument");
 }
 
-/// Verifies that `defined()` requires a string literal in AOT mode.
+/// Verifies that `constant()` requires exactly one argument. A non-literal name
+/// is intentionally accepted (it lowers to the runtime constant registry), so the
+/// remaining compile-time error surface is the argument count.
 #[test]
-fn test_error_defined_non_literal_name() {
+fn test_error_constant_wrong_args() {
     expect_error(
-        "<?php $name = \"PHP_OS\"; defined($name);",
-        "defined() first argument must be a string literal in AOT mode",
+        "<?php constant(\"A\", \"B\");",
+        "constant() takes exactly 1 argument",
     );
 }
 

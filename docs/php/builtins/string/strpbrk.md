@@ -2,7 +2,7 @@
 title: "strpbrk()"
 description: "Lowers `strpbrk(string, characters)` and boxes its `string|false` result as Mixed."
 sidebar:
-  order: 383
+  order: 387
 ---
 
 ## strpbrk()

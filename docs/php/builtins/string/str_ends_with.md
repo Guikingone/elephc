@@ -2,7 +2,7 @@
 title: "str_ends_with()"
 description: "Lowers a two-argument string builtin that directly delegates to a runtime helper."
 sidebar:
-  order: 371
+  order: 375
 ---
 
 ## str_ends_with()

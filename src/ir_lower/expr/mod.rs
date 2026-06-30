@@ -1764,6 +1764,9 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     if let Some(value) = constants::lower_static_defined_call(ctx, name, args, expr) {
         return value;
     }
+    if let Some(value) = constants::lower_static_constant_call(ctx, name, args, expr) {
+        return value;
+    }
     let canonical = name.as_str();
     if let Some(value) = lower_lazy_isset(ctx, canonical, args, expr) {
         return value;
@@ -6421,7 +6424,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "stream_socket_client" | "stream_socket_pair" | "stream_copy_to_stream"
         | "stream_socket_get_name" | "stream_socket_recvfrom" | "stream_socket_sendto"
         | "stream_socket_server" | "tmpfile" | "gzinflate" | "gzuncompress" | "strpos" | "strrpos"
-        | "strpbrk" => {
+        | "strpbrk" | "constant" => {
             Some(PhpType::Mixed)
         }
         "spl_autoload_functions" => Some(PhpType::Array(Box::new(PhpType::Int))),

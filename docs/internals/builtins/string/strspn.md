@@ -2,7 +2,7 @@
 title: "strspn() — internals"
 description: "Compiler internals for strspn(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 390
+  order: 394
 ---
 
 ## `strspn()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:156](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L156) (`lower_span`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:179](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L179) (`lower_span`)
 - **Function symbol**: `lower_span()`
 
 

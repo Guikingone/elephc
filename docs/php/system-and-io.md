@@ -19,7 +19,8 @@ sidebar:
 | `getenv()` | `getenv($name): string` | Get environment variable |
 | `putenv()` | `putenv($assignment): bool` | Set environment variable ("KEY=VALUE") |
 | `define()` | `define($name, $value): bool` | Define a compile-time global constant with a string-literal name |
-| `defined()` | `defined($name): bool` | Check whether a string-literal constant name is defined |
+| `defined()` | `defined($name): bool` | Check whether a constant name is defined (literal or runtime name) |
+| `constant()` | `constant($name): mixed` | Return the value of a constant by name (literal or runtime name) |
 | `php_uname()` | `php_uname($mode = "a"): string` | Get system information from the target runtime |
 | `phpversion()` | `phpversion(): string` | Get the elephc package version from `Cargo.toml` |
 | `extension_loaded()` | `extension_loaded($extension): bool` | Check whether a PHP extension is loaded (always `false`; see below) |
@@ -29,7 +30,11 @@ sidebar:
 | `passthru()` | `passthru($command): void` | Execute, pass raw output |
 | `trigger_deprecation()` | `trigger_deprecation($package, $version, $message, ...$args): void` | Symfony's `symfony/deprecation-contracts` global. Accepts the call and is a sound no-op: deprecation notices are advisory, so elephc evaluates the arguments and emits nothing |
 
-`define()` returns `true` the first time a constant is defined at runtime. Duplicate attempts keep the first value, return `false`, and emit a suppressible runtime warning. `defined()` currently requires a string literal in AOT mode.
+`define()` returns `true` the first time a constant is defined at runtime. Duplicate attempts keep the first value, return `false`, and emit a suppressible runtime warning.
+
+`defined()` and `constant()` accept both string-literal and runtime (non-literal) names. A literal name is resolved at compile time (`defined()` folds to a boolean; `constant()` folds to the value). A non-literal name is resolved against a closed-world constant registry emitted into the binary: `defined()` returns whether the name is registered, and `constant()` returns the constant's value or throws a catchable `\Error` (`Undefined constant "NAME"`) on a miss. The registry covers scalar global constants — top-level `const` declarations, literal `define()` calls, and built-in scalar constants (`PHP_INT_SIZE`, `E_ALL`, `DIRECTORY_SEPARATOR`, …). Class constants (`Cls::C`), enum-case constants, and array/composite constant values are not yet registered for non-literal `constant()`, so a non-literal lookup of those names throws.
+
+`enum_exists()` likewise accepts a runtime (non-literal) enum name and resolves it against a closed-world enum registry; its `$autoload` argument is ignored in the closed-world model. A literal enum name still folds to a compile-time boolean.
 
 `extension_loaded()` resolves at compile time. elephc is a closed-world AOT compiler with no dynamically loaded PHP extensions, so it currently reports every extension as not loaded (`false`), matching extension names case-insensitively like PHP. This is the correct value for code that uses `extension_loaded()` to choose between a native extension and a userland fallback: the fallback path is selected, and elephc-provided functions remain available through `function_exists()` and the builtin catalog.
 

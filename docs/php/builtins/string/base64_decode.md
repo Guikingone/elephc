@@ -1,8 +1,8 @@
 ---
 title: "base64_decode()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Lowers `base64_decode(string $string, bool $strict = false)`."
 sidebar:
-  order: 320
+  order: 324
 ---
 
 ## base64_decode()
@@ -11,11 +11,11 @@ sidebar:
 function base64_decode(string $string, bool $strict): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Lowers `base64_decode(string $string, bool $strict = false)`.
 
 **Parameters**:
 - `$string` (`string`)
-- `$strict` (`bool`)
+- `$strict` (`bool`), optional
 
 **Returns**: `string`
 

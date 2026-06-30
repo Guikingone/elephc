@@ -1351,7 +1351,7 @@ pub(super) fn check_builtin(
                 "class_alias() is only supported as a top-level statement with literal class names",
             ));
         }
-        "class_exists" | "interface_exists" | "trait_exists" | "enum_exists" => {
+        "class_exists" | "interface_exists" | "trait_exists" => {
             if args.is_empty() || args.len() > 2 {
                 return Err(CompileError::new(
                     span,
@@ -1381,6 +1381,19 @@ pub(super) fn check_builtin(
                     ));
                 }
             }
+            Ok(Some(PhpType::Bool))
+        }
+        "enum_exists" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(CompileError::new(span, "enum_exists() takes 1 or 2 arguments"));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            // A string-literal name folds to a compile-time boolean during
+            // lowering; a non-literal name is accepted here and lowered to the
+            // `__rt_enum_exists` closed-world enum-registry lookup. The closed-world
+            // `$autoload` argument has no effect, so it accepts any value.
             Ok(Some(PhpType::Bool))
         }
         "class_implements" | "class_parents" | "class_uses" => {

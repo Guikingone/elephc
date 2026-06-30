@@ -2,7 +2,7 @@
 title: "hash_algos()"
 description: "Lowers `hash_algos()` through the runtime algorithm-list builder."
 sidebar:
-  order: 337
+  order: 341
 ---
 
 ## hash_algos()

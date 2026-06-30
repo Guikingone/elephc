@@ -2,7 +2,7 @@
 title: "extension_loaded()"
 description: "Lowers `extension_loaded(\"name\")` to a compile-time constant boolean."
 sidebar:
-  order: 260
+  order: 262
 ---
 
 ## extension_loaded()

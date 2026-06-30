@@ -2,7 +2,7 @@
 title: "substr_count() — internals"
 description: "Compiler internals for substr_count(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 395
+  order: 399
 ---
 
 ## `substr_count()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:921](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L921) (`lower_substr_count`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:944](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L944) (`lower_substr_count`)
 - **Function symbol**: `lower_substr_count()`
 
 

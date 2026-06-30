@@ -2,7 +2,7 @@
 title: "preg_last_error()"
 description: "Lowers `preg_last_error()` — always returns 0 (PREG_NO_ERROR) in this implementation."
 sidebar:
-  order: 361
+  order: 365
 ---
 
 ## preg_last_error()

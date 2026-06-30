@@ -8,10 +8,13 @@
 //! Key details:
 //! - Symbol names and table layouts are link-time ABI shared with generated code and runtime helper labels.
 
+mod const_registry;
 mod fixed;
 mod instanceof;
 mod user;
 
+/// Emit the closed-world constant/enum registry data tables for runtime lookups.
+pub(crate) use const_registry::emit_const_registry_data;
 pub(crate) use fixed::emit_runtime_data_fixed;
 /// Emit fixed runtime data section (heap globals, fatal/assertion messages, lookup tables, builtin callable metadata).
 pub(crate) use user::emit_runtime_data_user;

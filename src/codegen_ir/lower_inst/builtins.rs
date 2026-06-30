@@ -156,6 +156,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "get_debug_type" => lower_get_debug_type(ctx, inst),
         "define" => lower_define(ctx, inst),
         "defined" => lower_defined(ctx, inst),
+        "constant" => lower_constant(ctx, inst),
         "file_get_contents" => io::lower_file_get_contents(ctx, inst),
         "readfile" => io::lower_readfile(ctx, inst),
         "readline" => io::lower_readline(ctx, inst),
@@ -860,13 +861,85 @@ fn lower_phpversion(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result
     store_if_result(ctx, inst)
 }
 
-/// Lowers `defined("NAME")` for compile-time string constant names.
+/// Lowers `defined($name)` against the closed-world constant registry.
+///
+/// A constant string name folds to a static boolean (the cheap literal path
+/// normally resolved during EIR lowering never reaches the runtime helper); a
+/// non-literal name is lowered to the `__rt_defined` registry lookup.
 fn lower_defined(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "defined", 1)?;
     let value = expect_operand(inst, 0)?;
-    let constant_name = const_string_operand(ctx, value)?;
-    emit_static_bool(ctx, ctx.has_global_name(&constant_name));
+    if let Ok(constant_name) = const_string_operand(ctx, value) {
+        let exists =
+            ctx.has_global_name(&constant_name) || const_registry_contains(ctx, &constant_name);
+        emit_static_bool(ctx, exists);
+        return store_if_result(ctx, inst);
+    }
+    emit_registry_string_lookup(ctx, value, "defined", "__rt_defined")?;
     store_if_result(ctx, inst)
+}
+
+/// Lowers `constant($name)` against the closed-world constant registry.
+///
+/// Literal names that resolve at compile time are folded during EIR lowering and
+/// never reach here; every name that does reach this lowering (non-literal, or a
+/// literal that did not resolve) is sent to `__rt_constant`, which returns an
+/// owned boxed Mixed on a hit and throws a catchable `\Error` on a miss.
+fn lower_constant(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "constant", 1)?;
+    let value = expect_operand(inst, 0)?;
+    emit_registry_string_lookup(ctx, value, "constant", "__rt_constant")?;
+    store_if_result(ctx, inst)
+}
+
+/// Returns true when the closed-world constant registry holds the named constant.
+fn const_registry_contains(ctx: &FunctionContext<'_>, name: &str) -> bool {
+    let normalized = name.trim_start_matches('\\');
+    ctx.module
+        .const_registry
+        .iter()
+        .any(|(candidate, _)| candidate == normalized)
+}
+
+/// Loads a runtime string name into the helper argument registers and calls the
+/// named constant/enum registry runtime routine.
+///
+/// The name operand is materialized as a PHP string (a `Mixed`/`Union` operand is
+/// first cast with `__rt_mixed_cast_string`), then the `(ptr, len)` pair is moved
+/// into the integer argument registers before the call. The helper's result
+/// (boolean for `__rt_defined`/`__rt_enum_exists`, boxed Mixed for
+/// `__rt_constant`) is left in the result register for `store_if_result`.
+fn emit_registry_string_lookup(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    builtin_name: &str,
+    helper: &str,
+) -> Result<()> {
+    let ty = ctx.load_value_to_result(value)?;
+    match ty.codegen_repr() {
+        PhpType::Str => {}
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} name with PHP type {:?}",
+                builtin_name, other
+            )));
+        }
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // move string pointer into helper argument 0
+            ctx.emitter.instruction("mov x1, x2");                              // move string length into helper argument 1
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // move string pointer into helper argument 0
+            ctx.emitter.instruction("mov rsi, rdx");                            // move string length into helper argument 1
+        }
+    }
+    abi::emit_call_label(ctx.emitter, helper);
+    Ok(())
 }
 
 /// Lowers `function_exists("name")` for compile-time string names.
@@ -926,7 +999,12 @@ fn lower_extension_loaded(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     store_if_result(ctx, inst)
 }
 
-/// Lowers AOT class/interface/enum existence checks for literal names.
+/// Lowers AOT class/interface/enum existence checks.
+///
+/// `class_exists`/`interface_exists`/`trait_exists` fold a literal name to a
+/// static boolean (the checker requires a literal name for those). `enum_exists`
+/// additionally accepts a non-literal name, which is lowered to the
+/// `__rt_enum_exists` closed-world enum-registry lookup.
 fn lower_class_like_exists(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -934,6 +1012,10 @@ fn lower_class_like_exists(
 ) -> Result<()> {
     ensure_arg_count_between(inst, name, 1, 2)?;
     let value = expect_operand(inst, 0)?;
+    if name == "enum_exists" && const_string_operand(ctx, value).is_err() {
+        emit_registry_string_lookup(ctx, value, "enum_exists", "__rt_enum_exists")?;
+        return store_if_result(ctx, inst);
+    }
     let symbol_name = const_string_operand(ctx, value)?;
     let exists = match name {
         "class_exists" => contains_folded(

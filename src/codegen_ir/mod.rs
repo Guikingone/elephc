@@ -197,6 +197,24 @@ fn finalize_user_asm(
     }
     user_asm.push('\n');
     user_asm.push_str(&user_data);
+    if module.required_runtime_features.const_introspection {
+        let mut enum_names: Vec<String> = module
+            .enum_infos
+            .keys()
+            .map(|name| name.trim_start_matches('\\').to_string())
+            .collect();
+        enum_names.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+        let error_class_id = runtime_classes
+            .get("Error")
+            .map(|info| info.class_id)
+            .unwrap_or(u64::MAX);
+        user_asm.push('\n');
+        user_asm.push_str(&runtime::emit_const_registry_data(
+            &module.const_registry,
+            &enum_names,
+            error_class_id,
+        ));
+    }
     if matches!(emit, Emit::Cdylib) && module.target.platform == Platform::Linux {
         let mut exported: HashSet<String> = exported_functions
             .values()

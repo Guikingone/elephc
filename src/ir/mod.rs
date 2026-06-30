@@ -35,8 +35,8 @@ pub use instr::{
     BuiltinId, CmpPredicate, Immediate, InstId, Instruction, MixedNumericOp, Op, RuntimeId,
 };
 pub use module::{
-    ClassTable, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl, InterfaceTable,
-    Module, PackedLayoutTable,
+    ClassTable, ConstScalar, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl,
+    InterfaceTable, Module, PackedLayoutTable,
 };
 pub use print::{print_function, print_module};
 pub use types::{IrHeapKind, IrType};

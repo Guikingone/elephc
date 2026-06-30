@@ -9,6 +9,10 @@
 //! - System helpers must preserve PHP-visible behavior while crossing libc, syscall, JSON, regex, and date formatter boundaries.
 
 mod build_argv;
+mod rt_constant;
+mod rt_defined;
+mod rt_enum_exists;
+mod rt_sorted_name_search;
 mod date;
 mod date_data;
 mod checkdate;
@@ -100,3 +104,7 @@ pub(crate) use shell_exec::emit_shell_exec;
 pub(crate) use strtotime::emit_strtotime;
 pub(crate) use strtotime::emit_strtotime_data;
 pub(crate) use time::emit_time;
+pub(crate) use rt_constant::emit_rt_constant;
+pub(crate) use rt_defined::emit_rt_defined;
+pub(crate) use rt_enum_exists::emit_rt_enum_exists;
+pub(crate) use rt_sorted_name_search::emit_rt_sorted_name_search;

@@ -2,7 +2,7 @@
 title: "sleep() — internals"
 description: "Compiler internals for sleep(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 296
+  order: 300
 ---
 
 ## `sleep()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:473](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L473) (`lower_sleep`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:486](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L486) (`lower_sleep`)
 - **Function symbol**: `lower_sleep()`
 
 

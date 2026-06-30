@@ -355,14 +355,30 @@ pub(super) fn check_builtin(
             if args.len() != 1 {
                 return Err(CompileError::new(span, "defined() takes exactly 1 argument"));
             }
+            // A string-literal name still folds to a compile-time boolean later; a
+            // non-literal name is accepted here and lowered to the `__rt_defined`
+            // closed-world constant-registry lookup.
             checker.infer_type(&args[0], env)?;
-            if !matches!(args[0].kind, ExprKind::StringLiteral(_)) {
-                return Err(CompileError::new(
-                    span,
-                    "defined() first argument must be a string literal in AOT mode",
-                ));
-            }
             Ok(Some(PhpType::Bool))
+        }
+        "constant" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "constant() takes exactly 1 argument"));
+            }
+            checker.infer_type(&args[0], env)?;
+            // A literal global-constant name keeps its precise checker type (the
+            // value is folded during lowering); every other name — non-literal or
+            // a class/enum `::` form — resolves at runtime through `__rt_constant`
+            // and is typed as `Mixed`.
+            if let ExprKind::StringLiteral(name) = &args[0].kind {
+                let canonical = name.trim_start_matches('\\');
+                if !canonical.contains("::") {
+                    if let Some(ty) = checker.constants.get(canonical) {
+                        return Ok(Some(ty.clone()));
+                    }
+                }
+            }
+            Ok(Some(PhpType::Mixed))
         }
         "date" | "gmdate" => {
             if args.is_empty() || args.len() > 2 {

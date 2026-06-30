@@ -35,6 +35,26 @@ impl DataId {
     }
 }
 
+/// Scalar value of a program constant materialized into the closed-world
+/// constant registry consumed by `constant()`/`defined()` runtime lookups.
+///
+/// Only PHP scalar shapes are representable here; class constants, enum-case
+/// singletons, and array/composite constants are intentionally absent in
+/// Stage 0 (a registry miss is correct PHP behavior: `false`/throw).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConstScalar {
+    /// Integer constant (boxed as Mixed tag 0).
+    Int(i64),
+    /// Floating-point constant (boxed as Mixed tag 2 via its bit pattern).
+    Float(f64),
+    /// Boolean constant (boxed as Mixed tag 3).
+    Bool(bool),
+    /// String constant (boxed as Mixed tag 1; bytes interned in the data section).
+    Str(String),
+    /// `null` constant (boxed as Mixed tag 8).
+    Null,
+}
+
 /// Complete EIR module for one compile target.
 #[derive(Debug, Clone)]
 pub struct Module {
@@ -64,6 +84,10 @@ pub struct Module {
     pub packed_class_infos: HashMap<String, PackedClassInfo>,
     pub packed_layouts: PackedLayoutTable,
     pub required_runtime_features: RuntimeFeatures,
+    /// Closed-world constant registry (canonical FQN, no leading `\`, sorted by
+    /// name bytes) materialized for runtime `defined()`/`constant()` lookups when
+    /// `required_runtime_features.const_introspection` is set.
+    pub const_registry: Vec<(String, ConstScalar)>,
 }
 
 impl Module {
@@ -96,6 +120,7 @@ impl Module {
             packed_class_infos: HashMap::new(),
             packed_layouts: PackedLayoutTable::default(),
             required_runtime_features: RuntimeFeatures::none(),
+            const_registry: Vec::new(),
         }
     }
 

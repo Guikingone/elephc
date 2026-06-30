@@ -2,7 +2,7 @@
 title: "substr_count()"
 description: "Lowers `substr_count(haystack, needle[, offset[, length]])`."
 sidebar:
-  order: 392
+  order: 396
 ---
 
 ## substr_count()

@@ -39,6 +39,12 @@ pub struct RuntimeFeatures {
     /// tail-call `elephc_web_write` (a symbol only linked into `--web` binaries).
     /// Non-web runtimes must leave this false so they never reference that symbol.
     pub web: bool,
+    /// True when the program performs a non-literal `defined()`/`constant()`/
+    /// `enum_exists()` lookup that must search the emitted closed-world constant
+    /// and enum registries at runtime (`__rt_defined`/`__rt_constant`/
+    /// `__rt_enum_exists` and their `_const_table`/`_enum_table` data). Detected
+    /// from the lowered EIR instruction stream, not the AST.
+    pub const_introspection: bool,
 }
 
 impl RuntimeFeatures {
@@ -49,6 +55,7 @@ impl RuntimeFeatures {
             phar_archive: false,
             descriptor_invoker: false,
             web: false,
+            const_introspection: false,
         }
     }
 
@@ -60,6 +67,7 @@ impl RuntimeFeatures {
             phar_archive: true,
             descriptor_invoker: true,
             web: true,
+            const_introspection: true,
         }
     }
 }
@@ -1030,6 +1038,7 @@ mod tests {
             phar_archive: false,
             descriptor_invoker: true,
             web: false,
+            const_introspection: false,
         })
         .iter()
         .any(|lib| lib == "elephc_crypto"));
