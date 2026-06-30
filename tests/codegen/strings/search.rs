@@ -242,6 +242,33 @@ fn test_strspn_no_leading_match() {
     assert_eq!(out, "0");
 }
 
+/// Verifies the 3-argument `strcspn`/`strspn` forms scan a substr-style window
+/// starting at a non-negative offset (the form symfony/yaml relies on).
+///
+/// `strcspn("hello world", " \r\n", 1)` scans "ello world" and stops at the
+/// space (index 4); `strspn("   abc", " ", 1)` counts the two remaining spaces.
+#[test]
+fn test_strcspn_strspn_with_offset() {
+    let out = compile_and_run(
+        r#"<?php echo strcspn("hello world", " \r\n", 1), "|", strspn("   abc", " ", 1);"#,
+    );
+    assert_eq!(out, "4|2");
+}
+
+/// Verifies the 4-argument `strcspn` form clamps the scan to an explicit window,
+/// including PHP's tail-relative negative length.
+///
+/// `strcspn("hello", "xyz", 2, 1)` scans only the 1-byte window "l" (no member,
+/// span 1); `strcspn("hello world", "o", 0, -3)` scans "hello wo" (length
+/// 11 - 3) and stops at 'o' (index 4). Cross-checked against `php -r`.
+#[test]
+fn test_strcspn_with_offset_and_length() {
+    let out = compile_and_run(
+        r#"<?php echo strcspn("hello", "xyz", 2, 1), "|", strcspn("hello world", "o", 0, -3);"#,
+    );
+    assert_eq!(out, "1|4");
+}
+
 /// Verifies `strpbrk` returns the suffix beginning at the first character found in the set.
 /// Fixture: "hello" with set "lo" first matches 'l' at index 2, yielding "llo".
 #[test]

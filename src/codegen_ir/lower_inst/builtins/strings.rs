@@ -174,8 +174,10 @@ pub(super) fn lower_binary_string_runtime(
 ///
 /// Both builtins scan `string` for the longest leading run of bytes that are
 /// (`strspn`) or are not (`strcspn`) members of `characters`, returning that
-/// run's length. The optional `offset`/`length` arguments are accepted by the
-/// type checker but are not yet supported in the EIR backend.
+/// run's length. With the optional `offset`/`length` arguments, the scan is run
+/// over a substr-style window of `string`; the window `(ptr, len)` is computed
+/// inline (matching PHP's offset/length normalization) and fed to the same
+/// 2-string span helper.
 pub(super) fn lower_span(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -189,15 +191,130 @@ pub(super) fn lower_span(
             inst.operands.len()
         )));
     }
-    if inst.operands.len() > 2 {
-        return Err(CodegenIrError::unsupported(format!(
-            "{} with offset/length arguments",
-            name
-        )));
+    if inst.operands.len() == 2 {
+        load_binary_string_args(ctx, inst, name)?;
+        abi::emit_call_label(ctx.emitter, runtime_label);
+        return store_if_result(ctx, inst);
     }
-    load_binary_string_args(ctx, inst, name)?;
-    abi::emit_call_label(ctx.emitter, runtime_label);
+    let has_length = inst.operands.len() >= 4;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            lower_span_windowed_aarch64(ctx, inst, name, runtime_label, has_length)?
+        }
+        Arch::X86_64 => {
+            lower_span_windowed_x86_64(ctx, inst, name, runtime_label, has_length)?
+        }
+    }
     store_if_result(ctx, inst)
+}
+
+/// Emits the AArch64 windowed `strcspn`/`strspn` lowering for the 3/4-argument forms.
+///
+/// Materializes a substr-style window `(x1=ptr, x2=len)` over the subject string and feeds it,
+/// together with the preserved `characters` string (`x3`/`x4`), to the 2-string span runtime
+/// helper. `has_length` selects the 4-argument path at codegen time, so an explicit `length == -1`
+/// is never mistaken for an omitted length. No runtime call runs during the window computation, so
+/// `x5` is free scratch for the tail-relative length adjustment.
+fn lower_span_windowed_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+    has_length: bool,
+) -> Result<()> {
+    let neg_done = ctx.next_label("span_neg_done");
+    load_string_arg_to_regs(ctx, inst, 1, name, "x1", "x2")?;
+    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the characters string across offset/length materialization
+    load_string_arg_to_regs(ctx, inst, 0, name, "x1", "x2")?;
+    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the subject string while materializing numeric arguments
+    let offset = expect_operand(inst, 2)?;
+    load_as_int(ctx, offset, &format!("{} offset", name))?;
+    if has_length {
+        ctx.emitter.instruction("str x0, [sp, #-16]!");                         // preserve the offset while materializing the explicit length
+        let length = expect_operand(inst, 3)?;
+        load_as_int(ctx, length, &format!("{} length", name))?;
+        ctx.emitter.instruction("mov x3, x0");                                  // move the explicit window length into the clamp register
+        ctx.emitter.instruction("ldr x0, [sp], #16");                           // restore the offset after length materialization
+    }
+    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the subject pointer and length
+    ctx.emitter.instruction("cmp x0, #0");                                      // check whether the requested offset is negative
+    ctx.emitter.instruction(&format!("b.ge {}", neg_done));                     // skip tail-relative offset adjustment for non-negative offsets
+    ctx.emitter.instruction("add x0, x2, x0");                                  // convert the negative offset into a tail-relative byte index
+    ctx.emitter.instruction("cmp x0, #0");                                      // check whether the tail-relative offset still points before the string
+    ctx.emitter.instruction("csel x0, xzr, x0, lt");                            // clamp underflowing offsets back to the start of the string
+    ctx.emitter.label(&neg_done);
+    ctx.emitter.instruction("cmp x0, x2");                                      // compare the final offset against the full subject length
+    ctx.emitter.instruction("csel x0, x2, x0, gt");                             // clamp offsets past the end to the subject length
+    ctx.emitter.instruction("add x1, x1, x0");                                  // advance the window pointer to the selected offset
+    ctx.emitter.instruction("sub x2, x2, x0");                                  // compute the remaining window length after the offset
+    if has_length {
+        ctx.emitter.instruction("cmp x3, #0");                                  // check whether the requested window length is negative
+        ctx.emitter.instruction("add x5, x2, x3");                              // negative length counts back from the end of the remaining window
+        ctx.emitter.instruction("csel x3, x5, x3, lt");                         // use the tail-relative length for a negative window length
+        ctx.emitter.instruction("cmp x3, #0");                                  // re-check the window length after tail-relative adjustment
+        ctx.emitter.instruction("csel x3, xzr, x3, lt");                        // clamp a still-negative window length to zero
+        ctx.emitter.instruction("cmp x3, x2");                                  // compare the requested length against the remaining window
+        ctx.emitter.instruction("csel x2, x3, x2, lt");                         // shrink the window when the requested length is shorter
+    }
+    ctx.emitter.instruction("ldp x3, x4, [sp], #16");                           // restore the characters pointer/length into helper argument registers
+    abi::emit_call_label(ctx.emitter, runtime_label);
+    Ok(())
+}
+
+/// Emits the x86_64 windowed `strcspn`/`strspn` lowering for the 3/4-argument forms.
+///
+/// Materializes a substr-style window `(rdi=ptr, rsi=len)` over the subject string and feeds it,
+/// together with the preserved `characters` string (`rdx`/`rcx`), to the 2-string span runtime
+/// helper. `has_length` selects the 4-argument path at codegen time, so an explicit `length == -1`
+/// is never mistaken for an omitted length. `r8` is free scratch during the window computation,
+/// which runs without any intervening runtime call.
+fn lower_span_windowed_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+    has_length: bool,
+) -> Result<()> {
+    let neg_done = ctx.next_label("span_neg_done");
+    load_string_arg_to_regs(ctx, inst, 1, name, "rdi", "rsi")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rdi", "rsi");
+    load_string_arg_to_regs(ctx, inst, 0, name, "rdi", "rsi")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rdi", "rsi");
+    let offset = expect_operand(inst, 2)?;
+    load_as_int(ctx, offset, &format!("{} offset", name))?;
+    if has_length {
+        abi::emit_push_reg(ctx.emitter, "rax");
+        let length = expect_operand(inst, 3)?;
+        load_as_int(ctx, length, &format!("{} length", name))?;
+        ctx.emitter.instruction("mov rcx, rax");                                // move the explicit window length into the clamp register
+        abi::emit_pop_reg(ctx.emitter, "rax");
+    }
+    abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+    ctx.emitter.instruction("cmp rax, 0");                                      // check whether the requested offset is negative
+    ctx.emitter.instruction(&format!("jge {}", neg_done));                      // skip tail-relative offset adjustment for non-negative offsets
+    ctx.emitter.instruction("add rax, rsi");                                    // convert the negative offset into a tail-relative byte index
+    ctx.emitter.instruction("cmp rax, 0");                                      // check whether the tail-relative offset still points before the string
+    ctx.emitter.instruction("mov r8, 0");                                       // materialize zero for offset clamping
+    ctx.emitter.instruction("cmovl rax, r8");                                   // clamp underflowing offsets back to the start of the string
+    ctx.emitter.label(&neg_done);
+    ctx.emitter.instruction("cmp rax, rsi");                                    // compare the final offset against the full subject length
+    ctx.emitter.instruction("cmovg rax, rsi");                                  // clamp offsets past the end to the subject length
+    ctx.emitter.instruction("add rdi, rax");                                    // advance the window pointer to the selected offset
+    ctx.emitter.instruction("sub rsi, rax");                                    // compute the remaining window length after the offset
+    if has_length {
+        ctx.emitter.instruction("mov r8, rsi");                                 // remaining window length for the tail-relative computation
+        ctx.emitter.instruction("add r8, rcx");                                 // remaining + length counts a negative length back from the end
+        ctx.emitter.instruction("cmp rcx, 0");                                  // check whether the requested window length is negative
+        ctx.emitter.instruction("cmovl rcx, r8");                               // use the tail-relative length for a negative window length
+        ctx.emitter.instruction("cmp rcx, 0");                                  // re-check the window length after tail-relative adjustment
+        ctx.emitter.instruction("mov r8, 0");                                   // materialize zero for negative-length clamping
+        ctx.emitter.instruction("cmovl rcx, r8");                               // clamp a still-negative window length to zero
+        ctx.emitter.instruction("cmp rcx, rsi");                                // compare the requested length against the remaining window
+        ctx.emitter.instruction("cmovl rsi, rcx");                              // shrink the window when the requested length is shorter
+    }
+    abi::emit_pop_reg_pair(ctx.emitter, "rdx", "rcx");                          // restore the characters pointer/length into helper argument registers
+    abi::emit_call_label(ctx.emitter, runtime_label);
+    Ok(())
 }
 
 /// Lowers `strpbrk(string, characters)` and boxes its `string|false` result as Mixed.

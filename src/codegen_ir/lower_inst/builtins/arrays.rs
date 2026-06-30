@@ -1229,6 +1229,9 @@ pub(super) fn lower_in_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
         InArrayCase::Scalar => lower_in_array_scalar(ctx, needle, array)?,
         InArrayCase::String => lower_in_array_string(ctx, needle, array)?,
         InArrayCase::MixedString => lower_in_array_mixed_string(ctx, needle, array)?,
+        InArrayCase::MixedNeedleString => {
+            lower_in_array_mixed_needle_string(ctx, needle, array)?
+        }
     }
     store_if_result(ctx, inst)
 }
@@ -4849,6 +4852,7 @@ enum InArrayCase {
     Scalar,
     String,
     MixedString,
+    MixedNeedleString,
 }
 
 /// Verifies that an indexed-array `in_array()` call has a lowered Phase 04 payload shape.
@@ -4866,6 +4870,12 @@ fn supported_in_array_case(needle_ty: PhpType, array_ty: PhpType) -> Result<InAr
             // slot. A string needle is matched by unboxing each cell and string-comparing the
             // string-tagged ones, mirroring the concrete string-array path's `__rt_str_eq` scan.
             PhpType::Mixed if needle_ty == PhpType::Str => Ok(InArrayCase::MixedString),
+            // A concrete indexed `array<Str>` searched for a boxed `Mixed` needle (e.g. a parsed
+            // scalar whose static type collapsed to Mixed). The needle is unboxed once: only a
+            // string-tagged needle can match, and it is then byte-compared against each element
+            // with `__rt_str_eq`, mirroring the `MixedString` path with the needle/element roles
+            // swapped. A non-string needle matches nothing, matching `MixedString`'s convention.
+            PhpType::Str if needle_ty == PhpType::Mixed => Ok(InArrayCase::MixedNeedleString),
             elem_ty => Err(CodegenIrError::unsupported(format!(
                 "in_array needle PHP type {:?} for indexed-array element PHP type {:?}",
                 needle_ty,
@@ -5062,6 +5072,133 @@ fn lower_in_array_mixed_string_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the not-found result after a match
     ctx.emitter.label(&end_label);
     ctx.emitter.instruction("xor eax, eax");                                    // return false when no cell matches the needle
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Lowers a boxed-`Mixed`-needle membership scan over a concrete indexed `array<Str>`.
+///
+/// The needle is unboxed once: only a string-tagged needle can match, and it is then byte-compared
+/// against each string element with `__rt_str_eq`, mirroring `lower_in_array_mixed_string` with the
+/// needle/element roles swapped. A non-string needle matches nothing, like the `MixedString` path.
+fn lower_in_array_mixed_needle_string(
+    ctx: &mut FunctionContext<'_>,
+    needle: crate::ir::ValueId,
+    array: crate::ir::ValueId,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_in_array_mixed_needle_string_aarch64(ctx, needle, array),
+        Arch::X86_64 => lower_in_array_mixed_needle_string_x86_64(ctx, needle, array),
+    }
+}
+
+/// Emits the AArch64 boxed-Mixed-needle / concrete-string-array membership loop.
+///
+/// `x5`/`x6` hold the unboxed needle string pointer/length across the scan; they are outside the
+/// allocator's caller-saved pool (`x12`–`x15`), so clobbering them never corrupts a live value, and
+/// they are still saved around each `__rt_str_eq` call because that runtime call clobbers them.
+fn lower_in_array_mixed_needle_string_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    needle: crate::ir::ValueId,
+    array: crate::ir::ValueId,
+) -> Result<()> {
+    let loop_label = ctx.next_label("in_array_mixneedle_loop");
+    let found_label = ctx.next_label("in_array_mixneedle_found");
+    let end_label = ctx.next_label("in_array_mixneedle_end");
+    let done_label = ctx.next_label("in_array_mixneedle_done");
+
+    // -- unbox the boxed Mixed needle once; only a string-tagged needle can ever match --
+    ctx.load_value_to_reg(needle, "x0")?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                       // unbox the needle cell → x0=tag, x1=string ptr, x2=string len
+    ctx.emitter.instruction("cmp x0, #1");                                      // is the needle a string value (runtime tag 1)?
+    ctx.emitter.instruction(&format!("b.ne {}", end_label));                    // a non-string needle can never equal a string element
+    ctx.emitter.instruction("mov x5, x1");                                      // stash the needle string pointer across the scan
+    ctx.emitter.instruction("mov x6, x2");                                      // stash the needle string length across the scan
+
+    ctx.load_value_to_reg(array, "x10")?;
+    ctx.emitter.instruction("ldr x9, [x10]");                                   // load indexed string-array length before scanning payload slots
+    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first indexed string-array payload slot
+    ctx.emitter.instruction("mov x12, #0");                                     // start the string membership scan at index zero
+    ctx.emitter.label(&loop_label);
+    ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against indexed-array length
+    ctx.emitter.instruction(&format!("b.ge {}", end_label));                    // finish with false after all string elements are scanned
+    ctx.emitter.instruction("lsl x13, x12, #4");                                // scale the element index by the 16-byte string slot width
+    ctx.emitter.instruction("ldr x1, [x10, x13]");                              // load the current string element pointer for comparison
+    ctx.emitter.instruction("add x14, x13, #8");                                // compute the current string element length-slot offset
+    ctx.emitter.instruction("ldr x2, [x10, x14]");                              // load the current string element length for comparison
+    ctx.emitter.instruction("mov x3, x5");                                      // pass the stashed needle string pointer to the comparison
+    ctx.emitter.instruction("mov x4, x6");                                      // pass the stashed needle string length to the comparison
+    abi::emit_push_reg_pair(ctx.emitter, "x9", "x10");
+    abi::emit_push_reg_pair(ctx.emitter, "x5", "x6");
+    abi::emit_push_reg(ctx.emitter, "x12");
+    abi::emit_call_label(ctx.emitter, "__rt_str_eq");                           // compare the current element (x1/x2) against the needle (x3/x4)
+    abi::emit_pop_reg(ctx.emitter, "x12");
+    abi::emit_pop_reg_pair(ctx.emitter, "x5", "x6");
+    abi::emit_pop_reg_pair(ctx.emitter, "x9", "x10");
+    ctx.emitter.instruction(&format!("cbnz x0, {}", found_label));              // stop as soon as the needle matches an element
+    ctx.emitter.instruction("add x12, x12, #1");                                // advance to the next indexed string element
+    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning remaining string payload slots
+    ctx.emitter.label(&found_label);
+    ctx.emitter.instruction("mov x0, #1");                                      // return true after finding a matching element
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the not-found result after a match
+    ctx.emitter.label(&end_label);
+    ctx.emitter.instruction("mov x0, #0");                                      // return false when no element matches the needle
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits the x86_64 boxed-Mixed-needle / concrete-string-array membership loop.
+///
+/// `r8`/`r9` hold the unboxed needle string pointer/length across the scan. They are in the
+/// allocator's caller-saved pool, so no value lives in them across this call-containing lowering;
+/// they are still saved around each `__rt_str_eq` call because that runtime call clobbers them.
+fn lower_in_array_mixed_needle_string_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    needle: crate::ir::ValueId,
+    array: crate::ir::ValueId,
+) -> Result<()> {
+    let loop_label = ctx.next_label("in_array_mixneedle_loop");
+    let found_label = ctx.next_label("in_array_mixneedle_found");
+    let end_label = ctx.next_label("in_array_mixneedle_end");
+    let done_label = ctx.next_label("in_array_mixneedle_done");
+
+    // -- unbox the boxed Mixed needle once; only a string-tagged needle can ever match --
+    ctx.load_value_to_reg(needle, "rax")?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                       // unbox the needle cell → rax=tag, rdi=string ptr, rdx=string len
+    ctx.emitter.instruction("cmp rax, 1");                                      // is the needle a string value (runtime tag 1)?
+    ctx.emitter.instruction(&format!("jne {}", end_label));                     // a non-string needle can never equal a string element
+    ctx.emitter.instruction("mov r8, rdi");                                     // stash the needle string pointer across the scan
+    ctx.emitter.instruction("mov r9, rdx");                                     // stash the needle string length across the scan
+
+    ctx.load_value_to_reg(array, "r10")?;
+    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load indexed string-array length before scanning payload slots
+    ctx.emitter.instruction("lea r12, [r10 + 24]");                             // point at the first indexed string-array payload slot
+    ctx.emitter.instruction("xor r13d, r13d");                                  // start the string membership scan at index zero
+    ctx.emitter.label(&loop_label);
+    ctx.emitter.instruction("cmp r13, r11");                                    // compare the scan index against indexed-array length
+    ctx.emitter.instruction(&format!("jge {}", end_label));                     // finish with false after all string elements are scanned
+    ctx.emitter.instruction("mov rcx, r13");                                    // copy the scan index before scaling it to a byte offset
+    ctx.emitter.instruction("shl rcx, 4");                                      // scale the element index by the 16-byte string slot width
+    ctx.emitter.instruction("mov rdi, QWORD PTR [r12 + rcx]");                  // load the current string element pointer for comparison
+    ctx.emitter.instruction("mov rsi, QWORD PTR [r12 + rcx + 8]");              // load the current string element length for comparison
+    ctx.emitter.instruction("mov rdx, r8");                                     // pass the stashed needle string pointer to the comparison
+    ctx.emitter.instruction("mov rcx, r9");                                     // pass the stashed needle string length to the comparison
+    abi::emit_push_reg_pair(ctx.emitter, "r11", "r12");
+    abi::emit_push_reg_pair(ctx.emitter, "r8", "r9");
+    abi::emit_push_reg(ctx.emitter, "r13");
+    abi::emit_call_label(ctx.emitter, "__rt_str_eq");                           // compare the current element (rdi/rsi) against the needle (rdx/rcx)
+    abi::emit_pop_reg(ctx.emitter, "r13");
+    abi::emit_pop_reg_pair(ctx.emitter, "r8", "r9");
+    abi::emit_pop_reg_pair(ctx.emitter, "r11", "r12");
+    ctx.emitter.instruction("test rax, rax");                                   // did the current element match the needle?
+    ctx.emitter.instruction(&format!("jne {}", found_label));                   // stop as soon as the needle matches an element
+    ctx.emitter.instruction("add r13, 1");                                      // advance to the next indexed string element
+    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue scanning remaining string payload slots
+    ctx.emitter.label(&found_label);
+    ctx.emitter.instruction("mov rax, 1");                                      // return true after finding a matching element
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the not-found result after a match
+    ctx.emitter.label(&end_label);
+    ctx.emitter.instruction("xor eax, eax");                                    // return false when no element matches the needle
     ctx.emitter.label(&done_label);
     Ok(())
 }

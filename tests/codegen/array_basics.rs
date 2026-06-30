@@ -995,6 +995,25 @@ echo (in_array("hello", $a) ? "y" : "n"),
     assert_eq!(out, "yyn");
 }
 
+/// Regression: `in_array()` with a `Mixed` needle must work over a concrete indexed `array<Str>`
+/// (the inverse of the string-needle / Mixed-array case). An untyped function parameter is a boxed
+/// `Mixed` value; searching it against a literal string array surfaced in symfony/yaml. The needle
+/// is unboxed once and, when string-tagged, byte-compared against each element; a non-string needle
+/// (e.g. an integer) matches nothing, mirroring PHP's behavior for these cases.
+#[test]
+fn test_in_array_mixed_needle_over_string_array() {
+    let out = compile_and_run(
+        r#"<?php
+function check($needle) {
+    $arr = ["a", "b", "c"];
+    return in_array($needle, $arr) ? "y" : "n";
+}
+echo check("b"), check("x"), check(2);
+"#,
+    );
+    assert_eq!(out, "ynn");
+}
+
 // --- Long-form `array(...)` literal ---
 
 /// Verifies that the long-form `array(...)` produces an indexed array equivalent to `[...]`.
