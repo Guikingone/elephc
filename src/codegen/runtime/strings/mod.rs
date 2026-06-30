@@ -30,6 +30,7 @@ mod strrpos;
 mod str_repeat;
 mod strrev;
 mod chr;
+mod php_compare;
 mod strcmp;
 mod strcasecmp;
 mod strcspn;
@@ -136,6 +137,8 @@ pub use chr::emit_chr;
 /// Emit character code to string helper.
 pub use strcmp::emit_strcmp;
 /// Emit case-sensitive string comparison.
+/// Emit the PHP 8 three-way ordered comparison helper for boxed Mixed operands.
+pub use php_compare::emit_php_compare;
 pub use strcasecmp::emit_strcasecmp;
 /// Emit case-insensitive string comparison.
 pub use strcspn::emit_strcspn;

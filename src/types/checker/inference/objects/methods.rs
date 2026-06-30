@@ -106,6 +106,22 @@ impl Checker {
                 _ => {}
             }
         }
+        // A method call on a gradual `Mixed` receiver has an unknown runtime class, so its return
+        // type is genuinely unknown — `Mixed`, not a default scalar. Returning `Mixed` keeps a call
+        // such as `$value->format(...)` on an un-narrowed `mixed` value compatible with any declared
+        // return type (gradual typing), which matches PHP where the method exists at runtime. This
+        // is what makes a `switch (true) { case $v instanceof DateTimeInterface: return $v->format(...) }`
+        // body (where the case arm does not narrow `$v`) type-check against a `: string` signature.
+        //
+        // The argument expressions are intentionally not re-inferred here: the receiver class is
+        // unknown so there is no signature to check them against, and the caller already inferred
+        // them (the `infer_type_with_assignment_effects` method-call path threads assignment effects
+        // through the arguments before this runs). Re-inferring them with plain `infer_type` would
+        // drop that flow state and, for an argument such as `match (true) { !$x = f() => ..., $x => ... }`,
+        // falsely report the in-condition assignment target as undefined.
+        if matches!(obj_ty, PhpType::Mixed) {
+            return Ok(PhpType::Mixed);
+        }
         Ok(PhpType::Int)
     }
 

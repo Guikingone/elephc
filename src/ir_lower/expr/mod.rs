@@ -854,9 +854,15 @@ fn lower_compare(
         BinOp::Eq => Op::LooseEq,
         BinOp::NotEq => Op::LooseNotEq,
         BinOp::Spaceship => Op::Spaceship,
+        // Ordered comparison (`<`, `<=`, `>`, `>=`) with a string or Mixed operand needs PHP 8
+        // semantics (numeric-string detection, lexicographic fallback), which the backend lowers
+        // through `__rt_php_compare` from the `StrCmp` opcode. Concrete numeric pairs keep the
+        // direct integer/float fast paths below.
+        _ if operand_uses_php_compare(lhs.ir_type) || operand_uses_php_compare(rhs.ir_type) => {
+            Op::StrCmp
+        }
         _ if lhs.ir_type == IrType::F64 || rhs.ir_type == IrType::F64 => Op::FCmp,
         _ if lhs.ir_type == IrType::I64 && rhs.ir_type == IrType::I64 => Op::ICmp,
-        _ if lhs.ir_type == IrType::Str && rhs.ir_type == IrType::Str => Op::StrCmp,
         _ => Op::ICmp,
     };
     if matches!(opcode, Op::FCmp) {
@@ -960,6 +966,17 @@ fn lower_datetime_instant_key(
         Op::IAdd.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Returns true when an operand's storage type makes an ordered comparison require PHP 8
+/// runtime semantics (numeric-string detection and lexicographic fallback) rather than a
+/// direct integer/float comparison.
+///
+/// Strings (`IrType::Str`) and boxed `Mixed` values both route through `__rt_php_compare`.
+/// Concrete `Int`/`Float`/`Bool` operands keep the fast integer/float comparison paths;
+/// unions and tagged scalars are intentionally left on their existing lowering.
+fn operand_uses_php_compare(ty: IrType) -> bool {
+    matches!(ty, IrType::Str | IrType::Heap(IrHeapKind::Mixed))
 }
 
 /// Maps an AST comparison operator to an EIR predicate.

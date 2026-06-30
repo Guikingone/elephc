@@ -469,3 +469,98 @@ echo ($i == $m ? "y" : "n"), ($m == $i ? "y" : "n"), ($i == $h["n"] ? "y" : "n")
     );
     assert_eq!(out, "yyyn");
 }
+
+// --- PHP 8 ordered comparison of string/Mixed operands (`__rt_php_compare`) ---
+
+/// Two numeric strings compare numerically, not lexicographically: `"10" < "9"` is false
+/// because 10 is not less than 9 (a byte comparison would wrongly report `'1' < '9'`). The
+/// string parameters keep the operands non-constant so the comparison reaches the runtime.
+#[test]
+fn test_str_lt_numeric_strings_compare_numerically() {
+    let out = compile_and_run(
+        r#"<?php
+function cmp(string $a, string $b): string { return ($a < $b) ? "lt" : "ge"; }
+echo cmp("10", "9"), "|", cmp("9", "10");
+"#,
+    );
+    assert_eq!(out, "ge|lt");
+}
+
+/// Non-numeric strings compare lexicographically: `"abc" < "abd"` is true (`c` < `d`).
+#[test]
+fn test_str_lt_non_numeric_strings_compare_lexicographically() {
+    let out = compile_and_run(
+        r#"<?php
+function cmp(string $a, string $b): string { return ($a < $b) ? "lt" : "ge"; }
+echo cmp("abc", "abd"), "|", cmp("abd", "abc");
+"#,
+    );
+    assert_eq!(out, "lt|ge");
+}
+
+/// A string vs int comparison follows PHP 8: a numeric string compares numerically (`"3" < 5`
+/// is true), while a non-numeric string forces lexicographic comparison against the
+/// stringified int (`"abc" < 5` compares `"abc"` with `"5"`, so it is false).
+#[test]
+fn test_str_lt_int_php8_semantics() {
+    let out = compile_and_run(
+        r#"<?php
+function f(string $s): string { return ($s < 5) ? "lt" : "ge"; }
+echo f("3"), "|", f("abc");
+"#,
+    );
+    assert_eq!(out, "lt|ge");
+}
+
+/// Regression for the Symfony YAML blocker: `$scalar < PHP_INT_MIN` on a (numeric) string
+/// operand must compare numerically. `"-9.99e18"` is less than `PHP_INT_MIN` (~-9.22e18).
+#[test]
+fn test_str_lt_php_int_min_numeric() {
+    let out = compile_and_run(
+        r#"<?php
+function below_min(string $s): string { return ($s < PHP_INT_MIN) ? "below" : "ok"; }
+echo below_min("-9.99e18"), "|", below_min("0");
+"#,
+    );
+    assert_eq!(out, "below|ok");
+}
+
+/// A boxed `Mixed` operand (heterogeneous associative-array element) ordered against a string
+/// goes through the same PHP 8 comparator: `"10"` vs `"9"` compares numerically.
+#[test]
+fn test_mixed_lt_str_numeric() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["v" => "10", "s" => "x"];
+echo ($h["v"] < "9") ? "lt" : "ge";
+"#,
+    );
+    assert_eq!(out, "ge");
+}
+
+/// The concrete integer comparison fast path is unaffected: `1 < 2` is still true and
+/// `3 < 2` is still false.
+#[test]
+fn test_int_lt_fast_path_unchanged() {
+    let out = compile_and_run(
+        r#"<?php
+function ci(int $a, int $b): string { return ($a < $b) ? "lt" : "ge"; }
+echo ci(1, 2), "|", ci(3, 2);
+"#,
+    );
+    assert_eq!(out, "lt|ge");
+}
+
+/// The spaceship operator over string operands returns the PHP 8 three-way sign directly:
+/// numeric strings compare numerically (`"10" <=> "9"` is 1), non-numeric strings
+/// lexicographically (`"abc" <=> "abd"` is -1).
+#[test]
+fn test_spaceship_str_php8_sign() {
+    let out = compile_and_run(
+        r#"<?php
+function sp(string $a, string $b): int { return $a <=> $b; }
+echo sp("10", "9"), "|", sp("abc", "abd"), "|", sp("5", "5");
+"#,
+    );
+    assert_eq!(out, "1|-1|0");
+}

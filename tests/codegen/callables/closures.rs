@@ -1339,3 +1339,48 @@ echo $f->call(new Greeter(), "?");
     );
     assert_eq!(out, "Hi Ada!|Hi Ada?");
 }
+
+// --- Untyped closure/arrow-fn parameter is Mixed inside the body (PHP semantics) ---
+
+/// An untyped arrow-function parameter with no contextual hint is `Mixed` inside the body, so
+/// indexing it (`$x[0]`) type-checks through the gradual Mixed-index path instead of being
+/// rejected as a non-array `Int`. The indexed values flow through a string concat at runtime.
+#[test]
+fn test_untyped_arrow_param_index_is_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+$idx = fn($x) => $x[0] . $x[1];
+echo $idx(['a', 'b', 'c']);
+"#,
+    );
+    assert_eq!(out, "ab");
+}
+
+/// The Symfony YAML Unescaper pattern: an untyped arrow-fn callback indexing `$m[0]` is accepted
+/// by `preg_replace_callback` (its callback parameter is `Mixed`), and the match group flows into
+/// a string builtin. Previously the untyped parameter defaulted to `Int`, so `$m[0]` was rejected
+/// and the callback had no statically known signature.
+#[test]
+fn test_untyped_callback_param_index_preg_replace_callback() {
+    let out = compile_and_run(
+        r#"<?php
+$cb = fn($m) => strtoupper($m[0]);
+echo preg_replace_callback('/[a-z]/', $cb, "abc");
+"#,
+    );
+    assert_eq!(out, "ABC");
+}
+
+/// An untyped-parameter arithmetic closure passed to `array_map` keeps working: `array_map`
+/// exposes the element type so the parameter is typed precisely (the contextual-hint path is
+/// unaffected by the no-hint Mixed fallback), and the multiplication lowers correctly.
+#[test]
+fn test_untyped_arrow_param_arithmetic_array_map_unaffected() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_map(fn($n) => $n * 2, [1, 2, 3]);
+echo $r[0], $r[1], $r[2];
+"#,
+    );
+    assert_eq!(out, "246");
+}

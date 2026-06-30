@@ -2440,3 +2440,40 @@ echo ($a <=> $b);
     );
     assert_eq!(out, "101-1");
 }
+
+/// Verifies a `DateTimeInterface`-typed receiver resolves its declared method return types: a
+/// parameter typed `\DateTimeInterface` can have `->format('Y')` used where a `string` is
+/// required, and `->getTimestamp()` used where an `int` is required. Regression for interface
+/// method-return inference on the builtin date/time contract.
+#[test]
+fn test_datetime_interface_typed_receiver_method_returns() {
+    let out = compile_and_run(
+        r#"<?php
+function fmt(\DateTimeInterface $d): string { return $d->format('Y'); }
+function epoch(\DateTimeInterface $d): int { return $d->getTimestamp(); }
+$d = new DateTime("2021-06-15 00:00:00");
+echo fmt($d), "|", (epoch($d) > 0 ? "pos" : "neg");
+"#,
+    );
+    assert_eq!(out, "2021|pos");
+}
+
+/// Verifies that calling a method on an `instanceof`-narrowed (`mixed` → `DateTimeInterface`)
+/// receiver type-checks against a `: string` return signature: a method call on a gradual `Mixed`
+/// receiver yields `Mixed` (unknown class → unknown, gradual-compatible) rather than a default
+/// `Int`. This is the Symfony YAML `Inline::dump` pattern.
+#[test]
+fn test_datetime_interface_instanceof_narrowed_format_returns_string() {
+    let out = compile_and_run(
+        r#"<?php
+function describe(mixed $value): string {
+    if ($value instanceof \DateTimeInterface) {
+        return $value->format('Y');
+    }
+    return "n/a";
+}
+echo describe(new DateTime("2021-06-15 00:00:00"));
+"#,
+    );
+    assert_eq!(out, "2021");
+}

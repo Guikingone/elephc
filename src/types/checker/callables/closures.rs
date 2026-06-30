@@ -98,7 +98,13 @@ impl Checker {
                 }
                 None => match contextual_param_types.get(idx) {
                     Some(hint) => (hint.clone(), hint.clone()),
-                    None => (PhpType::Int, PhpType::Mixed),
+                    // An untyped closure/arrow-fn parameter with no contextual hint is `Mixed`
+                    // inside the body (PHP semantics: an unannotated parameter accepts any value).
+                    // The body type must therefore be `Mixed`, not a default `Int`, so gradual
+                    // operations like `$param[0]` type-check. Callback builtins that know their
+                    // comparator/visitor argument types pass them through `contextual_param_types`
+                    // (the `Some(hint)` arm above), so arithmetic closures keep their precise typing.
+                    None => (PhpType::Mixed, PhpType::Mixed),
                 },
             };
 

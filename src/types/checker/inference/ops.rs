@@ -98,14 +98,14 @@ impl Checker {
                 Ok(PhpType::Bool)
             }
             BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
-                let numeric_ok =
-                    is_numeric_operand_type(self, &lt) && is_numeric_operand_type(self, &rt);
+                let ordered_ok = is_ordered_comparable_operand_type(self, &lt)
+                    && is_ordered_comparable_operand_type(self, &rt);
                 let datetime_ok =
                     is_datetime_family_object(&lt) && is_datetime_family_object(&rt);
-                if !numeric_ok && !datetime_ok {
+                if !ordered_ok && !datetime_ok {
                     return Err(CompileError::new(
                         expr.span,
-                        "Comparison operators require numeric operands",
+                        "Comparison operators require numeric or string operands",
                     ));
                 }
                 Ok(PhpType::Bool)
@@ -128,14 +128,14 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             BinOp::Spaceship => {
-                let numeric_ok =
-                    is_numeric_operand_type(self, &lt) && is_numeric_operand_type(self, &rt);
+                let ordered_ok = is_ordered_comparable_operand_type(self, &lt)
+                    && is_ordered_comparable_operand_type(self, &rt);
                 let datetime_ok =
                     is_datetime_family_object(&lt) && is_datetime_family_object(&rt);
-                if !numeric_ok && !datetime_ok {
+                if !ordered_ok && !datetime_ok {
                     return Err(CompileError::new(
                         expr.span,
-                        "Spaceship operator requires numeric operands",
+                        "Spaceship operator requires numeric or string operands",
                     ));
                 }
                 Ok(PhpType::Int)
@@ -1220,6 +1220,16 @@ fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
         ty,
         PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::Mixed
     ) || checker.is_union_with_mixed_int_dispatch(ty)
+}
+
+/// Returns `true` if `ty` is a valid operand type for the relational/spaceship operators
+/// (`<`, `<=`, `>`, `>=`, `<=>`). This accepts every numeric operand type plus `Str`: PHP
+/// orders strings (numeric strings numerically, otherwise lexicographically), and the EIR
+/// backend lowers string/`Mixed` ordered comparisons through `__rt_php_compare`. Array,
+/// associative-array, and object operands remain rejected here (PHP's array/object ordering
+/// is intentionally unsupported); concrete `DateTime` family ordering is handled separately.
+fn is_ordered_comparable_operand_type(checker: &Checker, ty: &PhpType) -> bool {
+    is_numeric_operand_type(checker, ty) || *ty == PhpType::Str
 }
 
 /// Returns `true` if `ty` is a concrete `DateTime`/`DateTimeImmutable` object, the family PHP orders

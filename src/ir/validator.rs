@@ -382,7 +382,8 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         StrToI | StrToF | StrToNumber | StrLen | StrPersist => {
             check_unary(function, inst_id, inst, IrType::Str, "Str")
         }
-        StrConcat | StrEq | StrCmp | StrLooseEq => check_binary(function, inst_id, inst, IrType::Str, "Str"),
+        StrConcat | StrEq | StrLooseEq => check_binary(function, inst_id, inst, IrType::Str, "Str"),
+        StrCmp => check_php_compare_binary(function, inst_id, inst),
         StrCharAt => {
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(function, inst_id, inst, 0, IrType::Str, "Str")?;
@@ -515,6 +516,56 @@ fn check_unary_any(
 ) -> Result<(), ValidationError> {
     check_count(inst_id, inst, 1, "1")?;
     let operand = inst.operands[0];
+    let actual = function
+        .value(operand)
+        .ok_or(ValidationError::UnknownValue(operand))?
+        .ir_type;
+    if expected.contains(&actual) {
+        Ok(())
+    } else {
+        Err(ValidationError::OperandTypeMismatch {
+            inst: inst_id,
+            operand,
+            expected: expected_label,
+            actual,
+        })
+    }
+}
+
+/// Validates both operands of an `StrCmp` (PHP ordered comparison) instruction.
+///
+/// Unlike strict string operations, `StrCmp` lowers a PHP 8 ordered comparison whose operands may
+/// be a string, a number (`I64`/`F64`), a tagged scalar, `null` (`Void`), or a boxed `Mixed`/`Union`
+/// value — the backend boxes each operand as `Mixed` and dispatches through `__rt_php_compare`.
+fn check_php_compare_binary(
+    function: &Function,
+    inst_id: InstId,
+    inst: &Instruction,
+) -> Result<(), ValidationError> {
+    const ALLOWED: &[IrType] = &[
+        IrType::Str,
+        IrType::I64,
+        IrType::F64,
+        IrType::TaggedScalar,
+        IrType::Void,
+        IrType::Heap(IrHeapKind::Mixed),
+        IrType::Heap(IrHeapKind::Union),
+    ];
+    check_count(inst_id, inst, 2, "2")?;
+    check_operand_in_set(function, inst_id, inst, 0, ALLOWED, "Str/number/Mixed")?;
+    check_operand_in_set(function, inst_id, inst, 1, ALLOWED, "Str/number/Mixed")
+}
+
+/// Validates that a single operand's storage type belongs to an accepted set.
+fn check_operand_in_set(
+    function: &Function,
+    inst_id: InstId,
+    inst: &Instruction,
+    index: usize,
+    expected: &[IrType],
+    expected_label: &'static str,
+) -> Result<(), ValidationError> {
+    let operand = inst.operands[index];
     let actual = function
         .value(operand)
         .ok_or(ValidationError::UnknownValue(operand))?

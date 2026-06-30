@@ -215,13 +215,14 @@ fn test_error_negate_string() {
     );
 }
 
-/// Verifies that comparison operators on strings produce an error.
-/// Input: `$x = "a"; echo $x < 1;` — string vs int comparison is invalid.
+/// Verifies that ordered comparison operators on an array operand produce an error.
+/// PHP 8 allows string/numeric ordered comparison (lowered through `__rt_php_compare`),
+/// but array/object ordering stays rejected. Input: `$x = [1, 2]; echo $x < 1;`.
 #[test]
-fn test_error_comparison_on_string() {
+fn test_error_comparison_on_array() {
     expect_error(
-        "<?php $x = \"a\"; echo $x < 1;",
-        "Comparison operators require numeric operands",
+        "<?php $x = [1, 2]; echo $x < 1;",
+        "Comparison operators require numeric or string operands",
     );
 }
 

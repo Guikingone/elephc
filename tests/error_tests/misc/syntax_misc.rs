@@ -110,13 +110,14 @@ fn test_error_bitwise_not_string() {
     );
 }
 
-/// Tests that the spaceship operator `<=>` with string operands rejects them
-/// with the "Spaceship operator requires numeric operands" error.
+/// Tests that the spaceship operator `<=>` with an array operand is rejected with the
+/// "Spaceship operator requires numeric or string operands" error. PHP 8 string ordering is
+/// now valid (lowered through `__rt_php_compare`); array/object ordering stays rejected.
 #[test]
-fn test_error_spaceship_string() {
+fn test_error_spaceship_array() {
     expect_error(
-        r#"<?php echo "a" <=> "b";"#,
-        "Spaceship operator requires numeric operands",
+        r#"<?php $a = [1]; echo $a <=> 1;"#,
+        "Spaceship operator requires numeric or string operands",
     );
 }
 

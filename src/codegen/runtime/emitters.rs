@@ -60,6 +60,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_grapheme_strrev(emitter);
     strings::emit_chr(emitter);
     strings::emit_strcmp(emitter);
+    strings::emit_php_compare(emitter);
     strings::emit_strcasecmp(emitter);
     strings::emit_strcspn(emitter);
     strings::emit_strspn(emitter);

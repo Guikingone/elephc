@@ -32,6 +32,8 @@ sidebar:
 | `<=>` | `$a <=> $b` | Spaceship: returns -1, 0, or 1 |
 | `instanceof` | `$obj instanceof User` | Runtime class/interface check; returns bool |
 
+The relational operators (`<`, `>`, `<=`, `>=`) and the spaceship operator (`<=>`) accept numeric and string operands and follow PHP 8 ordering: two numbers (or numeric strings) compare numerically, while a non-numeric string compares lexicographically against the other operand's string form (e.g. `"10" < "9"` is `false`, but `"abc" < 5` is `false` because `"abc"` is compared with `"5"`). Ordered comparison of arrays or objects is rejected at compile time.
+
 `instanceof` supports named class/interface targets plus `self`, `parent`, and `static`. It also supports dynamic targets such as `$obj instanceof $className`, `$obj instanceof $otherObject`, and parenthesized target expressions like `$obj instanceof ($prefix . $suffix)`.
 
 Direct object values and boxed `mixed` / nullable / union values are checked at runtime; scalar, array, and null payloads return `false` after the dynamic target has been validated. Dynamic string targets are matched case-insensitively against class/interface names; unknown class strings return `false`. Dynamic object targets use the target object's runtime class. If a dynamic target is neither a string nor an object, the program exits with a fatal runtime diagnostic.
