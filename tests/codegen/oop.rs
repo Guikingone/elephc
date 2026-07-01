@@ -45,3 +45,5 @@ mod property_hooks;
 mod datetime;
 #[path = "oop/cloning.rs"]
 mod cloning;
+#[path = "oop/dom.rs"]
+mod dom;

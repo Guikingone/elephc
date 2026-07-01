@@ -20,8 +20,8 @@ use crate::types::{
 };
 
 use super::builtin_types::{
-    inject_builtin_date_period, inject_builtin_datetime, inject_builtin_reflection,
-    inject_builtin_throwables,
+    inject_builtin_date_period, inject_builtin_datetime, inject_builtin_dom,
+    inject_builtin_reflection, inject_builtin_throwables,
     patch_builtin_exception_signatures,
     patch_builtin_fiber_signatures, patch_builtin_reflection_signatures,
     patch_magic_method_signatures, InterfaceDeclInfo,
@@ -185,6 +185,9 @@ pub(super) fn check_types_impl(
     if let Err(error) =
         inject_builtin_reflection(&interface_map, &mut class_map, &declared_traits)
     {
+        errors.extend(error.flatten());
+    }
+    if let Err(error) = inject_builtin_dom(&interface_map, &mut class_map, &declared_traits) {
         errors.extend(error.flatten());
     }
     checker.declared_classes = class_map.keys().cloned().collect();
