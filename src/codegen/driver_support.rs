@@ -501,7 +501,24 @@ pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpTyp
                 emitter.instruction("call __rt_mixed_from_value");              // box the string payload into a mixed cell
             }
         },
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+        PhpType::Array(_) => {
+            // A statically-indexed array may have been promoted to an associative
+            // hash at runtime (a `mixed`/string-key store through
+            // `__rt_array_set_mixed_key`, or a by-ref callee that promoted it), so
+            // the static `Array` tag (4) can be stale. Box through the heap-kind
+            // probe so the Mixed value tag (4 = indexed, 5 = associative) reflects
+            // the live storage, letting later reads/isset/iteration dispatch on
+            // reality instead of the checker's original indexed guess.
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("bl __rt_mixed_from_array_kind");       // box the array/hash with a heap-kind-derived indexed/associative tag
+                }
+                Arch::X86_64 => {
+                    emitter.instruction("call __rt_mixed_from_array_kind");     // box the array/hash with a heap-kind-derived indexed/associative tag
+                }
+            }
+        }
+        PhpType::AssocArray { .. } | PhpType::Object(_) => {
             match emitter.target.arch {
                 Arch::AArch64 => {
                     emitter.instruction("mov x1, x0");                          // move the current heap pointer into the mixed helper payload register

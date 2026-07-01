@@ -2191,8 +2191,26 @@ fn lower_native_isset_offset_probe_from_value(
 ) -> LoweredValue {
     match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
-            let mut index_value = lower_expr(ctx, index);
-            index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+            let index_value = lower_expr(ctx, index);
+            // A non-integer key (runtime string, non-canonical string literal, or
+            // boxed Mixed) is a PHP associative probe. The array may have been
+            // promoted to a hash at runtime (a `mixed`/string-key store through
+            // `__rt_array_set_mixed_key`, or a by-ref callee promotion), so probe
+            // through the kind-aware boxed reader instead of coercing the key to an
+            // integer offset and doing packed indexing — which would dereference a
+            // hash slot as an indexed pointer and crash, or silently miss the entry.
+            if packed_array_key_needs_associative_get(index, index_value.ir_type) {
+                let read_value =
+                    lower_packed_array_associative_get(ctx, array_value, index_value, expr);
+                return emit_builtin_call_value(
+                    ctx,
+                    "isset",
+                    vec![read_value.value],
+                    PhpType::Int,
+                    expr.span,
+                );
+            }
+            let index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
             ctx.emit_value(
                 Op::ArrayIsset,
                 vec![array_value.value, index_value.value],
