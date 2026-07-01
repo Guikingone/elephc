@@ -1,13 +1,15 @@
 //! Purpose:
 //! Integration tests for end-to-end codegen of bare expression statements whose leading
-//! token is a value or unary operator (e.g. `0 > $T && $T += 0x40;`, `new C();`, `-$x;`).
+//! token is a value or unary operator (e.g. `0 > $T && $T += 0x40;`, `new C();`, `-$x;`),
+//! or a variable that is an operand of a larger expression (e.g. `$s > 0 ? f() : $x = 1;`).
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
 //! - PHP allows any expression as a statement. These fixtures exercise the statement
-//!   dispatcher's bare-expression fallback for non-variable, non-keyword leading tokens and
+//!   dispatcher's bare-expression fallback for non-variable, non-keyword leading tokens, as
+//!   well as variable-led statements whose next token is not an assignment operator, and
 //!   assert PHP-equivalent stdout. One fixture uses `$argc` so the construct survives
 //!   AST-level constant folding and actually reaches codegen.
 
@@ -73,4 +75,36 @@ fn test_negated_call_short_circuit_statement() {
         "<?php function f() { echo \"f\"; return false; } !f() && print(\"g\");",
     );
     assert_eq!(out, "fg");
+}
+
+/// Verifies a bare ternary-expression statement whose leading variable is a comparison
+/// operand (mirroring Symfony's `ProgressBar::setProgress`, e.g.
+/// `$startAt > 0 ? f($startAt) : $this->percent = 0.0;`). The condition is false, so the
+/// false branch's assignment `$x = 5.0` runs; cross-checked with `php -r`.
+#[test]
+fn test_variable_led_ternary_statement_false_branch_assigns() {
+    let out = compile_and_run(
+        "<?php $s = 0; $x = 1.0; $s > 0 ? printf(\"t\") : $x = 5.0; echo $x;",
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies the true-branch variant of the same bare ternary-expression statement: the
+/// condition is true, so `printf(\"t\")` runs and the false branch's assignment never
+/// executes, leaving `$x` at its original `1`. Cross-checked with `php -r`.
+#[test]
+fn test_variable_led_ternary_statement_true_branch_skips_assign() {
+    let out = compile_and_run(
+        "<?php $s = 3; $x = 1.0; $s > 0 ? printf(\"t\") : $x = 5.0; echo $x;",
+    );
+    assert_eq!(out, "t1");
+}
+
+/// Verifies the general case: a bare comparison statement whose leading token is a
+/// variable (`$s > 0;`) compiles and runs as a discarded expression statement, producing
+/// no output. Previously this errored with "Expected '=' after variable name".
+#[test]
+fn test_variable_led_comparison_statement_compiles_and_runs() {
+    let out = compile_and_run("<?php $s = 5; $s > 0; echo \"ok\";");
+    assert_eq!(out, "ok");
 }

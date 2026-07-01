@@ -21,7 +21,10 @@ use super::super::expect_semicolon;
 ///
 /// Dispatches to postfix assignment, post-increment/decrement, property access with
 /// compound assignment, closure calls, or regular/compound assignment based on the
-/// token that follows the variable.
+/// token that follows the variable. When the variable is not immediately followed by
+/// an assignment operator, it is treated as an operand of a larger expression (e.g. a
+/// comparison, ternary, logical, or `instanceof` expression) and parsed as a bare
+/// expression statement.
 ///
 /// # Arguments
 /// - `tokens` — the token stream
@@ -115,6 +118,16 @@ pub(in crate::parser::stmt) fn parse_variable_stmt(
         return Ok(Stmt::new(StmtKind::ExprStmt(expr), span));
     }
 
-    // Regular or compound assignment
-    compound::parse_assign(tokens, pos, span)
+    // Regular or compound assignment, only when an assignment operator directly
+    // follows the variable; otherwise the variable is an operand of a larger
+    // expression statement (comparison, ternary, logical, `instanceof`, bare use, …).
+    if *pos + 1 < tokens.len()
+        && compound::assignment_operator(&tokens[*pos + 1].0).is_some()
+    {
+        return compound::parse_assign(tokens, pos, span);
+    }
+
+    let expr = parse_expr(tokens, pos)?;
+    expect_semicolon(tokens, pos)?;
+    Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
 }
