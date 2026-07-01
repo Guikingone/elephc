@@ -379,3 +379,99 @@ echo s("7"), "|", s("elephc"), "|", s("abc");
     );
     assert_eq!(out, "digit:7|elephc|abc");
 }
+
+/// Regression: a `string` parameter reassigned to an `int` inside a `do…while` body must be
+/// read with the widened representation after the loop. The reassignment widens the slot to
+/// `Mixed` for the whole function, so the post-loop `"v:" . $s` read must load it as `Mixed`
+/// and coerce, matching PHP: the reassignment never runs when the loop iterates once, but the
+/// widened storage is still correct on the multi-iteration path.
+#[test]
+fn test_do_while_string_to_int_widening_reads_after_loop() {
+    let out = compile_and_run(
+        r#"<?php
+function f(string $s, int $n): string {
+    $i = 0;
+    do {
+        if ($i === 1) { $s = 42; }
+        $i++;
+    } while ($i < $n);
+    return "v:" . $s;
+}
+echo f("elephc", 1), "|", f("elephc", 3);
+"#,
+    );
+    assert_eq!(out, "v:elephc|v:42");
+}
+
+/// Regression for the loop back-edge type leak: a `string` local read at the top of a `while`
+/// body, before it is reassigned to an `int` later in the same body, is live with the widened
+/// `Mixed` value on iterations past the first. Without loop-scoped pre-widening the read stayed
+/// typed `string`, so `gettype()` reported `string` on every iteration (the `Mixed` cell coerced
+/// back to a string) instead of `integer` once the reassignment had run. Matches PHP.
+#[test]
+fn test_while_body_read_before_reassignment_sees_widened_type() {
+    let out = compile_and_run(
+        r#"<?php
+function g(string $s, int $n): string {
+    $i = 0;
+    $out = "";
+    while ($i < $n) {
+        $out .= gettype($s) . ":";
+        if ($i === 0) { $s = 42; }
+        $i++;
+    }
+    return $out;
+}
+echo g("elephc", 1), "|", g("elephc", 3);
+"#,
+    );
+    assert_eq!(out, "string:|string:integer:integer:");
+}
+
+/// Regression: the loop back-edge leak also travels through `foreach`. A `string` local read at
+/// the top of the body, then reassigned to the (int) element on each pass, must report the type
+/// of the value carried from the previous iteration. Before loop pre-widening it read `string`
+/// throughout; PHP reports `string` on the first pass and `integer` afterward.
+#[test]
+fn test_foreach_body_read_before_reassignment_sees_widened_type() {
+    let out = compile_and_run(
+        r#"<?php
+function h(array $items, string $s): string {
+    $out = "";
+    foreach ($items as $x) {
+        $out .= gettype($s) . ":";
+        $s = $x;
+    }
+    return $out;
+}
+echo h([1, 2], "elephc");
+"#,
+    );
+    assert_eq!(out, "string:integer:");
+}
+
+/// Regression guard against over-widening: a loop counter reassigned to the **same** type
+/// (`$x = $x + 1`, int→int) must NOT be promoted to `Mixed`. If the pre-scan wrongly widened it,
+/// each `$acc[] = $x` would store a boxed `Mixed` pointer into the `array<int>` container and
+/// `implode` would print raw addresses instead of the integers. Correct output keeps the counter
+/// narrow, matching PHP.
+#[test]
+fn test_same_type_loop_counter_is_not_over_widened() {
+    let out = compile_and_run(
+        r#"<?php
+function counter(int $n): string {
+    $x = 10;
+    $acc = [];
+    $i = 0;
+    while ($i < $n) {
+        $acc[] = $x;
+        $x = $x + 1;
+        $i++;
+    }
+    return implode(",", $acc);
+}
+echo counter(3);
+"#,
+    );
+    assert_eq!(out, "10,11,12");
+}

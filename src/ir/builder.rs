@@ -382,7 +382,12 @@ impl<'f> Builder<'f> {
 }
 
 /// Returns the local frame PHP representation that can store both observed types.
-fn widened_local_storage_type(current: &PhpType, incoming: &PhpType) -> PhpType {
+///
+/// Exposed to the AST-to-EIR lowering (`crate::ir_lower::stmt::loop_types`) so a loop
+/// pre-scan can predict whether an in-loop reassignment would widen a local's frame
+/// storage to `Mixed`, matching exactly what `widen_local_storage_type` records during
+/// real lowering. Keeping one definition avoids two divergent widening rules.
+pub(crate) fn widened_local_storage_type(current: &PhpType, incoming: &PhpType) -> PhpType {
     let current = current.codegen_repr();
     let incoming = incoming.codegen_repr();
     if current == incoming {

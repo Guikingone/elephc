@@ -11,6 +11,8 @@
 
 use std::collections::HashSet;
 
+mod loop_types;
+
 use crate::ir::{
     BlockId, CmpPredicate, Immediate, IrType, LocalKind, LocalSlotId, Op, Ownership, SwitchCase,
     Terminator,
@@ -553,6 +555,10 @@ fn lower_ifdef(
 
 /// Lowers a `while` loop.
 fn lower_while(ctx: &mut LoweringContext<'_, '_>, condition: &Expr, body: &[Stmt]) {
+    // A local reassigned inside the loop can be read on a later iteration by the condition or a
+    // body statement placed before the reassignment; widen its type to Mixed for the whole loop
+    // scope so those reads do not coerce a widened Mixed slot to a stale narrow type.
+    loop_types::prewiden_loop_carried_locals(ctx, &[body], &[], &[condition]);
     let header = ctx.builder.create_named_block("while.cond", Vec::new());
     let body_block = ctx.builder.create_named_block("while.body", Vec::new());
     let exit = ctx.builder.create_named_block("while.exit", Vec::new());
@@ -585,6 +591,9 @@ fn lower_while(ctx: &mut LoweringContext<'_, '_>, condition: &Expr, body: &[Stmt
 
 /// Lowers a `do while` loop.
 fn lower_do_while(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt], condition: &Expr) {
+    // See `lower_while`: pre-widen loop-carried locals so a read placed before an in-loop
+    // reassignment is typed to match the widened Mixed slot on iterations past the first.
+    loop_types::prewiden_loop_carried_locals(ctx, &[body], &[], &[condition]);
     let body_block = ctx.builder.create_named_block("do.body", Vec::new());
     let cond_block = ctx.builder.create_named_block("do.cond", Vec::new());
     let exit = ctx.builder.create_named_block("do.exit", Vec::new());
@@ -629,6 +638,15 @@ fn lower_for(
     if ctx.builder.insertion_block_is_terminated() {
         return;
     }
+    // Pre-widen loop-carried locals after `init` (which fixes their entry types) and before the
+    // condition/body/update are lowered, so later-iteration reads use the widened Mixed slot. The
+    // one-shot `init` is not part of the carried scope; the recurring update and condition are.
+    let mut prescan_stmts: Vec<&Stmt> = Vec::new();
+    if let Some(update) = update {
+        prescan_stmts.push(update);
+    }
+    let prescan_exprs: Vec<&Expr> = condition.into_iter().collect();
+    loop_types::prewiden_loop_carried_locals(ctx, &[body], &prescan_stmts, &prescan_exprs);
 
     let header = ctx.builder.create_named_block("for.cond", Vec::new());
     let body_block = ctx.builder.create_named_block("for.body", Vec::new());
@@ -1143,6 +1161,10 @@ fn lower_foreach(
     value_by_ref: bool,
     body: &[Stmt],
 ) {
+    // Pre-widen locals reassigned inside the loop body (other than the foreach key/value locals,
+    // whose per-iteration binding already keeps their type consistent) so later-iteration reads
+    // placed before an in-loop reassignment use the widened Mixed slot. See `lower_while`.
+    loop_types::prewiden_loop_carried_locals(ctx, &[body], &[], &[]);
     let source = lower_expr(ctx, array);
     let source_php_ty = ctx.builder.value_php_type(source.value);
     let source_ty = source_php_ty.codegen_repr();

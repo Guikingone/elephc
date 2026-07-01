@@ -26,6 +26,7 @@ mod tests;
 
 pub use block::{BasicBlock, BlockId, SwitchCase, Terminator};
 pub use builder::Builder;
+pub(crate) use builder::widened_local_storage_type;
 pub use effects::Effects;
 pub use function::{
     Function, FunctionFlags, FunctionId, FunctionParam, GeneratorSource, LocalKind, LocalSlot,
