@@ -47,6 +47,16 @@ pub(super) fn lower_preg_match(
         .transpose()?;
     load_pattern_and_subject(ctx, pattern, subject)?;
     if let Some(target) = &matches_target {
+        // The capture helper builds an associative hash (so `$m['name']` reads work)
+        // only when the destination is a boxed-Mixed cell and the pattern actually has
+        // named groups. Signal that permission through the flag register so plain indexed
+        // `$matches` locals keep their fast contiguous layout.
+        let allow_hash = target_allows_named_hash(target);
+        let flag_reg = match ctx.emitter.target.arch {
+            Arch::AArch64 => "x5",
+            Arch::X86_64 => "r8",
+        };
+        abi::emit_load_int_immediate(ctx.emitter, flag_reg, allow_hash as i64);
         abi::emit_call_label(ctx.emitter, "__rt_preg_match_capture");
         store_matches_array(ctx, target)?;
     } else {
@@ -489,6 +499,21 @@ fn matches_target(ctx: &FunctionContext<'_>, value: ValueId) -> Result<MatchesTa
     }
 }
 
+/// Returns whether a `$matches` destination may receive a named-group associative hash.
+///
+/// Only a by-reference cell whose declared type boxes to a Mixed cell (`Mixed`/`Union`, e.g.
+/// PHP `?array`) can observe string-keyed entries through `$m['name']`, and only that path
+/// boxes the runtime result kind-aware (indexed vs hash). A plain indexed local keeps its
+/// contiguous layout so numeric `$m[0]` reads stay a direct indexed load.
+fn target_allows_named_hash(target: &MatchesTarget) -> bool {
+    match target {
+        MatchesTarget::RefCell { cell_ty, .. } => {
+            matches!(cell_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        }
+        MatchesTarget::Local(_) => false,
+    }
+}
+
 /// Stores the `preg_replace()` replacement count (in the int result register) into its destination.
 fn store_replacement_count(ctx: &mut FunctionContext<'_>, target: &MatchesTarget) -> Result<()> {
     match target {
@@ -553,7 +578,6 @@ fn store_matches_array_through_ref_cell(
     };
     let int_reg = abi::int_result_reg(ctx.emitter);
     let offset = ctx.local_offset(slot)?;
-    let array_ty = preg_matches_type();
     let boxes_to_mixed = matches!(cell_repr, PhpType::Mixed | PhpType::Union(_));
 
     // -- preserve the match flag and the owned matches array across the writeback helpers --
@@ -570,10 +594,10 @@ fn store_matches_array_through_ref_cell(
     // -- materialize the value to write through the cell from the owned matches array --
     abi::emit_load_temporary_stack_slot(ctx.emitter, int_reg, 8);              // reload the owned matches array pointer into the value register
     if boxes_to_mixed {
-        emit_box_current_value_as_mixed(ctx.emitter, &array_ty);               // box the matches array into a mixed cell (retains the array)
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_from_array_kind");       // box kind-aware (tag 4 indexed / 5 hash) so `$m['name']` reads work; retains the child
         abi::emit_store_to_sp(ctx.emitter, int_reg, 16);                       // save the boxed mixed-cell pointer to store through the cell
         abi::emit_load_temporary_stack_slot(ctx.emitter, int_reg, 8);          // reload the original owned array pointer for release
-        abi::emit_decref_if_refcounted(ctx.emitter, &array_ty);               // drop the original array reference; the mixed cell now owns it
+        abi::emit_call_label(ctx.emitter, "__rt_decref_any");                 // drop the original array/hash reference kind-aware; the mixed cell now owns it
         abi::emit_load_temporary_stack_slot(ctx.emitter, int_reg, 16);         // reload the boxed mixed-cell pointer to write through the cell
     }
 

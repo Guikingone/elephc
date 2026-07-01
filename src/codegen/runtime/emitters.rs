@@ -163,6 +163,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_json_validate(emitter);
     if features.regex {
         system::emit_preg_strip(emitter);
+        system::emit_preg_group_names(emitter);
         system::emit_pcre_to_posix(emitter);
         system::emit_preg_match(emitter);
         system::emit_preg_match_all(emitter);
@@ -311,6 +312,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_gc_mark_reachable(emitter);
     arrays::emit_gc_collect_cycles(emitter);
     arrays::emit_mixed_from_value(emitter);
+    arrays::emit_mixed_from_array_kind(emitter);
     arrays::emit_mixed_abs(emitter);
     arrays::emit_mixed_instanceof(emitter);
     arrays::emit_iterable_unsupported_kind(emitter);

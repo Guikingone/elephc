@@ -125,6 +125,7 @@ mod incref;
 mod iterable_unsupported_kind;
 mod iterable_write_stdout;
 mod mixed_abs;
+mod mixed_from_array_kind;
 mod mixed_from_value;
 mod mixed_instanceof;
 mod mixed_cast_bool;
@@ -363,6 +364,7 @@ pub use ksort::emit_ksort;
 pub use natsort::emit_natsort;
 /// Emit natural sort helper.
 pub use mixed_abs::emit_mixed_abs;
+pub use mixed_from_array_kind::emit_mixed_from_array_kind;
 pub use mixed_from_value::emit_mixed_from_value;
 /// Emit Mixed from value conversion helper.
 pub use mixed_instanceof::emit_mixed_instanceof;

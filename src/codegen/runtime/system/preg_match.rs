@@ -121,7 +121,14 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     let matches_array_off = regexec_result_off + 8;
     let group_idx_off = matches_array_off + 8;
     let max_group_off = group_idx_off + 8;
-    let stack_size = (max_group_off + 96 + 15) & !15;
+    let allow_hash_off = max_group_off + 8;
+    let stripped_ptr_off = allow_hash_off + 8;
+    let stripped_len_off = stripped_ptr_off + 8;
+    let names_buf_off = stripped_len_off + 8;
+    let name_idx_off = names_buf_off + 8;
+    let cur_name_ptr_off = name_idx_off + 8;
+    let cur_name_len_off = cur_name_ptr_off + 8;
+    let stack_size = (cur_name_len_off + 96 + 15) & !15;
     let save_off = stack_size - 16;
 
     emitter.blank();
@@ -139,10 +146,26 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x2, [sp, #{}]", pattern_len_off));        // save pattern len
     emitter.instruction(&format!("str x3, [sp, #{}]", subject_ptr_off));        // save subject ptr
     emitter.instruction(&format!("str x4, [sp, #{}]", subject_len_off));        // save subject len
+    emitter.instruction(&format!("str x5, [sp, #{}]", allow_hash_off));         // save the allow-named-hash flag passed by the caller
+    emitter.instruction(&format!("str xzr, [sp, #{}]", names_buf_off));         // default the group-name map to null until it is built
 
     // -- strip delimiters and compile PCRE regex --
     emitter.instruction("bl __rt_preg_strip");                                  // strip delimiters and expose regex flags
     emitter.instruction(&format!("str x3, [sp, #{}]", flags_off));              // save stripped regex flags
+
+    // -- when a hash destination is permitted, record the named-group map --
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", allow_hash_off));         // reload the allow-named-hash flag
+    emitter.instruction("cbz x9, __rt_preg_match_capture_skip_names");          // plain indexed destinations never need the name map
+    emitter.instruction(&format!("str x1, [sp, #{}]", stripped_ptr_off));       // preserve the stripped pattern pointer across the scan
+    emitter.instruction(&format!("str x2, [sp, #{}]", stripped_len_off));       // preserve the stripped pattern length across the scan
+    emitter.instruction("mov x0, x1");                                          // pass the stripped pattern pointer to the group-name scanner
+    emitter.instruction("mov x1, x2");                                          // pass the stripped pattern length to the group-name scanner
+    emitter.instruction("bl __rt_preg_group_names");                            // build the name -> group-index map for named captures
+    emitter.instruction(&format!("str x0, [sp, #{}]", names_buf_off));          // save the name-map buffer for the capture loops and cleanup
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", stripped_ptr_off));       // restore the stripped pattern pointer for pcre_to_posix
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", stripped_len_off));       // restore the stripped pattern length for pcre_to_posix
+    emitter.label("__rt_preg_match_capture_skip_names");
+
     emitter.instruction("bl __rt_pcre_to_posix");                               // materialize PCRE pattern as a C string
     emitter.instruction(&format!("str x0, [sp, #{}]", pattern_cstr_off));       // save null-terminated PCRE pattern
     super::emit_prepare_regex_locale(emitter);
@@ -204,7 +227,31 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_match_capture_scan_found");
     emitter.instruction(&format!("str x12, [sp, #{}]", max_group_off));         // save highest capture index to materialize
 
+    // -- choose between an indexed array and a named-group associative hash --
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", allow_hash_off));         // reload the allow-named-hash flag
+    emitter.instruction("cbz x9, __rt_preg_match_capture_build_indexed");       // plain destinations keep the contiguous indexed layout
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", names_buf_off));         // reload the group-name map buffer
+    emitter.instruction("cbz x10, __rt_preg_match_capture_build_indexed");      // no map (allocation failure) falls back to indexed
+    emitter.instruction("ldr w11, [x10]");                                      // load the recorded named-group count
+    emitter.instruction("cbz w11, __rt_preg_match_capture_build_indexed");      // no named groups falls back to indexed
+    emit_preg_match_capture_build_hash_arm64(
+        emitter,
+        nmatch_off,
+        max_group_off,
+        group_idx_off,
+        matches_array_off,
+        names_buf_off,
+        name_idx_off,
+        cur_name_ptr_off,
+        cur_name_len_off,
+        regmatches_ptr_off,
+        subject_cstr_off,
+        regmatch_rm_eo_off,
+        regmatch_size,
+    );
+
     // -- allocate and fill matches array --
+    emitter.label("__rt_preg_match_capture_build_indexed");
     emitter.instruction(&format!("ldr x0, [sp, #{}]", nmatch_off));             // allocate enough slots for every compiled capture
     emitter.instruction("mov x1, #16");                                         // string arrays use pointer/length payload slots
     emitter.instruction("bl __rt_array_new");                                   // allocate indexed string matches array
@@ -273,10 +320,148 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0");                                          // report no match
 
     emitter.label("__rt_preg_match_capture_ret");
+    // -- free the group-name map (if any) before returning, preserving the results --
+    emitter.instruction(&format!("str x0, [sp, #{}]", cur_name_ptr_off));       // stash the match flag across the free call
+    emitter.instruction(&format!("str x1, [sp, #{}]", cur_name_len_off));       // stash the matches array/hash pointer across the free call
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", names_buf_off));          // reload the group-name map buffer
+    emitter.instruction("cbz x0, __rt_preg_match_capture_ret_free_done");       // skip the free when no name map was allocated
+    emitter.bl_c("free");                                                       // release the scratch group-name map buffer
+    emitter.instruction(&format!("str xzr, [sp, #{}]", names_buf_off));         // clear the freed pointer to avoid any double free
+    emitter.label("__rt_preg_match_capture_ret_free_done");
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", cur_name_ptr_off));       // restore the match flag
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", cur_name_len_off));       // restore the matches array/hash pointer
     emitter.instruction(&format!("add x9, sp, #{}", save_off));                 // compute save-slot address for epilogue restore
     emitter.instruction("ldp x29, x30, [x9]");                                  // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", stack_size));               // deallocate preg_match capture stack frame
     emitter.instruction("ret");                                                 // return match flag in x0 and matches array in x1
+}
+
+/// Emits the ARM64 named-group hash builder for `__rt_preg_match_capture`.
+///
+/// Builds a Mixed-valued associative hash containing the numeric captures `0..=max_group`
+/// under integer keys plus every named capture under its string key, so `$m['name']` reads
+/// resolve through `__rt_hash_get`. Each substring is boxed through `__rt_mixed_from_value`
+/// (which persists the bytes) and inserted with `__rt_hash_set`, which takes ownership of the
+/// boxed value. The finished hash is left in `matches_array_off`; control falls through to the
+/// shared success epilogue which frees the regmatch vector and returns.
+#[allow(clippy::too_many_arguments)]
+fn emit_preg_match_capture_build_hash_arm64(
+    emitter: &mut Emitter,
+    nmatch_off: usize,
+    max_group_off: usize,
+    group_idx_off: usize,
+    matches_array_off: usize,
+    names_buf_off: usize,
+    name_idx_off: usize,
+    cur_name_ptr_off: usize,
+    cur_name_len_off: usize,
+    regmatches_ptr_off: usize,
+    subject_cstr_off: usize,
+    regmatch_rm_eo_off: usize,
+    regmatch_size: usize,
+) {
+    // -- allocate a Mixed-valued hash sized for the captures plus the named entries --
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", nmatch_off));             // request one bucket per compiled capture group
+    emitter.instruction("add x0, x0, #8");                                      // reserve extra capacity for the named-key entries
+    emitter.instruction("mov x1, #7");                                          // value_type 7 = boxed Mixed hash slots
+    emitter.instruction("bl __rt_hash_new");                                    // allocate the associative matches hash
+    emitter.instruction(&format!("str x0, [sp, #{}]", matches_array_off));      // reuse the matches slot to hold the hash pointer
+    emitter.instruction(&format!("str xzr, [sp, #{}]", group_idx_off));         // start inserting from capture index zero
+
+    // -- insert the numeric captures 0..=max_group under integer keys --
+    emitter.label("__rt_preg_match_capture_hash_int_loop");
+    emitter.instruction(&format!("ldr x12, [sp, #{}]", group_idx_off));         // reload the current capture index
+    emitter.instruction(&format!("ldr x13, [sp, #{}]", max_group_off));         // reload the highest populated capture index
+    emitter.instruction("cmp x12, x13");                                        // have all numeric captures been inserted?
+    emitter.instruction("b.gt __rt_preg_match_capture_hash_named");             // move on to the named captures once done
+    emitter.instruction("mov x14, x12");                                        // copy the capture index before scaling to a regmatch offset
+    if regmatch_size == 16 {
+        emitter.instruction("lsl x14, x14, #4");                                // scale the capture index by 16-byte regmatch_t slots
+    } else {
+        emitter.instruction("lsl x14, x14, #3");                                // scale the capture index by compact 8-byte regmatch_t slots
+    }
+    emitter.instruction(&format!("ldr x15, [sp, #{}]", regmatches_ptr_off));    // load the dynamic regmatch_t buffer base
+    emitter.instruction("add x14, x15, x14");                                   // compute the address of this regmatch_t slot
+    emit_arm_load_regoff_from_index(emitter, "x15", "x14", 0, regmatch_size);
+    emit_arm_load_regoff_from_index(emitter, "x16", "x14", regmatch_rm_eo_off, regmatch_size);
+    emitter.instruction("cmp x15, #0");                                         // did this capture participate in the match?
+    emitter.instruction("b.lt __rt_preg_match_capture_hash_int_empty");         // unmatched captures store an empty string
+    emitter.instruction("sub x2, x16, x15");                                    // substring length = rm_eo - rm_so
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_cstr_off));       // reload the subject C string base
+    emitter.instruction("add x1, x1, x15");                                     // compute the substring pointer
+    emitter.instruction("b __rt_preg_match_capture_hash_int_box");              // box the substring value
+    emitter.label("__rt_preg_match_capture_hash_int_empty");
+    emitter.instruction("mov x1, #0");                                          // an unmatched capture has a null pointer
+    emitter.instruction("mov x2, #0");                                          // an unmatched capture has zero length
+    emitter.label("__rt_preg_match_capture_hash_int_box");
+    emitter.instruction("mov x0, #1");                                          // value_type 1 = string for the mixed boxing helper
+    emitter.instruction("bl __rt_mixed_from_value");                            // persist the substring and box it into a Mixed cell
+    emitter.instruction("mov x3, x0");                                          // value_lo = the boxed Mixed substring
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", matches_array_off));      // reload the matches hash pointer
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", group_idx_off));          // key_lo = the numeric capture index
+    emitter.instruction("mov x2, #-1");                                         // key_hi = -1 marks an integer hash key
+    emitter.instruction("mov x4, #0");                                          // boxed Mixed values leave the high word empty
+    emitter.instruction("mov x5, #7");                                          // value_tag 7 = boxed Mixed payload
+    emitter.instruction("bl __rt_hash_set");                                    // insert the numeric capture into the hash
+    emitter.instruction(&format!("str x0, [sp, #{}]", matches_array_off));      // save the possibly-grown hash pointer
+    emitter.instruction(&format!("ldr x12, [sp, #{}]", group_idx_off));         // reload the capture index after the helper calls
+    emitter.instruction("add x12, x12, #1");                                    // advance to the next capture index
+    emitter.instruction(&format!("str x12, [sp, #{}]", group_idx_off));         // save the next capture index
+    emitter.instruction("b __rt_preg_match_capture_hash_int_loop");             // continue inserting numeric captures
+
+    // -- insert each named capture under its string key --
+    emitter.label("__rt_preg_match_capture_hash_named");
+    emitter.instruction(&format!("str xzr, [sp, #{}]", name_idx_off));          // start from the first named-group entry
+    emitter.label("__rt_preg_match_capture_hash_named_loop");
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", names_buf_off));          // reload the name-map buffer base
+    emitter.instruction("ldr w10, [x9]");                                       // reload the recorded named-group count
+    emitter.instruction(&format!("ldr x11, [sp, #{}]", name_idx_off));          // reload the current named-entry index
+    emitter.instruction("cmp x11, x10");                                        // have all named captures been inserted?
+    emitter.instruction("b.hs __rt_preg_match_capture_hash_done");              // finish once every named entry is materialized
+    emitter.instruction("lsl x12, x11, #4");                                    // scale the entry index by the 16-byte entry stride
+    emitter.instruction("add x12, x9, x12");                                    // advance to this entry from the buffer base
+    emitter.instruction("add x12, x12, #8");                                    // skip the 8-byte header to the entry payload
+    emitter.instruction("ldr x13, [x12]");                                      // load the entry name pointer
+    emitter.instruction("ldr w14, [x12, #8]");                                  // load the entry name length
+    emitter.instruction("ldr w15, [x12, #12]");                                 // load the entry capture-group index
+    emitter.instruction(&format!("str x13, [sp, #{}]", cur_name_ptr_off));      // preserve the name pointer across the boxing helper
+    emitter.instruction(&format!("str x14, [sp, #{}]", cur_name_len_off));      // preserve the name length across the boxing helper
+    if regmatch_size == 16 {
+        emitter.instruction("lsl x15, x15, #4");                                // scale the group index by 16-byte regmatch_t slots
+    } else {
+        emitter.instruction("lsl x15, x15, #3");                                // scale the group index by compact 8-byte regmatch_t slots
+    }
+    emitter.instruction(&format!("ldr x16, [sp, #{}]", regmatches_ptr_off));    // load the dynamic regmatch_t buffer base
+    emitter.instruction("add x15, x16, x15");                                   // compute the address of the group's regmatch_t slot
+    emit_arm_load_regoff_from_index(emitter, "x16", "x15", 0, regmatch_size);
+    emit_arm_load_regoff_from_index(emitter, "x17", "x15", regmatch_rm_eo_off, regmatch_size);
+    emitter.instruction("cmp x16, #0");                                         // did the named group participate in the match?
+    emitter.instruction("b.lt __rt_preg_match_capture_hash_named_empty");       // an unmatched named group stores an empty string
+    emitter.instruction("sub x2, x17, x16");                                    // substring length = rm_eo - rm_so
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_cstr_off));       // reload the subject C string base
+    emitter.instruction("add x1, x1, x16");                                     // compute the substring pointer
+    emitter.instruction("b __rt_preg_match_capture_hash_named_box");            // box the substring value
+    emitter.label("__rt_preg_match_capture_hash_named_empty");
+    emitter.instruction("mov x1, #0");                                          // an unmatched named group has a null pointer
+    emitter.instruction("mov x2, #0");                                          // an unmatched named group has zero length
+    emitter.label("__rt_preg_match_capture_hash_named_box");
+    emitter.instruction("mov x0, #1");                                          // value_type 1 = string for the mixed boxing helper
+    emitter.instruction("bl __rt_mixed_from_value");                            // persist the substring and box it into a Mixed cell
+    emitter.instruction("mov x3, x0");                                          // value_lo = the boxed Mixed substring
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", matches_array_off));      // reload the matches hash pointer
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", cur_name_ptr_off));       // key_lo = the named-group name pointer
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", cur_name_len_off));       // key_hi = the name length marks a string key
+    emitter.instruction("mov x4, #0");                                          // boxed Mixed values leave the high word empty
+    emitter.instruction("mov x5, #7");                                          // value_tag 7 = boxed Mixed payload
+    emitter.instruction("bl __rt_hash_set");                                    // insert the named capture into the hash
+    emitter.instruction(&format!("str x0, [sp, #{}]", matches_array_off));      // save the possibly-grown hash pointer
+    emitter.instruction(&format!("ldr x11, [sp, #{}]", name_idx_off));          // reload the named-entry index after the helper calls
+    emitter.instruction("add x11, x11, #1");                                    // advance to the next named entry
+    emitter.instruction(&format!("str x11, [sp, #{}]", name_idx_off));          // save the next named-entry index
+    emitter.instruction("b __rt_preg_match_capture_hash_named_loop");           // continue inserting named captures
+
+    emitter.label("__rt_preg_match_capture_hash_done");
+    emitter.instruction("b __rt_preg_match_capture_success");                   // share the success epilogue (frees the regmatch vector)
 }
 
 /// Prefills ARM64 regmatch slots with unmatched sentinels before regexec.
@@ -409,7 +594,14 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     let matches_array_off = regexec_result_off + 8;
     let group_idx_off = matches_array_off + 8;
     let max_group_off = group_idx_off + 8;
-    let stack_size = (max_group_off + 32 + 15) & !15;
+    let allow_hash_off = max_group_off + 8;
+    let stripped_ptr_off = allow_hash_off + 8;
+    let stripped_len_off = stripped_ptr_off + 8;
+    let names_buf_off = stripped_len_off + 8;
+    let name_idx_off = names_buf_off + 8;
+    let cur_name_ptr_off = name_idx_off + 8;
+    let cur_name_len_off = cur_name_ptr_off + 8;
+    let stack_size = (cur_name_len_off + 32 + 15) & !15;
 
     emitter.blank();
     emitter.comment("--- runtime: preg_match_capture ---");
@@ -420,10 +612,27 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("sub rsp, {}", stack_size));                   // reserve local storage for regex_t, regmatch buffer, and matches array state
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", subject_ptr_off)); // preserve the elephc subject pointer across pattern helper calls
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off)); // preserve the elephc subject length across pattern helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r8", allow_hash_off)); // save the allow-named-hash flag passed by the caller
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", names_buf_off)); // default the group-name map to null until it is built
     emitter.instruction("mov rax, rdi");                                        // move pattern pointer into preg-strip helper input register
     emitter.instruction("mov rdx, rsi");                                        // move pattern length into preg-strip helper input register
     emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and collect supported regex flags
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", flags_off));  // save stripped regex flags for regcomp
+
+    // -- when a hash destination is permitted, record the named-group map --
+    emitter.instruction(&format!("mov r8, QWORD PTR [rsp + {}]", allow_hash_off)); // reload the allow-named-hash flag
+    emitter.instruction("test r8, r8");                                         // plain indexed destinations never need the name map
+    emitter.instruction("jz __rt_preg_match_capture_skip_names_x");             // skip the scan for indexed destinations
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", stripped_ptr_off)); // preserve the stripped pattern pointer across the scan
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", stripped_len_off)); // preserve the stripped pattern length across the scan
+    emitter.instruction("mov rdi, rax");                                        // pass the stripped pattern pointer to the group-name scanner
+    emitter.instruction("mov rsi, rdx");                                        // pass the stripped pattern length to the group-name scanner
+    emitter.instruction("call __rt_preg_group_names");                          // build the name -> group-index map for named captures
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", names_buf_off)); // save the name-map buffer for the capture loops and cleanup
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", stripped_ptr_off)); // restore the stripped pattern pointer for pcre_to_posix
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", stripped_len_off)); // restore the stripped pattern length for pcre_to_posix
+    emitter.label("__rt_preg_match_capture_skip_names_x");
+
     emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a C string
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); // save null-terminated PCRE pattern for regcomp
     super::emit_prepare_regex_locale(emitter);
@@ -481,6 +690,33 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_match_capture_scan_found_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", max_group_off)); // save highest capture index to materialize
 
+    // -- choose between an indexed array and a named-group associative hash --
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", allow_hash_off)); // reload the allow-named-hash flag
+    emitter.instruction("test r9, r9");                                         // plain destinations keep the contiguous indexed layout
+    emitter.instruction("jz __rt_preg_match_capture_build_indexed_x");          // fall back to the indexed builder
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", names_buf_off)); // reload the group-name map buffer
+    emitter.instruction("test r10, r10");                                       // no map (allocation failure) falls back to indexed
+    emitter.instruction("jz __rt_preg_match_capture_build_indexed_x");          // fall back to the indexed builder
+    emitter.instruction("mov r11d, DWORD PTR [r10]");                           // load the recorded named-group count
+    emitter.instruction("test r11d, r11d");                                     // no named groups falls back to indexed
+    emitter.instruction("jz __rt_preg_match_capture_build_indexed_x");          // fall back to the indexed builder
+    emit_preg_match_capture_build_hash_x86_64(
+        emitter,
+        nmatch_off,
+        max_group_off,
+        group_idx_off,
+        matches_array_off,
+        names_buf_off,
+        name_idx_off,
+        cur_name_ptr_off,
+        cur_name_len_off,
+        regmatches_ptr_off,
+        subject_cstr_off,
+        regmatch_rm_eo_off,
+        regmatch_size,
+    );
+
+    emitter.label("__rt_preg_match_capture_build_indexed_x");
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // allocate enough slots for every compiled capture
     emitter.instruction("mov rsi, 16");                                         // string arrays use pointer/length payload slots
     emitter.instruction("call __rt_array_new");                                 // allocate indexed string matches array
@@ -549,6 +785,130 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("add rsp, {}", stack_size));                   // release capture helper local storage
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return match flag in rax and matches array in rdx
+}
+
+/// Emits the x86_64 named-group hash builder for `__rt_preg_match_capture`.
+///
+/// Builds a Mixed-valued associative hash containing the numeric captures `0..=max_group`
+/// under integer keys plus every named capture under its string key, so `$m['name']` reads
+/// resolve through `__rt_hash_get`. Each substring is boxed through `__rt_mixed_from_value`
+/// (tag in `rax`, value_lo/value_hi in `rdi`/`rsi` per the SysV runtime convention), which
+/// persists the bytes, and inserted with `__rt_hash_set`, which takes ownership of the boxed
+/// value. The finished hash is left in `matches_array_off`; control jumps to the shared
+/// success epilogue which frees the regmatch vector and returns.
+#[allow(clippy::too_many_arguments)]
+fn emit_preg_match_capture_build_hash_x86_64(
+    emitter: &mut Emitter,
+    nmatch_off: usize,
+    max_group_off: usize,
+    group_idx_off: usize,
+    matches_array_off: usize,
+    names_buf_off: usize,
+    name_idx_off: usize,
+    cur_name_ptr_off: usize,
+    cur_name_len_off: usize,
+    regmatches_ptr_off: usize,
+    subject_cstr_off: usize,
+    regmatch_rm_eo_off: usize,
+    regmatch_size: usize,
+) {
+    // -- allocate a Mixed-valued hash sized for the captures plus the named entries --
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // request one bucket per compiled capture group
+    emitter.instruction("add rdi, 8");                                          // reserve extra capacity for the named-key entries
+    emitter.instruction("mov esi, 7");                                          // value_type 7 = boxed Mixed hash slots
+    emitter.instruction("call __rt_hash_new");                                  // allocate the associative matches hash
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // reuse the matches slot to hold the hash pointer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_idx_off)); // start inserting from capture index zero
+
+    // -- insert the numeric captures 0..=max_group under integer keys --
+    emitter.label("__rt_preg_match_capture_hash_int_loop_linux_x86_64");
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload the current capture index
+    emitter.instruction(&format!("mov r8, QWORD PTR [rsp + {}]", max_group_off)); // reload the highest populated capture index
+    emitter.instruction("cmp r9, r8");                                          // have all numeric captures been inserted?
+    emitter.instruction("jg __rt_preg_match_capture_hash_named_linux_x86_64");  // move on to the named captures once done
+    emitter.instruction("mov r10, r9");                                         // copy the capture index before scaling to a regmatch offset
+    emitter.instruction(&format!("imul r10, {}", regmatch_size));               // scale the capture index to the native regmatch_t stride
+    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load the dynamic regmatch_t buffer base
+    emitter.instruction("add r10, r12");                                        // compute the address of this regmatch_t slot
+    emit_x86_load_regoff_from_index(emitter, "r11", "r10", 0, regmatch_size);
+    emit_x86_load_regoff_from_index(emitter, "rcx", "r10", regmatch_rm_eo_off, regmatch_size);
+    emitter.instruction("cmp r11, 0");                                          // did this capture participate in the match?
+    emitter.instruction("jl __rt_preg_match_capture_hash_int_empty_linux_x86_64"); // unmatched captures store an empty string
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", subject_cstr_off)); // reload the subject C string base as value_lo
+    emitter.instruction("add rdi, r11");                                        // value_lo = the substring pointer
+    emitter.instruction("mov rsi, rcx");                                        // copy the capture end offset before subtracting the start
+    emitter.instruction("sub rsi, r11");                                        // value_hi = rm_eo - rm_so (substring length)
+    emitter.instruction("jmp __rt_preg_match_capture_hash_int_box_linux_x86_64"); // box the substring value
+    emitter.label("__rt_preg_match_capture_hash_int_empty_linux_x86_64");
+    emitter.instruction("xor edi, edi");                                        // an unmatched capture has a null value_lo pointer
+    emitter.instruction("xor esi, esi");                                        // an unmatched capture has zero value_hi length
+    emitter.label("__rt_preg_match_capture_hash_int_box_linux_x86_64");
+    emitter.instruction("mov eax, 1");                                          // value_tag 1 = string for the mixed boxing helper
+    emitter.instruction("call __rt_mixed_from_value");                          // persist the substring and box it into a Mixed cell
+    emitter.instruction("mov rcx, rax");                                        // value_lo = the boxed Mixed substring
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", matches_array_off)); // reload the matches hash pointer
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", group_idx_off)); // key_lo = the numeric capture index
+    emitter.instruction("mov rdx, -1");                                         // key_hi = -1 marks an integer hash key
+    emitter.instruction("xor r8d, r8d");                                        // boxed Mixed values leave the high word empty
+    emitter.instruction("mov r9d, 7");                                          // value_tag 7 = boxed Mixed payload
+    emitter.instruction("call __rt_hash_set");                                  // insert the numeric capture into the hash
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // save the possibly-grown hash pointer
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload the capture index after the helper calls
+    emitter.instruction("add r9, 1");                                           // advance to the next capture index
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", group_idx_off)); // save the next capture index
+    emitter.instruction("jmp __rt_preg_match_capture_hash_int_loop_linux_x86_64"); // continue inserting numeric captures
+
+    // -- insert each named capture under its string key --
+    emitter.label("__rt_preg_match_capture_hash_named_linux_x86_64");
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", name_idx_off)); // start from the first named-group entry
+    emitter.label("__rt_preg_match_capture_hash_named_loop_linux_x86_64");
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", names_buf_off)); // reload the name-map buffer base
+    emitter.instruction("mov r10d, DWORD PTR [r9]");                            // reload the recorded named-group count
+    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", name_idx_off)); // reload the current named-entry index
+    emitter.instruction("cmp r11, r10");                                        // have all named captures been inserted?
+    emitter.instruction("jae __rt_preg_match_capture_hash_done_linux_x86_64");  // finish once every named entry is materialized
+    emitter.instruction("mov r12, r11");                                        // copy the entry index before scaling to the entry stride
+    emitter.instruction("shl r12, 4");                                          // scale the entry index by the 16-byte entry stride
+    emitter.instruction("add r12, r9");                                         // advance to this entry from the buffer base
+    emitter.instruction("add r12, 8");                                          // skip the 8-byte header to the entry payload
+    emitter.instruction("mov r13, QWORD PTR [r12]");                            // load the entry name pointer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r13", cur_name_ptr_off)); // preserve the name pointer across the boxing helper
+    emitter.instruction("mov r13d, DWORD PTR [r12 + 8]");                       // load the entry name length
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r13", cur_name_len_off)); // preserve the name length across the boxing helper
+    emitter.instruction("mov r13d, DWORD PTR [r12 + 12]");                      // load the entry capture-group index
+    emitter.instruction(&format!("imul r13, {}", regmatch_size));               // scale the group index to the native regmatch_t stride
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load the dynamic regmatch_t buffer base
+    emitter.instruction("add r13, r10");                                        // compute the address of the group's regmatch_t slot
+    emit_x86_load_regoff_from_index(emitter, "r11", "r13", 0, regmatch_size);
+    emit_x86_load_regoff_from_index(emitter, "rcx", "r13", regmatch_rm_eo_off, regmatch_size);
+    emitter.instruction("cmp r11, 0");                                          // did the named group participate in the match?
+    emitter.instruction("jl __rt_preg_match_capture_hash_named_empty_linux_x86_64"); // an unmatched named group stores an empty string
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", subject_cstr_off)); // reload the subject C string base as value_lo
+    emitter.instruction("add rdi, r11");                                        // value_lo = the substring pointer
+    emitter.instruction("mov rsi, rcx");                                        // copy the capture end offset before subtracting the start
+    emitter.instruction("sub rsi, r11");                                        // value_hi = rm_eo - rm_so (substring length)
+    emitter.instruction("jmp __rt_preg_match_capture_hash_named_box_linux_x86_64"); // box the substring value
+    emitter.label("__rt_preg_match_capture_hash_named_empty_linux_x86_64");
+    emitter.instruction("xor edi, edi");                                        // an unmatched named group has a null value_lo pointer
+    emitter.instruction("xor esi, esi");                                        // an unmatched named group has zero value_hi length
+    emitter.label("__rt_preg_match_capture_hash_named_box_linux_x86_64");
+    emitter.instruction("mov eax, 1");                                          // value_tag 1 = string for the mixed boxing helper
+    emitter.instruction("call __rt_mixed_from_value");                          // persist the substring and box it into a Mixed cell
+    emitter.instruction("mov rcx, rax");                                        // value_lo = the boxed Mixed substring
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", matches_array_off)); // reload the matches hash pointer
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", cur_name_ptr_off)); // key_lo = the named-group name pointer
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", cur_name_len_off)); // key_hi = the name length marks a string key
+    emitter.instruction("xor r8d, r8d");                                        // boxed Mixed values leave the high word empty
+    emitter.instruction("mov r9d, 7");                                          // value_tag 7 = boxed Mixed payload
+    emitter.instruction("call __rt_hash_set");                                  // insert the named capture into the hash
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // save the possibly-grown hash pointer
+    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", name_idx_off)); // reload the named-entry index after the helper calls
+    emitter.instruction("add r11, 1");                                          // advance to the next named entry
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", name_idx_off)); // save the next named-entry index
+    emitter.instruction("jmp __rt_preg_match_capture_hash_named_loop_linux_x86_64"); // continue inserting named captures
+
+    emitter.label("__rt_preg_match_capture_hash_done_linux_x86_64");
+    emitter.instruction("jmp __rt_preg_match_capture_success_linux_x86_64");    // share the success epilogue (frees the regmatch vector)
 }
 
 /// Prefills x86_64 regmatch slots with unmatched sentinels before regexec.

@@ -1809,6 +1809,92 @@ echo $n . "|" . $arr[0] . "|" . $arr[1] . "|" . $arr[2];
     assert_eq!(out, "1|ab|a|b");
 }
 
+/// Verifies `preg_match()` accepts the PHP `#` delimiter (not only `/`), matching a plain
+/// pattern and populating numeric capture groups exactly like the `/.../ ` form.
+/// Cross-checked against `php -r` (`1|3|ab,a,b`).
+#[test]
+fn test_preg_match_hash_delimiter() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_match('#hello#', 'hello world'), "|";
+preg_match('#(a)(b)#', 'zab', $m);
+echo count($m), "|", $m[0], ",", $m[1], ",", $m[2];
+"#,
+    );
+    assert_eq!(out, "1|3|ab,a,b");
+}
+
+/// Verifies a `(?P<name>...)` named capture populates both the numeric `$m[1]` slot and the
+/// associative `$m['name']` slot when `$matches` is a by-reference `?array` cell (a boxed
+/// Mixed destination), read through the cell in the same scope. The `#` delimiter and the `u`
+/// modifier are both exercised. This is the shape named groups take in real parsers.
+/// Cross-checked against `php -r` (`name:|name|name`).
+#[test]
+fn test_preg_match_named_group_populates_hash_through_byref_cell() {
+    let out = compile_and_run(
+        r#"<?php
+function w(string $p, string $s, ?array &$m): string {
+    preg_match($p, $s, $m);
+    return $m[0] . "|" . $m['key'] . "|" . $m[1];
+}
+echo w('#(?P<key>\w+):#u', "name: x", $mm);
+"#,
+    );
+    assert_eq!(out, "name:|name|name");
+}
+
+/// Verifies two `(?P<name>...)` named captures both resolve under their string keys and their
+/// numeric indices through a by-reference `?array` (boxed Mixed) `$matches` cell.
+/// Cross-checked against `php -r` (`id|42|id|42`).
+#[test]
+fn test_preg_match_two_named_groups_through_byref_cell() {
+    let out = compile_and_run(
+        r#"<?php
+function w(string $p, string $s, ?array &$m): string {
+    preg_match($p, $s, $m);
+    return $m['k'] . "|" . $m['v'] . "|" . $m[1] . "|" . $m[2];
+}
+echo w('#(?P<k>\w+)=(?P<v>\d+)#', "id=42", $mm);
+"#,
+    );
+    assert_eq!(out, "id|42|id|42");
+}
+
+/// Verifies an unmatched optional named capture (`(?P<a>x)?`) materializes as PHP's empty
+/// string under its string key while a later named capture is populated normally, through a
+/// by-reference `?array` (boxed Mixed) `$matches` cell.
+/// Cross-checked against `php -r` (`[][abc]`).
+#[test]
+fn test_preg_match_unmatched_named_group_is_empty_through_byref_cell() {
+    let out = compile_and_run(
+        r#"<?php
+function w(string $p, string $s, ?array &$m): string {
+    preg_match($p, $s, $m);
+    return "[" . $m['a'] . "][" . $m['b'] . "]";
+}
+echo w('#(?P<a>x)?(?P<b>\w+)#', "abc", $mm);
+"#,
+    );
+    assert_eq!(out, "[][abc]");
+}
+
+/// Verifies the alternate `(?<name>...)` named-group syntax (without the `P`) resolves under
+/// its string key through a by-reference `?array` (boxed Mixed) `$matches` cell.
+/// Cross-checked against `php -r` (`hello`).
+#[test]
+fn test_preg_match_alternate_named_group_syntax_through_byref_cell() {
+    let out = compile_and_run(
+        r#"<?php
+function w(string $p, string $s, ?array &$m): string {
+    preg_match($p, $s, $m);
+    return $m['word'];
+}
+echo w('#(?<word>\w+)#', "hello", $mm);
+"#,
+    );
+    assert_eq!(out, "hello");
+}
+
 /// Verifies `preg_match` with the Unicode property escape `\p{L}+` matches a run of letters
 /// including non-ASCII characters (Japanese kana).
 #[test]
