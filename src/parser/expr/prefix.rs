@@ -627,7 +627,9 @@ fn parse_this(
 /// tighter than `* / % + - .` and the comparison/logical operators — so `(int)$x + 3` parses
 /// as `((int)$x) + 3`, matching PHP — while `**` (left bp 37) still binds tighter than the cast.
 /// Otherwise parses as a grouped expression: consumes `(` and `)`, then checks for an immediate
-/// call (`inner(args)`) to support expression-call syntax.
+/// call (`inner(args)`) to support expression-call syntax. Also recognizes the first-class-callable
+/// form `($expr)(...)`, mirroring `parse_variable`'s `$var(...)` handling: the grouped value is
+/// returned as-is rather than wrapped in an `ExprCall`.
 fn parse_group_or_cast(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -654,6 +656,12 @@ fn parse_group_or_cast(
     if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
         let call_span = tokens[*pos].1;
         *pos += 1;
+        if parse_first_class_callable_parens(tokens, pos)? {
+            // `($expr)(...)` is the first-class-callable form on a parenthesized expression.
+            // As with `$var(...)`, the grouped value is expected to already be a callable, so
+            // the closure-creation form evaluates to that value directly.
+            return Ok(inner);
+        }
         let args = parse_args(tokens, pos, call_span)?;
         return Ok(Expr::new(
             ExprKind::ExprCall {

@@ -1613,3 +1613,37 @@ echo $obj->run(21);
     );
     assert_eq!(out, "42");
 }
+
+/// Sibling of the `$this(...)` FCC fix: `($expr)(...)` first-class callable applied to a
+/// parenthesized expression. `($c)(...)` where `$c` already holds a closure evaluates to that
+/// closure value directly (mirrors `$var(...)`), so calling the result invokes it normally.
+#[test]
+fn test_grouped_expr_fcc_then_invoke() {
+    let out = compile_and_run(
+        r#"<?php
+$c = function(){ return 7; };
+$g = ($c)(...);
+echo $g();
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Regression pin (symfony/console `Attribute/Argument.php:113`): `($this->prop)(...)` FCC on a
+/// parenthesized object-property access guarded by `is_callable`. Proves the grouped-expression
+/// FCC form parses and dispatches through property access, not just a bare variable.
+#[test]
+fn test_grouped_property_fcc_then_invoke() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public $suggestedValues;
+    public function __construct($v) { $this->suggestedValues = $v; }
+}
+$box = new Box(function() { return 99; });
+$g = is_callable($box->suggestedValues) ? ($box->suggestedValues)(...) : $box->suggestedValues;
+echo $g();
+"#,
+    );
+    assert_eq!(out, "99");
+}
