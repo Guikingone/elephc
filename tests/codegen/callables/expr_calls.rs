@@ -1546,3 +1546,70 @@ echo D::go("a", 9);
     );
     assert_eq!(out, "D:9");
 }
+
+/// Regression pin (symfony/console `Command.php:157`): `$this(...)` first-class callable inside a
+/// class that does NOT declare `__invoke`. The produced callable flows into a `callable`-typed
+/// constructor parameter but is never invoked (mirrors `new InvokableCommand($this, $this(...))`).
+/// Proves it parses, type-checks to `callable`, compiles, links, and the program runs normally.
+#[test]
+fn test_this_fcc_without_invoke_flows_into_callable_param() {
+    let out = compile_and_run(
+        r#"<?php
+class Sink {
+    public $code;
+    public function __construct(callable $code) { $this->code = $code; }
+}
+class Command {
+    public $sink;
+    public function configure(): void {
+        $this->sink = new Sink($this(...));
+    }
+    public function name(): string { return "cmd"; }
+}
+$c = new Command();
+$c->configure();
+echo $c->name();
+"#,
+    );
+    assert_eq!(out, "cmd");
+}
+
+/// Dispatch correctness: `$this(...)` FCC inside a class that DOES declare `__invoke`, then invoke
+/// the produced callable (`$g = $this(...); return $g();`). Proves the desugaring reuses the
+/// working instance-method (`__invoke`) dispatch path and yields the `__invoke` return value.
+#[test]
+fn test_this_fcc_with_invoke_dispatches() {
+    let out = compile_and_run(
+        r#"<?php
+class Greeter {
+    public function __invoke(): string { return "hi"; }
+    public function run(): string {
+        $g = $this(...);
+        return $g();
+    }
+}
+$obj = new Greeter();
+echo $obj->run();
+"#,
+    );
+    assert_eq!(out, "hi");
+}
+
+/// Best-effort direct-invoke form: `$this($n)` inside a class that declares `__invoke` routes to
+/// the existing invokable-object dispatch and returns the `__invoke` result.
+#[test]
+fn test_this_direct_call_with_invoke_dispatches() {
+    let out = compile_and_run(
+        r#"<?php
+class Doubler {
+    public function __invoke(int $n): int { return $n * 2; }
+    public function run(int $n): int {
+        return $this($n);
+    }
+}
+$obj = new Doubler();
+echo $obj->run(21);
+"#,
+    );
+    assert_eq!(out, "42");
+}

@@ -175,15 +175,37 @@ impl Checker {
                         let class_info = self.classes.get(&class_name).ok_or_else(|| {
                             CompileError::new(span, &format!("Undefined class: {}", class_name))
                         })?;
-                        let sig = class_info.methods.get(method).ok_or_else(|| {
-                            CompileError::new(
+                        let Some(sig) = class_info.methods.get(method) else {
+                            // FCC of `$this` (or any object) whose class does not statically
+                            // declare `__invoke`. PHP treats `$this(...)` as a *callable value*;
+                            // whether it is actually invokable is a runtime concern (guarded with
+                            // `is_callable($this)`), so we type it as a permissive callable rather
+                            // than erroring. Scope is strictly `__invoke`: any other missing method
+                            // is still a genuine typo and keeps the diagnostic below.
+                            if method == "__invoke" {
+                                return Ok(FunctionSig {
+                                    params: vec![(
+                                        "args".to_string(),
+                                        PhpType::Array(Box::new(PhpType::Mixed)),
+                                    )],
+                                    defaults: vec![None],
+                                    return_type: PhpType::Mixed,
+                                    declared_return: true,
+                                    by_ref_return: false,
+                                    ref_params: vec![false],
+                                    declared_params: vec![true],
+                                    variadic: Some("args".to_string()),
+                                    deprecation: None,
+                                });
+                            }
+                            return Err(CompileError::new(
                                 span,
                                 &format!(
                                     "Undefined method for first-class callable: {}::{}",
                                     class_name, method
                                 ),
-                            )
-                        })?;
+                            ));
+                        };
                         if let Some(visibility) = class_info.method_visibilities.get(method) {
                             let declaring_class = class_info
                                 .method_declaring_classes

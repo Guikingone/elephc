@@ -794,6 +794,10 @@ fn emit_static_late_bound_first_class_callable(
 }
 
 /// Emits a runtime descriptor for receiver-bound `object::method` first-class callables.
+/// Returns `Ok(true)` when a descriptor was emitted, and `Ok(false)` to fall through to the
+/// caller's null-descriptor path — either when the target is not an `object::` FCC, or for the
+/// relaxed `$this(...)` case where the receiver class does not declare/emit `__invoke`. Any other
+/// missing method or absent method body is a hard `Err`.
 fn emit_instance_method_first_class_callable(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -830,20 +834,31 @@ fn emit_instance_method_first_class_callable(
             target,
             normalized_class
         )))?;
-    let sig = class_info
-        .methods
-        .get(&method_key)
-        .ok_or_else(|| CodegenIrError::unsupported(format!(
+    let Some(sig) = class_info.methods.get(&method_key).cloned() else {
+        // `$this(...)` FCC on a class that does not statically declare `__invoke`: fall through
+        // to the caller's null-descriptor path (a link/codegen-safe null callable), matching the
+        // checker relaxation. Any other missing method is still a hard error. The scope is strictly
+        // `__invoke` so genuine method typos remain unsupported-errors.
+        if method_key == "__invoke" {
+            return Ok(false);
+        }
+        return Err(CodegenIrError::unsupported(format!(
             "instance first-class callable '{}' with unknown method",
             target
-        )))?
-        .clone();
+        )));
+    };
     let impl_class = class_info
         .method_impl_classes
         .get(&method_key)
         .cloned()
         .unwrap_or_else(|| normalized_class.clone());
     if !class_method_body_exists(ctx, &impl_class, &method_key) {
+        // `__invoke` declared but with no emitted body (e.g. abstract/interface-only): treat like
+        // the missing-method case above and fall through to the null callable. Other methods stay
+        // hard errors so a missing concrete body is still surfaced.
+        if method_key == "__invoke" {
+            return Ok(false);
+        }
         return Err(CodegenIrError::unsupported(format!(
             "instance first-class callable '{}' without emitted method body",
             target

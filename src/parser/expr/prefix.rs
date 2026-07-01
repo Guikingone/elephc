@@ -11,7 +11,7 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::names::Name;
-use crate::parser::ast::{Expr, ExprKind, MagicConstant, StaticReceiver};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, MagicConstant, StaticReceiver};
 use crate::span::Span;
 
 use super::assignment_targets::is_non_local_assignment_target;
@@ -263,7 +263,7 @@ pub(super) fn parse_prefix(
         // above `**`'s lhs bp (37) so `clone $a ** 2` parses as `(clone $a) ** 2`, while the
         // unconditional postfix loop still folds `clone $a->b` into `clone ($a->b)`.
         Token::Clone => parse_unary(tokens, pos, span, ExprKind::Clone, 38),
-        Token::This => parse_simple(tokens, pos, span, ExprKind::This),
+        Token::This => parse_this(tokens, pos, span),
         Token::Yield => parse_yield(tokens, pos, span),
         other => Err(CompileError::new(
             span,
@@ -578,6 +578,47 @@ fn parse_variable(
         }
     }
     Ok(Expr::new(ExprKind::Variable(name), span))
+}
+
+/// Parses a `$this` expression, mirroring `parse_variable`'s `(`-handling so `$this(...)`
+/// and `$this(args)` are recognized in the prefix parser (the Pratt postfix `(` gate does not
+/// include `ExprKind::This`). Only intercepts a following `(`; `->`, `::`, and `[` are left to
+/// the Pratt postfix loop so `$this->m()` etc. keep working. Returns:
+/// - `FirstClassCallable(Method{ object: This, method: "__invoke" })` for the FCC form `$this(...)`
+///   (a callable value of the current instance's `__invoke`),
+/// - `ExprCall { callee: This, args }` for a direct invoke `$this(args)`, and
+/// - a bare `This` node otherwise.
+fn parse_this(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Expr, CompileError> {
+    *pos += 1;
+    if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
+        *pos += 1;
+        if parse_first_class_callable_parens(tokens, pos)? {
+            // `$this(...)` is the first-class-callable form: it produces a callable value of the
+            // current instance's `__invoke`. Reuses the fully-working Method-FCC path; on a class
+            // that lacks `__invoke` the checker/codegen relaxations keep it callable-typed and
+            // link-safe (runtime-dead when guarded by `is_callable($this)`).
+            return Ok(Expr::new(
+                ExprKind::FirstClassCallable(CallableTarget::Method {
+                    object: Box::new(Expr::new(ExprKind::This, span)),
+                    method: "__invoke".to_string(),
+                }),
+                span,
+            ));
+        }
+        let args = parse_args(tokens, pos, span)?;
+        return Ok(Expr::new(
+            ExprKind::ExprCall {
+                callee: Box::new(Expr::new(ExprKind::This, span)),
+                args,
+            },
+            span,
+        ));
+    }
+    Ok(Expr::new(ExprKind::This, span))
 }
 
 /// Parses a grouped expression `(...)` or a type cast `(type) expr`. If `peek_cast` detects

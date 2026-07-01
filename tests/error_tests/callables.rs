@@ -432,3 +432,24 @@ fn test_error_pipe_closure_literal_typed_parameter_mismatch() {
         "pipe target parameter $n expects Int, got Str",
     );
 }
+
+/// Verifies the `$this(...)`/`__invoke` first-class-callable relaxation stays scoped: a genuine
+/// method typo used as an FCC (`$this->genuinelyMissingMethod(...)`) still produces the
+/// "Undefined method for first-class callable" diagnostic. Only `__invoke` is permissively
+/// accepted on a class that lacks it, so typo detection for every other method is preserved.
+#[test]
+fn test_error_this_fcc_missing_method_still_reported() {
+    expect_error(
+        r#"<?php
+class Foo {
+    public function real(): void {}
+    public function go(): void {
+        $cb = $this->genuinelyMissingMethod(...);
+    }
+}
+$f = new Foo();
+$f->go();
+"#,
+        "Undefined method for first-class callable",
+    );
+}
