@@ -68,11 +68,34 @@ pub(super) fn layout_for_function(
     };
 
     let value_placement = value_placement::allocate(function);
+    // A by-value parameter slot must also reserve room for the incoming ABI
+    // materialization shape, which the prologue spills before any Mixed-widening
+    // box. That shape can be wider than the (possibly Mixed-widened) local
+    // storage type: a `string`/`TaggedScalar` param spills a 16-byte pair even
+    // when its local is later boxed to an 8-byte Mixed cell. Undersizing the slot
+    // would let the second word (the length/tag) overwrite the adjacent slot.
+    // Parameters occupy the first slots as `LocalSlotId::from_raw(0..params.len())`,
+    // matching how the prologue stores them.
+    let param_abi_bytes: HashMap<LocalSlotId, usize> = function
+        .params
+        .iter()
+        .enumerate()
+        .filter(|(_, param)| !param.by_ref)
+        .map(|(index, param)| {
+            (
+                LocalSlotId::from_raw(index as u32),
+                param.php_type.codegen_repr().stack_size(),
+            )
+        })
+        .collect();
     let mut local_offsets = HashMap::new();
     let mut offset = value_placement.total_slot_bytes;
     for local in &function.locals {
-        let bytes = value_placement::bytes_for(local.ir_type)
+        let mut bytes = value_placement::bytes_for(local.ir_type)
             .max(local.php_type.codegen_repr().stack_size());
+        if let Some(param_bytes) = param_abi_bytes.get(&local.id) {
+            bytes = bytes.max(*param_bytes);
+        }
         if bytes == 0 {
             continue;
         }

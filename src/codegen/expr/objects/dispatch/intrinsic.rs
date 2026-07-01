@@ -208,6 +208,7 @@ pub(super) fn emit_instance_intrinsic_with_loaded_args(
         IntrinsicCallKind::SplRecursiveAssumeIterator => {
             emit_recursive_assume_iterator_intrinsic(emitter, ctx)
         }
+        IntrinsicCallKind::ThrowableConstruct => emit_simple_runtime_intrinsic(intrinsic, emitter),
         IntrinsicCallKind::SplDllAdd
         | IntrinsicCallKind::SplDllPop
         | IntrinsicCallKind::SplDllShift

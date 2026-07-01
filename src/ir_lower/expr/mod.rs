@@ -10098,6 +10098,16 @@ fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, expr: &Expr) 
 }
 
 /// Coerces branch values to the hidden temp storage type before storing them.
+///
+/// A branch that materializes a boxed `Mixed` (for example a `?Class`/`?array`
+/// property read whose null-stripped `??`/`??=` merge type is a concrete object
+/// or container) must be unboxed to the raw heap payload that the merge temp's
+/// object/array/iterable type expects. Storing the `Mixed` cell into an
+/// object-typed slot verbatim would later make a virtual dispatch read the
+/// `Mixed` runtime tag as a class id (and index a missing vtable), or make an
+/// array op read the cell header as an array descriptor. The `RuntimeCall` unbox
+/// mirrors `coerce_to_return_type`'s heap path and yields an owned reference the
+/// surrounding store then retains, so ownership stays balanced.
 fn coerce_value_for_temp(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -10123,6 +10133,18 @@ fn coerce_value_for_temp(
         }
         PhpType::Float => coerce_to_float_at_span(ctx, value, Some(span)),
         PhpType::Str => coerce_to_string_at_span(ctx, value, Some(span)),
+        PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable
+            if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) =>
+        {
+            ctx.emit_value(
+                Op::RuntimeCall,
+                vec![value.value],
+                None,
+                temp_type.clone(),
+                effects_lookup::runtime_effects(),
+                Some(span),
+            )
+        }
         _ => value,
     }
 }

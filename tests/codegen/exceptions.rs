@@ -505,3 +505,54 @@ fn test_sequential_try_catch_does_not_blow_up_codegen() {
     let out = compile_and_run(&php);
     assert_eq!(out, expected);
 }
+
+/// Verifies a user subclass whose `__construct` chains into the built-in
+/// Throwable root via `parent::__construct(message, code)` links and runs the
+/// standalone `_method_<Root>___construct` wrapper (backed by the
+/// `__rt_exception_construct` runtime helper), so `getMessage()`/`getCode()`
+/// observe the message/code written by the compact-payload constructor. Before
+/// the standalone constructor symbol existed the `parent::__construct` chain
+/// failed to link; this locks the read-back path (`boom|7`, matching PHP).
+#[test]
+fn test_subclass_parent_construct_sets_message_and_code() {
+    let out = compile_and_run(
+        r#"<?php
+class MyErr extends \RuntimeException {
+    public function __construct() {
+        parent::__construct("boom", 7);
+    }
+}
+$e = new MyErr();
+echo $e->getMessage(), "|", $e->getCode();
+"#,
+    );
+    assert_eq!(out, "boom|7");
+}
+
+/// Regression for a frame-slot overlap: a `string` parameter whose local is
+/// Mixed-widened is materialized in the prologue as a 16-byte `ptr,len` pair
+/// before being boxed, but the frame layout sized the slot for the 8-byte Mixed
+/// storage, so the length word overwrote the adjacent parameter slot (the
+/// receiver `$this`), producing a garbage receiver and a SIGSEGV. Reassigning
+/// the `string` param to the `mixed` property widens its local to Mixed and
+/// triggers the prologue box; dereferencing `$this` afterward crashed before the
+/// slot was sized to also fit the incoming string ABI shape. Correct output is
+/// `box:5` (matching PHP).
+#[test]
+fn test_string_param_widened_to_mixed_does_not_clobber_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+final class Box {
+    public string $label = "box";
+    public mixed $extra = 5;
+    public function run(string $value): string {
+        if ($this->extra) { $value = $this->extra; }
+        return $this->label . ":" . $value;
+    }
+}
+$b = new Box();
+echo $b->run("hello");
+"#,
+    );
+    assert_eq!(out, "box:5");
+}
