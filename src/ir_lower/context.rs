@@ -469,6 +469,33 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.initialized_slots = initialized_slots;
     }
 
+    /// Captures the current logical local-type facts at a control-flow split.
+    ///
+    /// The lowering tracks each local's flow-sensitive PHP type in `local_types` and
+    /// mutates it imperatively as it walks assignments. Branch bodies must snapshot
+    /// this map before lowering and restore/merge afterward so a type change on one
+    /// branch (for example a `string` parameter reassigned to `int`) does not leak
+    /// into a sibling branch or the post-branch code where that reassignment never ran.
+    pub(crate) fn local_types_snapshot(&self) -> crate::types::TypeEnv {
+        self.local_types.clone()
+    }
+
+    /// Replaces the logical local-type facts after branch lowering or merge analysis.
+    pub(crate) fn restore_local_types(&mut self, local_types: crate::types::TypeEnv) {
+        self.local_types = local_types;
+    }
+
+    /// Returns the widened frame-storage PHP type recorded for a named local, if any.
+    ///
+    /// Used when merging branch type facts: a local whose logical type differs between
+    /// two reachable branches must adopt a representation that can hold both, which is
+    /// exactly the storage type already widened by `set_local_type`.
+    pub(crate) fn local_storage_php_type(&self, name: &str) -> Option<PhpType> {
+        self.local_slots
+            .get(name)
+            .map(|slot| self.builder.local_php_type(*slot))
+    }
+
     /// Records that a local currently aliases by-reference storage.
     pub(crate) fn mark_ref_bound_local(&mut self, name: &str) {
         self.ref_bound_locals.insert(name.to_string());

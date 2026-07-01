@@ -315,3 +315,67 @@ fn test_gradual_array_union_with_mixed_operand() {
     );
     assert_eq!(out, "125");
 }
+
+/// Regression: a `string` parameter reassigned to an `int` on the **then** branch of an `if`
+/// (which returns) must not leak its `int` type onto the else/fall-through path where the
+/// reassignment never ran. Before branch-scoped local-type tracking, the else path read the
+/// still-string parameter with the leaked `int` representation and printed `0` instead of the
+/// original string. Matches PHP, which prints the parameter unchanged on the else path.
+#[test]
+fn test_string_param_reassigned_int_on_returning_branch_does_not_leak_type() {
+    let out = compile_and_run(
+        r#"<?php
+function f(string $s): string {
+    if ($s === "zzz") {
+        $s = 42;
+        return "then:" . $s;
+    }
+    return "else:" . $s;
+}
+echo f("zzz"), "|", f("elephc"), "|", f("abc");
+"#,
+    );
+    assert_eq!(out, "then:42|else:elephc|else:abc");
+}
+
+/// Regression: when a `string` local is conditionally reassigned to an `int` and the branches
+/// merge (no early return), the post-`if` value must carry each branch's own value with the
+/// correct representation — `int(42)` when the branch ran, the original string otherwise — with
+/// `gettype()` reporting `integer`/`string` respectively, matching PHP.
+#[test]
+fn test_conditional_string_to_int_reassignment_merges_per_branch() {
+    let out = compile_and_run(
+        r#"<?php
+function f(string $s): string {
+    if ($s === "zzz") {
+        $s = 42;
+    }
+    return $s . ":" . gettype($s);
+}
+echo f("zzz"), "|", f("elephc");
+"#,
+    );
+    assert_eq!(out, "42:integer|elephc:string");
+}
+
+/// Regression: the leak also travels through a `switch`. A `string` value reassigned to an `int`
+/// inside a case body that **returns** must not change the type seen by the code after the switch
+/// on the no-match path, where the value is still the original string. Before switch body type
+/// mutations were folded back against the no-match state, `s("elephc")` printed `0`.
+#[test]
+fn test_string_reassigned_int_in_returning_switch_case_does_not_leak_after_switch() {
+    let out = compile_and_run(
+        r#"<?php
+function s(string $v): string {
+    switch (true) {
+        case ctype_digit($v):
+            $v = (int) $v;
+            return "digit:" . $v;
+    }
+    return (string) $v;
+}
+echo s("7"), "|", s("elephc"), "|", s("abc");
+"#,
+    );
+    assert_eq!(out, "digit:7|elephc|abc");
+}

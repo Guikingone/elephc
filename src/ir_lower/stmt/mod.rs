@@ -394,6 +394,7 @@ fn lower_if_chain(
     let cond_value = lower_expr(ctx, condition);
     let cond_value = ctx.truthy(cond_value, Some(condition.span));
     let split_initialized = ctx.initialized_slots_snapshot();
+    let split_types = ctx.local_types_snapshot();
     let then_block = ctx.builder.create_named_block("if.then", Vec::new());
     let else_block = ctx.builder.create_named_block("if.else", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
@@ -406,8 +407,10 @@ fn lower_if_chain(
 
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    ctx.restore_local_types(split_types.clone());
     lower_block(ctx, then_body);
     let then_initialized = ctx.initialized_slots_snapshot();
+    let then_types = ctx.local_types_snapshot();
     let mut merge_reachable = false;
     let then_reachable = !ctx.builder.insertion_block_is_terminated();
     if then_reachable {
@@ -418,6 +421,7 @@ fn lower_if_chain(
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    ctx.restore_local_types(split_types.clone());
     let else_reachable = if let Some(((next_condition, next_body), rest)) = elseif_clauses.split_first() {
         lower_if_chain(ctx, next_condition, next_body, rest, else_body, merge, span)
     } else if let Some(else_body) = else_body {
@@ -439,6 +443,7 @@ fn lower_if_chain(
     };
     merge_reachable |= else_reachable;
     let else_initialized = ctx.initialized_slots_snapshot();
+    let else_types = ctx.local_types_snapshot();
     ctx.restore_initialized_slots(merge_initialized_slots(
         &split_initialized,
         then_initialized,
@@ -446,7 +451,69 @@ fn lower_if_chain(
         else_initialized,
         else_reachable,
     ));
+    let merged_types = merge_local_types(
+        ctx,
+        &split_types,
+        then_types,
+        then_reachable,
+        else_types,
+        else_reachable,
+    );
+    ctx.restore_local_types(merged_types);
     merge_reachable
+}
+
+/// Merges the flow-sensitive local-type facts from the reachable branches of an `if`.
+///
+/// Only branches that reach the merge point contribute; a branch that returns, throws,
+/// or otherwise cannot fall through must not leak its type mutations into the code after
+/// the `if`. When a local's logical type differs between two reachable branches, the merged
+/// type is the local's already-widened frame-storage type, which can hold either branch's
+/// value. This keeps a `string` parameter reassigned to `int` on one branch from being read
+/// with the wrong representation on a path where that reassignment never ran.
+fn merge_local_types(
+    ctx: &LoweringContext<'_, '_>,
+    split_types: &crate::types::TypeEnv,
+    then_types: crate::types::TypeEnv,
+    then_reachable: bool,
+    else_types: crate::types::TypeEnv,
+    else_reachable: bool,
+) -> crate::types::TypeEnv {
+    match (then_reachable, else_reachable) {
+        (true, false) => then_types,
+        (false, true) => else_types,
+        (false, false) => split_types.clone(),
+        (true, true) => join_local_types(ctx, then_types, &else_types),
+    }
+}
+
+/// Joins two reachable-path local-type environments into one that is valid after both paths merge.
+///
+/// A local present in both with the same logical type keeps that type. When the two paths disagree
+/// on a local's type, the join adopts the local's already-widened frame-storage type (`Mixed` for
+/// an incompatible reassignment), which can represent a value from either path. Locals present on
+/// only one path are carried over unchanged. Used for `if`/`switch` merges so per-branch type
+/// changes are combined instead of one path's facts silently overwriting the other's.
+fn join_local_types(
+    ctx: &LoweringContext<'_, '_>,
+    mut base: crate::types::TypeEnv,
+    other: &crate::types::TypeEnv,
+) -> crate::types::TypeEnv {
+    for (name, other_ty) in other {
+        match base.get(name) {
+            Some(base_ty) if base_ty == other_ty => {}
+            Some(_) => {
+                let widened = ctx
+                    .local_storage_php_type(name)
+                    .unwrap_or_else(|| other_ty.clone());
+                base.insert(name.clone(), widened);
+            }
+            None => {
+                base.insert(name.clone(), other_ty.clone());
+            }
+        }
+    }
+    base
 }
 
 /// Merges definitely-initialized locals from the reachable branches of an `if`.
@@ -1279,7 +1346,17 @@ fn lower_switch(
         lower_dynamic_switch_dispatch(ctx, subject, cases, &blocks, default_block);
     }
 
+    // The state after dispatch (all case conditions evaluated, no body run) is the
+    // no-match path's type environment, and it is the environment the code after the
+    // switch sees when the subject matched no case. Capturing it here lets us fold the
+    // case/default body type mutations back against it so a reassignment that only
+    // happens on a case body (especially one that returns) does not leak into the
+    // post-switch code where that body never ran.
+    let no_match_types = ctx.local_types_snapshot();
     lower_switch_bodies(ctx, cases, default, &blocks, default_block, exit);
+    let body_types = ctx.local_types_snapshot();
+    let merged = join_local_types(ctx, no_match_types, &body_types);
+    ctx.restore_local_types(merged);
 }
 
 /// Returns true when every switch case pattern can use the static integer switch terminator.
