@@ -19,15 +19,19 @@ use crate::parser::ast::{
     BinOp, CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TypeExpr,
 };
 
+use super::locals::LocalTypes;
 use super::reach::{Analyzer, Receiver};
 
-/// Per-body scan context: what `$this`/`self` resolve to, the visible parameter type hints, and a
-/// human-readable label for the body being scanned (used in fallback diagnostics).
+/// Per-body scan context: what `$this`/`self` resolve to, the visible parameter type hints, the
+/// per-body local-variable type map, and a human-readable label for the body being scanned (used in
+/// fallback diagnostics).
 pub(super) struct ScanCtx<'a> {
     /// Enclosing class FQN for `$this`/`self`/`static`/`parent`; `None` inside a free function.
     enclosing: Option<String>,
     /// In-scope parameter (and closure-parameter) names mapped to their declared type hints.
     params: HashMap<&'a str, &'a TypeExpr>,
+    /// Per-body local-variable types (Stage 2.5) so a local receiver resolves to its class set.
+    locals: LocalTypes,
     /// Label such as `<main>`, `foo()`, or `Class::method` for fallback notes.
     location: String,
 }
@@ -36,28 +40,36 @@ impl<'a> Analyzer<'a> {
     /// Scans the program's top-level statements as the entry "virtual body": executable roots plus
     /// wrapper blocks, skipping every declaration body (those are reached lazily through edges).
     pub(super) fn scan_root(&mut self, program: &'a [Stmt]) {
-        let ctx = ScanCtx { enclosing: None, params: HashMap::new(), location: "<main>".into() };
+        let locals = self.compute_local_types(program, None, &[], &[]);
+        let ctx =
+            ScanCtx { enclosing: None, params: HashMap::new(), locals, location: "<main>".into() };
         self.scan_stmts(program, &ctx);
     }
 
-    /// Scans a reachable free function's body with its parameter hints in scope.
+    /// Scans a reachable free function's body with its parameter hints and local-variable types in
+    /// scope.
     pub(super) fn scan_function(&mut self, fqn: &str) {
         let Some(entry) = self.index.functions.get(fqn) else { return };
-        let params = param_map(entry.params);
+        let param_list = entry.params;
         let body = entry.body;
-        let ctx = ScanCtx { enclosing: None, params, location: format!("{fqn}()") };
+        let params = param_map(param_list);
+        let locals = self.compute_local_types(body, None, param_list, &[]);
+        let ctx = ScanCtx { enclosing: None, params, locals, location: format!("{fqn}()") };
         self.scan_stmts(body, &ctx);
     }
 
     /// Scans a reachable method's body with the declaring class as `$this`'s type and the method's
-    /// parameter hints in scope. A bodyless (abstract/interface) method scans nothing.
+    /// parameter hints and local-variable types in scope. A bodyless (abstract/interface) method
+    /// scans nothing.
     pub(super) fn scan_method(&mut self, class: &str, lower: &str) {
         let Some(entry) = self.index.classes.get(class) else { return };
         let Some(method) = entry.methods.get(lower).copied() else { return };
         let params = param_map(&method.params);
+        let locals = self.compute_local_types(&method.body, Some(class), &method.params, &[]);
         let ctx = ScanCtx {
             enclosing: Some(class.to_string()),
             params,
+            locals,
             location: format!("{class}::{}", method.name),
         };
         self.scan_stmts(&method.body, &ctx);
@@ -254,8 +266,8 @@ impl<'a> Analyzer<'a> {
                 );
                 self.scan_args(args, ctx);
             }
-            ExprKind::Closure { body, params, .. } => {
-                let child = self.closure_ctx(params, ctx);
+            ExprKind::Closure { body, params, captures, capture_refs, .. } => {
+                let child = self.closure_ctx(params, captures, capture_refs, body, ctx);
                 self.scan_stmts(body, &child);
             }
             ExprKind::BinaryOp { left, op, right } => {
@@ -396,8 +408,12 @@ impl<'a> Analyzer<'a> {
                                 self.enqueue_over_classes(&set, &lower);
                             }
                         }
-                        _ => match self.receiver_of(&items[0], ctx.enclosing.as_deref(), &ctx.params)
-                        {
+                        _ => match self.receiver_of(
+                            &items[0],
+                            ctx.enclosing.as_deref(),
+                            &ctx.params,
+                            &ctx.locals,
+                        ) {
                             Receiver::Bound { key, classes } => {
                                 self.add_typed_site(key, classes, &lower)
                             }
@@ -455,7 +471,7 @@ impl<'a> Analyzer<'a> {
     /// receiver-typing helper and either records a typed call site or an unknown-receiver fallback.
     fn handle_method_call(&mut self, object: &'a Expr, method: &str, ctx: &ScanCtx<'a>) {
         let lower = method.to_ascii_lowercase();
-        match self.receiver_of(object, ctx.enclosing.as_deref(), &ctx.params) {
+        match self.receiver_of(object, ctx.enclosing.as_deref(), &ctx.params, &ctx.locals) {
             Receiver::Bound { key, classes } => self.add_typed_site(key, classes, &lower),
             Receiver::Any => self.add_named_fallback(
                 &lower,
@@ -484,30 +500,39 @@ impl<'a> Analyzer<'a> {
     /// spec permits, to avoid a broad `__toString` fallback on every string/echo.
     fn string_context(&mut self, expr: &'a Expr, ctx: &ScanCtx<'a>) {
         if let Receiver::Bound { key, classes } =
-            self.receiver_of(expr, ctx.enclosing.as_deref(), &ctx.params)
+            self.receiver_of(expr, ctx.enclosing.as_deref(), &ctx.params, &ctx.locals)
         {
             self.add_typed_site(format!("{key}#tostring"), classes, "__tostring");
         }
     }
 
     /// Builds a child scan context for a closure body: keeps the enclosing class and outer
-    /// parameter hints, then overlays the closure's own parameter hints (which shadow captures).
+    /// parameter hints, overlays the closure's own parameter hints (which shadow captures), and
+    /// computes a fresh local-variable type map for the closure body. Captured names (by value or
+    /// by reference) are seeded as `Any` — the enclosing types are not threaded in, which is sound.
     fn closure_ctx(
         &self,
         params: &'a [(String, Option<TypeExpr>, Option<Expr>, bool)],
+        captures: &[String],
+        capture_refs: &[String],
+        body: &'a [Stmt],
         ctx: &ScanCtx<'a>,
     ) -> ScanCtx<'a> {
-        let mut child = ScanCtx {
-            enclosing: ctx.enclosing.clone(),
-            params: ctx.params.clone(),
-            location: format!("{} closure", ctx.location),
-        };
+        let mut child_params = ctx.params.clone();
         for (name, ty, _, _) in params {
             if let Some(ty) = ty {
-                child.params.insert(name.as_str(), ty);
+                child_params.insert(name.as_str(), ty);
             }
         }
-        child
+        let captured: Vec<&str> =
+            captures.iter().chain(capture_refs).map(String::as_str).collect();
+        let locals = self.compute_local_types(body, ctx.enclosing.as_deref(), params, &captured);
+        ScanCtx {
+            enclosing: ctx.enclosing.clone(),
+            params: child_params,
+            locals,
+            location: format!("{} closure", ctx.location),
+        }
     }
 }
 

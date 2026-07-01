@@ -13,11 +13,14 @@
 //!   for the data shapes; `query.rs` holds the closed-world queries.
 //! - Stage 2 adds `compute_reachable` (a Rapid-Type-Analysis reachability fixpoint over the
 //!   skeleton) in `reach.rs`, with the body index (`index.rs`), receiver typing (`receiver.rs`),
-//!   and edge walk (`edges.rs`). It is pure analysis today: the pipeline only dumps the result.
+//!   and edge walk (`edges.rs`). Stage 2.5 adds sound intra-body local-variable typing
+//!   (`locals.rs`) so a local receiver assigned from a typed source resolves to its class instead
+//!   of the `Any` fallback. It is pure analysis today: the pipeline only dumps the result.
 
 mod edges;
 mod harvest;
 mod index;
+mod locals;
 mod query;
 mod reach;
 mod receiver;

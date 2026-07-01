@@ -22,10 +22,14 @@ use crate::parser::ast::{
 
 use super::skeleton::strip_root;
 
-/// One free function's scannable AST: its parameter list (for receiver typing) and body.
+/// One free function's scannable AST: its parameter list (for receiver typing), declared return
+/// type (for local-variable typing of `$v = f()`), and body.
 pub(super) struct FnEntry<'a> {
     /// The parameter tuples `(name, type, default, by_ref)` exactly as parsed.
     pub params: &'a [(String, Option<TypeExpr>, Option<Expr>, bool)],
+    /// The declared return type hint (`function f(): T`), used to type a local assigned from the
+    /// call. `None` for an untyped return, which types the local as `Any`.
+    pub return_type: Option<&'a TypeExpr>,
     /// The function body statements to scan when the function becomes reachable.
     pub body: &'a [Stmt],
 }
@@ -96,9 +100,9 @@ fn index_stmt<'a>(
             record_class(index, trait_deps, name, None, &[], methods, &[]);
             recurse_methods(methods, index, trait_deps);
         }
-        StmtKind::FunctionDecl { name, params, body, .. } => {
+        StmtKind::FunctionDecl { name, params, return_type, body, .. } => {
             let key = strip_root(name).to_string();
-            index.functions.insert(key, FnEntry { params, body });
+            index.functions.insert(key, FnEntry { params, return_type: return_type.as_ref(), body });
             index_stmts(body, index, trait_deps);
         }
         StmtKind::NamespaceBlock { body, .. }
@@ -266,6 +270,26 @@ impl<'a> AstIndex<'a> {
             let entry = self.classes.get(&cur)?;
             if let Some(ty) = entry.properties.get(property) {
                 return Some(ty);
+            }
+            current = entry.parent.clone();
+        }
+        None
+    }
+
+    /// Resolves the declared return type of `lower` (a lowercase method key) on `class`, walking the
+    /// parent chain until the method is found. Returns `None` when the method is absent, has no
+    /// declared return type, or the chain leaves the indexed world — in each case the caller treats
+    /// the call result as `Any` for local-variable typing. Guards against cyclic hierarchies.
+    pub(super) fn method_return_type(&self, class: &str, lower: &str) -> Option<&'a TypeExpr> {
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut current = Some(strip_root(class).to_string());
+        while let Some(cur) = current {
+            if !visited.insert(cur.clone()) {
+                return None;
+            }
+            let entry = self.classes.get(&cur)?;
+            if let Some(method) = entry.methods.get(lower) {
+                return method.return_type.as_ref();
             }
             current = entry.parent.clone();
         }

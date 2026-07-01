@@ -1,6 +1,8 @@
 //! Purpose:
 //! Unit tests for the Stage-2 reachability fixpoint (`compute_reachable`): the worklist, the edge
-//! table, virtual dispatch, and the soundness fallbacks (untyped receiver, dynamic `new`).
+//! table, virtual dispatch, and the soundness fallbacks (untyped receiver, dynamic `new`). Also
+//! covers the Stage-2.5 intra-body local-variable typing (`locals.rs`): local `new`/typed-call
+//! receivers resolve precisely, while reassignment and by-reference closure capture widen to `Any`.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness (`cargo test tree_shake::reach`).
@@ -191,4 +193,88 @@ fn literal_string_callable_is_resolved() {
         apply('Handler::handle');",
     );
     assert!(has_method(&r, "Handler", "handle"), "literal 'Class::method' callable resolved");
+}
+
+/// Stage 2.5: a local assigned from an inline `new C` types the receiver to exactly `C`, so
+/// `$x->go()` reaches only `Impl::go` even though an unrelated `Other` is also constructed and
+/// declares `go`. This is the precision win over Stage 2's untyped-local fallback, which kept both.
+#[test]
+fn local_new_receiver_types_precisely() {
+    let r = reach(
+        "<?php
+        class Impl { function go(){} }
+        class Other { function go(){} }
+        new Other();
+        $x = new Impl();
+        $x->go();",
+    );
+    assert!(has_method(&r, "Impl", "go"), "Impl::go reachable via local-new typing");
+    assert!(r.instantiated.contains("Other"), "Other is constructed");
+    assert!(
+        !has_method(&r, "Other", "go"),
+        "Other::go pruned: $x typed to Impl beats the untyped fallback"
+    );
+}
+
+/// Stage 2.5: a local assigned from a call whose callee declares a class return type
+/// (`function make(): Impl`) inherits that type, so `$y->go()` reaches only `Impl::go`. `Other` is
+/// never constructed here, confirming the return-type path drives both instantiation and dispatch.
+#[test]
+fn local_typed_call_return_types_precisely() {
+    let r = reach(
+        "<?php
+        class Impl { function go(){} }
+        class Other { function go(){} }
+        function make(): Impl { return new Impl(); }
+        $y = make();
+        $y->go();",
+    );
+    assert!(has_method(&r, "Impl", "go"), "Impl::go reachable via return-type typing");
+    assert!(!r.instantiated.contains("Other"), "Other never constructed");
+    assert!(!has_method(&r, "Other", "go"), "Other::go pruned (never constructed, no fallback)");
+}
+
+/// Stage 2.5 soundness: a local reassigned with an untyped value joins to `Any` for the whole body
+/// (join-per-body, not flow-sensitive), so `$z->go()` falls back and keeps `go` on EVERY
+/// constructed class. Proves multi-assignment never under-approximates.
+#[test]
+fn local_reassignment_widens_to_any() {
+    let r = reach(
+        "<?php
+        class Impl { function go(){} }
+        class Other { function go(){} }
+        function untyped(){ return null; }
+        new Impl();
+        new Other();
+        $z = new Impl();
+        if (untyped()) { $z = untyped(); }
+        $z->go();",
+    );
+    assert!(has_method(&r, "Impl", "go"), "Impl::go kept via fallback after reassign-to-Any");
+    assert!(
+        has_method(&r, "Other", "go"),
+        "Other::go kept: $z widened to Any keeps go on all constructed classes"
+    );
+}
+
+/// Stage 2.5 soundness: capturing a local by reference into a closure (`use (&$w)`) lets the closure
+/// rebind it, so `$w` widens to `Any` for the whole body and `$w->go()` falls back to every
+/// constructed `go`. Proves the by-reference-capture poison rule.
+#[test]
+fn local_byref_closure_capture_widens_to_any() {
+    let r = reach(
+        "<?php
+        class Impl { function go(){} }
+        class Other { function go(){} }
+        new Impl();
+        new Other();
+        $w = new Impl();
+        $f = function() use (&$w) {};
+        $w->go();",
+    );
+    assert!(has_method(&r, "Impl", "go"), "Impl::go kept via fallback after by-ref capture");
+    assert!(
+        has_method(&r, "Other", "go"),
+        "Other::go kept: by-reference capture widened $w to Any"
+    );
 }

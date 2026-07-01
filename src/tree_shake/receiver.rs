@@ -9,26 +9,31 @@
 //! - Every shape we cannot pin down cheaply returns `Receiver::Any`, which the fixpoint turns into
 //!   a sound over-approximation (keep the method on every instantiated class). We NEVER guess a
 //!   narrower set than the syntax guarantees — under-approximation would miscompile later stages.
-//! - Only four shapes are pinned: `$this`, a type-hinted parameter variable, an inline `new`, and
-//!   `$this->prop` with a declared property type. Reassignments/branches are deliberately ignored.
+//! - Five shapes are pinned: `$this`, a type-hinted parameter variable, an inline `new`, a
+//!   `$this->prop` with a declared property type, and (Stage 2.5) a local variable whose per-body
+//!   `LocalType` is `Known` (computed in `locals.rs`). Reassignments are folded into that join, so
+//!   a reassigned local widens to `Any`; branch-sensitivity is deliberately not modeled.
 
 use std::collections::HashMap;
 
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver, TypeExpr};
 
+use super::locals::{LocalType, LocalTypes};
 use super::reach::{Analyzer, Receiver};
 
 impl<'a> Analyzer<'a> {
     /// Determines the candidate class set for a method-call receiver.
     ///
     /// `enclosing` is the class whose method body we are scanning (for `$this`/`$this->prop`);
-    /// `params` maps in-scope parameter names to their declared type hints. Returns a `Bound`
-    /// closed set for the four cheaply-typeable shapes, or `Any` for everything else.
+    /// `params` maps in-scope parameter names to their declared type hints; `locals` is the per-body
+    /// local-variable type map from `locals.rs`. Returns a `Bound` closed set for the five
+    /// cheaply-typeable shapes, or `Any` for everything else.
     pub(super) fn receiver_of(
         &self,
         object: &Expr,
         enclosing: Option<&str>,
         params: &HashMap<&'a str, &'a TypeExpr>,
+        locals: &LocalTypes,
     ) -> Receiver {
         match &object.kind {
             // `$this` is an instance of the enclosing class or any subtype that could be the
@@ -40,11 +45,20 @@ impl<'a> Analyzer<'a> {
                 },
                 None => Receiver::Any,
             },
-            // A parameter whose declared type is a known class/interface pins the receiver to that
-            // type's subtypes. An untyped or scalar/unknown-typed variable is unknown → `Any`.
-            ExprKind::Variable(name) => match params.get(name.as_str()) {
-                Some(ty) => self.type_to_receiver(format!("param:{name}"), ty),
-                None => Receiver::Any,
+            // A local variable's per-body `LocalType` is authoritative when present: it already
+            // folds the parameter hint and EVERY reassignment, so a widened `Any` must NOT fall
+            // back to the (now stale) parameter hint. Only an absent local — the map carries no
+            // information for it — consults the parameter hint, then the sound `Any` fallback.
+            ExprKind::Variable(name) => match locals.get(name.as_str()) {
+                Some(LocalType::Known(classes)) if !classes.is_empty() => Receiver::Bound {
+                    key: format!("local:{name}"),
+                    classes: classes.clone(),
+                },
+                Some(_) => Receiver::Any,
+                None => match params.get(name.as_str()) {
+                    Some(ty) => self.type_to_receiver(format!("param:{name}"), ty),
+                    None => Receiver::Any,
+                },
             },
             // A freshly constructed object is exactly its class.
             ExprKind::NewObject { class_name, .. } => {

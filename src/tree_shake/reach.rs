@@ -388,7 +388,7 @@ impl<'a> Analyzer<'a> {
 
     /// Collects the candidate classes for a type expression: `Some(subtypes)` for a known
     /// class/interface (union members combined), `None` when any part is unknown/`Any`-inducing.
-    fn classes_for_type(&self, ty: &TypeExpr) -> Option<HashSet<String>> {
+    pub(super) fn classes_for_type(&self, ty: &TypeExpr) -> Option<HashSet<String>> {
         match ty {
             TypeExpr::Named(name) => {
                 let key = name.as_str().trim_start_matches('\\');
