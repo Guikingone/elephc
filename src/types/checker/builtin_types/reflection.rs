@@ -38,6 +38,8 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionFunction",
         "ReflectionParameter",
         "ReflectionNamedType",
+        "ReflectionType",
+        "ReflectionUnionType",
     ] {
         let builtin_key = php_symbol_key(builtin_name);
         if interface_map
@@ -110,6 +112,11 @@ pub(crate) fn inject_builtin_reflection(
     class_map.insert(
         "ReflectionNamedType".to_string(),
         builtin_reflection_named_type(),
+    );
+    class_map.insert("ReflectionType".to_string(), builtin_reflection_type());
+    class_map.insert(
+        "ReflectionUnionType".to_string(),
+        builtin_reflection_union_type(),
     );
 
     Ok(())
@@ -331,6 +338,36 @@ fn builtin_reflection_slot_getter(
     }
 }
 
+/// Returns a public no-arg method that unconditionally returns `value`, typed
+/// `return_type`. Used for `ReflectionType`'s base-class stub methods, which
+/// have no backing state of their own: concrete subtypes (`ReflectionNamedType`,
+/// `ReflectionUnionType`) override with real slot-backed accessors instead of
+/// sharing a same-named private property with the parent, which the checker
+/// rejects as unsupported private-property shadowing.
+fn builtin_reflection_literal_method(
+    method_name: &str,
+    return_type: TypeExpr,
+    value: Option<Expr>,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(return_type),
+        by_ref_return: false,
+        body: vec![Stmt::new(StmtKind::Return(value), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns the public `__construct(string $name)` for `ReflectionFunction`. The
 /// body is empty; codegen populates the metadata slots from the reflected
 /// function's signature.
@@ -440,11 +477,12 @@ fn builtin_reflection_parameter() -> FlattenedClass {
 
 /// Builds the `ReflectionNamedType` shell: a parameter/return type rendered as a
 /// runtime object with a name, nullability flag, and builtin flag. Populated at
-/// codegen from the declared type.
+/// codegen from the declared type. Extends `ReflectionType` so a value typed
+/// `\ReflectionType` can be narrowed to `\ReflectionNamedType` via `instanceof`.
 fn builtin_reflection_named_type() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionNamedType".to_string(),
-        extends: None,
+        extends: Some("ReflectionType".to_string()),
         implements: Vec::new(),
         is_abstract: false,
         is_final: true,
@@ -469,6 +507,56 @@ fn builtin_reflection_named_type() -> FlattenedClass {
             builtin_reflection_slot_getter("allowsNull", "__allows_null", TypeExpr::Bool),
             builtin_reflection_slot_getter("isBuiltin", "__builtin", TypeExpr::Bool),
         ],
+        attributes: Vec::new(),
+        constants: Vec::new(),
+        used_traits: Vec::new(),
+    }
+}
+
+/// Builds the `ReflectionType` shell: the abstract base class for PHP's type
+/// reflection objects (`ReflectionNamedType`, `ReflectionUnionType`,
+/// `ReflectionIntersectionType`). Declares no properties of its own — its
+/// `allowsNull()`/`__toString()` stubs are literal-returning placeholders so
+/// concrete subtypes stay free to declare their own same-named private slots
+/// without tripping the checker's private-property-shadowing restriction.
+/// Populated at codegen from the declared type via the concrete subtype.
+fn builtin_reflection_type() -> FlattenedClass {
+    FlattenedClass {
+        name: "ReflectionType".to_string(),
+        extends: None,
+        implements: Vec::new(),
+        is_abstract: true,
+        is_final: false,
+        is_readonly_class: false,
+        properties: Vec::new(),
+        methods: vec![
+            builtin_reflection_literal_method("allowsNull", TypeExpr::Bool, bool_lit(false)),
+            builtin_reflection_literal_method("__toString", TypeExpr::Str, empty_string()),
+        ],
+        attributes: Vec::new(),
+        constants: Vec::new(),
+        used_traits: Vec::new(),
+    }
+}
+
+/// Builds the `ReflectionUnionType` shell: a `ReflectionType` subtype exposing
+/// the union's member types through `getTypes(): array`. Populated at codegen
+/// from the declared union type.
+fn builtin_reflection_union_type() -> FlattenedClass {
+    FlattenedClass {
+        name: "ReflectionUnionType".to_string(),
+        extends: Some("ReflectionType".to_string()),
+        implements: Vec::new(),
+        is_abstract: false,
+        is_final: true,
+        is_readonly_class: false,
+        properties: vec![builtin_property(
+            "__types",
+            Visibility::Private,
+            Some(array_type()),
+            empty_array(),
+        )],
+        methods: vec![builtin_reflection_slot_getter("getTypes", "__types", array_type())],
         attributes: Vec::new(),
         constants: Vec::new(),
         used_traits: Vec::new(),

@@ -1456,6 +1456,98 @@ echo "|", $t1->getName(), "|", $t1->isBuiltin() ? "b" : "-", "|", $t1->allowsNul
     assert_eq!(out, "Widget|-|n|string|b|-");
 }
 
+/// Verifies a function parameter typed `\ReflectionUnionType` compiles and its
+/// `getTypes(): array` accessor resolves against the private `__types` slot,
+/// and a sibling parameter typed the `\ReflectionType` base class type-checks
+/// its `allowsNull(): bool` accessor. `ReflectionUnionType` instances are
+/// engine-produced — there is no PHP-visible way to construct one directly —
+/// so neither function is called here; this exercises signature resolution
+/// and slot-getter codegen without needing a real instance.
+#[test]
+fn test_reflection_union_type_and_reflection_type_params_compile() {
+    let out = compile_and_run(
+        r#"<?php
+function describeUnion(\ReflectionUnionType $t): array {
+    return $t->getTypes();
+}
+function describeBase(\ReflectionType $t): bool {
+    return $t->allowsNull();
+}
+echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies `ReflectionNamedType` satisfies a `\ReflectionType`-typed
+/// parameter (the supertype relationship set by
+/// `ReflectionNamedType.extends = ReflectionType`) and that calling the
+/// inherited `allowsNull()` accessor through the base-typed parameter
+/// dispatches to `ReflectionNamedType`'s own override — reading its private
+/// `__allows_null` slot — rather than the `ReflectionType` base stub.
+#[test]
+fn test_reflection_named_type_satisfies_reflection_type_param() {
+    let out = compile_and_run(
+        r#"<?php
+function describeAllowsNull(\ReflectionType $t): bool {
+    return $t->allowsNull();
+}
+function greet(int $a, ?string $b = null): void {}
+$params = (new ReflectionFunction('greet'))->getParameters();
+echo describeAllowsNull($params[0]->getType()) ? "n" : "-";
+echo describeAllowsNull($params[1]->getType()) ? "n" : "-";
+"#,
+    );
+    assert_eq!(out, "-n");
+}
+
+/// Runs the frontend pipeline through type-checking only (tokenize → parse →
+/// autoload alias collection → name resolution → constant folding → type
+/// check), without lowering to EIR or generating assembly. Mirrors
+/// `tests/error_tests.rs`'s `check_source` helper. Used by
+/// `test_reflection_type_instanceof_narrowing_type_checks` below, which
+/// type-checks cleanly but cannot go through `compile_and_run`: EIR codegen
+/// resolves a method call on an `instanceof`-narrowed receiver against the
+/// receiver's *declared* (pre-narrowing) class rather than the narrowed one,
+/// so `$t->getName()` inside an `instanceof \ReflectionNamedType` branch
+/// fails at the EIR backend with "unknown method ReflectionType::getName".
+/// This is a pre-existing, general `instanceof`-narrowing codegen gap
+/// (reproduced independently with an unrelated user-defined class hierarchy,
+/// unconnected to this Reflection change) and is out of scope here.
+fn type_checks_cleanly(source: &str) -> Result<(), String> {
+    let tokens = elephc::lexer::tokenize(source).map_err(|e| e.message.clone())?;
+    let ast = elephc::parser::parse(&tokens).map_err(|e| e.message.clone())?;
+    let ast = elephc::autoload::collect_aliases(ast);
+    let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
+    let ast = elephc::optimize::fold_constants(ast);
+    elephc::types::check(&ast).map_err(|e| e.message.clone())?;
+    Ok(())
+}
+
+/// Verifies that a value typed `\ReflectionType`, narrowed via
+/// `instanceof \ReflectionNamedType`, type-checks a call to
+/// `\ReflectionNamedType::getName()` — mirroring
+/// `symfony/console/Attribute/Option.php:174`'s
+/// `$t instanceof \ReflectionNamedType ? $t->getName() : null` pattern (using
+/// an `if` here, since the checker only narrows `instanceof` inside `if`
+/// conditions, not ternary conditions). This is a type-check-only assertion;
+/// see the `type_checks_cleanly` docblock for why a full `compile_and_run`
+/// is not used.
+#[test]
+fn test_reflection_type_instanceof_narrowing_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function describe(\ReflectionType $t): ?string {
+    if ($t instanceof \ReflectionNamedType) {
+        return $t->getName();
+    }
+    return null;
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
+
 /// Verifies a global-constant attribute argument (`#[A(CONST)]`) resolves to the
 /// constant's value through `getArguments()`, preserving its integer type.
 #[test]
