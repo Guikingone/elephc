@@ -178,15 +178,6 @@ pub(crate) fn compile(config: CliConfig) {
     };
     timings.record_since("name-resolve", phase_started);
 
-    // Stage 1 tree-shaking: harvest the structural skeleton behind `--tree-shake`. The
-    // result is intentionally discarded here — later stages (reachability, checker, and
-    // ir_lower pruning) consume it. Computing it has no effect on diagnostics or codegen,
-    // so `--tree-shake` off is byte-identical to today and the flag on differs only by
-    // this discarded work.
-    if tree_shake {
-        let _skeleton = tree_shake::harvest_skeleton(&ast);
-    }
-
     let phase_started = Instant::now();
     let ast = match autoload::run(ast, parent, &autoload_registry) {
         Ok((resolved, autoload_warnings)) => {
@@ -205,6 +196,21 @@ pub(crate) fn compile(config: CliConfig) {
     let phase_started = Instant::now();
     let ast = optimize::fold_constants(ast);
     timings.record_since("opt-fold", phase_started);
+
+    // Tree-shaking (Stage 2), behind `--tree-shake`: harvest the structural skeleton and run the
+    // reachability fixpoint over the fully-autoloaded, constant-folded program. The result is
+    // intentionally discarded — later stages (checker/ir_lower pruning) will consume it. Stage 2
+    // only optionally dumps it to STDERR when `ELEPHC_TREE_SHAKE_DUMP=1`, so `--tree-shake` off is
+    // byte-identical to today and the flag on still reaches the same diagnostics/codegen.
+    if tree_shake {
+        let phase_started = Instant::now();
+        let skeleton = tree_shake::harvest_skeleton(&ast);
+        let reachable = tree_shake::compute_reachable(&ast, &skeleton);
+        if std::env::var("ELEPHC_TREE_SHAKE_DUMP").as_deref() == Ok("1") {
+            eprint!("{}", tree_shake::dump_reachable(&reachable));
+        }
+        timings.record_since("tree-shake", phase_started);
+    }
 
     let phase_started = Instant::now();
     let check_result = match types::check_with_target(&ast, target) {

@@ -11,13 +11,23 @@
 //! - The harvest deliberately does NOT resolve type hints, so it never errors on an
 //!   absent/optional-dependency type. See `harvest.rs` for the walk and `skeleton.rs`
 //!   for the data shapes; `query.rs` holds the closed-world queries.
+//! - Stage 2 adds `compute_reachable` (a Rapid-Type-Analysis reachability fixpoint over the
+//!   skeleton) in `reach.rs`, with the body index (`index.rs`), receiver typing (`receiver.rs`),
+//!   and edge walk (`edges.rs`). It is pure analysis today: the pipeline only dumps the result.
 
+mod edges;
 mod harvest;
+mod index;
 mod query;
+mod reach;
+mod receiver;
 mod skeleton;
 
+#[cfg(test)]
+mod reach_tests;
 #[cfg(test)]
 mod tests;
 
 pub use harvest::harvest_skeleton;
+pub use reach::{compute_reachable, dump_reachable, Reachable};
 pub use skeleton::{ClassKind, ClassSkel, FnSkel, MethodSkel, Skeleton};
