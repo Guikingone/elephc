@@ -33,3 +33,5 @@ mod mixed_method_dispatch;
 mod switch_and_float_params;
 #[path = "regressions/return_this_ownership.rs"]
 mod return_this_ownership;
+#[path = "regressions/prologue_param_register_clobber.rs"]
+mod prologue_param_register_clobber;
