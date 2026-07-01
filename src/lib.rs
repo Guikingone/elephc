@@ -54,6 +54,8 @@ mod string_bytes;
 pub mod superglobals;
 /// Termination and exit handling.
 pub mod termination;
+/// Tree-shaking skeleton harvest (class hierarchy + method tables + free functions).
+pub mod tree_shake;
 /// Type system and checking.
 pub mod types;
 /// Conditionally-injected timezone-introspection prelude (extern + marshalling).

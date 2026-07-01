@@ -41,6 +41,8 @@ mod string_bytes;
 mod superglobals;
 mod termination;
 mod timings;
+#[allow(dead_code, unused_imports)]
+mod tree_shake;
 mod types;
 mod tz_prelude;
 mod var_export_prelude;

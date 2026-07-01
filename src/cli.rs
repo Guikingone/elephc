@@ -15,7 +15,7 @@ pub(crate) use crate::codegen::Emit;
 use crate::codegen::platform::Target;
 
 /// Usage string printed to stderr when command-line arguments are invalid or missing.
-pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--ir-backend] [--ast-backend] [--emit-asm] [--emit KIND] [--check] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--source-map] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] <source.php>";
+pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--ir-backend] [--ast-backend] [--emit-asm] [--emit KIND] [--check] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--tree-shake] [--timings] [--source-map] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] <source.php>";
 
 /// Backend selected for assembly generation after frontend and optimization passes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,6 +41,9 @@ pub(crate) struct CliConfig {
     pub(crate) emit_source_map: bool,
     pub(crate) regalloc_linear: bool,
     pub(crate) ir_opt: bool,
+    /// Enables method-level tree-shaking (reachability-driven pruning). Off by default;
+    /// Stage 1 only harvests a structural skeleton and does not change compilation.
+    pub(crate) tree_shake: bool,
     pub(crate) target: Target,
     pub(crate) extra_link_libs: Vec<String>,
     pub(crate) extra_link_paths: Vec<String>,
@@ -94,6 +97,9 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         Ok("on") => true,
         _ => true,
     };
+    // Tree-shaking is off by default. `ELEPHC_TREE_SHAKE=1` enables it as an alternative
+    // to the `--tree-shake` flag, mirroring how the other analysis toggles read env vars.
+    let mut tree_shake = matches!(std::env::var("ELEPHC_TREE_SHAKE").as_deref(), Ok("1"));
 
     let mut i = 1;
     while i < args.len() {
@@ -138,6 +144,8 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
             ir_opt = parse_ir_opt(value);
         } else if arg == "--no-ir-opt" {
             ir_opt = false;
+        } else if arg == "--tree-shake" {
+            tree_shake = true;
         } else if arg == "--define" {
             i += 1;
             let symbol = required_value(args, i, "Missing symbol after --define");
@@ -228,6 +236,7 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         emit_source_map,
         regalloc_linear,
         ir_opt,
+        tree_shake,
         target,
         extra_link_libs,
         extra_link_paths,
@@ -400,5 +409,22 @@ mod tests {
         let args = vec!["elephc".into(), "app.php".into()];
         let config = parse_args(&args);
         assert!(!config.web);
+    }
+
+    /// Verifies `--tree-shake` sets the tree-shake flag on the parsed config.
+    #[test]
+    fn tree_shake_flag_sets_tree_shake() {
+        let args = vec!["elephc".into(), "--tree-shake".into(), "app.php".into()];
+        let config = parse_args(&args);
+        assert!(config.tree_shake);
+    }
+
+    /// Verifies the absence of `--tree-shake` leaves the tree-shake flag off by default,
+    /// so whole-program compilation stays the behavior unless explicitly opted in.
+    #[test]
+    fn no_tree_shake_flag_defaults_off() {
+        let args = vec!["elephc".into(), "app.php".into()];
+        let config = parse_args(&args);
+        assert!(!config.tree_shake);
     }
 }

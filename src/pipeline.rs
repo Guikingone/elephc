@@ -20,7 +20,8 @@ use crate::timings::CompileTimings;
 use crate::{
     autoload, codegen, codegen_ir, conditional, errors, exports, ir, ir_lower, ir_passes, lexer,
     linker, list_id_prelude, magic_constants, name_resolver, optimize, parser, pdo_prelude,
-    resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude, web_prelude,
+    resolver, runtime_cache, source_map, tree_shake, tz_prelude, types, var_export_prelude,
+    web_prelude,
 };
 
 /// Holds the paths for all compilation output files (assembly, object, binary, source map).
@@ -50,6 +51,7 @@ pub(crate) fn compile(config: CliConfig) {
         emit_source_map,
         regalloc_linear,
         ir_opt,
+        tree_shake,
         target,
         mut extra_link_libs,
         extra_link_paths,
@@ -175,6 +177,15 @@ pub(crate) fn compile(config: CliConfig) {
         }
     };
     timings.record_since("name-resolve", phase_started);
+
+    // Stage 1 tree-shaking: harvest the structural skeleton behind `--tree-shake`. The
+    // result is intentionally discarded here — later stages (reachability, checker, and
+    // ir_lower pruning) consume it. Computing it has no effect on diagnostics or codegen,
+    // so `--tree-shake` off is byte-identical to today and the flag on differs only by
+    // this discarded work.
+    if tree_shake {
+        let _skeleton = tree_shake::harvest_skeleton(&ast);
+    }
 
     let phase_started = Instant::now();
     let ast = match autoload::run(ast, parent, &autoload_registry) {
