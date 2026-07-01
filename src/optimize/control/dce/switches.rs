@@ -462,6 +462,17 @@ pub(super) fn dce_switch_stmt_with_tail(
         return dce_switch_stmt(subject, cases, default, span, guards);
     }
 
+    // A switch without a `default` branch has an implicit no-match path: when the
+    // subject matches no case, control bypasses every case body and falls through
+    // to the following statements. Sinking the tail into the case bodies would drop
+    // it for that path (the no-match path has no body to sink into), so keep the tail
+    // after the switch whenever there is no default to catch the no-match fall-through.
+    if default.is_none() {
+        let mut stmts = dce_switch_stmt(subject, cases, default, span, guards);
+        stmts.extend(tail);
+        return stmts;
+    }
+
     let reachability = analyze_switch_tail_paths(&cases, &default);
     if reachability
         .case_tail_paths
