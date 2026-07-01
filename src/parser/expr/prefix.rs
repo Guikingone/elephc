@@ -265,6 +265,14 @@ pub(super) fn parse_prefix(
         Token::Clone => parse_unary(tokens, pos, span, ExprKind::Clone, 38),
         Token::This => parse_this(tokens, pos, span),
         Token::Yield => parse_yield(tokens, pos, span),
+        Token::Include | Token::IncludeOnce | Token::Require | Token::RequireOnce => {
+            // `include`/`require` (optionally `_once`) are expressions in PHP: they evaluate to
+            // the included file's top-level `return` value (or 1). Reuse the shared value-include
+            // parser so an include in operand position (`$x ??= require F`, `f(require F)`, a
+            // ternary branch, …) produces the same `IncludeValue` node as `$x = require F`.
+            Ok(crate::parser::stmt::try_parse_value_include(tokens, pos)?
+                .expect("include keyword guarantees a value-include expression"))
+        }
         other => Err(CompileError::new(
             span,
             &format!("Unexpected token: {:?}", other),

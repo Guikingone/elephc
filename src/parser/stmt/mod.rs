@@ -30,6 +30,10 @@ pub(crate) use oop::parse_anonymous_class;
 pub(crate) use params::{looks_like_typed_param, parse_type_expr};
 pub(crate) use assign::can_replay_assignment_target;
 pub(crate) use assign::parse_and_lower_foreach_destructure;
+// Re-exported so `crate::parser::expr::prefix` (outside the private `simple` module) can parse
+// `include`/`require` as a general expression operand via the same value-include parser used for
+// `$x = require F;` and `return require F;`.
+pub(in crate::parser) use simple::try_parse_value_include;
 
 /// Parses a single PHP statement, including optional PHP 8 attribute groups.
 pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, CompileError> {

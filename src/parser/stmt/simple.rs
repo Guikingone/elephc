@@ -69,7 +69,11 @@ pub(super) fn parse_include(
 /// `ExprKind::IncludeValue` marker that the resolver expands by inlining the included file's
 /// statements into the caller's statement list (sharing scope) and capturing its top-level
 /// `return` into a hidden temporary.
-pub(in crate::parser::stmt) fn try_parse_value_include(
+///
+/// Visible across `crate::parser` (not just `crate::parser::stmt`) so the general prefix
+/// expression parser (`crate::parser::expr::prefix`) can also parse `include`/`require` as an
+/// operand in arbitrary expression position (e.g. `$x ??= require F;`, `f(require F)`).
+pub(in crate::parser) fn try_parse_value_include(
     tokens: &[(Token, Span)],
     pos: &mut usize,
 ) -> Result<Option<Expr>, CompileError> {
