@@ -1754,6 +1754,64 @@ echo count($matches) . "|" . $matches[0] . "|" . $matches[1] . "|" . $matches[2]
     assert_eq!(out, "3|b||b");
 }
 
+/// Verifies the `~`, `!`, and `%` regex delimiters are all stripped like the canonical `/`.
+/// Cross-checked against `php -r` (`142|1hey|1pct`).
+#[test]
+fn test_preg_match_alternate_delimiters() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_match('~(\d+)~', "x42y", $a) . $a[1] . "|";
+echo preg_match('!(\w+)!', "hey", $b) . $b[1] . "|";
+echo preg_match('%(\w+)%', "pct", $c) . $c[1];
+"#,
+    );
+    assert_eq!(out, "142|1hey|1pct");
+}
+
+/// Verifies an alphanumeric opener is treated as an undelimited raw pattern rather than being
+/// mis-stripped (e.g. `'aba'` must not strip to `'b'`). elephc compiles the pattern verbatim in
+/// this case: `preg_match('abc', "abc")` matches (1) and `"xyz"` does not (0). This is an
+/// intentional divergence from PHP, which rejects an alphanumeric delimiter with a warning.
+#[test]
+fn test_preg_match_undelimited_pattern_treated_as_raw() {
+    let out = compile_and_run(
+        r#"<?php echo preg_match('abc', "abc") . "|" . preg_match('aba', "b");"#,
+    );
+    assert_eq!(out, "1|0");
+}
+
+/// Verifies named groups interleaved with unnamed groups keep PCRE left-to-right numbering,
+/// so `$m['mid']` and the numeric `$m[1]`/`$m[3]` twins all resolve. Cross-checked against
+/// `php -r` (`a|b|c`).
+#[test]
+fn test_preg_match_named_and_unnamed_group_numbering() {
+    let out = compile_and_run(
+        r#"<?php
+function mm(string $p, string $s, ?array &$m = null): int { return preg_match($p, $s, $m); }
+mm('#(\w)(?P<mid>\w)(\w)#', "abc", $m);
+echo $m[1] . "|" . $m['mid'] . "|" . $m[3];
+"#,
+    );
+    assert_eq!(out, "a|b|c");
+}
+
+/// Verifies a trailing unmatched named group is omitted from `$matches` (so `isset` is false),
+/// while a matched one is present, matching PHP's array shape. Cross-checked against `php -r`
+/// (`YN|Yb`).
+#[test]
+fn test_preg_match_trailing_unmatched_named_group_omitted() {
+    let out = compile_and_run(
+        r#"<?php
+function mm(string $p, string $s, ?array &$m = null): int { return preg_match($p, $s, $m); }
+mm('#(?P<x>a)(?P<y>b)?#', "a", $c);
+echo (isset($c['x']) ? "Y" : "N") . (isset($c['y']) ? "Y" : "N");
+mm('#(?P<x>a)(?P<y>b)?#', "ab", $d);
+echo "|" . (isset($d['y']) ? "Y" : "N") . $d['y'];
+"#,
+    );
+    assert_eq!(out, "YN|Yb");
+}
+
 /// Verifies named arguments can provide the optional by-reference `$matches` output variable.
 #[test]
 fn test_preg_match_named_matches_argument() {

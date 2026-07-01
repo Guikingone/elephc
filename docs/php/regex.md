@@ -95,8 +95,26 @@ Common linker failures mean the native PCRE2 libraries were not found:
 
 PCRE syntax is passed to PCRE2 directly, so lookahead, lookbehind, lazy
 quantifiers, shorthand classes, and Unicode property escapes are available.
-PHP-style slash-delimited patterns are supported, and elephc maps these trailing
-modifiers to PCRE2 wrapper flags:
+
+### Delimiters
+
+The opening delimiter is the first byte of the pattern. Besides the canonical
+`/`, elephc supports any non-alphanumeric, non-whitespace, non-backslash single
+character as a delimiter, e.g. `#`, `~`, `!`, `%`, `@`, `|`:
+
+```php
+preg_match('#^(\w+):(\w+)$#', 'a:b', $m);
+preg_match('~\d+~', 'x42', $m);
+```
+
+The closing delimiter is the same character, located past any trailing modifier
+letters. Bracket-pair delimiters (`()`, `{}`, `[]`, `<>`) are not yet supported.
+A pattern whose first byte is alphanumeric, whitespace, or a backslash is treated
+as an undelimited raw pattern (compiled verbatim) rather than reporting an error.
+
+### Modifiers
+
+elephc maps these trailing modifiers to PCRE2 wrapper flags:
 
 | Modifier | Meaning |
 |---|---|
@@ -114,6 +132,17 @@ Other trailing modifiers are currently not mapped to PCRE2 flags.
 is the full match, and `$matches[1]` onward contain compiled numbered capture
 groups. Unmatched interior captures are empty strings; trailing unmatched groups
 are omitted.
+
+Named capture groups are supported in all three PCRE spellings — `(?P<name>...)`,
+`(?<name>...)`, and `(?'name'...)`. A named group's substring appears in
+`$matches['name']` in addition to its numeric index (numbering follows PCRE's
+left-to-right opening-parenthesis order across named and unnamed groups). Named
+string keys are populated when `$matches` is a boxed-`Mixed` destination — a
+`?array`/`array` by-reference parameter, as PHP's own `$matches` variables and
+symfony's `Parser::preg_match()` wrapper are. A `$matches` variable typed as a
+plain indexed array keeps only its numeric keys. A trailing named group that did
+not participate in the match is omitted (so `isset($matches['name'])` is false),
+matching PHP.
 
 `preg_replace()` expands `$0`..`$99` and `\0`..`\99` to captured groups.
 Unmatched optional groups and missing groups expand to an empty string.

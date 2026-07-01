@@ -424,6 +424,9 @@ fn emit_preg_match_capture_build_hash_arm64(
     emitter.instruction("ldr x13, [x12]");                                      // load the entry name pointer
     emitter.instruction("ldr w14, [x12, #8]");                                  // load the entry name length
     emitter.instruction("ldr w15, [x12, #12]");                                 // load the entry capture-group index
+    emitter.instruction(&format!("ldr x16, [sp, #{}]", max_group_off));         // reload the highest populated capture index
+    emitter.instruction("cmp x15, x16");                                        // is this named group beyond the populated captures?
+    emitter.instruction("b.gt __rt_preg_match_capture_hash_named_skip");        // PHP omits trailing unmatched named groups
     emitter.instruction(&format!("str x13, [sp, #{}]", cur_name_ptr_off));      // preserve the name pointer across the boxing helper
     emitter.instruction(&format!("str x14, [sp, #{}]", cur_name_len_off));      // preserve the name length across the boxing helper
     if regmatch_size == 16 {
@@ -459,6 +462,12 @@ fn emit_preg_match_capture_build_hash_arm64(
     emitter.instruction("add x11, x11, #1");                                    // advance to the next named entry
     emitter.instruction(&format!("str x11, [sp, #{}]", name_idx_off));          // save the next named-entry index
     emitter.instruction("b __rt_preg_match_capture_hash_named_loop");           // continue inserting named captures
+
+    emitter.label("__rt_preg_match_capture_hash_named_skip");
+    emitter.instruction(&format!("ldr x11, [sp, #{}]", name_idx_off));          // reload the named-entry index for a skipped trailing group
+    emitter.instruction("add x11, x11, #1");                                    // advance past the omitted trailing named group
+    emitter.instruction(&format!("str x11, [sp, #{}]", name_idx_off));          // save the next named-entry index
+    emitter.instruction("b __rt_preg_match_capture_hash_named_loop");           // continue scanning the remaining named captures
 
     emitter.label("__rt_preg_match_capture_hash_done");
     emitter.instruction("b __rt_preg_match_capture_success");                   // share the success epilogue (frees the regmatch vector)
@@ -782,6 +791,17 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // report no match
 
     emitter.label("__rt_preg_match_capture_ret_linux_x86_64");
+    // -- free the group-name map (if any) before returning, preserving the results --
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", cur_name_ptr_off)); // stash the match flag across the free call
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", cur_name_len_off)); // stash the matches array/hash pointer across the free call
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", names_buf_off)); // reload the group-name map buffer
+    emitter.instruction("test rdi, rdi");                                       // skip the free when no name map was allocated
+    emitter.instruction("jz __rt_preg_match_capture_ret_free_done_x");          // nothing to release for indexed destinations
+    emitter.bl_c("free");                                                       // release the scratch group-name map buffer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", names_buf_off)); // clear the freed pointer to avoid any double free
+    emitter.label("__rt_preg_match_capture_ret_free_done_x");
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", cur_name_ptr_off)); // restore the match flag
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", cur_name_len_off)); // restore the matches array/hash pointer
     emitter.instruction(&format!("add rsp, {}", stack_size));                   // release capture helper local storage
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return match flag in rax and matches array in rdx
@@ -876,6 +896,9 @@ fn emit_preg_match_capture_build_hash_x86_64(
     emitter.instruction("mov r13d, DWORD PTR [r12 + 8]");                       // load the entry name length
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r13", cur_name_len_off)); // preserve the name length across the boxing helper
     emitter.instruction("mov r13d, DWORD PTR [r12 + 12]");                      // load the entry capture-group index
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", max_group_off)); // reload the highest populated capture index
+    emitter.instruction("cmp r13, r10");                                        // is this named group beyond the populated captures?
+    emitter.instruction("jg __rt_preg_match_capture_hash_named_skip_linux_x86_64"); // PHP omits trailing unmatched named groups
     emitter.instruction(&format!("imul r13, {}", regmatch_size));               // scale the group index to the native regmatch_t stride
     emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load the dynamic regmatch_t buffer base
     emitter.instruction("add r13, r10");                                        // compute the address of the group's regmatch_t slot
@@ -906,6 +929,12 @@ fn emit_preg_match_capture_build_hash_x86_64(
     emitter.instruction("add r11, 1");                                          // advance to the next named entry
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", name_idx_off)); // save the next named-entry index
     emitter.instruction("jmp __rt_preg_match_capture_hash_named_loop_linux_x86_64"); // continue inserting named captures
+
+    emitter.label("__rt_preg_match_capture_hash_named_skip_linux_x86_64");
+    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", name_idx_off)); // reload the named-entry index for a skipped trailing group
+    emitter.instruction("add r11, 1");                                          // advance past the omitted trailing named group
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", name_idx_off)); // save the next named-entry index
+    emitter.instruction("jmp __rt_preg_match_capture_hash_named_loop_linux_x86_64"); // continue scanning the remaining named captures
 
     emitter.label("__rt_preg_match_capture_hash_done_linux_x86_64");
     emitter.instruction("jmp __rt_preg_match_capture_success_linux_x86_64");    // share the success epilogue (frees the regmatch vector)
