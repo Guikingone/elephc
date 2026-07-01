@@ -13,7 +13,7 @@
 //! - `ScanCtx` threads the enclosing class (for `$this`/`self`/`static`/`parent`) and the in-scope
 //!   parameter type hints (for receiver typing) plus a location label used in fallback notes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::parser::ast::{
     BinOp, CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TypeExpr,
@@ -21,6 +21,19 @@ use crate::parser::ast::{
 
 use super::locals::LocalTypes;
 use super::reach::{Analyzer, Receiver};
+
+/// How an opaque (non-literal) callable value at an invocation site is bounded by the callable-flow
+/// analysis, deciding whether the broad all-methods fallback fires.
+enum OpaqueCallable {
+    /// The value is provably a closure (its body is already scanned inline) or a typed object
+    /// (invokable only through `__invoke`). Bounded: keep `__invoke` of constructed classes; do NOT
+    /// broaden to all methods.
+    Bounded,
+    /// The value cannot be classified as a bounded callable — it could be a computed string naming
+    /// any function or `Class::method`. Sound over-approximation: keep all functions and, via the
+    /// broad fallback, all methods of every constructed class.
+    Unbounded,
+}
 
 /// Per-body scan context: what `$this`/`self` resolve to, the visible parameter type hints, the
 /// per-body local-variable type map, and a human-readable label for the body being scanned (used in
@@ -32,6 +45,9 @@ pub(super) struct ScanCtx<'a> {
     params: HashMap<&'a str, &'a TypeExpr>,
     /// Per-body local-variable types (Stage 2.5) so a local receiver resolves to its class set.
     locals: LocalTypes,
+    /// Per-body local names that provably hold only closure values (Stage 2.6), so an opaque
+    /// invocation of one is bounded (its body is already scanned) rather than broadening.
+    closures: HashSet<String>,
     /// Label such as `<main>`, `foo()`, or `Class::method` for fallback notes.
     location: String,
 }
@@ -41,8 +57,14 @@ impl<'a> Analyzer<'a> {
     /// wrapper blocks, skipping every declaration body (those are reached lazily through edges).
     pub(super) fn scan_root(&mut self, program: &'a [Stmt]) {
         let locals = self.compute_local_types(program, None, &[], &[]);
-        let ctx =
-            ScanCtx { enclosing: None, params: HashMap::new(), locals, location: "<main>".into() };
+        let closures = self.closure_valued_locals(program, &[], &[]);
+        let ctx = ScanCtx {
+            enclosing: None,
+            params: HashMap::new(),
+            locals,
+            closures,
+            location: "<main>".into(),
+        };
         self.scan_stmts(program, &ctx);
     }
 
@@ -54,7 +76,9 @@ impl<'a> Analyzer<'a> {
         let body = entry.body;
         let params = param_map(param_list);
         let locals = self.compute_local_types(body, None, param_list, &[]);
-        let ctx = ScanCtx { enclosing: None, params, locals, location: format!("{fqn}()") };
+        let closures = self.closure_valued_locals(body, param_list, &[]);
+        let ctx =
+            ScanCtx { enclosing: None, params, locals, closures, location: format!("{fqn}()") };
         self.scan_stmts(body, &ctx);
     }
 
@@ -66,10 +90,12 @@ impl<'a> Analyzer<'a> {
         let Some(method) = entry.methods.get(lower).copied() else { return };
         let params = param_map(&method.params);
         let locals = self.compute_local_types(&method.body, Some(class), &method.params, &[]);
+        let closures = self.closure_valued_locals(&method.body, &method.params, &[]);
         let ctx = ScanCtx {
             enclosing: Some(class.to_string()),
             params,
             locals,
+            closures,
             location: format!("{class}::{}", method.name),
         };
         self.scan_stmts(&method.body, &ctx);
@@ -98,7 +124,7 @@ impl<'a> Analyzer<'a> {
             | StmtKind::ConstDecl { value: expr, .. }
             | StmtKind::StaticVar { init: expr, .. }
             | StmtKind::ArrayPush { value: expr, .. }
-            | StmtKind::ListUnpack { value: expr, .. } => self.scan_expr(expr, ctx),
+            | StmtKind::ListUnpack { value: expr, .. } => self.scan_value(expr, ctx),
             StmtKind::RefAssign { source, .. } => self.scan_expr(source, ctx),
             StmtKind::RefAssignToTarget { target, source } => {
                 self.scan_expr(target, ctx);
@@ -175,7 +201,7 @@ impl<'a> Analyzer<'a> {
             }
             StmtKind::PropertyAssign { object, value, .. } => {
                 self.scan_expr(object, ctx);
-                self.scan_expr(value, ctx);
+                self.scan_value(value, ctx);
             }
             StmtKind::PropertyArrayPush { object, value, .. } => {
                 self.scan_expr(object, ctx);
@@ -187,7 +213,7 @@ impl<'a> Analyzer<'a> {
                 self.scan_expr(value, ctx);
             }
             StmtKind::StaticPropertyAssign { value, .. }
-            | StmtKind::StaticPropertyArrayPush { value, .. } => self.scan_expr(value, ctx),
+            | StmtKind::StaticPropertyArrayPush { value, .. } => self.scan_value(value, ctx),
             StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
                 self.scan_expr(index, ctx);
                 self.scan_expr(value, ctx);
@@ -249,21 +275,30 @@ impl<'a> Analyzer<'a> {
             ExprKind::FirstClassCallable(target) => self.handle_callable_target(target, ctx),
             ExprKind::ExprCall { callee, args } => {
                 // A closure literal is invoked with its own body (already scanned by recursion);
-                // any other callee is a dynamic invocation target → sound `__invoke` fallback.
+                // any other callee is an opaque callable value classified by callable-flow (bounded
+                // closure/object → `__invoke`, else a possible computed string → broaden soundly).
                 if !matches!(callee.kind, ExprKind::Closure { .. }) {
-                    self.add_named_fallback(
-                        "__invoke",
-                        format!("dynamic call target ()(...) at {}", ctx.location),
-                    );
+                    self.account_opaque_callable(callee, "()", ctx);
                 }
                 self.scan_expr(callee, ctx);
                 self.scan_args(args, ctx);
             }
-            ExprKind::ClosureCall { args, .. } => {
-                self.add_named_fallback(
-                    "__invoke",
-                    format!("dynamic call $var(...) at {}", ctx.location),
-                );
+            ExprKind::ClosureCall { var, args } => {
+                // `$var(...)`: bounded when `$var` provably holds a closure (its body was scanned at
+                // the literal); otherwise it may hold a computed string or array callable naming any
+                // function/method, so broaden soundly (keep all functions + all methods).
+                if ctx.closures.contains(var.as_str()) {
+                    self.add_named_fallback(
+                        "__invoke",
+                        format!("bounded closure call ${var}(...) at {}", ctx.location),
+                    );
+                } else {
+                    self.enqueue_all_functions();
+                    self.add_dynamic_fallback(format!(
+                        "form-4 opaque call ${var}(...) at {}",
+                        ctx.location
+                    ));
+                }
                 self.scan_args(args, ctx);
             }
             ExprKind::Closure { body, params, captures, capture_refs, .. } => {
@@ -309,7 +344,7 @@ impl<'a> Analyzer<'a> {
             ExprKind::Assignment { target, value, result_target, prelude, .. } => {
                 self.scan_stmts(prelude, ctx);
                 self.scan_expr(target, ctx);
-                self.scan_expr(value, ctx);
+                self.scan_value(value, ctx);
                 if let Some(result_target) = result_target {
                     self.scan_expr(result_target, ctx);
                 }
@@ -369,6 +404,17 @@ impl<'a> Analyzer<'a> {
         }
     }
 
+    /// Scans an expression appearing in a value-producing position (an assignment RHS, a `return`
+    /// value, or a property/static-property store) and, before the ordinary edge walk, resolves any
+    /// literal callable it CREATES into the reachable set (the callable universe). This closes the
+    /// Stage-2 gap where a `[$o,'m']`/`'C::m'`/`'func'` callable value created outside call-argument
+    /// position (assigned to a variable, returned, or stored in a property) was invisible to the
+    /// analysis and could then be invoked opaquely.
+    fn scan_value(&mut self, expr: &'a Expr, ctx: &ScanCtx<'a>) {
+        self.scan_callable_literal(expr, ctx);
+        self.scan_expr(expr, ctx);
+    }
+
     /// Scans a call's arguments and additionally resolves any literal callable arguments
     /// (`'C::m'`, `['C'|$obj, 'm']`, or a bare string naming a known function).
     fn scan_args(&mut self, args: &'a [Expr], ctx: &ScanCtx<'a>) {
@@ -378,9 +424,16 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    /// Resolves a literal callable expression into edges: `"C::m"` static calls, a two-element
-    /// `[receiver, "m"]` array, or a bare string that names a declared free function. Non-literal
-    /// callables are handled elsewhere (or fall back), so this only fires on statically-visible ones.
+    /// Resolves a literal callable VALUE expression into edges — the callable universe collection.
+    ///
+    /// Handles only the STATICALLY-RESOLVABLE (form 2) shapes: a `"C::m"`/`"func"` string literal, or
+    /// a `["C"|$obj, "m"]` two-element array with a string-literal method name. These are added to the
+    /// reachable set wherever such a value is created (a call argument, an assignment RHS, a `return`,
+    /// or a property store), so a callable created outside call-argument position and later invoked
+    /// opaquely is still accounted for. A dynamic-method-name array (`[$o, $m]`) is deliberately NOT
+    /// treated as a callable here — a two-element array with a non-literal element is indistinguishable
+    /// from an ordinary data pair (`[$col, $row]`), so its broadening is deferred to the point it is
+    /// actually USED as a callable (`account_callable_arg` / the opaque-invocation rule).
     fn scan_callable_literal(&mut self, arg: &'a Expr, ctx: &ScanCtx<'a>) {
         match &arg.kind {
             ExprKind::StringLiteral(text) => {
@@ -431,19 +484,91 @@ impl<'a> Analyzer<'a> {
 
     /// Handles higher-order builtins (`call_user_func`, `array_map`, `usort`, …): a callable
     /// argument that is a literal (`'C::m'`, `[obj,'m']`), a closure, or a first-class callable is
-    /// resolved by the normal walk; any OTHER (opaque, computed) callable has an unknown method
-    /// name, so it triggers the sound dynamic fallback (keep every method of every instantiated
-    /// class). This is the one place a variable-held callable is accounted for.
+    /// resolved by the normal walk; any OTHER (opaque, computed) callable argument is classified by
+    /// callable-flow (`account_opaque_callable`) — bounded to `__invoke` when it is provably a
+    /// closure/typed object, or broadened only when it could be a computed-string callable.
     fn handle_higher_order_call(&mut self, name: &str, args: &'a [Expr], ctx: &ScanCtx<'a>) {
         let canonical = name.trim_start_matches('\\').to_ascii_lowercase();
         for &index in callable_arg_indices(&canonical) {
             let Some(arg) = args.get(index) else { continue };
-            if !is_resolvable_callable(arg) {
+            self.account_callable_arg(arg, &canonical, ctx);
+        }
+    }
+
+    /// Accounts for one callable argument passed to a known higher-order builtin (a genuine callable
+    /// POSITION), where the builtin will invoke it at runtime.
+    ///
+    /// Statically resolvable forms — a closure/arrow-fn literal, a first-class callable, `null`, a
+    /// string literal, or a `[recv, 'literalMethod']` array — are resolved precisely by the ordinary
+    /// walk (`scan_callable_literal` / inline closure scan), so nothing extra is needed here. A
+    /// `[recv, <non-literal method>]` array is a dynamic-method-name callback whose method is unknown,
+    /// so it broadens to every method of every constructed class (form 4). Any other expression is an
+    /// opaque callable value classified by `account_opaque_callable`.
+    fn account_callable_arg(&mut self, arg: &'a Expr, canonical: &str, ctx: &ScanCtx<'a>) {
+        match &arg.kind {
+            ExprKind::Closure { .. }
+            | ExprKind::FirstClassCallable(_)
+            | ExprKind::Null
+            | ExprKind::StringLiteral(_) => {}
+            ExprKind::ArrayLiteral(items) if items.len() == 2 => {
+                if !matches!(items[1].kind, ExprKind::StringLiteral(_))
+                    && could_be_method_name(&items[1])
+                {
+                    self.enqueue_all_functions();
+                    self.add_dynamic_fallback(format!(
+                        "form-4 dynamic method-name callable [obj,$m] to {canonical}() at {}",
+                        ctx.location
+                    ));
+                }
+            }
+            _ => self.account_opaque_callable(arg, canonical, ctx),
+        }
+    }
+
+    /// Accounts for one opaque callable value invoked at a callable site, applying the Stage-2.6
+    /// callable-flow bound instead of the old blanket all-methods fallback.
+    ///
+    /// A provably-bounded value (closure literal, closure-valued local, or a typed object receiver
+    /// that can only be invoked through `__invoke`) keeps just `__invoke` of every constructed class
+    /// — its concrete target (a closure body, or a literal callable already in the reachable set)
+    /// needs nothing more. A value that cannot be classified is treated as a possible computed-string
+    /// callable: it could name any function or `Class::method`, so all functions and (via the broad
+    /// dynamic fallback) all methods of every constructed class are kept. Soundness over precision.
+    fn account_opaque_callable(&mut self, arg: &'a Expr, canonical: &str, ctx: &ScanCtx<'a>) {
+        match self.classify_opaque_callable(arg, ctx) {
+            OpaqueCallable::Bounded => self.add_named_fallback(
+                "__invoke",
+                format!("bounded opaque callable to {canonical}() at {}", ctx.location),
+            ),
+            OpaqueCallable::Unbounded => {
+                self.enqueue_all_functions();
                 self.add_dynamic_fallback(format!(
-                    "opaque callable arg to {canonical}() at {}",
+                    "form-4 computed-string callable to {canonical}() at {}",
                     ctx.location
                 ));
             }
+        }
+    }
+
+    /// Classifies an opaque callable value expression as bounded or unbounded.
+    ///
+    /// Bounded when the value is provably a closure (a closure/arrow-fn literal, or a local proven to
+    /// hold only closures) or a receiver typed to a known object class set (invokable only via
+    /// `__invoke`). Everything else — an untyped/`callable`/`string`/`mixed`-typed variable, a
+    /// property read, a call result, or any computed expression — is `Unbounded`, because it could
+    /// hold a computed string callable that we must not under-approximate.
+    fn classify_opaque_callable(&self, arg: &Expr, ctx: &ScanCtx<'a>) -> OpaqueCallable {
+        if matches!(arg.kind, ExprKind::Closure { .. }) {
+            return OpaqueCallable::Bounded;
+        }
+        if let ExprKind::Variable(name) = &arg.kind {
+            if ctx.closures.contains(name.as_str()) {
+                return OpaqueCallable::Bounded;
+            }
+        }
+        match self.receiver_of(arg, ctx.enclosing.as_deref(), &ctx.params, &ctx.locals) {
+            Receiver::Bound { .. } => OpaqueCallable::Bounded,
+            Receiver::Any => OpaqueCallable::Unbounded,
         }
     }
 
@@ -527,10 +652,12 @@ impl<'a> Analyzer<'a> {
         let captured: Vec<&str> =
             captures.iter().chain(capture_refs).map(String::as_str).collect();
         let locals = self.compute_local_types(body, ctx.enclosing.as_deref(), params, &captured);
+        let closures = self.closure_valued_locals(body, params, &captured);
         ScanCtx {
             enclosing: ctx.enclosing.clone(),
             params: child_params,
             locals,
+            closures,
             location: format!("{} closure", ctx.location),
         }
     }
@@ -565,16 +692,18 @@ fn callable_arg_indices(name: &str) -> &'static [usize] {
     }
 }
 
-/// Returns `true` when a callable argument is statically resolvable by the ordinary walk — a
-/// closure literal, a first-class callable, or a literal string/array callable — so it does NOT
-/// need the dynamic fallback. Any other (computed) expression is treated as an opaque callable.
-fn is_resolvable_callable(arg: &Expr) -> bool {
-    matches!(
-        arg.kind,
-        ExprKind::Closure { .. }
-            | ExprKind::FirstClassCallable(_)
-            | ExprKind::StringLiteral(_)
-            | ExprKind::ArrayLiteral(_)
+/// Returns `true` when an expression could evaluate to a string method name, i.e. it is NOT a
+/// literal of a kind that can never be a method name (int/float/bool/null, an array, or a closure).
+/// Used to decide whether `[recv, X]` is a dynamic-method-name callable (form 4) or plain data.
+fn could_be_method_name(expr: &Expr) -> bool {
+    !matches!(
+        expr.kind,
+        ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::BoolLiteral(_)
             | ExprKind::Null
+            | ExprKind::ArrayLiteral(_)
+            | ExprKind::ArrayLiteralAssoc(_)
+            | ExprKind::Closure { .. }
     )
 }

@@ -278,3 +278,91 @@ fn local_byref_closure_capture_widens_to_any() {
         "Other::go kept: by-reference capture widened $w to Any"
     );
 }
+
+/// Stage 2.6: a method used ONLY as a `[$obj, 'literalMethod']` callable value — created outside
+/// call-argument position (assigned to a variable) — is collected into the callable universe and
+/// kept, while an unrelated method on the same class stays pruned. Proves the universe collection at
+/// a value position resolves the object part precisely (typed `$h` → only `Handler::handle`).
+#[test]
+fn literal_object_callable_value_is_kept() {
+    let r = reach(
+        "<?php
+        class Handler { function handle(){} function unused(){} }
+        $h = new Handler();
+        $cb = [$h, 'handle'];",
+    );
+    assert!(r.instantiated.contains("Handler"), "Handler constructed");
+    assert!(has_method(&r, "Handler", "handle"), "[$h,'handle'] callable value keeps handle");
+    assert!(!has_method(&r, "Handler", "unused"), "unrelated unused method pruned");
+}
+
+/// Stage 2.6 (the key precision win): a method that is NEVER used as a callable and not otherwise
+/// dispatched is PRUNED even though a reachable opaque `call_user_func($closureVar)` exists — because
+/// the closure value is provably bounded (its body is scanned inline), so it does NOT trigger the
+/// broad all-methods fallback. Under the old blanket rule, `neverCallable` would have been kept.
+#[test]
+fn opaque_closure_invocation_does_not_keep_unrelated_methods() {
+    let r = reach(
+        "<?php
+        class Thing { function used(){} function neverCallable(){} }
+        $t = new Thing();
+        $t->used();
+        $fn = function(){};
+        call_user_func($fn);",
+    );
+    assert!(has_method(&r, "Thing", "used"), "Thing::used reachable via typed dispatch");
+    assert!(
+        !has_method(&r, "Thing", "nevercallable"),
+        "neverCallable pruned: opaque call of a bounded closure does not broaden"
+    );
+    assert!(
+        r.fallback_sites.iter().all(|note| !note.contains("computed-string")),
+        "a bounded closure invocation records no computed-string (broad) fallback"
+    );
+}
+
+/// Stage 2.6 soundness: a dynamic-method-name callable `[$o, $m]` (the method name is a variable, not
+/// a string literal) created in a callable position is genuinely unbounded, so it fires the broad
+/// fallback — keeping BOTH sibling methods of the receiver's class and, soundly, methods of every
+/// other constructed class. Proves the form-4 dynamic-method detection never under-approximates.
+#[test]
+fn dynamic_method_name_callable_triggers_broad_fallback() {
+    let r = reach(
+        "<?php
+        class Pair { function first(){} function second(){} }
+        class Unrelated { function first(){} function second(){} }
+        $o = new Pair();
+        new Unrelated();
+        $m = 'first';
+        call_user_func([$o, $m]);",
+    );
+    assert!(has_method(&r, "Pair", "first"), "Pair::first kept by broad fallback");
+    assert!(has_method(&r, "Pair", "second"), "sibling Pair::second kept by broad fallback");
+    assert!(
+        has_method(&r, "Unrelated", "first") && has_method(&r, "Unrelated", "second"),
+        "unrelated constructed class methods kept: dynamic method name is sound-broad"
+    );
+    assert!(
+        r.fallback_sites.iter().any(|note| note.contains("form-4 dynamic method-name")),
+        "a form-4 dynamic method-name fallback note is recorded"
+    );
+}
+
+/// Stage 2.6: an invokable object opaquely invoked (`call_user_func($g)` where `$g` is a typed
+/// object) keeps that object's `__invoke`, but NOT its unrelated methods — the receiver is provably
+/// an object, so it is bounded to `__invoke` rather than broadening to all methods.
+#[test]
+fn invokable_object_opaque_invocation_keeps_invoke_only() {
+    let r = reach(
+        "<?php
+        class Greeter { function __invoke(){} function other(){} }
+        $g = new Greeter();
+        call_user_func($g);",
+    );
+    assert!(r.instantiated.contains("Greeter"), "Greeter constructed");
+    assert!(has_method(&r, "Greeter", "__invoke"), "invokable object keeps __invoke");
+    assert!(
+        !has_method(&r, "Greeter", "other"),
+        "unrelated other() pruned: typed object bounded to __invoke, not broadened"
+    );
+}

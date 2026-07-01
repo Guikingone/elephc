@@ -99,6 +99,51 @@ impl<'a> Analyzer<'a> {
         self.solve_local_types(&sources, enclosing)
     }
 
+    /// Computes the set of local names that provably hold ONLY closure values in this body.
+    ///
+    /// A name qualifies when it has at least one closure-flavoured binding (a closure/arrow-fn
+    /// literal, or a `Closure`/`\Closure` type-hinted parameter) and NO other kind of binding —
+    /// no non-closure assignment, and none of the `Any`-poison forms (reference alias, `foreach`
+    /// bind, list destructure, `static`/`global`, by-reference closure capture, increment, or an
+    /// untyped/non-`Closure`-typed parameter). Reuses the same source-collection walk as
+    /// `compute_local_types`, so every binding form is accounted for; a missed binding could only
+    /// make a name look *more* closure-valued, which is why the classifier is all-sources-agree.
+    ///
+    /// Used by the opaque-callable rule: an opaque invocation of a provably-closure value is bounded
+    /// (the closure body was already scanned inline at its literal), so it does NOT trigger the broad
+    /// callable fallback. A value we cannot prove to be a closure is treated as possibly a computed
+    /// string callable and broadened (sound over-approximation).
+    pub(super) fn closure_valued_locals(
+        &self,
+        stmts: &'a [Stmt],
+        params: &'a [(String, Option<TypeExpr>, Option<Expr>, bool)],
+        captured_any: &[&str],
+    ) -> HashSet<String> {
+        let mut sources: HashMap<String, Vec<Source<'a>>> = HashMap::new();
+        for (name, ty, _, _) in params {
+            match ty {
+                Some(ty) => push(&mut sources, name, Source::Hint(ty)),
+                None => push(&mut sources, name, Source::Any),
+            }
+        }
+        for name in captured_any {
+            push(&mut sources, name, Source::Any);
+        }
+        for stmt in stmts {
+            collect_stmt_sources(stmt, &mut sources);
+        }
+        let mut out: HashSet<String> = HashSet::new();
+        for (name, srcs) in &sources {
+            if !srcs.is_empty()
+                && srcs.iter().all(source_is_closure)
+                && srcs.iter().any(source_is_closure)
+            {
+                out.insert(name.clone());
+            }
+        }
+        out
+    }
+
     /// Runs the monotone widening fixpoint over the collected sources, returning the stable local
     /// map. Each local only widens (`bottom -> Known -> Any`, `Known` sets only grow), so the loop
     /// converges well within the `#locals + 4` cap; the cap only guards against a latent bug.
@@ -327,6 +372,34 @@ impl<'a> Analyzer<'a> {
 /// Pushes a source onto a variable's source list, creating the entry on first sight.
 fn push<'a>(sources: &mut HashMap<String, Vec<Source<'a>>>, name: &str, src: Source<'a>) {
     sources.entry(name.to_string()).or_default().push(src);
+}
+
+/// Returns `true` when a single binding source is closure-flavoured: an assignment RHS that is a
+/// closure/arrow-fn literal or a first-class callable (`f(...)`, `$o->m(...)`), or a `Closure`/
+/// `\Closure` type-hint. A first-class callable evaluates to a `Closure` wrapping a KNOWN target,
+/// which the edge walk already enqueues where the callable value is created, so an opaque invocation
+/// of it is safely bounded. A variable RHS (even one holding another closure), any other expression,
+/// or the `Any` poison is treated as non-closure, so the all-sources-agree classifier in
+/// `closure_valued_locals` stays conservative (never over-claims).
+fn source_is_closure(src: &Source<'_>) -> bool {
+    match src {
+        Source::Expr(expr) => {
+            matches!(expr.kind, ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_))
+        }
+        Source::Hint(ty) => is_closure_type(ty),
+        Source::Any => false,
+    }
+}
+
+/// Returns `true` when a declared type hint is exactly `Closure`/`\Closure` (or its nullable form),
+/// the only type that statically guarantees a closure value. `callable` is deliberately excluded:
+/// a `callable` may be a string/array callable, which must stay unbounded for soundness.
+fn is_closure_type(ty: &TypeExpr) -> bool {
+    match ty {
+        TypeExpr::Named(name) => strip_root(name.as_str()).eq_ignore_ascii_case("Closure"),
+        TypeExpr::Nullable(inner) => is_closure_type(inner),
+        _ => false,
+    }
 }
 
 /// Collects the typed sources contributed by one statement, recursing into control-flow bodies but

@@ -194,6 +194,16 @@ impl<'a> Analyzer<'a> {
         }
     }
 
+    /// Marks every indexed free function reachable. Used by the computed-string callable fallback:
+    /// a runtime string callable could name ANY global function, so soundness requires keeping them
+    /// all (they carry no absent-optional-dependency risk, unlike class methods). Idempotent.
+    pub(super) fn enqueue_all_functions(&mut self) {
+        let names: Vec<String> = self.index.functions.keys().cloned().collect();
+        for name in names {
+            self.enqueue_function(&name);
+        }
+    }
+
     /// Marks `(class, method)` reachable and enqueues it for scanning the first time it is seen.
     /// `class` is the declaring class returned by resolution; `method` is a lowercase key.
     pub(super) fn enqueue_method(&mut self, class: String, method: String) {
