@@ -337,3 +337,52 @@ fn test_multiarg_string_builtins_of_mixed_argument() {
     );
     assert_eq!(out, "hell0 w0rld|6|hello,world");
 }
+
+/// Regression: `$v = trim($v)` reassigning a HEAP string to a trimmed slice of ITSELF used to
+/// corrupt `$v`. `trim` returns a borrowed slice into the source buffer; the store freed the old
+/// buffer the slice still points into before copying it, so the value read back was garbage. This
+/// is the exact shape of symfony/yaml `Inline::parse`'s `mixed` scalar return (a heap `$value`
+/// trimmed and returned), which produced corruption once heap churn reused the freed buffer.
+/// Persisting the trim slice to an owned copy fixes it. The first iteration used to be correct and
+/// later iterations garbage; asserting every iteration is `elephc` catches the regression.
+/// Output cross-checked with `php -r`.
+#[test]
+fn test_trim_self_reassign_mixed_return_loop_does_not_corrupt() {
+    let out = compile_and_run(
+        r#"<?php
+function parseScalar(string $v): mixed {
+    $v = trim($v);
+    $refs = [];
+    for ($i = 0; $i < 8; $i++) { $refs[] = $i * $i; }
+    return $v;
+}
+$out = "";
+$parts = ["ele", "phc"];
+for ($k = 0; $k < 4; $k++) {
+    $h = $parts[0] . $parts[1];
+    $r = parseScalar($h);
+    $out .= $r . ":" . strlen($r) . "|";
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "elephc:6|elephc:6|elephc:6|elephc:6|");
+}
+
+/// Regression: `$s = trim($s)` on a heap string with real leading/trailing whitespace persists the
+/// interior slice to an owned copy, so a later read after heap churn still sees the trimmed value
+/// instead of a freed/reused region. Guards the interior-pointer case of the trim persist fix.
+#[test]
+fn test_trim_self_reassign_interior_slice_survives_heap_churn() {
+    let out = compile_and_run(
+        r#"<?php
+$parts = ["  ele", "phc  "];
+$s = $parts[0] . $parts[1];
+$s = trim($s);
+$junk = [];
+for ($i = 0; $i < 12; $i++) { $junk[] = str_repeat("q", $i + 1); }
+echo $s, "|", strlen($s);
+"#,
+    );
+    assert_eq!(out, "elephc|6");
+}

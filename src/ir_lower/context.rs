@@ -1467,6 +1467,14 @@ fn builtin_call_result_owns_storage_as_temporary(name: &str) -> bool {
             | "ptr_read_string"
             | "strpos"
             | "strrpos"
+            // The trim family persists its borrowed slice into an owned heap copy
+            // (see `lower_trim_like`), so its result is a fresh owning temporary like the
+            // allocating builtins above. Without this, `$s = trim($s)` frees the old buffer the
+            // slice still aliases before copying it (symfony/yaml `Inline::parse` corruption).
+            | "trim"
+            | "ltrim"
+            | "rtrim"
+            | "chop"
     )
 }
 

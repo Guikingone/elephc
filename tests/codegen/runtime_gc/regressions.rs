@@ -1083,3 +1083,28 @@ echo "done";
         "promoting an indexed array literal to hash storage must free the source array (issue #408)"
     );
 }
+
+/// Regression for the trim self-reassign fix: `$s = trim($s)` now persists an owned copy of the
+/// trimmed slice instead of returning a slice into the source buffer, so reassigning a heap string
+/// to a trimmed slice of itself under loop churn neither corrupts the string nor leaks/double-frees.
+/// Each iteration allocates the persisted copy and frees the previous value, so allocs and frees
+/// stay balanced. Mirrors symfony/yaml `Inline::parse`'s `$value = trim($value)` scalar path.
+#[test]
+fn test_trim_self_reassign_loop_balances_gc_stats() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$parts = ["  ele", "phc  "];
+$total = 0;
+for ($k = 0; $k < 6; $k++) {
+    $s = $parts[0] . $parts[1];
+    $s = trim($s);
+    $total = $total + strlen($s);
+}
+echo $total;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "36");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "trim self-reassign loop leaked or double-freed");
+}

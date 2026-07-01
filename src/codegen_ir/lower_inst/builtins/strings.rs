@@ -155,6 +155,14 @@ pub(super) fn lower_trim_like(
         lower_trim_mask_arg(ctx, inst, name)?;
         abi::emit_call_label(ctx.emitter, mask_runtime_label);
     }
+    // The trim helpers return a borrowed slice that points INTO the source string's buffer
+    // (ptr/len in the string result registers). Persist it to an owned heap copy so the result no
+    // longer aliases the source. Without this, `$s = trim($s)` reassigning a string to a trimmed
+    // slice of itself corrupts `$s`: the store frees the old buffer the slice still points into
+    // before copying it (seen through symfony/yaml's `Inline::parse` mixed-string return). PHP's
+    // trim family returns a fresh string value, so the copy also matches PHP semantics. Registered
+    // in `builtin_call_result_owns_storage_as_temporary` so the copy is balanced (no leak/double-free).
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     store_if_result(ctx, inst)
 }
 
