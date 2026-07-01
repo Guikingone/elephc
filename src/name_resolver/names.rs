@@ -81,7 +81,11 @@ pub(super) fn resolve_type_expr(
         }
         TypeExpr::Named(name) => {
             let raw = name.as_str();
-            if matches!(raw, "array" | "mixed" | "callable" | "void") {
+            // "object" is PHP's any-instance pseudo-type and must stay bare (not
+            // FQN-prefixed with the current namespace) just like the other
+            // pseudo-types below; `\Closure` is unaffected since Symfony writes it
+            // fully-qualified, so it already resolves via the class-name path.
+            if matches!(raw, "array" | "mixed" | "callable" | "void" | "object") {
                 TypeExpr::Named(name.clone())
             } else {
                 TypeExpr::Named(resolved_name(resolve_special_or_class_name(

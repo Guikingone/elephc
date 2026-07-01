@@ -118,6 +118,12 @@ impl Checker {
                     "callable" => Ok(PhpType::Callable),
                     "void" => Ok(PhpType::Void),
                     "array" => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
+                    // `object` is PHP's any-instance pseudo-type, modeled as Mixed for now
+                    // (gradual; a precise any-object type is a follow-up). `\Closure` as a
+                    // type hint is modeled as Callable since closure values are already
+                    // Callable (nominal Closure with its methods is a follow-up).
+                    "object" => Ok(PhpType::Mixed),
+                    "closure" => Ok(PhpType::Callable),
                     // Relative class types only survive to this point when used outside a class
                     // body; inside a class they are rewritten to the enclosing class beforehand.
                     relative @ ("self" | "static" | "parent") => Err(CompileError::new(
