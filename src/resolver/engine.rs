@@ -15,8 +15,10 @@ use crate::errors::CompileError;
 use crate::names::canonical_name_for_decl;
 use crate::parser::ast::{CatchClause, ClassMethod, ExprKind, Stmt, StmtKind};
 
+use super::contains::stmt_has_value_include;
 use super::discovery::FunctionVariantRegistry;
 use super::engine_includes::{expand_value_include, resolve_include_stmt, IncludeValueCapture};
+use super::hoist_includes::hoist_value_includes_in_stmt;
 use super::include_path::fold_include_path;
 use super::state::{
     is_define_call_name, namespace_string, normalize_defined_constant_name,
@@ -102,6 +104,29 @@ pub(super) fn resolve_stmts(
             result.extend(expanded);
             continue;
         }
+
+        // Nested expression-position includes (e.g. `self::$x ??= require F;` or
+        // `$y = 10 + require F;`) are not caught by the direct-capture fast-path above, so hoist
+        // each one into a fresh temporary evaluated *before* this statement, prepending its
+        // expansion to `result`. The include therefore runs EAGERLY (before the statement); for
+        // pure data-file includes this is observably identical to PHP and consistent with
+        // elephc's compile-time include-inlining model. See `hoist_includes` for the tradeoff.
+        let stmt = if stmt_has_value_include(&stmt) {
+            let mut hoisted = Vec::new();
+            let rewritten = hoist_value_includes_in_stmt(
+                stmt,
+                &mut hoisted,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?;
+            result.extend(hoisted);
+            rewritten
+        } else {
+            stmt
+        };
 
         let stmt = resolve_stmt_exprs(
             stmt,
