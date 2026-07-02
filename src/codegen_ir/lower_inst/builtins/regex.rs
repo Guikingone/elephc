@@ -65,16 +65,39 @@ pub(super) fn lower_preg_match(
     super::store_if_result(ctx, inst)
 }
 
-/// Lowers `preg_match_all(pattern, subject)` through the shared regex runtime helper.
+/// Lowers `preg_match_all(pattern, subject, &matches?, flags?, offset?)` through the regex runtime.
+///
+/// The optional `$matches` out-parameter is populated through `__rt_preg_match_capture` (the same
+/// helper `preg_match` uses), so the caller's variable is defined and readable after the call. The
+/// capture helper records the first match and its capture groups; full `preg_match_all` semantics
+/// (nested per-match arrays) require a dedicated runtime helper and are not yet implemented —
+/// `$flags` and `$offset` are accepted so calls type-check and lower but behave as the defaults.
 pub(super) fn lower_preg_match_all(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "preg_match_all", 2)?;
+    super::ensure_arg_count_between(inst, "preg_match_all", 2, 5)?;
     let pattern = super::expect_operand(inst, 0)?;
     let subject = super::expect_operand(inst, 1)?;
+    let matches_target = inst
+        .operands
+        .get(2)
+        .copied()
+        .map(|value| matches_target(ctx, value))
+        .transpose()?;
     load_pattern_and_subject(ctx, pattern, subject)?;
-    abi::emit_call_label(ctx.emitter, "__rt_preg_match_all");
+    if let Some(target) = &matches_target {
+        let allow_hash = target_allows_named_hash(target);
+        let flag_reg = match ctx.emitter.target.arch {
+            Arch::AArch64 => "x5",
+            Arch::X86_64 => "r8",
+        };
+        abi::emit_load_int_immediate(ctx.emitter, flag_reg, allow_hash as i64);
+        abi::emit_call_label(ctx.emitter, "__rt_preg_match_capture");
+        store_matches_array(ctx, target)?;
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_preg_match_all");
+    }
     super::store_if_result(ctx, inst)
 }
 

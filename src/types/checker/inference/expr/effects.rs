@@ -258,6 +258,25 @@ impl Checker {
                     env.insert(var, ty);
                 }
                 let builtin_name = name.trim_start_matches('\\');
+                // A builtin by-reference out-parameter auto-vivifies the caller's variable (PHP
+                // definite-assignment semantics), mirroring the user-function path above. Define
+                // such variables BEFORE inferring the call so the variable stays defined even when
+                // the call's own inference recovers from an error (e.g. an unrecognized builtin
+                // routed through `check_function_call`), which would otherwise skip a post-call
+                // define and leave the next read reported as "Undefined variable".
+                for (var, out_ty) in
+                    Checker::builtin_call_by_ref_outputs(builtin_name, &expanded_args, env)
+                {
+                    env.entry(var).or_insert(out_ty);
+                }
+                // Builtin by-reference out-parameter positions come from the canonical signature's
+                // `ref_params`. Such parameters (preg_match/preg_match_all &$matches, preg_replace
+                // &$count, parse_str &$result, proc_open &$pipes) auto-vivify the caller's variable,
+                // so the argument is not eagerly inferred here (it may be as-yet undefined) and is
+                // defined in the caller scope after the call returns.
+                let builtin_sig = crate::types::builtin_call_sig(builtin_name);
+                let is_builtin_by_ref =
+                    |idx: usize| builtin_sig.as_ref().map_or(false, |sig| sig.ref_params.get(idx).copied().unwrap_or(false));
                 // `isset`/`unset` are lazy language constructs: an operand may be
                 // an undeclared property routed to `__isset`/`__unset`, which must
                 // not be inferred as a bare property access here. The call's own
@@ -266,21 +285,10 @@ impl Checker {
                     || builtin_name.eq_ignore_ascii_case("unset");
                 if !is_lazy_construct {
                     for (idx, arg) in expanded_args.iter().enumerate() {
+                        if is_builtin_by_ref(idx) {
+                            continue;
+                        }
                         if builtin_name.eq_ignore_ascii_case("preg_replace_callback") && idx == 1 {
-                            continue;
-                        }
-                        if builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2 {
-                            continue;
-                        }
-                        // `parse_str()`'s 2nd argument is a by-ref `$result`
-                        // out-parameter: PHP auto-vivifies it, so it may be an
-                        // as-yet-undefined variable before the call.
-                        if builtin_name.eq_ignore_ascii_case("parse_str") && idx == 1 {
-                            continue;
-                        }
-                        // `preg_replace()`'s 5th argument is a by-ref `$count`
-                        // out-parameter: it may be undefined before the call.
-                        if builtin_name.eq_ignore_ascii_case("preg_replace") && idx == 4 {
                             continue;
                         }
                         // The user-sort comparator is type-checked by `check_builtin`
@@ -299,33 +307,6 @@ impl Checker {
                     }
                 }
                 let ty = self.infer_type(expr, env)?;
-                if builtin_name.eq_ignore_ascii_case("preg_match") {
-                    if let Some(arg) = expanded_args.get(2) {
-                        if let Some(name) = preg_match_output_var(arg) {
-                            env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Str)));
-                        }
-                    }
-                }
-                if builtin_name.eq_ignore_ascii_case("preg_replace") {
-                    if let Some(arg) = expanded_args.get(4) {
-                        if let Some(name) = preg_match_output_var(arg) {
-                            env.insert(name.clone(), PhpType::Int);
-                        }
-                    }
-                }
-                if builtin_name.eq_ignore_ascii_case("parse_str") {
-                    if let Some(arg) = expanded_args.get(1) {
-                        if let Some(name) = preg_match_output_var(arg) {
-                            env.insert(
-                                name.clone(),
-                                PhpType::AssocArray {
-                                    key: Box::new(PhpType::Str),
-                                    value: Box::new(PhpType::Mixed),
-                                },
-                            );
-                        }
-                    }
-                }
                 if builtin_name.eq_ignore_ascii_case("unset") {
                     for arg in &expanded_args {
                         promote_indexed_local_for_element_unset(arg, env);
@@ -506,15 +487,6 @@ fn flatten_short_circuit_operands<'a>(expr: &'a Expr, op: &BinOp, out: &mut Vec<
         }
     }
     out.push(expr);
-}
-
-/// Returns the variable name used as `preg_match()`'s output `$matches` argument.
-fn preg_match_output_var(arg: &Expr) -> Option<&String> {
-    match &arg.kind {
-        ExprKind::Variable(name) => Some(name),
-        ExprKind::NamedArg { value, .. } => preg_match_output_var(value),
-        _ => None,
-    }
 }
 
 /// Promotes a packed indexed-array local to an associative array when one of its elements is

@@ -1768,6 +1768,35 @@ echo preg_match('%(\w+)%', "pct", $c) . $c[1];
     assert_eq!(out, "142|1hey|1pct");
 }
 
+/// Verifies a `preg_match()` by-reference `$matches` out-parameter defines the caller's variable,
+/// so the first read after the call does not report "Undefined variable" (PHP definite-assignment
+/// semantics). Cross-checked against `php -r 'preg_match("/a/","cat",$m); echo $m[0];'` (`a`).
+#[test]
+fn test_preg_match_by_ref_defines_matches() {
+    let out = compile_and_run(
+        r#"<?php
+preg_match('/a/', 'cat', $matches);
+echo $matches[0];
+"#,
+    );
+    assert_eq!(out, "a");
+}
+
+/// Verifies `preg_match_all()` with a by-reference `$matches` out-parameter defines the caller's
+/// variable. The EIR backend populates the array with the first match's captures (full
+/// `preg_match_all` nested-array semantics are a downstream gap), so `count($m)` matches PHP's
+/// per-call group count. Cross-checked against `php -r 'preg_match_all("/(\d)/","a1b2",$m); echo count($m);'` (`2`).
+#[test]
+fn test_preg_match_all_by_ref_defines_matches() {
+    let out = compile_and_run(
+        r#"<?php
+preg_match_all('/(\d)/', 'a1b2', $m);
+echo count($m);
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
 /// Verifies an alphanumeric opener is treated as an undelimited raw pattern rather than being
 /// mis-stripped (e.g. `'aba'` must not strip to `'b'`). elephc compiles the pattern verbatim in
 /// this case: `preg_match('abc', "abc")` matches (1) and `"xyz"` does not (0). This is an

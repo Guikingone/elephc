@@ -335,6 +335,7 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "print_r",
     "printf",
     "proc_close",
+    "proc_open",
     "ptr",
     "ptr_get",
     "ptr_is_null",

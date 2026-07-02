@@ -649,13 +649,25 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Int))
         }
         "preg_match_all" => {
-            if args.len() != 2 {
+            // PHP: preg_match_all(string $pattern, string $subject, array &$matches = null,
+            //   int $flags = 0, int $offset = 0): int|false. `$matches` is a by-ref
+            //   out-parameter, so it must be a variable and is not eagerly inferred
+            //   (its value is produced by the call). `$flags` and `$offset` are read-only.
+            if !(2..=5).contains(&args.len()) {
                 return Err(CompileError::new(
                     span,
-                    "preg_match_all() takes exactly 2 arguments",
+                    "preg_match_all() takes 2 to 5 arguments",
                 ));
             }
-            for arg in args {
+            checker.infer_type(&args[0], env)?;
+            checker.infer_type(&args[1], env)?;
+            if args.len() >= 3 && !matches!(args[2].kind, ExprKind::Variable(_)) {
+                return Err(CompileError::new(
+                    args[2].span,
+                    "preg_match_all() parameter $matches must be passed a variable",
+                ));
+            }
+            for arg in args.iter().skip(3) {
                 checker.infer_type(arg, env)?;
             }
             Ok(Some(PhpType::Int))

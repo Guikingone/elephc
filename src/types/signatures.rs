@@ -699,7 +699,40 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             sig.ref_params[2] = true;
             Some(sig)
         }
-        "preg_match_all" => Some(fixed(&["pattern", "subject"])),
+        "preg_match_all" => {
+            // PHP: preg_match_all(string $pattern, string $subject, array &$matches = null,
+            //   int $flags = 0, int $offset = 0): int|false. `$matches` is a by-ref
+            //   out-parameter that PHP auto-vivifies, so it must be skipped during eager
+            //   argument inference and defined in the caller scope after the call.
+            let mut sig = optional(
+                &["pattern", "subject", "matches", "flags", "offset"],
+                2,
+                vec![
+                    Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy()),
+                    int_lit(0),
+                    int_lit(0),
+                ],
+            );
+            sig.ref_params[2] = true;
+            Some(sig)
+        }
+        "proc_open" => {
+            // PHP: proc_open($cmd, $descriptor_spec, array &$pipes, $cwd = null,
+            //   $env = null, $options = []): resource|false. `$pipes` is a by-ref
+            //   out-parameter auto-vivified by PHP, so the caller's variable becomes
+            //   defined after the call even when previously unset.
+            let mut sig = optional(
+                &["command", "descriptorspec", "pipes", "cwd", "env", "options"],
+                3,
+                vec![
+                    null_lit(),
+                    null_lit(),
+                    Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy()),
+                ],
+            );
+            sig.ref_params[2] = true;
+            Some(sig)
+        }
         "preg_replace_callback" => Some(fixed(&["pattern", "callback", "subject"])),
         "preg_replace" => {
             let mut sig = optional(

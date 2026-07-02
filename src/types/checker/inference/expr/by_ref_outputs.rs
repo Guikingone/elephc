@@ -1,7 +1,7 @@
 //! Purpose:
 //! Resolves which caller variables become defined by being passed to a user-defined
-//! function/method/static-method by-reference parameter, mirroring the builtin
-//! `preg_match`/`preg_replace` out-parameter handling for user callables.
+//! function/method/static-method by-reference parameter, and to a builtin by-reference
+//! out-parameter (`preg_match`/`preg_match_all`/`preg_replace`/`parse_str`/`proc_open`).
 //!
 //! Called from:
 //! - `crate::types::checker::Checker::infer_type_with_assignment_effects()` (effects.rs)
@@ -12,6 +12,10 @@
 //! - The inserted type matches what call validation enforces: declared parameter
 //!   types are inserted verbatim (so the boxed/nullable storage and compatibility
 //!   checks see an identical type), while undeclared parameters insert `Mixed`.
+//! - Builtin out-parameter types come from `builtin_out_param_type`, which records the
+//!   PHP-accurate element type for each known by-ref builtin out-param (defaulting to
+//!   `Mixed` for any future builtin whose signature marks `ref_params` without a table
+//!   entry).
 //! - Positional argument shapes only: calls using named or spread arguments bail so
 //!   the positional parameter mapping cannot be misaligned.
 
@@ -40,6 +44,58 @@ impl Checker {
             return Vec::new();
         };
         Self::sig_undefined_by_ref_variable_outputs(sig, args, env)
+    }
+
+    /// Returns `(name, type)` pairs for currently-undefined plain `$variable` arguments that a
+    /// builtin call binds to by-reference out-parameters, so the caller scope can define them.
+    ///
+    /// Mirrors `function_call_by_ref_outputs` for builtins: the by-ref param positions come from
+    /// the canonical builtin signature's `ref_params`, and the inserted type comes from
+    /// `builtin_out_param_type` (which records the PHP-accurate element type for each known
+    /// builtin out-param, defaulting to `Mixed`). Returns an empty vector when the builtin has no
+    /// signature, no by-ref params, or the call uses named/spread arguments (positional mapping
+    /// only).
+    pub(crate) fn builtin_call_by_ref_outputs(
+        builtin_name: &str,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Vec<(String, PhpType)> {
+        let Some(sig) = crate::types::builtin_call_sig(builtin_name) else {
+            return Vec::new();
+        };
+        if !sig.ref_params.iter().any(|is_ref| *is_ref) {
+            return Vec::new();
+        }
+        // A live `Spread` operand reorders positional parameters unpredictably, so bail to keep
+        // the positional `ref_params` mapping sound. `NamedArg` wrappers are unwrapped (the call
+        // validation layer already ensures the name resolves), mirroring the previous hardcoded
+        // `preg_match`/`preg_replace` path which unwrapped `matches: $var`.
+        if args
+            .iter()
+            .any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+        {
+            return Vec::new();
+        }
+        let mut outputs = Vec::new();
+        for (index, arg) in args.iter().enumerate() {
+            let var_name = match &arg.kind {
+                ExprKind::Variable(name) => name,
+                ExprKind::NamedArg { value, .. } => match &value.kind {
+                    ExprKind::Variable(name) => name,
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            if !sig.ref_params.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            if env.contains_key(var_name) {
+                continue;
+            }
+            let inserted_ty = builtin_out_param_type(builtin_name, index);
+            outputs.push((var_name.clone(), inserted_ty));
+        }
+        outputs
     }
 
     /// Returns `(name, type)` pairs for currently-undefined plain `$variable` arguments bound to
@@ -347,16 +403,7 @@ impl Checker {
                 let expanded = crate::types::call_args::expand_static_assoc_spread_args(args);
                 out.extend(self.function_call_by_ref_outputs(name, &expanded, env));
                 let builtin = name.trim_start_matches('\\');
-                if builtin.eq_ignore_ascii_case("preg_match") {
-                    push_builtin_preg_output(
-                        expanded.get(2),
-                        PhpType::Array(Box::new(PhpType::Str)),
-                        env,
-                        out,
-                    );
-                } else if builtin.eq_ignore_ascii_case("preg_replace") {
-                    push_builtin_preg_output(expanded.get(4), PhpType::Int, env, out);
-                }
+                out.extend(Self::builtin_call_by_ref_outputs(builtin, &expanded, env));
                 for arg in &expanded {
                     self.collect_nested_by_ref_outputs(arg, env, out);
                 }
@@ -541,27 +588,32 @@ impl Checker {
     }
 }
 
-/// Pushes the by-reference output of a builtin `preg_match`/`preg_replace` argument when it is a
-/// plain `$variable` (or a named argument wrapping one) that is not yet defined in `env`.
-fn push_builtin_preg_output(
-    arg: Option<&Expr>,
-    ty: PhpType,
-    env: &TypeEnv,
-    out: &mut Vec<(String, PhpType)>,
-) {
-    if let Some(var) = arg.and_then(builtin_preg_output_var) {
-        if !env.contains_key(var) {
-            out.push((var.clone(), ty));
-        }
-    }
-}
-
-/// Returns the variable name used as a builtin `preg_match`/`preg_replace` output argument,
-/// unwrapping a named-argument wrapper.
-fn builtin_preg_output_var(arg: &Expr) -> Option<&String> {
-    match &arg.kind {
-        ExprKind::Variable(name) => Some(name),
-        ExprKind::NamedArg { value, .. } => builtin_preg_output_var(value),
-        _ => None,
+/// Returns the PHP-accurate type a builtin by-reference out-parameter writes into the caller's
+/// variable, used when auto-vivifying a previously-undefined plain `$variable`.
+///
+/// The by-ref param POSITIONS come from each builtin signature's `ref_params`; this table records
+/// the element type the runtime helper writes, so a freshly-defined variable gets a type that
+/// downstream indexing/count reads accept (mirroring the types the previous hardcoded
+/// preg_match/preg_replace/parse_str paths inserted). Unknown builtins or positions default to
+/// `Mixed`, which is compatible with every later use.
+fn builtin_out_param_type(builtin: &str, index: usize) -> PhpType {
+    let lower = builtin.to_ascii_lowercase();
+    match lower.as_str() {
+        // preg_match(&$matches): array of full-match + capture-group strings.
+        "preg_match" if index == 2 => PhpType::Array(Box::new(PhpType::Str)),
+        // preg_match_all(&$matches): array of (full-match list, capture-group list).
+        "preg_match_all" if index == 2 => PhpType::Array(Box::new(PhpType::Array(Box::new(
+            PhpType::Str,
+        )))),
+        // preg_replace(&$count): int replacement count.
+        "preg_replace" if index == 4 => PhpType::Int,
+        // parse_str(&$result): associative array of parsed key => value pairs.
+        "parse_str" if index == 1 => PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Mixed),
+        },
+        // proc_open(&$pipes): array of process pipe resources.
+        "proc_open" if index == 2 => PhpType::Array(Box::new(PhpType::Mixed)),
+        _ => PhpType::Mixed,
     }
 }

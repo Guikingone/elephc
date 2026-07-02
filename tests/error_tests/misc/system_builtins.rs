@@ -394,7 +394,7 @@ fn test_error_preg_match_too_many_args() {
 fn test_error_preg_match_all_no_args() {
     expect_error(
         "<?php preg_match_all();",
-        "preg_match_all() takes exactly 2 arguments",
+        "preg_match_all() takes 2 to 5 arguments",
     );
 }
 
@@ -404,6 +404,34 @@ fn test_error_preg_replace_wrong_args() {
     expect_error(
         r#"<?php preg_replace("/a/", "b");"#,
         "preg_replace() takes 3 to 5 arguments",
+    );
+}
+
+/// Verifies a by-reference out-parameter is defined AFTER the call, not before: reading `$matches`
+/// before the `preg_match()` call still reports "Undefined variable" (the call writes `$matches`
+/// during execution, so a prior read is a genuine undefined-variable use in PHP).
+#[test]
+fn test_error_preg_match_read_before_call_still_undefined() {
+    expect_error(
+        r#"<?php
+echo $matches;
+preg_match('/a/', 'cat', $matches);
+"#,
+        "Undefined variable: $matches",
+    );
+}
+
+/// Verifies a by-VALUE builtin argument does NOT define the caller's variable: `strlen($x)` reads
+/// `$x` but does not write it, so a later read of an otherwise-undefined `$x` still reports
+/// "Undefined variable". Guards against over-marking from the by-reference definite-assignment fix.
+#[test]
+fn test_error_by_value_builtin_arg_does_not_define() {
+    expect_error(
+        r#"<?php
+strlen($x);
+echo $x;
+"#,
+        "Undefined variable: $x",
     );
 }
 
