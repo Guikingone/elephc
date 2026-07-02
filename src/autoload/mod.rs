@@ -113,7 +113,6 @@ pub fn run(
         return Ok((program, warnings));
     }
     let mut included: HashSet<PathBuf> = HashSet::new();
-    const MAX_ITERATIONS: usize = 64;
 
     // -- prefix always-included files first --
     // composer.json's `autoload.files` declares files that must always be
@@ -154,12 +153,60 @@ pub fn run(
     // reference graph collected below.
     program = polyfill_prune::prune_provided_function_polyfills(program);
 
-    // Drop definition guards for optional `autoload.files` helpers the program never calls
-    // (e.g. Symfony's `u()`/`b()`/`s()` and `dump()`/`dd()`). Their bodies construct heavy
-    // classes (`UnicodeString`, `ByteString`, `VarDumper`) that would otherwise be dragged into
-    // the closure purely by the unused helper, not the program's actual reachable code.
-    program = polyfill_prune::prune_unused_optional_helpers(program);
+    // Decide which optional `autoload.files` helpers (`u`/`b`/`s`, `dump`/`dd`) the program
+    // actually calls, so uncalled ones can be pruned (keeping the heavy classes their bodies
+    // reference — `UnicodeString`, `ByteString`, `VarDumper` — out of the closure) while called
+    // ones are retained. A helper may be called only from a class that the PSR-4 class-reference
+    // iteration loads (e.g. `OutputFormatter` calling `b()`/`s()` via `use function`), so the call
+    // set must be gathered AFTER that iteration. But running the iteration with the helper bodies
+    // present would drag their referenced classes in even for uncalled helpers. The two-phase
+    // survey below resolves the ordering: survey with all optional helper bodies stripped, then
+    // prune the real program with the surveyed call set, then load the retained helper bodies'
+    // classes.
 
+    // Snapshot the set of files already spliced (the `autoload.files` prefix) so the final
+    // class-load iteration can re-splice caller classes the survey parsed without re-parsing the
+    // prefix.
+    let included_after_prefix = included.clone();
+
+    // Survey phase: strip every optional helper guard so none of their bodies' class references
+    // enter the survey graph, then iterate class loading to a fixed point. This loads every
+    // PSR-4-referenced caller class and exposes the helpers it calls.
+    let survey = polyfill_prune::strip_all_optional_helper_guards(program.clone());
+    let survey_loaded = load_referenced_classes(survey, base_dir, registry, &mut included)?;
+    let called = walk::collect_called_function_names(&survey_loaded);
+
+    // Reset the included set to the prefix snapshot: caller classes parsed during the survey must
+    // be re-spliced into the real program (the survey's splices live only in `survey_loaded`), so
+    // they must re-parse-and-splice during the final iteration. The prefix files stay included so
+    // they are not re-read.
+    included = included_after_prefix;
+
+    // Prune the original program (with helper guards intact) using the surveyed call set: a
+    // helper named in `called` is retained, an uncalled one is dropped with its body's class
+    // references.
+    program = polyfill_prune::prune_unused_optional_helpers_with(program, &called);
+
+    // Final class-load iteration: retained helper bodies now reference their classes
+    // (`UnicodeString`/`ByteString` for retained `b()`/`s()`), which get loaded here alongside
+    // the re-spliced caller classes.
+    program = load_referenced_classes(program, base_dir, registry, &mut included)?;
+
+    Ok((program, warnings))
+}
+
+/// Iterates PSR-4 class-reference loading to a fixed point: each pass collects class-like
+/// references the program makes but does not declare, resolves them through the registry
+/// (PSR-4 then user rules), parses and name-resolves the referenced file, and splices its
+/// statements before the referencing statement. Stops when a pass adds no new class file.
+/// `included` tracks already-loaded files so a class is parsed at most once per call.
+fn load_referenced_classes(
+    mut program: Program,
+    base_dir: &Path,
+    registry: &Registry,
+    included: &mut HashSet<PathBuf>,
+) -> Result<Program, CompileError> {
+    const MAX_ITERATIONS: usize = 64;
     for _ in 0..MAX_ITERATIONS {
         let mut declared = collect_declared_fqns(&program);
         seed_builtin_declared_fqns(&mut declared);
@@ -193,7 +240,7 @@ pub fn run(
             program.splice(insert_at..insert_at, loaded);
         }
     }
-    Ok((program, warnings))
+    Ok(program)
 }
 
 /// Lower any top-level literal `class_alias()` calls left after another

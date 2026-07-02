@@ -20,6 +20,9 @@
 
 use std::collections::HashSet;
 
+// `collect_called_function_names` is only referenced by the `#[cfg(test)]` convenience wrapper
+// `prune_unused_optional_helpers`; gate the import so non-test builds stay warning-free.
+#[cfg(test)]
 use super::walk::collect_called_function_names;
 use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
 
@@ -68,11 +71,36 @@ pub fn prune_provided_function_polyfills(program: Program) -> Program {
 /// anywhere in the program assembled so far (the main file plus eagerly-spliced helpers). A later
 /// direct call from a lazily-loaded class would surface a clean "undefined function" compile error
 /// rather than a miscompile.
+///
+/// Test-only convenience: the autoload pass now gathers the call set from a survey iteration and
+/// calls `prune_unused_optional_helpers_with` directly, so this self-computing wrapper is kept only
+/// for unit tests that exercise the prune without a survey.
+#[cfg(test)]
 pub fn prune_unused_optional_helpers(program: Program) -> Program {
     let called = collect_called_function_names(&program);
+    prune_unused_optional_helpers_with(program, &called)
+}
+
+/// Same as `prune_unused_optional_helpers` but accepts a precomputed call set instead of recomputing
+/// one from `program`. The autoload pass uses this to prune with a call set gathered from a prior
+/// survey iteration (which has loaded all PSR-4-referenced caller classes) so a helper called only
+/// from a lazily-loaded class is correctly retained.
+pub fn prune_unused_optional_helpers_with(program: Program, called: &HashSet<String>) -> Program {
+    let called = called.clone();
     prune_stmt_list(program, &move |stmt| {
         unused_optional_guard_live_branch(stmt, &called)
     })
+}
+
+/// Removes the definition guards of EVERY optional `autoload.files` helper in
+/// `OPTIONAL_HELPER_FUNCTIONS`, regardless of whether the program calls it. Used by the autoload
+/// pass for the survey iteration: stripping all optional helper bodies from the survey program
+/// keeps the heavy classes those bodies reference (e.g. `UnicodeString`, `VarDumper`) out of the
+/// survey's reference graph, so the survey only loads the caller classes (e.g. `OutputFormatter`
+/// calling `b()`/`s()` via `use function`) and exposes their calls before the real prune decides
+/// which helpers to keep.
+pub fn strip_all_optional_helper_guards(program: Program) -> Program {
+    prune_stmt_list(program, &any_optional_guard_live_branch)
 }
 
 /// Rewrites a statement list, splicing in the live branch of every guard `classify` matches and
@@ -251,6 +279,31 @@ fn unused_optional_guard_live_branch(
     }
 }
 
+/// Classifies a statement for the survey-time strip of ALL optional helper guards. Returns
+/// `Ok(else_branch)` for any `if (!function_exists('X')) { function X(...) { ... } }` whose
+/// declared function is in `OPTIONAL_HELPER_FUNCTIONS`, regardless of whether it is called, so
+/// the survey program carries no optional helper bodies (and thus none of their class
+/// references) into the class-load iteration.
+fn any_optional_guard_live_branch(stmt: Stmt) -> Result<Vec<Stmt>, Stmt> {
+    let Stmt { kind, span, attributes } = stmt;
+    match kind {
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } if elseif_clauses.is_empty() && is_optional_def_guard(&condition, &then_body) =>
+        {
+            Ok(else_body.unwrap_or_default())
+        }
+        kind => Err(Stmt {
+            kind,
+            span,
+            attributes,
+        }),
+    }
+}
+
 /// Returns whether an `if` is the definition guard of an optional helper the program never calls:
 /// the condition is `!function_exists(...)` and the then-body declares a function whose canonical
 /// name is in `OPTIONAL_HELPER_FUNCTIONS` and absent from `called`. Matching the declared function
@@ -261,25 +314,48 @@ fn is_unused_optional_def_guard(
     then_body: &[Stmt],
     called: &HashSet<String>,
 ) -> bool {
+    match optional_helper_name_in_guard(condition, then_body) {
+        Some(key) => !called.contains(&key),
+        None => false,
+    }
+}
+
+/// Returns whether an `if` is the definition guard of ANY optional helper: the condition is
+/// `!function_exists(...)` and the then-body declares a function whose canonical name is in
+/// `OPTIONAL_HELPER_FUNCTIONS`. Unlike `is_unused_optional_def_guard` this ignores the call set,
+/// so the survey strip removes every optional helper guard regardless of whether it is called.
+fn is_optional_def_guard(condition: &Expr, then_body: &[Stmt]) -> bool {
+    optional_helper_name_in_guard(condition, then_body).is_some()
+}
+
+/// Returns the canonical lowercased name of the optional helper declared inside a
+/// `!function_exists(...)` definition guard, or `None` when the statement is not such a guard.
+/// The condition must be a negated `function_exists` call and the then-body must declare a
+/// function whose canonical name is in `OPTIONAL_HELPER_FUNCTIONS`. The guard argument form
+/// (`'Name'` vs `Name::class`) is not yet constant-folded at autoload time, so the match is made
+/// on the declared function name, not the guard argument.
+fn optional_helper_name_in_guard(condition: &Expr, then_body: &[Stmt]) -> Option<String> {
     let ExprKind::Not(inner) = &condition.kind else {
-        return false;
+        return None;
     };
     let ExprKind::FunctionCall { name, .. } = &inner.kind else {
-        return false;
+        return None;
     };
     if !name
         .as_str()
         .trim_start_matches('\\')
         .eq_ignore_ascii_case("function_exists")
     {
-        return false;
+        return None;
     }
-    then_body.iter().any(|stmt| match &stmt.kind {
+    then_body.iter().find_map(|stmt| match &stmt.kind {
         StmtKind::FunctionDecl { name, .. } => {
             let key = name.trim_start_matches('\\').to_ascii_lowercase();
-            OPTIONAL_HELPER_FUNCTIONS.contains(&key.as_str()) && !called.contains(&key)
+            OPTIONAL_HELPER_FUNCTIONS
+                .contains(&key.as_str())
+                .then_some(key)
         }
-        _ => false,
+        _ => None,
     })
 }
 
@@ -499,5 +575,65 @@ mod tests {
         let pruned = prune_unused_optional_helpers(program);
         assert_eq!(pruned.len(), 1, "non-allowlisted guard should be preserved");
         assert!(matches!(pruned[0].kind, StmtKind::If { .. }));
+    }
+
+    /// `prune_unused_optional_helpers_with` retains a helper that the supplied call set names,
+    /// so the autoload pass can keep a helper called only from a lazily-loaded class once that
+    /// caller has been observed by the survey iteration.
+    #[test]
+    fn prune_with_retains_helper_named_in_supplied_call_set() {
+        let program = vec![guard_def("dump")];
+        let mut called = HashSet::new();
+        called.insert("dump".to_string());
+        let pruned = prune_unused_optional_helpers_with(program, &called);
+        assert_eq!(
+            pruned.len(),
+            1,
+            "helper named in the supplied call set must be retained"
+        );
+        assert!(matches!(pruned[0].kind, StmtKind::If { .. }));
+    }
+
+    /// `prune_unused_optional_helpers_with` drops a helper absent from the supplied call set,
+    /// preserving the `u`-case regression guard: a genuinely-uncalled helper is still pruned even
+    /// when the call set came from outside rather than recomputed internally.
+    #[test]
+    fn prune_with_drops_helper_absent_from_supplied_call_set() {
+        let program = vec![guard_def("dump")];
+        let called = HashSet::new();
+        let pruned = prune_unused_optional_helpers_with(program, &called);
+        assert!(
+            pruned.is_empty(),
+            "helper absent from the supplied call set must be pruned"
+        );
+    }
+
+    /// `strip_all_optional_helper_guards` removes every optional helper guard regardless of
+    /// whether it is called, so the survey program carries no optional helper bodies (and none of
+    /// their class references) into the class-load iteration.
+    #[test]
+    fn strip_all_removes_every_optional_helper_guard() {
+        let program = vec![
+            guard_def("dump"),
+            guard_def("dd"),
+            call_stmt("dump"),
+        ];
+        let stripped = strip_all_optional_helper_guards(program);
+        assert_eq!(
+            stripped.len(),
+            1,
+            "all optional helper guards must be stripped, leaving only the non-guard statement"
+        );
+        assert!(matches!(stripped[0].kind, StmtKind::ExprStmt(_)));
+    }
+
+    /// `strip_all_optional_helper_guards` leaves a non-optional helper guard intact, confirming
+    /// the survey strip is allowlist-scoped just like the real prune.
+    #[test]
+    fn strip_all_leaves_non_optional_guard_intact() {
+        let program = vec![guard_def("my_app_helper")];
+        let stripped = strip_all_optional_helper_guards(program);
+        assert_eq!(stripped.len(), 1, "non-allowlisted guard should be preserved");
+        assert!(matches!(stripped[0].kind, StmtKind::If { .. }));
     }
 }

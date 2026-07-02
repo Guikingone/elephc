@@ -1936,3 +1936,100 @@ fn test_called_optional_helper_guard_is_kept_and_loads_referenced_class() {
         "a called optional helper must keep its class reference and fail to load the broken class",
     );
 }
+
+/// Verifies the prune ordering fix: an optional helper (`dump`) called ONLY from a class that the
+/// PSR-4 class-reference iteration loads (`App\Caller`) is retained, not pruned. Before the fix the
+/// prune ran before the class-ref iteration, so `dump` was dropped as unused and `Caller::go()`'s
+/// `dump()` call surfaced an "Undefined function" error. The `dd` helper in the same bootstrap is
+/// genuinely uncalled and must still be pruned, so its body's reference to the unparseable
+/// `App\BrokenUncalled` never loads. Asserting `Ok` therefore checks BOTH that `dump` was retained
+/// (else `dump()` is undefined) AND that `dd` was pruned (else `BrokenUncalled` hard-fails to load).
+#[test]
+fn test_optional_helper_called_only_from_loaded_class_is_retained() {
+    let result = autoload_run_result(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"},"files":["bootstrap.php"]}}"#,
+            ),
+            (
+                "bootstrap.php",
+                "<?php\n\
+                 if (!function_exists('dump')) {\n    \
+                 function dump($v) { return \\App\\Retained::run(); }\n}\n\
+                 if (!function_exists('dd')) {\n    \
+                 function dd($v) { return \\App\\BrokenUncalled::run(); }\n}\n",
+            ),
+            (
+                "src/Retained.php",
+                "<?php\nnamespace App;\nclass Retained {\n    \
+                 public static function run(): string { return \"ok\"; }\n}\n",
+            ),
+            (
+                "src/BrokenUncalled.php",
+                "<?php\nnamespace App;\n$x = \"unterminated;\n",
+            ),
+            (
+                "src/Caller.php",
+                "<?php\nnamespace App;\nclass Caller {\n    \
+                 public static function go(): string { return dump(\"x\"); }\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\necho \\App\\Caller::go();\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert!(
+        result.is_ok(),
+        "dump called from a PSR-4-loaded class must be retained (not pruned before the class-ref \
+         iteration), and uncalled dd must still be pruned so its broken delegate never loads; \
+         got {:?}",
+        result.err(),
+    );
+}
+
+/// Regression guard for the `u` case: after the prune moves to a survey-then-prune ordering, a
+/// genuinely-uncalled optional helper (`dd`) is still pruned even when the PSR-4 class-reference
+/// iteration loads an unrelated class for an unrelated reason. `App\Other` is loaded because main
+/// references it, but nothing calls `dd`, so `dd`'s guard is dropped and its body's reference to
+/// the unparseable `App\BrokenUncalled` never loads. Asserting `Ok` confirms `dd` was pruned (else
+/// `BrokenUncalled` would hard-fail to load).
+#[test]
+fn test_uncalled_optional_helper_still_pruned_after_class_load_iteration() {
+    let result = autoload_run_result(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"},"files":["bootstrap.php"]}}"#,
+            ),
+            (
+                "bootstrap.php",
+                "<?php\n\
+                 if (!function_exists('dd')) {\n    \
+                 function dd($v) { return \\App\\BrokenUncalled::run(); }\n}\n",
+            ),
+            (
+                "src/BrokenUncalled.php",
+                "<?php\nnamespace App;\n$x = \"unterminated;\n",
+            ),
+            (
+                "src/Other.php",
+                "<?php\nnamespace App;\nclass Other {\n    \
+                 public static function greet(): string { return \"ok\"; }\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\necho \\App\\Other::greet();\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert!(
+        result.is_ok(),
+        "uncalled dd must still be pruned after the class-ref iteration loads an unrelated class, \
+         so its broken delegate never loads; got {:?}",
+        result.err(),
+    );
+}
