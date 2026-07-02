@@ -220,6 +220,20 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "array_diff_key"
             | "array_intersect_key"
             | "range"
+            // -- misc recognition-only builtins that are pure reads/transforms --
+            // method_exists reads the class table; preg_quote/preg_grep/version_compare/unpack/
+            // http_build_query/escapeshellarg are pure string/array transforms. The impure
+            // siblings (trigger_error, set_error_handler, restore_error_handler,
+            // set_exception_handler, random_bytes, assert, sapi_windows_cp_conv, posix_kill)
+            // are intentionally absent: they emit, mutate global handler state, are
+            // nondeterministic, or can throw.
+            | "method_exists"
+            | "preg_quote"
+            | "preg_grep"
+            | "version_compare"
+            | "unpack"
+            | "http_build_query"
+            | "escapeshellarg"
     )
     // Note: json_encode / json_decode / json_validate / json_last_error /
     // json_last_error_msg are intentionally NOT listed here — they read

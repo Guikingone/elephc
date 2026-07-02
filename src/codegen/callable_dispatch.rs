@@ -562,9 +562,13 @@ pub(crate) fn runtime_instance_method_case(
 /// `strncasecmp`, `substr_compare`, `strip_tags`, `levenshtein`, `is_countable`,
 /// `array_key_first`, `array_replace_recursive`), the multibyte-string (`mb_*`) family, the
 /// intl grapheme/normalizer (`grapheme_*`, `normalizer_*`) and `iconv*` families, `ctype_upper`,
-/// and the process/system control builtins (`pcntl_*`, `proc_close`, `getmypid`,
+/// the process/system control builtins (`pcntl_*`, `proc_close`, `getmypid`,
 /// `cli_set_process_title`, `setproctitle`, `sapi_windows_*`, `ini_get`,
-/// `get_defined_constants`) are registered for type checking and first-class-callable resolution
+/// `get_defined_constants`), and the misc/error-handling group (`method_exists`,
+/// `trigger_error`, `set_error_handler`, `restore_error_handler`, `set_exception_handler`,
+/// `preg_quote`, `preg_grep`, `version_compare`, `unpack`, `random_bytes`, `http_build_query`,
+/// `escapeshellarg`, `assert`, `posix_kill`) are registered for type checking and
+/// first-class-callable resolution
 /// but have no runtime lowering yet. The runtime dynamic-call table materializes a wrapper for
 /// every builtin carrying a first-class-callable signature, so they are excluded here until their
 /// codegen lands — otherwise a program that builds the dynamic string-callable table would
@@ -594,6 +598,12 @@ fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
             | "cli_set_process_title" | "setproctitle"
             | "sapi_windows_cp_get" | "sapi_windows_cp_set" | "sapi_windows_vt100_support"
             | "ini_get" | "get_defined_constants"
+            | "sapi_windows_cp_conv"
+            | "method_exists" | "trigger_error" | "set_error_handler"
+            | "restore_error_handler" | "set_exception_handler"
+            | "preg_quote" | "preg_grep" | "version_compare" | "unpack"
+            | "random_bytes" | "http_build_query" | "escapeshellarg"
+            | "assert" | "posix_kill"
     )
 }
 

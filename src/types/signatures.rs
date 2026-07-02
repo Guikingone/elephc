@@ -601,6 +601,50 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "ini_get" => Some(fixed(&["option"])),
         // get_defined_constants(bool $categorize = false): array.
         "get_defined_constants" => Some(optional(&["categorize"], 0, vec![bool_lit(false)])),
+        // -- misc / error-handling / process builtins (recognition-only; runtime deferred) --
+        // method_exists(object|string $object_or_class, string $method): bool.
+        "method_exists" => Some(fixed(&["object_or_class", "method"])),
+        // trigger_error(string $message, int $error_level = E_USER_NOTICE (1024)): bool.
+        "trigger_error" => Some(optional(&["message", "error_level"], 1, vec![int_lit(1024)])),
+        // set_error_handler(?callable $callback, int $error_levels = E_ALL (32767)): ?callable.
+        "set_error_handler" => {
+            Some(optional(&["callback", "error_levels"], 1, vec![int_lit(32767)]))
+        }
+        // restore_error_handler(): true.
+        "restore_error_handler" => Some(fixed(&[])),
+        // set_exception_handler(?callable $callback): ?callable.
+        "set_exception_handler" => Some(fixed(&["callback"])),
+        // preg_quote(string $str, ?string $delimiter = null): string.
+        "preg_quote" => Some(optional(&["str", "delimiter"], 1, vec![null_lit()])),
+        // preg_grep(string $pattern, array $array, int $flags = 0): array|false.
+        "preg_grep" => Some(optional(&["pattern", "array", "flags"], 2, vec![int_lit(0)])),
+        // version_compare(string $version1, string $version2,
+        // ?string $operator = null): int|bool.
+        "version_compare" => Some(optional(
+            &["version1", "version2", "operator"],
+            2,
+            vec![null_lit()],
+        )),
+        // unpack(string $format, string $string, int $offset = 0): array|false.
+        "unpack" => Some(optional(&["format", "string", "offset"], 2, vec![int_lit(0)])),
+        // random_bytes(int $length): string.
+        "random_bytes" => Some(fixed(&["length"])),
+        // http_build_query(array|object $data, string $numeric_prefix = '',
+        // ?string $arg_separator = null, int $encoding_type = PHP_QUERY_RFC1738 (1)): string.
+        "http_build_query" => Some(optional(
+            &["data", "numeric_prefix", "arg_separator", "encoding_type"],
+            1,
+            vec![string_lit(""), null_lit(), int_lit(1)],
+        )),
+        // escapeshellarg(string $arg): string.
+        "escapeshellarg" => Some(fixed(&["arg"])),
+        // assert(mixed $assertion, Throwable|string|null $description = null): bool.
+        "assert" => Some(optional(&["assertion", "description"], 1, vec![null_lit()])),
+        // sapi_windows_cp_conv(int|string $in_codepage, int|string $out_codepage,
+        // string $subject): ?string (Windows-only; recognized everywhere).
+        "sapi_windows_cp_conv" => Some(fixed(&["in_codepage", "out_codepage", "subject"])),
+        // posix_kill(int $process_id, int $signal): bool.
+        "posix_kill" => Some(fixed(&["process_id", "signal"])),
         "exec" | "shell_exec" | "system" | "passthru" => Some(fixed(&["command"])),
         "define" => Some(fixed(&["constant_name", "value"])),
         "date" | "gmdate" => Some(optional(&["format", "timestamp"], 1, vec![null_lit()])),
@@ -1219,6 +1263,67 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         "get_defined_constants" => {
             return_typed_first_class_builtin_sig(name, PhpType::Array(Box::new(PhpType::Mixed)))
         }
+        // -- misc / error-handling / process first-class callables (recognition-only) --
+        // method_exists checks whether a class or object exposes a method and returns bool.
+        "method_exists" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Mixed, PhpType::Str],
+            PhpType::Bool,
+        )),
+        // trigger_error emits a user-level error/notice and returns bool.
+        "trigger_error" => Some(typed_first_class_builtin_sig(name, &[PhpType::Str], PhpType::Bool)),
+        // set_error_handler installs a handler and returns the previous one (?callable).
+        "set_error_handler" => {
+            Some(typed_first_class_builtin_sig(name, &[PhpType::Mixed], PhpType::Mixed))
+        }
+        // restore_error_handler pops the current handler and returns true.
+        "restore_error_handler" => return_typed_first_class_builtin_sig(name, PhpType::Bool),
+        // set_exception_handler installs a handler and returns the previous one (?callable).
+        "set_exception_handler" => {
+            Some(typed_first_class_builtin_sig(name, &[PhpType::Mixed], PhpType::Mixed))
+        }
+        // preg_quote escapes regex metacharacters and returns the quoted string.
+        "preg_quote" => Some(typed_first_class_builtin_sig(name, &[PhpType::Str], PhpType::Str)),
+        // preg_grep returns the matching array entries, or false on error.
+        "preg_grep" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str, PhpType::Array(Box::new(PhpType::Mixed))],
+            PhpType::Union(vec![PhpType::Array(Box::new(PhpType::Mixed)), PhpType::Bool]),
+        )),
+        // version_compare returns -1/0/1, or a bool when an operator is supplied.
+        "version_compare" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str, PhpType::Str],
+            PhpType::Union(vec![PhpType::Int, PhpType::Bool]),
+        )),
+        // unpack unpacks a binary string into an array, or false on error.
+        "unpack" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str, PhpType::Str],
+            PhpType::Union(vec![PhpType::Array(Box::new(PhpType::Mixed)), PhpType::Bool]),
+        )),
+        // random_bytes returns a cryptographically secure random byte string.
+        "random_bytes" => Some(typed_first_class_builtin_sig(name, &[PhpType::Int], PhpType::Str)),
+        // http_build_query serializes an array/object into a URL query string.
+        "http_build_query" => {
+            Some(typed_first_class_builtin_sig(name, &[PhpType::Mixed], PhpType::Str))
+        }
+        // escapeshellarg returns the shell-escaped form of its argument.
+        "escapeshellarg" => Some(typed_first_class_builtin_sig(name, &[PhpType::Str], PhpType::Str)),
+        // assert evaluates the assertion and returns bool (may throw its description).
+        "assert" => Some(typed_first_class_builtin_sig(name, &[PhpType::Mixed], PhpType::Bool)),
+        // sapi_windows_cp_conv converts a string between code pages: a string or null.
+        "sapi_windows_cp_conv" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Mixed, PhpType::Mixed],
+            PhpType::Union(vec![PhpType::Str, PhpType::Void]),
+        )),
+        // posix_kill sends a signal to a process and returns bool.
+        "posix_kill" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Int, PhpType::Int],
+            PhpType::Bool,
+        )),
         // strcspn/strspn/strpbrk/hexdec are intentionally absent here: they are
         // lowered only by the active EIR backend, so the frozen legacy direct
         // backend that emits dynamic first-class-callable wrapper bodies cannot

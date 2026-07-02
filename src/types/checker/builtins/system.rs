@@ -844,6 +844,204 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Array(Box::new(PhpType::Mixed))))
         }
+        // -- misc / error-handling / process builtins (recognition-only; runtime deferred) --
+        // These type-check so calls stop being "Undefined function"; no EIR/codegen lowering yet.
+        "method_exists" => {
+            // method_exists(object|string $object_or_class, string $method): bool.
+            if args.len() != 2 {
+                return Err(CompileError::new(
+                    span,
+                    "method_exists() takes exactly 2 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "trigger_error" => {
+            // trigger_error(string $message, int $error_level = E_USER_NOTICE): bool.
+            if !(1..=2).contains(&args.len()) {
+                return Err(CompileError::new(
+                    span,
+                    "trigger_error() takes 1 or 2 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "set_error_handler" => {
+            // set_error_handler(?callable $callback, int $error_levels = E_ALL): ?callable.
+            // The previous handler is returned; modeled as Mixed (callable-or-null).
+            if !(1..=2).contains(&args.len()) {
+                return Err(CompileError::new(
+                    span,
+                    "set_error_handler() takes 1 or 2 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Mixed))
+        }
+        "restore_error_handler" => {
+            // restore_error_handler(): true.
+            if !args.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "restore_error_handler() takes no arguments",
+                ));
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "set_exception_handler" => {
+            // set_exception_handler(?callable $callback): ?callable — the previous handler.
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "set_exception_handler() takes exactly 1 argument",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Mixed))
+        }
+        "preg_quote" => {
+            // preg_quote(string $str, ?string $delimiter = null): string.
+            if !(1..=2).contains(&args.len()) {
+                return Err(CompileError::new(
+                    span,
+                    "preg_quote() takes 1 or 2 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Str))
+        }
+        "preg_grep" => {
+            // preg_grep(string $pattern, array $array, int $flags = 0): array|false.
+            if !(2..=3).contains(&args.len()) {
+                return Err(CompileError::new(
+                    span,
+                    "preg_grep() takes 2 or 3 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(checker.normalize_union_type(vec![
+                PhpType::Array(Box::new(PhpType::Mixed)),
+                PhpType::Bool,
+            ])))
+        }
+        "version_compare" => {
+            // version_compare(string $version1, string $version2,
+            // ?string $operator = null): int|bool — int (-1/0/1) or bool when an operator is given.
+            if !(2..=3).contains(&args.len()) {
+                return Err(CompileError::new(
+                    span,
+                    "version_compare() takes 2 or 3 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(checker.normalize_union_type(vec![
+                PhpType::Int,
+                PhpType::Bool,
+            ])))
+        }
+        "unpack" => {
+            // unpack(string $format, string $string, int $offset = 0): array|false.
+            if !(2..=3).contains(&args.len()) {
+                return Err(CompileError::new(span, "unpack() takes 2 or 3 arguments"));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(checker.normalize_union_type(vec![
+                PhpType::Array(Box::new(PhpType::Mixed)),
+                PhpType::Bool,
+            ])))
+        }
+        "random_bytes" => {
+            // random_bytes(int $length): string.
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "random_bytes() takes exactly 1 argument",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Str))
+        }
+        "http_build_query" => {
+            // http_build_query(array|object $data, string $numeric_prefix = '',
+            // ?string $arg_separator = null, int $encoding_type = PHP_QUERY_RFC1738): string.
+            if !(1..=4).contains(&args.len()) {
+                return Err(CompileError::new(
+                    span,
+                    "http_build_query() takes 1 to 4 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Str))
+        }
+        "escapeshellarg" => {
+            // escapeshellarg(string $arg): string.
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "escapeshellarg() takes exactly 1 argument",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Str))
+        }
+        "assert" => {
+            // assert(mixed $assertion, Throwable|string|null $description = null): bool.
+            if !(1..=2).contains(&args.len()) {
+                return Err(CompileError::new(span, "assert() takes 1 or 2 arguments"));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "sapi_windows_cp_conv" => {
+            // sapi_windows_cp_conv(int|string $in_codepage, int|string $out_codepage,
+            // string $subject): ?string (Windows-only; recognized on every target).
+            if args.len() != 3 {
+                return Err(CompileError::new(
+                    span,
+                    "sapi_windows_cp_conv() takes exactly 3 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(checker.normalize_union_type(vec![
+                PhpType::Str,
+                PhpType::Void,
+            ])))
+        }
+        "posix_kill" => {
+            // posix_kill(int $process_id, int $signal): bool.
+            if args.len() != 2 {
+                return Err(CompileError::new(
+                    span,
+                    "posix_kill() takes exactly 2 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Bool))
+        }
         _ => Ok(None),
     }
 }
