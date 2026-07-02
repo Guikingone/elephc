@@ -325,9 +325,15 @@ fn collect_function_exists_guards_into(condition: &Expr, names: &mut HashSet<Str
     }
 }
 
-/// Extracts the single string-literal argument of a `function_exists('name')` call, matching the
-/// callee case-insensitively and tolerating a leading namespace separator (PHP resolves it to the
-/// global builtin). Returns `None` for any other expression.
+/// Extracts the single name argument of a `function_exists('name')` or `function_exists(X::class)`
+/// call, matching the callee case-insensitively and tolerating a leading namespace separator (PHP
+/// resolves it to the global builtin). Returns `None` for any other expression shape.
+///
+/// For `Name::class`, the receiver name has already been canonicalized to its FQN by
+/// `name_resolver` (see `expressions.rs`), so `as_canonical()` yields the same function-name string
+/// PHP would compute for `X::class` in the enclosing namespace. This lets a polyfill guard written
+/// as `if (!function_exists(s::class)) { function s ... }` (the Symfony `symfony/string` pattern)
+/// be recognized and dropped when `s` is already known, mirroring the string-literal guard path.
 fn function_exists_argument(expr: &Expr) -> Option<String> {
     let ExprKind::FunctionCall { name, args } = &expr.kind else {
         return None;
@@ -344,6 +350,9 @@ fn function_exists_argument(expr: &Expr) -> Option<String> {
     };
     match &arg.kind {
         ExprKind::StringLiteral(value) => Some(value.clone()),
+        ExprKind::ClassConstant {
+            receiver: crate::parser::ast::StaticReceiver::Named(name),
+        } => Some(name.as_canonical()),
         _ => None,
     }
 }

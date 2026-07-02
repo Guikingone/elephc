@@ -97,6 +97,24 @@ echo $probe->ok();
     assert_eq!(out, "5");
 }
 
+/// Verifies that a prelude-injected global function (`var_export`) is resolved by the PHP
+/// namespace fallback for a bare call inside a namespace block, so `var_export(...)` in
+/// `namespace N` resolves to the global `\var_export` rather than the non-existent `N\var_export`.
+/// `var_export` is provided by `crate::var_export_prelude` as a prelude-injected user function
+/// (not the builtin catalog), so this exercises the `canonical_prelude_global_function_name`
+/// fallback path in `src/name_resolver`. Cross-checked with
+/// `php -r 'namespace N; echo var_export(["x"=>1], true);'`.
+#[test]
+fn test_namespace_bare_call_falls_back_to_prelude_global_var_export() {
+    let out = compile_and_run(
+        r#"<?php
+namespace N;
+echo var_export(["x" => 1], true);
+"#,
+    );
+    assert_eq!(out, "array (\n  'x' => 1,\n)");
+}
+
 /// Verifies that a declared return type (`Box`) resolves to the same-namespace class
 /// inside a typed local variable declaration (`Box $box = ...`). Checks both return-type
 /// resolution and typed local variable initialization.

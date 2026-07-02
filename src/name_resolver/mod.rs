@@ -132,6 +132,33 @@ pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
     crate::types::checker::builtins::canonical_builtin_function_name(name)
 }
 
+/// Function names elephc provides as prelude-injected global user functions (see
+/// `crate::var_export_prelude` and siblings in `crate::pipeline`), rather than as catalog
+/// builtins. PHP considers these always-available global functions, so a bare namespaced call
+/// `var_export(...)` inside `namespace N` must fall back to the global `\var_export` — but they
+/// are NOT in the builtin catalog (registering them there caused redeclaration/link errors), so
+/// the builtin-fallback path in `canonical_function` does not see them.
+///
+/// Each autoloaded file is name-resolved in isolation by `autoload::load_autoloaded_file`, so the
+/// prelude declaration (injected into the main program before the main name-resolution pass) is
+/// absent from the per-file symbol table. Seeding these names here keeps the PHP namespace
+/// fallback for bare calls correct without re-injecting the prelude per file or duplicating the
+/// catalog. Extend this set only with prelude-injected globals that PHP treats as unconditionally
+/// available.
+const PRELUDE_GLOBAL_FUNCTIONS: &[&str] = &["var_export"];
+
+/// Returns the canonical name for a prelude-injected global function, case-normalized with a
+/// leading `\` stripped. Returns `None` if the name is not a known prelude global. Mirrors
+/// `canonical_builtin_function_name` so `Symbols::canonical_function` can fall back to prelude
+/// globals exactly as it falls back to catalog builtins.
+pub(crate) fn canonical_prelude_global_function_name(name: &str) -> Option<String> {
+    let bare = name.trim_start_matches('\\');
+    PRELUDE_GLOBAL_FUNCTIONS
+        .iter()
+        .find(|prelude| bare.eq_ignore_ascii_case(prelude))
+        .map(|prelude| (*prelude).to_string())
+}
+
 /// Reports whether `name` matches one of PHP's procedural date/time aliases
 /// (e.g. `date_create`, `idate`, `gmstrftime`). The name set is the same as the one
 /// rewritten by `expressions::rewrite_date_procedural_alias`, minus the per-arity guards,

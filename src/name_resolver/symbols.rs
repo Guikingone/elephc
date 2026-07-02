@@ -64,6 +64,7 @@ impl Symbols {
             .or_else(|| self.extern_functions.get(&key))
             .cloned()
             .or_else(|| canonical_builtin_function_name(name))
+            .or_else(|| super::canonical_prelude_global_function_name(name))
     }
 
     /// Returns whether `name` resolves to a user-declared (or extern) function,

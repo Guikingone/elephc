@@ -1,5 +1,6 @@
 //! Purpose:
-//! Folds closed-world `function_exists('name')` calls on a string literal to a boolean literal, so
+//! Folds closed-world `function_exists('name')` and `function_exists(Name::class)` calls on a
+//! string literal or `::class` constant to a boolean literal, so
 //! `if (!function_exists('X')) { ... }` guards become constant control flow the existing DCE can
 //! prune. This complements the resolver's conditional-function hoisting: once a guarded polyfill
 //! wrapper has been hoisted to a real top-level function, its now-redundant in-place guard folds to
@@ -111,8 +112,19 @@ pub fn fold_function_existence_in_method_bodies(check: &mut CheckResult, set: &F
 }
 
 /// Attempts to fold a `FunctionCall` to a boolean when it is a closed-world `function_exists` check
-/// on a single string-literal name. Returns `None` (leaving the call intact) when the set is not
-/// installed, the callee is not `function_exists`, or the argument is not a lone string literal.
+/// on a single name argument. The argument may be a string literal (`function_exists('X')`) or a
+/// `Name::class` constant (`function_exists(X::class)`), the latter resolved to its FQN through the
+/// shared `static_name_from_literal_or_class_const` resolver so `function_exists` and `class_exists`
+/// use one `::class`-to-FQN path.
+///
+/// Returns `None` (leaving the call intact) when the set is not installed, the callee is not
+/// `function_exists`, or the argument is not a lone literal/`::class`. When the resolved name
+/// classifies to a boolean, the call folds to `BoolLiteral`. When the name is a checked user
+/// function whose runtime availability must be deferred to codegen (`classify` returns `None`) AND
+/// the argument was a `::class` constant, the call is rewritten in place to use the resolved FQN
+/// string literal so codegen's `lower_function_exists` receives a `const_string_operand` it can
+/// lower (otherwise codegen rejects `function_exists` with a non-literal function name). A string-
+/// literal argument that defers is left untouched, since codegen already handles it.
 pub(in crate::optimize) fn try_fold_function_exists(name: &Name, args: &[Expr]) -> Option<ExprKind> {
     ACTIVE_FUNCTION_EXISTENCE.with(|slot| {
         let borrowed = slot.borrow();
@@ -123,10 +135,23 @@ pub(in crate::optimize) fn try_fold_function_exists(name: &Name, args: &[Expr]) 
         let [arg] = args else {
             return None;
         };
-        let ExprKind::StringLiteral(literal) = &arg.kind else {
-            return None;
-        };
-        set.classify(literal).map(ExprKind::BoolLiteral)
+        let literal = super::class_existence::static_name_from_literal_or_class_const(arg)?;
+        match set.classify(&literal) {
+            Some(bool) => Some(ExprKind::BoolLiteral(bool)),
+            None => {
+                // A deferred user function: codegen must lower the call with a runtime/variant
+                // check. Only rewrite when the argument was a `::class` constant — a string-literal
+                // argument is already lowerable by codegen, so leave it intact.
+                if matches!(&arg.kind, ExprKind::ClassConstant { .. }) {
+                    Some(ExprKind::FunctionCall {
+                        name: name.clone(),
+                        args: vec![Expr::new(ExprKind::StringLiteral(literal), arg.span)],
+                    })
+                } else {
+                    None
+                }
+            }
+        }
     })
 }
 

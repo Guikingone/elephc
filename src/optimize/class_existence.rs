@@ -128,7 +128,7 @@ pub(in crate::optimize) fn try_fold_class_existence(name: &Name, args: &[Expr]) 
         let borrowed = slot.borrow();
         let sets = borrowed.as_ref()?;
         let kind = classify_existence_builtin(name.as_str())?;
-        let literal = args.first().and_then(literal_class_name)?;
+        let literal = args.first().and_then(static_name_from_literal_or_class_const)?;
         // Folding the call away would drop the evaluation of any further arguments, so only fold
         // when the trailing `autoload` argument (if present) is a side-effect-free literal.
         if args[1..].iter().any(|arg| !is_side_effect_free_literal(arg)) {
@@ -156,10 +156,15 @@ fn classify_existence_builtin(name: &str) -> Option<ExistenceKind> {
     }
 }
 
-/// Extracts a static class name from an existence-check first argument: a string literal or a
+/// Extracts a static name from an existence-check first argument: a string literal or a
 /// `Name::class` constant. Returns `None` for dynamic names or `self`/`static`/`parent::class`,
 /// which are left to runtime/codegen lowering.
-fn literal_class_name(expr: &Expr) -> Option<String> {
+///
+/// The returned string is the canonical name as it appears after `name_resolver` canonicalization,
+/// so for `Name::class` inside a namespace block it is the fully-qualified name. Shared with
+/// `function_existence` so `function_exists(Name::class)` folds against the same `::class`-to-FQN
+/// resolution that `class_exists(Name::class)` uses, without forking the resolver.
+pub(in crate::optimize) fn static_name_from_literal_or_class_const(expr: &Expr) -> Option<String> {
     match &expr.kind {
         ExprKind::StringLiteral(value) => Some(value.clone()),
         ExprKind::ClassConstant {

@@ -13,6 +13,8 @@ use crate::support::*;
 mod branch_simplification;
 #[path = "optimizer/class_existence_fold.rs"]
 mod class_existence_fold;
+#[path = "optimizer/function_existence_fold.rs"]
+mod function_existence_fold;
 #[path = "optimizer/constant_folding.rs"]
 mod constant_folding;
 #[path = "optimizer/constant_propagation.rs"]
