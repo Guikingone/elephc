@@ -438,6 +438,39 @@ echo $c->value;
     assert_eq!(out, "2");
 }
 
+/// Verifies a child may declare a property whose name collides only with a PRIVATE
+/// ancestor property, choosing its own (different) visibility and type. PHP does not
+/// inherit private properties, so `Child::$secret` is a fresh, independent property, and
+/// the class must type-check, compile, and run. The child reads its own redeclared
+/// property, returning "y|y".
+///
+/// NOTE: the class layout currently keys property storage by name, so the child's
+/// `$secret` and the ancestor's private `$secret` share one slot (a documented
+/// type-check-only unblock); this test therefore only exercises the child-owned value,
+/// not independent parent-private storage.
+#[test]
+fn test_property_shadows_private_parent_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    private int $secret = 1;
+}
+
+class Child extends Base {
+    public string $secret = "y";
+
+    public function reveal(): string {
+        return $this->secret;
+    }
+}
+
+$c = new Child();
+echo $c->secret, "|", $c->reveal();
+"#,
+    );
+    assert_eq!(out, "y|y");
+}
+
 /// Verifies property redeclaration can widen visibility from `protected` to `public`
 /// while preserving the value, returning "20:20".
 #[test]

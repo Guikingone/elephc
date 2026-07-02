@@ -82,6 +82,14 @@ fn resolve_files_error(
     result.expect_err("expected resolve to fail")
 }
 
+/// Asserts that `src` type-checks cleanly (no reported error). Used for regression
+/// tests where a construct that previously produced a diagnostic is now accepted.
+fn expect_ok(src: &str) {
+    if let Err(msg) = check_source(src) {
+        panic!("Expected source to type-check cleanly, but got error: {}", msg);
+    }
+}
+
 /// Verifies expect error.
 fn expect_error(src: &str, expected_substr: &str) {
     match check_source(src) {

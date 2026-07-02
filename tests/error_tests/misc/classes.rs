@@ -760,13 +760,17 @@ fn test_error_property_redeclaration_adds_type_to_untyped_parent() {
     );
 }
 
-/// Verifies the error diagnostic for property redeclaration shadows private parent property.
+/// Verifies that a child may redeclare a property whose name collides only with a
+/// PRIVATE ancestor property, freely choosing a different visibility and type. PHP
+/// does not inherit private properties, so this is a fresh own property rather than an
+/// override, and the override visibility/type-invariance checks must not fire. The
+/// codegen counterpart lives in `tests/codegen/oop/inheritance.rs`.
 #[test]
-fn test_error_property_redeclaration_shadows_private_parent_property() {
-    // private parent properties cannot be shadowed by a child; the feature is not yet supported.
-    expect_error(
-        "<?php class Base { private int $secret = 1; } class Child extends Base { public int $secret = 2; }",
-        "shadowing private parent properties is not yet supported",
+fn test_private_parent_property_shadowing_is_allowed() {
+    // A private ancestor property is not inherited, so the child's same-named property
+    // is independent and may pick any visibility/type without an override error.
+    expect_ok(
+        "<?php class Base { private int $secret = 1; } class Child extends Base { public string $secret = \"y\"; }",
     );
 }
 
