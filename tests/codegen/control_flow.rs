@@ -13,6 +13,8 @@ use crate::support::*;
 mod branches_and_loops;
 #[path = "control_flow/functions.rs"]
 mod functions;
+#[path = "control_flow/conditional_functions.rs"]
+mod conditional_functions;
 #[path = "control_flow/booleans.rs"]
 mod booleans;
 #[path = "control_flow/assignments/mod.rs"]

@@ -193,6 +193,15 @@ pub(crate) fn compile(config: CliConfig) {
     };
     timings.record_since("autoload-run", phase_started);
 
+    // Hoist conditionally-declared functions (`if (!function_exists('X')) { function X(...) {...} }`
+    // and other conditionally-nested declarations) to the top level so top-level function
+    // collection registers them. Runs after autoload so `polyfill_prune` has already dropped its
+    // provided-function/optional-helper guards, and after name resolution so nested bodies are
+    // already fully qualified and can be moved verbatim.
+    let phase_started = Instant::now();
+    let ast = resolver::hoist_conditional_function_declarations(ast);
+    timings.record_since("hoist-conditional-fns", phase_started);
+
     let phase_started = Instant::now();
     let ast = optimize::fold_constants(ast);
     timings.record_since("opt-fold", phase_started);
@@ -276,6 +285,20 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = optimize::fold_class_existence(ast, &existence_sets);
     optimize::fold_class_existence_in_method_bodies(&mut check_result, &existence_sets);
     timings.record_since("opt-class-exists", phase_started);
+
+    // Fold closed-world `function_exists('X')` on a literal name to a boolean, so a `!function_exists`
+    // guard around a builtin redefinition becomes constant control flow the following passes prune.
+    // The fold is conservative about runtime load order: it folds unconditionally-available names
+    // (builtin/extern/date-alias -> true, genuinely-absent -> false) but leaves checked user
+    // functions for codegen, which keeps `function_exists` on an include-loaded function a runtime
+    // check. Covers top-level/function bodies and, separately, class/enum method bodies EIR reads
+    // from `check_result`.
+    let phase_started = Instant::now();
+    let function_existence_set =
+        optimize::FunctionExistenceSet::from_check_result(&check_result);
+    let ast = optimize::fold_function_existence(ast, &function_existence_set);
+    optimize::fold_function_existence_in_method_bodies(&mut check_result, &function_existence_set);
+    timings.record_since("opt-func-exists", phase_started);
 
     let phase_started = Instant::now();
     let ast = optimize::prune_constant_control_flow(ast);

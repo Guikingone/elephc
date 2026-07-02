@@ -128,6 +128,7 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let (resolved, _autoload_warnings) =
         elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
+    let resolved = elephc::resolver::hoist_conditional_function_declarations(resolved);
     let resolved = elephc::optimize::fold_constants(resolved);
     let mut check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
@@ -138,6 +139,13 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     );
     let optimized = elephc::optimize::fold_class_existence(optimized, &existence_sets);
     elephc::optimize::fold_class_existence_in_method_bodies(&mut check_result, &existence_sets);
+    let function_existence_set =
+        elephc::optimize::FunctionExistenceSet::from_check_result(&check_result);
+    let optimized = elephc::optimize::fold_function_existence(optimized, &function_existence_set);
+    elephc::optimize::fold_function_existence_in_method_bodies(
+        &mut check_result,
+        &function_existence_set,
+    );
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);

@@ -21,10 +21,14 @@ mod class_existence;
 mod control;
 mod effects;
 mod fold;
+mod function_existence;
 mod propagate;
 
 pub use class_existence::{
     fold_class_existence, fold_class_existence_in_method_bodies, ClassExistenceSets,
+};
+pub use function_existence::{
+    fold_function_existence, fold_function_existence_in_method_bodies, FunctionExistenceSet,
 };
 use control::*;
 use effects::*;

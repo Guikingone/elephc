@@ -19,6 +19,7 @@ mod engine_includes;
 mod exprs;
 mod files;
 mod function_variants;
+mod hoist_conditional_functions;
 mod hoist_includes;
 mod include_once;
 mod include_path;
@@ -34,6 +35,8 @@ use contains::has_includes;
 use discovery::discover_include_declarations;
 use engine::resolve_stmts;
 use state::ResolveState;
+
+pub use hoist_conditional_functions::hoist_conditional_function_declarations;
 
 /// Resolves all include/require statements by inlining the referenced files.
 ///

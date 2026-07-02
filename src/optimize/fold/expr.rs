@@ -181,8 +181,10 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             let args: Vec<Expr> = args.into_iter().map(fold_expr).collect();
             // Fold closed-world `class_exists`/`interface_exists`/`trait_exists`/`enum_exists` on a
             // literal name to a boolean when the existence sets are installed (see
-            // `crate::optimize::class_existence`); otherwise keep the call unchanged.
+            // `crate::optimize::class_existence`); otherwise try the analogous `function_exists`
+            // fold (see `crate::optimize::function_existence`); otherwise keep the call unchanged.
             crate::optimize::class_existence::try_fold_class_existence(&name, &args)
+                .or_else(|| crate::optimize::function_existence::try_fold_function_exists(&name, &args))
                 .unwrap_or(ExprKind::FunctionCall { name, args })
         }
         ExprKind::ArrayLiteral(items) => {
