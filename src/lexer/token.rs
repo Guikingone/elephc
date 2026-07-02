@@ -85,6 +85,7 @@ pub enum Token {
     Fn,             // fn (arrow functions)
     Use,            // use (closure captures — reserved for future)
     Namespace,      // namespace
+    Declare,        // declare (strict_types/ticks/encoding directives)
     Const,          // const
     Global,         // global
     Static,         // static

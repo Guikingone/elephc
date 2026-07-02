@@ -145,3 +145,77 @@ fn test_bare_new_object_statement_parses() {
 fn test_non_expression_token_at_statement_position_fails() {
     assert!(parse_fails("<?php => 5;"));
 }
+
+// --- declare(...) ---
+
+/// Verifies `declare(strict_types=1);` parses without error and lowers to an empty
+/// `Synthetic` block (a no-op): elephc type-checks statically already, so the directive
+/// changes no behavior and is discarded.
+#[test]
+fn test_declare_strict_types_is_noop() {
+    let stmts = parse_source("<?php declare(strict_types=1);");
+    assert_eq!(
+        stmts,
+        vec![Stmt::new(StmtKind::Synthetic(vec![]), elephc::span::Span::dummy())]
+    );
+}
+
+/// Verifies `declare(ticks=1);` parses without error and also lowers to a no-op: tick
+/// handlers are not supported, so the directive is discarded like `strict_types`.
+#[test]
+fn test_declare_ticks_is_noop() {
+    let stmts = parse_source("<?php declare(ticks=1);");
+    assert_eq!(
+        stmts,
+        vec![Stmt::new(StmtKind::Synthetic(vec![]), elephc::span::Span::dummy())]
+    );
+}
+
+/// Verifies multiple comma-separated directives (`declare(strict_types=1, ticks=1);`) parse
+/// as a single no-op statement rather than being misread as two assignment expressions.
+#[test]
+fn test_declare_multiple_directives_is_noop() {
+    let stmts = parse_source("<?php declare(strict_types=1, ticks=1);");
+    assert_eq!(
+        stmts,
+        vec![Stmt::new(StmtKind::Synthetic(vec![]), elephc::span::Span::dummy())]
+    );
+}
+
+/// Verifies the block form `declare(ticks=1) { echo 1; }` keeps its body: the directive list
+/// is discarded but the block's statements are preserved and run normally.
+#[test]
+fn test_declare_block_form_keeps_body() {
+    let stmts = parse_source("<?php declare(ticks=1) { echo 1; }");
+    assert_eq!(
+        stmts,
+        vec![Stmt::new(
+            StmtKind::Synthetic(vec![Stmt::echo(Expr::int_lit(1))]),
+            elephc::span::Span::dummy(),
+        )]
+    );
+}
+
+/// Verifies `declare(encoding='UTF-8');` accepts a string-literal directive value (not just
+/// integers), matching PHP's `encoding` directive.
+#[test]
+fn test_declare_encoding_string_value_is_noop() {
+    let stmts = parse_source("<?php declare(encoding='UTF-8');");
+    assert_eq!(
+        stmts,
+        vec![Stmt::new(StmtKind::Synthetic(vec![]), elephc::span::Span::dummy())]
+    );
+}
+
+/// Verifies `declare(strict_types);` (missing `= value`) is rejected: directive values are
+/// mandatory, not parsed as a bareword/assignment expression.
+#[test]
+fn test_declare_missing_value_fails() {
+    assert!(parse_fails("<?php declare(strict_types);"));
+}
+
+/// Verifies `declare();` (no directives at all) is rejected rather than silently accepted.
+#[test]
+fn test_declare_empty_directives_fails() {
+    assert!(parse_fails("<?php declare();"));
+}

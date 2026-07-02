@@ -479,6 +479,26 @@ fn test_error_missing_equals() {
     expect_error("<?php $x \"hi\";", "Expected '='");
 }
 
+/// Verifies a `declare(...)` directive missing its `= value` (e.g. `declare(strict_types);`)
+/// is rejected with a clear diagnostic instead of being silently accepted.
+#[test]
+fn test_error_declare_missing_directive_value() {
+    expect_error(
+        "<?php declare(strict_types);",
+        "Expected '=' after declare directive name",
+    );
+}
+
+/// Verifies an empty `declare()` (no directives at all) is rejected instead of silently
+/// accepted as a no-op.
+#[test]
+fn test_error_declare_empty_directives() {
+    expect_error(
+        "<?php declare();",
+        "Expected a directive name inside 'declare(...)'",
+    );
+}
+
 /// Verifies the error diagnostic for unclosed paren.
 #[test]
 fn test_error_unclosed_paren() {

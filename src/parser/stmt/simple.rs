@@ -1,12 +1,16 @@
 //! Purpose:
 //! Parses simple statement forms with minimal nested structure.
-//! Handles includes, echo, expression statements, returns, throws, `$this` statements, and constants.
+//! Handles includes, echo, expression statements, returns, throws, `$this` statements, constants,
+//! and `declare(...)` directives.
 //!
 //! Called from:
 //! - `crate::parser::stmt::parse_stmt()`.
 //!
 //! Key details:
 //! - Include statements preserve their path expression for resolver include discovery and loading.
+//! - `declare(...)` directives (`strict_types`, `ticks`, `encoding`) are parsed and discarded:
+//!   elephc type-checks statically and does not support tick handlers or alternate source
+//!   encodings, so the statement form lowers to a no-op and the block form keeps only its body.
 
 use crate::errors::CompileError;
 use crate::lexer::Token;
@@ -15,7 +19,7 @@ use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
 
 use super::assign::try_parse_postfix_assignment;
-use super::{expect_semicolon, expect_token};
+use super::{expect_semicolon, expect_token, parse_block};
 
 /// Parses `include`/`require` (with optional `_once`) statements.
 ///
@@ -300,4 +304,79 @@ pub(super) fn parse_const_decl(
     expect_semicolon(tokens, pos)?;
 
     Ok(Stmt::new(StmtKind::ConstDecl { name, value }, span))
+}
+
+/// Parses a `declare(directive = value, ...)` statement, in either its statement form
+/// (`declare(...);`) or block form (`declare(...) { ... }`).
+///
+/// PHP's `declare` construct configures compile-time directives such as `strict_types`,
+/// `ticks`, and `encoding`. elephc type-checks statically already (so `strict_types` changes
+/// no behavior), and does not support tick handlers or alternate source encodings, so every
+/// directive is parsed for syntax only and then discarded. Directive values are literals (an
+/// integer for `strict_types`/`ticks`, a string for `encoding`) — parsed directly as `ident =
+/// literal` pairs rather than through the general expression parser, since a bareword directive
+/// name is not a valid assignment target for `parse_expr`.
+///
+/// The statement form lowers to an empty `StmtKind::Synthetic` (a no-op). The block form lowers
+/// to a `StmtKind::Synthetic` wrapping the block's statements, so the body runs normally while
+/// the directive list itself is discarded.
+pub(super) fn parse_declare(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume 'declare'
+    expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'declare'")?;
+
+    loop {
+        match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Identifier(_)) => *pos += 1, // consume the directive name
+            _ => {
+                return Err(CompileError::new(
+                    span,
+                    "Expected a directive name inside 'declare(...)'",
+                ))
+            }
+        }
+
+        expect_token(
+            tokens,
+            pos,
+            &Token::Assign,
+            "Expected '=' after declare directive name",
+        )?;
+
+        match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::IntLiteral(_)) | Some(Token::StringLiteral(_)) => *pos += 1, // consume the literal directive value
+            _ => {
+                return Err(CompileError::new(
+                    span,
+                    "Expected an integer or string literal for declare directive value",
+                ))
+            }
+        }
+
+        if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Comma)) {
+            *pos += 1; // consume ',' and parse the next directive
+            continue;
+        }
+        break;
+    }
+
+    expect_token(
+        tokens,
+        pos,
+        &Token::RParen,
+        "Expected ')' after declare directives",
+    )?;
+
+    // Block form: `declare(...) { ... }` — keep the body, discard the directives.
+    if *pos < tokens.len() && tokens[*pos].0 == Token::LBrace {
+        let body = parse_block(tokens, pos)?;
+        return Ok(Stmt::new(StmtKind::Synthetic(body), span));
+    }
+
+    // Statement form: `declare(...);` — a no-op.
+    expect_semicolon(tokens, pos)?;
+    Ok(Stmt::new(StmtKind::Synthetic(Vec::new()), span))
 }

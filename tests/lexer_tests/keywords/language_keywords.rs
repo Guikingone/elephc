@@ -102,6 +102,48 @@ fn test_namespace_and_backslash_tokens() {
     );
 }
 
+/// Verifies `declare(strict_types=1);` tokenizes `declare` as the dedicated `Declare` keyword
+/// (not a bareword `Identifier`), so the parser can dispatch to the directive-list parser
+/// instead of misreading `strict_types=1` as a call argument assignment.
+#[test]
+fn test_declare_keyword_token() {
+    let t = tokens("<?php declare(strict_types=1);");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Declare,
+            Token::LParen,
+            Token::Identifier("strict_types".into()),
+            Token::Assign,
+            Token::IntLiteral(1),
+            Token::RParen,
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies `declare` is matched case-insensitively like other PHP keywords (e.g. `DECLARE`).
+#[test]
+fn test_declare_keyword_case_insensitive() {
+    let t = tokens("<?php DECLARE(ticks=1);");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Declare,
+            Token::LParen,
+            Token::Identifier("ticks".into()),
+            Token::Assign,
+            Token::IntLiteral(1),
+            Token::RParen,
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
 /// Verifies `enum Color: int { case Red; }` token sequence.
 #[test]
 fn test_enum_tokens() {
