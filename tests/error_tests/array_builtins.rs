@@ -481,6 +481,17 @@ fn test_error_array_map_wrong_args() {
     );
 }
 
+/// Verifies that a string-literal callback naming a non-existent, non-builtin
+/// function is still reported as "Undefined function" after the
+/// builtin-callable resolution path was added (genuine-undefined guard).
+#[test]
+fn test_error_array_map_string_literal_undefined_function() {
+    expect_error(
+        r#"<?php array_map('no_such_function_anywhere', [1, 2]);"#,
+        "Undefined function: no_such_function_anywhere",
+    );
+}
+
 /// Verifies that error array filter wrong args.
 #[test]
 fn test_error_array_filter_wrong_args() {

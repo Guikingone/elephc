@@ -734,6 +734,29 @@ pub(crate) fn check_callback_builtin_call(
             let _ = checker.check_function_call(cb_name, callback_args, span, env);
             return Ok(PhpType::Int);
         }
+        // Before reporting "Undefined function", recognize a string-literal
+        // callback that names a PHP builtin (e.g. `array_map('trim', ...)`). A
+        // bare `trim(...)` call in a namespace already resolves to the global
+        // builtin via the catalog lookup; a string callable naming the same
+        // builtin must resolve the same way instead of being rejected as
+        // undefined. `canonical_builtin_function_name` implements PHP's
+        // case-insensitive builtin lookup against the same catalog a normal
+        // builtin call uses, so the namespace-fallback semantics are
+        // preserved: the literal `'trim'` is canonicalized to the global
+        // `trim` builtin regardless of the enclosing namespace.
+        if let Some(builtin_name) = canonical_builtin_function_name(cb_name) {
+            // Validate the callback's arguments against the builtin's real
+            // signature (arity, argument types, return type), mirroring how a
+            // direct `trim(...)` call is checked. This surfaces arity errors
+            // for genuine misuse while accepting valid builtin callables.
+            if let Some(ret_ty) = checker.check_builtin(&builtin_name, callback_args, span, env)? {
+                return Ok(ret_ty);
+            }
+            // The builtin dispatcher returned no inferred return type; treat
+            // the callback as valid and fall back to the conventional
+            // placeholder used for user-function callbacks above.
+            return Ok(PhpType::Int);
+        }
         return checker.check_function_call(cb_name, callback_args, span, env);
     }
 

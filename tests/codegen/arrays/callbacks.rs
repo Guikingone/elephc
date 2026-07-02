@@ -59,6 +59,62 @@ echo $b[1];
     assert_eq!(out, "2,4");
 }
 
+/// Tests `array_map` with a string-literal builtin callback (`'trim'`) at
+/// global scope, verifying that a string callable naming a PHP builtin is
+/// recognized by the callback validator and round-trips through codegen.
+#[test]
+fn test_array_map_string_literal_builtin_callback_trim() {
+    let out = compile_and_run(
+        r#"<?php
+$x = array_map('trim', [" a ", " b "]);
+echo $x[0] . $x[1];
+"#,
+    );
+    assert_eq!(out, "ab");
+}
+
+/// Tests `array_map` with a string-literal builtin callback inside a
+/// namespace, verifying that `'trim'` resolves to the global `trim` builtin
+/// via PHP namespace-fallback (the repro case for the cluster).
+#[test]
+fn test_array_map_string_literal_builtin_callback_in_namespace() {
+    let out = compile_and_run(
+        r#"<?php
+namespace N;
+$x = array_map('trim', [" a ", " b "]);
+echo $x[0] . $x[1];
+"#,
+    );
+    assert_eq!(out, "ab");
+}
+
+/// Tests `array_map` with a string-literal builtin callback `'strtoupper'`,
+/// verifying the callback validator recognizes string builtins beyond trim.
+#[test]
+fn test_array_map_string_literal_builtin_callback_strtoupper() {
+    let out = compile_and_run(
+        r#"<?php
+$x = array_map('strtoupper', ["a", "b"]);
+echo $x[0] . $x[1];
+"#,
+    );
+    assert_eq!(out, "AB");
+}
+
+/// Tests `usort` with a string-literal builtin comparator callback `'strcmp'`,
+/// verifying the comparator-callback validation path also recognizes builtins.
+#[test]
+fn test_usort_string_literal_builtin_callback_strcmp() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [3, 1, 2];
+usort($a, 'strcmp');
+echo $a[0] . $a[1] . $a[2];
+"#,
+    );
+    assert_eq!(out, "123");
+}
+
 /// Verifies runtime string builtin callback variables dispatch through descriptor-backed array_map.
 #[test]
 fn test_array_map_dynamic_string_builtin_callback_uses_descriptor_invoker() {
