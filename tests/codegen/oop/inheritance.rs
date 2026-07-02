@@ -728,3 +728,74 @@ echo $s->make()->name();
     );
     assert_eq!(out, "dog");
 }
+
+/// Verifies LSP-legal parameter widening: a child override may add a trailing
+/// optional parameter over a zero-parameter parent method. Both the defaulted
+/// call `f()` and the explicit call `f(5)` must resolve to the child override.
+/// Cross-checked with `php` (prints `2|5`).
+#[test]
+fn test_override_add_optional_trailing_param() {
+    let out = compile_and_run(
+        r#"<?php
+class A { function f() { return 1; } }
+class B extends A { function f($x = 2) { return $x; } }
+$b = new B();
+echo $b->f(), "|", $b->f(5);
+"#,
+    );
+    assert_eq!(out, "2|5");
+}
+
+/// Verifies LSP-legal parameter widening: a child override may make a required
+/// parent parameter optional (widening what it accepts). The defaulted call
+/// `f()` uses the child's default and `f(7)` passes the argument through.
+/// Cross-checked with `php` (prints `0|7`).
+#[test]
+fn test_override_make_required_param_optional() {
+    let out = compile_and_run(
+        r#"<?php
+class A { function f($x) { return $x; } }
+class B extends A { function f($x = 0) { return $x; } }
+$b = new B();
+echo $b->f(), "|", $b->f(7);
+"#,
+    );
+    assert_eq!(out, "0|7");
+}
+
+/// Verifies LSP-legal parameter widening: a child override may add a variadic
+/// tail over a fixed-arity parent method. The override is accepted by signature
+/// validation and the variadic tail collects the extra arguments at runtime.
+/// (Calls with two or more arguments and uses `count` to sidestep two unrelated
+/// pre-existing instance-method-variadic gaps in call-count validation and
+/// `array_sum(Array<Mixed>)` lowering.) Cross-checked with `php`: `3 + count([4,5])`
+/// is `5`.
+#[test]
+fn test_override_add_variadic_over_fixed_parent() {
+    let out = compile_and_run(
+        r#"<?php
+class A { function f($a) { return $a; } }
+class B extends A { function f($a, ...$rest) { return $a + count($rest); } }
+$b = new B();
+echo $b->f(3, 4, 5);
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies the interface-implementation analog of parameter widening: a class
+/// implementing an interface method may add a trailing optional parameter. The
+/// same `validate_signature_compatibility` path serves interface implementation
+/// via the "implementing" context. Cross-checked with `php` (prints `9`).
+#[test]
+fn test_interface_impl_add_optional_trailing_param() {
+    let out = compile_and_run(
+        r#"<?php
+interface Doer { public function doIt(); }
+class Worker implements Doer { public function doIt($n = 9) { return $n; } }
+$w = new Worker();
+echo $w->doIt();
+"#,
+    );
+    assert_eq!(out, "9");
+}

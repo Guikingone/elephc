@@ -132,12 +132,59 @@ fn test_error_static_this() {
 }
 
 /// Tests that a child class method that changes the parameter count when
-/// overriding a parent method produces the expected error.
+/// overriding a parent method produces the expected error. Dropping a parameter
+/// (the child accepts fewer calls than the parent) is a genuine LSP violation
+/// and stays rejected. Cross-checked with `php` (fatal: must be compatible).
 #[test]
 fn test_error_override_cannot_change_parameter_count() {
     expect_error(
         "<?php class Base { public function ping($x) { return $x; } } class Child extends Base { public function ping() { return 1; } }",
         "Cannot change parameter count when overriding method: Child::ping",
+    );
+}
+
+/// Tests that a child override adding a *required* parameter over a
+/// zero-parameter parent method is rejected: the parent's callers never supply
+/// it, so the child accepts fewer calls. Cross-checked with `php` (fatal: must
+/// be compatible).
+#[test]
+fn test_error_override_cannot_add_required_param() {
+    expect_error(
+        "<?php class Base { public function ping() { return 1; } } class Child extends Base { public function ping($x) { return $x; } }",
+        "Cannot add a required parameter when overriding method: Child::ping",
+    );
+}
+
+/// Tests that a child override making an *optional* parent parameter *required*
+/// is rejected: callers who omit the argument would break. Cross-checked with
+/// `php` (fatal: must be compatible).
+#[test]
+fn test_error_override_cannot_make_optional_param_required() {
+    expect_error(
+        "<?php class Base { public function ping($x = 1) { return $x; } } class Child extends Base { public function ping($x) { return $x; } }",
+        "Cannot make an optional parameter required when overriding method: Child::ping",
+    );
+}
+
+/// Tests that a child override removing the parent's variadic tail is rejected:
+/// it would reject calls that pass extra arguments the parent accepts.
+/// Cross-checked with `php` (fatal: must be compatible).
+#[test]
+fn test_error_override_cannot_remove_variadic() {
+    expect_error(
+        "<?php class Base { public function ping($a, ...$xs) { return $a; } } class Child extends Base { public function ping($a) { return $a; } }",
+        "Cannot change variadic parameter shape when overriding method: Child::ping",
+    );
+}
+
+/// Tests that a child override changing the by-reference-ness of an overlapping
+/// parameter is rejected: PHP requires by-ref parameters to match exactly for
+/// overlapping positions. Cross-checked with `php` (fatal: must be compatible).
+#[test]
+fn test_error_override_cannot_change_by_reference_param() {
+    expect_error(
+        "<?php class Base { public function ping(&$x) { $x = 1; } } class Child extends Base { public function ping($x) { return $x; } }",
+        "Cannot change pass-by-reference parameters when overriding method: Child::ping",
     );
 }
 

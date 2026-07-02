@@ -189,9 +189,44 @@ pub(crate) fn required_param_count(sig: &FunctionSig) -> usize {
         .count()
 }
 
-/// Validates that `child_sig` is compatible with `parent_sig` for override purposes.
-/// Checks parameter count, ref params, defaults layout, variadic flag, and required param count.
-/// Reports errors with `context` and `kind` (e.g., "overriding method") in the message.
+/// Returns the number of fixed (non-variadic) parameters in `sig`.
+///
+/// The trailing variadic parameter, when present, is materialized as the last
+/// entry of `sig.params` by `callable_wrapper_sig`; this excludes it so callers
+/// can reason about the positional/fixed arity separately from the variadic
+/// tail. `sig.params` always holds at least the variadic entry when
+/// `sig.variadic` is set, so the subtraction never underflows.
+fn fixed_param_count(sig: &FunctionSig) -> usize {
+    let total = sig.params.len();
+    if sig.variadic.is_some() {
+        total.saturating_sub(1)
+    } else {
+        total
+    }
+}
+
+/// Returns `true` if parameter `index` of `sig` is optional (has a default value).
+///
+/// An out-of-range `index` is treated as optional: there is no required
+/// parameter at that position, so it cannot impose a call-site requirement.
+fn param_is_optional(sig: &FunctionSig, index: usize) -> bool {
+    sig.defaults.get(index).map_or(true, |d| d.is_some())
+}
+
+/// Validates that `child_sig` is a contravariant-compatible (LSP) override of
+/// `parent_sig`.
+///
+/// PHP method-override parameters are contravariant: a child may accept *more*
+/// than the parent, never fewer. This allows a child to add trailing optional
+/// parameters, add a variadic, or make a required parent parameter optional,
+/// while still rejecting the genuinely-incompatible cases: dropping a parameter
+/// (without a covering variadic), adding a required parameter, making an
+/// optional parent parameter required, removing the parent's variadic, or
+/// changing the by-reference-ness of an overlapping parameter.
+///
+/// By-reference (`ref_params`) matching stays strict, but is compared only over
+/// the overlapping prefix so an added trailing by-value parameter does not trip
+/// it. Reports errors with `context` and `kind` (e.g., "overriding method").
 pub(crate) fn validate_signature_compatibility(
     span: crate::span::Span,
     owner_name: &str,
@@ -201,7 +236,15 @@ pub(crate) fn validate_signature_compatibility(
     kind: &str,
     context: &str,
 ) -> Result<(), CompileError> {
-    if child_sig.params.len() != parent_sig.params.len() {
+    let parent_fixed = fixed_param_count(parent_sig);
+    let child_fixed = fixed_param_count(child_sig);
+    let parent_variadic = parent_sig.variadic.is_some();
+    let child_variadic = child_sig.variadic.is_some();
+
+    // Count / dropped-parameter rule: the child must accept at least as many
+    // positional arguments as the parent can supply. Fewer fixed parameters is
+    // only acceptable when the child has a variadic that absorbs the tail.
+    if child_fixed < parent_fixed && !child_variadic {
         return Err(CompileError::new(
             span,
             &format!(
@@ -211,37 +254,41 @@ pub(crate) fn validate_signature_compatibility(
         ));
     }
 
-    if child_sig.ref_params != parent_sig.ref_params {
-        return Err(CompileError::new(
-            span,
-            &format!(
-                "Cannot change pass-by-reference parameters when {} {}: {}::{}",
-                context, kind, owner_name, method_name
-            ),
-        ));
+    // Added-parameter rule: every child parameter beyond the parent's fixed arity
+    // must be optional (the variadic tail lives past `child_fixed`); the parent's
+    // callers never supply it, so requiring it would reject legal calls.
+    for index in parent_fixed..child_fixed {
+        if !param_is_optional(child_sig, index) {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Cannot add a required parameter when {} {}: {}::{}",
+                    context, kind, owner_name, method_name
+                ),
+            ));
+        }
     }
 
-    let child_defaults: Vec<bool> = child_sig
-        .defaults
-        .iter()
-        .map(|default| default.is_some())
-        .collect();
-    let parent_defaults: Vec<bool> = parent_sig
-        .defaults
-        .iter()
-        .map(|default| default.is_some())
-        .collect();
-    if child_defaults != parent_defaults {
-        return Err(CompileError::new(
-            span,
-            &format!(
-                "Cannot change optional parameter layout when {} {}: {}::{}",
-                context, kind, owner_name, method_name
-            ),
-        ));
+    // Overlapping-optionality rule: an optional parent parameter must stay
+    // optional in the child (`parent_optional[i]` implies `child_optional[i]`);
+    // making it required rejects callers who omit it.
+    let overlap = parent_fixed.min(child_fixed);
+    for index in 0..overlap {
+        if param_is_optional(parent_sig, index) && !param_is_optional(child_sig, index) {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Cannot make an optional parameter required when {} {}: {}::{}",
+                    context, kind, owner_name, method_name
+                ),
+            ));
+        }
     }
 
-    if child_sig.variadic != parent_sig.variadic {
+    // Variadic rule: the child may add a variadic, but may not remove the
+    // parent's (`parent_variadic` implies `child_variadic`); removing it would
+    // reject calls that pass extra arguments the parent accepts.
+    if parent_variadic && !child_variadic {
         return Err(CompileError::new(
             span,
             &format!(
@@ -251,7 +298,25 @@ pub(crate) fn validate_signature_compatibility(
         ));
     }
 
-    if required_param_count(child_sig) != required_param_count(parent_sig) {
+    // By-reference rule: pass-by-reference-ness must match exactly over the
+    // overlapping prefix. Trailing child parameters are excluded so an added
+    // optional by-value parameter does not trip the comparison.
+    let ref_prefix = parent_sig.ref_params.len().min(child_sig.ref_params.len());
+    if child_sig.ref_params[..ref_prefix] != parent_sig.ref_params[..ref_prefix] {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "Cannot change pass-by-reference parameters when {} {}: {}::{}",
+                context, kind, owner_name, method_name
+            ),
+        ));
+    }
+
+    // Required-parameter-count backstop: the child may require fewer parameters
+    // than the parent, never more (`child_required <= parent_required`). The
+    // rules above already cover the observable cases; this guards any residual
+    // mismatch defensively.
+    if required_param_count(child_sig) > required_param_count(parent_sig) {
         return Err(CompileError::new(
             span,
             &format!(
