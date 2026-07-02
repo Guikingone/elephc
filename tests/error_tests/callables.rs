@@ -221,6 +221,18 @@ fn test_error_call_non_callable_variable() {
     expect_error(r#"<?php $x = 5; $x(1);"#, "not a callable");
 }
 
+/// Verifies that calling a non-callable integer expression is rejected.
+///
+/// Genuine-error guard for the expression-call site: a concrete `Int` receiver
+/// must still produce a "not a callable" diagnostic after the gradual
+/// acceptance helper is introduced.
+#[test]
+fn test_error_call_non_callable_int_expression() {
+    // Verifies invoking an integer literal expression produces a "not a callable"
+    // diagnostic at the expression-call site.
+    expect_error(r#"<?php echo (5)();"#, "not a callable");
+}
+
 /// Verifies that error call user func ref param requires variable.
 #[test]
 fn test_error_call_user_func_ref_param_requires_variable() {

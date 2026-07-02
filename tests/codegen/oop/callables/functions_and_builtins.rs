@@ -227,3 +227,106 @@ echo call_user_func(strlen(...), "hello");
     );
     assert_eq!(out, "5");
 }
+
+/// Tests a direct call on a `Closure` value stored in a variable.
+///
+/// Baseline sanity: `$f = fn($x) => $x + 1; $f(41)` must type-check and run.
+#[test]
+fn test_closure_direct_call_baseline() {
+    let out = compile_and_run(
+        r#"<?php
+$f = fn($x) => $x + 1;
+$r = $f(41);
+echo $r;
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// Tests calling a `callable|null`-typed variable inside a null guard.
+///
+/// The receiver comes from a `?callable`-returning function
+/// (`Union([Callable, Null])`). The call expression inside the guard must
+/// type-check against the nullable-callable union. At runtime `$cb` is null so
+/// the guard is false and nothing is emitted; the test exercises the
+/// type-checker acceptance path (the call site is accepted via the `Callable`
+/// union member) without depending on union-typed runtime call dispatch.
+#[test]
+fn test_callable_nullable_union_call_under_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function get_cb(bool $ok): ?callable {
+    if (!$ok) {
+        return null;
+    }
+    return fn($v) => $v;
+}
+$cb = get_cb(false);
+if ($cb) {
+    echo $cb(2);
+}
+"#,
+    );
+    assert_eq!(out, "");
+}
+
+/// Tests calling a `mixed`-typed receiver holding a closure.
+///
+/// A `mixed`-typed value (from a `mixed`-returning function) is callable under
+/// PHP's gradual rules; the call type-checks (returns `Mixed`) and runs.
+/// Mirrors `php -r '$x = fn($v) => $v; echo $x(2);'`.
+#[test]
+fn test_mixed_receiver_callable_call() {
+    let out = compile_and_run(
+        r#"<?php
+function get_mixed(): mixed {
+    return fn($v) => $v;
+}
+$x = get_mixed();
+echo $x(2);
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// Tests calling a value whose inferred type is a `Callable|Void` union.
+///
+/// Mirrors the Symfony console shape: a function that returns a closure in one
+/// branch and nothing in another has inferred return `Union([Callable, Void])`.
+/// The call runs only under the truthiness guard. Cross-checked with `php -r`.
+#[test]
+fn test_callable_void_union_receiver_call() {
+    let out = compile_and_run(
+        r#"<?php
+function get_cb(bool $ok) {
+    if ($ok) {
+        return fn($v) => $v;
+    }
+}
+$cb = get_cb(true);
+if ($cb) {
+    echo $cb(5);
+}
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Tests calling a value typed as `Closure` (i.e. `Object("Closure")`).
+///
+/// A function returning `Closure` is called as `$h(21)`. Exercises the
+/// `Object("Closure")` acceptance path (Closure has no user-class entry with
+/// `__invoke`). Cross-checked with `php -r`.
+#[test]
+fn test_closure_return_type_call() {
+    let out = compile_and_run(
+        r#"<?php
+function g(): Closure {
+    return fn($x) => $x * 2;
+}
+$h = g();
+echo $h(21);
+"#,
+    );
+    assert_eq!(out, "42");
+}
