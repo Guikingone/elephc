@@ -69,10 +69,10 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Union(vec![PhpType::Str, PhpType::Bool])))
         }
         "file_put_contents" => {
-            if args.len() != 2 {
+            if args.len() < 2 || args.len() > 4 {
                 return Err(CompileError::new(
                     span,
-                    "file_put_contents() takes exactly 2 arguments",
+                    "file_put_contents() takes 2 to 4 arguments",
                 ));
             }
             // file_put_contents("phar://...") writes through the elephc-phar

@@ -207,6 +207,30 @@ fn test_htmlspecialchars_roundtrip() {
     assert_eq!(out, "<div>\"test\"</div>");
 }
 
+/// Verifies `html_entity_decode()` accepts the optional second `$flags` argument (PHP 1–3 arity).
+/// Fixture: html_entity_decode("&lt;b&gt;", ENT_QUOTES) decodes to "<b>".
+#[test]
+fn test_html_entity_decode_with_flags() {
+    let out = compile_and_run(r#"<?php echo html_entity_decode("&lt;b&gt;", ENT_QUOTES);"#);
+    assert_eq!(out, "<b>");
+}
+
+/// Verifies `htmlentities()` accepts the optional second `$flags` argument (PHP 1–4 arity).
+/// Fixture: htmlentities("<b>", ENT_QUOTES) encodes to "&lt;b&gt;".
+#[test]
+fn test_htmlentities_with_flags() {
+    let out = compile_and_run(r#"<?php echo htmlentities("<b>", ENT_QUOTES);"#);
+    assert_eq!(out, "&lt;b&gt;");
+}
+
+/// Verifies `htmlspecialchars()` accepts the optional second `$flags` argument (PHP 1–4 arity).
+/// Fixture: htmlspecialchars("<b>", ENT_QUOTES) encodes to "&lt;b&gt;".
+#[test]
+fn test_htmlspecialchars_with_flags() {
+    let out = compile_and_run(r#"<?php echo htmlspecialchars("<b>", ENT_QUOTES);"#);
+    assert_eq!(out, "&lt;b&gt;");
+}
+
 /// Verifies `urlencode()` percent-encodes spaces as `+` and special chars (`&`, `=`) as `%XX`.
 #[test]
 fn test_urlencode() {

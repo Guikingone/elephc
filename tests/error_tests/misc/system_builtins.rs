@@ -453,12 +453,22 @@ fn test_error_preg_replace_count_must_be_variable() {
     );
 }
 
-/// Verifies that `preg_replace_callback()` with only two arguments yields a wrong-args diagnostic.
+/// Verifies that `preg_replace_callback()` with only two arguments yields a wrong-args
+/// diagnostic (PHP allows 3–6).
 #[test]
 fn test_error_preg_replace_callback_wrong_args() {
     expect_error(
         r#"<?php preg_replace_callback("/a/", function($matches) { return $matches[0]; });"#,
-        "preg_replace_callback() takes exactly 3 arguments",
+        "preg_replace_callback() takes 3 to 6 arguments",
+    );
+}
+
+/// Verifies that `preg_replace_callback()` rejects seven arguments (PHP allows 3–6).
+#[test]
+fn test_error_preg_replace_callback_too_many_args() {
+    expect_error(
+        r#"<?php preg_replace_callback("/a/", function($m) { return $m[0]; }, "s", 1, 2, 3, 4);"#,
+        "preg_replace_callback() takes 3 to 6 arguments",
     );
 }
 

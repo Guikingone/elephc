@@ -439,6 +439,44 @@ echo $product;
     assert_eq!(out, "24");
 }
 
+/// Verifies `array_reduce()` accepts the 2-argument form (no explicit `$initial`).
+/// PHP uses `null` as the implicit initial carry; for an integer-add callback the null
+/// carry coerces to 0, so `array_reduce([1,2,3], fn($c,$v)=>$c+$v)` yields 6.
+///
+/// Currently ignored: the EIR `array_reduce` lowerer reads the `$initial` operand by
+/// index and positional builtin calls do not get optional defaults materialized at the
+/// IR-lowering layer, so the 2-arg form type-checks but the lowerer still expects 3
+/// operands. Tracked as a deferred lowerer follow-up (see the deliverable report).
+#[test]
+#[ignore = "array_reduce 2-arg needs lowerer default-initial synthesis"]
+fn test_array_reduce_two_args_no_initial() {
+    let out = compile_and_run(
+        r#"<?php
+echo array_reduce([1, 2, 3], fn($c, $v) => $c + $v);
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+/// Verifies `array_filter()` accepts the 1-argument form (no callback), which in PHP
+/// removes falsy values. Fixture: [0, 1, 2, 3] keeps 1, 2, 3 → count 3.
+///
+/// Currently ignored: the EIR `array_filter` lowerer requires a callback operand and
+/// positional builtin calls do not get optional defaults materialized at the IR-lowering
+/// layer, so the 1-arg form type-checks but the lowerer still expects 2–3 operands. A
+/// no-callback runtime path (remove falsy) is a deferred follow-up (see the report).
+#[test]
+#[ignore = "array_filter 1-arg needs a no-callback runtime path"]
+fn test_array_filter_one_arg_removes_falsy() {
+    let out = compile_and_run(
+        r#"<?php
+$b = array_filter([0, 1, 2, 3]);
+echo count($b);
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
 // Tests `array_walk` with a callback that echoes each element, verifying the function
 // walks by reference and mutates the array in place.
 /// Verifies that array walk.

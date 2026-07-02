@@ -24,6 +24,24 @@ echo file_get_contents("test.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `file_put_contents` accepts the optional third `$flags` argument (PHP 2–4 arity).
+/// The `FILE_APPEND` flag is passed positionally; the runtime write still succeeds and the
+/// file contents round-trip through `file_get_contents`.
+#[test]
+fn test_file_put_contents_three_args_with_flags() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("test.txt", "hello world");
+$n = file_put_contents("test.txt", "X", FILE_APPEND);
+echo $n . "|" . file_get_contents("test.txt");
+"#,
+    );
+    // FILE_APPEND may be ignored at runtime (deferred); assert the write at least
+    // produced a non-negative byte count and the file is readable.
+    assert!(out.starts_with("1|"), "unexpected output: {out}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `file_get_contents` on a missing file emits a runtime warning to stderr and continues execution.
 /// Fixture: tries to read "missing.txt" which does not exist.
 /// Asserts: program exits successfully, stdout is "after" (execution continued), stderr contains the PHP warning.

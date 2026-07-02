@@ -87,9 +87,24 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
 
         "strlen" | "strtolower" | "strtoupper" | "ucfirst" | "lcfirst" | "strrev"
         | "grapheme_strrev" | "addslashes" | "stripslashes" | "nl2br" | "bin2hex"
-        | "hex2bin" | "htmlspecialchars" | "htmlentities" | "html_entity_decode"
-        | "urlencode" | "urldecode" | "rawurlencode" | "rawurldecode"
+        | "hex2bin" | "urlencode" | "urldecode" | "rawurlencode" | "rawurldecode"
         | "base64_encode" => Some(fixed(&["string"])),
+        // htmlspecialchars/htmlentities(string $string, int $flags = ENT_QUOTES|ENT_SUBSTITUTE,
+        // ?string $encoding = null, bool $double_encode = true): string. The default
+        // flags value 11 = ENT_QUOTES|ENT_SUBSTITUTE; ENT_SUBSTITUTE is not registered
+        // as a named constant here, so the literal 11 is used directly.
+        "htmlspecialchars" | "htmlentities" => Some(optional(
+            &["string", "flags", "encoding", "double_encode"],
+            1,
+            vec![int_lit(11), null_lit(), bool_lit(true)],
+        )),
+        // html_entity_decode(string $string, int $flags = ENT_QUOTES|ENT_SUBSTITUTE,
+        // ?string $encoding = null): string.
+        "html_entity_decode" => Some(optional(
+            &["string", "flags", "encoding"],
+            1,
+            vec![int_lit(11), null_lit()],
+        )),
         "base64_decode" => Some(optional(&["string", "strict"], 1, vec![bool_lit(false)])),
         // serialize(mixed $value): string and unserialize(string $data, array $options = []): mixed.
         // The signatures must match PHP so named arguments and the optional `$options` default
@@ -222,7 +237,7 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             2,
             vec![int_lit(0)],
         )),
-        "strrpos" => Some(fixed(&["haystack", "needle"])),
+        "strrpos" => Some(optional(&["haystack", "needle", "offset"], 2, vec![int_lit(0)])),
         "strstr" => Some(optional(
             &["haystack", "needle", "before_needle"],
             2,
@@ -464,10 +479,18 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         )),
 
         "array_pop" | "array_shift" => Some(first_param_ref(fixed(&["array"]))),
-        "array_keys" | "array_values" | "array_reverse" | "array_unique" | "array_flip"
-        | "array_sum" | "array_product" | "array_rand" => Some(fixed(&["array"])),
-        "sort" | "rsort" | "shuffle" | "natsort" | "natcasesort" | "asort"
-        | "arsort" | "ksort" | "krsort" => Some(first_param_ref(fixed(&["array"]))),
+        "array_keys" | "array_values" | "array_flip" | "array_sum" | "array_product"
+        | "array_rand" => Some(fixed(&["array"])),
+        // array_reverse(array $array, bool $preserve_keys = false): array.
+        "array_reverse" => Some(optional(&["array", "preserve_keys"], 1, vec![bool_lit(false)])),
+        // array_unique(array $array, int $flags = SORT_STRING): array. SORT_STRING = 2.
+        "array_unique" => Some(optional(&["array", "flags"], 1, vec![int_lit(2)])),
+        // sort family: shuffle/natsort/natcasesort take exactly 1 arg in PHP;
+        // sort/rsort/asort/arsort/ksort/krsort accept an optional $flags (SORT_REGULAR=0).
+        "shuffle" | "natsort" | "natcasesort" => Some(first_param_ref(fixed(&["array"]))),
+        "sort" | "rsort" | "asort" | "arsort" | "ksort" | "krsort" => {
+            Some(first_param_ref(optional(&["array", "flags"], 1, vec![int_lit(0)])))
+        }
         "in_array" => Some(optional(&["needle", "haystack", "strict"], 2, vec![bool_lit(false)])),
         "array_key_exists" => Some(fixed(&["key", "array"])),
         // array_key_first(array $array): string|int|null — reads the first key
@@ -510,14 +533,17 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "array_pad" => Some(fixed(&["array", "length", "value"])),
         "array_fill" => Some(fixed(&["start_index", "count", "value"])),
         "array_slice" => Some(optional(
-            &["array", "offset", "length"],
+            &["array", "offset", "length", "preserve_keys"],
             2,
-            vec![null_lit()],
+            vec![null_lit(), bool_lit(false)],
         )),
         "array_splice" => Some(first_param_ref(optional(
-            &["array", "offset", "length"],
+            &["array", "offset", "length", "replacement"],
             2,
-            vec![null_lit()],
+            vec![
+                null_lit(),
+                Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy()),
+            ],
         ))),
         "array_chunk" => Some(fixed(&["array", "length"])),
         "array_column" => Some(fixed(&["array", "column_key"])),
@@ -733,7 +759,16 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             sig.ref_params[2] = true;
             Some(sig)
         }
-        "preg_replace_callback" => Some(fixed(&["pattern", "callback", "subject"])),
+        "preg_replace_callback" => {
+            let mut sig = optional(
+                &["pattern", "callback", "subject", "limit", "count", "flags"],
+                3,
+                vec![int_lit(-1), null_lit(), int_lit(0)],
+            );
+            // $count is the by-ref out-param mirroring preg_replace's by-ref $count.
+            sig.ref_params[4] = true;
+            Some(sig)
+        }
         "preg_replace" => {
             let mut sig = optional(
                 &["pattern", "replacement", "subject", "limit", "count"],
@@ -755,7 +790,11 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         | "fileperms" | "fileowner" | "filegroup" | "fileinode" | "filetype"
         | "stat" | "lstat" => Some(fixed(&["filename"])),
         "disk_free_space" | "disk_total_space" => Some(fixed(&["directory"])),
-        "file_put_contents" => Some(fixed(&["filename", "data"])),
+        "file_put_contents" => Some(optional(
+            &["filename", "data", "flags", "context"],
+            2,
+            vec![int_lit(0), null_lit()],
+        )),
         "__elephc_phar_list_entries" => Some(fixed(&["filename"])),
         "__elephc_phar_set_compression" => Some(fixed(&["filename", "compression"])),
         "copy" | "rename" => Some(fixed(&["from", "to"])),

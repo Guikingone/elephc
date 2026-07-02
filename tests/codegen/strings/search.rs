@@ -118,6 +118,14 @@ fn test_strrpos_not_found_is_strict_false() {
     assert_eq!(out, "miss");
 }
 
+/// Verifies strrpos accepts an optional third `$offset` argument (PHP 2–3 arity).
+/// Fixture: strrpos("hello world","o",5) finds the last "o" at or after offset 5 → 7.
+#[test]
+fn test_strrpos_with_offset() {
+    let out = compile_and_run(r#"<?php echo strrpos("hello world", "o", 5);"#);
+    assert_eq!(out, "7");
+}
+
 /// Verifies strstr returns the portion of the string starting from the first needle occurrence.
 /// Fixture: "user@example.com" split on "@" yields "@example.com".
 #[test]

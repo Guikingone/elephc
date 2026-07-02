@@ -23,6 +23,21 @@ echo $b[0] . $b[1] . $b[2];
     assert_eq!(out, "213");
 }
 
+/// Compiles `array_reverse($a, true)` — the 2-argument form preserves keys. Input
+/// `[1, 2, 3]` with `preserve_keys=true` keeps keys 0,1,2 in reverse value order, so
+/// accessing by key 0,1,2 yields the reversed values `"321"`.
+#[test]
+fn test_array_reverse_preserve_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2, 3];
+$b = array_reverse($a, true);
+echo $b[0] . $b[1] . $b[2];
+"#,
+    );
+    assert_eq!(out, "321");
+}
+
 /// Compiles `array_sum($a)` and verifies integer summation of all elements.
 /// Input: `[10, 20, 30]` → sum = 60.
 #[test]

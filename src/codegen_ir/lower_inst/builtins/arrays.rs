@@ -183,7 +183,7 @@ pub(super) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction
 
 /// Lowers `array_reverse()` for indexed arrays with 8-byte payload slots.
 pub(super) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count(inst, "array_reverse", 1)?;
+    ensure_arg_count_between(inst, "array_reverse", 1, 2)?;
     let array = expect_operand(inst, 0)?;
     let elem_ty = eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_reverse")?;
     ctx.load_value_to_result(array)?;
@@ -196,7 +196,7 @@ pub(super) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruct
 
 /// Lowers `array_unique()` for indexed arrays with 8-byte payload slots.
 pub(super) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count(inst, "array_unique", 1)?;
+    ensure_arg_count_between(inst, "array_unique", 1, 2)?;
     let array = expect_operand(inst, 0)?;
     let elem_ty = eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_unique")?;
     ctx.load_value_to_result(array)?;
@@ -956,7 +956,7 @@ pub(super) fn lower_array_intersect_key(ctx: &mut FunctionContext<'_>, inst: &In
 
 /// Lowers `array_slice()` for indexed arrays with pointer-sized payload slots.
 pub(super) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count_between(inst, "array_slice", 2, 3)?;
+    ensure_arg_count_between(inst, "array_slice", 2, 4)?;
     let array = expect_operand(inst, 0)?;
     if matches!(
         ctx.value_php_type(array)?.codegen_repr(),
@@ -965,7 +965,7 @@ pub(super) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instructio
         return lower_mixed_array_slice(ctx, inst);
     }
     let offset = expect_operand(inst, 1)?;
-    let length = if inst.operands.len() == 3 {
+    let length = if inst.operands.len() >= 3 {
         Some(expect_operand(inst, 2)?)
     } else {
         None
@@ -982,7 +982,7 @@ pub(super) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instructio
 fn lower_mixed_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let offset = expect_operand(inst, 1)?;
-    let length = if inst.operands.len() == 3 {
+    let length = if inst.operands.len() >= 3 {
         Some(expect_operand(inst, 2)?)
     } else {
         None
@@ -999,7 +999,7 @@ fn lower_mixed_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 
 /// Lowers `array_splice()` by mutating an indexed source array and returning removed elements.
 pub(super) fn lower_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count_between(inst, "array_splice", 2, 3)?;
+    ensure_arg_count_between(inst, "array_splice", 2, 4)?;
     let array = expect_operand(inst, 0)?;
     if matches!(
         ctx.value_php_type(array)?.codegen_repr(),
@@ -1008,7 +1008,7 @@ pub(super) fn lower_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instructi
         return lower_mixed_array_splice(ctx, inst);
     }
     let offset = expect_operand(inst, 1)?;
-    let length = if inst.operands.len() == 3 {
+    let length = if inst.operands.len() >= 3 {
         Some(expect_operand(inst, 2)?)
     } else {
         None
@@ -1028,7 +1028,7 @@ pub(super) fn lower_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instructi
 fn lower_mixed_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let offset = expect_operand(inst, 1)?;
-    let length = if inst.operands.len() == 3 {
+    let length = if inst.operands.len() >= 3 {
         Some(expect_operand(inst, 2)?)
     } else {
         None
@@ -1380,7 +1380,7 @@ fn lower_indexed_array_sort(
     int_helper: &str,
     str_helper: Option<&str>,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, name, 1)?;
+    ensure_arg_count_between(inst, name, 1, 2)?;
     let array = expect_operand(inst, 0)?;
     let elem_ty = indexed_sort_element_type(ctx.value_php_type(array)?, name, str_helper.is_some())?;
     let source_local = source_load_local_slot(ctx, array)?;
@@ -1552,7 +1552,7 @@ fn lower_array_key_sort(
     name: &str,
     helper: &str,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, name, 1)?;
+    ensure_arg_count_between(inst, name, 1, 2)?;
     let array = expect_operand(inst, 0)?;
     require_array_key_sort_type(ctx.value_php_type(array)?, name)?;
     match ctx.emitter.target.arch {

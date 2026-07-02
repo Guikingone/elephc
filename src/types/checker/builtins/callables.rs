@@ -887,16 +887,30 @@ pub(super) fn check_builtin(
             }
         }
         "array_filter" => {
-            if args.len() < 2 || args.len() > 3 {
+            if args.len() < 1 || args.len() > 3 {
                 return Err(CompileError::new(
                     span,
-                    "array_filter() takes 2 or 3 arguments",
+                    "array_filter() takes 1 to 3 arguments",
                 ));
             }
             for arg in args {
                 checker.infer_type(arg, env)?;
             }
             let arr_ty = checker.infer_type(&args[0], env)?;
+            // With 1 arg (no callback), PHP removes falsy values; skip callback
+            // validation. The element type is preserved.
+            if args.len() < 2 {
+                return match arr_ty {
+                    PhpType::Array(elem_ty) => Ok(Some(PhpType::Array(elem_ty))),
+                    t if array_arg_is_gradually_acceptable(&t) => {
+                        Ok(Some(PhpType::Array(Box::new(PhpType::Mixed))))
+                    }
+                    _ => Err(CompileError::new(
+                        span,
+                        "array_filter() first argument must be array",
+                    )),
+                };
+            }
             match arr_ty {
                 PhpType::Array(elem_ty) => {
                     let arr_ty = PhpType::Array(elem_ty.clone());
@@ -934,10 +948,10 @@ pub(super) fn check_builtin(
             }
         }
         "array_reduce" => {
-            if args.len() != 3 {
+            if args.len() < 2 || args.len() > 3 {
                 return Err(CompileError::new(
                     span,
-                    "array_reduce() takes exactly 3 arguments",
+                    "array_reduce() takes 2 or 3 arguments",
                 ));
             }
             for arg in args {

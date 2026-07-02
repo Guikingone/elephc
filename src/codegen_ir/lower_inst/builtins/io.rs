@@ -3503,7 +3503,7 @@ pub(super) fn lower_file_put_contents(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "file_put_contents", 2)?;
+    super::ensure_arg_count_between(inst, "file_put_contents", 2, 4)?;
     let path = expect_operand(inst, 0)?;
     let data = expect_operand(inst, 1)?;
     let path_literal = optional_const_string_operand(ctx, path)?;

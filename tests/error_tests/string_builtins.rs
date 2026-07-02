@@ -272,12 +272,22 @@ fn test_error_sha1_wrong_args() {
     expect_error("<?php sha1();", "sha1() takes 1 or 2 arguments");
 }
 
-/// Verifies that `htmlspecialchars()` with no arguments produces the correct arity error.
+/// Verifies that `htmlspecialchars()` with no arguments produces the correct arity
+/// error (PHP allows 1–4).
 #[test]
 fn test_error_htmlspecialchars_wrong_args() {
     expect_error(
         "<?php htmlspecialchars();",
-        "htmlspecialchars() takes exactly 1 argument",
+        "htmlspecialchars() takes 1 to 4 arguments",
+    );
+}
+
+/// Verifies that `htmlspecialchars()` rejects five arguments (PHP allows 1–4).
+#[test]
+fn test_error_htmlspecialchars_too_many_args() {
+    expect_error(
+        r#"<?php htmlspecialchars("x", 3, "UTF-8", true, 1);"#,
+        "htmlspecialchars() takes 1 to 4 arguments",
     );
 }
 

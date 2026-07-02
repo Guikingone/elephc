@@ -143,8 +143,27 @@ pub(super) fn check_builtin(
                 )),
             }
         }
-        "sort" | "rsort" | "shuffle" | "natsort" | "natcasesort" | "asort" | "arsort"
-        | "ksort" | "krsort" => {
+        "sort" | "rsort" | "asort" | "arsort" | "ksort" | "krsort" => {
+            // These accept an optional second `$flags` argument (1–2 in PHP).
+            if args.is_empty() || args.len() > 2 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes 1 or 2 arguments", name),
+                ));
+            }
+            let ty = checker.infer_type(&args[0], env)?;
+            // These sorts take the array by reference. The argument is accepted under
+            // the gradual boundary (concrete array, `Mixed`, or union containing an
+            // array); a concretely non-array argument stays a compile error.
+            if !array_arg_is_gradually_acceptable(&ty) {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() argument must be array", name),
+                ));
+            }
+            Ok(Some(PhpType::Void))
+        }
+        "shuffle" | "natsort" | "natcasesort" => {
             if args.len() != 1 {
                 return Err(CompileError::new(
                     span,
@@ -152,9 +171,6 @@ pub(super) fn check_builtin(
                 ));
             }
             let ty = checker.infer_type(&args[0], env)?;
-            // These sorts take the array by reference. The argument is accepted under
-            // the gradual boundary (concrete array, `Mixed`, or union containing an
-            // array); a concretely non-array argument stays a compile error.
             if !array_arg_is_gradually_acceptable(&ty) {
                 return Err(CompileError::new(
                     span,
@@ -198,10 +214,12 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Void))
         }
         "array_reverse" | "array_unique" => {
-            if args.len() != 1 {
+            // array_reverse(array, bool $preserve_keys = false): 1–2 args.
+            // array_unique(array, int $flags = SORT_STRING): 1–2 args.
+            if args.is_empty() || args.len() > 2 {
                 return Err(CompileError::new(
                     span,
-                    &format!("{}() takes exactly 1 argument", name),
+                    &format!("{}() takes 1 or 2 arguments", name),
                 ));
             }
             let ty = checker.infer_type(&args[0], env)?;
@@ -462,10 +480,12 @@ pub(super) fn check_builtin(
             }
         }
         "array_slice" | "array_splice" => {
-            if args.len() < 2 || args.len() > 3 {
+            // array_slice(array, offset, ?length, bool $preserve_keys = false): 2–4.
+            // array_splice(array, offset, ?length, array $replacement = []): 2–4.
+            if args.len() < 2 || args.len() > 4 {
                 return Err(CompileError::new(
                     span,
-                    &format!("{}() takes 2 or 3 arguments", name),
+                    &format!("{}() takes 2 to 4 arguments", name),
                 ));
             }
             let ty = checker.infer_type(&args[0], env)?;

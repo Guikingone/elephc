@@ -69,12 +69,21 @@ function dump_file(): int {
     );
 }
 
-/// Verifies `file_put_contents()` rejects one argument (requires 2) with arity error.
+/// Verifies `file_put_contents()` rejects one argument (PHP allows 2–4) with arity error.
 #[test]
 fn test_error_file_put_contents_wrong_args() {
     expect_error(
         r#"<?php file_put_contents("x");"#,
-        "file_put_contents() takes exactly 2 arguments",
+        "file_put_contents() takes 2 to 4 arguments",
+    );
+}
+
+/// Verifies `file_put_contents()` rejects five arguments (PHP allows 2–4) with arity error.
+#[test]
+fn test_error_file_put_contents_too_many_args() {
+    expect_error(
+        r#"<?php file_put_contents("x", "y", 0, null, 1);"#,
+        "file_put_contents() takes 2 to 4 arguments",
     );
 }
 

@@ -23,11 +23,11 @@ expect_builtin_arity_error!(
     "intval() takes exactly 1 argument"
 );
 
-// Tests strrpos() arity error when called with only one argument (needs haystack + needle).
+// Tests strrpos() arity error when called with only one argument (PHP allows 2–3).
 expect_builtin_arity_error!(
     test_error_strrpos_wrong_args,
     "<?php strrpos(\"abc\");",
-    "strrpos() takes exactly 2 arguments"
+    "strrpos() takes 2 or 3 arguments"
 );
 
 // Tests strstr() arity error when called with only one argument (needs haystack + needle).
@@ -212,18 +212,18 @@ expect_builtin_arity_error!(
     "hex2bin() takes exactly 1 argument"
 );
 
-// Tests htmlentities() arity error when called with no arguments.
+// Tests htmlentities() arity error when called with no arguments (PHP allows 1–4).
 expect_builtin_arity_error!(
     test_error_htmlentities_wrong_args,
     "<?php htmlentities();",
-    "htmlentities() takes exactly 1 argument"
+    "htmlentities() takes 1 to 4 arguments"
 );
 
-// Tests html_entity_decode() arity error when called with no arguments.
+// Tests html_entity_decode() arity error when called with no arguments (PHP allows 1–3).
 expect_builtin_arity_error!(
     test_error_html_entity_decode_wrong_args,
     "<?php html_entity_decode();",
-    "html_entity_decode() takes exactly 1 argument"
+    "html_entity_decode() takes 1 to 3 arguments"
 );
 
 // Tests urldecode() arity error when called with no arguments.

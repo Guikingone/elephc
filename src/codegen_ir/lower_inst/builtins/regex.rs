@@ -145,7 +145,7 @@ pub(super) fn lower_preg_replace_callback(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "preg_replace_callback", 3)?;
+    super::ensure_arg_count_between(inst, "preg_replace_callback", 3, 6)?;
     let pattern = super::expect_operand(inst, 0)?;
     let callback = super::expect_operand(inst, 1)?;
     let subject = super::expect_operand(inst, 2)?;

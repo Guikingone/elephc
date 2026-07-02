@@ -51,6 +51,20 @@ echo count($a);
     assert_eq!(out, "3");
 }
 
+/// Verifies ksort accepts the optional second `$flags` argument (PHP 1–2 arity).
+/// Fixture: associative array with integer-string keys sorted with SORT_STRING.
+#[test]
+fn test_ksort_with_flags() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [3 => "c", 1 => "a", 2 => "b"];
+ksort($a, SORT_STRING);
+echo $a[1] . $a[2] . $a[3];
+"#,
+    );
+    assert_eq!(out, "abc");
+}
+
 /// Verifies krsort sorts by keys in descending order, preserving values.
 /// Fixture: [1, 2, 3] with string keys → sorted descending → count remains 3.
 #[test]

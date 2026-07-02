@@ -78,10 +78,10 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Union(vec![PhpType::Int, PhpType::Bool])))
         }
         "strrpos" => {
-            if args.len() != 2 {
+            if args.len() < 2 || args.len() > 3 {
                 return Err(CompileError::new(
                     span,
-                    "strrpos() takes exactly 2 arguments",
+                    "strrpos() takes 2 or 3 arguments",
                 ));
             }
             for arg in args {
@@ -487,8 +487,22 @@ pub(super) fn check_builtin(
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Int))
         }
-        "htmlspecialchars" | "htmlentities" | "html_entity_decode" | "urlencode"
-        | "urldecode" | "rawurlencode" | "rawurldecode" | "base64_encode" => {
+        "htmlspecialchars" | "htmlentities" | "html_entity_decode" => {
+            // htmlspecialchars/htmlentities accept 1–4 args (string, flags, encoding,
+            // double_encode); html_entity_decode accepts 1–3 (no double_encode).
+            let max_args = if name == "html_entity_decode" { 3 } else { 4 };
+            if args.is_empty() || args.len() > max_args {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes 1 to {} arguments", name, max_args),
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Str))
+        }
+        "urlencode" | "urldecode" | "rawurlencode" | "rawurldecode" | "base64_encode" => {
             if args.len() != 1 {
                 return Err(CompileError::new(
                     span,

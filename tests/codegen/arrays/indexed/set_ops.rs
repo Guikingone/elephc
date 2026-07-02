@@ -22,6 +22,20 @@ echo count($b);
     assert_eq!(out, "3");
 }
 
+/// Verifies `array_unique()` accepts the optional second `$flags` argument (PHP 1–2 arity).
+/// Fixture: `[1, 2, 2, 3]` with SORT_STRING → 3 unique values.
+#[test]
+fn test_array_unique_with_flags() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2, 2, 3];
+$b = array_unique($a, SORT_STRING);
+echo count($b);
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
 /// Verifies `array_diff()` returns values from `$a` not present in `$b`; count of `[1,2,3,4]` vs `[2,4]` is 2.
 #[test]
 fn test_array_diff() {

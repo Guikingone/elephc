@@ -46,7 +46,7 @@ fn test_error_indexed_array_union_requires_compatible_element_types() {
 fn test_error_array_reverse_wrong_args() {
     expect_error(
         "<?php array_reverse();",
-        "array_reverse() takes exactly 1 argument",
+        "array_reverse() takes 1 or 2 arguments",
     );
 }
 
@@ -192,7 +192,7 @@ fn test_error_array_key_exists_wrong_args() {
 fn test_error_array_slice_wrong_args() {
     expect_error(
         "<?php $a = [1]; array_slice($a);",
-        "array_slice() takes 2 or 3 arguments",
+        "array_slice() takes 2 to 4 arguments",
     );
 }
 
@@ -277,13 +277,13 @@ fn test_error_array_values_wrong_args() {
 /// Verifies that error sort wrong args.
 #[test]
 fn test_error_sort_wrong_args() {
-    expect_error("<?php sort();", "sort() takes exactly 1 argument");
+    expect_error("<?php sort();", "sort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error rsort wrong args.
 #[test]
 fn test_error_rsort_wrong_args() {
-    expect_error("<?php rsort();", "rsort() takes exactly 1 argument");
+    expect_error("<?php rsort();", "rsort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error isset wrong args.
@@ -297,7 +297,7 @@ fn test_error_isset_wrong_args() {
 fn test_error_array_unique_wrong_args() {
     expect_error(
         "<?php array_unique();",
-        "array_unique() takes exactly 1 argument",
+        "array_unique() takes 1 or 2 arguments",
     );
 }
 
@@ -333,7 +333,7 @@ fn test_error_array_unshift_wrong_args() {
 fn test_error_array_splice_wrong_args() {
     expect_error(
         "<?php array_splice();",
-        "array_splice() takes 2 or 3 arguments",
+        "array_splice() takes 2 to 4 arguments",
     );
 }
 
@@ -427,25 +427,25 @@ fn test_error_array_rand_wrong_args() {
 /// Verifies that error asort wrong args.
 #[test]
 fn test_error_asort_wrong_args() {
-    expect_error("<?php asort();", "asort() takes exactly 1 argument");
+    expect_error("<?php asort();", "asort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error arsort wrong args.
 #[test]
 fn test_error_arsort_wrong_args() {
-    expect_error("<?php arsort();", "arsort() takes exactly 1 argument");
+    expect_error("<?php arsort();", "arsort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error ksort wrong args.
 #[test]
 fn test_error_ksort_wrong_args() {
-    expect_error("<?php ksort();", "ksort() takes exactly 1 argument");
+    expect_error("<?php ksort();", "ksort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error krsort wrong args.
 #[test]
 fn test_error_krsort_wrong_args() {
-    expect_error("<?php krsort();", "krsort() takes exactly 1 argument");
+    expect_error("<?php krsort();", "krsort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error natsort wrong args.
@@ -492,21 +492,39 @@ fn test_error_array_map_string_literal_undefined_function() {
     );
 }
 
-/// Verifies that error array filter wrong args.
+/// Verifies that array_filter() rejects too few arguments (0 args; PHP allows 1–3).
 #[test]
 fn test_error_array_filter_wrong_args() {
     expect_error(
-        r#"<?php array_filter([]);"#,
-        "array_filter() takes 2 or 3 arguments",
+        r#"<?php array_filter();"#,
+        "array_filter() takes 1 to 3 arguments",
     );
 }
 
-/// Verifies that error array reduce wrong args.
+/// Verifies that array_filter() rejects too many arguments (4 args; PHP allows 1–3).
+#[test]
+fn test_error_array_filter_too_many_args() {
+    expect_error(
+        r#"<?php array_filter([1], fn($v) => $v, 0, 1);"#,
+        "array_filter() takes 1 to 3 arguments",
+    );
+}
+
+/// Verifies that array_reduce() rejects too few arguments (1 arg; PHP allows 2–3).
 #[test]
 fn test_error_array_reduce_wrong_args() {
     expect_error(
-        r#"<?php array_reduce([], "fn");"#,
-        "array_reduce() takes exactly 3 arguments",
+        r#"<?php array_reduce([]);"#,
+        "array_reduce() takes 2 or 3 arguments",
+    );
+}
+
+/// Verifies that array_reduce() rejects too many arguments (4 args; PHP allows 2–3).
+#[test]
+fn test_error_array_reduce_too_many_args() {
+    expect_error(
+        r#"<?php array_reduce([], fn($c, $v) => $c, 0, 1);"#,
+        "array_reduce() takes 2 or 3 arguments",
     );
 }
 

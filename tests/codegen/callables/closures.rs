@@ -1371,6 +1371,21 @@ echo preg_replace_callback('/[a-z]/', $cb, "abc");
     assert_eq!(out, "ABC");
 }
 
+/// Verifies `preg_replace_callback()` accepts the optional fourth `$limit` argument
+/// (PHP 3–6 arity). The subject has a single match so the observable output is
+/// identical whether or not the runtime honors `$limit` (limit semantics deferred).
+/// Cross-check: `php -r 'echo preg_replace_callback('/\d/', fn($m)=>$m[0]*2, "a1b", 1);'`
+/// yields "a2b".
+#[test]
+fn test_preg_replace_callback_four_args_with_limit() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_replace_callback('/\d/', fn($m) => $m[0] * 2, "a1b", 1);
+"#,
+    );
+    assert_eq!(out, "a2b");
+}
+
 /// An untyped-parameter arithmetic closure passed to `array_map` keeps working: `array_map`
 /// exposes the element type so the parameter is typed precisely (the contextual-hint path is
 /// unaffected by the no-hint Mixed fallback), and the multiplication lowers correctly.

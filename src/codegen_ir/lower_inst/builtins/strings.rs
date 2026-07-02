@@ -939,14 +939,34 @@ pub(super) fn lower_str_contains(ctx: &mut FunctionContext<'_>, inst: &Instructi
 }
 
 /// Lowers `strpos()`/`strrpos()` and boxes position-or-false results as Mixed.
+///
+/// `strrpos()` accepts an optional third `$offset` argument (2–3 args); `strpos()`
+/// is lowered through its own `lower_strpos` entry point. When three operands are
+/// present, the haystack start is adjusted by the offset and the runtime result is
+/// shifted back to an absolute position, mirroring `strpos`'s offset path.
 pub(super) fn lower_string_position(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
     runtime_label: &str,
 ) -> Result<()> {
-    load_binary_string_args(ctx, inst, name)?;
-    abi::emit_call_label(ctx.emitter, runtime_label);
+    if inst.operands.len() < 2 || inst.operands.len() > 3 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expected 2 or 3 args, got {}",
+            name,
+            inst.operands.len()
+        )));
+    }
+    if inst.operands.len() == 2 {
+        load_binary_string_args(ctx, inst, name)?;
+        abi::emit_call_label(ctx.emitter, runtime_label);
+        box_search_result(ctx, name);
+        return store_if_result(ctx, inst);
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_strpos_with_offset_aarch64(ctx, inst, name, runtime_label)?,
+        Arch::X86_64 => lower_strpos_with_offset_x86_64(ctx, inst, name, runtime_label)?,
+    }
     box_search_result(ctx, name);
     store_if_result(ctx, inst)
 }
@@ -1055,8 +1075,8 @@ pub(super) fn lower_strpos(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
         return store_if_result(ctx, inst);
     }
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_strpos_with_offset_aarch64(ctx, inst)?,
-        Arch::X86_64 => lower_strpos_with_offset_x86_64(ctx, inst)?,
+        Arch::AArch64 => lower_strpos_with_offset_aarch64(ctx, inst, "strpos", "__rt_strpos")?,
+        Arch::X86_64 => lower_strpos_with_offset_x86_64(ctx, inst, "strpos", "__rt_strpos")?,
     }
     box_search_result(ctx, "strpos");
     store_if_result(ctx, inst)
@@ -1280,9 +1300,9 @@ fn load_single_string_arg(
     inst: &Instruction,
     name: &str,
 ) -> Result<()> {
-    if inst.operands.len() != 1 {
+    if inst.operands.is_empty() {
         return Err(CodegenIrError::invalid_module(format!(
-            "{} expected 1 arg, got {}",
+            "{} expected at least 1 arg, got {}",
             name,
             inst.operands.len()
         )));
@@ -1994,29 +2014,32 @@ fn lower_strstr_x86_64(
 /// Emits AArch64 `strpos(haystack, needle, offset)` with adjusted haystack start.
 ///
 /// Loads the offset, saves it to the stack, adjusts the haystack by that amount, calls
-/// `__rt_strpos`, and then adds the offset back so the returned position is absolute.
+/// `runtime_label`, and then adds the offset back so the returned position is absolute.
+/// Shared by `strpos` and `strrpos` (which pass their own runtime helper label).
 fn lower_strpos_with_offset_aarch64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
 ) -> Result<()> {
     let offset_val = expect_operand(inst, 2)?;
-    load_as_int(ctx, offset_val, "strpos")?;                                     // x0 = offset
+    load_as_int(ctx, offset_val, name)?;                                        // x0 = offset
     abi::emit_push_reg_pair(ctx.emitter, "x0", "x0");                            // save offset (both slots hold the same value; 16-byte aligned)
 
-    load_string_arg_to_regs(ctx, inst, 0, "strpos", "x1", "x2")?;               // x1=hay_ptr, x2=hay_len
+    load_string_arg_to_regs(ctx, inst, 0, name, "x1", "x2")?;                   // x1=hay_ptr, x2=hay_len
     ctx.emitter.instruction("ldr x0, [sp]");                                     // reload saved offset before adjusting the haystack
     ctx.emitter.instruction("add x1, x1, x0");                                   // advance the haystack pointer past the starting offset
     ctx.emitter.instruction("sub x2, x2, x0");                                   // shrink the haystack length by the starting offset
 
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                            // save the adjusted haystack while loading the needle
-    load_string_arg_to_regs(ctx, inst, 1, "strpos", "x1", "x2")?;               // x1=needle_ptr, x2=needle_len
+    load_string_arg_to_regs(ctx, inst, 1, name, "x1", "x2")?;                   // x1=needle_ptr, x2=needle_len
     ctx.emitter.instruction("mov x3, x1");                                       // move needle pointer to the secondary string argument register
     ctx.emitter.instruction("mov x4, x2");                                       // move needle length to the secondary string argument register
     abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");                             // restore the adjusted haystack into the primary argument registers
-    abi::emit_call_label(ctx.emitter, "__rt_strpos");                             // x0 = match position relative to adjusted start, or -1
+    abi::emit_call_label(ctx.emitter, runtime_label);                            // x0 = match position relative to adjusted start, or -1
 
-    let add_label = ctx.next_label("strpos_add_offset");
-    let done_label = ctx.next_label("strpos_offset_done");
+    let add_label = ctx.next_label(&format!("{}_add_offset", name));
+    let done_label = ctx.next_label(&format!("{}_offset_done", name));
     abi::emit_pop_reg_pair(ctx.emitter, "x5", "x6");                             // restore saved offset into x5 (x6 holds the same value, unused)
     ctx.emitter.instruction("cmp x0, #0");                                       // check whether strpos found a match within the adjusted range
     ctx.emitter.instruction(&format!("b.ge {}", add_label));                     // translate relative offset to absolute when a match was found
@@ -2030,29 +2053,32 @@ fn lower_strpos_with_offset_aarch64(
 /// Emits x86_64 `strpos(haystack, needle, offset)` with adjusted haystack start.
 ///
 /// Loads the offset, saves it to the stack, adjusts the haystack by that amount, calls
-/// `__rt_strpos`, and then adds the offset back so the returned position is absolute.
+/// `runtime_label`, and then adds the offset back so the returned position is absolute.
+/// Shared by `strpos` and `strrpos` (which pass their own runtime helper label).
 fn lower_strpos_with_offset_x86_64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
 ) -> Result<()> {
     let offset_val = expect_operand(inst, 2)?;
-    load_as_int(ctx, offset_val, "strpos")?;                                     // rax = offset
+    load_as_int(ctx, offset_val, name)?;                                        // rax = offset
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rax");                          // save offset (both slots hold the same value; 16-byte aligned)
 
-    load_string_arg_to_regs(ctx, inst, 0, "strpos", "rax", "rdx")?;             // rax=hay_ptr, rdx=hay_len
+    load_string_arg_to_regs(ctx, inst, 0, name, "rax", "rdx")?;                 // rax=hay_ptr, rdx=hay_len
     ctx.emitter.instruction("mov r8, QWORD PTR [rsp]");                          // reload saved offset before adjusting the haystack
     ctx.emitter.instruction("add rax, r8");                                      // advance the haystack pointer past the starting offset
     ctx.emitter.instruction("sub rdx, r8");                                      // shrink the haystack length by the starting offset
 
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                          // save the adjusted haystack while loading the needle
-    load_string_arg_to_regs(ctx, inst, 1, "strpos", "rax", "rdx")?;             // rax=needle_ptr, rdx=needle_len
+    load_string_arg_to_regs(ctx, inst, 1, name, "rax", "rdx")?;                 // rax=needle_ptr, rdx=needle_len
     ctx.emitter.instruction("mov rcx, rdx");                                     // move needle length to the fourth SysV argument register
     ctx.emitter.instruction("mov rdx, rax");                                     // move needle pointer to the third SysV argument register
     abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");                           // restore the adjusted haystack into the first two SysV argument registers
-    abi::emit_call_label(ctx.emitter, "__rt_strpos");                             // rax = match position relative to adjusted start, or -1
+    abi::emit_call_label(ctx.emitter, runtime_label);                            // rax = match position relative to adjusted start, or -1
 
-    let add_label = ctx.next_label("strpos_add_offset");
-    let done_label = ctx.next_label("strpos_offset_done");
+    let add_label = ctx.next_label(&format!("{}_add_offset", name));
+    let done_label = ctx.next_label(&format!("{}_offset_done", name));
     abi::emit_pop_reg_pair(ctx.emitter, "r8", "r9");                             // restore saved offset into r8 (r9 holds the same value, unused)
     ctx.emitter.instruction("cmp rax, 0");                                       // check whether strpos found a match within the adjusted range
     ctx.emitter.instruction(&format!("jge {}", add_label));                      // translate relative offset to absolute when a match was found
