@@ -667,3 +667,37 @@ fn test_error_nullsafe_dynamic_method_call() {
         "Nullsafe dynamic method calls are not supported yet",
     );
 }
+
+/// Verifies the covariant-return fix does not over-accept: a child override that
+/// *widens* the return type (parent returns `Dog`, child returns the supertype
+/// `Animal`) is contravariant, which PHP rejects. This guards that accepting
+/// covariant (subtype) returns did not also start accepting contravariant ones.
+#[test]
+fn test_error_override_contravariant_return_rejected() {
+    expect_error(
+        r#"<?php
+class Animal {}
+class Dog extends Animal {}
+class Base { public function make(): Dog { return new Dog(); } }
+class Sub extends Base { public function make(): Animal { return new Animal(); } }
+"#,
+        "incompatible return type",
+    );
+}
+
+/// Verifies the covariant-return fix does not over-accept for interface
+/// implementations either: an interface method declared to return `Dog` cannot be
+/// implemented with the widened (supertype) return `Animal`. Return types are
+/// covariant, not contravariant, so this must still error.
+#[test]
+fn test_error_interface_contravariant_return_rejected() {
+    expect_error(
+        r#"<?php
+class Animal {}
+class Dog extends Animal {}
+interface I { public function f(): Dog; }
+class C implements I { public function f(): Animal { return new Animal(); } }
+"#,
+        "incompatible return type",
+    );
+}

@@ -8,9 +8,12 @@
 //! Key details:
 //! - Declaration metadata must align with name resolution, inheritance flattening, and runtime/codegen expectations.
 
+use std::collections::{HashMap, HashSet};
+
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Attribute, ClassMethod, Expr, ExprKind, StmtKind, Visibility};
+use crate::types::traits::FlattenedClass;
 use crate::types::{FunctionSig, PhpType};
 
 use super::super::Checker;
@@ -272,12 +275,114 @@ pub(crate) fn declared_return_type_compatible(
     matches!(actual, PhpType::Never) || checker.type_accepts(expected, actual)
 }
 
+/// Returns `true` when `child` is the same type as `ancestor`, or a subtype of it —
+/// i.e. `child` transitively `extends`/`implements` `ancestor`.
+///
+/// The subtype relationship is resolved **order-independently** from the complete
+/// `class_map` (every class's `extends`/`implements` is known before any class body is
+/// built) together with the already-fully-built interface table on `checker` (all
+/// interfaces are built before any class). This matters because class-override
+/// validation runs mid-schema-build, when a return type's class may not yet be
+/// registered in `checker.classes`; walking only `checker.classes` (as `is_subclass_of`
+/// does) would falsely reject legal covariant returns. Interface-to-interface edges
+/// defer to `checker.interface_extends_interface`. A name absent from both `class_map`
+/// and the interface table (e.g. a builtin class not registered in `class_map`) falls
+/// back to the partially-built `checker` tables. Cycles are guarded with a visited set,
+/// and an unknown/unrelated `child` is treated conservatively (returns `false`).
+fn class_map_is_subtype(
+    child: &str,
+    ancestor: &str,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &Checker,
+) -> bool {
+    if child == ancestor {
+        return true;
+    }
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut queue: Vec<String> = vec![child.to_string()];
+    while let Some(current) = queue.pop() {
+        if current == ancestor {
+            return true;
+        }
+        if !visited.insert(current.clone()) {
+            continue;
+        }
+        // Interface chains are fully resolved before any class is built, so honor an
+        // interface-extends-interface edge (also true when `current` == `ancestor`).
+        if checker.interfaces.contains_key(&current)
+            && checker.interface_extends_interface(&current, ancestor)
+        {
+            return true;
+        }
+        if let Some(flat) = class_map.get(&current) {
+            if let Some(parent) = &flat.extends {
+                queue.push(parent.clone());
+            }
+            for interface_name in &flat.implements {
+                if interface_name == ancestor
+                    || checker.interface_extends_interface(interface_name, ancestor)
+                {
+                    return true;
+                }
+                queue.push(interface_name.clone());
+            }
+        } else if checker.is_subclass_of(&current, ancestor)
+            || checker.object_type_implements_interface(&current, ancestor)
+        {
+            // `current` is not a user-declared class in `class_map` (e.g. a builtin class
+            // or interface already registered): consult the built `checker` tables.
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns `true` when a child override's declared return type `actual` is a legal
+/// **covariant** refinement of the parent's declared return type `expected` (PHP 7.4+).
+///
+/// Covariance means `actual` is the same as, or a subtype of, `expected`; a return type
+/// may be narrowed but never widened. This accepts everything
+/// `declared_return_type_compatible` already allows (exact match, `type_accepts`,
+/// `Never`) and additionally accepts an object/interface `actual` that is a subtype of
+/// `expected` per `class_map_is_subtype` (resolved order-independently so a not-yet-built
+/// return-type class is not falsely rejected), plus nullable/union returns where every
+/// `actual` member is covariant into some `expected` member. An `actual` that is a
+/// supertype of, or unrelated to, `expected` is NOT accepted, so genuine
+/// contravariant/incompatible returns keep erroring (return types are covariant, not
+/// contravariant).
+pub(crate) fn covariant_return_compatible(
+    checker: &Checker,
+    class_map: &HashMap<String, FlattenedClass>,
+    expected: &PhpType,
+    actual: &PhpType,
+) -> bool {
+    if declared_return_type_compatible(checker, expected, actual) {
+        return true;
+    }
+    match (expected, actual) {
+        (PhpType::Object(expected_name), PhpType::Object(actual_name)) => {
+            class_map_is_subtype(actual_name, expected_name, class_map, checker)
+        }
+        // Nullable/union return: every child member must be covariant into the parent
+        // union, which also enforces child nullability ⊆ parent nullability (a child
+        // `null` member with no matching parent member is rejected below).
+        (PhpType::Union(_), PhpType::Union(actual_members)) => actual_members
+            .iter()
+            .all(|member| covariant_return_compatible(checker, class_map, expected, member)),
+        (PhpType::Union(expected_members), _) => expected_members
+            .iter()
+            .any(|member| covariant_return_compatible(checker, class_map, member, actual)),
+        _ => false,
+    }
+}
+
 /// Validates that `method` can override `parent_sig` in class `class_name`.
 /// Builds the child signature via `build_method_sig`, skips validation for `__construct`,
 /// checks signature compatibility, and ensures the child does not remove a declared
 /// return type when the parent has one or make it incompatible.
 pub(crate) fn validate_override_signature(
     checker: &Checker,
+    class_map: &HashMap<String, FlattenedClass>,
     class_name: &str,
     method: &ClassMethod,
     parent_sig: &FunctionSig,
@@ -307,7 +412,12 @@ pub(crate) fn validate_override_signature(
         ));
     }
     if parent_sig.declared_return
-        && !declared_return_type_compatible(checker, &parent_sig.return_type, &child_sig.return_type)
+        && !covariant_return_compatible(
+            checker,
+            class_map,
+            &parent_sig.return_type,
+            &child_sig.return_type,
+        )
     {
         return Err(CompileError::new(
             method.span,

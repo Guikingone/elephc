@@ -635,3 +635,96 @@ echo $c->value;
     );
     assert_eq!(out, "42:42");
 }
+
+/// Verifies covariant return via `static`: an abstract parent method declared
+/// `: static` is overridden by a concrete child also declared `: static`. The
+/// override is legal (PHP 7.4+ covariance; `static` resolves to the child class,
+/// a subtype of the parent), so the program compiles and `$b->m()` returns a `B`.
+/// Regression guard for the checker falsely rejecting covariant returns because the
+/// child's return-type class was not yet registered mid-schema-build.
+#[test]
+fn test_covariant_return_static_override_runs() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class A { abstract public function m(): static; }
+class B extends A { public function m(): static { return $this; } }
+$b = new B();
+echo get_class($b->m());
+"#,
+    );
+    assert_eq!(out, "B");
+}
+
+/// Verifies covariant return with concrete classes: a parent returning `Animal` is
+/// overridden by a child returning `Dog` (a subclass). PHP accepts this covariant
+/// narrowing, so the program compiles and calls the narrowed method's result.
+#[test]
+fn test_covariant_return_concrete_subclass_runs() {
+    let out = compile_and_run(
+        r#"<?php
+class Animal { public function name(): string { return "animal"; } }
+class Dog extends Animal { public function name(): string { return "dog"; } }
+class Base { public function make(): Animal { return new Animal(); } }
+class Sub extends Base { public function make(): Dog { return new Dog(); } }
+$s = new Sub();
+echo $s->make()->name();
+"#,
+    );
+    assert_eq!(out, "dog");
+}
+
+/// Verifies nullable covariant return: parent `: ?Animal` overridden by child
+/// `: ?Dog` is accepted (Dog <: Animal, and null <: null). The narrowed nullable
+/// return still resolves to the concrete `Dog` at runtime.
+#[test]
+fn test_covariant_return_nullable_subclass_runs() {
+    let out = compile_and_run(
+        r#"<?php
+class Animal { public function name(): string { return "animal"; } }
+class Dog extends Animal { public function name(): string { return "dog"; } }
+class Base { public function make(): ?Animal { return new Animal(); } }
+class Sub extends Base { public function make(): ?Dog { return new Dog(); } }
+$s = new Sub();
+echo $s->make()->name();
+"#,
+    );
+    assert_eq!(out, "dog");
+}
+
+/// Verifies covariant return when implementing an interface method: an interface
+/// declares `f(): Animal` and a class implements it returning `Dog` (a subtype).
+/// PHP accepts this, so the program compiles and dispatches to the concrete result.
+#[test]
+fn test_covariant_return_interface_method_runs() {
+    let out = compile_and_run(
+        r#"<?php
+class Animal { public function name(): string { return "animal"; } }
+class Dog extends Animal { public function name(): string { return "dog"; } }
+interface I { public function f(): Animal; }
+class C implements I { public function f(): Dog { return new Dog(); } }
+$c = new C();
+echo $c->f()->name();
+"#,
+    );
+    assert_eq!(out, "dog");
+}
+
+/// Verifies covariant-return acceptance is order-independent: the overriding child
+/// class and its parent are declared *before* the return-type classes (`Animal`,
+/// `Dog`) in source, exercising the mid-schema-build path where the child's
+/// return-type class is not yet registered in `checker.classes`. The subtype
+/// relationship must still be resolved from the complete class map.
+#[test]
+fn test_covariant_return_order_independent_runs() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { public function make(): Animal { return new Animal(); } }
+class Sub extends Base { public function make(): Dog { return new Dog(); } }
+class Animal { public function name(): string { return "animal"; } }
+class Dog extends Animal { public function name(): string { return "dog"; } }
+$s = new Sub();
+echo $s->make()->name();
+"#,
+    );
+    assert_eq!(out, "dog");
+}

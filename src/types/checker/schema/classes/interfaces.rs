@@ -19,7 +19,7 @@ use crate::types::{PhpType, PropertyHookContract};
 
 use super::super::super::Checker;
 use super::super::validation::{
-    declared_return_type_compatible, validate_signature_compatibility,
+    covariant_return_compatible, validate_signature_compatibility,
 };
 use super::state::ClassBuildState;
 
@@ -319,8 +319,9 @@ fn validate_interface_method(
         }
     }
     if required_sig.declared_return
-        && !declared_return_type_compatible(
+        && !covariant_return_compatible(
             checker,
+            class_map,
             &required_sig.return_type,
             &actual_sig.return_type,
         )

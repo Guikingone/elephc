@@ -92,7 +92,7 @@ fn build_class_info_body(
 
     let mut state = ClassBuildState::from_parent(parent_info.as_ref());
     properties::apply_properties(&mut state, &class, checker)?;
-    methods::apply_methods(&mut state, &class, checker)?;
+    methods::apply_methods(&mut state, &class, class_map, checker)?;
     interfaces::collect_interfaces(&mut state, &class, class_map, checker)?;
     interfaces::validate_interface_contracts(
         &mut state,

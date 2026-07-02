@@ -8,6 +8,8 @@
 //! Key details:
 //! - Class metadata is shared globally after construction, so validation must reject inconsistent inheritance early.
 
+use std::collections::HashMap;
+
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassMethod, Visibility};
@@ -26,14 +28,15 @@ use super::state::{collect_attribute_args, collect_attribute_names, ClassBuildSt
 pub(super) fn apply_methods(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
+    class_map: &HashMap<String, FlattenedClass>,
     checker: &Checker,
 ) -> Result<(), CompileError> {
     for method in &class.methods {
         validate_method_shape(class, method)?;
         if method.is_static {
-            apply_static_method(state, class, checker, method)?;
+            apply_static_method(state, class, class_map, checker, method)?;
         } else {
-            apply_instance_method(state, class, checker, method)?;
+            apply_instance_method(state, class, class_map, checker, method)?;
         }
     }
     Ok(())
@@ -92,6 +95,7 @@ fn validate_method_shape(
 fn apply_static_method(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
+    class_map: &HashMap<String, FlattenedClass>,
     checker: &Checker,
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
@@ -132,7 +136,7 @@ fn apply_static_method(
         }
     }
     if let Some(parent_sig) = state.static_sigs.get(&method_key) {
-        validate_override_signature(checker, &class.name, method, parent_sig, true)?;
+        validate_override_signature(checker, class_map, &class.name, method, parent_sig, true)?;
     } else if has_override_attribute(method)
         && !interface_declares_method(checker, class, &method_key)
     {
@@ -189,6 +193,7 @@ fn apply_static_method(
 fn apply_instance_method(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
+    class_map: &HashMap<String, FlattenedClass>,
     checker: &Checker,
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
@@ -229,7 +234,7 @@ fn apply_instance_method(
         }
     }
     if let Some(parent_sig) = state.method_sigs.get(&method_key) {
-        validate_override_signature(checker, &class.name, method, parent_sig, false)?;
+        validate_override_signature(checker, class_map, &class.name, method, parent_sig, false)?;
     } else if has_override_attribute(method)
         && !interface_declares_method(checker, class, &method_key)
     {
