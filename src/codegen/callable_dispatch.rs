@@ -560,12 +560,13 @@ pub(crate) fn runtime_instance_method_case(
 ///
 /// The recognition-only string/array builtins (`strtr`, `stripos`, `strripos`, `strncmp`,
 /// `strncasecmp`, `substr_compare`, `strip_tags`, `levenshtein`, `is_countable`,
-/// `array_key_first`, `array_replace_recursive`) and the multibyte-string (`mb_*`) family are
-/// registered for type checking and first-class-callable resolution but have no runtime lowering
-/// yet. The runtime dynamic-call table materializes a wrapper for every builtin carrying a
-/// first-class-callable signature, so they are excluded here until their codegen lands —
-/// otherwise a program that builds the dynamic string-callable table would materialize a wrapper
-/// body that lowers an unsupported builtin call.
+/// `array_key_first`, `array_replace_recursive`), the multibyte-string (`mb_*`) family, and the
+/// intl grapheme/normalizer (`grapheme_*`, `normalizer_*`) and `iconv*` families are registered
+/// for type checking and first-class-callable resolution but have no runtime lowering yet. The
+/// runtime dynamic-call table materializes a wrapper for every builtin carrying a first-class-
+/// callable signature, so they are excluded here until their codegen lands — otherwise a program
+/// that builds the dynamic string-callable table would materialize a wrapper body that lowers an
+/// unsupported builtin call.
 fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
     matches!(
         name,
@@ -578,6 +579,12 @@ fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
             | "mb_strstr" | "mb_stristr" | "mb_strtolower" | "mb_strtoupper"
             | "mb_convert_case" | "mb_convert_encoding" | "mb_detect_encoding"
             | "mb_internal_encoding" | "mb_ord" | "mb_str_split" | "mb_strwidth"
+            | "mb_strpos" | "mb_strrpos"
+            | "grapheme_strlen" | "grapheme_substr" | "grapheme_stripos"
+            | "grapheme_strripos" | "grapheme_str_split" | "grapheme_extract"
+            | "normalizer_normalize" | "normalizer_is_normalized"
+            | "iconv" | "iconv_strlen" | "iconv_strpos" | "iconv_strrpos"
+            | "iconv_substr" | "iconv_mime_decode"
     )
 }
 

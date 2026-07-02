@@ -189,6 +189,8 @@ mod math_builtins;
 mod string_builtins;
 #[path = "error_tests/mbstring_builtins.rs"]
 mod mbstring_builtins;
+#[path = "error_tests/intl_builtins.rs"]
+mod intl_builtins;
 #[path = "error_tests/io_builtins/mod.rs"]
 mod io_builtins;
 #[path = "error_tests/array_builtins.rs"]

@@ -73,6 +73,23 @@ pub(super) fn check_builtin(
                 PhpType::Bool,
             ])))
         }
+        "mb_strpos" | "mb_strrpos" => {
+            // mb_strpos/mb_strrpos(string $haystack, string $needle, int $offset = 0,
+            // ?string $encoding = null): int|false — multibyte substring search.
+            if args.len() < 2 || args.len() > 4 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes 2 to 4 arguments", name),
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(checker.normalize_union_type(vec![
+                PhpType::Int,
+                PhpType::Bool,
+            ])))
+        }
         "mb_strstr" | "mb_stristr" => {
             // mb_strstr/mb_stristr(string $haystack, string $needle,
             // bool $before_needle = false, ?string $encoding = null): string|false.

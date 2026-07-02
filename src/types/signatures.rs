@@ -288,6 +288,13 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             2,
             vec![int_lit(0), null_lit()],
         )),
+        // mb_strpos/mb_strrpos(string $haystack, string $needle, int $offset = 0,
+        // ?string $encoding = null): int|false.
+        "mb_strpos" | "mb_strrpos" => Some(optional(
+            &["haystack", "needle", "offset", "encoding"],
+            2,
+            vec![int_lit(0), null_lit()],
+        )),
         // mb_strstr/mb_stristr(string $haystack, string $needle,
         // bool $before_needle = false, ?string $encoding = null): string|false.
         "mb_strstr" | "mb_stristr" => Some(optional(
@@ -333,6 +340,65 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         )),
         // mb_strwidth(string $string, ?string $encoding = null): int.
         "mb_strwidth" => Some(optional(&["string", "encoding"], 1, vec![null_lit()])),
+        // -- grapheme (intl) builtins (recognition-only; runtime deferred) --
+        // grapheme_strlen(string $string): int|false|null.
+        "grapheme_strlen" => Some(fixed(&["string"])),
+        // grapheme_substr(string $string, int $offset, ?int $length = null): string|false.
+        "grapheme_substr" => Some(optional(&["string", "offset", "length"], 2, vec![null_lit()])),
+        // grapheme_stripos/grapheme_strripos(string $haystack, string $needle,
+        // int $offset = 0): int|false.
+        "grapheme_stripos" | "grapheme_strripos" => Some(optional(
+            &["haystack", "needle", "offset"],
+            2,
+            vec![int_lit(0)],
+        )),
+        // grapheme_str_split(string $string, int $length = 1): array|false.
+        "grapheme_str_split" => Some(optional(&["string", "length"], 1, vec![int_lit(1)])),
+        // grapheme_extract(string $haystack, int $size, int $type = GRAPHEME_EXTR_COUNT (0),
+        // int $offset = 0, int &$next = null): string|false. The trailing $next is by-reference —
+        // grapheme_extract writes the next cursor position back into it.
+        "grapheme_extract" => {
+            let mut sig = optional(
+                &["haystack", "size", "type", "offset", "next"],
+                2,
+                vec![int_lit(0), int_lit(0), null_lit()],
+            );
+            sig.ref_params[4] = true;
+            Some(sig)
+        }
+        // -- normalizer (intl) builtins (recognition-only; runtime deferred) --
+        // normalizer_normalize(string $string, int $form = 16 (Normalizer::FORM_C)): string|false.
+        "normalizer_normalize" => Some(optional(&["string", "form"], 1, vec![int_lit(16)])),
+        // normalizer_is_normalized(string $string, int $form = 16 (Normalizer::FORM_C)): bool.
+        "normalizer_is_normalized" => Some(optional(&["string", "form"], 1, vec![int_lit(16)])),
+        // -- iconv builtins (recognition-only; runtime deferred) --
+        // iconv(string $from_encoding, string $to_encoding, string $string): string|false.
+        "iconv" => Some(fixed(&["from_encoding", "to_encoding", "string"])),
+        // iconv_strlen(string $string, ?string $encoding = null): int|false.
+        "iconv_strlen" => Some(optional(&["string", "encoding"], 1, vec![null_lit()])),
+        // iconv_strpos(string $haystack, string $needle, int $offset = 0,
+        // ?string $encoding = null): int|false.
+        "iconv_strpos" => Some(optional(
+            &["haystack", "needle", "offset", "encoding"],
+            2,
+            vec![int_lit(0), null_lit()],
+        )),
+        // iconv_strrpos(string $haystack, string $needle, ?string $encoding = null): int|false.
+        // Note: iconv_strrpos has no $offset parameter (unlike iconv_strpos).
+        "iconv_strrpos" => Some(optional(&["haystack", "needle", "encoding"], 2, vec![null_lit()])),
+        // iconv_substr(string $string, int $offset, ?int $length = null,
+        // ?string $encoding = null): string|false.
+        "iconv_substr" => Some(optional(
+            &["string", "offset", "length", "encoding"],
+            2,
+            vec![null_lit(), null_lit()],
+        )),
+        // iconv_mime_decode(string $string, int $mode = 0, ?string $encoding = null): string|false.
+        "iconv_mime_decode" => Some(optional(
+            &["string", "mode", "encoding"],
+            1,
+            vec![int_lit(0), null_lit()],
+        )),
         "hexdec" => Some(fixed(&["hex_string"])),
         "str_contains" | "str_starts_with" | "str_ends_with" => {
             Some(fixed(&["haystack", "needle"]))
@@ -983,6 +1049,75 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             name,
             &[PhpType::Str],
             PhpType::Array(Box::new(PhpType::Str)),
+        )),
+        // mb_strpos/mb_strrpos are multibyte search: int index or false.
+        "mb_strpos" | "mb_strrpos" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str, PhpType::Str],
+            PhpType::Union(vec![PhpType::Int, PhpType::Bool]),
+        )),
+        // -- grapheme (intl) first-class callables (recognition-only) --
+        // grapheme_strlen counts graphemes: int, or false/null on error.
+        "grapheme_strlen" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str],
+            PhpType::Union(vec![PhpType::Int, PhpType::Bool, PhpType::Void]),
+        )),
+        // grapheme_substr/grapheme_extract return the matched substring or false.
+        "grapheme_substr" | "grapheme_extract" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str],
+            PhpType::Union(vec![PhpType::Str, PhpType::Bool]),
+        )),
+        // grapheme_stripos/grapheme_strripos are grapheme search: int index or false.
+        "grapheme_stripos" | "grapheme_strripos" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str, PhpType::Str],
+            PhpType::Union(vec![PhpType::Int, PhpType::Bool]),
+        )),
+        // grapheme_str_split splits a string into an array of graphemes, or false on error.
+        "grapheme_str_split" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str],
+            PhpType::Union(vec![PhpType::Array(Box::new(PhpType::Str)), PhpType::Bool]),
+        )),
+        // -- normalizer (intl) first-class callables (recognition-only) --
+        // normalizer_normalize returns the normalized string or false.
+        "normalizer_normalize" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str],
+            PhpType::Union(vec![PhpType::Str, PhpType::Bool]),
+        )),
+        // normalizer_is_normalized returns whether the string is already normalized.
+        "normalizer_is_normalized" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str],
+            PhpType::Bool,
+        )),
+        // -- iconv first-class callables (recognition-only) --
+        // iconv(from_encoding, to_encoding, string) returns the converted string or false.
+        "iconv" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str, PhpType::Str, PhpType::Str],
+            PhpType::Union(vec![PhpType::Str, PhpType::Bool]),
+        )),
+        // iconv_substr/iconv_mime_decode return the converted string or false.
+        "iconv_substr" | "iconv_mime_decode" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str],
+            PhpType::Union(vec![PhpType::Str, PhpType::Bool]),
+        )),
+        // iconv_strlen measures a string: int length or false.
+        "iconv_strlen" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str],
+            PhpType::Union(vec![PhpType::Int, PhpType::Bool]),
+        )),
+        // iconv_strpos/iconv_strrpos are byte-offset search: int index or false.
+        "iconv_strpos" | "iconv_strrpos" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str, PhpType::Str],
+            PhpType::Union(vec![PhpType::Int, PhpType::Bool]),
         )),
         // strcspn/strspn/strpbrk/hexdec are intentionally absent here: they are
         // lowered only by the active EIR backend, so the frozen legacy direct

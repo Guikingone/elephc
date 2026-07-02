@@ -98,6 +98,30 @@ fn test_mbstring_first_class_callable_recognized() {
     );
 }
 
+/// Verifies that `mb_strpos`/`mb_strrpos` (unmasked in this batch) are recognized
+/// and yield `int|false`, so a strict `=== false` check type-checks against the union.
+#[test]
+fn test_mb_strpos_recognized() {
+    assert!(
+        check_source(
+            r#"<?php
+$p = mb_strpos("héllo", "l");
+if ($p === false) { echo "no"; } else { echo $p; }
+$r = mb_strrpos("héllo", "l", 0, "UTF-8");
+if ($r === false) { echo "no"; } else { echo $r; }
+"#
+        )
+        .is_ok(),
+        "mb_strpos/mb_strrpos should type-check with int|false return",
+    );
+}
+
+expect_builtin_arity_error!(
+    test_error_mb_strpos_wrong_args,
+    "<?php mb_strpos(\"a\");",
+    "mb_strpos() takes 2 to 4 arguments"
+);
+
 expect_builtin_arity_error!(
     test_error_mb_substr_wrong_args,
     "<?php mb_substr(\"a\");",
