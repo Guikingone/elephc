@@ -9,7 +9,7 @@
 //! - Signatures, callable aliases, optimizer effects, and codegen builtin dispatch must remain in lockstep.
 
 use crate::errors::CompileError;
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -539,6 +539,96 @@ pub(super) fn check_builtin(
             }
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Bool))
+        }
+        "strtr" => {
+            // strtr(string $string, array|string $from, ?string $to = null): string.
+            // The 2-arg map form and the 3-arg char-translation form both return string.
+            if args.len() < 2 || args.len() > 3 {
+                return Err(CompileError::new(span, "strtr() takes 2 or 3 arguments"));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Str))
+        }
+        "stripos" | "strripos" => {
+            // Case-insensitive strpos/strrpos: returns int offset or false.
+            if args.len() < 2 || args.len() > 3 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes 2 or 3 arguments", name),
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(checker.normalize_union_type(vec![PhpType::Int, PhpType::Bool])))
+        }
+        "strncmp" | "strncasecmp" => {
+            // Compare the first $length bytes; returns a signed int (<0, 0, >0).
+            if args.len() != 3 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 3 arguments", name),
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Int))
+        }
+        "substr_compare" => {
+            // substr_compare(haystack, needle, offset, ?length = null,
+            // case_insensitive = false): int.
+            if args.len() < 3 || args.len() > 5 {
+                return Err(CompileError::new(
+                    span,
+                    "substr_compare() takes 3 to 5 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Int))
+        }
+        "strip_tags" => {
+            // strip_tags(string $string, array|string|null $allowed_tags = null): string.
+            if args.is_empty() || args.len() > 2 {
+                return Err(CompileError::new(span, "strip_tags() takes 1 or 2 arguments"));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Str))
+        }
+        "levenshtein" => {
+            // levenshtein(string1, string2, insertion=1, replacement=1, deletion=1): int.
+            if args.len() < 2 || args.len() > 5 {
+                return Err(CompileError::new(
+                    span,
+                    "levenshtein() takes 2 to 5 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Int))
+        }
+        "parse_str" => {
+            // PHP: parse_str(string $string, array &$result): void. `$result` is a
+            // by-ref out-parameter (PHP auto-vivifies it), so — like preg_match's
+            // `$matches` — it must be a variable and is not eagerly inferred.
+            if args.len() != 2 {
+                return Err(CompileError::new(span, "parse_str() takes exactly 2 arguments"));
+            }
+            checker.infer_type(&args[0], env)?;
+            if !matches!(args[1].kind, ExprKind::Variable(_)) {
+                return Err(CompileError::new(
+                    args[1].span,
+                    "parse_str() parameter $result must be passed a variable",
+                ));
+            }
+            Ok(Some(PhpType::Void))
         }
         _ => Ok(None),
     }

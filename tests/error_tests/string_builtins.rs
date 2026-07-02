@@ -445,3 +445,161 @@ expect_builtin_arity_error!(
     "<?php preg_last_error_msg(1);",
     "preg_last_error_msg() takes exactly 0 arguments"
 );
+
+// -- Recognition-layer coverage for newly registered string builtins --
+// These builtins are recognized at type-check time (catalog + signature +
+// checker return type + first-class-callable sig); their EIR/runtime lowering
+// is deferred, so only type-check recognition is asserted here (no
+// compile_and_run, which would fail at the deferred codegen stage).
+
+/// Verifies that `strtr()` type-checks and returns a string in both the 3-arg
+/// char-translation form and the 2-arg key=>value map form.
+#[test]
+fn test_strtr_recognized() {
+    assert!(
+        check_source(
+            r#"<?php
+$a = strtr("hello", "el", "ip");
+$b = strtr("hi", ["h" => "j"]);
+echo $a . $b;
+"#
+        )
+        .is_ok(),
+        "strtr() should be recognized in both the 3-arg and 2-arg map forms",
+    );
+}
+
+/// Verifies that `stripos()`/`strripos()` are recognized and return `int|false`,
+/// which flows into an `int` return under gradual typing (false coerces to int),
+/// mirroring the existing strpos/strrpos behavior.
+#[test]
+fn test_stripos_strripos_recognized() {
+    assert!(
+        check_source(
+            r#"<?php
+function a(): int { return stripos("Hello", "L"); }
+function b(): int { return strripos("Hello", "l", 1); }
+"#
+        )
+        .is_ok(),
+        "stripos()/strripos() should be recognized and return int|false",
+    );
+}
+
+/// Verifies that `strncmp`/`strncasecmp` type-check and return an int.
+#[test]
+fn test_strncmp_strncasecmp_recognized() {
+    assert!(
+        check_source(
+            r#"<?php
+$x = strncmp("abc", "abd", 2);
+$y = strncasecmp("ABC", "abd", 2);
+echo $x + $y;
+"#
+        )
+        .is_ok(),
+        "strncmp()/strncasecmp() should be recognized and return int",
+    );
+}
+
+/// Verifies that `substr_compare` accepts both its 3-arg and full 5-arg forms.
+#[test]
+fn test_substr_compare_recognized() {
+    assert!(
+        check_source(
+            r#"<?php
+$x = substr_compare("Hello", "llo", 2);
+$y = substr_compare("Hello", "LLO", 2, 3, true);
+echo $x + $y;
+"#
+        )
+        .is_ok(),
+        "substr_compare() should be recognized in its 3-arg and 5-arg forms",
+    );
+}
+
+/// Verifies that `strip_tags` (1- and 2-arg) and `levenshtein` (2- and 5-arg)
+/// type-check.
+#[test]
+fn test_strip_tags_levenshtein_recognized() {
+    assert!(
+        check_source(
+            r#"<?php
+$t = strip_tags("<b>hi</b>");
+$t2 = strip_tags("<b>hi</b>", "<b>");
+$l = levenshtein("kitten", "sitting");
+$l2 = levenshtein("a", "b", 1, 2, 1);
+echo $t . $t2 . $l . $l2;
+"#
+        )
+        .is_ok(),
+        "strip_tags()/levenshtein() should be recognized",
+    );
+}
+
+/// Verifies that `parse_str()` accepts an as-yet-undefined by-reference
+/// `$result` out-parameter (PHP auto-vivifies it) without a spurious
+/// "Undefined variable" diagnostic, and that `$result` is usable afterward —
+/// mirroring the preg_match `$matches` out-parameter handling.
+#[test]
+fn test_parse_str_byref_out_param_recognized() {
+    assert!(
+        check_source(
+            r#"<?php
+parse_str("a=1&b=2", $result);
+echo $result["a"];
+"#
+        )
+        .is_ok(),
+        "parse_str() should define its by-ref $result out-parameter",
+    );
+}
+
+/// Verifies that `strtr` is usable through first-class-callable syntax so
+/// callable-passing call sites (common in Symfony) type-check.
+#[test]
+fn test_strtr_first_class_callable_recognized() {
+    assert!(
+        check_source("<?php $f = strtr(...); echo is_callable($f);").is_ok(),
+        "strtr(...) first-class callable syntax should type-check",
+    );
+}
+
+expect_builtin_arity_error!(
+    test_error_strtr_wrong_args,
+    "<?php strtr(\"abc\", \"a\", \"b\", \"c\");",
+    "strtr() takes 2 or 3 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_strncmp_wrong_args,
+    "<?php strncmp(\"a\", \"b\");",
+    "strncmp() takes exactly 3 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_substr_compare_wrong_args,
+    "<?php substr_compare(\"a\", \"b\");",
+    "substr_compare() takes 3 to 5 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_levenshtein_wrong_args,
+    "<?php levenshtein(\"a\");",
+    "levenshtein() takes 2 to 5 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_parse_str_wrong_args,
+    "<?php parse_str(\"a=1\");",
+    "parse_str() takes exactly 2 arguments"
+);
+
+/// Verifies that `parse_str()` rejects a non-variable by-ref `$result` argument.
+#[test]
+fn test_error_parse_str_result_must_be_variable() {
+    expect_error(
+        "<?php parse_str(\"a=1\", [\"x\"]);",
+        "parse_str() parameter $result must be passed a variable",
+    );
+}

@@ -921,6 +921,32 @@ pub(super) fn check_builtin(
             )?;
             Ok(Some(PhpType::Void))
         }
+        "array_walk_recursive" => {
+            // array_walk_recursive(object|array &$array, callable $callback,
+            // mixed $arg = null): true — invokes the callback on every non-array
+            // leaf, recursing into nested arrays. The optional third argument is
+            // forwarded to the callback.
+            if args.len() < 2 || args.len() > 3 {
+                return Err(CompileError::new(
+                    span,
+                    "array_walk_recursive() takes 2 or 3 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            let arr_ty = checker.infer_type(&args[0], env)?;
+            let dummy_args = vec![dummy_arg_for_array_scalar_elem(&arr_ty, span)];
+            check_callback_builtin_call(
+                checker,
+                &args[1],
+                &dummy_args,
+                span,
+                env,
+                "array_walk_recursive() callback",
+            )?;
+            Ok(Some(PhpType::Bool))
+        }
         "usort" | "uksort" | "uasort" => {
             if args.len() != 2 {
                 return Err(CompileError::new(

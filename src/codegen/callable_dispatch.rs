@@ -557,11 +557,23 @@ pub(crate) fn runtime_instance_method_case(
 /// frozen legacy direct backend, which does not know these names and would emit an unresolved
 /// `bl _fn_<name>` reference. They are never invoked dynamically, so excluding them from the
 /// dynamic-call descriptor table is both safe and semantically correct.
+///
+/// The recognition-only string/array builtins (`strtr`, `stripos`, `strripos`, `strncmp`,
+/// `strncasecmp`, `substr_compare`, `strip_tags`, `levenshtein`, `is_countable`,
+/// `array_key_first`, `array_replace_recursive`) are registered for type checking and
+/// first-class-callable resolution but have no runtime lowering yet. The runtime dynamic-call
+/// table materializes a wrapper for every builtin carrying a first-class-callable signature, so
+/// they are excluded here until their codegen lands — otherwise a program that builds the
+/// dynamic string-callable table would materialize a wrapper body that lowers an unsupported
+/// builtin call.
 fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
     matches!(
         name,
         "iterator_apply" | "preg_replace_callback"
             | "__elephc_mktime_raw" | "__elephc_gmmktime_raw"
+            | "strtr" | "stripos" | "strripos" | "strncmp" | "strncasecmp"
+            | "substr_compare" | "strip_tags" | "levenshtein" | "is_countable"
+            | "array_key_first" | "array_replace_recursive"
     )
 }
 

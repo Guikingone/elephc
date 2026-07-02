@@ -514,6 +514,90 @@ pub(super) fn check_builtin(
             checker.infer_type(&args[1], env)?;
             Ok(Some(PhpType::Array(Box::new(PhpType::Int))))
         }
+        "reset" | "current" | "key" => {
+            // reset(&$array) seeks the internal pointer to the first element and
+            // returns that value; current($array)/key($array) read the value/key at
+            // the current pointer. Like `end`, the array argument is accepted under
+            // the gradual-typing boundary and the element-or-`false`/`null` result
+            // is modeled as the boxed mixed value.
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 1 argument", name),
+                ));
+            }
+            let ty = checker.infer_type(&args[0], env)?;
+            if !array_arg_is_gradually_acceptable(&ty) {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() argument must be array", name),
+                ));
+            }
+            Ok(Some(PhpType::Mixed))
+        }
+        "array_key_first" => {
+            // array_key_first(array $array): string|int|null — the first key without
+            // touching the internal pointer, or null (Void) for an empty array.
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "array_key_first() takes exactly 1 argument",
+                ));
+            }
+            let ty = checker.infer_type(&args[0], env)?;
+            if !array_arg_is_gradually_acceptable(&ty) {
+                return Err(CompileError::new(
+                    span,
+                    "array_key_first() argument must be array",
+                ));
+            }
+            Ok(Some(checker.normalize_union_type(vec![
+                PhpType::Str,
+                PhpType::Int,
+                PhpType::Void,
+            ])))
+        }
+        "array_replace_recursive" => {
+            // array_replace_recursive(array $array, array ...$replacements): array.
+            // Later arrays overwrite earlier values key-by-key, recursing when both
+            // sides are arrays. The static result reuses the first array's shape when
+            // it is concrete, otherwise a heterogeneous associative array.
+            if args.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "array_replace_recursive() takes at least 1 argument",
+                ));
+            }
+            let ty1 = checker.infer_type(&args[0], env)?;
+            for arg in &args[1..] {
+                checker.infer_type(arg, env)?;
+            }
+            if !array_arg_is_gradually_acceptable(&ty1) {
+                return Err(CompileError::new(
+                    span,
+                    "array_replace_recursive() first argument must be array",
+                ));
+            }
+            match ty1 {
+                PhpType::Array(_) | PhpType::AssocArray { .. } => Ok(Some(ty1)),
+                _ => Ok(Some(PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::Mixed),
+                })),
+            }
+        }
+        "is_countable" => {
+            // is_countable(mixed $value): bool — true for arrays and Countable
+            // objects; accepts any value (a pure type predicate).
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "is_countable() takes exactly 1 argument",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Bool))
+        }
         _ => Ok(None),
     }
 }

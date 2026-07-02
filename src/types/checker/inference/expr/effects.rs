@@ -272,6 +272,12 @@ impl Checker {
                         if builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2 {
                             continue;
                         }
+                        // `parse_str()`'s 2nd argument is a by-ref `$result`
+                        // out-parameter: PHP auto-vivifies it, so it may be an
+                        // as-yet-undefined variable before the call.
+                        if builtin_name.eq_ignore_ascii_case("parse_str") && idx == 1 {
+                            continue;
+                        }
                         // `preg_replace()`'s 5th argument is a by-ref `$count`
                         // out-parameter: it may be undefined before the call.
                         if builtin_name.eq_ignore_ascii_case("preg_replace") && idx == 4 {
@@ -304,6 +310,19 @@ impl Checker {
                     if let Some(arg) = expanded_args.get(4) {
                         if let Some(name) = preg_match_output_var(arg) {
                             env.insert(name.clone(), PhpType::Int);
+                        }
+                    }
+                }
+                if builtin_name.eq_ignore_ascii_case("parse_str") {
+                    if let Some(arg) = expanded_args.get(1) {
+                        if let Some(name) = preg_match_output_var(arg) {
+                            env.insert(
+                                name.clone(),
+                                PhpType::AssocArray {
+                                    key: Box::new(PhpType::Str),
+                                    value: Box::new(PhpType::Mixed),
+                                },
+                            );
                         }
                     }
                 }

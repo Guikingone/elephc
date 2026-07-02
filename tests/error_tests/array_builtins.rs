@@ -504,3 +504,126 @@ fn test_error_call_user_func_array_ref_callback_param_requires_variable() {
         "parameter $n must be passed a variable",
     );
 }
+
+// -- Recognition-layer coverage for newly registered array builtins --
+// These builtins are recognized at type-check time (catalog + signature +
+// checker return type + first-class-callable sig); their EIR/runtime lowering
+// is deferred, so only type-check recognition is asserted here (no
+// compile_and_run, which would fail at the deferred codegen stage).
+
+/// Verifies that the internal-pointer family `reset()` (by-ref), `current()`,
+/// and `key()` type-check on an array argument.
+#[test]
+fn test_reset_current_key_recognized() {
+    assert!(
+        check_source(
+            r#"<?php
+$a = [1, 2, 3];
+$r = reset($a);
+$c = current($a);
+$k = key($a);
+echo $r;
+"#
+        )
+        .is_ok(),
+        "reset()/current()/key() should be recognized on an array argument",
+    );
+}
+
+/// Verifies that `array_key_first()` type-checks (returns string|int|null).
+#[test]
+fn test_array_key_first_recognized() {
+    assert!(
+        check_source(
+            r#"<?php
+$a = ["x" => 1, "y" => 2];
+$first = array_key_first($a);
+echo $first;
+"#
+        )
+        .is_ok(),
+        "array_key_first() should be recognized and return string|int|null",
+    );
+}
+
+/// Verifies that `array_replace_recursive()` type-checks in its variadic form.
+#[test]
+fn test_array_replace_recursive_recognized() {
+    assert!(
+        check_source(
+            r#"<?php
+$merged = array_replace_recursive(["a" => 1], ["a" => 2], ["b" => 3]);
+echo count($merged);
+"#
+        )
+        .is_ok(),
+        "array_replace_recursive() should be recognized as a variadic array merge",
+    );
+}
+
+/// Verifies that `array_walk_recursive()` type-checks with a by-ref-free
+/// callback (its by-ref &$value callback modeling matches array_walk exactly).
+#[test]
+fn test_array_walk_recursive_recognized() {
+    assert!(
+        check_source(
+            r#"<?php
+$a = [1, 2, 3];
+array_walk_recursive($a, function ($v) { echo $v; });
+"#
+        )
+        .is_ok(),
+        "array_walk_recursive() should be recognized with a callback",
+    );
+}
+
+/// Verifies that `is_countable()` type-checks and returns bool for any value,
+/// including through first-class-callable syntax.
+#[test]
+fn test_is_countable_recognized() {
+    assert!(
+        check_source(
+            r#"<?php
+$a = [1, 2, 3];
+$b = is_countable($a);
+$f = is_countable(...);
+echo is_callable($f);
+"#
+        )
+        .is_ok(),
+        "is_countable() should be recognized and return bool",
+    );
+}
+
+expect_builtin_arity_error!(
+    test_error_reset_wrong_args,
+    "<?php reset();",
+    "reset() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_array_key_first_wrong_args,
+    "<?php array_key_first([], 1);",
+    "array_key_first() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_array_walk_recursive_wrong_args,
+    "<?php array_walk_recursive([1]);",
+    "array_walk_recursive() takes 2 or 3 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_is_countable_wrong_args,
+    "<?php is_countable();",
+    "is_countable() takes exactly 1 argument"
+);
+
+/// Verifies that `current()` rejects a concretely non-array argument.
+#[test]
+fn test_error_current_non_array() {
+    expect_error(
+        "<?php current(5);",
+        "current() argument must be array",
+    );
+}

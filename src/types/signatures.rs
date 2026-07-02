@@ -187,6 +187,8 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             vec![bool_lit(true)],
         )),
         "is_resource" => Some(fixed(&["value"])),
+        // is_countable(mixed $value): bool — true for arrays and Countable objects.
+        "is_countable" => Some(fixed(&["value"])),
         "get_resource_type" | "get_resource_id" => Some(fixed(&["resource"])),
         "class_attribute_names" | "class_get_attributes" => Some(fixed(&["class_name"])),
         "class_attribute_args" => Some(fixed(&["class_name", "attribute_name"])),
@@ -234,6 +236,41 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             vec![int_lit(0), null_lit()],
         )),
         "strpbrk" => Some(fixed(&["string", "characters"])),
+        // stripos/strripos: case-insensitive strpos/strrpos, returning int|false
+        // (PHP: (string $haystack, string $needle, int $offset = 0)).
+        "stripos" | "strripos" => Some(optional(
+            &["haystack", "needle", "offset"],
+            2,
+            vec![int_lit(0)],
+        )),
+        // strncmp/strncasecmp compare the first $length bytes of two strings.
+        "strncmp" | "strncasecmp" => Some(fixed(&["string1", "string2", "length"])),
+        // substr_compare(string $haystack, string $needle, int $offset,
+        // ?int $length = null, bool $case_insensitive = false): int.
+        "substr_compare" => Some(optional(
+            &["haystack", "needle", "offset", "length", "case_insensitive"],
+            3,
+            vec![null_lit(), bool_lit(false)],
+        )),
+        // strtr(string $string, array|string $from, ?string $to = null): string —
+        // covers both the 2-arg map form and the 3-arg char-translation form.
+        "strtr" => Some(optional(&["string", "from", "to"], 2, vec![null_lit()])),
+        // strip_tags(string $string, array|string|null $allowed_tags = null): string.
+        "strip_tags" => Some(optional(&["string", "allowed_tags"], 1, vec![null_lit()])),
+        // levenshtein(string $string1, string $string2, int $insertion_cost = 1,
+        // int $replacement_cost = 1, int $deletion_cost = 1): int.
+        "levenshtein" => Some(optional(
+            &["string1", "string2", "insertion_cost", "replacement_cost", "deletion_cost"],
+            2,
+            vec![int_lit(1), int_lit(1), int_lit(1)],
+        )),
+        // parse_str(string $string, array &$result): void — the parsed key/value
+        // pairs are written back through the by-reference second parameter.
+        "parse_str" => {
+            let mut sig = fixed(&["string", "result"]);
+            sig.ref_params[1] = true;
+            Some(sig)
+        }
         "hexdec" => Some(fixed(&["hex_string"])),
         "str_contains" | "str_starts_with" | "str_ends_with" => {
             Some(fixed(&["haystack", "needle"]))
@@ -298,10 +335,19 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         | "arsort" | "ksort" | "krsort" => Some(first_param_ref(fixed(&["array"]))),
         "in_array" => Some(optional(&["needle", "haystack", "strict"], 2, vec![bool_lit(false)])),
         "array_key_exists" => Some(fixed(&["key", "array"])),
+        // array_key_first(array $array): string|int|null — reads the first key
+        // without moving the internal pointer.
+        "array_key_first" => Some(fixed(&["array"])),
         // `end(&$array)` takes the array by reference (PHP advances its internal
         // pointer); elephc only reads the last element, but the by-ref marker keeps
         // the original storage from being copied into a value temporary.
         "end" => Some(first_param_ref(fixed(&["array"]))),
+        // reset(object|array &$array): mixed — moves the internal pointer to the
+        // first element. By-ref like `end`, so the original storage is passed.
+        "reset" => Some(first_param_ref(fixed(&["array"]))),
+        // current(object|array $array)/key(object|array $array): read the value/key
+        // at the array's internal pointer. Not by-ref in PHP 8.
+        "current" | "key" => Some(fixed(&["array"])),
         // `setlocale(int $category, string|array $locales, string ...$rest)`. The
         // category and first locale are required; further locale fallbacks are
         // variadic.
@@ -316,6 +362,8 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         }
         "array_push" | "array_unshift" => Some(first_param_ref(variadic(&["array"], "values"))),
         "array_merge" => Some(variadic(&[], "arrays")),
+        // array_replace_recursive(array $array, array ...$replacements): array.
+        "array_replace_recursive" => Some(variadic(&["array"], "replacements")),
         "array_diff" | "array_intersect" | "array_diff_key" | "array_intersect_key" => {
             Some(variadic(&["array"], "arrays"))
         }
@@ -349,6 +397,13 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         )),
         "array_walk" | "usort" | "uksort" | "uasort" => {
             Some(first_param_ref(fixed(&["array", "callback"])))
+        }
+        // array_walk_recursive(object|array &$array, callable $callback,
+        // mixed $arg = null): true — by-ref array like array_walk, plus recursion.
+        "array_walk_recursive" => {
+            let mut sig = optional(&["array", "callback", "arg"], 2, vec![null_lit()]);
+            sig.ref_params[0] = true;
+            Some(sig)
         }
         "call_user_func" => Some(variadic(&["callback"], "args")),
         "call_user_func_array" => Some(fixed(&["callback", "args"])),
@@ -757,6 +812,7 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         // Direct calls are fully supported; first-class/string-callback use is not (yet).
         "boolval" | "is_bool" | "is_null" | "is_float" | "is_int" | "is_iterable"
         | "is_string" | "is_numeric" | "is_nan" | "is_finite" | "is_infinite"
+        | "is_countable"
         | "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" => {
             Some(typed_first_class_builtin_sig(name, &[PhpType::Mixed], PhpType::Bool))
         }
@@ -788,7 +844,8 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         | "base64_decode" | "trim" | "ltrim" | "rtrim" | "chop" | "ucwords" | "substr"
         | "str_repeat" | "strstr" | "str_replace" | "str_ireplace" | "explode"
         | "implode" | "substr_replace" | "str_pad" | "str_split" | "wordwrap"
-        | "sprintf" | "hash" | "hash_hmac" | "md5" | "sha1" | "crc32" | "number_format" | "chr" => {
+        | "sprintf" | "hash" | "hash_hmac" | "md5" | "sha1" | "crc32" | "number_format"
+        | "chr" | "strtr" | "strip_tags" => {
             Some(typed_first_class_builtin_sig(
                 name,
                 &[PhpType::Str],
@@ -800,6 +857,20 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             &[PhpType::Str],
             PhpType::Int,
         )),
+        // stripos/strripos are the case-insensitive strpos/strrpos: int index or false.
+        "stripos" | "strripos" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str, PhpType::Str],
+            PhpType::Union(vec![PhpType::Int, PhpType::Bool]),
+        )),
+        // strncmp/strncasecmp/substr_compare/levenshtein return a signed int result.
+        "strncmp" | "strncasecmp" | "substr_compare" | "levenshtein" => {
+            Some(typed_first_class_builtin_sig(
+                name,
+                &[PhpType::Str, PhpType::Str],
+                PhpType::Int,
+            ))
+        }
         // strcspn/strspn/strpbrk/hexdec are intentionally absent here: they are
         // lowered only by the active EIR backend, so the frozen legacy direct
         // backend that emits dynamic first-class-callable wrapper bodies cannot
@@ -824,10 +895,18 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             ))
         }
         "array_chunk" | "array_pad" | "array_fill" | "array_slice" | "array_diff"
-        | "array_intersect" | "range" => return_typed_first_class_builtin_sig(
+        | "array_intersect" | "array_replace_recursive" | "range" => {
+            return_typed_first_class_builtin_sig(
+                name,
+                PhpType::Array(Box::new(PhpType::Mixed)),
+            )
+        }
+        // array_key_first returns the first key (string|int) or null for an empty array.
+        "array_key_first" => Some(typed_first_class_builtin_sig(
             name,
-            PhpType::Array(Box::new(PhpType::Mixed)),
-        ),
+            &[PhpType::Array(Box::new(PhpType::Mixed))],
+            PhpType::Union(vec![PhpType::Str, PhpType::Int, PhpType::Void]),
+        )),
         "array_flip" | "array_combine" | "array_fill_keys" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Array(Box::new(PhpType::Mixed))],
