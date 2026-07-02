@@ -1361,7 +1361,19 @@ pub(super) fn check_builtin(
             for arg in args {
                 checker.infer_type(arg, env)?;
             }
-            if !matches!(args[0].kind, ExprKind::StringLiteral(_)) {
+            // Accept a string literal or a `Name::class` constant (a compile-time class-name
+            // string). The AST optimizer folds both forms to a boolean using the closed world
+            // before codegen (see `crate::optimize::class_existence`); `self`/`static`/`parent`
+            // `::class` are left out because they are not statically foldable here and codegen
+            // has no runtime path for them.
+            let first_arg_is_literal_class_name = matches!(
+                &args[0].kind,
+                ExprKind::StringLiteral(_)
+                    | ExprKind::ClassConstant {
+                        receiver: StaticReceiver::Named(_)
+                    }
+            );
+            if !first_arg_is_literal_class_name {
                 return Err(CompileError::new(
                     span,
                     &format!("{}() first argument must be a string literal in AOT mode", name),

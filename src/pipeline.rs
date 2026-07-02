@@ -213,7 +213,7 @@ pub(crate) fn compile(config: CliConfig) {
     }
 
     let phase_started = Instant::now();
-    let check_result = match types::check_with_target(&ast, target) {
+    let mut check_result = match types::check_with_target(&ast, target) {
         Ok(result) => result,
         Err(e) => {
             errors::report(&e);
@@ -264,6 +264,18 @@ pub(crate) fn compile(config: CliConfig) {
     let phase_started = Instant::now();
     let ast = optimize::propagate_constants(ast);
     timings.record_since("opt-prop", phase_started);
+
+    // Fold closed-world class/interface/trait/enum existence checks on literal names to booleans
+    // using the checked closed world, so `class_exists`-guarded blocks that reference absent
+    // optional-dependency classes become constant control flow the following passes can prune.
+    // The program-level fold covers top-level statements and function bodies; the method-body
+    // fold covers class/enum methods, which EIR lowering reads from `check_result.method_decls`.
+    let phase_started = Instant::now();
+    let existence_sets =
+        optimize::ClassExistenceSets::from_program_and_check_result(&ast, &check_result);
+    let ast = optimize::fold_class_existence(ast, &existence_sets);
+    optimize::fold_class_existence_in_method_bodies(&mut check_result, &existence_sets);
+    timings.record_since("opt-class-exists", phase_started);
 
     let phase_started = Instant::now();
     let ast = optimize::prune_constant_control_flow(ast);

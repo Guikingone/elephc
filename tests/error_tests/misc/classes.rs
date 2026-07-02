@@ -19,11 +19,16 @@ fn test_error_instanceof_self_outside_class_scope() {
     );
 }
 
-/// Verifies the error diagnostic for undefined class.
+/// Verifies that `new` on a class absent from the closed world is tolerated as an absent
+/// optional dependency: it warns and type-checks (degrading to `Mixed`) rather than hard-erroring.
+/// This is the accepted softening of class-name typo detection needed to compile frameworks with
+/// uninstalled optional dependencies. See `crate::types::checker::absent_class`.
 #[test]
-fn test_error_undefined_class() {
-    // new on an undefined class name reports an undefined class error.
-    expect_error("<?php $x = new Missing();", "Undefined class: Missing");
+fn test_new_undefined_class_tolerated_as_absent_warning() {
+    expect_warning(
+        "<?php $x = new Missing();",
+        "reference to unknown class 'Missing' treated as an absent optional dependency",
+    );
 }
 
 /// Verifies the error diagnostic for undefined property.

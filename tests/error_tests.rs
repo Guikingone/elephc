@@ -199,6 +199,8 @@ mod spl_builtins;
 mod misc;
 #[path = "error_tests/image.rs"]
 mod image;
+#[path = "error_tests/absent_class.rs"]
+mod absent_class;
 
 // --- Iterator-related errors ---
 

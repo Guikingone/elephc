@@ -298,13 +298,14 @@ fn test_error_magic_unset_must_take_one_argument() {
     );
 }
 
-/// Verifies that `catch (MissingException $e)` with an undefined class
-/// reports "Undefined class: MissingException".
+/// Verifies that `catch (MissingException $e)` with a class absent from the closed world is
+/// tolerated as an absent optional dependency: it warns and type-checks (the clause simply never
+/// matches at runtime) rather than hard-erroring. See `crate::types::checker::absent_class`.
 #[test]
-fn test_error_catch_requires_defined_class() {
-    expect_error(
+fn test_catch_absent_class_tolerated_as_absent_warning() {
+    expect_warning(
         "<?php try { echo 1; } catch (MissingException $e) { echo 2; }",
-        "Undefined class: MissingException",
+        "reference to unknown class 'MissingException' treated as an absent optional dependency",
     );
 }
 

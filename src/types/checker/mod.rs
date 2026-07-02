@@ -8,6 +8,7 @@
 //! Key details:
 //! - Checker state is populated in ordered phases; later passes assume schemas, builtins, and signatures are complete.
 
+mod absent_class;
 pub(crate) mod builtins;
 mod builtin_enums;
 mod builtin_interfaces;
@@ -166,6 +167,11 @@ pub(crate) struct Checker {
     /// Merged with AST-only warnings from `collect_warnings` before being returned
     /// in `CheckResult`.
     pub warnings: Vec<crate::errors::CompileWarning>,
+    /// Absent-class warnings buffered during type-hint resolution. `resolve_type_expr`
+    /// runs behind `&self`, so it cannot push to `warnings` directly; these are collected
+    /// through interior mutability (deduplicated by span+message) and drained into
+    /// `warnings` once checking completes. See `crate::types::checker::absent_class`.
+    pub absent_class_warnings: std::cell::RefCell<Vec<crate::errors::CompileWarning>>,
     /// `(class, property)` pairs for regular properties that had a reference taken
     /// (`$x = &$obj->prop`, by-reference return of `$obj->prop`). Recorded while
     /// checking bodies and applied to `classes` after checking so every access lowers
@@ -205,6 +211,7 @@ pub fn check_types(program: &Program, target_platform: Platform) -> Result<Check
     propagate_abstract_return_types(&mut checker);
     apply_reference_property_promotions(&mut checker);
     validate_magic_method_contracts(&checker)?;
+    checker.drain_absent_class_warnings();
 
     let mut warnings = crate::types::warnings::collect_warnings(program);
     warnings.extend(checker.warnings);

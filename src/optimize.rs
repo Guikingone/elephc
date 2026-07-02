@@ -17,11 +17,15 @@ use crate::termination::{block_terminal_effect, stmt_terminal_effect, TerminalEf
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
+mod class_existence;
 mod control;
 mod effects;
 mod fold;
 mod propagate;
 
+pub use class_existence::{
+    fold_class_existence, fold_class_existence_in_method_bodies, ClassExistenceSets,
+};
 use control::*;
 use effects::*;
 use fold::*;

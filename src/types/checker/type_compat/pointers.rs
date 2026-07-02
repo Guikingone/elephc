@@ -141,10 +141,16 @@ impl Checker {
                     _ if self.packed_classes.contains_key(name_str) => {
                         Ok(PhpType::Packed(name_str.to_string()))
                     }
-                    _ => Err(CompileError::new(
-                        span,
-                        &format!("Unknown type: {}", name_str),
-                    )),
+                    // An unresolved class name (not a known class/interface/enum/extern/packed and
+                    // not a reserved keyword handled above) is treated as an absent optional
+                    // dependency: the type hint degrades to `Mixed` (gradual any-value, codegen-safe)
+                    // with a warning rather than a hard error, so a framework's optional-dependency
+                    // type hints (e.g. `array|\Process`) compile. `resolve_type_expr` is `&self`, so
+                    // the warning is deferred to a mutable interner and emitted after resolution.
+                    _ => {
+                        self.pending_absent_class_warning(span, name_str);
+                        Ok(PhpType::Mixed)
+                    }
                 }
             },
         }

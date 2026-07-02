@@ -110,6 +110,13 @@ impl Checker {
                 &format!("Undefined enum case: {}::{}", class_name, name),
             ));
         }
+        // Static constant access on a class that is unknown everywhere in the closed world is an
+        // absent optional dependency (e.g. `Process::ERR`): degrade to `Mixed` with a warning
+        // instead of erroring. A missing constant on a *known* class stays a hard error below.
+        if !self.class_like_exists(&class_name) {
+            self.warn_absent_class(expr.span, &class_name);
+            return Ok(PhpType::Mixed);
+        }
         Err(CompileError::new(
             expr.span,
             &format!("Undefined class constant: {}::{}", class_name, name),

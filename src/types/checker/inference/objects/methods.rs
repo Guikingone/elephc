@@ -823,6 +823,17 @@ impl Checker {
                 ));
             }
         } else {
+            // A static call on a class that is unknown everywhere in the closed world is an
+            // absent optional dependency (e.g. `Process::fromShellCommandline(...)`): the call
+            // yields an opaque `PhpType::Mixed` value with a warning instead of erroring. Argument
+            // expressions are still inferred so genuine errors inside them keep surfacing.
+            if !self.class_like_exists(class_name) {
+                self.warn_absent_class(expr.span, class_name);
+                for arg in args {
+                    self.infer_type(arg, env)?;
+                }
+                return Ok(PhpType::Mixed);
+            }
             return Err(CompileError::new(
                 expr.span,
                 &format!("Undefined class: {}", class_name),

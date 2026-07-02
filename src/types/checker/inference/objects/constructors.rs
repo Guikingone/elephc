@@ -45,6 +45,18 @@ impl Checker {
             ));
         }
         if !self.classes.contains_key(class_name.as_str()) {
+            // An unresolved class (not an enum/interface handled above, and unknown everywhere in
+            // the closed world) is an absent optional dependency: `new AbsentClass(...)` produces
+            // an opaque `PhpType::Mixed` value with a warning instead of erroring. This is only
+            // ever reached at runtime inside `class_exists`-guarded (DCE-pruned) code. Argument
+            // expressions are still inferred so genuine errors inside them keep surfacing.
+            if !self.class_like_exists(class_name.as_str()) {
+                self.warn_absent_class(expr.span, class_name.as_str());
+                for arg in args {
+                    self.infer_type(arg, env)?;
+                }
+                return Ok(PhpType::Mixed);
+            }
             return Err(CompileError::new(
                 expr.span,
                 &format!("Undefined class: {}", class_name),

@@ -127,6 +127,7 @@ impl Checker {
             break_continue_depth: 0,
             finally_break_continue_bases: Vec::new(),
             warnings: Vec::new(),
+            absent_class_warnings: std::cell::RefCell::new(Vec::new()),
             reference_property_promotions: HashSet::new(),
         }
     }

@@ -199,9 +199,15 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved = elephc::optimize::fold_constants(resolved);
-    let check_result =
+    let mut check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized = elephc::optimize::propagate_constants(resolved);
+    let existence_sets = elephc::optimize::ClassExistenceSets::from_program_and_check_result(
+        &optimized,
+        &check_result,
+    );
+    let optimized = elephc::optimize::fold_class_existence(optimized, &existence_sets);
+    elephc::optimize::fold_class_existence_in_method_bodies(&mut check_result, &existence_sets);
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
@@ -284,9 +290,15 @@ pub(crate) fn compile_and_run_files_with_defines(
     let (resolved, _autoload_warnings) = elephc::autoload::run(resolved, base_dir, &autoload_registry)
         .expect("autoload failed");
     let resolved = elephc::optimize::fold_constants(resolved);
-    let check_result =
+    let mut check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized = elephc::optimize::propagate_constants(resolved);
+    let existence_sets = elephc::optimize::ClassExistenceSets::from_program_and_check_result(
+        &optimized,
+        &check_result,
+    );
+    let optimized = elephc::optimize::fold_class_existence(optimized, &existence_sets);
+    elephc::optimize::fold_class_existence_in_method_bodies(&mut check_result, &existence_sets);
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
@@ -403,8 +415,14 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved = elephc::optimize::fold_constants(resolved);
-    let check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
+    let mut check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized = elephc::optimize::propagate_constants(resolved);
+    let existence_sets = elephc::optimize::ClassExistenceSets::from_program_and_check_result(
+        &optimized,
+        &check_result,
+    );
+    let optimized = elephc::optimize::fold_class_existence(optimized, &existence_sets);
+    elephc::optimize::fold_class_existence_in_method_bodies(&mut check_result, &existence_sets);
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
@@ -516,8 +534,14 @@ pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBu
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved = elephc::optimize::fold_constants(resolved);
-    let check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
+    let mut check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized = elephc::optimize::propagate_constants(resolved);
+    let existence_sets = elephc::optimize::ClassExistenceSets::from_program_and_check_result(
+        &optimized,
+        &check_result,
+    );
+    let optimized = elephc::optimize::fold_class_existence(optimized, &existence_sets);
+    elephc::optimize::fold_class_existence_in_method_bodies(&mut check_result, &existence_sets);
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);

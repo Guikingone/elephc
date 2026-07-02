@@ -177,10 +177,14 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::PostIncrement(name) => ExprKind::PostIncrement(name),
         ExprKind::PreDecrement(name) => ExprKind::PreDecrement(name),
         ExprKind::PostDecrement(name) => ExprKind::PostDecrement(name),
-        ExprKind::FunctionCall { name, args } => ExprKind::FunctionCall {
-            name,
-            args: args.into_iter().map(fold_expr).collect(),
-        },
+        ExprKind::FunctionCall { name, args } => {
+            let args: Vec<Expr> = args.into_iter().map(fold_expr).collect();
+            // Fold closed-world `class_exists`/`interface_exists`/`trait_exists`/`enum_exists` on a
+            // literal name to a boolean when the existence sets are installed (see
+            // `crate::optimize::class_existence`); otherwise keep the call unchanged.
+            crate::optimize::class_existence::try_fold_class_existence(&name, &args)
+                .unwrap_or(ExprKind::FunctionCall { name, args })
+        }
         ExprKind::ArrayLiteral(items) => {
             ExprKind::ArrayLiteral(items.into_iter().map(fold_expr).collect())
         }

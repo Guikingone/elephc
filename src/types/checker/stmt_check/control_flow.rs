@@ -333,6 +333,15 @@ impl Checker {
                         if !self.classes.contains_key(&exception_type)
                             && !self.interfaces.contains_key(&exception_type)
                         {
+                            // An exception type that is unknown everywhere in the closed world is
+                            // an absent optional dependency (e.g. `ProcessFailedException`): warn
+                            // and skip it rather than erroring. The class does not exist at runtime,
+                            // so the clause simply never matches; `$e` is bound below from whatever
+                            // types did resolve (falling back to `Throwable` when none did).
+                            if !self.class_like_exists(&exception_type) {
+                                self.warn_absent_class(stmt.span, &exception_type);
+                                continue;
+                            }
                             return Err(CompileError::new(
                                 stmt.span,
                                 &format!("Undefined class: {}", exception_type),
