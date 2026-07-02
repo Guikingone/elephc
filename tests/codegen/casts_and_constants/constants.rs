@@ -187,6 +187,27 @@ fn test_str_pad_mode_constants() {
     assert_eq!(out, "102");
 }
 
+/// Verifies the platform-conditional `SIGUSR1`/`SIGUSR2` constants are defined
+/// integer constants on every supported target. Uses a target-agnostic
+/// assertion (`> 0` → `yes`) so the test passes on macOS (30/31) and Linux
+/// (10/12). Cross-check: `php -r 'echo SIGUSR1;'` on macOS prints `30`.
+#[test]
+fn test_sigusr_constants_defined() {
+    let out = compile_and_run("<?php echo SIGUSR1 > 0 ? 'yes' : 'no', SIGUSR2 > 0 ? 'yes' : 'no';");
+    assert_eq!(out, "yesyes");
+}
+
+/// Verifies the macOS values of SIGUSR1/SIGUSR2 (30/31) when the test binary is
+/// built and run on macOS. Gated by `cfg(target_os = "macos")` because the test
+/// RUNS on the host (the compiler's `target_platform` defaults to the host
+/// platform); Linux hosts have different values (10/12).
+#[cfg(target_os = "macos")]
+#[test]
+fn test_sigusr_macos_values() {
+    let out = compile_and_run("<?php echo SIGUSR1, '|', SIGUSR2;");
+    assert_eq!(out, "30|31");
+}
+
 /// Verifies `STR_PAD_LEFT` drives `str_pad()` left-padding at runtime.
 /// Fixture: `str_pad("x", 5, " ", STR_PAD_LEFT)` → four leading spaces then `x`.
 #[test]

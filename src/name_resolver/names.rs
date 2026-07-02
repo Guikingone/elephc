@@ -386,6 +386,9 @@ fn is_builtin_global_constant(name: &str) -> bool {
         .chain(crate::types::filter_constants::FILTER_INT_CONSTANTS.iter())
         .chain(crate::types::pcntl_constants::PCNTL_INT_CONSTANTS.iter())
         .any(|(constant_name, _)| *constant_name == name)
+        || crate::types::pcntl_constants::PCNTL_PLATFORM_SIGNALS
+            .iter()
+            .any(|(constant_name, _, _)| *constant_name == name)
         || matches!(
             name,
             "PHP_SAPI" | "PHP_VERSION" | "PHP_OS_FAMILY" | "PCRE_VERSION"

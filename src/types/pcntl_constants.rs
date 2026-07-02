@@ -28,9 +28,19 @@ pub(crate) const PCNTL_INT_CONSTANTS: &[(&str, i64)] = &[
     ("SIG_IGN", 1),
 ];
 
+/// Tuple of `(name, macos_value, linux_value)` for `ext/pcntl` user signals
+/// whose integer values DIFFER across supported targets (macOS vs Linux), so
+/// they cannot live in the target-agnostic `PCNTL_INT_CONSTANTS`. macOS:
+/// SIGUSR1=30, SIGUSR2=31. Linux (x86_64 and aarch64): SIGUSR1=10, SIGUSR2=12.
+/// The value is selected by the codegen prescan from the compile target.
+pub(crate) const PCNTL_PLATFORM_SIGNALS: &[(&str, i64, i64)] = &[
+    ("SIGUSR1", 30, 10),
+    ("SIGUSR2", 31, 12),
+];
+
 #[cfg(test)]
 mod tests {
-    use super::PCNTL_INT_CONSTANTS;
+    use super::{PCNTL_INT_CONSTANTS, PCNTL_PLATFORM_SIGNALS};
 
     /// Looks up a constant value by name, panicking if it is absent.
     fn value_of(name: &str) -> i64 {
@@ -67,5 +77,41 @@ mod tests {
         let len_before = names.len();
         names.dedup();
         assert_eq!(names.len(), len_before, "duplicate pcntl constant name");
+    }
+
+    /// Verifies the platform-conditional SIGUSR1/SIGUSR2 values match the
+    /// macOS and Linux signal numbers (macOS: 30/31, Linux: 10/12). Cross-checked
+    /// with `php -r 'echo SIGUSR1;'` on macOS (prints `30`).
+    #[test]
+    fn test_platform_signal_values() {
+        let sigusr1 = PCNTL_PLATFORM_SIGNALS
+            .iter()
+            .find(|(n, _, _)| *n == "SIGUSR1")
+            .expect("SIGUSR1 present");
+        assert_eq!(sigusr1.1, 30, "macOS SIGUSR1");
+        assert_eq!(sigusr1.2, 10, "Linux SIGUSR1");
+        let sigusr2 = PCNTL_PLATFORM_SIGNALS
+            .iter()
+            .find(|(n, _, _)| *n == "SIGUSR2")
+            .expect("SIGUSR2 present");
+        assert_eq!(sigusr2.1, 31, "macOS SIGUSR2");
+        assert_eq!(sigusr2.2, 12, "Linux SIGUSR2");
+    }
+
+    /// Asserts no duplicate names exist in `PCNTL_PLATFORM_SIGNALS` and that
+    /// none of its names collide with the target-agnostic `PCNTL_INT_CONSTANTS`.
+    #[test]
+    fn test_platform_signals_have_unique_names() {
+        let mut names: Vec<&str> = PCNTL_PLATFORM_SIGNALS.iter().map(|(n, _, _)| *n).collect();
+        names.sort_unstable();
+        let len_before = names.len();
+        names.dedup();
+        assert_eq!(names.len(), len_before, "duplicate platform signal name");
+        for (n, _, _) in PCNTL_PLATFORM_SIGNALS {
+            assert!(
+                !PCNTL_INT_CONSTANTS.iter().any(|(cn, _)| cn == n),
+                "{n} collides with PCNTL_INT_CONSTANTS"
+            );
+        }
     }
 }

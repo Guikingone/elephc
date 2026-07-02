@@ -508,3 +508,58 @@ echo go();
     );
     assert_eq!(out, "9");
 }
+
+/// Verifies that a top-level `\define('NAME', ...)` inside a namespace creates a
+/// GLOBAL constant and that an unqualified reference inside the namespace falls
+/// back to that global. Mirrors PHP: `php -r 'namespace X; define("MY_GLOBAL_CONST","hello"); echo MY_GLOBAL_CONST;'` prints `hello`.
+#[test]
+fn test_namespace_define_global_constant_unqualified_reference_resolves() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Symfony\Polyfill\Intl\Grapheme;
+
+\define('MY_GLOBAL_CONST', 'hello');
+
+echo MY_GLOBAL_CONST;
+"#,
+    );
+    assert_eq!(out, "hello");
+}
+
+/// Verifies that a `define()` with a NON-foldable value (runtime ternary) still
+/// has its NAME registered by the name_resolver so unqualified references inside
+/// the namespace resolve to the global. The value ternary depends on `$argc`
+/// (runtime-unknown) so it survives AST folding; the reference must still resolve
+/// and the chosen branch must be echoed.
+#[test]
+fn test_namespace_define_non_foldable_value_unqualified_reference_resolves() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo\Runtime;
+
+\define('RX', $argc > 1 ? 'a' : 'b');
+
+echo RX;
+"#,
+    );
+    assert_eq!(out, "b");
+}
+
+/// Verifies that a namespace-local `const FOO` wins over a global `define('FOO')`
+/// of the same name: an unqualified `FOO` inside the namespace resolves to the
+/// namespace-local constant (name_resolver step 4), not the global. Mirrors PHP:
+/// `php -r 'namespace X; const FOO = 1; define("FOO", 2); echo FOO;'` prints `1`.
+#[test]
+fn test_namespace_local_const_shadows_global_define() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo\Shadow;
+
+const FOO = 1;
+\define('FOO', 2);
+
+echo FOO;
+"#,
+    );
+    assert_eq!(out, "1");
+}

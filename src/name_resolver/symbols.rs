@@ -8,10 +8,20 @@
 //! Key details:
 //! - Builtin class-like symbols are seeded so unresolved user names can still bind to PHP builtins.
 
-use crate::names::{canonical_name_for_decl, php_symbol_key};
-use crate::parser::ast::{Stmt, StmtKind};
+use crate::names::{canonical_name_for_decl, php_symbol_key, Name, NameKind};
+use crate::parser::ast::{ExprKind, Stmt, StmtKind};
 
 use super::{canonical_builtin_function_name, namespace_name, Symbols};
+
+/// Returns `true` if `name` refers to the builtin `define()` function, i.e. an
+/// unqualified or fully-qualified single-segment name equal to `"define"`.
+/// Inlined here (mirroring `src/resolver/state.rs::is_define_call_name`) because
+/// the resolver helper is `pub(super)`-private and must not be widened.
+fn is_define_call_name(name: &Name) -> bool {
+    matches!(name.kind, NameKind::Unqualified | NameKind::FullyQualified)
+        && name.parts.len() == 1
+        && name.parts[0] == "define"
+}
 
 const BUILTIN_CLASS_LIKE_SYMBOLS: &[&str] = &[
     "ArrayAccess",
@@ -172,6 +182,24 @@ pub(super) fn collect_symbols(
                 symbols
                     .constants
                     .insert(canonical_name_for_decl(namespace.as_deref(), name));
+            }
+            // Top-level `\define('LITERAL', ...)` calls create GLOBAL constants
+            // (or FQN constants when the literal name contains `\`). Register the
+            // name so the namespace global-fallback in `resolve_constant_name`
+            // (names.rs step 5) can resolve unqualified references inside a
+            // namespace to this global. The value's TYPE is registered separately
+            // by the checker's `define` handler (`builtins/system.rs`); the
+            // name_resolver only needs the name for fallback resolution.
+            StmtKind::ExprStmt(expr) => {
+                if let ExprKind::FunctionCall { name, args } = &expr.kind {
+                    if args.len() >= 2 && is_define_call_name(name) {
+                        if let ExprKind::StringLiteral(const_name) = &args[0].kind {
+                            symbols
+                                .constants
+                                .insert(const_name.trim_start_matches('\\').to_string());
+                        }
+                    }
+                }
             }
             _ => {}
         }

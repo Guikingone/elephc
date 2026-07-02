@@ -51,6 +51,18 @@ fn test_error_undefined_constant() {
     expect_error("<?php echo UNDEFINED_CONST;", "Undefined constant");
 }
 
+/// Verifies that an unqualified reference to a genuinely-undefined constant
+/// inside a namespace still errors with the namespaced FQN. Guards that the
+/// name_resolver's new `define()` symbol collection does not over-accept: only
+/// constants actually created by a `define('LITERAL', ...)` call are registered.
+#[test]
+fn test_error_namespace_undefined_constant_no_define() {
+    expect_error(
+        "<?php namespace Demo\\Missing; echo MISSING_CONST;",
+        "Undefined constant: Demo\\Missing\\MISSING_CONST",
+    );
+}
+
 /// Verifies that `define()` with a single argument (missing value) yields a wrong-args diagnostic.
 #[test]
 fn test_error_define_wrong_args() {

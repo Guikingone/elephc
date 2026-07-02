@@ -24,7 +24,7 @@ use crate::types::string_constants::STRING_INT_CONSTANTS;
 use crate::types::sort_constants::SORT_INT_CONSTANTS;
 use crate::types::mbstring_constants::MBSTRING_INT_CONSTANTS;
 use crate::types::filter_constants::FILTER_INT_CONSTANTS;
-use crate::types::pcntl_constants::PCNTL_INT_CONSTANTS;
+use crate::types::pcntl_constants::{PCNTL_INT_CONSTANTS, PCNTL_PLATFORM_SIGNALS};
 use crate::types::{PhpType, TypeEnv};
 
 use super::context::{Context, TRY_HANDLER_SLOT_SIZE};
@@ -189,6 +189,20 @@ pub(crate) fn collect_constants(
         );
     }
     for (name, value) in PCNTL_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    // Platform-conditional user signals (SIGUSR1/SIGUSR2): select the value from
+    // the COMPILE target (not `cfg(target_os)`, since elephc cross-compiles).
+    // macOS: SIGUSR1=30, SIGUSR2=31. Linux (x86_64 and aarch64): SIGUSR1=10,
+    // SIGUSR2=12. Mirrors the fnmatch `match target_platform` pattern above.
+    for (name, macos_value, linux_value) in PCNTL_PLATFORM_SIGNALS {
+        let value = match target_platform {
+            Platform::MacOS => macos_value,
+            Platform::Linux => linux_value,
+        };
         constants.insert(
             (*name).to_string(),
             (ExprKind::IntLiteral(*value), PhpType::Int),

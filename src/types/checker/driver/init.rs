@@ -23,7 +23,7 @@ use crate::types::string_constants::STRING_INT_CONSTANTS;
 use crate::types::sort_constants::SORT_INT_CONSTANTS;
 use crate::types::mbstring_constants::MBSTRING_INT_CONSTANTS;
 use crate::types::filter_constants::FILTER_INT_CONSTANTS;
-use crate::types::pcntl_constants::PCNTL_INT_CONSTANTS;
+use crate::types::pcntl_constants::{PCNTL_INT_CONSTANTS, PCNTL_PLATFORM_SIGNALS};
 use crate::types::PhpType;
 
 use super::super::Checker;
@@ -98,6 +98,12 @@ impl Checker {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         for (name, _value) in PCNTL_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        // Platform-conditional user signals (SIGUSR1/SIGUSR2): only the NAME is
+        // needed for type-checking; the target-specific VALUE is materialized by
+        // the codegen prescan. Register unconditionally (target-agnostic).
+        for (name, _macos_value, _linux_value) in PCNTL_PLATFORM_SIGNALS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         // PHP_SAPI, PHP_VERSION, PHP_OS_FAMILY, and PCRE_VERSION are string constants.
