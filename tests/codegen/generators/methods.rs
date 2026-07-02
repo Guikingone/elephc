@@ -72,14 +72,13 @@ foreach (C::g() as $x) { echo $x; }
 
 /// Repro D from the spec: `yield from $this->otherGeneratorMethod()`. The
 /// generator-method RETURN fix makes `$this->all()` type as `Object("Generator")`
-/// (verified: the diagnostic now reads `got Object("Generator")`, not `got Iterable`),
-/// but the `yield from` CONSUMER arm
-/// (`src/types/checker/inference/expr/mod.rs`) still gates on the operand's
-/// syntactic kind and rejects a METHOD-CALL operand — a separate bucket-1
-/// follow-up (codegen-coupled via `__rt_gen_delegate`). Ignored until that arm
-/// is widened; the return-type half of the fix is covered by the tests above.
+/// (verified: the diagnostic reads `got Object("Generator")`, not `got Iterable`),
+/// and the `yield from` CONSUMER arm
+/// (`src/types/checker/inference/expr/mod.rs`) now gates on the operand's TYPE
+/// (array or Generator) rather than its syntactic kind, so a METHOD-CALL
+/// operand returning a Generator is accepted and delegated via
+/// `__rt_gen_delegate`. Cross-checked against `php -r` → "123".
 #[test]
-#[ignore]
 fn test_generator_method_yield_from_generator_method_call() {
     let out = compile_and_run(
         r#"<?php
@@ -93,4 +92,23 @@ foreach ($b->combined() as $x) { echo $x; }
 "#,
     );
     assert_eq!(out, "123");
+}
+
+/// Verifies `yield from self::inner()` where a STATIC generator method delegates
+/// to another static generator method. `self::inner()` types as
+/// `Object("Generator")`, which the type-based `yield from` gate now accepts
+/// (any syntactic form of a Generator-typed operand is delegated via
+/// `__rt_gen_delegate`). Cross-checked against `php -r` → "12".
+#[test]
+fn test_generator_yield_from_static_method_delegation() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public static function inner(): iterable { yield 1; yield 2; }
+    public static function outer(): iterable { yield from self::inner(); }
+}
+foreach (C::outer() as $x) { echo $x; }
+"#,
+    );
+    assert_eq!(out, "12");
 }

@@ -329,6 +329,9 @@ fn test_error_yield_from_outside_function() {
 }
 
 /// Verifies the error diagnostic for yield from rejects non generator call.
+/// The wording is "an array or Generator" (message-only change: `yield from`
+/// now accepts array-typed operands, not just array literals). An `int`-typed
+/// operand is neither an array nor a Generator, so it stays an error.
 #[test]
 fn test_error_yield_from_rejects_non_generator_call() {
     expect_error(
@@ -336,6 +339,38 @@ fn test_error_yield_from_rejects_non_generator_call() {
 function not_gen(): int { return 1; }
 function gen() { yield from not_gen(); }
 ",
-        "yield from expects an array literal or Generator, got Int",
+        "yield from expects an array or Generator, got Int",
+    );
+}
+
+/// Codegen-safety guard: `yield from` a `Mixed`-typed operand must STAY an
+/// error. Codegen's `lower_yield_from` sends any non-array operand to
+/// `__rt_gen_delegate`, which assumes a real `Generator` pointer (reads the
+/// fiber state offset). A `Mixed` value is not a Generator, so accepting it
+/// would mis-delegate and crash at runtime. `type_accepts(Object("Generator"),
+/// Mixed)` is false (the Object-expected arm only matches Object actuals), so
+/// the type-based gate keeps rejecting it. This test pins that boundary.
+#[test]
+fn test_error_yield_from_rejects_mixed_operand() {
+    expect_error(
+        "<?php
+function outer(mixed $m) { yield from $m; }
+",
+        "yield from expects an array or Generator, got Mixed",
+    );
+}
+
+/// Codegen-safety guard: `yield from` an `Iterable`-typed operand must STAY an
+/// error. `__rt_gen_delegate` can only drive a `Generator`, not an arbitrary
+/// iterable/Traversable, so `type_accepts(Object("Generator"), Iterable)` is
+/// false and the operand is rejected. Accepting bare `Iterable`/`Traversable`
+/// operands needs a separate runtime iterator-delegation path (follow-up).
+#[test]
+fn test_error_yield_from_rejects_iterable_operand() {
+    expect_error(
+        "<?php
+function outer(iterable $it) { yield from $it; }
+",
+        "yield from expects an array or Generator, got Iterable",
     );
 }

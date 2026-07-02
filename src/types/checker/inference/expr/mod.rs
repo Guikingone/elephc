@@ -654,18 +654,24 @@ impl Checker {
             }
             ExprKind::YieldFrom(inner) => {
                 let inner_ty = self.infer_type(inner, env)?;
-                let supported = match &inner.kind {
-                    ExprKind::ArrayLiteral(_) => true,
-                    ExprKind::FunctionCall { .. } | ExprKind::Variable(_) => {
-                        self.type_accepts(&PhpType::Object("Generator".to_string()), &inner_ty)
-                    }
-                    _ => false,
-                };
+                // `yield from` accepts an array (any syntactic form — literal,
+                // variable, or a call returning an array) OR a Generator-typed
+                // operand (a generator function/method call, or a Generator-typed
+                // variable). Codegen (`lower_yield_from`) dispatches on the SAME
+                // type distinction: arrays lower to an iterator loop, everything
+                // else to `__rt_gen_delegate`, which requires a real `Generator`.
+                // `type_accepts(Object("Generator"), _)` is false for
+                // `Mixed`/`Iterable`/unions, so those stay rejected — matching what
+                // the runtime delegate can actually drive.
+                let supported = matches!(
+                    inner_ty.codegen_repr(),
+                    PhpType::Array(_) | PhpType::AssocArray { .. }
+                ) || self.type_accepts(&PhpType::Object("Generator".to_string()), &inner_ty);
                 if !supported {
                     return Err(CompileError::new(
                         inner.span,
                         &format!(
-                            "yield from expects an array literal or Generator, got {:?}",
+                            "yield from expects an array or Generator, got {:?}",
                             inner_ty
                         ),
                     ));

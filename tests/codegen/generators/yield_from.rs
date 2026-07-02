@@ -300,6 +300,38 @@ foreach (outer() as $v) { echo $v; echo " "; }
     assert_eq!(out, "0 1 2 ");
 }
 
+/// Regression: `yield from inner()` where `inner(): iterable` is a generator
+/// function (typed as `Object("Generator")`). The type-based `yield from` gate
+/// still accepts a Generator-typed function-call operand. Cross-checked against
+/// `php -r` → "12".
+#[test]
+fn test_generator_yield_from_iterable_hinted_function_call() {
+    let out = compile_and_run(
+        r#"<?php
+function inner(): iterable { yield 1; yield 2; }
+function outer(): iterable { yield from inner(); }
+foreach (outer() as $x) { echo $x; }
+"#,
+    );
+    assert_eq!(out, "12");
+}
+
+/// Verifies `yield from $a` where `$a` is an array-TYPED VARIABLE (parameter
+/// declared `array $a`). Previously the syntactic gate only accepted an array
+/// LITERAL; the type-based gate now accepts any array-typed operand, which
+/// codegen lowers to an iterator loop over the array. A value-only loop is used
+/// to avoid PHP key-collision surprises. Cross-checked against `php -r` → "1299".
+#[test]
+fn test_generator_yield_from_array_typed_variable() {
+    let out = compile_and_run(
+        r#"<?php
+function outer(array $a): iterable { yield from $a; yield 99; }
+foreach (outer([1, 2]) as $x) { echo $x; }
+"#,
+    );
+    assert_eq!(out, "1299");
+}
+
 /// Verifies `yield from` passes arguments through to the inner generator,
 /// then chains a second `yield from` for additional delegation. Tests
 /// sequential delegation with argument passthrough.
