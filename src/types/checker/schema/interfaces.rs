@@ -55,6 +55,38 @@ pub(crate) fn build_interface_info_recursive(
         ));
     }
 
+    // Keep `interface_name` in `building` while parents are recursively built so genuine cycles are
+    // still detected, then ALWAYS remove it — on Ok and on Err — before propagating the result.
+    // This mirrors the class-side fix and prevents a failed interface build from polluting the
+    // shared set and mis-flagging later interfaces as circular.
+    let result = build_interface_info_body(
+        interface_name,
+        interface_map,
+        class_map,
+        checker,
+        next_interface_id,
+        building,
+    );
+    building.remove(interface_name);
+    result
+}
+
+/// Performs the actual `InterfaceInfo` build for `interface_name`, assuming the caller has already
+/// inserted `interface_name` into `building` and is responsible for removing it on every exit path.
+///
+/// Flattens parent interfaces (rejecting extends-of-class), merges methods/properties/constants,
+/// validates signature compatibility, and stores the completed `InterfaceInfo` in
+/// `checker.interfaces`, bumping `next_interface_id`. This function forwards `building` to the
+/// recursive parent builds — which preserves genuine cycle detection — but otherwise leaves the set
+/// untouched so the caller can guarantee cleanup on both success and error.
+fn build_interface_info_body(
+    interface_name: &str,
+    interface_map: &HashMap<String, InterfaceDeclInfo>,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &mut Checker,
+    next_interface_id: &mut u64,
+    building: &mut HashSet<String>,
+) -> Result<(), CompileError> {
     let interface = interface_map.get(interface_name).cloned().ok_or_else(|| {
         CompileError::new(
             crate::span::Span::dummy(),
@@ -277,7 +309,6 @@ pub(crate) fn build_interface_info_recursive(
         },
     );
     *next_interface_id += 1;
-    building.remove(interface_name);
     Ok(())
 }
 

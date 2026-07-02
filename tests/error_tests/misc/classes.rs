@@ -398,6 +398,37 @@ fn test_error_circular_inheritance() {
     );
 }
 
+/// Regression: a class whose schema build genuinely fails must NOT pollute the shared
+/// `building` cycle-detection set and mis-flag other classes as circular.
+///
+/// `S extends F` fails at schema time (`F` is final), which used to leave `S` stuck in `building`
+/// on the `?` early-return. Later builds of `A`/`B` (both `extends S`) or the top-level revisit of
+/// `S` then re-entered `S` while it was still in `building` and reported a spurious "Circular
+/// inheritance detected involving class S". The fix removes `S` from `building` on every exit path,
+/// so the ONLY error is the genuine "cannot extend final class" — no false circular. Class-build
+/// order is `HashMap`-driven, but the assertion holds for every order: with the leak, at least one
+/// spurious circular appears; without it, none can (no genuine cycle exists in this tree).
+#[test]
+fn test_class_build_failure_does_not_leak_building_set() {
+    let err = check_source_full(
+        "<?php final class F {} class S extends F {} class A extends S {} class B extends S {}",
+    )
+    .expect_err("expected the final-parent violation to fail the build");
+    let messages: Vec<String> = err.flatten().into_iter().map(|e| e.message).collect();
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("cannot extend final class F")),
+        "expected the genuine final-parent error, got: {:?}",
+        messages,
+    );
+    assert!(
+        !messages.iter().any(|m| m.contains("Circular inheritance")),
+        "class-build failure leaked into `building` and produced a false circular error: {:?}",
+        messages,
+    );
+}
+
 /// Verifies the error diagnostic for cannot reduce visibility when overriding method.
 #[test]
 fn test_error_cannot_reduce_visibility_when_overriding_method() {
@@ -600,6 +631,38 @@ fn test_error_interface_inheritance_cycle() {
     expect_error(
         "<?php interface A extends B {} interface B extends A {}",
         "Circular interface inheritance detected",
+    );
+}
+
+/// Regression (interface analog of `test_class_build_failure_does_not_leak_building_set`): an
+/// interface whose schema build genuinely fails must NOT pollute the shared `building` set and
+/// mis-flag other interfaces as circular.
+///
+/// `S extends C` fails at schema time (`C` is a class, and interfaces may only extend interfaces),
+/// which used to leave `S` stuck in `building` on the `?` early-return. Later builds of `A`/`B`
+/// (both `extends S`) or the top-level revisit of `S` then re-entered `S` and reported a spurious
+/// "Circular interface inheritance detected involving S". The fix removes `S` on every exit path,
+/// so the ONLY error is the genuine "cannot extend class" — no false circular, in any build order.
+#[test]
+fn test_interface_build_failure_does_not_leak_building_set() {
+    let err = check_source_full(
+        "<?php class C {} interface S extends C {} interface A extends S {} interface B extends S {}",
+    )
+    .expect_err("expected the interface-extends-class violation to fail the build");
+    let messages: Vec<String> = err.flatten().into_iter().map(|e| e.message).collect();
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("cannot extend class C")),
+        "expected the genuine interface-extends-class error, got: {:?}",
+        messages,
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|m| m.contains("Circular interface inheritance")),
+        "interface-build failure leaked into `building` and produced a false circular error: {:?}",
+        messages,
     );
 }
 
