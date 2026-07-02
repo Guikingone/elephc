@@ -28,6 +28,16 @@ pub(crate) mod fibers;
 pub(crate) mod date_constants;
 /// POSIX locale category integer constants (LC_ALL, LC_NUMERIC, etc.).
 pub(crate) mod locale_constants;
+/// String-function integer constants (STR_PAD_*, ENT_* html-entity flags).
+pub(crate) mod string_constants;
+/// Sort comparison-mode integer constants (SORT_STRING, SORT_NATURAL).
+pub(crate) mod sort_constants;
+/// mbstring case-mode integer constants (MB_CASE_FOLD_SIMPLE).
+pub(crate) mod mbstring_constants;
+/// `ext/filter` validation-filter integer constants (FILTER_VALIDATE_BOOL[EAN]).
+pub(crate) mod filter_constants;
+/// `ext/pcntl` signal integer constants (SIGINT, SIGTERM, SIG_DFL, SIG_IGN, etc.).
+pub(crate) mod pcntl_constants;
 /// C FFI type mapping utilities.
 mod ffi;
 /// JSON literal constant type inference.

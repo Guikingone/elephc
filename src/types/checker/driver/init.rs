@@ -19,6 +19,11 @@ use crate::types::php_runtime_constants::PHP_RUNTIME_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::locale_constants::LOCALE_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
+use crate::types::string_constants::STRING_INT_CONSTANTS;
+use crate::types::sort_constants::SORT_INT_CONSTANTS;
+use crate::types::mbstring_constants::MBSTRING_INT_CONSTANTS;
+use crate::types::filter_constants::FILTER_INT_CONSTANTS;
+use crate::types::pcntl_constants::PCNTL_INT_CONSTANTS;
 use crate::types::PhpType;
 
 use super::super::Checker;
@@ -80,11 +85,27 @@ impl Checker {
         for (name, _value) in LOCALE_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
-        // PHP_SAPI, PHP_VERSION, and PHP_OS_FAMILY are string constants.
+        for (name, _value) in STRING_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in SORT_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in MBSTRING_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in FILTER_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in PCNTL_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        // PHP_SAPI, PHP_VERSION, PHP_OS_FAMILY, and PCRE_VERSION are string constants.
         // Their type is registered here; their values are materialized in prescan.
         constants.insert("PHP_SAPI".to_string(), PhpType::Str);
         constants.insert("PHP_VERSION".to_string(), PhpType::Str);
         constants.insert("PHP_OS_FAMILY".to_string(), PhpType::Str);
+        constants.insert("PCRE_VERSION".to_string(), PhpType::Str);
 
         Self {
             target_platform,

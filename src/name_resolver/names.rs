@@ -372,15 +372,22 @@ fn is_builtin_global_constant(name: &str) -> bool {
     ) {
         return true;
     }
-    // Shared source-of-truth slices for JSON, stream/socket, error-level, and PHP runtime constants.
+    // Shared source-of-truth slices for JSON, stream/socket, error-level, PHP runtime,
+    // preg/PCRE, string-function, sort, mbstring, filter, and pcntl signal constants.
     crate::types::json_constants::JSON_INT_CONSTANTS
         .iter()
         .chain(crate::types::stream_constants::STREAM_INT_CONSTANTS.iter())
         .chain(crate::types::error_constants::ERROR_INT_CONSTANTS.iter())
         .chain(crate::types::php_runtime_constants::PHP_RUNTIME_INT_CONSTANTS.iter())
+        .chain(crate::types::preg_constants::PREG_INT_CONSTANTS.iter())
+        .chain(crate::types::string_constants::STRING_INT_CONSTANTS.iter())
+        .chain(crate::types::sort_constants::SORT_INT_CONSTANTS.iter())
+        .chain(crate::types::mbstring_constants::MBSTRING_INT_CONSTANTS.iter())
+        .chain(crate::types::filter_constants::FILTER_INT_CONSTANTS.iter())
+        .chain(crate::types::pcntl_constants::PCNTL_INT_CONSTANTS.iter())
         .any(|(constant_name, _)| *constant_name == name)
         || matches!(
             name,
-            "PHP_SAPI" | "PHP_VERSION" | "PHP_OS_FAMILY"
+            "PHP_SAPI" | "PHP_VERSION" | "PHP_OS_FAMILY" | "PCRE_VERSION"
         )
 }

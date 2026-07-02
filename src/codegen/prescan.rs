@@ -19,7 +19,12 @@ use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::php_runtime_constants::{PHP_RUNTIME_INT_CONSTANTS, PHP_SAPI_STR, PHP_VERSION_STR};
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::locale_constants::LOCALE_INT_CONSTANTS;
-use crate::types::preg_constants::PREG_INT_CONSTANTS;
+use crate::types::preg_constants::{PCRE_VERSION_STR, PREG_INT_CONSTANTS};
+use crate::types::string_constants::STRING_INT_CONSTANTS;
+use crate::types::sort_constants::SORT_INT_CONSTANTS;
+use crate::types::mbstring_constants::MBSTRING_INT_CONSTANTS;
+use crate::types::filter_constants::FILTER_INT_CONSTANTS;
+use crate::types::pcntl_constants::PCNTL_INT_CONSTANTS;
 use crate::types::{PhpType, TypeEnv};
 
 use super::context::{Context, TRY_HANDLER_SLOT_SIZE};
@@ -159,6 +164,40 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    for (name, value) in STRING_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in SORT_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in MBSTRING_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in FILTER_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in PCNTL_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    constants.insert(
+        "PCRE_VERSION".to_string(),
+        (ExprKind::StringLiteral(PCRE_VERSION_STR.to_string()), PhpType::Str),
+    );
     constants.insert(
         "PHP_SAPI".to_string(),
         (ExprKind::StringLiteral(PHP_SAPI_STR.to_string()), PhpType::Str),

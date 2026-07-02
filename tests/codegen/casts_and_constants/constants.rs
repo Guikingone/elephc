@@ -178,3 +178,87 @@ fn test_setlocale_returns_requested_locale() {
     let out = compile_and_run("<?php echo setlocale(LC_ALL, \"C\");");
     assert_eq!(out, "C");
 }
+
+/// Verifies `str_pad()` padding-mode constants fold to their PHP values
+/// (`STR_PAD_RIGHT=1`, `STR_PAD_LEFT=0`, `STR_PAD_BOTH=2`).
+#[test]
+fn test_str_pad_mode_constants() {
+    let out = compile_and_run("<?php echo STR_PAD_RIGHT, STR_PAD_LEFT, STR_PAD_BOTH;");
+    assert_eq!(out, "102");
+}
+
+/// Verifies `STR_PAD_LEFT` drives `str_pad()` left-padding at runtime.
+/// Fixture: `str_pad("x", 5, " ", STR_PAD_LEFT)` → four leading spaces then `x`.
+#[test]
+fn test_str_pad_left_with_constant() {
+    let out = compile_and_run("<?php echo str_pad(\"x\", 5, \" \", STR_PAD_LEFT), \"|\";");
+    assert_eq!(out, "    x|");
+}
+
+/// Verifies the html-entity flag constants fold to their PHP values
+/// (`ENT_QUOTES=3`, `ENT_COMPAT=2`, `ENT_HTML401=0`).
+#[test]
+fn test_html_entity_flag_constants() {
+    let out = compile_and_run("<?php echo ENT_QUOTES, \"|\", ENT_COMPAT, \"|\", ENT_HTML401;");
+    assert_eq!(out, "3|2|0");
+}
+
+/// Verifies the sort comparison-mode constants fold to their PHP values
+/// (`SORT_STRING=2`, `SORT_NATURAL=6`).
+#[test]
+fn test_sort_mode_constants() {
+    let out = compile_and_run("<?php echo SORT_STRING, \"|\", SORT_NATURAL;");
+    assert_eq!(out, "2|6");
+}
+
+/// Verifies `MB_CASE_FOLD_SIMPLE` folds to PHP's ext/mbstring value 7.
+#[test]
+fn test_mb_case_fold_simple_constant() {
+    let out = compile_and_run("<?php echo MB_CASE_FOLD_SIMPLE;");
+    assert_eq!(out, "7");
+}
+
+/// Verifies both boolean-validation filter names fold to PHP's shared value 258
+/// (`FILTER_VALIDATE_BOOL` is the alias of `FILTER_VALIDATE_BOOLEAN`).
+#[test]
+fn test_filter_validate_bool_constants() {
+    let out = compile_and_run("<?php echo FILTER_VALIDATE_BOOL, \"|\", FILTER_VALIDATE_BOOLEAN;");
+    assert_eq!(out, "258|258");
+}
+
+/// Verifies the PCRE version component constants fold to the bundled PCRE2 10.42
+/// values (`PCRE_VERSION_MAJOR=10`, `PCRE_VERSION_MINOR=42`).
+#[test]
+fn test_pcre_version_component_constants() {
+    let out = compile_and_run("<?php echo PCRE_VERSION_MAJOR, \"|\", PCRE_VERSION_MINOR;");
+    assert_eq!(out, "10|42");
+}
+
+/// Verifies `PCRE_VERSION` resolves to the bundled PCRE2 version string (PHP 8.4 uses 10.42).
+#[test]
+fn test_pcre_version_string() {
+    let out = compile_and_run("<?php echo PCRE_VERSION;");
+    assert_eq!(out, "10.42 2022-12-11");
+}
+
+/// Verifies the pcntl signal constants fold to their POSIX values shared across
+/// every supported target (`SIGALRM=14`, `SIGINT=2`, `SIG_DFL=0`, `SIG_IGN=1`,
+/// `SIGTERM=15`, `SIGKILL=9`, `SIGHUP=1`).
+#[test]
+fn test_pcntl_signal_constants() {
+    let out = compile_and_run(
+        "<?php echo SIGALRM, \"|\", SIGINT, \"|\", SIG_DFL, \"|\", SIG_IGN, \"|\", SIGTERM, \"|\", SIGKILL, \"|\", SIGHUP;",
+    );
+    assert_eq!(out, "14|2|0|1|15|9|1");
+}
+
+/// Verifies newly-registered predefined constants resolve when referenced from
+/// inside a namespace (the name resolver's builtin-global-constant fallback).
+/// symfony/console references these constants from namespaced code.
+#[test]
+fn test_predefined_constants_resolve_in_namespace() {
+    let out = compile_and_run(
+        "<?php namespace App; echo \\STR_PAD_LEFT === STR_PAD_LEFT ? 1 : 0, \"|\", SORT_STRING, \"|\", SIGINT, \"|\", FILTER_VALIDATE_BOOL;",
+    );
+    assert_eq!(out, "1|2|2|258");
+}
