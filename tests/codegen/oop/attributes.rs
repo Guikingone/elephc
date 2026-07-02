@@ -1761,3 +1761,156 @@ echo "ok";
     );
     assert_eq!(out, "ok");
 }
+
+/// Verifies `ReflectionProperty::getName()` is a recognised member: calling it
+/// through a `\ReflectionProperty`-typed parameter type-checks. Backed by the
+/// `__name` slot getter (mirrors `ReflectionParameter::getName`).
+#[test]
+fn test_reflection_property_get_name_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function f(\ReflectionProperty $p): void {
+    $n = $p->getName();
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
+
+/// Verifies `ReflectionProperty::getDeclaringFunction()` is a recognised member:
+/// calling it through a `\ReflectionProperty`-typed parameter type-checks. The
+/// stub returns a `mixed` placeholder (object return → mixed; see
+/// `builtin_reflection_property` for the lowering reason).
+#[test]
+fn test_reflection_property_get_declaring_function_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function f(\ReflectionProperty $p): void {
+    $fn = $p->getDeclaringFunction();
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
+
+/// Verifies `ReflectionParameter::isDefaultValueAvailable()` is a recognised
+/// member: calling it through a `\ReflectionParameter`-typed parameter
+/// type-checks. The stub returns a `bool` placeholder.
+#[test]
+fn test_reflection_parameter_is_default_value_available_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function f(\ReflectionParameter $p): void {
+    $b = $p->isDefaultValueAvailable();
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
+
+/// Verifies `ReflectionParameter::getDefaultValue()` is a recognised member:
+/// calling it through a `\ReflectionParameter`-typed parameter type-checks. The
+/// stub returns a `mixed` placeholder.
+#[test]
+fn test_reflection_parameter_get_default_value_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function f(\ReflectionParameter $p): void {
+    $v = $p->getDefaultValue();
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
+
+/// Verifies `ReflectionMethod::isPublic()` is a recognised member: calling it
+/// through a `\ReflectionMethod`-typed parameter type-checks. The stub returns a
+/// `bool` placeholder.
+#[test]
+fn test_reflection_method_is_public_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function f(\ReflectionMethod $m): void {
+    $b = $m->isPublic();
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
+
+/// Verifies `ReflectionMethod::getName()` is a recognised member: calling it
+/// through a `\ReflectionMethod`-typed parameter type-checks. Backed by the
+/// `__name` slot getter.
+#[test]
+fn test_reflection_method_get_name_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function f(\ReflectionMethod $m): void {
+    $n = $m->getName();
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
+
+/// Verifies `ReflectionClass::newInstanceWithoutConstructor()` is a recognised
+/// member: calling it through a `\ReflectionClass`-typed parameter type-checks.
+/// The stub returns a `mixed` placeholder (object return → mixed).
+#[test]
+fn test_reflection_class_new_instance_without_constructor_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function f(\ReflectionClass $c): void {
+    $o = $c->newInstanceWithoutConstructor();
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
+
+/// Verifies `ReflectionClass::getProperty(string)` is a recognised member:
+/// calling it with a string argument through a `\ReflectionClass`-typed
+/// parameter type-checks. The stub returns a `mixed` placeholder.
+#[test]
+fn test_reflection_class_get_property_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function f(\ReflectionClass $c): void {
+    $p = $c->getProperty('name');
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
+
+/// Verifies `ReflectionFunction::invoke(?array)` is a recognised member: calling
+/// it with a nullable-array argument through a `\ReflectionFunction`-typed
+/// parameter type-checks. The stub returns a `mixed` placeholder.
+#[test]
+fn test_reflection_function_invoke_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function f(\ReflectionFunction $r): void {
+    $v = $r->invoke(null);
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
+
+/// Verifies `ReflectionType::getName()` is a recognised member on the abstract
+/// base: Symfony's `getType()?->getName()` pattern resolves against
+/// `\ReflectionType` when `instanceof \ReflectionNamedType` narrowing does not
+/// flow through, so the call must type-check. The stub returns a `mixed`
+/// placeholder; `ReflectionNamedType` overrides with its slot-backed `getName`.
+#[test]
+fn test_reflection_type_get_name_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function f(\ReflectionType $t): void {
+    $n = $t->getName();
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}

@@ -84,23 +84,45 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionClass".to_string(),
         builtin_reflection_class(),
     );
-    class_map.insert(
-        "ReflectionMethod".to_string(),
-        builtin_reflection_owner_class(
-            "ReflectionMethod",
-            vec![
-                // PHP: __construct(object|string $objectOrMethod, ?string $method = null).
-                // Relax the first argument to `object|string` (modelled as `mixed`) so
-                // `new ReflectionMethod($object, 'method')` no longer fails the "expects Str,
-                // got Object" generic check. `method_name` stays required: the reflection
-                // constructor's downstream validation (in the checker's inference layer)
-                // asserts the method-name arg is present, so an optional/absent second
-                // argument would trip that assertion rather than type-check.
-                ("class_name", Some(mixed_type()), None, false),
-                ("method_name", Some(TypeExpr::Str), None, false),
-            ],
-        ),
+    let reflection_method = builtin_reflection_owner_class(
+        "ReflectionMethod",
+        vec![
+            // PHP: __construct(object|string $objectOrMethod, ?string $method = null).
+            // Relax the first argument to `object|string` (modelled as `mixed`) so
+            // `new ReflectionMethod($object, 'method')` no longer fails the "expects Str,
+            // got Object" generic check. `method_name` stays required: the reflection
+            // constructor's downstream validation (in the checker's inference layer)
+            // asserts the method-name arg is present, so an optional/absent second
+            // argument would trip that assertion rather than type-check.
+            ("class_name", Some(mixed_type()), None, false),
+            ("method_name", Some(TypeExpr::Str), None, false),
+        ],
     );
+    class_map.insert("ReflectionMethod".to_string(), reflection_method);
+    // Extend the `ReflectionMethod` shell with a private `__name` slot and
+    // three PHP API methods the console probe calls. The slot is populated at
+    // codegen from the reflected method's name; the accessors are un-backed
+    // stubs (recognition layer only) per the existing reflection-stub policy.
+    if let Some(reflection_method) = class_map.get_mut("ReflectionMethod") {
+        reflection_method
+            .properties
+            .push(builtin_property("__name", Visibility::Private, Some(TypeExpr::Str), empty_string()));
+        // PHP: `getName(): string` — slot getter on `__name`.
+        reflection_method
+            .methods
+            .push(builtin_reflection_slot_getter("getName", "__name", TypeExpr::Str));
+        // PHP: `isPublic(): bool` — un-backed stub returning `true`; scalar
+        // returns lower safely on the EIR backend.
+        reflection_method
+            .methods
+            .push(builtin_reflection_literal_method("isPublic", TypeExpr::Bool, bool_lit(true)));
+        // PHP: `getClosure(): ?Closure` — un-backed stub returning `null` typed
+        // `mixed` (object/closure return → mixed; see `builtin_reflection_property`
+        // for the EIR-lowering reason).
+        reflection_method
+            .methods
+            .push(builtin_reflection_literal_method("getClosure", mixed_type(), null_lit()));
+    }
     class_map.insert("ReflectionProperty".to_string(), builtin_reflection_property());
     class_map.insert("ReflectionFunction".to_string(), builtin_reflection_function());
     class_map.insert(
@@ -366,6 +388,41 @@ fn builtin_reflection_literal_method(
     }
 }
 
+/// Returns a public method that unconditionally returns `value` (typed
+/// `return_type`) like `builtin_reflection_literal_method`, but accepts a
+/// parameter list. Each tuple is `(name, type_expr, default, by_ref)`. Used for
+/// un-backed reflection stubs that take arguments (e.g. `setValue`,
+/// `ReflectionFunction::invoke`, `ReflectionClass::getProperty`) — the body is a
+/// placeholder return and the parameters exist only so named/positional calls
+/// type-check against PHP's signatures.
+fn builtin_reflection_literal_method_with_params(
+    method_name: &str,
+    return_type: TypeExpr,
+    value: Option<Expr>,
+    params: Vec<(&str, Option<TypeExpr>, Option<Expr>, bool)>,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: params
+            .into_iter()
+            .map(|(name, ty, default, by_ref)| (name.to_string(), ty, default, by_ref))
+            .collect(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(return_type),
+        by_ref_return: false,
+        body: vec![Stmt::new(StmtKind::Return(value), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns the public `__construct(string $name)` for `ReflectionFunction`. The
 /// body is empty; codegen populates the metadata slots from the reflected
 /// function's signature.
@@ -426,6 +483,27 @@ fn builtin_reflection_function() -> FlattenedClass {
             // PHP: getClosureThis(): ?object — the bound `$this` of a closure, or null.
             // No runtime backing yet; returns null, typed `mixed` (covers `?object`).
             builtin_reflection_literal_method("getClosureThis", mixed_type(), null_lit()),
+            // PHP: `invoke(?array $args = null): mixed`. Un-backed stub returning
+            // `null` typed `mixed`; the nullable-array parameter lets named and
+            // positional calls type-check against PHP's signature.
+            builtin_reflection_literal_method_with_params(
+                "invoke",
+                mixed_type(),
+                null_lit(),
+                vec![(
+                    "args",
+                    Some(TypeExpr::Nullable(Box::new(array_type()))),
+                    null_lit(),
+                    false,
+                )],
+            ),
+            // PHP: `getClosureCalledClass(): ?ReflectionClass`. Un-backed stub
+            // returning `null` typed `mixed` (object return → mixed).
+            builtin_reflection_literal_method(
+                "getClosureCalledClass",
+                mixed_type(),
+                null_lit(),
+            ),
         ],
         attributes: Vec::new(),
         constants: Vec::new(),
@@ -476,6 +554,21 @@ fn builtin_reflection_parameter() -> FlattenedClass {
             // `mixed` is used rather than `ReflectionFunction`. Gradual typing still lets
             // callers chain methods on the result.
             builtin_reflection_literal_method("getDeclaringFunction", mixed_type(), null_lit()),
+            // PHP: `isDefaultValueAvailable(): bool`. Un-backed stub returning
+            // `false`; scalar returns lower safely on the EIR backend.
+            builtin_reflection_literal_method(
+                "isDefaultValueAvailable",
+                TypeExpr::Bool,
+                bool_lit(false),
+            ),
+            // PHP 8.0+ `hasDefaultValue(): bool`. Un-backed stub returning `false`.
+            builtin_reflection_literal_method("hasDefaultValue", TypeExpr::Bool, bool_lit(false)),
+            // PHP: `getDefaultValue(): mixed`. Un-backed stub returning `null`
+            // typed `mixed`.
+            builtin_reflection_literal_method("getDefaultValue", mixed_type(), null_lit()),
+            // PHP: `getDeclaringClass(): ?ReflectionClass`. Un-backed stub
+            // returning `null` typed `mixed` (object return → mixed).
+            builtin_reflection_literal_method("getDeclaringClass", mixed_type(), null_lit()),
         ],
         attributes: Vec::new(),
         constants: Vec::new(),
@@ -540,6 +633,16 @@ fn builtin_reflection_type() -> FlattenedClass {
         methods: vec![
             builtin_reflection_literal_method("allowsNull", TypeExpr::Bool, bool_lit(false)),
             builtin_reflection_literal_method("__toString", TypeExpr::Str, empty_string()),
+            // PHP's `ReflectionType` does not declare `getName()` — it lives on
+            // `ReflectionNamedType` — but Symfony calls `getType()?->getName()`
+            // after an `instanceof ReflectionNamedType` that elephc does not
+            // narrow through, so the call resolves against `ReflectionType`.
+            // Add a `mixed`-returning stub here so the call type-checks under
+            // gradual typing; concrete subtypes override with their slot-backed
+            // `getName`. Object return types are unsafe on un-backed reflection
+            // stubs (see `builtin_reflection_property`), so `mixed` + `null_lit`
+            // is used instead of `?ReflectionNamedType`.
+            builtin_reflection_literal_method("getName", mixed_type(), null_lit()),
         ],
         attributes: Vec::new(),
         constants: Vec::new(),
@@ -600,6 +703,24 @@ fn builtin_reflection_class() -> FlattenedClass {
             )]),
             builtin_reflection_class_get_name_method(),
             builtin_reflection_owner_get_attributes_method(),
+            // PHP: `newInstanceWithoutConstructor(): object`. Un-backed stub
+            // returning `null` typed `mixed` — object return types cannot be
+            // used on un-backed reflection stubs (see `builtin_reflection_property`
+            // for the EIR-lowering reason), so `mixed` is the proven-safe return.
+            builtin_reflection_literal_method(
+                "newInstanceWithoutConstructor",
+                mixed_type(),
+                null_lit(),
+            ),
+            // PHP: `getProperty(string $name): ReflectionProperty`. Un-backed
+            // stub returning `null` typed `mixed` (object return → mixed); the
+            // `name` parameter lets named/positional calls type-check.
+            builtin_reflection_literal_method_with_params(
+                "getProperty",
+                mixed_type(),
+                null_lit(),
+                vec![("name", Some(TypeExpr::Str), None, false)],
+            ),
         ],
         attributes: Vec::new(),
         constants: Vec::new(),
@@ -691,10 +812,43 @@ fn builtin_reflection_property() -> FlattenedClass {
             ("property_name", Some(TypeExpr::Str), None, false),
         ],
     );
+    // Private name slot populated at codegen from the reflected property's
+    // declared name; surfaced through the `getName()` slot getter below.
+    class
+        .properties
+        .push(builtin_property("__name", Visibility::Private, Some(TypeExpr::Str), empty_string()));
     class.methods.push(builtin_reflection_literal_method(
         "getType",
         mixed_type(),
         null_lit(),
+    ));
+    // PHP: `getName(): string` — slot getter on `__name` (mirrors
+    // `ReflectionParameter::getName`).
+    class
+        .methods
+        .push(builtin_reflection_slot_getter("getName", "__name", TypeExpr::Str));
+    // PHP: `getDeclaringFunction(): ReflectionFunctionAbstract` — un-backed
+    // stub returning `null` typed `mixed` (object return → mixed; see the
+    // `ReflectionParameter::getDeclaringFunction` comment for the lowering
+    // reason).
+    class.methods.push(builtin_reflection_literal_method(
+        "getDeclaringFunction",
+        mixed_type(),
+        null_lit(),
+    ));
+    // PHP: `setValue(mixed $objectOrValue, mixed $value = UNKNOWN): void`.
+    // Un-backed stub: `void` return with a placeholder `return;` and two
+    // `mixed` parameters so named/positional calls type-check. The second
+    // parameter defaults to `null` (PHP's `UNKNOWN` sentinel is a runtime
+    // concern; `null` is the safe syntactic default here).
+    class.methods.push(builtin_reflection_literal_method_with_params(
+        "setValue",
+        TypeExpr::Void,
+        None,
+        vec![
+            ("objectOrValue", Some(mixed_type()), None, false),
+            ("value", Some(mixed_type()), null_lit(), false),
+        ],
     ));
     class
 }
