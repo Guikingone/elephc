@@ -112,3 +112,51 @@ foreach (C::outer() as $x) { echo $x; }
     );
     assert_eq!(out, "12");
 }
+
+/// Repro X1: a `: iterable` generator method that RECURSIVELY delegates to
+/// itself via `yield from $this->upto(...)` (receiver `$this`, typed as the
+/// declaring class, so the callee's return type is resolved from its own
+/// signature). Before the `build_method_sig` generator seed fix, `upto`'s
+/// signature was seeded from the `: iterable` hint, so while `upto`'s body was
+/// being checked (before the method pass ran) the self-call `$this->upto(...)`
+/// resolved as `Iterable` and `yield from` rejected it ("got Iterable").
+/// Seeding `Generator` at the signature layer makes the self-recursive call
+/// resolve as a delegatable Generator from the start.
+/// Cross-checked against `php -r` → "321".
+#[test]
+fn test_generator_method_direct_self_recursion() {
+    let out = compile_and_run(
+        r#"<?php
+class Counter {
+    public function upto(int $n): iterable {
+        yield $n;
+        if ($n > 1) { yield from $this->upto($n - 1); }
+    }
+}
+$c = new Counter();
+foreach ($c->upto(3) as $v) { echo $v; }
+"#,
+    );
+    assert_eq!(out, "321");
+}
+
+/// Repro Z1: two `: iterable` generator methods `a()`/`b()` that MUTUALLY
+/// recurse via `yield from $this->b()` / `yield from $this->a()` with a
+/// terminating guard. Each method's signature is now seeded `Generator`, so the
+/// cross-references resolve as delegatable Generators from the start (before the
+/// method pass runs) instead of the stale `Iterable` seed.
+/// Cross-checked against `php -r` → "120340".
+#[test]
+fn test_generator_method_mutual_recursion() {
+    let out = compile_and_run(
+        r#"<?php
+class Spec {
+    public function a(int $n): iterable { yield $n; if ($n < 4) { yield from $this->b($n + 1); } }
+    public function b(int $n): iterable { yield $n * 10; if ($n < 4) { yield from $this->a($n + 1); } }
+}
+$s = new Spec();
+foreach ($s->a(1) as $v) { echo $v; }
+"#,
+    );
+    assert_eq!(out, "120340");
+}

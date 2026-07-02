@@ -21,7 +21,10 @@ use super::super::Checker;
 /// Builds a `FunctionSig` from a parsed class method, resolving parameter and return type
 /// annotations through the checker. Parameters without type hints default to `PhpType::Int`.
 /// Validates that each declared parameter's default value is compatible with its resolved type.
-/// Infers return type from method body when no return annotation is present.
+/// Infers return type from method body when no return annotation is present. A generator method
+/// (body contains `yield`) is seeded `Object("Generator")` regardless of the declared
+/// `iterable`/`Generator`/`Traversable` hint so recursive generator-method calls resolve the
+/// correct type before the method pass runs; the declared hint is validated by the method pass.
 pub(crate) fn build_method_sig(
     checker: &Checker,
     method: &ClassMethod,
@@ -55,13 +58,23 @@ pub(crate) fn build_method_sig(
             )?;
         }
     }
-    let return_type = match method.return_type.as_ref() {
-        Some(type_ann) => checker.resolve_declared_return_type_hint(
-            type_ann,
-            method.span,
-            &format!("Method '{}'", method.name),
-        )?,
-        None => super::super::infer_return_type_syntactic(&method.body),
+    let return_type = if super::super::yield_validation::body_contains_yield(&method.body) {
+        // A generator method (body contains `yield`/`yield from`) returns a `Generator`
+        // object regardless of the declared `iterable`/`Generator`/`Traversable` hint.
+        // Seed `Generator` here so a RECURSIVE call to this method (resolved from this
+        // signature before the method pass runs) sees the correct type. The declared
+        // hint's Generator-acceptance is validated by the method pass
+        // (`update_method_return_type`); here we only seed the runtime shape.
+        PhpType::Object("Generator".to_string())
+    } else {
+        match method.return_type.as_ref() {
+            Some(type_ann) => checker.resolve_declared_return_type_hint(
+                type_ann,
+                method.span,
+                &format!("Method '{}'", method.name),
+            )?,
+            None => super::super::infer_return_type_syntactic(&method.body),
+        }
     };
     let mut sig = Checker::callable_wrapper_sig(&FunctionSig {
         params,
