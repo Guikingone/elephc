@@ -298,6 +298,12 @@ pub(crate) fn compile_and_run_files_with_defines(
     let (resolved, _autoload_warnings) = elephc::autoload::run(resolved, base_dir, &autoload_registry)
         .expect("autoload failed");
     let resolved = elephc::resolver::hoist_conditional_function_declarations(resolved);
+    // Mirror `pipeline::compile`: inject the var_export prelude after autoload::run and
+    // the conditional-function hoist so usage inside PSR-4 autoloaded files is detected
+    // and the declaration is present before the type checker collects functions. Other
+    // preludes (pdo/tz/list_id/image) are intentionally not injected here to keep this
+    // path minimal; var_export is the only prelude the autoload fixtures exercise.
+    let resolved = elephc::var_export_prelude::inject_if_used(resolved);
     let resolved = elephc::optimize::fold_constants(resolved);
     let mut check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");

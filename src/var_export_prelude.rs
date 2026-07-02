@@ -6,9 +6,14 @@
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` and the codegen test harness via `inject_if_used`,
-//!   before name resolution, so a user `var_export(...)` call resolves to the
-//!   injected function through the normal pipeline (functions, recursion, arrays,
-//!   string builtins) with no dedicated codegen or runtime helper.
+//!   after `autoload::run` and the conditional-function hoist, so the detection scan
+//!   sees `var_export` usage in PSR-4 autoloaded files too. A user `var_export(...)`
+//!   call resolves to the injected declaration through the name_resolver prelude-global
+//!   fallback (`canonical_prelude_global_function_name`), which canonicalizes bare
+//!   namespaced calls to the global `var_export` during the main name-resolution pass
+//!   and during each autoloaded file's isolated name-resolution. The prelude's internal
+//!   builtins are matched by `check_builtin` on their bare lowercase names, which the
+//!   prelude source already uses, so they need no name-resolution pass.
 //!
 //! Key details:
 //! - Implemented as a prelude rather than a runtime walker because the recursive,
@@ -143,4 +148,54 @@ pub fn inject_if_used(program: Program) -> Program {
     let mut combined = crate::parser::parse(&tokens).expect("var_export prelude must parse");
     combined.extend(program);
     combined
+}
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Function-level tests for the `inject_if_used` pay-for-use guard, covering the
+    //! "only when used" contract and the user-declaration skip, mirroring the stage at
+    //! which the injection now runs (after autoload and the conditional-function hoist,
+    //! on the fully-expanded program).
+    //!
+    //! Called from:
+    //! - `cargo test` through Rust's test harness.
+    //!
+    //! Key details:
+    //! - Source is parsed the way `inject_if_used` sees it: tokenize then parse.
+
+    use super::*;
+
+    /// Parses source the way `inject_if_used` sees it: tokenize then parse.
+    fn parse(source: &str) -> Program {
+        let tokens = crate::lexer::tokenize(source).expect("test source must tokenize");
+        crate::parser::parse(&tokens).expect("test source must parse")
+    }
+
+    /// A program with no `var_export` usage is returned unchanged (the prelude is not
+    /// injected), guarding the "only when used" contract.
+    #[test]
+    fn no_injection_when_unused() {
+        let program = parse(r#"<?php $a = [1, 2]; echo count($a);"#);
+        let injected = inject_if_used(program.clone());
+        assert_eq!(injected.len(), program.len());
+    }
+
+    /// A program that calls `var_export` gets the prelude prepended (the program gains
+    /// the three prelude function declarations: `var_export` plus the two helpers).
+    #[test]
+    fn injection_when_used() {
+        let program = parse(r#"<?php var_export(42);"#);
+        let injected = inject_if_used(program.clone());
+        assert!(injected.len() > program.len());
+    }
+
+    /// A program that declares its own `var_export` is returned unchanged, so the user
+    /// definition wins and there is no redeclaration conflict.
+    #[test]
+    fn no_injection_when_user_declares() {
+        let program = parse(r#"<?php function var_export($v, $r = false) { return ""; }"#);
+        let injected = inject_if_used(program.clone());
+        assert_eq!(injected.len(), program.len());
+    }
 }

@@ -147,14 +147,6 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = list_id_prelude::inject_if_used(ast);
     timings.record_since("list-id-prelude", phase_started);
 
-    // Inject the var_export prelude (a pure elephc-PHP function) only when the program
-    // references var_export and does not declare its own, so other binaries carry
-    // nothing. Runs after include resolution so usage inside includes is detected, and
-    // before name resolution so the call resolves to the injected function.
-    let phase_started = Instant::now();
-    let ast = var_export_prelude::inject_if_used(ast);
-    timings.record_since("var-export-prelude", phase_started);
-
     // Inject the image standard-library prelude (elephc_image externs + GD/Exif/
     // Imagick/Gmagick/Cairo surface, written in elephc-PHP) only when the program
     // references an image symbol, so non-image binaries never declare the
@@ -201,6 +193,27 @@ pub(crate) fn compile(config: CliConfig) {
     let phase_started = Instant::now();
     let ast = resolver::hoist_conditional_function_declarations(ast);
     timings.record_since("hoist-conditional-fns", phase_started);
+
+    // Inject the var_export prelude (a pure elephc-PHP function) only when the program
+    // references var_export and does not declare its own, so other binaries carry
+    // nothing. Runs AFTER autoload::run and AFTER hoist_conditional_function_declarations
+    // so the detection scan sees the fully-expanded program INCLUDING PSR-4 autoloaded
+    // files (var_export usage inside autoloaded Symfony files is detected here, not just
+    // usage in include-expanded files), and the injected `function var_export` declaration
+    // is present before the type checker's function-discovery collects functions. Name
+    // resolution of those calls is handled by the prelude-global fallback in
+    // `name_resolver::canonical_prelude_global_function_name` (commit 25e24ba02), which
+    // canonicalizes a bare namespaced `var_export(...)` call to the global `var_export`
+    // during the main pass and during each autoloaded file's isolated name-resolution, so
+    // the call resolves to this injected declaration even though injection now happens
+    // after name resolution. The prelude's own internal builtins (str_replace, sprintf,
+    // is_*, ...) are matched by `check_builtin` on their bare lowercase names, which the
+    // prelude source already uses, so they need no name-resolution pass. The injected
+    // function is a plain top-level FunctionDecl, so the earlier hoist pass does not
+    // touch it (it runs before this injection) and the subsequent fold/check collect it.
+    let phase_started = Instant::now();
+    let ast = var_export_prelude::inject_if_used(ast);
+    timings.record_since("var-export-prelude", phase_started);
 
     let phase_started = Instant::now();
     let ast = optimize::fold_constants(ast);

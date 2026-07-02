@@ -369,4 +369,81 @@ echo var_export(123, true);
     assert_eq!(out, "custom");
 }
 
+/// `var_export` usage inside a PSR-4 autoloaded file is detected after the pipeline move
+/// (injection now runs after `autoload::run`), the prelude is injected, and the bare
+/// namespaced `var_export(...)` call inside `App\Dumper` resolves to the injected global
+/// via the name_resolver prelude-global fallback. This is the regression that previously
+/// produced "Undefined function: var_export" for autoloaded Symfony files.
+///
+/// This is a pipeline-level (type-check) assertion rather than a full `compile_and_run_files`
+/// end-to-end run: the legacy direct-AST `codegen::generate` path used by the multi-file
+/// helper does not lower `is_array` (a builtin the prelude body calls) and so fails at link
+/// time independently of this fix. Asserting `types::check_with_target` succeeds proves the
+/// prelude was injected and the call resolved at the pipeline stage the move targets, without
+/// coupling to the unrelated legacy-codegen `is_array` gap.
+#[test]
+fn test_var_export_in_autoloaded_file_is_injected() {
+    use crate::support::target;
+    use std::collections::HashSet;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static LOCAL_ID: AtomicU64 = AtomicU64::new(0);
+    let id = LOCAL_ID.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!(
+        "elephc_var_export_autoload_{}_{}",
+        std::process::id(),
+        id,
+    ));
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(
+        dir.join("composer.json"),
+        r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("src/Dumper.php"),
+        "<?php\nnamespace App;\nclass Dumper {\n    public static function dump(mixed $v): string { return var_export($v, true); }\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        "<?php\necho App\\Dumper::dump([1, 2]);\n",
+    )
+    .unwrap();
+
+    let php_path = dir.join("main.php");
+    let base_dir = php_path.parent().unwrap();
+    let source = fs::read_to_string(&php_path).unwrap();
+    let tokens = elephc::lexer::tokenize(&source).expect("tokenize failed");
+    let ast = elephc::parser::parse(&tokens).expect("parse failed");
+    let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &php_path);
+    let define_set: HashSet<String> = HashSet::new();
+    let ast = elephc::conditional::apply(ast, &define_set);
+    let (autoload_registry, ast) = elephc::autoload::Registry::build(base_dir, ast);
+    let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
+    let resolved = elephc::autoload::collect_aliases(resolved);
+    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+    let (resolved, _warnings) =
+        elephc::autoload::run(resolved, base_dir, &autoload_registry).expect("autoload failed");
+    let resolved = elephc::resolver::hoist_conditional_function_declarations(resolved);
+    // The fix under test: inject AFTER autoload::run + hoist so the autoloaded-file
+    // usage is detected and the declaration is present before the type checker.
+    let resolved = elephc::var_export_prelude::inject_if_used(resolved);
+    let resolved = elephc::optimize::fold_constants(resolved);
+    let check_result = elephc::types::check_with_target(&resolved, target());
+    let _ = fs::remove_dir_all(&dir);
+    match check_result {
+        Ok(_) => {}
+        Err(e) => panic!(
+            "type check failed for autoloaded var_export usage: {}",
+            e.message
+        ),
+    }
+}
+
+// The "only when used" guard (no injection when the program has no `var_export` usage)
+// is verified at the function level in `src/var_export_prelude.rs::tests::no_injection_when_unused`,
+// since a runtime `function_exists($non_literal_name)` probe is not supported by the EIR
+// backend and a `"var_export"` string literal would itself trigger detection.
+
 // --- File I/O: CSV, timestamps, directory listing, temp files, seek/rewind/eof ---

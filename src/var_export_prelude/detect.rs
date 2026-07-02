@@ -7,9 +7,12 @@
 //! - `crate::var_export_prelude::inject_if_used`.
 //!
 //! Key details:
-//! - Runs before name resolution, so function `Name`s are raw source text; matched
-//!   case-insensitively on the unqualified last segment (PHP function names are
-//!   case-insensitive and may be written `\var_export`).
+//! - Runs after name resolution (the injection point in `pipeline::compile` is after
+//!   `autoload::run` and the conditional-function hoist), so function `Name`s are the
+//!   canonicalized forms produced by the name resolver; `name_is_var_export` matches on
+//!   the unqualified last segment, which is `var_export` whether the call was written
+//!   bare, as `\var_export`, or as a namespaced `N\var_export` that the prelude-global
+//!   fallback rewrote to the global `var_export`. PHP function names are case-insensitive.
 //! - A `"var_export"` string literal also counts as a reference so the
 //!   `function_exists('var_export')` and `'var_export'` callable forms still inject
 //!   the function. Over-injection (e.g. an unrelated string) only adds a small, later
