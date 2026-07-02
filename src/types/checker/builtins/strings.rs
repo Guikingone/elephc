@@ -530,7 +530,9 @@ pub(super) fn check_builtin(
                 Ok(Some(checker.normalize_union_type(vec![PhpType::Str, PhpType::Bool])))
             }
         }
-        "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" => {
+        "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" | "ctype_upper" => {
+            // ctype_*(mixed $text): bool — character-class predicate. ctype_upper is
+            // recognition-only (no runtime lowering yet); the others are runtime-backed.
             if args.len() != 1 {
                 return Err(CompileError::new(
                     span,

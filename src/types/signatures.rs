@@ -120,7 +120,7 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             vec![int_lit(0), null_lit()],
         )),
 
-        "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" => {
+        "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" | "ctype_upper" => {
             Some(fixed(&["text"]))
         }
 
@@ -352,6 +352,13 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             2,
             vec![int_lit(0)],
         )),
+        // grapheme_strpos/grapheme_strrpos(string $haystack, string $needle,
+        // int $offset = 0): int|false — the case-sensitive grapheme search pair.
+        "grapheme_strpos" | "grapheme_strrpos" => Some(optional(
+            &["haystack", "needle", "offset"],
+            2,
+            vec![int_lit(0)],
+        )),
         // grapheme_str_split(string $string, int $length = 1): array|false.
         "grapheme_str_split" => Some(optional(&["string", "length"], 1, vec![int_lit(1)])),
         // grapheme_extract(string $haystack, int $size, int $type = GRAPHEME_EXTR_COUNT (0),
@@ -560,6 +567,40 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         )),
         "getenv" => Some(fixed(&["name"])),
         "putenv" => Some(fixed(&["assignment"])),
+        // -- process / system control builtins (recognition-only; runtime deferred) --
+        // pcntl_signal(int $signal, callable|int $handler,
+        // bool $restart_syscalls = true): bool.
+        "pcntl_signal" => Some(optional(
+            &["signal", "handler", "restart_syscalls"],
+            2,
+            vec![bool_lit(true)],
+        )),
+        // pcntl_alarm(int $seconds): int.
+        "pcntl_alarm" => Some(fixed(&["seconds"])),
+        // pcntl_async_signals(?bool $enable = null): bool.
+        "pcntl_async_signals" => Some(optional(&["enable"], 0, vec![null_lit()])),
+        // pcntl_signal_get_handler(int $signal): int|string.
+        "pcntl_signal_get_handler" => Some(fixed(&["signal"])),
+        // proc_close($process): int — $process is a resource returned by proc_open().
+        "proc_close" => Some(fixed(&["process"])),
+        // getmypid(): int|false.
+        "getmypid" => Some(fixed(&[])),
+        // cli_set_process_title(string $title): bool.
+        "cli_set_process_title" => Some(fixed(&["title"])),
+        // setproctitle(string $title): bool — the ext/proctitle alias of the above.
+        "setproctitle" => Some(fixed(&["title"])),
+        // sapi_windows_cp_get(string $kind = ''): int (Windows-only; recognized everywhere).
+        "sapi_windows_cp_get" => Some(optional(&["kind"], 0, vec![string_lit("")])),
+        // sapi_windows_cp_set(int $code_page): bool.
+        "sapi_windows_cp_set" => Some(fixed(&["code_page"])),
+        // sapi_windows_vt100_support($stream, ?bool $enable = null): bool.
+        "sapi_windows_vt100_support" => {
+            Some(optional(&["stream", "enable"], 1, vec![null_lit()]))
+        }
+        // ini_get(string $option): string|false.
+        "ini_get" => Some(fixed(&["option"])),
+        // get_defined_constants(bool $categorize = false): array.
+        "get_defined_constants" => Some(optional(&["categorize"], 0, vec![bool_lit(false)])),
         "exec" | "shell_exec" | "system" | "passthru" => Some(fixed(&["command"])),
         "define" => Some(fixed(&["constant_name", "value"])),
         "date" | "gmdate" => Some(optional(&["format", "timestamp"], 1, vec![null_lit()])),
@@ -941,7 +982,7 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         "boolval" | "is_bool" | "is_null" | "is_float" | "is_int" | "is_iterable"
         | "is_string" | "is_numeric" | "is_nan" | "is_finite" | "is_infinite"
         | "is_countable"
-        | "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" => {
+        | "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" | "ctype_upper" => {
             Some(typed_first_class_builtin_sig(name, &[PhpType::Mixed], PhpType::Bool))
         }
         "defined" => Some(typed_first_class_builtin_sig(
@@ -1075,6 +1116,12 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             &[PhpType::Str, PhpType::Str],
             PhpType::Union(vec![PhpType::Int, PhpType::Bool]),
         )),
+        // grapheme_strpos/grapheme_strrpos are case-sensitive grapheme search: int index or false.
+        "grapheme_strpos" | "grapheme_strrpos" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str, PhpType::Str],
+            PhpType::Union(vec![PhpType::Int, PhpType::Bool]),
+        )),
         // grapheme_str_split splits a string into an array of graphemes, or false on error.
         "grapheme_str_split" => Some(typed_first_class_builtin_sig(
             name,
@@ -1119,6 +1166,59 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             &[PhpType::Str, PhpType::Str],
             PhpType::Union(vec![PhpType::Int, PhpType::Bool]),
         )),
+        // -- process / system control first-class callables (recognition-only) --
+        // pcntl_signal(signal, handler, restart_syscalls?) installs a handler and returns bool.
+        "pcntl_signal" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Int, PhpType::Mixed],
+            PhpType::Bool,
+        )),
+        // pcntl_alarm returns the number of seconds remaining on any previous alarm.
+        "pcntl_alarm" => Some(typed_first_class_builtin_sig(name, &[PhpType::Int], PhpType::Int)),
+        // pcntl_async_signals toggles async signal dispatch and returns the prior state.
+        "pcntl_async_signals" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Mixed],
+            PhpType::Bool,
+        )),
+        // pcntl_signal_get_handler returns the installed handler: an int constant or a callable name.
+        "pcntl_signal_get_handler" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Int],
+            PhpType::Union(vec![PhpType::Int, PhpType::Str]),
+        )),
+        // proc_close waits on the process and returns its termination status int.
+        "proc_close" => Some(typed_first_class_builtin_sig(name, &[PhpType::Mixed], PhpType::Int)),
+        // getmypid returns the current process id, or false if it cannot be determined.
+        "getmypid" => {
+            return_typed_first_class_builtin_sig(name, PhpType::Union(vec![PhpType::Int, PhpType::Bool]))
+        }
+        // cli_set_process_title/setproctitle set the process title and return bool.
+        "cli_set_process_title" | "setproctitle" => {
+            Some(typed_first_class_builtin_sig(name, &[PhpType::Str], PhpType::Bool))
+        }
+        // sapi_windows_cp_get returns the active Windows code page as an int.
+        "sapi_windows_cp_get" => {
+            Some(typed_first_class_builtin_sig(name, &[PhpType::Str], PhpType::Int))
+        }
+        // sapi_windows_cp_set sets the Windows code page and returns bool.
+        "sapi_windows_cp_set" => {
+            Some(typed_first_class_builtin_sig(name, &[PhpType::Int], PhpType::Bool))
+        }
+        // sapi_windows_vt100_support toggles/queries VT100 support on a stream and returns bool.
+        "sapi_windows_vt100_support" => {
+            Some(typed_first_class_builtin_sig(name, &[PhpType::Mixed], PhpType::Bool))
+        }
+        // ini_get reads a php.ini directive: the string value, or false if unset.
+        "ini_get" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str],
+            PhpType::Union(vec![PhpType::Str, PhpType::Bool]),
+        )),
+        // get_defined_constants returns the map of defined constants as an array.
+        "get_defined_constants" => {
+            return_typed_first_class_builtin_sig(name, PhpType::Array(Box::new(PhpType::Mixed)))
+        }
         // strcspn/strspn/strpbrk/hexdec are intentionally absent here: they are
         // lowered only by the active EIR backend, so the frozen legacy direct
         // backend that emits dynamic first-class-callable wrapper bodies cannot

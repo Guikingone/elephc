@@ -106,6 +106,22 @@ expect_builtin_arity_error!(
 );
 
 expect_builtin_arity_error!(
+    test_error_ctype_upper_wrong_args,
+    "<?php ctype_upper();",
+    "ctype_upper() takes exactly 1 argument"
+);
+
+/// Verifies `ctype_upper(mixed): bool` is recognized (no "Undefined function") and its bool
+/// result flows into a boolean context. It is recognition-only (no runtime lowering yet).
+#[test]
+fn test_ctype_upper_recognized() {
+    assert!(
+        check_source("<?php $b = ctype_upper(\"ABC\"); echo $b ? \"y\" : \"n\";").is_ok(),
+        "ctype_upper() should type-check as a recognized bool-returning builtin",
+    );
+}
+
+expect_builtin_arity_error!(
     test_error_chop_wrong_args,
     "<?php chop();",
     "chop() takes 1 or 2 arguments"

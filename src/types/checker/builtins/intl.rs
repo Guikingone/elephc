@@ -69,9 +69,10 @@ pub(super) fn check_builtin(
                 PhpType::Bool,
             ])))
         }
-        "grapheme_stripos" | "grapheme_strripos" => {
-            // grapheme_stripos/grapheme_strripos(string $haystack, string $needle,
-            // int $offset = 0): int|false — case-insensitive grapheme search.
+        "grapheme_stripos" | "grapheme_strripos" | "grapheme_strpos" | "grapheme_strrpos" => {
+            // grapheme_strpos/grapheme_strrpos (case-sensitive) and grapheme_stripos/
+            // grapheme_strripos (case-insensitive): (string $haystack, string $needle,
+            // int $offset = 0): int|false — grapheme-cluster search returning an index or false.
             if args.len() < 2 || args.len() > 3 {
                 return Err(CompileError::new(
                     span,

@@ -700,6 +700,150 @@ pub(super) fn check_builtin(
             };
             Ok(Some(PhpType::Array(Box::new(elem_ty))))
         }
+        // -- process / system control builtins (recognition-only; runtime deferred) --
+        // These are runtime-dead for the console app: registered so calls type-check and stop
+        // being "Undefined function", but they have no EIR/codegen lowering yet.
+        "pcntl_signal" => {
+            // pcntl_signal(int $signal, callable|int $handler,
+            // bool $restart_syscalls = true): bool.
+            if args.len() < 2 || args.len() > 3 {
+                return Err(CompileError::new(
+                    span,
+                    "pcntl_signal() takes 2 or 3 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "pcntl_alarm" => {
+            // pcntl_alarm(int $seconds): int — seconds left on the previous alarm.
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "pcntl_alarm() takes exactly 1 argument"));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Int))
+        }
+        "pcntl_async_signals" => {
+            // pcntl_async_signals(?bool $enable = null): bool — returns the previous state.
+            if args.len() > 1 {
+                return Err(CompileError::new(
+                    span,
+                    "pcntl_async_signals() takes 0 or 1 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "pcntl_signal_get_handler" => {
+            // pcntl_signal_get_handler(int $signal): int|string — an int constant
+            // (SIG_DFL/SIG_IGN) or the installed callable's name.
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "pcntl_signal_get_handler() takes exactly 1 argument",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(checker.normalize_union_type(vec![
+                PhpType::Int,
+                PhpType::Str,
+            ])))
+        }
+        "proc_close" => {
+            // proc_close($process): int — waits on the process and returns its exit status.
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "proc_close() takes exactly 1 argument"));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Int))
+        }
+        "getmypid" => {
+            // getmypid(): int|false — the current process id.
+            if !args.is_empty() {
+                return Err(CompileError::new(span, "getmypid() takes no arguments"));
+            }
+            Ok(Some(checker.normalize_union_type(vec![
+                PhpType::Int,
+                PhpType::Bool,
+            ])))
+        }
+        "cli_set_process_title" | "setproctitle" => {
+            // cli_set_process_title(string $title): bool; setproctitle is the ext/proctitle
+            // alias with the same shape.
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 1 argument", name),
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Bool))
+        }
+        "sapi_windows_cp_get" => {
+            // sapi_windows_cp_get(string $kind = ''): int — Windows-only; recognized everywhere.
+            if args.len() > 1 {
+                return Err(CompileError::new(
+                    span,
+                    "sapi_windows_cp_get() takes 0 or 1 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Int))
+        }
+        "sapi_windows_cp_set" => {
+            // sapi_windows_cp_set(int $code_page): bool.
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "sapi_windows_cp_set() takes exactly 1 argument",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Bool))
+        }
+        "sapi_windows_vt100_support" => {
+            // sapi_windows_vt100_support($stream, ?bool $enable = null): bool.
+            if args.is_empty() || args.len() > 2 {
+                return Err(CompileError::new(
+                    span,
+                    "sapi_windows_vt100_support() takes 1 or 2 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "ini_get" => {
+            // ini_get(string $option): string|false — the directive value, or false if unset.
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "ini_get() takes exactly 1 argument"));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(checker.normalize_union_type(vec![
+                PhpType::Str,
+                PhpType::Bool,
+            ])))
+        }
+        "get_defined_constants" => {
+            // get_defined_constants(bool $categorize = false): array.
+            if args.len() > 1 {
+                return Err(CompileError::new(
+                    span,
+                    "get_defined_constants() takes 0 or 1 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Array(Box::new(PhpType::Mixed))))
+        }
         _ => Ok(None),
     }
 }

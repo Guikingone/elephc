@@ -191,6 +191,8 @@ mod string_builtins;
 mod mbstring_builtins;
 #[path = "error_tests/intl_builtins.rs"]
 mod intl_builtins;
+#[path = "error_tests/process_builtins.rs"]
+mod process_builtins;
 #[path = "error_tests/io_builtins/mod.rs"]
 mod io_builtins;
 #[path = "error_tests/array_builtins.rs"]

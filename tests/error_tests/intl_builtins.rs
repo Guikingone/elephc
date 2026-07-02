@@ -72,6 +72,31 @@ if ($norm === false) { echo "no"; } else { echo $norm; }
     );
 }
 
+/// Verifies the case-sensitive grapheme search pair `grapheme_strpos`/`grapheme_strrpos`
+/// (unmasked by this batch) is recognized, accepts the optional `$offset`, and yields an
+/// `int|false` union that a strict `=== false` check type-checks against.
+#[test]
+fn test_grapheme_strpos_recognized() {
+    assert!(
+        check_source(
+            r#"<?php
+$p = grapheme_strpos("héllo", "l");
+if ($p === false) { echo "no"; } else { echo $p; }
+$r = grapheme_strrpos("héllo", "l", 1);
+if ($r === false) { echo "no"; } else { echo $r; }
+"#
+        )
+        .is_ok(),
+        "grapheme_strpos/grapheme_strrpos should type-check with an int|false return",
+    );
+}
+
+expect_builtin_arity_error!(
+    test_error_grapheme_strpos_too_few_args,
+    "<?php grapheme_strpos(\"a\");",
+    "grapheme_strpos() takes 2 or 3 arguments"
+);
+
 /// Verifies that the optional-tail forms type-check: `normalizer_normalize` with an
 /// explicit `$form`, `iconv_strpos` with an `$offset`, and `grapheme_extract` with a
 /// `$type`/`$offset`.
