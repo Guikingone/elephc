@@ -42,12 +42,8 @@ pub(super) fn check_builtin(
             }
             let ty = checker.infer_type(&args[0], env)?;
             match &ty {
-                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => {
-                    Ok(Some(PhpType::Int))
-                }
-                PhpType::Union(members) if members.iter().all(union_member_is_countable_array) => {
-                    Ok(Some(PhpType::Int))
-                }
+                // A `Countable` object is accepted (PHP counts `Countable::count()`),
+                // and a non-`Countable` object is a concrete error.
                 PhpType::Object(class_name) => {
                     if checker.class_implements_interface(class_name, "Countable") {
                         Ok(Some(PhpType::Int))
@@ -58,6 +54,9 @@ pub(super) fn check_builtin(
                         ))
                     }
                 }
+                // Concrete array, `Mixed`, or a union containing an array is accepted
+                // under the gradual-typing boundary; EIR emits a runtime unbox/assert.
+                t if array_arg_is_gradually_acceptable(t) => Ok(Some(PhpType::Int)),
                 _ => Err(CompileError::new(
                     span,
                     "count() argument must be array or Countable object",
@@ -132,6 +131,12 @@ pub(super) fn check_builtin(
                 ("array_values", PhpType::AssocArray { value, .. }) => {
                     Ok(Some(PhpType::Array(value.clone())))
                 }
+                // Gradual boundary: a `Mixed` or union-containing-array argument is
+                // accepted; the key/value element type is unknown, so the result is a
+                // list of `Mixed`. EIR emits the runtime unbox/assert-array guard.
+                (_, t) if array_arg_is_gradually_acceptable(t) => {
+                    Ok(Some(PhpType::Array(Box::new(PhpType::Mixed))))
+                }
                 _ => Err(CompileError::new(
                     span,
                     &format!("{}() argument must be array", name),
@@ -147,17 +152,16 @@ pub(super) fn check_builtin(
                 ));
             }
             let ty = checker.infer_type(&args[0], env)?;
-            if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            // These sorts take the array by reference. The argument is accepted under
+            // the gradual boundary (concrete array, `Mixed`, or union containing an
+            // array); a concretely non-array argument stays a compile error.
+            if !array_arg_is_gradually_acceptable(&ty) {
                 return Err(CompileError::new(
                     span,
                     &format!("{}() argument must be array", name),
                 ));
             }
-            Ok(Some(if name == "sort" || name == "rsort" {
-                PhpType::Void
-            } else {
-                PhpType::Void
-            }))
+            Ok(Some(PhpType::Void))
         }
         "isset" => {
             if args.is_empty() {
@@ -309,8 +313,29 @@ pub(super) fn check_builtin(
                 _ => Ok(Some(PhpType::Union(vec![PhpType::Int, PhpType::Bool]))),
             }
         }
-        "array_merge" | "array_diff" | "array_intersect" | "array_diff_key"
-        | "array_intersect_key" => {
+        "array_merge" => {
+            // PHP 8: `array_merge(array ...$arrays): array` — variadic, accepting zero
+            // or more array arguments. Each argument is accepted under the gradual
+            // boundary (concrete array, `Mixed`, or a union containing an array); a
+            // concretely non-array argument is rejected. `array_merge()` with no
+            // arguments returns an empty array.
+            let mut result: Option<PhpType> = None;
+            for (idx, arg) in args.iter().enumerate() {
+                let ty = checker.infer_type(arg, env)?;
+                if !array_arg_is_gradually_acceptable(&ty) {
+                    return Err(CompileError::new(
+                        span,
+                        &format!("array_merge() argument #{} must be array", idx + 1),
+                    ));
+                }
+                result = Some(match result {
+                    None => ty,
+                    Some(acc) => array_merge_return_type(acc, ty),
+                });
+            }
+            Ok(Some(result.unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Void)))))
+        }
+        "array_diff" | "array_intersect" | "array_diff_key" | "array_intersect_key" => {
             if args.len() != 2 {
                 return Err(CompileError::new(
                     span,
@@ -318,18 +343,16 @@ pub(super) fn check_builtin(
                 ));
             }
             let ty1 = checker.infer_type(&args[0], env)?;
-            let ty2 = checker.infer_type(&args[1], env)?;
-            if !matches!(ty1, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            checker.infer_type(&args[1], env)?;
+            // Gradual boundary: accept concrete array, `Mixed`, or union containing
+            // an array for the first (result-shaping) argument.
+            if !array_arg_is_gradually_acceptable(&ty1) {
                 return Err(CompileError::new(
                     span,
                     &format!("{}() first argument must be array", name),
                 ));
             }
-            if name == "array_merge" {
-                Ok(Some(array_merge_return_type(ty1, ty2)))
-            } else {
-                Ok(Some(ty1))
-            }
+            Ok(Some(ty1))
         }
         "array_unshift" => {
             if args.len() != 2 {
@@ -632,14 +655,6 @@ fn is_scalar_merge_element_type(ty: &PhpType) -> bool {
     )
 }
 
-/// Provides the Union member is countable array helper used by the arrays module.
-fn union_member_is_countable_array(ty: &PhpType) -> bool {
-    matches!(
-        ty,
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
-    )
-}
-
 /// Returns true when an array-taking builtin argument is acceptable under the gradual-typing
 /// boundary model.
 ///
@@ -649,7 +664,7 @@ fn union_member_is_countable_array(ty: &PhpType) -> bool {
 /// boundary guard (converting the boxed value to a concrete hash) before the array operation.
 /// A concretely non-array argument (`int`, `string`, object, …) is rejected so genuine type
 /// errors such as `in_array(1, 5)` keep being reported.
-fn array_arg_is_gradually_acceptable(ty: &PhpType) -> bool {
+pub(super) fn array_arg_is_gradually_acceptable(ty: &PhpType) -> bool {
     match ty {
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => true,
         PhpType::Union(members) => members

@@ -310,8 +310,10 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Bool))
         }
         "explode" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(span, "explode() takes exactly 2 arguments"));
+            // PHP: `explode(string $separator, string $string, int $limit = PHP_INT_MAX):
+            // array` — the trailing `$limit` is optional, so 2 or 3 arguments are valid.
+            if args.len() < 2 || args.len() > 3 {
+                return Err(CompileError::new(span, "explode() takes 2 or 3 arguments"));
             }
             for arg in args {
                 checker.infer_type(arg, env)?;

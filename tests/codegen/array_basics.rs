@@ -1125,6 +1125,20 @@ fn test_end_on_mixed_array_argument() {
     assert_eq!(out, "30");
 }
 
+/// Verifies count() accepts a genuinely `Mixed`-typed argument (a `mixed` function
+/// parameter) under the gradual-typing boundary and returns the element count at
+/// runtime. Regression for the checker wrongly rejecting `count($mixed)`.
+#[test]
+fn test_count_mixed_argument() {
+    let out = compile_and_run(
+        r#"<?php
+function n(mixed $x): int { return count($x); }
+echo n([1, 2, 3, 4]);
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
 /// Verifies appending a statically PHP-null (`Void`) value into an `array<never>` indexed
 /// array: the null is stored as an 8-byte sentinel slot, the length grows, and the element
 /// reads back as null. Regression for the symfony/yaml `array_push for PHP type Void` gap.

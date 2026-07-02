@@ -12,6 +12,7 @@ use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
+use super::arrays::array_arg_is_gradually_acceptable;
 use super::super::Checker;
 
 type BuiltinResult = Result<Option<PhpType>, CompileError>;
@@ -170,12 +171,31 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Float))
         }
         "min" | "max" => {
-            if args.len() < 2 {
+            // PHP overloads min/max as `min/max(array $value_array)` (a single array
+            // argument) or `min/max(mixed $value, mixed ...$values)` (two or more
+            // scalar arguments). Both forms require at least one argument.
+            if args.is_empty() {
                 return Err(CompileError::new(
                     span,
-                    &format!("{}() requires at least 2 arguments", name),
+                    &format!("{}() requires at least 1 argument", name),
                 ));
             }
+            if args.len() == 1 {
+                // Single-argument form: the lone argument must be an array. It is
+                // accepted under the gradual boundary (concrete array, `Mixed`, or a
+                // union containing an array); a concrete scalar is a type error, which
+                // matches PHP's `min(1)` / `max(1)` TypeError.
+                let ty = checker.infer_type(&args[0], env)?;
+                if !array_arg_is_gradually_acceptable(&ty) {
+                    return Err(CompileError::new(
+                        span,
+                        &format!("{}() single argument must be array", name),
+                    ));
+                }
+                return Ok(Some(min_max_single_array_result(&ty)));
+            }
+            // Two-or-more-argument scalar form: any argument types are accepted; a
+            // float argument promotes the result to float.
             let mut has_float = false;
             for arg in args {
                 let t = checker.infer_type(arg, env)?;
@@ -390,6 +410,26 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Void))
         }
         _ => Ok(None),
+    }
+}
+
+/// Infers the result type for the single-array form of `min`/`max`.
+///
+/// The result is the element type of the array argument: an `Int`-element array
+/// yields `Int`, a `Float`-element array yields `Float`, and any other or unknown
+/// element shape (including `Mixed` and empty-array sentinels) yields `Mixed` so
+/// heterogeneous or gradually-typed arrays are handled at runtime. Keeps
+/// `max([1, 2, 3])` an `Int` while `max([1.5, 2.5])` becomes `Float`.
+fn min_max_single_array_result(ty: &PhpType) -> PhpType {
+    let elem = match ty {
+        PhpType::Array(elem) => elem.as_ref().clone(),
+        PhpType::AssocArray { value, .. } => value.as_ref().clone(),
+        _ => PhpType::Mixed,
+    };
+    match elem.codegen_repr() {
+        PhpType::Int => PhpType::Int,
+        PhpType::Float => PhpType::Float,
+        _ => PhpType::Mixed,
     }
 }
 

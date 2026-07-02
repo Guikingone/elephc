@@ -50,12 +50,107 @@ fn test_error_array_reverse_wrong_args() {
     );
 }
 
-/// Verifies that error array merge wrong args.
+/// Verifies array_merge() rejects a concretely non-array argument. array_merge is
+/// variadic in PHP 8 (`array_merge(array ...$arrays)`), so arity is no longer fixed;
+/// a plain scalar argument is still a concrete type error. Input: `array_merge(5)`.
 #[test]
-fn test_error_array_merge_wrong_args() {
+fn test_error_array_merge_non_array_arg() {
     expect_error(
-        "<?php $a = [1]; array_merge($a);",
-        "array_merge() takes exactly 2 arguments",
+        "<?php array_merge(5);",
+        "array_merge() argument #1 must be array",
+    );
+}
+
+// --- Gradual-typing acceptance for array-taking builtins (Mixed / union) ---
+//
+// These type-check cleanly (the argument is accepted under the gradual boundary).
+// Full end-to-end codegen for the `Mixed` element case is a separate downstream EIR
+// concern, so acceptance is asserted at the type-checker level via `expect_ok`.
+
+/// Verifies count() accepts a genuinely `Mixed` argument (a `mixed` parameter) under
+/// the gradual-typing boundary instead of reporting a concrete type error.
+#[test]
+fn test_count_mixed_arg_type_checks() {
+    expect_ok("<?php function tc(mixed $x): int { return count($x); }");
+}
+
+/// Verifies ksort() (a by-reference sort) accepts a `Mixed` argument gradually.
+#[test]
+fn test_ksort_mixed_arg_type_checks() {
+    expect_ok("<?php function tc(mixed $x): void { ksort($x); }");
+}
+
+/// Verifies array_values() accepts a `Mixed` argument gradually.
+#[test]
+fn test_array_values_mixed_arg_type_checks() {
+    expect_ok("<?php function tc(mixed $x): void { $y = array_values($x); }");
+}
+
+/// Verifies array_filter() accepts a `Mixed` first argument gradually.
+#[test]
+fn test_array_filter_mixed_arg_type_checks() {
+    expect_ok("<?php function tc(mixed $x): void { $y = array_filter($x, fn ($v) => $v); }");
+}
+
+/// Verifies array_map() accepts a `Mixed` array argument gradually.
+#[test]
+fn test_array_map_mixed_arg_type_checks() {
+    expect_ok("<?php function tc(mixed $x): void { $y = array_map(fn ($v) => $v, $x); }");
+}
+
+/// Verifies array_merge() type-checks with three array arguments (it is variadic).
+#[test]
+fn test_array_merge_three_args_type_checks() {
+    expect_ok("<?php $r = array_merge([1], [2], [3]);");
+}
+
+/// Verifies array_merge() type-checks with zero arguments (returns an empty array).
+#[test]
+fn test_array_merge_zero_args_type_checks() {
+    expect_ok("<?php $r = array_merge();");
+}
+
+/// Verifies ksort() still rejects a concretely non-array argument (a plain int),
+/// preserving the disjoint-type error. Input: `$a = 5; ksort($a);`.
+#[test]
+fn test_error_ksort_non_array_arg() {
+    expect_error("<?php $a = 5; ksort($a);", "ksort() argument must be array");
+}
+
+/// Verifies array_values() still rejects a concretely non-array argument.
+#[test]
+fn test_error_array_values_non_array_arg() {
+    expect_error(
+        "<?php $a = 5; array_values($a);",
+        "array_values() argument must be array",
+    );
+}
+
+/// Verifies array_map() still rejects a concretely non-array data argument.
+#[test]
+fn test_error_array_map_non_array_arg() {
+    expect_error(
+        "<?php array_map(fn ($v) => $v, 5);",
+        "array_map() second argument must be array",
+    );
+}
+
+/// Verifies array_filter() still rejects a concretely non-array first argument.
+#[test]
+fn test_error_array_filter_non_array_arg() {
+    expect_error(
+        "<?php array_filter(5, fn ($v) => $v);",
+        "array_filter() first argument must be array",
+    );
+}
+
+/// Verifies count() still rejects a concretely non-array, non-Countable argument
+/// (a plain int), preserving the disjoint-type error. Input: `count(5)`.
+#[test]
+fn test_error_count_non_array_arg() {
+    expect_error(
+        "<?php count(5);",
+        "count() argument must be array or Countable object",
     );
 }
 

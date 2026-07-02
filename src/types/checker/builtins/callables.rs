@@ -14,6 +14,7 @@ use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver};
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
+use super::arrays::array_arg_is_gradually_acceptable;
 use super::canonical_builtin_function_name;
 use super::super::Checker;
 
@@ -840,6 +841,22 @@ pub(super) fn check_builtin(
                     };
                     Ok(Some(PhpType::Array(result_elem_ty)))
                 }
+                // Gradual boundary: a `Mixed` or union-containing-array array argument
+                // is accepted; the element type is unknown, so the callback is checked
+                // against a `Mixed` element and the result is a list of `Mixed`.
+                t if array_arg_is_gradually_acceptable(&t) => {
+                    let arr_ty = PhpType::Array(Box::new(PhpType::Mixed));
+                    let dummy_args = vec![dummy_arg_for_array_scalar_elem(&arr_ty, span)];
+                    check_callback_builtin_call(
+                        checker,
+                        &args[0],
+                        &dummy_args,
+                        span,
+                        env,
+                        "array_map() callback",
+                    )?;
+                    Ok(Some(PhpType::Array(Box::new(PhpType::Mixed))))
+                }
                 _ => Err(CompileError::new(
                     span,
                     "array_map() second argument must be array",
@@ -870,6 +887,22 @@ pub(super) fn check_builtin(
                         "array_filter() callback",
                     )?;
                     Ok(Some(PhpType::Array(elem_ty)))
+                }
+                // Gradual boundary: a `Mixed` or union-containing-array first argument
+                // is accepted; the element type is unknown, so the predicate is checked
+                // against a `Mixed` element and the result is a list of `Mixed`.
+                t if array_arg_is_gradually_acceptable(&t) => {
+                    let arr_ty = PhpType::Array(Box::new(PhpType::Mixed));
+                    let dummy_args = array_filter_callback_dummy_args(&arr_ty, args.get(2), span);
+                    check_callback_builtin_call(
+                        checker,
+                        &args[1],
+                        &dummy_args,
+                        span,
+                        env,
+                        "array_filter() callback",
+                    )?;
+                    Ok(Some(PhpType::Array(Box::new(PhpType::Mixed))))
                 }
                 _ => Err(CompileError::new(
                     span,

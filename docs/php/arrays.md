@@ -246,7 +246,7 @@ By-reference destructuring targets (`foreach ($arr as [&$a, $b])` and `[&$a, $b]
 | `array_slice()` | `array_slice($arr, $offset [, $length]): array` | Extract a slice |
 | `array_splice()` | `array_splice($arr, $offset [, $length]): array` | Remove a slice in place and return the removed elements |
 | `array_chunk()` | `array_chunk($arr, $size): array` | Split into chunks |
-| `array_merge()` | `array_merge($arr1, $arr2): array` | Merge two arrays |
+| `array_merge()` | `array_merge(...$arrays): array` | Merge one or more arrays (variadic; `array_merge()` returns an empty array) |
 | `array_combine()` | `array_combine($keys, $values): array` | Create array from keys/values |
 | `array_fill()` | `array_fill($start, $num, $value): array` | Fill with values |
 | `array_fill_keys()` | `array_fill_keys($keys, $value): array` | Fill with values using keys |

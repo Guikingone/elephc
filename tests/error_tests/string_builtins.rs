@@ -238,13 +238,18 @@ fn test_error_ord_wrong_args() {
     expect_error("<?php ord();", "ord() takes exactly 1 argument");
 }
 
-/// Verifies that `explode()` with only one argument produces the correct arity error.
+/// Verifies that `explode()` with only one argument produces the correct arity
+/// error. `explode` accepts 2 or 3 arguments (the trailing `$limit` is optional).
 #[test]
 fn test_error_explode_wrong_args() {
-    expect_error(
-        "<?php explode(\",\");",
-        "explode() takes exactly 2 arguments",
-    );
+    expect_error("<?php explode(\",\");", "explode() takes 2 or 3 arguments");
+}
+
+/// Verifies that the optional `$limit` third argument (`explode(",", $s, 2)`)
+/// type-checks cleanly now that the arity accepts 2 or 3 arguments.
+#[test]
+fn test_explode_with_limit_type_checks() {
+    expect_ok("<?php $s = \"a,b,c\"; $p = explode(\",\", $s, 2);");
 }
 
 /// Verifies that `str_pad()` with only one argument produces the correct arity error.

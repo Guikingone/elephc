@@ -39,16 +39,37 @@ fn test_error_pow_wrong_args() {
     expect_error("<?php pow(1);", "pow() takes exactly 2 arguments");
 }
 
-/// Verifies min() rejects single-argument call (requires at least 2). Input: `min(1)`.
+/// Verifies min() rejects a lone scalar argument. PHP's single-argument form is
+/// `min(array $value_array)`, so `min(1)` is a TypeError. Input: `min(1)`.
 #[test]
-fn test_error_min_wrong_args() {
-    expect_error("<?php min(1);", "min() requires at least 2 arguments");
+fn test_error_min_single_scalar_arg() {
+    expect_error("<?php min(1);", "min() single argument must be array");
 }
 
-/// Verifies max() rejects single-argument call (requires at least 2). Input: `max(1)`.
+/// Verifies max() rejects a lone scalar argument (single-argument form must be an
+/// array). Input: `max(1)`.
 #[test]
-fn test_error_max_wrong_args() {
-    expect_error("<?php max(1);", "max() requires at least 2 arguments");
+fn test_error_max_single_scalar_arg() {
+    expect_error("<?php max(1);", "max() single argument must be array");
+}
+
+/// Verifies max() rejects a zero-argument call (at least one argument required).
+/// Input: `max()`.
+#[test]
+fn test_error_max_no_args() {
+    expect_error("<?php max();", "max() requires at least 1 argument");
+}
+
+/// Verifies the single-argument array form `max([1, 2, 3])` type-checks cleanly.
+#[test]
+fn test_max_single_array_type_checks() {
+    expect_ok("<?php $m = max([1, 2, 3]);");
+}
+
+/// Verifies the single-argument array form `min([1, 2, 3])` type-checks cleanly.
+#[test]
+fn test_min_single_array_type_checks() {
+    expect_ok("<?php $m = min([1, 2, 3]);");
 }
 
 /// Verifies clamp() rejects missing bound arguments. Input: `clamp(1, 2)`.

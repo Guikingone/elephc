@@ -231,6 +231,31 @@ fn test_max_float() {
     assert_eq!(out, "2.5");
 }
 
+/// Verifies max() accepts three or more scalar arguments (variadic form) and
+/// returns the largest, `max(1, 2, 3)` -> 3. Regression for the fixed arity that
+/// previously required exactly two arguments.
+#[test]
+fn test_max_three_ints() {
+    let out = compile_and_run("<?php echo max(1, 2, 3);");
+    assert_eq!(out, "3");
+}
+
+/// Verifies min() accepts three scalar arguments (variadic form) and returns the
+/// smallest, `min(3, 1, 2)` -> 1.
+#[test]
+fn test_min_three_ints() {
+    let out = compile_and_run("<?php echo min(3, 1, 2);");
+    assert_eq!(out, "1");
+}
+
+/// Verifies max() with a mix of int and float variadic arguments promotes the
+/// result to float, `max(1, 2.5, 2)` -> 2.5.
+#[test]
+fn test_max_mixed_int_float() {
+    let out = compile_and_run("<?php echo max(1, 2.5, 2);");
+    assert_eq!(out, "2.5");
+}
+
 /// Verifies intdiv() with integers (7, 2) performs integer division returning 3.
 #[test]
 fn test_intdiv() {
