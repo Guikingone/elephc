@@ -122,6 +122,17 @@ pub(crate) fn inject_builtin_reflection(
         reflection_method
             .methods
             .push(builtin_reflection_literal_method("getClosure", mixed_type(), null_lit()));
+        // PHP: `getDeclaringClass(): ReflectionClass` — un-backed stub returning
+        // `null` typed `mixed` (object return → mixed; see
+        // `builtin_reflection_property` for the EIR-lowering reason).
+        reflection_method
+            .methods
+            .push(builtin_reflection_literal_method("getDeclaringClass", mixed_type(), null_lit()));
+        // PHP: `isStatic(): bool` — un-backed stub returning `false`; scalar
+        // returns lower safely on the EIR backend.
+        reflection_method
+            .methods
+            .push(builtin_reflection_literal_method("isStatic", TypeExpr::Bool, bool_lit(false)));
     }
     class_map.insert("ReflectionProperty".to_string(), builtin_reflection_property());
     class_map.insert("ReflectionFunction".to_string(), builtin_reflection_function());
@@ -850,6 +861,30 @@ fn builtin_reflection_property() -> FlattenedClass {
             ("value", Some(mixed_type()), null_lit(), false),
         ],
     ));
+    // PHP: `getDefaultValue(): mixed` — un-backed stub returning `null` typed
+    // `mixed` (the property's declared default value; no runtime backing yet).
+    class
+        .methods
+        .push(builtin_reflection_literal_method("getDefaultValue", mixed_type(), null_lit()));
+    // PHP 8.4 `hasDefaultValue(): bool` — un-backed stub returning `false`;
+    // scalar returns lower safely on the EIR backend.
+    class
+        .methods
+        .push(builtin_reflection_literal_method("hasDefaultValue", TypeExpr::Bool, bool_lit(false)));
+    // PHP: `isDefaultValueAvailable(): bool` — un-backed stub returning `false`.
+    // Distinct from `ReflectionParameter::isDefaultValueAvailable` (this is the
+    // property-side counterpart); same stub pattern.
+    class.methods.push(builtin_reflection_literal_method(
+        "isDefaultValueAvailable",
+        TypeExpr::Bool,
+        bool_lit(false),
+    ));
+    // PHP: `getDeclaringClass(): ReflectionClass` — un-backed stub returning
+    // `null` typed `mixed` (object return → mixed; see the
+    // `ReflectionParameter::getDeclaringClass` comment for the lowering reason).
+    class
+        .methods
+        .push(builtin_reflection_literal_method("getDeclaringClass", mixed_type(), null_lit()));
     class
 }
 

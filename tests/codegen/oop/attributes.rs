@@ -1914,3 +1914,81 @@ function f(\ReflectionType $t): void {
     );
     assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
 }
+
+/// Verifies `ReflectionProperty::getDefaultValue()` is a recognised member:
+/// calling it through a `\ReflectionProperty`-typed parameter type-checks. The
+/// stub returns a `mixed` placeholder (the property's declared default).
+#[test]
+fn test_reflection_property_get_default_value_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function f(\ReflectionProperty $p): void {
+    $v = $p->getDefaultValue();
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
+
+/// Verifies `ReflectionProperty::isDefaultValueAvailable()` is a recognised
+/// member (the property-side counterpart to `ReflectionParameter`'s same-named
+/// method): calling it through a `\ReflectionProperty`-typed parameter
+/// type-checks. The stub returns a `bool` placeholder.
+#[test]
+fn test_reflection_property_is_default_value_available_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function f(\ReflectionProperty $p): void {
+    $b = $p->isDefaultValueAvailable();
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
+
+/// Verifies `ReflectionProperty::getDeclaringClass()` is a recognised member:
+/// calling it through a `\ReflectionProperty`-typed parameter type-checks. The
+/// stub returns a `mixed` placeholder (object return → mixed; the reflection
+/// EIR backend cannot lower an un-backed stub with an object return type).
+#[test]
+fn test_reflection_property_get_declaring_class_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function f(\ReflectionProperty $p): void {
+    $c = $p->getDeclaringClass();
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
+
+/// Verifies `ReflectionMethod::isStatic()` is a recognised member: calling it
+/// through a `\ReflectionMethod`-typed parameter type-checks. The stub returns a
+/// `bool` placeholder.
+#[test]
+fn test_reflection_method_is_static_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function f(\ReflectionMethod $m): void {
+    $b = $m->isStatic();
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
+
+/// Verifies `ReflectionMethod::getDeclaringClass()` is a recognised member:
+/// calling it through a `\ReflectionMethod`-typed parameter type-checks. The
+/// stub returns a `mixed` placeholder (object return → mixed; the reflection
+/// EIR backend cannot lower an un-backed stub with an object return type).
+#[test]
+fn test_reflection_method_get_declaring_class_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function f(\ReflectionMethod $m): void {
+    $c = $m->getDeclaringClass();
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
