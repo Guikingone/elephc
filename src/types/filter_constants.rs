@@ -10,12 +10,16 @@
 //! Key details:
 //! - `FILTER_VALIDATE_BOOL` is PHP 8's alias of `FILTER_VALIDATE_BOOLEAN`; both
 //!   resolve to the same ext/filter value (258).
+//! - `FILTER_DEFAULT` (518) is the default filter used by `filter_var`/`filter_input`
+//!   when no `$filter` argument is supplied.
 
 /// Tuple of `(name, value)` pairs for PHP `ext/filter` integer constants.
 ///
 /// Both the modern `FILTER_VALIDATE_BOOL` name and the legacy
 /// `FILTER_VALIDATE_BOOLEAN` alias are registered with the same value.
+/// `FILTER_DEFAULT` is the default filter applied by `filter_var`.
 pub(crate) const FILTER_INT_CONSTANTS: &[(&str, i64)] = &[
+    ("FILTER_DEFAULT", 518),
     ("FILTER_VALIDATE_BOOL", 258),
     ("FILTER_VALIDATE_BOOLEAN", 258),
 ];

@@ -1,11 +1,14 @@
 //! Purpose:
 //! Recognition-layer tests for the misc/error-handling/process PHP builtins symfony/console and
 //! symfony/string need: `method_exists`, `trigger_error`, `set_error_handler`,
-//! `restore_error_handler`, `set_exception_handler`, `preg_quote`, `preg_grep`, `version_compare`,
-//! `unpack`, `random_bytes`, `http_build_query`, `escapeshellarg`, `assert`,
-//! `sapi_windows_cp_conv`, and `posix_kill`. These are registered for type checking and
-//! first-class-callable resolution only; they have no EIR/codegen lowering yet, so these tests
-//! assert type-check recognition (never `compile_and_run`).
+//! `restore_error_handler`, `restore_exception_handler`, `set_exception_handler`, `preg_quote`,
+//! `preg_grep`, `version_compare`, `unpack`, `random_bytes`, `http_build_query`, `escapeshellarg`,
+//! `assert`, `sapi_windows_cp_conv`, `posix_kill`, and `filter_var` (plus the array builtin
+//! `array_key_last`). These are registered for type checking and first-class-callable resolution
+//! only; they have no EIR/codegen lowering yet, so these tests assert type-check recognition
+//! (never `compile_and_run`). `var_export` is intentionally NOT registered here: it already has a
+//! runtime via the `var_export_prelude` injection, and catalog registration would conflict with
+//! that prelude (see the deliverable report for the var_export conflict).
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -43,6 +46,8 @@ $es = escapeshellarg("some arg");
 $as = assert(true);
 $cp = sapi_windows_cp_conv(65001, 1252, "text");
 $pk = posix_kill(12345, 9);
+$fv = filter_var("user@example.com", 257);
+$kl = array_key_last(["a" => 1, "b" => 2]);
 echo $q . $q2 . $rb . $hq . $es;
 "#
         )
@@ -125,4 +130,50 @@ expect_builtin_arity_error!(
     test_error_assert_too_many_args,
     "<?php assert(true, \"desc\", 1);",
     "assert() takes 1 or 2 arguments"
+);
+
+/// Verifies `filter_var` is usable through first-class-callable syntax, since Symfony
+/// references validation functions as callables. Exercises the mixed/int/mixed parameter
+/// shape and the `Mixed` return type through `is_callable`.
+#[test]
+fn test_filter_var_first_class_callable_recognized() {
+    assert!(
+        check_source("<?php $f = filter_var(...); echo is_callable($f);").is_ok(),
+        "filter_var should be usable as a first-class callable",
+    );
+}
+
+/// Verifies `array_key_last` is recognized and its `string|int|null` return union narrows
+/// through an `=== null` guard, mirroring `array_key_first`. Pins the new array builtin's
+/// recognition and the union return type.
+#[test]
+fn test_array_key_last_return_union_type_checks() {
+    assert!(
+        check_source(
+            r#"<?php
+$k = array_key_last(["a" => 1, "b" => 2]);
+if ($k === null) { echo "empty"; } else { echo $k; }
+"#
+        )
+        .is_ok(),
+        "array_key_last should type-check with a string|int|null return union",
+    );
+}
+
+expect_builtin_arity_error!(
+    test_error_restore_exception_handler_takes_no_args,
+    "<?php restore_exception_handler(1);",
+    "restore_exception_handler() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_filter_var_too_many_args,
+    "<?php filter_var(1, 2, 3, 4);",
+    "filter_var() takes 1 to 3 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_array_key_last_takes_one_arg,
+    "<?php array_key_last();",
+    "array_key_last() takes exactly 1 argument"
 );

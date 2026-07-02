@@ -197,6 +197,7 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "ctype_upper"
             | "array_key_exists"
             | "array_key_first"
+            | "array_key_last"
             | "array_replace_recursive"
             | "is_countable"
             | "array_search"
@@ -222,8 +223,9 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "range"
             // -- misc recognition-only builtins that are pure reads/transforms --
             // method_exists reads the class table; preg_quote/preg_grep/version_compare/unpack/
-            // http_build_query/escapeshellarg are pure string/array transforms. The impure
-            // siblings (trigger_error, set_error_handler, restore_error_handler,
+            // http_build_query/escapeshellarg are pure string/array transforms; filter_var is a
+            // pure input-validation transform on its arguments. The impure siblings (trigger_error,
+            // set_error_handler, restore_error_handler, restore_exception_handler,
             // set_exception_handler, random_bytes, assert, sapi_windows_cp_conv, posix_kill)
             // are intentionally absent: they emit, mutate global handler state, are
             // nondeterministic, or can throw.
@@ -234,6 +236,7 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "unpack"
             | "http_build_query"
             | "escapeshellarg"
+            | "filter_var"
     )
     // Note: json_encode / json_decode / json_validate / json_last_error /
     // json_last_error_msg are intentionally NOT listed here — they read

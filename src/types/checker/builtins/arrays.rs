@@ -580,6 +580,28 @@ pub(super) fn check_builtin(
                 PhpType::Void,
             ])))
         }
+        "array_key_last" => {
+            // array_key_last(array $array): string|int|null — the last key without
+            // touching the internal pointer, or null (Void) for an empty array.
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "array_key_last() takes exactly 1 argument",
+                ));
+            }
+            let ty = checker.infer_type(&args[0], env)?;
+            if !array_arg_is_gradually_acceptable(&ty) {
+                return Err(CompileError::new(
+                    span,
+                    "array_key_last() argument must be array",
+                ));
+            }
+            Ok(Some(checker.normalize_union_type(vec![
+                PhpType::Str,
+                PhpType::Int,
+                PhpType::Void,
+            ])))
+        }
         "array_replace_recursive" => {
             // array_replace_recursive(array $array, array ...$replacements): array.
             // Later arrays overwrite earlier values key-by-key, recursing when both

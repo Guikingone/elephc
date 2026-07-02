@@ -473,6 +473,9 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         // array_key_first(array $array): string|int|null — reads the first key
         // without moving the internal pointer.
         "array_key_first" => Some(fixed(&["array"])),
+        // array_key_last(array $array): string|int|null — reads the last key
+        // without moving the internal pointer.
+        "array_key_last" => Some(fixed(&["array"])),
         // `end(&$array)` takes the array by reference (PHP advances its internal
         // pointer); elephc only reads the last element, but the by-ref marker keeps
         // the original storage from being copied into a value temporary.
@@ -612,6 +615,15 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         }
         // restore_error_handler(): true.
         "restore_error_handler" => Some(fixed(&[])),
+        // restore_exception_handler(): true — pops the previously installed exception handler.
+        "restore_exception_handler" => Some(fixed(&[])),
+        // filter_var(mixed $value, int $filter = FILTER_DEFAULT (518),
+        // array|int $options = 0): mixed — the filtered value, or false on failure.
+        "filter_var" => Some(optional(
+            &["value", "filter", "options"],
+            1,
+            vec![int_lit(518), int_lit(0)],
+        )),
         // set_exception_handler(?callable $callback): ?callable.
         "set_exception_handler" => Some(fixed(&["callback"])),
         // preg_quote(string $str, ?string $delimiter = null): string.
@@ -1278,10 +1290,19 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         }
         // restore_error_handler pops the current handler and returns true.
         "restore_error_handler" => return_typed_first_class_builtin_sig(name, PhpType::Bool),
+        // restore_exception_handler pops the current exception handler and returns true.
+        "restore_exception_handler" => return_typed_first_class_builtin_sig(name, PhpType::Bool),
         // set_exception_handler installs a handler and returns the previous one (?callable).
         "set_exception_handler" => {
             Some(typed_first_class_builtin_sig(name, &[PhpType::Mixed], PhpType::Mixed))
         }
+        // filter_var(mixed $value, int $filter = FILTER_DEFAULT,
+        // array|int $options = 0): mixed — the filtered value or false on failure.
+        "filter_var" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Mixed, PhpType::Int, PhpType::Mixed],
+            PhpType::Mixed,
+        )),
         // preg_quote escapes regex metacharacters and returns the quoted string.
         "preg_quote" => Some(typed_first_class_builtin_sig(name, &[PhpType::Str], PhpType::Str)),
         // preg_grep returns the matching array entries, or false on error.
@@ -1356,6 +1377,12 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         }
         // array_key_first returns the first key (string|int) or null for an empty array.
         "array_key_first" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Array(Box::new(PhpType::Mixed))],
+            PhpType::Union(vec![PhpType::Str, PhpType::Int, PhpType::Void]),
+        )),
+        // array_key_last returns the last key (string|int) or null for an empty array.
+        "array_key_last" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Array(Box::new(PhpType::Mixed))],
             PhpType::Union(vec![PhpType::Str, PhpType::Int, PhpType::Void]),

@@ -560,14 +560,15 @@ pub(crate) fn runtime_instance_method_case(
 ///
 /// The recognition-only string/array builtins (`strtr`, `stripos`, `strripos`, `strncmp`,
 /// `strncasecmp`, `substr_compare`, `strip_tags`, `levenshtein`, `is_countable`,
-/// `array_key_first`, `array_replace_recursive`), the multibyte-string (`mb_*`) family, the
+/// `array_key_first`, `array_key_last`, `array_replace_recursive`), the multibyte-string (`mb_*`) family, the
 /// intl grapheme/normalizer (`grapheme_*`, `normalizer_*`) and `iconv*` families, `ctype_upper`,
 /// the process/system control builtins (`pcntl_*`, `proc_close`, `getmypid`,
 /// `cli_set_process_title`, `setproctitle`, `sapi_windows_*`, `ini_get`,
-/// `get_defined_constants`), and the misc/error-handling group (`method_exists`,
-/// `trigger_error`, `set_error_handler`, `restore_error_handler`, `set_exception_handler`,
+/// `get_defined_constants`), the misc/error-handling group (`method_exists`,
+/// `trigger_error`, `set_error_handler`, `restore_error_handler`, `restore_exception_handler`,
+/// `set_exception_handler`,
 /// `preg_quote`, `preg_grep`, `version_compare`, `unpack`, `random_bytes`, `http_build_query`,
-/// `escapeshellarg`, `assert`, `posix_kill`) are registered for type checking and
+/// `escapeshellarg`, `assert`, `posix_kill`), and the input-validation builtin `filter_var` are registered for type checking and
 /// first-class-callable resolution
 /// but have no runtime lowering yet. The runtime dynamic-call table materializes a wrapper for
 /// every builtin carrying a first-class-callable signature, so they are excluded here until their
@@ -580,7 +581,7 @@ fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
             | "__elephc_mktime_raw" | "__elephc_gmmktime_raw"
             | "strtr" | "stripos" | "strripos" | "strncmp" | "strncasecmp"
             | "substr_compare" | "strip_tags" | "levenshtein" | "is_countable"
-            | "array_key_first" | "array_replace_recursive"
+            | "array_key_first" | "array_key_last" | "array_replace_recursive"
             | "mb_substr" | "mb_strlen" | "mb_stripos" | "mb_strripos"
             | "mb_strstr" | "mb_stristr" | "mb_strtolower" | "mb_strtoupper"
             | "mb_convert_case" | "mb_convert_encoding" | "mb_detect_encoding"
@@ -600,10 +601,10 @@ fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
             | "ini_get" | "get_defined_constants"
             | "sapi_windows_cp_conv"
             | "method_exists" | "trigger_error" | "set_error_handler"
-            | "restore_error_handler" | "set_exception_handler"
+            | "restore_error_handler" | "restore_exception_handler" | "set_exception_handler"
             | "preg_quote" | "preg_grep" | "version_compare" | "unpack"
             | "random_bytes" | "http_build_query" | "escapeshellarg"
-            | "assert" | "posix_kill"
+            | "assert" | "posix_kill" | "filter_var"
     )
 }
 

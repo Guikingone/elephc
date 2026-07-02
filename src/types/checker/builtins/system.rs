@@ -896,6 +896,32 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Bool))
         }
+        "restore_exception_handler" => {
+            // restore_exception_handler(): true — pops the previously installed
+            // exception handler and always returns true.
+            if !args.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "restore_exception_handler() takes no arguments",
+                ));
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "filter_var" => {
+            // filter_var(mixed $value, int $filter = FILTER_DEFAULT,
+            // array|int $options = 0): mixed — the filtered value, or false on
+            // failure. Recognition-only; no EIR/runtime lowering yet.
+            if !(1..=3).contains(&args.len()) {
+                return Err(CompileError::new(
+                    span,
+                    "filter_var() takes 1 to 3 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Mixed))
+        }
         "set_exception_handler" => {
             // set_exception_handler(?callable $callback): ?callable — the previous handler.
             if args.len() != 1 {
