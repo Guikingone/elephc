@@ -472,3 +472,27 @@ fn test_error_static_arrow_closure_uses_this() {
         "Cannot use $this inside a static closure",
     );
 }
+
+/// Verifies that a `: string` function with NO return statement produces the
+/// "must return a value on every path" diagnostic and NOT a spurious "got Int"
+/// message. Guards the line-27 change: the no-return seed is now `Void`, so the
+/// checker's no-return path fires instead of the unsound `Int`-vs-`Str` mismatch.
+#[test]
+fn test_error_string_function_no_return_does_not_report_got_int() {
+    expect_error(
+        "<?php function foo(): string { }",
+        "Function 'foo' must return a value on every path",
+    );
+}
+
+/// Verifies that a `: int` function returning a string literal still produces the
+/// genuine "expects Int, got Str" error. Guards that the real mismatch path still
+/// fires after the unknown-default edits (the changed defaults only affect unknown
+/// constructs, not the well-typed `Str`-from-string-literal inference).
+#[test]
+fn test_error_int_function_returning_string_still_reports_got_str() {
+    expect_error(
+        "<?php function foo(): int { return 'x'; }",
+        "Function 'foo' return type expects Int, got Str",
+    );
+}

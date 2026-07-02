@@ -24,7 +24,10 @@ pub fn infer_return_type_syntactic(body: &[Stmt]) -> PhpType {
         collect_return_types_syntactic(stmt, &mut types);
     }
     if types.is_empty() {
-        return PhpType::Int;
+        // A body with no Return statements returns null in PHP, so seed Void rather than
+        // the unsound Int default. This avoids spurious "got Int" diagnostics when a
+        // free function delegates to a static method whose body has no explicit return.
+        return PhpType::Void;
     }
     // Pick the widest type across all return statements
     let mut result = types[0].clone();
@@ -225,7 +228,10 @@ fn is_empty_indexed_array_literal(expr: &Expr) -> bool {
 ///
 /// A best-effort syntactic heuristic — not full type inference. Handles literals,
 /// casts, null-coalesce, ternary, match, array literals, binary operators, function calls,
-/// and `new` expressions. Returns a conservative type for unrecognized constructs.
+/// and `new` expressions. Returns a conservative `Mixed` for unrecognized constructs
+/// (unknown expression kinds or unknown builtin names) and `Void` for bodies with no
+/// return statement, so callers see a gradually-assignable seed rather than an unsound
+/// `Int` default.
 pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
     match &expr.kind {
         ExprKind::StringLiteral(_) => PhpType::Str,
@@ -285,7 +291,10 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                 PhpType::Bool
             }
             "ptr_sizeof" | "ptr_get" | "ptr_read8" | "ptr_read32" => PhpType::Int,
-            _ => PhpType::Int,
+            // Unknown builtin name: default to Mixed (gradually assignable to any declared
+            // return type) instead of the unsound Int, which produced spurious "got Int"
+            // errors for free functions delegating to static methods calling unlisted builtins.
+            _ => PhpType::Mixed,
         },
         ExprKind::NullCoalesce { value, default } => {
             let left_ty = infer_expr_type_syntactic(value);
@@ -412,7 +421,11 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             _ => PhpType::Int,
         },
         ExprKind::InstanceOf { .. } => PhpType::Bool,
-        _ => PhpType::Int,
+        // Unrecognized expression kind (Variable, MethodCall, StaticMethodCall, property
+        // access, ...): default to Mixed (gradually assignable to any declared type) instead
+        // of the unsound Int, which produced spurious "got Int" errors for free functions
+        // delegating to static methods whose return expression is e.g. a bare Variable.
+        _ => PhpType::Mixed,
     }
 }
 
