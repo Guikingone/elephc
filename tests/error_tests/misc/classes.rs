@@ -267,14 +267,26 @@ fn test_error_typed_property_rejects_void_type() {
     );
 }
 
-/// Verifies the error diagnostic for typed property rejects callable type.
+/// Verifies that a property typed `callable` type-checks cleanly. PHP forbids the bare
+/// `callable` pseudo-type as a property type, but elephc maps the `\Closure` class type hint to
+/// the same `PhpType::Callable` representation, and `\Closure` IS a valid property type in PHP.
+/// Since the two are indistinguishable post-resolution, elephc accepts `Callable` in property
+/// types as a permissive superset of PHP's rule (see `resolve_declared_property_type_hint`).
 #[test]
-fn test_error_typed_property_rejects_callable_type() {
-    // callable is not a valid property type.
-    expect_error(
-        "<?php class Box { public callable $callback; }",
-        "Property Box::$callback cannot use type callable",
-    );
+fn test_typed_property_accepts_callable_type() {
+    assert!(check_source("<?php class Box { public callable $callback; }").is_ok());
+}
+
+/// Verifies that `\Closure`-typed properties, including nullable and union forms, type-check
+/// cleanly — mirroring real-world Symfony property declarations such as
+/// `Question::$autocompleterCallback` (`?\Closure`) and
+/// `Argument::$suggestedValues`/`Option::$suggestedValues` (`array|\Closure`).
+#[test]
+fn test_closure_typed_properties_type_check_cleanly() {
+    assert!(check_source(
+        "<?php class Box { public ?\\Closure $cb = null; public array|\\Closure $x; }"
+    )
+    .is_ok());
 }
 
 /// Verifies the error diagnostic for static property rejects readonly.

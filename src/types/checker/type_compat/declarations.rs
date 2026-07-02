@@ -82,7 +82,13 @@ impl Checker {
     }
 
     /// Resolves a property type hint from a `TypeExpr` to a `PhpType`, rejecting
-    /// `void`, `never`, and `callable`.
+    /// `void` and `never`.
+    ///
+    /// Note: unlike parameters/returns, `callable` is intentionally accepted here. PHP forbids
+    /// the bare `callable` pseudo-type as a property type but allows `\Closure` (a real class).
+    /// elephc models the `\Closure` type hint as `PhpType::Callable`, and post-resolution we
+    /// cannot distinguish a `\Closure`-origin `Callable` from a bare-`callable` one, so property
+    /// types accept `Callable` as a permissive superset of PHP's rule.
     pub(crate) fn resolve_declared_property_type_hint(
         &self,
         type_expr: &TypeExpr,
@@ -102,26 +108,7 @@ impl Checker {
                 &format!("{} cannot use type never", context),
             ));
         }
-        if Self::type_contains_callable(&ty) {
-            return Err(CompileError::new(
-                span,
-                &format!("{} cannot use type callable", context),
-            ));
-        }
         Ok(ty)
-    }
-
-    /// Returns true if `ty` is or contains a `PhpType::Callable` anywhere in its structure.
-    fn type_contains_callable(ty: &PhpType) -> bool {
-        match ty {
-            PhpType::Callable => true,
-            PhpType::Union(members) => members.iter().any(Self::type_contains_callable),
-            PhpType::Array(inner) | PhpType::Buffer(inner) => Self::type_contains_callable(inner),
-            PhpType::AssocArray { key, value } => {
-                Self::type_contains_callable(key) || Self::type_contains_callable(value)
-            }
-            _ => false,
-        }
     }
 
     /// Returns true if `ty` is or contains a `PhpType::Never` anywhere in its structure.
