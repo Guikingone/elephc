@@ -11,9 +11,10 @@
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, StaticReceiver};
 use crate::span::Span;
-use crate::types::{PhpType, TypeEnv};
+use crate::types::{normalized_array_key_type, PhpType, TypeEnv};
 
 use super::super::super::Checker;
+use super::properties::is_php_array_key_type;
 
 /// Internal data for static property assignment resolution.
 /// Holds the resolved class, declaring class, declared-type status, and current property type.
@@ -144,7 +145,8 @@ pub(super) fn check_static_property_array_assign(
             return Ok(());
         }
     }
-    if idx_ty != PhpType::Int {
+    let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
+    if !is_php_array_key_type(&normalized_idx_ty) {
         return Err(CompileError::new(span, "Array index must be integer"));
     }
 

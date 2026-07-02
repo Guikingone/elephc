@@ -310,3 +310,69 @@ echo Labels::$name;
     );
     assert_eq!(out, "abc");
 }
+
+/// Verifies that writing to a static `array` property with a *variable* string key
+/// (`C::$prop[$key] = v`) type-checks and stores the value under the string key.
+/// Guards Fix 2: the static-property write path previously rejected every non-`Int`
+/// key with "Array index must be integer"; it now normalizes the key and uses the
+/// shared `is_php_array_key_type` helper, accepting PHP-coercible keys just like the
+/// instance-property write path. Cross-check:
+/// `php -r 'class C { public static array $p = []; } $k = "k"; C::$p[$k] = 1; var_dump(C::$p["k"]);'`
+/// prints `int(1)`.
+///
+/// Currently `#[ignore]` because of a SEPARATE, out-of-scope downstream EIR codegen
+/// gap: `lower_static_property_array_assign` (`src/ir_lower/stmt/mod.rs`) funnels
+/// every `Array(_)`-typed static property through `Op::ArraySet`, whose codegen
+/// (`require_integer_like_index` in `src/codegen_ir/lower_inst/arrays.rs`) rejects
+/// non-int-like index types. Unlike the instance-property and local-array lowering
+/// paths, the static-property path has no Str/Mixed-key routing
+/// (`lower_string_key_array_promotion` / `lower_mixed_key_array_set` / `Op::HashSet`).
+/// The checker-level fix (Fix 2) is verified by the console probe (0 remaining
+/// "Array index must be integer" errors); this test documents the codegen gap for a
+/// follow-up that extends `lower_static_property_array_assign` to mirror
+/// `lower_property_array_assign`.
+#[test]
+#[ignore = "downstream EIR codegen gap: lower_static_property_array_assign has no Str/Mixed-key path"]
+fn test_static_property_array_write_variable_string_key() {
+    let out = compile_and_run(
+        r#"<?php
+class Registry {
+    public static array $items = [];
+}
+
+$key = "name";
+Registry::$items[$key] = 1;
+echo Registry::$items["name"];
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// Verifies that writing to a static `array` property with a `mixed` key
+/// type-checks and runs. Guards the `Mixed` case of the static-property write path
+/// (Fix 2): a `mixed` key is the gradual-typing boundary and is accepted by the
+/// shared `is_php_array_key_type` helper, mirroring the read path.
+///
+/// Currently `#[ignore]` for the same downstream EIR codegen gap as
+/// `test_static_property_array_write_variable_string_key` (see that test's docblock).
+/// The checker-level acceptance is verified by the console probe.
+#[test]
+#[ignore = "downstream EIR codegen gap: lower_static_property_array_assign has no Str/Mixed-key path"]
+fn test_static_property_array_write_mixed_key() {
+    let out = compile_and_run(
+        r#"<?php
+class Registry {
+    public static array $items = [];
+}
+
+function pick(mixed $k): mixed {
+    return $k;
+}
+
+$key = pick("name");
+Registry::$items[$key] = 7;
+echo Registry::$items["name"];
+"#,
+    );
+    assert_eq!(out, "7");
+}

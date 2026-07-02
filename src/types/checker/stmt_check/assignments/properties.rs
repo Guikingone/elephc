@@ -602,9 +602,20 @@ fn updated_array_property_assign_type(
     }
 }
 
-/// Returns true if `ty` is a valid PHP array key type (Int, Str, or Mixed).
-fn is_php_array_key_type(ty: &PhpType) -> bool {
-    matches!(ty, PhpType::Int | PhpType::Str | PhpType::Mixed)
+/// Returns true if `ty` can act as a PHP array key at the gradual-typing boundary
+/// for a WRITE (`$a[$k] = v`). Mirrors the read-path `php_type_is_array_key_coercible`
+/// (`src/types/checker/inference/expr/mod.rs`): `int`, `string`, `Mixed`, the scalar
+/// families PHP coerces to a key (`bool`, `float`), the null-like `Void`/`Never` tags
+/// (a null key becomes `""`), and unions composed only of those. Heap container types
+/// are rejected. Kept in lockstep with the read path so read and write key acceptance
+/// never diverge.
+pub(super) fn is_php_array_key_type(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Int | PhpType::Str | PhpType::Mixed | PhpType::Bool
+        | PhpType::Float | PhpType::Void | PhpType::Never => true,
+        PhpType::Union(members) => members.iter().all(is_php_array_key_type),
+        _ => false,
+    }
 }
 
 /// Computes the resulting `PhpType::AssocArray` type after writing to an array property with a

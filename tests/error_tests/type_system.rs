@@ -58,6 +58,19 @@ fn test_error_object_array_key_is_rejected() {
     );
 }
 
+/// Verifies that a NON-coercible key (an array-typed expression) used to index a
+/// property-array WRITE still fires "Array index must be integer" after the
+/// write-path key check was widened to mirror the read path. Guards the genuine-error
+/// boundary: only PHP-coercible key types (int/string/mixed/bool/float/null-like and
+/// unions thereof) are accepted; heap container types remain rejected.
+#[test]
+fn test_error_property_array_write_array_key_is_rejected() {
+    expect_error(
+        "<?php class C { public array $p = []; } $c = new C; $k = [1, 2]; $c->p[$k] = 1;",
+        "Array index must be integer",
+    );
+}
+
 /// Verifies that assigning to a string offset (character replacement) is rejected.
 /// Input: `$s = "hello"; $s[0] = "H";` — offset assignment on a string is unsupported.
 #[test]

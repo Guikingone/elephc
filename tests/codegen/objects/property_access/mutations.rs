@@ -474,3 +474,122 @@ echo $box->value;
     );
     assert_eq!(out, "7");
 }
+
+/// Verifies that writing to an array-typed instance property with a *variable*
+/// string key (`$obj->prop[$key] = v`) type-checks and stores the value under the
+/// string key. The write path previously only accepted `Int`/`Str`/`Mixed` keys and
+/// rejected a `Str`-typed *variable* key expression through the union-coercion guard;
+/// aligned with the read path it now accepts any PHP-coercible key. Cross-check:
+/// `php -r 'class C { public array $p = []; } $c = new C; $k = "k"; $c->p[$k] = 1; var_dump($c->p["k"]);'`
+/// prints `int(1)`.
+#[test]
+fn test_instance_property_array_write_variable_string_key() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    public array $items = [];
+}
+
+$b = new Bag();
+$key = "name";
+$b->items[$key] = 1;
+echo $b->items["name"];
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// Verifies that writing to an array-typed instance property with a `mixed` key
+/// type-checks and runs. A `mixed` key is the gradual-typing boundary: the runtime
+/// coerces it to a real integer or string key. Guards the `Mixed` arm of the widened
+/// write-path key check.
+#[test]
+fn test_instance_property_array_write_mixed_key() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    public array $items = [];
+}
+
+function pick(mixed $k): mixed {
+    return $k;
+}
+
+$b = new Bag();
+$k = pick("name");
+$b->items[$k] = 7;
+echo $b->items["name"];
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies that writing to an array-typed instance property with a `int|string`
+/// union-typed key expression type-checks and runs. Guards the union arm of the
+/// widened `is_php_array_key_type` (Fix 1): a union of coercible key types is itself
+/// a coercible key. Cross-check:
+/// `php -r 'class C { public array $p = []; } $c = new C; /** @var int|string $k */ $k = "x"; $c->p[$k] = 1; var_dump($c->p);'`.
+#[test]
+fn test_instance_property_array_write_union_int_string_key() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    public array $items = [];
+}
+
+function key_of(int|string $n): int|string {
+    return $n;
+}
+
+$b = new Bag();
+$k = key_of("label");
+$b->items[$k] = 42;
+echo $b->items["label"];
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// Verifies that writing to an array-typed instance property with a `?string`
+/// (i.e. `string|null` → elephc `Union([Str, Void])`) key expression type-checks
+/// and runs. Guards the `Union([Str, Void])` case from the console probe (lines 42
+/// and 594 of the autoloaded Symfony sources). A null key would coerce to `""` at
+/// runtime, but the non-null branch is exercised here.
+#[test]
+fn test_instance_property_array_write_nullable_string_key() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    public array $items = [];
+}
+
+function maybe_key(?string $n): ?string {
+    return $n;
+}
+
+$b = new Bag();
+$k = maybe_key("tag");
+$b->items[$k] = 9;
+echo $b->items["tag"];
+"#,
+    );
+    assert_eq!(out, "9");
+}
+
+/// Regression guard: reading an array-typed instance property by a literal string
+/// key still type-checks and runs (the read path already accepted string keys; this
+/// sanity-checks that the write-path widening did not perturb the read path).
+#[test]
+fn test_instance_property_array_read_string_key_still_works() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    public array $items = ["k" => 5];
+}
+
+$b = new Bag();
+echo $b->items["k"];
+"#,
+    );
+    assert_eq!(out, "5");
+}
