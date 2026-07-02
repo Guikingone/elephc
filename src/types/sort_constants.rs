@@ -13,10 +13,13 @@
 /// Tuple of `(name, value)` pairs for PHP sort-flag integer constants.
 ///
 /// These select the comparison mode passed to array sorting builtins
-/// (`sort()`, `rsort()`, `asort()`, `ksort()`, and friends).
+/// (`sort()`, `rsort()`, `asort()`, `ksort()`, and friends). `SORT_FLAG_CASE`
+/// is a modifier bit combined (bitwise-or) with `SORT_STRING`/`SORT_NATURAL`
+/// to request case-insensitive comparison.
 pub(crate) const SORT_INT_CONSTANTS: &[(&str, i64)] = &[
     ("SORT_STRING", 2),
     ("SORT_NATURAL", 6),
+    ("SORT_FLAG_CASE", 8),
 ];
 
 #[cfg(test)]
@@ -38,6 +41,12 @@ mod tests {
             .expect("SORT_NATURAL defined")
             .1;
         assert_eq!(natural_mode, 6);
+        let case_flag = SORT_INT_CONSTANTS
+            .iter()
+            .find(|(name, _)| *name == "SORT_FLAG_CASE")
+            .expect("SORT_FLAG_CASE defined")
+            .1;
+        assert_eq!(case_flag, 8);
     }
 
     /// Asserts no duplicate names exist in `SORT_INT_CONSTANTS`.

@@ -8,9 +8,9 @@
 //! - `crate::codegen::prescan` when materializing constant literal values.
 //!
 //! Key details:
-//! - The registered signal numbers (`SIGHUP`, `SIGINT`, `SIGKILL`, `SIGALRM`,
-//!   `SIGTERM`) share the same POSIX values across every supported target
-//!   (macOS and Linux), so a single table is target-agnostic.
+//! - The registered signal numbers (`SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGKILL`,
+//!   `SIGALRM`, `SIGTERM`) share the same POSIX values across every supported
+//!   target (macOS and Linux), so a single table is target-agnostic.
 //! - `SIG_DFL`/`SIG_IGN` are the default/ignore handler pseudo-constants.
 
 /// Tuple of `(name, value)` pairs for PHP `ext/pcntl` signal integer constants.
@@ -20,6 +20,7 @@
 pub(crate) const PCNTL_INT_CONSTANTS: &[(&str, i64)] = &[
     ("SIGHUP", 1),
     ("SIGINT", 2),
+    ("SIGQUIT", 3),
     ("SIGKILL", 9),
     ("SIGALRM", 14),
     ("SIGTERM", 15),
@@ -45,6 +46,7 @@ mod tests {
     fn test_signal_number_values() {
         assert_eq!(value_of("SIGHUP"), 1);
         assert_eq!(value_of("SIGINT"), 2);
+        assert_eq!(value_of("SIGQUIT"), 3);
         assert_eq!(value_of("SIGKILL"), 9);
         assert_eq!(value_of("SIGALRM"), 14);
         assert_eq!(value_of("SIGTERM"), 15);

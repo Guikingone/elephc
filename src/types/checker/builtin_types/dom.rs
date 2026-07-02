@@ -52,6 +52,15 @@ fn mixed_type() -> TypeExpr {
     TypeExpr::Named(Name::unqualified("mixed"))
 }
 
+/// Returns the `mixed` type used for DOM string parameters that PHP coerces from
+/// scalar arguments — e.g. `DOMElement::setAttribute`, whose `string $value` accepts
+/// ints/floats/bools that PHP casts to string. Modelled as `mixed` under the gradual
+/// type system so scalar callers type-check without weakening the shells' other typed
+/// members. Vendor code such as symfony/console passes ints to these string params.
+fn coercing_scalar() -> TypeExpr {
+    TypeExpr::Named(Name::unqualified("mixed"))
+}
+
 /// Returns a `$name` variable-reference expression.
 fn var(name: &str) -> Expr {
     Expr::new(ExprKind::Variable(name.to_string()), dummy())
@@ -210,16 +219,19 @@ fn builtin_dom_document() -> FlattenedClass {
             ),
             method(
                 "createElement",
+                // PHP coerces the element's text value; accept `mixed` for it (keeping the
+                // string tag name strict). The default stays the empty string.
                 vec![
                     param("name", TypeExpr::Str, None),
-                    param("value", TypeExpr::Str, Some(str_lit(""))),
+                    param("value", coercing_scalar(), Some(str_lit(""))),
                 ],
                 Some(class_type("DOMElement")),
                 vec![ret(new_obj("DOMElement"))],
             ),
             method(
                 "createTextNode",
-                vec![param("data", TypeExpr::Str, None)],
+                // PHP coerces the text-node content; accept `mixed` so scalar callers pass.
+                vec![param("data", coercing_scalar(), None)],
                 Some(class_type("DOMText")),
                 vec![ret(new_obj("DOMText"))],
             ),
@@ -264,7 +276,12 @@ fn builtin_dom_element() -> FlattenedClass {
         properties: Vec::new(),
         methods: vec![method(
             "setAttribute",
-            vec![param("name", TypeExpr::Str, None), param("value", TypeExpr::Str, None)],
+            // PHP: setAttribute(string $qualifiedName, string $value) — both coerce scalar
+            // arguments, and vendor code passes ints, so accept `mixed` for each.
+            vec![
+                param("name", coercing_scalar(), None),
+                param("value", coercing_scalar(), None),
+            ],
             Some(TypeExpr::Void),
             Vec::new(),
         )],

@@ -1548,6 +1548,94 @@ function describe(\ReflectionType $t): ?string {
     assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
 }
 
+/// Verifies `ReflectionProperty::getType()` (PHP's `getType(): ?ReflectionType`) is a
+/// recognised member: calling it through a `\ReflectionProperty`-typed parameter
+/// type-checks. Type-check-only because the DOM/reflection stub is un-backed at
+/// runtime; the shell returns a `mixed` placeholder (see `builtin_reflection_property`
+/// for why an object return type cannot be used).
+#[test]
+fn test_reflection_property_get_type_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function f(\ReflectionProperty $p): void {
+    $t = $p->getType();
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
+
+/// Verifies `ReflectionParameter::getDeclaringFunction()` is a recognised member:
+/// calling it through a `\ReflectionParameter`-typed parameter type-checks. The stub
+/// returns a `mixed` placeholder, so callers may still chain under gradual typing.
+#[test]
+fn test_reflection_parameter_get_declaring_function_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function f(\ReflectionParameter $p): void {
+    $fn = $p->getDeclaringFunction();
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
+
+/// Verifies `ReflectionFunction::getClosureThis()` (PHP's `getClosureThis(): ?object`)
+/// is a recognised member: calling it through a `\ReflectionFunction`-typed parameter
+/// type-checks. The stub returns a `mixed` placeholder covering `?object`.
+#[test]
+fn test_reflection_function_get_closure_this_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function f(\ReflectionFunction $r): void {
+    $bound = $r->getClosureThis();
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
+
+/// Verifies the two-argument `new ReflectionMethod('Class', 'method')` form type-checks
+/// after the constructor's first parameter was relaxed to `object|string` — the string
+/// class-name form remains fully supported and the required method-name argument is
+/// still enforced.
+#[test]
+fn test_reflection_method_construct_two_arg_string_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+class C { public function m(): void {} }
+$r = new ReflectionMethod('C', 'm');
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
+
+/// Verifies the constructor's first-parameter relaxation to `object|string`: passing an
+/// object as the first `ReflectionMethod` argument no longer produces the shell's
+/// parameter-type error ("expects Str, got Object"). It still errors, but from a
+/// separate downstream reflection-constructor validation (which requires a compile-time
+/// string class name to resolve attributes) — a limitation outside this shell change.
+/// This test pins that the *shell-level* type error is gone.
+#[test]
+fn test_reflection_method_construct_object_first_arg_not_shell_type_error() {
+    let result = type_checks_cleanly(
+        r#"<?php
+class C { public function m(): void {} }
+$o = new C();
+$r = new ReflectionMethod($o, 'm');
+"#,
+    );
+    let message = result.expect_err("object-first-arg construction still errors downstream");
+    assert!(
+        !message.contains("expects Str"),
+        "shell parameter-type error should be gone, got: {message}"
+    );
+    assert!(
+        message.contains("first argument must be a string class name"),
+        "expected the downstream string-class-name error, got: {message}"
+    );
+}
+
 /// Verifies a global-constant attribute argument (`#[A(CONST)]`) resolves to the
 /// constant's value through `getArguments()`, preserving its integer type.
 #[test]

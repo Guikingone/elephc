@@ -89,21 +89,19 @@ pub(crate) fn inject_builtin_reflection(
         builtin_reflection_owner_class(
             "ReflectionMethod",
             vec![
-                ("class_name", Some(TypeExpr::Str), None, false),
+                // PHP: __construct(object|string $objectOrMethod, ?string $method = null).
+                // Relax the first argument to `object|string` (modelled as `mixed`) so
+                // `new ReflectionMethod($object, 'method')` no longer fails the "expects Str,
+                // got Object" generic check. `method_name` stays required: the reflection
+                // constructor's downstream validation (in the checker's inference layer)
+                // asserts the method-name arg is present, so an optional/absent second
+                // argument would trip that assertion rather than type-check.
+                ("class_name", Some(mixed_type()), None, false),
                 ("method_name", Some(TypeExpr::Str), None, false),
             ],
         ),
     );
-    class_map.insert(
-        "ReflectionProperty".to_string(),
-        builtin_reflection_owner_class(
-            "ReflectionProperty",
-            vec![
-                ("class_name", Some(TypeExpr::Str), None, false),
-                ("property_name", Some(TypeExpr::Str), None, false),
-            ],
-        ),
-    );
+    class_map.insert("ReflectionProperty".to_string(), builtin_reflection_property());
     class_map.insert("ReflectionFunction".to_string(), builtin_reflection_function());
     class_map.insert(
         "ReflectionParameter".to_string(),
@@ -425,6 +423,9 @@ fn builtin_reflection_function() -> FlattenedClass {
                 TypeExpr::Int,
             ),
             builtin_reflection_slot_getter("getParameters", "__params", array_type()),
+            // PHP: getClosureThis(): ?object — the bound `$this` of a closure, or null.
+            // No runtime backing yet; returns null, typed `mixed` (covers `?object`).
+            builtin_reflection_literal_method("getClosureThis", mixed_type(), null_lit()),
         ],
         attributes: Vec::new(),
         constants: Vec::new(),
@@ -468,6 +469,13 @@ fn builtin_reflection_parameter() -> FlattenedClass {
             builtin_reflection_slot_getter("isVariadic", "__variadic", TypeExpr::Bool),
             builtin_reflection_slot_getter("hasType", "__has_type", TypeExpr::Bool),
             builtin_reflection_slot_getter("getType", "__type", mixed_type()),
+            // PHP: getDeclaringFunction(): ReflectionFunctionAbstract — the function or
+            // method this parameter belongs to. An un-backed stub returning null, typed
+            // `mixed`: the reflection EIR backend cannot lower a stub with an object
+            // return type (it becomes an unsupported `Void`-to-`Object` runtime call), so
+            // `mixed` is used rather than `ReflectionFunction`. Gradual typing still lets
+            // callers chain methods on the result.
+            builtin_reflection_literal_method("getDeclaringFunction", mixed_type(), null_lit()),
         ],
         attributes: Vec::new(),
         constants: Vec::new(),
@@ -659,6 +667,36 @@ fn builtin_reflection_owner_class(
         constants: Vec::new(),
         used_traits: Vec::new(),
     }
+}
+
+/// Builds the `ReflectionProperty` shell: the reflection-owner base (private
+/// `__attrs` slot, `__construct`, `getAttributes`) plus a `getType()` stub. Its
+/// constructor mirrors PHP's
+/// `ReflectionProperty::__construct(object|string $class, string $property)`: the first
+/// parameter accepts an object instance or a class-name string (modelled as `mixed`
+/// under the gradual type system so both forms type-check).
+///
+/// `getType()` (PHP's `getType(): ?ReflectionType`) is an un-backed stub that returns
+/// `null`, typed `mixed`. It is deliberately NOT typed `?ReflectionType`: the reflection
+/// EIR backend eagerly lowers every method of a used reflection class as a runtime call,
+/// and a stub returning an object type lowers to an unsupported `Void`-to-`Object`
+/// runtime call that breaks codegen for *all* reflection programs. `mixed` is the
+/// proven-safe stub return (matching `newInstance`) and still lets callers use
+/// `getType()`/`getType()?->getName()` under gradual typing.
+fn builtin_reflection_property() -> FlattenedClass {
+    let mut class = builtin_reflection_owner_class(
+        "ReflectionProperty",
+        vec![
+            ("class_name", Some(mixed_type()), None, false),
+            ("property_name", Some(TypeExpr::Str), None, false),
+        ],
+    );
+    class.methods.push(builtin_reflection_literal_method(
+        "getType",
+        mixed_type(),
+        null_lit(),
+    ));
+    class
 }
 
 /// Builds a public `__construct` method for a reflection owner class using the
