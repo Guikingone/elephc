@@ -270,7 +270,11 @@ impl Checker {
 
     /// Returns true when a declared generator return annotation accepts
     /// the actual `Generator` object returned when the body contains `yield`.
-    fn generator_return_type_accepts(&self, declared_ret: &PhpType) -> bool {
+    ///
+    /// Exposed as `pub(crate)` so the method-return-type pass
+    /// (`crate::types::checker::method_pass`) can share the same generator-hint
+    /// acceptance rule as this function path instead of re-deriving it.
+    pub(crate) fn generator_return_type_accepts(&self, declared_ret: &PhpType) -> bool {
         if matches!(declared_ret, PhpType::Object(name) if name == "Traversable") {
             return true;
         }

@@ -364,6 +364,31 @@ fn test_error_method_declared_return_type_requires_return_value() {
     );
 }
 
+/// Verifies that a GENERATOR method (body contains `yield`) whose declared
+/// return hint does NOT accept a `Generator` still errors with a return-type
+/// mismatch — the method-pass generator guard mirrors the free-function path.
+/// The diagnostic must be the Generator/return-type mismatch, NOT "must return
+/// a value on every path" (which must no longer fire for a generator body).
+#[test]
+fn test_error_generator_method_non_generator_return_hint_rejected() {
+    expect_error(
+        "<?php class C { public function g(): int { yield 1; } }",
+        "Method 'C::g' return type expects Int",
+    );
+}
+
+/// No-regression guard for the generator-method fix: an ORDINARY method (no
+/// `yield`) with a non-void declared return and no `return` on every path must
+/// still fire "must return a value on every path". Confirms the `body_contains_yield`
+/// guard did not disable return coverage for non-generator method bodies.
+#[test]
+fn test_error_ordinary_method_missing_return_still_reported_after_generator_guard() {
+    expect_error(
+        "<?php class C { public function g(): string { $x = 1; } }",
+        "Method 'C::g' must return a value on every path",
+    );
+}
+
 /// Verifies that a typed closure parameter rejects a mismatched argument type
 /// at the call site.
 #[test]

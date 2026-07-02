@@ -206,6 +206,13 @@ impl Checker {
     /// it always throws/exits/loops). `Never` combined with a body that *does* contain
     /// return statements produces a compile error. Generic array hints are passed
     /// through as-is to preserve inference.
+    ///
+    /// Generator methods (bodies containing `yield`/`yield from`) short-circuit to
+    /// an effective return type of `Object("Generator")`, mirroring the free-function
+    /// path: the declared hint is only validated for `Generator` acceptance (via
+    /// `generator_return_type_accepts`), and `require_declared_return_coverage` plus
+    /// the per-`return` compatibility checks are skipped because a generator body has
+    /// no `return`-on-every-path obligation.
     fn update_method_return_type(
         &mut self,
         class: &FlattenedClass,
@@ -235,7 +242,50 @@ impl Checker {
             Some(widest)
         };
         let inferred_return = raw_inferred.clone().unwrap_or(PhpType::Void);
-        let effective_return = if let Some(type_ann) = method.return_type.as_ref() {
+        // Generator methods: a body containing `yield`/`yield from` returns a
+        // `Generator` object, NOT the value(s) named by `return`/the declared hint.
+        // Mirror the function path (`functions/resolution/signature.rs`): validate the
+        // declared hint accepts a `Generator`, set the effective return to `Generator`,
+        // and SKIP `require_declared_return_coverage` (a generator body legitimately has
+        // no `return` on every path) and the per-return compatibility checks.
+        let effective_return = if crate::types::checker::yield_validation::body_contains_yield(
+            &method.body,
+        ) {
+            let generator_ty = PhpType::Object("Generator".to_string());
+            if let Some(type_ann) = method.return_type.as_ref() {
+                match self.resolve_declared_return_type_hint(
+                    type_ann,
+                    method.span,
+                    &format!("Method '{}::{}'", class.name, method.name),
+                ) {
+                    Ok(declared) => {
+                        if !self.generator_return_type_accepts(&declared) {
+                            if let Err(error) = self.require_compatible_return_type(
+                                &declared,
+                                &generator_ty,
+                                true,
+                                method.span,
+                                &format!("Method '{}::{}' return type", class.name, method.name),
+                            ) {
+                                pass_errors.extend(error.flatten());
+                                self.current_class = None;
+                                self.current_method = None;
+                                self.current_method_is_static = false;
+                                return;
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        pass_errors.extend(error.flatten());
+                        self.current_class = None;
+                        self.current_method = None;
+                        self.current_method_is_static = false;
+                        return;
+                    }
+                }
+            }
+            generator_ty
+        } else if let Some(type_ann) = method.return_type.as_ref() {
             match self.resolve_declared_return_type_hint(
                 type_ann,
                 method.span,
