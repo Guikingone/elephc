@@ -12,6 +12,7 @@ mod arrays;
 mod callables;
 mod catalog;
 mod io;
+mod mbstring;
 mod numeric;
 mod pointers;
 mod spl;
@@ -83,6 +84,9 @@ impl Checker {
         };
 
         if let Some(result) = strings::check_builtin(self, name, args, span, env)? {
+            return Ok(Some(result));
+        }
+        if let Some(result) = mbstring::check_builtin(self, name, args, span, env)? {
             return Ok(Some(result));
         }
         if let Some(result) = numeric::check_builtin(self, name, args, span, env)? {

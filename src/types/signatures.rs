@@ -271,6 +271,68 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             sig.ref_params[1] = true;
             Some(sig)
         }
+        // -- multibyte string (mbstring) builtins (recognition-only; runtime deferred) --
+        // mb_substr(string $string, int $start, ?int $length = null,
+        // ?string $encoding = null): string.
+        "mb_substr" => Some(optional(
+            &["string", "start", "length", "encoding"],
+            2,
+            vec![null_lit(), null_lit()],
+        )),
+        // mb_strlen(string $string, ?string $encoding = null): int.
+        "mb_strlen" => Some(optional(&["string", "encoding"], 1, vec![null_lit()])),
+        // mb_stripos/mb_strripos(string $haystack, string $needle, int $offset = 0,
+        // ?string $encoding = null): int|false.
+        "mb_stripos" | "mb_strripos" => Some(optional(
+            &["haystack", "needle", "offset", "encoding"],
+            2,
+            vec![int_lit(0), null_lit()],
+        )),
+        // mb_strstr/mb_stristr(string $haystack, string $needle,
+        // bool $before_needle = false, ?string $encoding = null): string|false.
+        "mb_strstr" | "mb_stristr" => Some(optional(
+            &["haystack", "needle", "before_needle", "encoding"],
+            2,
+            vec![bool_lit(false), null_lit()],
+        )),
+        // mb_strtolower/mb_strtoupper(string $string, ?string $encoding = null): string.
+        "mb_strtolower" | "mb_strtoupper" => {
+            Some(optional(&["string", "encoding"], 1, vec![null_lit()]))
+        }
+        // mb_convert_case(string $string, int $mode, ?string $encoding = null): string.
+        "mb_convert_case" => Some(optional(
+            &["string", "mode", "encoding"],
+            2,
+            vec![null_lit()],
+        )),
+        // mb_convert_encoding(array|string $string, string $to_encoding,
+        // array|string|null $from_encoding = null): array|string|false.
+        "mb_convert_encoding" => Some(optional(
+            &["string", "to_encoding", "from_encoding"],
+            2,
+            vec![null_lit()],
+        )),
+        // mb_detect_encoding(string $string, array|string|null $encodings = null,
+        // bool $strict = false): string|false.
+        "mb_detect_encoding" => Some(optional(
+            &["string", "encodings", "strict"],
+            1,
+            vec![null_lit(), bool_lit(false)],
+        )),
+        // mb_internal_encoding(?string $encoding = null): string|bool.
+        "mb_internal_encoding" => {
+            Some(optional(&["encoding"], 0, vec![null_lit()]))
+        }
+        // mb_ord(string $string, ?string $encoding = null): int|false.
+        "mb_ord" => Some(optional(&["string", "encoding"], 1, vec![null_lit()])),
+        // mb_str_split(string $string, int $length = 1, ?string $encoding = null): array.
+        "mb_str_split" => Some(optional(
+            &["string", "length", "encoding"],
+            1,
+            vec![int_lit(1), null_lit()],
+        )),
+        // mb_strwidth(string $string, ?string $encoding = null): int.
+        "mb_strwidth" => Some(optional(&["string", "encoding"], 1, vec![null_lit()])),
         "hexdec" => Some(fixed(&["hex_string"])),
         "str_contains" | "str_starts_with" | "str_ends_with" => {
             Some(fixed(&["haystack", "needle"]))
@@ -871,6 +933,57 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
                 PhpType::Int,
             ))
         }
+        // -- multibyte string (mbstring) first-class callables (recognition-only) --
+        // mb_substr/mb_strtolower/mb_strtoupper/mb_convert_case/mb_convert_encoding
+        // each take a string and return a string.
+        "mb_substr" | "mb_strtolower" | "mb_strtoupper" | "mb_convert_case"
+        | "mb_convert_encoding" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str],
+            PhpType::Str,
+        )),
+        // mb_strlen/mb_strwidth measure a string and return an int.
+        "mb_strlen" | "mb_strwidth" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str],
+            PhpType::Int,
+        )),
+        // mb_stripos/mb_strripos are case-insensitive multibyte search: int index or false.
+        "mb_stripos" | "mb_strripos" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str, PhpType::Str],
+            PhpType::Union(vec![PhpType::Int, PhpType::Bool]),
+        )),
+        // mb_strstr/mb_stristr return the matched substring or false.
+        "mb_strstr" | "mb_stristr" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str, PhpType::Str],
+            PhpType::Union(vec![PhpType::Str, PhpType::Bool]),
+        )),
+        // mb_detect_encoding returns the detected encoding name or false.
+        "mb_detect_encoding" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str],
+            PhpType::Union(vec![PhpType::Str, PhpType::Bool]),
+        )),
+        // mb_internal_encoding returns the current encoding (string) or true/false when set.
+        "mb_internal_encoding" => Some(typed_first_class_builtin_sig(
+            name,
+            &[],
+            PhpType::Union(vec![PhpType::Str, PhpType::Bool]),
+        )),
+        // mb_ord returns the code point (int) or false.
+        "mb_ord" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str],
+            PhpType::Union(vec![PhpType::Int, PhpType::Bool]),
+        )),
+        // mb_str_split splits a string into an array of multibyte characters.
+        "mb_str_split" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str],
+            PhpType::Array(Box::new(PhpType::Str)),
+        )),
         // strcspn/strspn/strpbrk/hexdec are intentionally absent here: they are
         // lowered only by the active EIR backend, so the frozen legacy direct
         // backend that emits dynamic first-class-callable wrapper bodies cannot

@@ -560,12 +560,12 @@ pub(crate) fn runtime_instance_method_case(
 ///
 /// The recognition-only string/array builtins (`strtr`, `stripos`, `strripos`, `strncmp`,
 /// `strncasecmp`, `substr_compare`, `strip_tags`, `levenshtein`, `is_countable`,
-/// `array_key_first`, `array_replace_recursive`) are registered for type checking and
-/// first-class-callable resolution but have no runtime lowering yet. The runtime dynamic-call
-/// table materializes a wrapper for every builtin carrying a first-class-callable signature, so
-/// they are excluded here until their codegen lands — otherwise a program that builds the
-/// dynamic string-callable table would materialize a wrapper body that lowers an unsupported
-/// builtin call.
+/// `array_key_first`, `array_replace_recursive`) and the multibyte-string (`mb_*`) family are
+/// registered for type checking and first-class-callable resolution but have no runtime lowering
+/// yet. The runtime dynamic-call table materializes a wrapper for every builtin carrying a
+/// first-class-callable signature, so they are excluded here until their codegen lands —
+/// otherwise a program that builds the dynamic string-callable table would materialize a wrapper
+/// body that lowers an unsupported builtin call.
 fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
     matches!(
         name,
@@ -574,6 +574,10 @@ fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
             | "strtr" | "stripos" | "strripos" | "strncmp" | "strncasecmp"
             | "substr_compare" | "strip_tags" | "levenshtein" | "is_countable"
             | "array_key_first" | "array_replace_recursive"
+            | "mb_substr" | "mb_strlen" | "mb_stripos" | "mb_strripos"
+            | "mb_strstr" | "mb_stristr" | "mb_strtolower" | "mb_strtoupper"
+            | "mb_convert_case" | "mb_convert_encoding" | "mb_detect_encoding"
+            | "mb_internal_encoding" | "mb_ord" | "mb_str_split" | "mb_strwidth"
     )
 }
 
