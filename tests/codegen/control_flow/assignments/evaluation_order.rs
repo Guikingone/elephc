@@ -302,3 +302,123 @@ echo pick(-1), "|", pick(6), "|", pick(3), "|", pick(1);
     assert_eq!(out, "hit|hit|hit|miss");
 }
 
+/// Verifies that an ordinary assignment in the RIGHT operand of a short-circuit `&&` chain
+/// surfaces the assigned variable to the outer scope, so a later read is not a false "Undefined
+/// variable". PHP prints `5` for `$a = 1; if ($a > 0 && ($u = 5) > 0) { echo $u; }`.
+#[test]
+fn test_and_chain_rhs_assignment_surfaces_to_outer_scope() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 1;
+if ($a > 0 && ($u = 5) > 0) { echo $u; }
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies the same outer-scope surfacing for a `||` chain: an assignment in the right operand
+/// (`($u = 5) > 0`) defines `$u` for the following body read. PHP prints `5` for
+/// `$a = 0; if ($a > 0 || ($u = 5) > 0) { echo $u; }`.
+#[test]
+fn test_or_chain_rhs_assignment_surfaces_to_outer_scope() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 0;
+if ($a > 0 || ($u = 5) > 0) { echo $u; }
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies the symfony `AbstractUnicodeString::wcswidth` shape: an assignment nested inside an
+/// array-index subscript in the RIGHT operand of an `&&` condition
+/// (`$tbl[$ubound = \count($tbl) - 1]`) surfaces `$ubound` so the following `while` loop can read
+/// it. A local array is used (not a static nested-array property) so the fixture does not depend on
+/// the separate EIR static-property-default codegen surface. PHP prints `1|2|3|0`.
+#[test]
+fn test_and_chain_nested_index_assignment_surfaces_to_outer_scope() {
+    let out = compile_and_run(
+        r#"<?php
+function widthOf(int $cp): int {
+    $tbl = [10, 30, 50];
+    $lbound = 0;
+    if ($cp >= 0 && $cp <= $tbl[$ubound = \count($tbl) - 1]) {
+        while ($ubound >= $lbound) {
+            $mid = intdiv($lbound + $ubound, 2);
+            if ($cp > $tbl[$mid]) {
+                $lbound = $mid + 1;
+            } else {
+                if ($mid === 0 || $cp > $tbl[$mid - 1]) {
+                    return $mid + 1;
+                }
+                $ubound = $mid - 1;
+            }
+        }
+    }
+    return 0;
+}
+echo widthOf(5), "|", widthOf(25), "|", widthOf(45), "|", widthOf(99);
+"#,
+    );
+    assert_eq!(out, "1|2|3|0");
+}
+
+/// Verifies that an assignment in the LAST operand of a three-operand `&&` chain surfaces to the
+/// outer scope. With `$a = $b = true`, the third operand `($u = 7)` runs and `$u` must be readable
+/// after the chain. PHP prints `7`.
+#[test]
+fn test_three_operand_and_chain_last_operand_assignment_surfaces() {
+    let out = compile_and_run(
+        r#"<?php
+$a = true;
+$b = true;
+if ($a && $b && ($u = 7)) { echo $u; }
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Regression: a variable already defined outside the chain is not corrupted when it is reassigned
+/// inside a later operand. The `or_insert` surfacing must not overwrite the outer binding, and the
+/// runtime value after the chain is the reassigned one. PHP prints `9` for
+/// `$x = 3; if (true && ($x = 9)) {} echo $x;`.
+#[test]
+fn test_outer_variable_not_corrupted_by_chain_reassignment() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 3;
+if (true && ($x = 9)) {}
+echo $x;
+"#,
+    );
+    assert_eq!(out, "9");
+}
+
+/// Regression: an assignment in the FIRST (left) operand still surfaces (the already-working path
+/// is unchanged). `($u = 5) > 0` in the left operand then `$u < 10` in the right, then a body read.
+/// PHP prints `5`.
+#[test]
+fn test_left_operand_assignment_still_surfaces() {
+    let out = compile_and_run(
+        r#"<?php
+if (($u = 5) > 0 && $u < 10) { echo $u; }
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Regression: a short-circuit chain with NO assignment surfaces nothing — the merge is a no-op and
+/// the program behaves normally. PHP prints `ok` for
+/// `$a = 1; $b = 2; if ($a && $b) { echo "ok"; }`.
+#[test]
+fn test_short_circuit_chain_without_assignment_is_noop() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 1;
+$b = 2;
+if ($a && $b) { echo "ok"; }
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+

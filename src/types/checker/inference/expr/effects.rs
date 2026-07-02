@@ -110,6 +110,16 @@ impl Checker {
                         self.infer_type_with_assignment_effects(operand, &mut chain_env)?;
                         self.define_nested_by_ref_outputs(operand, env);
                     }
+                    // Surface ordinary assignments made in later (conditionally-evaluated) operands
+                    // to the outer scope, mirroring the by-ref-output surfacing above and PHP's
+                    // non-flow-sensitive undefined-variable behavior: a variable first assigned in a
+                    // `&&`/`||` operand is usable after the chain (e.g. `... && ($u = 5) > 0` then
+                    // read `$u`). `or_insert` only DEFINES a currently-undefined variable — it never
+                    // overwrites an existing type, so the flow-sensitive narrowing threaded through
+                    // `chain_env` for variables that already existed does not leak to the outer scope.
+                    for (var, ty) in chain_env {
+                        env.entry(var).or_insert(ty);
+                    }
                     Ok(PhpType::Bool)
                 } else {
                     self.infer_type_with_assignment_effects(left, env)?;
