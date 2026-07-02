@@ -19,6 +19,18 @@ fn test_error_instanceof_self_outside_class_scope() {
     );
 }
 
+/// Regression: `instanceof self` used as an `if`-guard condition outside any class must still
+/// error. The relative-name narrowing resolver returns the target unchanged when there is no
+/// enclosing class (`current_class` is `None`), so the pre-existing instanceof-outside-class
+/// diagnostic keeps firing rather than a new panic/error path being introduced.
+#[test]
+fn test_error_instanceof_self_guard_outside_class_scope() {
+    expect_error(
+        "<?php function f(mixed $x): int { if ($x instanceof self) { return 1; } return 0; } echo f(5);",
+        "Cannot use self in instanceof outside of a class context",
+    );
+}
+
 /// Verifies that `new` on a class absent from the closed world is tolerated as an absent
 /// optional dependency: it warns and type-checks (degrading to `Mixed`) rather than hard-erroring.
 /// This is the accepted softening of class-name typo detection needed to compile frameworks with

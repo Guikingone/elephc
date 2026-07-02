@@ -47,6 +47,7 @@ impl Checker {
             _ => (condition, false),
         };
         let (var, target) = guard_var_and_type(cond)?;
+        let target = self.resolve_relative_instanceof_target(target);
         let current = env.get(&var)?.clone();
         let matched = self.narrow_to(&current, &target);
         let complement = self.narrow_complement(&current, &target);
@@ -56,6 +57,31 @@ impl Checker {
             (matched, complement)
         };
         Some(GuardNarrowing { var, then_ty, else_ty })
+    }
+
+    /// Resolves a relative class name (`self`/`static`/`parent`, case-insensitive) inside an
+    /// `instanceof` narrowing target to the concrete enclosing class. `self`/`static` map to
+    /// `current_class`; `parent` maps to the current class's parent. A target that is not a
+    /// relative-name `Object`, or a relative name that cannot be resolved (no class context, or
+    /// `parent` on a class with no parent), is returned unchanged so the existing unknown-class
+    /// diagnostics still fire downstream. Non-`Object` targets pass through untouched.
+    fn resolve_relative_instanceof_target(&self, target: PhpType) -> PhpType {
+        let PhpType::Object(class_name) = &target else {
+            return target;
+        };
+        let concrete = match class_name.to_ascii_lowercase().as_str() {
+            "self" | "static" => self.current_class.clone(),
+            "parent" => self
+                .current_class
+                .as_ref()
+                .and_then(|c| self.classes.get(c))
+                .and_then(|ci| ci.parent.clone()),
+            _ => return target,
+        };
+        match concrete {
+            Some(name) => PhpType::Object(name),
+            None => target,
+        }
     }
 
     /// Narrows `current` to the guard-true type. Inside the branch the guard guarantees the target,

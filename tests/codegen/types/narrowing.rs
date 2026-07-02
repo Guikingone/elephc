@@ -236,3 +236,133 @@ fn test_narrowing_restores_all_narrowed_variables() {
     );
     assert_eq!(out, "8");
 }
+
+/// Verifies `instanceof self` narrows the guarded variable to the enclosing class so that a
+/// typed property can be read off it. Before the fix the target became `Object("self")` (a
+/// non-existent class) and the property access failed to resolve. Matches PHP (`5`).
+#[test]
+fn test_instanceof_self_narrows_property_access() {
+    let out = compile_and_run(
+        r#"<?php
+        class Node {
+            public int $val = 5;
+            public function check(mixed $x): int {
+                if ($x instanceof self) { return $x->val; }
+                return 0;
+            }
+        }
+        $n = new Node();
+        echo $n->check($n);
+        "#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies `instanceof self` narrowing resolves a method on the enclosing class, including a
+/// generator method whose real `iterable`/`Generator` return type must be recognized so
+/// `yield from` accepts it. Before the fix the narrowed receiver was `Object("self")`, the
+/// method returned an `Int` fallback, and `yield from` rejected it. Matches PHP (`12`).
+#[test]
+fn test_instanceof_self_narrows_method_call_yield_from() {
+    let out = compile_and_run(
+        r#"<?php
+        class Spec {
+            public array $def = [];
+            public function g(): iterable { yield 1; yield 2; }
+            public function combined(): iterable {
+                foreach ($this->def as $item) {
+                    if ($item instanceof self) { yield from $item->g(); }
+                }
+            }
+        }
+        $s = new Spec();
+        $c = new Spec();
+        $s->def = [$c];
+        foreach ($s->combined() as $v) { echo $v; }
+        "#,
+    );
+    assert_eq!(out, "12");
+}
+
+/// Verifies `instanceof static` narrows the guarded variable to the enclosing class (a sound,
+/// conservative narrowing for the closed-world checker), letting a typed property be read.
+/// Matches PHP (`7`).
+#[test]
+fn test_instanceof_static_narrows_property_access() {
+    let out = compile_and_run(
+        r#"<?php
+        class Node {
+            public int $v = 7;
+            public function check(mixed $x): int {
+                if ($x instanceof static) { return $x->v; }
+                return 0;
+            }
+        }
+        $n = new Node();
+        echo $n->check($n);
+        "#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies `instanceof parent` narrows the guarded variable to the current class's parent, so
+/// a parent-declared property resolves. Before the fix the target became `Object("parent")`.
+/// Matches PHP (`3`).
+#[test]
+fn test_instanceof_parent_narrows_property_access() {
+    let out = compile_and_run(
+        r#"<?php
+        class Base { public int $b = 3; }
+        class Sub extends Base {
+            public function check(mixed $x): int {
+                if ($x instanceof parent) { return $x->b; }
+                return 0;
+            }
+        }
+        $s = new Sub();
+        echo $s->check($s);
+        "#,
+    );
+    assert_eq!(out, "3");
+}
+
+/// Regression: an explicit class name in an `instanceof` guard still narrows (property access
+/// path), guarding the passthrough arm of the relative-name resolver. Matches PHP (`5`).
+#[test]
+fn test_instanceof_explicit_class_still_narrows_property() {
+    let out = compile_and_run(
+        r#"<?php
+        class Node {
+            public int $val = 5;
+            public function check(mixed $x): int {
+                if ($x instanceof Node) { return $x->val; }
+                return 0;
+            }
+        }
+        $n = new Node();
+        echo $n->check($n);
+        "#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies a negated `instanceof self` guard narrows the fallthrough (post-early-return) path
+/// to the enclosing class, so the property access after the guarded early return resolves. The
+/// resolved target must flow through the complement/else swap. Matches PHP (`5`).
+#[test]
+fn test_negated_instanceof_self_narrows_fallthrough() {
+    let out = compile_and_run(
+        r#"<?php
+        class Node {
+            public int $val = 5;
+            public function pick(mixed $x): int {
+                if (!($x instanceof self)) { return 0; }
+                return $x->val;
+            }
+        }
+        $n = new Node();
+        echo $n->pick($n);
+        "#,
+    );
+    assert_eq!(out, "5");
+}
