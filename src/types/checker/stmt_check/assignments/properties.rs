@@ -465,6 +465,11 @@ fn resolve_object_array_property(
 ///
 /// For typed arrays: validates the pushed value against the element type via `require_compatible_arg_type`.
 /// For untyped arrays: merges the pushed value's type into the element type via `merge_array_element_type`.
+/// For `AssocArray` properties: always gradual-merges (a PHP `array` hint is unconstrained and assoc
+/// element types are inferred, never a user constraint), widening keys with `Int` and values with the
+/// pushed type — this never emits an element-type error.
+/// For union properties containing an array-like member (e.g. `?array` = `array|null`): accepts the push
+/// (PHP auto-vivifies a null property to an array) and keeps the declared union shape.
 /// For untyped `Int` or `Void` base types: converts the property to `array<value_type>`.
 /// Returns an error for buffer types or non-array property types.
 fn updated_array_property_push_type(
@@ -502,6 +507,33 @@ fn updated_array_property_push_type(
             span,
             "buffer<T> does not support push; allocate with buffer_new<T>(len)",
         )),
+        PhpType::AssocArray { key, value } => {
+            // `$prop[] = v` appends with the next integer key, so the property stays an associative
+            // array whose keys may now include Int and whose values widen to include the pushed type.
+            // A PHP `array`/`?array` hint imposes no element constraint (arrays are heterogeneous) and
+            // the assoc element types are inferred, so this is always a gradual merge — never an error.
+            let merged_value = checker
+                .merge_array_element_type(value, val_ty)
+                .unwrap_or(PhpType::Mixed);
+            let merged_key = checker
+                .merge_array_element_type(key, &PhpType::Int)
+                .unwrap_or(PhpType::Mixed);
+            Ok(PhpType::AssocArray {
+                key: Box::new(merged_key),
+                value: Box::new(merged_value),
+            })
+        }
+        PhpType::Union(members)
+            if members
+                .iter()
+                .any(|m| matches!(m, PhpType::Array(_) | PhpType::AssocArray { .. })) =>
+        {
+            // e.g. `?array` (`array|null`): `$prop[] = v` targets the array arm; PHP auto-vivifies a
+            // null-valued array property to an array on first push. Accept and keep the property's
+            // declared union shape (do not collapse the nullability). A union with no array-like member
+            // still falls through to the error below.
+            Ok(prop_ty.clone())
+        }
         other => Err(CompileError::new(
             span,
             &format!("Array push requires an array property, got {}", other),

@@ -94,6 +94,56 @@ echo $bucket->first();
     assert_eq!(out, "9");
 }
 
+/// Regression (currently `#[ignore]`d): `$this->rows[] = $value` where `$rows` is a declared
+/// `array` property initialized with an associative default (`['a' => 1]`, whose static type is
+/// `AssocArray`) is accepted by the type checker but the EIR backend cannot yet lower a push onto
+/// an associative-array-typed property. The checker fix (`updated_array_property_push_type`
+/// AssocArray arm) removes the false-positive `Array push requires an array property` diagnostic;
+/// enabling this test verifies the follow-up EIR lowering, where the push appends with the next
+/// integer key and `count()` observes the appended element (PHP prints `2`).
+#[test]
+#[ignore = "assoc/union-array [] = push not yet lowered in EIR — follow-up (unsupported EIR backend feature: prop_set AssocArray / runtime_call returning Void)"]
+fn test_class_property_assoc_array_push() {
+    let out = compile_and_run(
+        r#"<?php
+class Rows {
+    private array $rows = ['a' => 1];
+    public function push($value): void { $this->rows[] = $value; }
+    public function total(): int { return count($this->rows); }
+}
+$r = new Rows();
+$r->push(2);
+echo $r->total();
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// Regression (currently `#[ignore]`d): `$this->maybe[] = $value` where `$maybe` is a `?array`
+/// property initialized to `null` is accepted by the type checker (PHP auto-vivifies a null array
+/// property to an array on first push) but the EIR backend cannot yet lower a union/nullable-array
+/// push. The checker fix (`updated_array_property_push_type` union arm) removes the false-positive
+/// `Array push requires an array property` diagnostic; enabling this test verifies the follow-up
+/// EIR lowering, where two pushes yield a 2-element array (PHP prints `2`).
+#[test]
+#[ignore = "assoc/union-array [] = push not yet lowered in EIR — follow-up (unsupported EIR backend feature: prop_set AssocArray / runtime_call returning Void)"]
+fn test_class_property_nullable_array_push() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    private ?array $maybe = null;
+    public function add($value): void { $this->maybe[] = $value; }
+    public function total(): int { return count($this->maybe); }
+}
+$b = new Box();
+$b->add(1);
+$b->add(2);
+echo $b->total();
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
 /// Verifies assigning an untyped function parameter into a typed object property.
 #[test]
 fn test_typed_int_property_accepts_untyped_function_param_assignment() {

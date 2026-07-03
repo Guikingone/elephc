@@ -1086,6 +1086,44 @@ fn test_error_asymmetric_visibility_external_array_index_write() {
     );
 }
 
+/// Verifies that `$this->prop[] = v` type-checks cleanly when the property is an associative
+/// array — both an untyped property with an assoc default (`['k' => 'v']`, static type
+/// `AssocArray`) and a declared `array` property with an assoc default (`['a' => 1]`). A PHP
+/// `array` hint imposes no element constraint, so the push is a gradual merge and must not emit
+/// the false-positive `Array push requires an array property` diagnostic. (Runtime lowering of the
+/// assoc push is a tracked EIR follow-up; the codegen counterparts are `#[ignore]`d in
+/// `tests/codegen/objects/property_access/mutations.rs`.)
+#[test]
+fn test_assoc_array_property_push_type_checks() {
+    expect_ok(
+        "<?php class C { private $items = ['k' => 'v']; private array $rows = ['a' => 1]; public function add($x): void { $this->items[] = $x; $this->rows[] = $x; } }",
+    );
+}
+
+/// Verifies that `$this->maybe[] = v` type-checks cleanly when the property is `?array`
+/// (a `array|null` union) initialized to `null`. PHP auto-vivifies a null array property to an
+/// array on first push, so the push targets the array arm of the union and must not emit the
+/// false-positive `Array push requires an array property` diagnostic. (Runtime lowering of the
+/// union/nullable push is a tracked EIR follow-up; the codegen counterpart is `#[ignore]`d in
+/// `tests/codegen/objects/property_access/mutations.rs`.)
+#[test]
+fn test_nullable_array_property_push_type_checks() {
+    expect_ok(
+        "<?php class C { private ?array $maybe = null; public function addMaybe($x): void { $this->maybe[] = $x; } }",
+    );
+}
+
+/// Negative control: `$this->x[] = v` on a union property with NO array-like member
+/// (`int|string`) must still be rejected. This documents that the AssocArray/union push
+/// acceptance is narrow to array-like targets and does not open pushes to arbitrary unions.
+#[test]
+fn test_error_non_array_union_property_push() {
+    expect_error(
+        "<?php class C { private int|string $x = 0; public function push(): void { $this->x[] = 1; } }",
+        "Array push requires an array property",
+    );
+}
+
 /// Verifies that a `set` visibility weaker than the `get` visibility is rejected.
 #[test]
 fn test_error_asymmetric_visibility_set_weaker_than_get() {
