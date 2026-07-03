@@ -1992,3 +1992,14 @@ function f(\ReflectionMethod $m): void {
     );
     assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
 }
+
+/// Verifies the built-in `ReflectionAttribute::IS_INSTANCEOF` class constant
+/// (PHP value `2`) folds and runs end-to-end. Regression guard for the
+/// completeness fix that added the constant so Symfony's
+/// `$m->getAttributes($class, \ReflectionAttribute::IS_INSTANCEOF)` type-checks;
+/// unlike most reflection surface, this constant genuinely lowers to a value.
+#[test]
+fn test_reflection_attribute_is_instanceof_constant() {
+    let out = compile_and_run("<?php echo ReflectionAttribute::IS_INSTANCEOF;");
+    assert_eq!(out, "2");
+}

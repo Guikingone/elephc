@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
-    ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind, TypeExpr, Visibility,
+    ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind, TypeExpr, Visibility,
 };
 use crate::types::traits::FlattenedClass;
 use crate::types::PhpType;
@@ -76,7 +76,16 @@ pub(crate) fn inject_builtin_reflection(
                 builtin_reflection_attribute_new_instance_method(),
             ],
             attributes: Vec::new(),
-            constants: Vec::new(),
+            constants: vec![ClassConst {
+                name: "IS_INSTANCEOF".to_string(),
+                visibility: Visibility::Public,
+                is_final: false,
+                // PHP: ReflectionAttribute::IS_INSTANCEOF = 2 — the getAttributes() flag that
+                // matches attributes assignable to (instanceof) the given name.
+                value: Expr::new(ExprKind::IntLiteral(2), crate::span::Span::dummy()),
+                span: crate::span::Span::dummy(),
+                attributes: Vec::new(),
+            }],
             used_traits: Vec::new(),
         },
     );
@@ -107,6 +116,15 @@ pub(crate) fn inject_builtin_reflection(
         reflection_method
             .properties
             .push(builtin_property("__name", Visibility::Private, Some(TypeExpr::Str), empty_string()));
+        // PHP: public readonly `string $name` / `string $class`. Recognition-level
+        // stubs (un-backed, default `''`) so `$rm->name` / `$rm->class` type-check;
+        // runtime population is a separate follow-up.
+        reflection_method
+            .properties
+            .push(builtin_property("name", Visibility::Public, Some(TypeExpr::Str), empty_string()));
+        reflection_method
+            .properties
+            .push(builtin_property("class", Visibility::Public, Some(TypeExpr::Str), empty_string()));
         // PHP: `getName(): string` — slot getter on `__name`.
         reflection_method
             .methods
@@ -116,12 +134,19 @@ pub(crate) fn inject_builtin_reflection(
         reflection_method
             .methods
             .push(builtin_reflection_literal_method("isPublic", TypeExpr::Bool, bool_lit(true)));
-        // PHP: `getClosure(): ?Closure` — un-backed stub returning `null` typed
-        // `mixed` (object/closure return → mixed; see `builtin_reflection_property`
-        // for the EIR-lowering reason).
+        // PHP: `getClosure(?object $object = null): ?Closure` — un-backed stub
+        // returning `null` typed `mixed`. The optional `object` param (modelled
+        // `mixed`) lets `$method->getClosure($obj)` type-check; closure/object
+        // return → `mixed` for the EIR-lowering reason documented on
+        // `builtin_reflection_property`.
         reflection_method
             .methods
-            .push(builtin_reflection_literal_method("getClosure", mixed_type(), null_lit()));
+            .push(builtin_reflection_literal_method_with_params(
+                "getClosure",
+                mixed_type(),
+                null_lit(),
+                vec![("object", Some(mixed_type()), null_lit(), false)],
+            ));
         // PHP: `getDeclaringClass(): ReflectionClass` — un-backed stub returning
         // `null` typed `mixed` (object return → mixed; see
         // `builtin_reflection_property` for the EIR-lowering reason).
@@ -479,6 +504,10 @@ fn builtin_reflection_function() -> FlattenedClass {
                 int_lit(0),
             ),
             builtin_property("__params", Visibility::Private, Some(array_type()), empty_array()),
+            // PHP: public readonly `string $name`. Recognition-level stub
+            // (un-backed, default `''`) so `$rf->name` type-checks; runtime
+            // population is a separate follow-up.
+            builtin_property("name", Visibility::Public, Some(TypeExpr::Str), empty_string()),
         ],
         methods: vec![
             builtin_reflection_function_constructor_method(),
@@ -550,6 +579,10 @@ fn builtin_reflection_parameter() -> FlattenedClass {
             ),
             builtin_property("__has_type", Visibility::Private, Some(TypeExpr::Bool), bool_lit(false)),
             builtin_property("__type", Visibility::Private, Some(mixed_type()), null_lit()),
+            // PHP: public readonly `string $name`. Recognition-level stub
+            // (un-backed, default `''`) so `$param->name` type-checks; runtime
+            // population is a separate follow-up.
+            builtin_property("name", Visibility::Public, Some(TypeExpr::Str), empty_string()),
         ],
         methods: vec![
             builtin_reflection_slot_getter("getName", "__name", TypeExpr::Str),
@@ -704,6 +737,10 @@ fn builtin_reflection_class() -> FlattenedClass {
                 Some(array_type()),
                 empty_array(),
             ),
+            // PHP: public readonly `string $name`. Recognition-level stub
+            // (un-backed, default `''`) so `$rc->name` type-checks; runtime
+            // population is a separate follow-up.
+            builtin_property("name", Visibility::Public, Some(TypeExpr::Str), empty_string()),
         ],
         methods: vec![
             builtin_reflection_owner_constructor_method(vec![(
@@ -828,6 +865,15 @@ fn builtin_reflection_property() -> FlattenedClass {
     class
         .properties
         .push(builtin_property("__name", Visibility::Private, Some(TypeExpr::Str), empty_string()));
+    // PHP: public readonly `string $name` / `string $class`. Recognition-level
+    // stubs (un-backed, default `''`) so `$rp->name` / `$rp->class` type-check;
+    // runtime population is a separate follow-up.
+    class
+        .properties
+        .push(builtin_property("name", Visibility::Public, Some(TypeExpr::Str), empty_string()));
+    class
+        .properties
+        .push(builtin_property("class", Visibility::Public, Some(TypeExpr::Str), empty_string()));
     class.methods.push(builtin_reflection_literal_method(
         "getType",
         mixed_type(),
@@ -915,8 +961,11 @@ fn builtin_reflection_owner_constructor_method(
     }
 }
 
-/// Returns a public `getAttributes()` method that returns the private `__attrs`
-/// property as an `array` of `ReflectionAttribute` objects.
+/// Returns a public `getAttributes(?string $name = null, int $flags = 0)` method
+/// that returns the private `__attrs` property as an `array` of
+/// `ReflectionAttribute` objects. Filtering by name/flags is a runtime concern;
+/// the stub returns all collected attributes regardless. The two optional params
+/// exist so 1- and 2-arg calls type-check against PHP's signature.
 fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
@@ -926,7 +975,14 @@ fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
         is_abstract: false,
         is_final: false,
         has_body: true,
-        params: Vec::new(),
+        params: vec![
+            // PHP: getAttributes(?string $name = null, int $flags = 0). Filtering by name/flags
+            // is a runtime concern; the stub returns all collected attributes regardless. The
+            // params exist so 1- and 2-arg calls (e.g. getAttributes(AsCommand::class) and
+            // getAttributes($class, ReflectionAttribute::IS_INSTANCEOF)) type-check against PHP.
+            ("name".to_string(), Some(TypeExpr::Nullable(Box::new(TypeExpr::Str))), null_lit(), false),
+            ("flags".to_string(), Some(TypeExpr::Int), int_lit(0), false),
+        ],
         variadic: None,
         variadic_type: None,
         return_type: Some(array_type()),

@@ -662,6 +662,57 @@ fn test_error_reflection_method_unsupported_attribute_args() {
     );
 }
 
+/// Verifies the Reflection API-completeness fix: `getAttributes(?string, int)`
+/// optional params (1- and 2-arg calls), `getClosure(?object)` optional param,
+/// the `ReflectionAttribute::IS_INSTANCEOF` class constant, and the public
+/// `name`/`class` readonly properties all type-check cleanly. Regression guard
+/// for the 8 symfony/console probe errors these pieces previously produced
+/// (`expects 0 arguments`, `Undefined class constant`, `Undefined property`).
+/// Uses string-literal reflection constructors (the only AOT-supported form) and
+/// the type-check-only `expect_ok` helper — reflection is largely unbacked at
+/// runtime, so this asserts the type-check phase alone is clean.
+#[test]
+fn test_reflection_api_completeness_accepts() {
+    expect_ok(
+        r#"<?php
+class Foo { public function bar(): void {} public int $baz = 0; }
+$rc = new ReflectionClass('Foo');
+$rc->getAttributes('Attr');
+$rc->getAttributes('Attr', ReflectionAttribute::IS_INSTANCEOF);
+echo $rc->name;
+$rm = new ReflectionMethod('Foo', 'bar');
+$rm->getClosure($rc);
+echo $rm->class, $rm->name;
+$rp = new ReflectionProperty('Foo', 'baz');
+echo $rp->class, $rp->name;
+"#,
+    );
+}
+
+/// Negative control for the Reflection API-completeness fix: an unknown
+/// `ReflectionAttribute` class constant still reports "Undefined class constant".
+/// Documents that adding `IS_INSTANCEOF` did not blanket-accept arbitrary
+/// constants.
+#[test]
+fn test_error_reflection_attribute_unknown_constant() {
+    expect_error(
+        "<?php echo ReflectionAttribute::NOT_A_REAL_CONST;",
+        "Undefined class constant",
+    );
+}
+
+/// Negative control for the Reflection API-completeness fix: an unknown property
+/// on a reflection object still reports "Undefined property". Documents that
+/// adding the public `name`/`class` props did not blanket-accept arbitrary
+/// property reads.
+#[test]
+fn test_error_reflection_unknown_property() {
+    expect_error(
+        "<?php class Foo {} $rc = new ReflectionClass('Foo'); echo $rc->notARealProp;",
+        "Undefined property",
+    );
+}
+
 /// Verifies that an anonymous class missing its body is rejected with a clear diagnostic.
 #[test]
 fn test_error_anonymous_class_missing_body() {
