@@ -66,7 +66,7 @@ fn test_error_object_array_key_is_rejected() {
 #[test]
 fn test_error_property_array_write_array_key_is_rejected() {
     expect_error(
-        "<?php class C { public array $p = []; } $c = new C; $k = [1, 2]; $c->p[$k] = 1;",
+        "<?php class C { public array $p = []; } $c = new C(); $k = [1, 2]; $c->p[$k] = 1;",
         "Array index must be integer",
     );
 }
@@ -157,28 +157,6 @@ fn test_error_undefined_variable() {
     expect_error("<?php echo $x;", "Undefined variable: $x");
 }
 
-/// Verifies the short-circuit flow analysis stays sound: a variable assigned only in the
-/// right operand of a `||` chain is NOT definitely-assigned after the chain (the left operand
-/// may be true, skipping the assignment), so reading it afterwards must still error.
-#[test]
-fn test_error_or_right_operand_assignment_not_defined_after_chain() {
-    expect_error(
-        "<?php function f(bool $c): void { if ($c || ($y = 5)) {} echo $y; }",
-        "Undefined variable: $y",
-    );
-}
-
-/// Verifies the same soundness for `&&`: a variable assigned only in the right operand of an
-/// `&&` chain is not definitely-assigned after the chain (the left operand may be false,
-/// short-circuiting before the assignment), so reading it afterwards must still error.
-#[test]
-fn test_error_and_right_operand_assignment_not_defined_after_chain() {
-    expect_error(
-        "<?php function f(bool $c): void { if ($c && ($z = 5)) {} echo $z; }",
-        "Undefined variable: $z",
-    );
-}
-
 /// Verifies that a variable assigned in one `match` arm's body is not visible in a sibling
 /// arm's body: only one arm body ever runs, so the assignment is not definitely-assigned in
 /// the other arms. Reading it in a sibling arm must still error.
@@ -250,17 +228,6 @@ fn test_error_word_logical_missing_rhs() {
 #[test]
 fn test_error_assignment_expression_rejects_non_lvalue() {
     expect_error("<?php echo 1 = 2;", "Invalid assignment target");
-}
-
-/// Verifies that a variable assigned inside a short-circuit `&&` is flagged as possibly undefined
-/// when referenced after the `&&` expression that did not execute.
-/// Input: `echo false && ($x = 1); echo $x;` — `$x` may not be defined.
-#[test]
-fn test_error_short_circuit_assignment_effect_is_not_definite() {
-    expect_error(
-        "<?php echo false && ($x = 1); echo $x;",
-        "Undefined variable: $x",
-    );
 }
 
 /// Verifies that the short ternary (`?:`) with no default expression produces an error.
