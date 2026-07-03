@@ -2749,6 +2749,21 @@ fn lower_interface_method_call(
     interface_name: &str,
     method_name: &str,
 ) -> Result<()> {
+    let normalized = interface_name.trim_start_matches('\\');
+    let method_key = php_symbol_key(method_name);
+    let on_interface = ctx
+        .module
+        .interface_infos
+        .get(normalized)
+        .and_then(|iface| iface.methods.get(&method_key))
+        .is_some();
+    if !on_interface {
+        // The checker accepted this call by narrowing the interface-typed receiver to a
+        // concrete subtype via `instanceof` (the narrowing is discarded before the backend).
+        // Dispatch by runtime class-id over the concrete implementors that declare the method
+        // literally — the object's real class-id selects the right one (exact virtual dispatch).
+        return lower_narrowed_interface_method_call(ctx, inst, normalized, method_name);
+    }
     let (normalized, method_key, callee_sig) =
         resolve_interface_call_signature(ctx, interface_name, method_name, inst.operands.len())?;
     let mut param_types = Vec::with_capacity(callee_sig.params.len() + 1);
@@ -2806,6 +2821,197 @@ fn resolve_interface_call_signature(
         )));
     }
     Ok((normalized.to_string(), method_key, callee_sig))
+}
+
+/// Lowers a method call on an interface-typed receiver where the method is NOT declared on
+/// the interface (accepted by the checker via `instanceof` narrowing to a concrete subtype).
+/// Dispatches by the receiver's runtime class-id over the concrete implementors that declare
+/// the method literally — reusing the same machinery as `lower_mixed_method_call`, but without
+/// the Mixed unbox (an interface receiver is already a bare object pointer). Defers the `__call`
+/// case by keeping the loud unsupported error (see the gate), so this never miscompiles.
+fn lower_narrowed_interface_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    interface_name: &str,
+    method_name: &str,
+) -> Result<()> {
+    let candidates =
+        narrowed_interface_candidates(ctx, interface_name, method_name, inst.operands.len())?;
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    let no_match_label = ctx.next_label("iface_narrowed_no_match");
+    let done_label = ctx.next_label("iface_narrowed_done");
+
+    // Stage the bare object pointer (NO Mixed unbox, NO tag check) into the dispatch receiver reg.
+    ctx.load_value_to_result(inst.operands[0])?;
+    emit_bare_object_receiver_into_reg(ctx, receiver_reg);
+    emit_narrowed_interface_class_dispatch(
+        ctx,
+        inst,
+        receiver_reg,
+        &candidates,
+        &no_match_label,
+        &done_label,
+    )?;
+
+    ctx.emitter.label(&no_match_label);
+    emit_method_call_on_null_fatal(ctx, method_name);
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Lowers a nullable interface-typed receiver method call where the method is NOT declared on the
+/// interface (accepted by the checker via `instanceof` narrowing). Reuses the same gate, candidate
+/// scan, and class-id dispatch as `lower_narrowed_interface_method_call`, but sources the bare
+/// object pointer from the nullable receiver's non-null-guarded payload (routing PHP null to the
+/// member-call-on-null fatal). Defers the `__call` case via the shared gate.
+fn lower_narrowed_nullable_interface_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    interface_name: &str,
+    method_name: &str,
+) -> Result<()> {
+    let candidates =
+        narrowed_interface_candidates(ctx, interface_name, method_name, inst.operands.len())?;
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    let null_label = ctx.next_label("iface_narrowed_null");
+    let no_match_label = ctx.next_label("iface_narrowed_no_match");
+    let done_label = ctx.next_label("iface_narrowed_done");
+
+    // Stage the unboxed object payload; PHP null on the nullable receiver jumps to the fatal.
+    objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, receiver_reg)?;
+    emit_narrowed_interface_class_dispatch(
+        ctx,
+        inst,
+        receiver_reg,
+        &candidates,
+        &no_match_label,
+        &done_label,
+    )?;
+
+    ctx.emitter.label(&no_match_label);
+    emit_method_call_on_null_fatal(ctx, method_name);
+
+    ctx.emitter.label(&null_label);
+    emit_method_call_on_null_fatal(ctx, method_name);
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Applies the `__call` gate and collects the literal-method candidates for a narrowed interface
+/// method call. Returns the class-id-ordered candidates on success, or the loud unsupported
+/// diagnostic when an implementor would resolve the method via `__call` (deferred to a follow-up)
+/// or when no concrete implementor declares it literally at this arity.
+fn narrowed_interface_candidates(
+    ctx: &FunctionContext<'_>,
+    interface_name: &str,
+    method_name: &str,
+    operand_count: usize,
+) -> Result<Vec<MixedMethodCandidate>> {
+    // GATE: if any implementor of this interface would resolve the method via `__call`
+    // (declares no literal method of that name but declares `__call`), a literal-only class-id
+    // switch could match no candidate at runtime and wrongly fatal. Keep the loud error until
+    // commit 2 adds `__call`-forwarding candidates.
+    if interface_impl_relies_on_magic_call(ctx, interface_name, method_name) {
+        return Err(CodegenIrError::unsupported(format!(
+            "interface method call to unknown method {}::{} (narrowed dispatch through a __call-resolving implementor is not yet supported)",
+            interface_name, method_name
+        )));
+    }
+    let candidates = mixed_method_candidates(ctx, method_name, operand_count)?;
+    if candidates.is_empty() {
+        // No concrete implementor declares the method literally at this arity — nothing to
+        // dispatch. Preserve the original diagnostic.
+        return Err(CodegenIrError::unsupported(format!(
+            "interface method call to unknown method {}::{}",
+            interface_name, method_name
+        )));
+    }
+    // GATE: the checker cannot see the return type of an off-interface method, so it types the
+    // call result as `Mixed`. A by-reference-returning candidate hands back a typed ref-cell
+    // pointer, which the shared candidate machinery stores unboxed into that `Mixed` result slot;
+    // the downstream `bind_ref_cell_ptr`/`load_ref_cell` then misread the cell and silently
+    // produce a wrong value. Keep the loud error instead of that miscompile until a follow-up
+    // makes the narrowed path carry the concrete return type through the ref-cell binding.
+    if candidates
+        .iter()
+        .any(|candidate| candidate.target.by_ref_return)
+    {
+        return Err(CodegenIrError::unsupported(format!(
+            "interface method call to unknown method {}::{} (narrowed dispatch to a by-reference-returning method is not yet supported)",
+            interface_name, method_name
+        )));
+    }
+    Ok(candidates)
+}
+
+/// Emits the class-id dispatch chain and per-candidate call bodies for a narrowed interface
+/// method call whose receiver object pointer is already staged in `receiver_reg`. Each matched
+/// class-id branch reuses the `Mixed` candidate call machinery and jumps to `done_label`;
+/// unmatched class ids fall through to `no_match_label`. Shared by the plain and nullable
+/// interface-narrowed dispatch paths.
+fn emit_narrowed_interface_class_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    receiver_reg: &str,
+    candidates: &[MixedMethodCandidate],
+    no_match_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "iface_narrowed_{}",
+                label_fragment(&candidate.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+    emit_mixed_method_class_dispatch(ctx, receiver_reg, candidates, &match_labels, no_match_label);
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        lower_mixed_method_candidate_call(ctx, inst, receiver_reg, candidate)?;
+        abi::emit_jump(ctx.emitter, done_label);
+    }
+    Ok(())
+}
+
+/// Moves the bare object pointer left in the integer result register by `load_value_to_result`
+/// into the dispatch receiver register (interface receivers are already object pointers, so no
+/// Mixed unbox or tag check is needed).
+fn emit_bare_object_receiver_into_reg(ctx: &mut FunctionContext<'_>, receiver_reg: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("mov {}, x0", receiver_reg));      // stage the bare interface object pointer as the dispatch receiver
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov {}, rax", receiver_reg));     // stage the bare interface object pointer as the dispatch receiver
+        }
+    }
+}
+
+/// Returns whether any concrete class implementing `interface_name` would resolve `method_name`
+/// via `__call` (it declares no literal method of that name but does declare `__call`). Used to
+/// gate the narrowed interface dispatch: a literal-only class-id switch cannot dispatch such a
+/// class, so we keep the loud unsupported error instead of silently fataling at runtime.
+fn interface_impl_relies_on_magic_call(
+    ctx: &FunctionContext<'_>,
+    interface_name: &str,
+    method_name: &str,
+) -> bool {
+    let method_key = php_symbol_key(method_name);
+    let call_key = php_symbol_key("__call");
+    let normalized = interface_name.trim_start_matches('\\');
+    ctx.module.class_infos.values().any(|class_info| {
+        class_info
+            .interfaces
+            .iter()
+            .any(|impl_iface| impl_iface.trim_start_matches('\\') == normalized)
+            && class_info.methods.get(&method_key).is_none()
+            && class_info.methods.get(&call_key).is_some()
+    })
 }
 
 /// Lowers a method call after an earlier EIR guard has proven a nullable receiver non-null.
@@ -2879,6 +3085,23 @@ fn lower_nullable_receiver_interface_method_call(
 ) -> Result<()> {
     let normalized = interface_name.trim_start_matches('\\');
     let method_key = php_symbol_key(method_name);
+    let on_interface = ctx
+        .module
+        .interface_infos
+        .get(normalized)
+        .and_then(|interface_info| interface_info.methods.get(&method_key))
+        .is_some();
+    if !on_interface {
+        // The checker narrowed this nullable interface receiver to a concrete subtype via
+        // `instanceof`; dispatch by runtime class-id over the literal-method implementors.
+        return lower_narrowed_nullable_interface_method_call(
+            ctx,
+            inst,
+            object,
+            normalized,
+            method_name,
+        );
+    }
     let callee_sig = ctx
         .module
         .interface_infos
