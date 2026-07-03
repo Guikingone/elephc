@@ -94,15 +94,13 @@ echo $bucket->first();
     assert_eq!(out, "9");
 }
 
-/// Regression (currently `#[ignore]`d): `$this->rows[] = $value` where `$rows` is a declared
-/// `array` property initialized with an associative default (`['a' => 1]`, whose static type is
-/// `AssocArray`) is accepted by the type checker but the EIR backend cannot yet lower a push onto
-/// an associative-array-typed property. The checker fix (`updated_array_property_push_type`
-/// AssocArray arm) removes the false-positive `Array push requires an array property` diagnostic;
-/// enabling this test verifies the follow-up EIR lowering, where the push appends with the next
-/// integer key and `count()` observes the appended element (PHP prints `2`).
+/// Regression: `$this->rows[] = $value` where `$rows` is a declared `array` property initialized
+/// with an associative default (`['a' => 1]`, whose codegen type is `AssocArray`) is accepted by
+/// the type checker (checker fix `updated_array_property_push_type` AssocArray arm) AND now lowered
+/// by the EIR backend. `lower_property_array_push`'s `is_assoc_array_type` branch emits a 2-operand
+/// `RuntimeCall` on the hash-backed property value (the hash-append lowering), so the push appends
+/// with the next integer key and `count()` observes the appended element (PHP prints `2`).
 #[test]
-#[ignore = "assoc/union-array [] = push not yet lowered in EIR — follow-up (unsupported EIR backend feature: prop_set AssocArray / runtime_call returning Void)"]
 fn test_class_property_assoc_array_push() {
     let out = compile_and_run(
         r#"<?php
@@ -119,14 +117,17 @@ echo $r->total();
     assert_eq!(out, "2");
 }
 
-/// Regression (currently `#[ignore]`d): `$this->maybe[] = $value` where `$maybe` is a `?array`
-/// property initialized to `null` is accepted by the type checker (PHP auto-vivifies a null array
-/// property to an array on first push) but the EIR backend cannot yet lower a union/nullable-array
-/// push. The checker fix (`updated_array_property_push_type` union arm) removes the false-positive
-/// `Array push requires an array property` diagnostic; enabling this test verifies the follow-up
-/// EIR lowering, where two pushes yield a 2-element array (PHP prints `2`).
+/// Regression (still `#[ignore]`d — nullable/union push is deferred): `$this->maybe[] = $value`
+/// where `$maybe` is a `?array` property initialized to `null` is accepted by the type checker (PHP
+/// auto-vivifies a null array property to an array on first push) but its codegen type collapses to
+/// `Mixed`, so it stays on the loud-error fallback rather than being lowered. Unlike the concrete
+/// `AssocArray` case, a `Mixed` push cannot reuse the hash-append path: `Op::MixedArrayAppend`
+/// hard-requires runtime tag == 4 and silently drops the element on `null` (no auto-vivification) or
+/// a hash cell. Enabling this needs a separate 3-target runtime change to
+/// `Op::MixedArrayAppend`/`__rt_mixed_array_set` (null→array vivification + hash-tag append); it is a
+/// distinct follow-up ticket. Until then this must remain a loud compile error, not a silent drop.
 #[test]
-#[ignore = "assoc/union-array [] = push not yet lowered in EIR — follow-up (unsupported EIR backend feature: prop_set AssocArray / runtime_call returning Void)"]
+#[ignore = "nullable/union ?array [] = push deferred — codegen type collapses to Mixed; needs MixedArrayAppend null-vivification + hash-tag append (separate 3-target follow-up)"]
 fn test_class_property_nullable_array_push() {
     let out = compile_and_run(
         r#"<?php

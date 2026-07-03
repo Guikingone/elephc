@@ -2494,7 +2494,15 @@ fn lower_static_property_array_assign(
     );
 }
 
-/// Lowers `$object->prop[] = value`.
+/// Lowers `$object->prop[] = value` (array append onto an object property).
+///
+/// Handles two property shapes directly: a concrete indexed `Array(elem)`
+/// property (via `Op::ArrayPush`) and a concrete associative `AssocArray`
+/// property (via a 2-operand `Op::RuntimeCall` that lands on the backend's
+/// hash-append lowering, exactly like a local `$arr[] = $v` push). Nullable or
+/// union `?array` properties (whose codegen type collapses to `Mixed`) are
+/// intentionally deferred and left on the generic fallback so they remain a loud
+/// compile error rather than a silent element drop.
 fn lower_property_array_push(
     ctx: &mut LoweringContext<'_, '_>,
     object: &Expr,
@@ -2523,6 +2531,47 @@ fn lower_property_array_push(
             vec![property_value.value, value.value],
             None,
             Op::ArrayPush.default_effects(),
+            Some(span),
+        );
+        release_property_array_insert_value_after_retain(ctx, &property_ty, value, span);
+        ctx.emit_void(
+            Op::PropSet,
+            vec![object.value, property_value.value],
+            Some(Immediate::Data(data)),
+            Op::PropSet.default_effects(),
+            Some(span),
+        );
+        release_rewritten_property_value_after_retaining_store(ctx, &property_ty, property_value, span);
+        return;
+    }
+
+    if let Some(property_ty) =
+        object_property_type(ctx, object.value, property).filter(is_assoc_array_type)
+    {
+        let data = ctx.intern_string(property);
+        let property_value = ctx.emit_value(
+            Op::PropGet,
+            vec![object.value],
+            Some(Immediate::Data(data)),
+            property_ty.clone(),
+            Op::PropGet.default_effects(),
+            Some(span),
+        );
+        let property_value =
+            crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
+        let value = lower_expr(ctx, value);
+        // Append with the next integer key. A 2-operand `RuntimeCall` on the hash-backed
+        // property value lands on the backend's hash-append lowering (the
+        // `(AssocArray, Void)` arm), exactly like a local associative-array push
+        // `$arr[] = $v`; the backend inlines the next-int-key scan and calls
+        // `__rt_hash_set`, which COW-splits and may relocate the table (its updated
+        // pointer is written back into `property_value`'s slot, so the `PropSet` below
+        // stores the correct pointer).
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![property_value.value, value.value],
+            None,
+            effects_lookup::runtime_effects(),
             Some(span),
         );
         release_property_array_insert_value_after_retain(ctx, &property_ty, value, span);

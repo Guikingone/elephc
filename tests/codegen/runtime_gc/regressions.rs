@@ -613,6 +613,44 @@ echo count($x->a);
     );
 }
 
+/// Verifies that repeatedly pushing onto an associative-array property across
+/// several method calls appends with the next integer key and leaves the heap
+/// clean. The property is declared `array` with an associative default (codegen
+/// type `AssocArray`), so `$this->rows[] = $v` takes the EIR
+/// `lower_property_array_push` assoc branch: it acquires a distinct owned handle
+/// to the loaded hash, hash-appends (which COW-splits and may relocate the
+/// table), writes the possibly-relocated pointer back via `PropSet`, then
+/// releases the acquired copy. This exercises the acquire/release/`PropSet`
+/// ownership balance under repeated growth; a mismatched acquire or missing
+/// release would leak the hash or its inserted cells. Pushes `0, 10, 20` onto an
+/// initial `['a' => 1]`, so the final count is `4` with `$rows[0] == 0` and
+/// `$rows[2] == 20`; the heap must be clean at exit.
+#[test]
+fn test_regression_property_assoc_array_push_loop_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Rows {
+    private array $rows = ['a' => 1];
+    public function push($v): void { $this->rows[] = $v; }
+    public function total(): int { return count($this->rows); }
+    public function at(int $i): int { return $this->rows[$i]; }
+}
+$r = new Rows();
+for ($i = 0; $i < 3; $i++) {
+    $r->push($i * 10);
+}
+echo $r->total(), ":", $r->at(0), ",", $r->at(2);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "4:0,20");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Verifies that assigning a Mixed indexed-array cell to a local retains an
 /// independent owner and does not leave the array with a dangling cell.
 #[test]
