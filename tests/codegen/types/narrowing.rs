@@ -10,6 +10,9 @@
 //!   chains, and `: never`-function divergence that keeps the complement after an exhaustive chain.
 //!   The guarded variables are untyped parameters that are unions at runtime (heterogeneous calls),
 //!   so these tests depend on both the union parameter inference and the narrowing. Outputs match PHP.
+//! - Ternary-branch narrowing (`guard ? then : else`) mirrors the `if`/`else` narrowing: the guarded
+//!   variable is narrowed to its then-type in the then-branch and its else-type in the else-branch,
+//!   scoped to each branch so it never leaks past the ternary.
 
 use super::*;
 
@@ -365,4 +368,59 @@ fn test_negated_instanceof_self_narrows_fallthrough() {
         "#,
     );
     assert_eq!(out, "5");
+}
+
+/// Verifies `instanceof` narrowing applies inside a ternary's two branches. Without ternary
+/// narrowing, `$a->speak()` / `$a->bark()` on the un-narrowed `Cat|Dog` union would each be an
+/// "Undefined method" error (Dog has no `speak`, Cat has no `bark`); the guard narrows `$a` to the
+/// concrete class per branch so both dispatch. Runs the compiled binary; matches PHP (`meow\nwoof\n`).
+#[test]
+fn test_ternary_instanceof_narrowing_method_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+        class Cat { public function speak(): string { return "meow"; } }
+        class Dog { public function bark(): string { return "woof"; } }
+        function talk(Cat|Dog $a): string {
+            return $a instanceof Cat ? $a->speak() : $a->bark();
+        }
+        echo talk(new Cat()), "\n";
+        echo talk(new Dog()), "\n";
+        "#,
+    );
+    assert_eq!(out, "meow\nwoof\n");
+}
+
+/// Verifies a scalar `is_int` guard narrows both ternary branches: the then-branch uses `$x` as an
+/// int (`$x + 1`) and the else-branch as a string (`strlen($x)`), with `$x` being `int|string`.
+/// Matches PHP: `g(5)` is `6`, `g("hello")` is `5` (`6\n5\n`).
+#[test]
+fn test_ternary_is_int_narrowing() {
+    let out = compile_and_run(
+        r#"<?php
+        function g(int|string $x): int {
+            return is_int($x) ? $x + 1 : strlen($x);
+        }
+        echo g(5), "\n";
+        echo g("hello"), "\n";
+        "#,
+    );
+    assert_eq!(out, "6\n5\n");
+}
+
+/// Regression: ternary-branch narrowing must not leak into the outer scope. `is_string($x)` narrows
+/// `$x` to `string` in the then-branch, but after the ternary `$x` must still be `array|string`, so
+/// `count($x)` (which requires an array-containing type) type-checks. If the then-branch narrowing
+/// leaked, `count($x)` would become a static error. Matches PHP (`count([10,20,30]) + 2 == 5`).
+#[test]
+fn test_ternary_narrowing_does_not_leak() {
+    let out = compile_and_run(
+        r#"<?php
+        function leak(array|string $x): int {
+            $marker = is_string($x) ? 1 : 2;
+            return count($x) + $marker;
+        }
+        echo leak([10, 20, 30]), "\n";
+        "#,
+    );
+    assert_eq!(out, "5\n");
 }

@@ -338,8 +338,26 @@ impl Checker {
                 else_expr,
             } => {
                 self.infer_type(condition, env)?;
-                let then_ty = self.infer_type(then_expr, env)?;
-                let else_ty = self.infer_type(else_expr, env)?;
+                // Flow-sensitive narrowing across the ternary branches, mirroring the
+                // if/else narrowing in `control_flow.rs`. When the condition is a
+                // recognized type guard (`is_int`/`instanceof`/`is_countable`/…), the
+                // guarded variable is narrowed to its then-type while inferring the
+                // then-branch and to its else-type while inferring the else-branch. The
+                // narrowing is scoped to cloned envs so it never leaks into the outer
+                // `env` — a use of the variable after the ternary still sees its join.
+                let (then_ty, else_ty) =
+                    if let Some(guard) = self.type_guard_narrowing(condition, env) {
+                        let mut then_env = env.clone();
+                        then_env.insert(guard.var.clone(), guard.then_ty.clone());
+                        let mut else_env = env.clone();
+                        else_env.insert(guard.var.clone(), guard.else_ty.clone());
+                        (
+                            self.infer_type(then_expr, &then_env)?,
+                            self.infer_type(else_expr, &else_env)?,
+                        )
+                    } else {
+                        (self.infer_type(then_expr, env)?, self.infer_type(else_expr, env)?)
+                    };
                 let result_ty = if then_ty == else_ty {
                     then_ty
                 } else if then_ty == PhpType::Str || else_ty == PhpType::Str {

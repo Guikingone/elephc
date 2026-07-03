@@ -6,8 +6,9 @@
 //! - `crate::types::checker::stmt_check::control_flow` when checking `StmtKind::If`.
 //!
 //! Key details:
-//! - Recognizes `is_int`/`is_float`/`is_string`/`is_bool($var)` (and aliases) and `$var instanceof
-//!   Class` guards, optionally negated with a leading `!`. Narrowing is applied to each clause in an
+//! - Recognizes `is_int`/`is_float`/`is_string`/`is_bool`/`is_countable($var)` (and aliases) and
+//!   `$var instanceof Class` guards, optionally negated with a leading `!`. `is_countable` narrows
+//!   to `array<mixed>|Countable`. Narrowing is applied to each clause in an
 //!   if/elseif*/else chain (each subsequent clause, and the else, see the accumulated complement
 //!   from previous guards). For a chain with no else where *every* clause body always diverges
 //!   (return/throw/exit/die/never-function), the accumulated complement is applied to the statements
@@ -176,6 +177,15 @@ fn guard_var_and_type(cond: &Expr) -> Option<(String, PhpType)> {
                 "is_float" | "is_double" => PhpType::Float,
                 "is_string" => PhpType::Str,
                 "is_bool" => PhpType::Bool,
+                // `is_countable($x)` guarantees the value is an `array` or a `Countable`
+                // object — exactly the two things `count()` accepts. Narrowing to this
+                // union lets guarded `count($x)` type-check even when `$x` is declared
+                // `iterable` (a non-Countable `Traversable` is dropped by the guard, so
+                // unguarded `count(iterable)` still errors).
+                "is_countable" => PhpType::Union(vec![
+                    PhpType::Array(Box::new(PhpType::Mixed)),
+                    PhpType::Object("Countable".to_string()),
+                ]),
                 _ => return None,
             };
             Some((var.clone(), target))

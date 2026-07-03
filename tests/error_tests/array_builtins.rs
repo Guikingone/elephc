@@ -212,6 +212,38 @@ fn test_error_count_string_arg() {
     );
 }
 
+/// Core correctness requirement: an UNGUARDED `count()` on an `iterable`-typed value still errors.
+/// An `iterable` can be a non-`Countable` `Traversable`, so `count()` on it is a static error in
+/// PHP 8 unless an `is_countable()` guard proves the value is an array or `Countable`. The guard
+/// narrowing must NOT blanket-accept `Iterable`. Input: `count($x)` with `iterable $x`.
+#[test]
+fn test_error_count_iterable_unguarded() {
+    expect_error(
+        "<?php function f(iterable $x): int { return count($x); }",
+        "count() argument must be array or Countable object",
+    );
+}
+
+/// Verifies the Symfony ProgressBar shape type-checks: an `is_countable()` guard narrows an
+/// `iterable`-typed variable to `array|Countable` inside the TERNARY true-branch, so the guarded
+/// `count($x)` is accepted. Checker-only (`is_countable` itself is not lowered to codegen).
+#[test]
+fn test_is_countable_ternary_guard_narrows_iterable_count() {
+    expect_ok(
+        "<?php function f(iterable $x): ?int { return is_countable($x) ? count($x) : null; }",
+    );
+}
+
+/// Verifies the `if`-form counterpart of the ProgressBar shape: an `is_countable()` guard narrows
+/// an `iterable`-typed variable to `array|Countable` inside the `if` true-branch, so the guarded
+/// `count($x)` is accepted. Checker-only.
+#[test]
+fn test_is_countable_if_guard_narrows_iterable_count() {
+    expect_ok(
+        "<?php function f(iterable $x): ?int { if (is_countable($x)) { return count($x); } return null; }",
+    );
+}
+
 /// Verifies that error array sum wrong args.
 #[test]
 fn test_error_array_sum_wrong_args() {

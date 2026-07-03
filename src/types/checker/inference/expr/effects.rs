@@ -166,9 +166,22 @@ impl Checker {
                 else_expr,
             } => {
                 self.infer_type_with_assignment_effects(condition, env)?;
+                // Flow-sensitive narrowing across the ternary branches, mirroring the
+                // if/else narrowing in `control_flow.rs` and the `infer_type` ternary arm.
+                // This is the statement-level path (a ternary directly under `return`,
+                // an assignment RHS, etc.), so it is where the `is_countable($x) ? count($x)
+                // : null` shape is checked. When the condition is a recognized type guard,
+                // the guarded variable is narrowed to its then-type in the then-branch and
+                // its else-type in the else-branch. Both branch envs are already per-branch
+                // clones, so the narrowing never leaks past the ternary.
+                let guard = self.type_guard_narrowing(condition, env);
                 let mut then_env = env.clone();
-                let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
                 let mut else_env = env.clone();
+                if let Some(guard) = &guard {
+                    then_env.insert(guard.var.clone(), guard.then_ty.clone());
+                    else_env.insert(guard.var.clone(), guard.else_ty.clone());
+                }
+                let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
                 let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
                 // By-reference call outputs in the cloned branches define their out-parameters for
                 // later code, mirroring PHP's undefined-variable behavior.
