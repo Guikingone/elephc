@@ -465,3 +465,55 @@ $f->go();
         "Undefined method for first-class callable",
     );
 }
+
+/// Verifies that a dynamic `$stringVar::cases()` on an unresolved class infers `array<mixed>`
+/// so `array_column()` accepts it (R5). The receiver is a `string` class-name that cannot be
+/// resolved to the concrete enum at compile time.
+#[test]
+fn test_dynamic_cases_call_infers_array_for_array_column() {
+    expect_ok(
+        r#"<?php
+enum E: string { case A = 'a'; case B = 'b'; }
+function f(string $c) { return array_column($c::cases(), 'value'); }
+"#,
+    );
+}
+
+/// Verifies the R5 gate infers the concrete `array<mixed>` (not the gradual `Mixed`) for a
+/// dynamic `cases()`: returning it from an `int`-typed function is a type error, proving the
+/// result is an array.
+#[test]
+fn test_dynamic_cases_call_result_is_array_not_mixed() {
+    expect_error(
+        r#"<?php
+enum E: string { case A = 'a'; }
+function f(string $c): int { return $c::cases(); }
+"#,
+        "got Array",
+    );
+}
+
+/// Verifies the R5 gate is strictly `cases`-only: a dynamic non-`cases` static call on an
+/// unresolved receiver keeps its pre-existing gradual `Mixed` inference (accepted here as an
+/// `int` return), so the special case does not widen unrelated dynamic dispatch.
+#[test]
+fn test_dynamic_non_cases_call_stays_gradual_mixed() {
+    expect_ok(
+        r#"<?php
+function g(string $c): int { return $c::nonexistent(); }
+"#,
+    );
+}
+
+/// Verifies the R5 gate does not mask genuine errors on a *resolved* receiver: calling an
+/// undefined static method on a known enum still reports `Undefined method`.
+#[test]
+fn test_resolved_static_undefined_method_still_errors() {
+    expect_error(
+        r#"<?php
+enum E: string { case A = 'a'; }
+echo E::nonexistent();
+"#,
+        "Undefined method: E::nonexistent",
+    );
+}

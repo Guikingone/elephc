@@ -193,6 +193,13 @@ fn check_object_or_array_callable_call(
         }
     }
 
+    // A dynamic `$stringVar::cases()` on an unresolved class infers `array<mixed>`, before the
+    // generic runtime-callable-array generalization would widen it to `Mixed`.
+    if let Some(cases_ty) = unresolved_cases_callable_return(checker, callback, callback_args, env)?
+    {
+        return Ok(Some(cases_ty));
+    }
+
     let callback_ty = checker.infer_type(callback, env)?;
     if runtime_callable_array_type(&callback_ty) {
         if !allow_runtime_callable_array {
@@ -282,6 +289,12 @@ fn infer_object_or_array_callable_runtime_return(
             return infer_callable_target_runtime_return(checker, &target, callback, env)
                 .map(Some);
         }
+    }
+
+    // A dynamic `$stringVar::cases()` on an unresolved class infers `array<mixed>` here too,
+    // keeping the callable-return inference coherent with the direct call path.
+    if let Some(cases_ty) = unresolved_cases_callable_return(checker, callback, &[], env)? {
+        return Ok(Some(cases_ty));
     }
 
     let callback_ty = checker.infer_type(callback, env)?;
@@ -515,6 +528,48 @@ fn callable_array_parts(callback: &Expr) -> Option<(&Expr, &str)> {
         return None;
     };
     Some((&elems[0], method.as_str()))
+}
+
+/// Recognizes a dynamic `$stringVar::cases()` array-callable whose receiver class cannot be
+/// resolved at compile time, returning `array<mixed>` so array consumers such as
+/// `array_column()` accept it.
+///
+/// A backed enum's `cases()` is universally an array, but a static call whose receiver is a
+/// runtime class-name string (`$self->typeName::cases()`) cannot be resolved to the concrete
+/// enum, so ordinary inference yields the gradual `Mixed`. Since any class may define
+/// `cases()`, `array<mixed>` is the honest element type and is sufficient for array acceptance.
+///
+/// The gate is strictly `cases`-only (case-insensitive, via `php_symbol_key`) with an
+/// unresolved, non-object receiver. Every other unresolved dynamic static call keeps its
+/// existing inference, so genuine mistakes (`$str::nonexistent()`) are not masked here and the
+/// resolved-class `cases()` path is left untouched. Returns `None` when the call is not a
+/// `cases()` array-callable on an unresolved receiver.
+fn unresolved_cases_callable_return(
+    checker: &mut Checker,
+    callback: &Expr,
+    callback_args: &[Expr],
+    env: &TypeEnv,
+) -> Result<Option<PhpType>, CompileError> {
+    let Some((receiver, method)) = callable_array_parts(callback) else {
+        return Ok(None);
+    };
+    if php_symbol_key(method) != "cases" {
+        return Ok(None);
+    }
+    // A statically resolvable class-name receiver goes through the normal resolved path.
+    if static_callable_receiver(checker, receiver, callback.span)?.is_some() {
+        return Ok(None);
+    }
+    // An object receiver names an instance-method array callable, not a static `cases()` call.
+    let receiver_ty = checker.infer_type(receiver, env)?;
+    if checker.invokable_class_for_type(&receiver_ty).is_some() {
+        return Ok(None);
+    }
+    // `cases()` takes no arguments; infer any provided ones for their side effects/diagnostics.
+    for arg in callback_args {
+        checker.infer_type(arg, env)?;
+    }
+    Ok(Some(PhpType::Array(Box::new(PhpType::Mixed))))
 }
 
 /// Provides the Static callable receiver helper used by the callables module.

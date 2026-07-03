@@ -129,6 +129,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _closure_bind_unsupported_msg\n_closure_bind_unsupported_msg:\n    .ascii \"Fatal error: Closure::bind requires a closure that captures only $this\\n\"\n");
     out.push_str(".globl _iterable_unsupported_kind_msg\n_iterable_unsupported_kind_msg:\n    .ascii \"Fatal error: foreach over iterable with unsupported kind\\n\"\n");
     out.push_str(".globl _array_cast_unsupported_msg\n_array_cast_unsupported_msg:\n    .ascii \"Fatal error: (array) cast of associative array or object is unsupported\\n\"\n");
+    out.push_str(".globl _array_arg_type_error_msg\n_array_arg_type_error_msg:\n    .ascii \"Fatal error: Uncaught TypeError: array builtin argument must be of type array\\n\"\n");
     out.push_str(".globl _iterable_array_str\n_iterable_array_str:\n    .ascii \"Array\"\n");
     out.push_str(".globl _match_unhandled_msg\n_match_unhandled_msg:\n    .ascii \"Fatal error: unhandled match case\\n\"\n");
     out.push_str(".globl _serialize_unsupported_msg\n_serialize_unsupported_msg:\n    .ascii \"Fatal error: serialize()/unserialize() is not yet supported\\n\"\n");

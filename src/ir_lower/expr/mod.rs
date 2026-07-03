@@ -6291,6 +6291,12 @@ fn array_builtin_return_type(
             let array = operands.first()?;
             match ctx.builder.value_php_type(*array).codegen_repr() {
                 PhpType::Array(elem) => Some(PhpType::Array(elem)),
+                // Gradual boundary: a `Mixed`/union operand lowers through the assert-array
+                // path, which rebuilds a raw owned `array<mixed>`; type the result as that
+                // concrete array (not a boxed `Mixed`) so consumers read the array payload.
+                PhpType::Mixed | PhpType::Union(_) => {
+                    Some(PhpType::Array(Box::new(PhpType::Mixed)))
+                }
                 other => Some(other),
             }
         }
@@ -6332,8 +6338,12 @@ fn array_column_builtin_return_type(
     match ctx.builder.value_php_type(*array).codegen_repr() {
         PhpType::Array(inner) => match inner.codegen_repr() {
             PhpType::AssocArray { value, .. } => Some(PhpType::Array(value)),
-            other => Some(other),
+            // Gradual rows (`array<mixed>`): the column values are unknown → `array<mixed>`.
+            _ => Some(PhpType::Array(Box::new(PhpType::Mixed))),
         },
+        // Gradual boundary: a `Mixed`/union operand extracts through the assert-array path,
+        // producing a raw owned `array<mixed>` column.
+        PhpType::Mixed | PhpType::Union(_) => Some(PhpType::Array(Box::new(PhpType::Mixed))),
         other => Some(other),
     }
 }

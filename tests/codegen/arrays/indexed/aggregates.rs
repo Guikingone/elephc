@@ -63,3 +63,34 @@ echo array_product($a);
     );
     assert_eq!(out, "24");
 }
+
+/// Verifies `array_reverse()` accepts a gradual `Mixed` operand (a `mixed` parameter holding an
+/// array) and reverses the underlying array through the assert-array boundary path.
+/// Input: `[1, 2, 3]` boxed as `Mixed` → reversed → `"3,2,1"`.
+#[test]
+fn test_array_reverse_gradual_mixed_operand() {
+    let out = compile_and_run(
+        r#"<?php
+function rev(mixed $u) { return implode(",", array_reverse($u)); }
+echo rev([1, 2, 3]);
+"#,
+    );
+    assert_eq!(out, "3,2,1");
+}
+
+/// Verifies `array_reverse()` on a runtime `false` gradual operand fatals with a `TypeError`,
+/// matching PHP 8 (`array_reverse(false)` is a `TypeError`) instead of silently yielding `[]`.
+#[test]
+fn test_array_reverse_gradual_false_operand_fatals() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+function rev(mixed $u) { return array_reverse($u); }
+$r = rev(false);
+echo "unreached";
+"#,
+    );
+    assert!(
+        err.contains("array builtin argument must be of type array"),
+        "unexpected stderr: {err}"
+    );
+}

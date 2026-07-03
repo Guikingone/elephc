@@ -305,6 +305,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_usort(emitter);
     arrays::emit_array_to_mixed(emitter);
     arrays::emit_array_from_mixed(emitter);
+    arrays::emit_mixed_array_or_fatal(emitter);
+    arrays::emit_mixed_array_payload_or_fatal(emitter);
     arrays::emit_array_merge_into(emitter);
     arrays::emit_array_merge_into_refcounted(emitter);
     arrays::emit_decref_any(emitter);

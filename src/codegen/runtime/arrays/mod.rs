@@ -85,6 +85,8 @@ mod decref_hash;
 mod decref_mixed;
 mod decref_object;
 mod end_boxed;
+mod mixed_array_or_fatal;
+mod mixed_array_payload_or_fatal;
 mod mixed_to_owned_hash;
 mod gc_collect_cycles;
 mod gc_collect_cycles_x86_64;
@@ -195,6 +197,10 @@ pub use array_flip_string::emit_array_flip_string;
 pub use array_free_deep::emit_array_free_deep;
 /// Emit the `(array)` cast runtime dispatcher (`__rt_array_from_mixed`).
 pub use array_from_mixed::emit_array_from_mixed;
+/// Emit the strict array-argument assert (`__rt_mixed_array_or_fatal`).
+pub use mixed_array_or_fatal::emit_mixed_array_or_fatal;
+/// Emit the strict borrowed-payload array-argument assert (`__rt_mixed_array_payload_or_fatal`).
+pub use mixed_array_payload_or_fatal::emit_mixed_array_payload_or_fatal;
 /// Emit deep array free helper.
 pub use array_grow::emit_array_grow;
 /// Emit array grow helper.

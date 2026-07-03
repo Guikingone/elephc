@@ -185,12 +185,60 @@ pub(super) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction
 pub(super) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_reverse", 1, 2)?;
     let array = expect_operand(inst, 0)?;
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return lower_mixed_array_reverse(ctx, inst);
+    }
     let elem_ty = eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_reverse")?;
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the reverse helper argument
     }
     abi::emit_call_label(ctx.emitter, array_reverse_runtime_helper(&elem_ty));
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `array_reverse()` for a boxed `Mixed`/union operand at the gradual-typing boundary.
+///
+/// `__rt_mixed_array_or_fatal` asserts the boxed value is an indexed array — fataling with a
+/// `TypeError` on a non-array payload (e.g. `array_reverse(false)`), matching PHP 8 rather than
+/// silently yielding `[]` — and rebuilds it into a freshly owned `array<mixed>` (normalizing
+/// homogeneous raw-slot payloads to boxed-Mixed slots the refcounted reverse helper can retain).
+///
+/// `__rt_array_reverse_refcounted` is a non-mutating clone, so the rebuilt intermediate array is
+/// released kind-aware via `__rt_decref_any` afterwards: its refcount drops to zero and frees the
+/// header while the reversed clone keeps the shared boxed-Mixed elements alive, keeping GC
+/// balanced.
+fn lower_mixed_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    ctx.load_value_to_result(array)?;
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the boxed Mixed operand to the array-argument assert
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_array_or_fatal");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");                              // save the rebuilt intermediate array for its later release
+            abi::emit_call_label(ctx.emitter, "__rt_array_reverse_refcounted");
+            abi::emit_pop_reg(ctx.emitter, "x1");                               // x1 = rebuilt intermediate array to release
+            abi::emit_push_reg(ctx.emitter, "x0");                              // save the reversed clone across the release
+            ctx.emitter.instruction("mov x0, x1");                              // pass the intermediate array to the kind-aware release
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            abi::emit_pop_reg(ctx.emitter, "x0");                               // restore the reversed clone as the result
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the rebuilt array to the reverse helper
+            abi::emit_push_reg(ctx.emitter, "rdi");                             // save the rebuilt intermediate array for its later release
+            abi::emit_call_label(ctx.emitter, "__rt_array_reverse_refcounted");
+            abi::emit_pop_reg(ctx.emitter, "rcx");                              // rcx = rebuilt intermediate array to release
+            abi::emit_push_reg(ctx.emitter, "rax");                             // save the reversed clone across the release
+            ctx.emitter.instruction("mov rdi, rcx");                            // pass the intermediate array to the kind-aware release
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            abi::emit_pop_reg(ctx.emitter, "rax");                              // restore the reversed clone as the result
+        }
+    }
     store_if_result(ctx, inst)
 }
 

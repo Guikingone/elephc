@@ -98,6 +98,51 @@ fn test_array_map_mixed_arg_type_checks() {
     expect_ok("<?php function tc(mixed $x): void { $y = array_map(fn ($v) => $v, $x); }");
 }
 
+/// Verifies array_reverse() accepts a `Mixed` argument gradually (R4), instead of the previous
+/// strict concrete-array-only check.
+#[test]
+fn test_array_reverse_mixed_arg_type_checks() {
+    expect_ok("<?php function tc(mixed $x): void { $y = array_reverse($x); }");
+}
+
+/// Verifies array_reverse() accepts an `array|false` union operand (R4): `grapheme_str_split`
+/// returns `array|false`, which `count` already accepts and `array_reverse` now does too.
+#[test]
+fn test_array_reverse_union_operand_type_checks() {
+    expect_ok("<?php $u = grapheme_str_split('abc'); $r = array_reverse($u);");
+}
+
+/// Verifies array_column() accepts a `Mixed` first argument gradually (R4).
+#[test]
+fn test_array_column_mixed_arg_type_checks() {
+    expect_ok("<?php function tc(mixed $x): void { $y = array_column($x, 'k'); }");
+}
+
+/// Verifies array_column() accepts an `array|false` union operand gradually (R4).
+#[test]
+fn test_array_column_union_operand_type_checks() {
+    expect_ok("<?php $u = grapheme_str_split('abc'); $r = array_column($u, 'k');");
+}
+
+/// Verifies array_reverse() still rejects a concretely non-array argument (a plain int),
+/// preserving the disjoint-type error after the gradual relaxation.
+#[test]
+fn test_error_array_reverse_non_array_arg() {
+    expect_error(
+        "<?php $a = 5; array_reverse($a);",
+        "array_reverse() argument must be array",
+    );
+}
+
+/// Verifies array_column() still rejects a concretely non-array first argument.
+#[test]
+fn test_error_array_column_non_array_arg() {
+    expect_error(
+        "<?php array_column(5, 'k');",
+        "array_column() first argument must be array",
+    );
+}
+
 /// Verifies array_merge() type-checks with three array arguments (it is variadic).
 #[test]
 fn test_array_merge_three_args_type_checks() {

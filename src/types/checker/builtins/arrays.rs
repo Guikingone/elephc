@@ -213,20 +213,47 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Void))
         }
-        "array_reverse" | "array_unique" => {
+        "array_reverse" => {
             // array_reverse(array, bool $preserve_keys = false): 1–2 args.
-            // array_unique(array, int $flags = SORT_STRING): 1–2 args.
             if args.is_empty() || args.len() > 2 {
                 return Err(CompileError::new(
                     span,
-                    &format!("{}() takes 1 or 2 arguments", name),
+                    "array_reverse() takes 1 or 2 arguments",
+                ));
+            }
+            let ty = checker.infer_type(&args[0], env)?;
+            // Accept a concrete array or a gradual operand (`Mixed`/union containing
+            // an array), exactly like `count`. EIR emits a runtime unbox + assert-array
+            // boundary guard, so a runtime non-array still fatals (PHP-8 `TypeError`).
+            if !array_arg_is_gradually_acceptable(&ty) {
+                return Err(CompileError::new(
+                    span,
+                    "array_reverse() argument must be array",
+                ));
+            }
+            match ty {
+                // A concrete array keeps its precise element type in the result.
+                PhpType::Array(_) | PhpType::AssocArray { .. } => Ok(Some(ty)),
+                // A `Mixed`/union operand has an unknown element type, so the result
+                // is a list of `Mixed`, mirroring `array_keys`/`array_values`.
+                _ => Ok(Some(PhpType::Array(Box::new(PhpType::Mixed)))),
+            }
+        }
+        "array_unique" => {
+            // array_unique(array, int $flags = SORT_STRING): 1–2 args. Kept strict to a
+            // concrete array: the refcounted dedup helper compares boxed-Mixed cells by
+            // identity, so a gradual operand cannot be deduplicated correctly here.
+            if args.is_empty() || args.len() > 2 {
+                return Err(CompileError::new(
+                    span,
+                    "array_unique() takes 1 or 2 arguments",
                 ));
             }
             let ty = checker.infer_type(&args[0], env)?;
             if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
                 return Err(CompileError::new(
                     span,
-                    &format!("{}() argument must be array", name),
+                    "array_unique() argument must be array",
                 ));
             }
             Ok(Some(ty))
@@ -538,11 +565,22 @@ pub(super) fn check_builtin(
             match ty {
                 PhpType::Array(inner) => match *inner {
                     PhpType::AssocArray { value, .. } => Ok(Some(PhpType::Array(value))),
+                    // Gradual boundary: an array of `Mixed` rows (e.g. a dynamic
+                    // `$enum::cases()` whose class is unresolved) has an unknown row
+                    // shape, so the extracted column is a list of `Mixed`.
+                    PhpType::Mixed => Ok(Some(PhpType::Array(Box::new(PhpType::Mixed)))),
                     _ => Err(CompileError::new(
                         span,
                         "array_column() requires an array of associative arrays",
                     )),
                 },
+                // Gradual boundary: a `Mixed` or union-containing-array operand is
+                // accepted, exactly like `count`. The row/column element type is
+                // unknown, so the result is a list of `Mixed`. EIR emits a runtime
+                // unbox + assert-array guard, so a runtime non-array still fatals.
+                t if array_arg_is_gradually_acceptable(&t) => {
+                    Ok(Some(PhpType::Array(Box::new(PhpType::Mixed))))
+                }
                 _ => Err(CompileError::new(
                     span,
                     "array_column() first argument must be array",
