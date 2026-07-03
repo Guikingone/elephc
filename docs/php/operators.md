@@ -42,12 +42,37 @@ Direct object values and boxed `mixed` / nullable / union values are checked at 
 
 | Operator | Example | Notes |
 |---|---|---|
-| `&` | `$a & $b` | Bitwise AND |
-| `\|` | `$a \| $b` | Bitwise OR |
-| `^` | `$a ^ $b` | Bitwise XOR |
+| `&` | `$a & $b` | Bitwise AND (integers), or bytewise AND when both operands are strings |
+| `\|` | `$a \| $b` | Bitwise OR (integers), or bytewise OR when both operands are strings |
+| `^` | `$a ^ $b` | Bitwise XOR (integers), or bytewise XOR when both operands are strings |
 | `~` | `~$a` | Bitwise NOT |
 | `<<` | `$a << $b` | Left shift |
 | `>>` | `$a >> $b` | Arithmetic right shift |
+
+### String bitwise operators
+
+When **both** operands of `&`, `|`, or `^` are strings, the operator works
+**bytewise** on the raw bytes and produces a string (exactly like PHP). The
+operation is binary-safe: it uses the full byte length and never stops at a NUL
+byte, and it never interprets the bytes as UTF-8.
+
+- `&` and `^` produce a result whose length is the **shorter** of the two
+  operands (`min(strlen($a), strlen($b))`); each output byte is `$a[i] & $b[i]`
+  / `$a[i] ^ $b[i]`.
+- `|` produces a result whose length is the **longer** of the two operands
+  (`max(strlen($a), strlen($b))`): overlapping bytes are OR-ed, then the tail of
+  the longer operand is copied verbatim.
+
+```php
+echo bin2hex("ABCD" & "\xff\x00\xff\x00"); // "41004300" (min length 4)
+echo bin2hex("AB"   | "\x00\x00\x01\x02"); // "41420102" (max length 4, tail copied)
+echo bin2hex("ABCD" ^ "\x01\x01");         // "4043"     (min length 2)
+echo "AB" & "";                            // ""         (min length 0)
+```
+
+Only `&`, `|`, and `^` have string forms. `<<` and `>>` are never string
+operators, and a string opposed to an integer takes the integer path (the string
+is coerced to an integer) rather than the bytewise path.
 
 ## Logical
 

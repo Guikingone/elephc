@@ -227,6 +227,9 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::MixedNumericOp(op) => {
             let _ = write!(out, " {}", op.as_eir());
         }
+        Immediate::StrBitOp(op) => {
+            let _ = write!(out, " {}", op.as_eir());
+        }
         Immediate::CmpPredicate(predicate) => {
             let _ = write!(out, " {:?}", predicate);
         }

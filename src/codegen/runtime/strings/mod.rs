@@ -10,6 +10,7 @@
 
 mod itoa;
 mod concat;
+mod str_bitwise;
 mod ftoa;
 mod str_eq;
 mod str_loose_eq;
@@ -96,6 +97,8 @@ pub use itoa::emit_itoa;
 /// Emit integer-to-string conversion helper.
 pub use concat::emit_concat;
 /// Emit string concatenation helper.
+pub use str_bitwise::emit_str_bitwise;
+/// Emit PHP bytewise string operator helper (`&`/`|`/`^` on two strings).
 pub use ftoa::emit_ftoa;
 /// Emit float-to-string conversion helper.
 pub use str_eq::emit_str_eq;

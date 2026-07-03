@@ -102,6 +102,7 @@ pub enum Immediate {
     HeapKind(IrHeapKind),
     MixedTag(u8),
     MixedNumericOp(MixedNumericOp),
+    StrBitOp(StrBitKind),
     CmpPredicate(CmpPredicate),
     CastTarget(IrType),
     TypeName(DataId),
@@ -124,6 +125,42 @@ impl MixedNumericOp {
             MixedNumericOp::Add => "add",
             MixedNumericOp::Sub => "sub",
             MixedNumericOp::Mul => "mul",
+        }
+    }
+}
+
+/// PHP bytewise string operator carried by `Op::StrBitwise`.
+///
+/// PHP applies `&`/`|`/`^` bytewise when both operands are strings, producing a
+/// string result rather than an integer. The variant is passed to
+/// `__rt_str_bitwise` as a mode immediate so a single opcode and one runtime
+/// helper cover all three operators.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StrBitKind {
+    And,
+    Or,
+    Xor,
+}
+
+impl StrBitKind {
+    /// Returns the lower-case textual spelling used by the EIR printer.
+    pub fn as_eir(self) -> &'static str {
+        match self {
+            StrBitKind::And => "and",
+            StrBitKind::Or => "or",
+            StrBitKind::Xor => "xor",
+        }
+    }
+
+    /// Returns the numeric mode passed to `__rt_str_bitwise` (0=And, 1=Or, 2=Xor).
+    ///
+    /// The runtime helper (`src/codegen/runtime/strings/str_bitwise.rs`) branches on
+    /// exactly this numbering, so the two must stay in lockstep.
+    pub fn as_mode(self) -> i64 {
+        match self {
+            StrBitKind::And => 0,
+            StrBitKind::Or => 1,
+            StrBitKind::Xor => 2,
         }
     }
 }
@@ -244,6 +281,10 @@ pub enum Op {
     MixedCastFloat,
     MixedCastString,
     StrConcat,
+    /// PHP bytewise string operator (`&`/`|`/`^` with two string operands).
+    /// Carries an `Immediate::StrBitOp` mode; produces a concat-scratch string
+    /// via `__rt_str_bitwise` (And/Xor → min length, Or → max length + tail copy).
+    StrBitwise,
     StrLen,
     StrPersist,
     StrCharAt,
@@ -413,7 +454,7 @@ impl Op {
             StoreGlobal | StoreStaticLocal | StoreStaticProperty | InitStaticLocal | IncludeOnceMark
             | FunctionVariantMark | TryPushHandler | TryPopHandler => E::WRITES_GLOBAL,
             IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL,
-            IToStr | FToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate
+            IToStr | FToStr | ResourceToStr | StrConcat | StrBitwise | StrCharAt | StrInterpolate
             | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
             ConcatReset => E::WRITES_GLOBAL,
             Cast => E::READS_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL,
@@ -589,6 +630,7 @@ impl Op {
             MixedCastFloat => "mixed_cast_float",
             MixedCastString => "mixed_cast_string",
             StrConcat => "str_concat",
+            StrBitwise => "str_bitwise",
             StrLen => "str_len",
             StrPersist => "str_persist",
             StrCharAt => "str_char_at",

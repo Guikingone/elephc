@@ -12,7 +12,7 @@
 
 use crate::ir::{
     BlockId, CmpPredicate, Effects, Immediate, IrHeapKind, IrType, LocalSlotId, MixedNumericOp, Op,
-    Ownership, Terminator, ValueId,
+    Ownership, StrBitKind, Terminator, ValueId,
 };
 use crate::ir_lower::context::{
     value_ir_type, ByRefPropWriteback, ClosureCapture, LoweredValue, LoweringContext,
@@ -358,6 +358,12 @@ fn lower_numeric_binary(
             Some(expr.span),
         );
     }
+    if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor)
+        && lhs.ir_type == IrType::Str
+        && rhs.ir_type == IrType::Str
+    {
+        return lower_string_bitwise(ctx, lhs, rhs, op, expr);
+    }
     if matches!(
         op,
         BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight
@@ -652,6 +658,43 @@ fn lower_concat(ctx: &mut LoweringContext<'_, '_>, left: &Expr, right: &Expr, ex
     result
 }
 
+/// Lowers a PHP bytewise string operator (`&`/`|`/`^` with two string operands).
+///
+/// Both operands are already lowered `IrType::Str` values. The operator kind is
+/// carried as an `Immediate::StrBitOp` mode so the single `Op::StrBitwise` opcode
+/// covers all three operators; the runtime helper resolves the result length
+/// (And/Xor → min, Or → max) and the per-byte op once at entry. Operand
+/// temporaries are released with the same borrowed-aware pattern as `lower_concat`,
+/// including the `!=` self-alias guard for `$a & $a`.
+fn lower_string_bitwise(
+    ctx: &mut LoweringContext<'_, '_>,
+    lhs: LoweredValue,
+    rhs: LoweredValue,
+    op: &BinOp,
+    expr: &Expr,
+) -> LoweredValue {
+    let kind = match op {
+        BinOp::BitAnd => StrBitKind::And,
+        BinOp::BitOr => StrBitKind::Or,
+        BinOp::BitXor => StrBitKind::Xor,
+        // `lower_numeric_binary` only routes And/Or/Xor here.
+        _ => unreachable!("lower_string_bitwise only handles &/|/^"),
+    };
+    let result = ctx.emit_value(
+        Op::StrBitwise,
+        vec![lhs.value, rhs.value],
+        Some(Immediate::StrBitOp(kind)),
+        PhpType::Str,
+        Op::StrBitwise.default_effects(),
+        Some(expr.span),
+    );
+    release_binary_operand_temporary(ctx, lhs, expr.span);
+    if rhs.value != lhs.value {
+        release_binary_operand_temporary(ctx, rhs, expr.span);
+    }
+    result
+}
+
 /// Persists scratch-backed concat LHS values before a call-like RHS can reset concat storage.
 fn persist_concat_lhs_if_rhs_can_reset(
     ctx: &mut LoweringContext<'_, '_>,
@@ -688,6 +731,7 @@ pub(crate) fn string_op_uses_scratch_storage(op: Op) -> bool {
             | Op::ResourceToStr
             | Op::MixedCastString
             | Op::StrConcat
+            | Op::StrBitwise
             | Op::StrCharAt
             | Op::StrInterpolate
             | Op::RuntimeCall

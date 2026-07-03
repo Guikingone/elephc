@@ -100,6 +100,18 @@ fn test_error_bitwise_and_string() {
     );
 }
 
+/// Tests that a string shift (`<<`/`>>`) stays on the integer path and is still rejected.
+/// PHP string bitwise only covers `&`/`|`/`^`; shifts are never string operators, so
+/// `"abc" << 1` must still report "Bitwise operators require integer operands" — the
+/// both-string string-bitwise rule must not leak into the shift operators.
+#[test]
+fn test_error_bitwise_shift_string_unaffected() {
+    expect_error(
+        r#"<?php echo "abc" << 1;"#,
+        "Bitwise operators require integer operands",
+    );
+}
+
 /// Tests that unary `~` on a string rejects it with the
 /// "Bitwise NOT requires integer operand" error.
 #[test]

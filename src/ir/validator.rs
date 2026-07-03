@@ -290,6 +290,9 @@ fn validate_instruction_immediate(inst_id: InstId, inst: &Instruction) -> Result
         MixedNumericBinop => require_immediate(inst_id, inst, "mixed numeric op", |imm| {
             matches!(imm, Imm::MixedNumericOp(_))
         }),
+        StrBitwise => require_immediate(inst_id, inst, "string bitwise op", |imm| {
+            matches!(imm, Imm::StrBitOp(_))
+        }),
         Cast => require_immediate(inst_id, inst, "cast target", |imm| {
             matches!(imm, Imm::CastTarget(_))
         }),
@@ -383,7 +386,9 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         StrToI | StrToF | StrToNumber | StrLen | StrPersist => {
             check_unary(function, inst_id, inst, IrType::Str, "Str")
         }
-        StrConcat | StrEq | StrLooseEq => check_binary(function, inst_id, inst, IrType::Str, "Str"),
+        StrConcat | StrBitwise | StrEq | StrLooseEq => {
+            check_binary(function, inst_id, inst, IrType::Str, "Str")
+        }
         StrCmp => check_php_compare_binary(function, inst_id, inst),
         StrCharAt => {
             check_count(inst_id, inst, 2, "2")?;

@@ -163,7 +163,18 @@ fn try_fold_int_mod(left: &Expr, right: &Expr) -> Option<ExprKind> {
 
 /// Evaluates bitwise AND, OR, XOR, and shift operations on two integer literals.
 /// Shift amounts must fit in a `u32`; returns `None` for invalid shift amounts.
+///
+/// PHP's `&`/`|`/`^` are bytewise *string* operators when both operands are strings
+/// (producing a string, not an integer). Such nodes are left to the type checker and
+/// runtime `__rt_str_bitwise` path, so folding is skipped whenever either operand is
+/// a string literal — never coerce a string operand to an integer here.
 fn try_fold_bitwise_binop(op: &BinOp, left: &Expr, right: &Expr) -> Option<ExprKind> {
+    if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor)
+        && (matches!(left.kind, ExprKind::StringLiteral(_))
+            || matches!(right.kind, ExprKind::StringLiteral(_)))
+    {
+        return None;
+    }
     let (left, right) = (int_literal(left)?, int_literal(right)?);
     match op {
         BinOp::BitAnd => Some(ExprKind::IntLiteral(left & right)),

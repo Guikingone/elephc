@@ -34,6 +34,7 @@ pub use function::{
 };
 pub use instr::{
     BuiltinId, CmpPredicate, Immediate, InstId, Instruction, MixedNumericOp, Op, RuntimeId,
+    StrBitKind,
 };
 pub use module::{
     ClassTable, ConstScalar, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl,

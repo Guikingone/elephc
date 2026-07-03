@@ -590,3 +590,80 @@ echo ("abc" != $m2) ? "T" : "F";
     );
     assert_eq!(out, "TTTFTT");
 }
+
+// --- PHP string bitwise operators (`&`/`|`/`^` bytewise on two strings) ---
+
+/// Verifies `&` on two multi-byte string literals is bytewise (`min` length,
+/// per-byte AND). `bin2hex("ABCD" & "\xff\x00\xff\x00")` == "41004300" in PHP.
+#[test]
+fn test_string_bitwise_and_multibyte() {
+    let out = compile_and_run(r#"<?php echo bin2hex("ABCD" & "\xff\x00\xff\x00");"#);
+    assert_eq!(out, "41004300");
+}
+
+/// Verifies `&` truncates to the shorter (right) operand's length: `"ABCD" & "\x0f"`
+/// yields a single byte `0x41 & 0x0f == 0x01`, so strlen==1 and bin2hex=="01".
+#[test]
+fn test_string_bitwise_and_shorter_right() {
+    let out = compile_and_run(r#"<?php echo strlen("ABCD" & "\x0f"), ":", bin2hex("ABCD" & "\x0f");"#);
+    assert_eq!(out, "1:01");
+}
+
+/// Verifies `&` against an empty string produces an empty (len 0) string without crashing.
+#[test]
+fn test_string_bitwise_and_empty() {
+    let out = compile_and_run(r#"<?php echo strlen("AB" & "");"#);
+    assert_eq!(out, "0");
+}
+
+/// Verifies `|` uses `max` length and copies the longer operand's tail verbatim:
+/// `bin2hex("AB" | "\x00\x00\x01\x02")` == "41420102" (overlap OR then tail 01 02).
+#[test]
+fn test_string_bitwise_or_tail_copy() {
+    let out = compile_and_run(r#"<?php echo bin2hex("AB" | "\x00\x00\x01\x02");"#);
+    assert_eq!(out, "41420102");
+}
+
+/// Verifies `^` is bytewise over the `min` length: `bin2hex("ABCD" ^ "\x01\x01")` == "4043".
+#[test]
+fn test_string_bitwise_xor_min() {
+    let out = compile_and_run(r#"<?php echo bin2hex("ABCD" ^ "\x01\x01");"#);
+    assert_eq!(out, "4043");
+}
+
+/// Verifies the real-world polyfill pattern: a length-1 `&` used as an array key.
+/// `$s[0]` is `"\xF5"`, `"\xF5" & "\xF0"` is `"\xF0"`, so `$m["\xF0"]` is `3`.
+#[test]
+fn test_string_bitwise_polyfill_pattern() {
+    let out = compile_and_run(
+        r#"<?php $s="\xF5x"; $m=["\xF0"=>3]; echo $m[$s[0] & "\xF0"] ?? 0;"#,
+    );
+    assert_eq!(out, "3");
+}
+
+/// Verifies the self-alias case `$a & $a` does not double-free and produces the operand
+/// bytes unchanged: `bin2hex("AB" & "AB")` == "4142".
+#[test]
+fn test_string_bitwise_self_alias() {
+    let out = compile_and_run(r#"<?php $a="AB"; echo bin2hex($a & $a);"#);
+    assert_eq!(out, "4142");
+}
+
+/// Verifies the runtime path (non-literal operands, so no constant folding) matches PHP
+/// for both `&` (min length) and `|` (max length with tail copy).
+#[test]
+fn test_string_bitwise_runtime_operands() {
+    let out = compile_and_run(
+        r#"<?php $x="ABCD"; $y="\xff\x00\xff\x00"; $p="AB"; $q="\x00\x00\x01\x02";
+echo bin2hex($x & $y), ":", bin2hex($p | $q);"#,
+    );
+    assert_eq!(out, "41004300:41420102");
+}
+
+/// Verifies that a non-both-string bitwise operator is unaffected: integer `&`/`|`/`^`
+/// still take the integer path (6 & 3 == 2, 5 | 2 == 7, 5 ^ 1 == 4).
+#[test]
+fn test_integer_bitwise_unaffected_by_string_path() {
+    let out = compile_and_run("<?php echo (6 & 3), ':', (5 | 2), ':', (5 ^ 1);");
+    assert_eq!(out, "2:7:4");
+}

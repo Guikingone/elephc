@@ -11,7 +11,7 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::Instruction;
+use crate::ir::{Immediate, Instruction, StrBitKind};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -140,6 +140,45 @@ pub(super) fn lower_str_concat(ctx: &mut FunctionContext<'_>, inst: &Instruction
     }
     abi::emit_call_label(ctx.emitter, "__rt_concat");
     store_if_result(ctx, inst)
+}
+
+/// Lowers a PHP bytewise string operator (`&`/`|`/`^`) into a `__rt_str_bitwise` call.
+///
+/// Both operands must be strings. The operator kind travels in the instruction's
+/// `Immediate::StrBitOp` and is passed to the runtime helper as a mode integer
+/// (0=And, 1=Or, 2=Xor) so a single helper resolves the result length and per-byte
+/// op once at entry. The string operands are loaded into the same ABI registers as
+/// `__rt_concat`; the mode register is loaded last so the string loads cannot clobber it.
+pub(super) fn lower_str_bitwise(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    require_string(ctx.value_php_type(lhs)?, inst)?;
+    require_string(ctx.value_php_type(rhs)?, inst)?;
+    let mode = expect_str_bit_op(inst)?.as_mode();
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_string_value_to_regs(lhs, "x1", "x2")?;
+            ctx.load_string_value_to_regs(rhs, "x3", "x4")?;
+            abi::emit_load_int_immediate(ctx.emitter, "x5", mode);
+        }
+        Arch::X86_64 => {
+            ctx.load_string_value_to_regs(lhs, "rax", "rdx")?;
+            ctx.load_string_value_to_regs(rhs, "rdi", "rsi")?;
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", mode);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_bitwise");
+    store_if_result(ctx, inst)
+}
+
+/// Extracts the `StrBitKind` mode carried by a `StrBitwise` instruction's immediate.
+fn expect_str_bit_op(inst: &Instruction) -> Result<StrBitKind> {
+    match inst.immediate {
+        Some(Immediate::StrBitOp(kind)) => Ok(kind),
+        _ => Err(CodegenIrError::unsupported(
+            "str_bitwise without a string bitwise op immediate",
+        )),
+    }
 }
 
 /// Lowers a string length opcode by returning the string-pair length word.

@@ -1104,6 +1104,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::MixedNumericBinop
                     | Op::MixedCastString
                     | Op::StrConcat
+                    | Op::StrBitwise
                     | Op::StrPersist
                     | Op::StrCharAt
                     | Op::StrInterpolate

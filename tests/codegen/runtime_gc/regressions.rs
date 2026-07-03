@@ -96,6 +96,39 @@ echo "done";
     assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
 }
 
+/// Verifies PHP bytewise string operator results are owned/released cleanly over many
+/// iterations. Each `&`/`|`/`^` result feeds `bin2hex` (which allocates an owned heap
+/// string) and is reassigned to `$out` every loop, so the previous owned value must be
+/// released without a double-free. Exercises the `$a & $a` self-alias release path and
+/// all three operators; 300 iterations must leave the heap clean (allocations ==
+/// deallocations, no corruption). `bin2hex("ABCD" ^ "\xF0\x0F\xF0\x0F")` is `b14db34b`.
+#[test]
+fn test_string_bitwise_result_released_cleanly() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$a = "AB";
+$x = "ABCD";
+$y = "\xF0\x0F\xF0\x0F";
+$out = "";
+for ($i = 0; $i < 300; $i++) {
+    $out = bin2hex($a & $a);
+    $out = bin2hex($x & $y);
+    $out = bin2hex($x | $y);
+    $out = bin2hex($x ^ $y);
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out.stdout, "b14db34b");
+    assert!(
+        !out.stderr.contains("double free") && !out.stderr.contains("bad refcount"),
+        "heap corruption detected: {}",
+        out.stderr
+    );
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
 /// Regression: a temporary object implicitly stringified via `__toString` in `echo` must
 /// be released, not leaked. 100 iterations would accumulate 100 leaked objects otherwise.
 #[test]
