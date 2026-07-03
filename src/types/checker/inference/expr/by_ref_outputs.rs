@@ -16,6 +16,11 @@
 //!   PHP-accurate element type for each known by-ref builtin out-param (defaulting to
 //!   `Mixed` for any future builtin whose signature marks `ref_params` without a table
 //!   entry).
+//! - OUT-ONLY builtin by-ref params (`builtin_out_only_ref_param`: preg_match/preg_match_all
+//!   `$matches`, preg_replace/preg_replace_callback `$count`) overwrite the caller variable
+//!   wholesale, so they re-type even an ALREADY-defined variable (PHP replaces it regardless of
+//!   its prior value — e.g. a subject reused as the out-param). IN-OUT params (sort, array_push, …)
+//!   keep the caller's existing type and are only used to define currently-undefined variables.
 //! - Positional argument shapes only: calls using named or spread arguments bail so
 //!   the positional parameter mapping cannot be misaligned.
 
@@ -89,7 +94,14 @@ impl Checker {
             if !sig.ref_params.get(index).copied().unwrap_or(false) {
                 continue;
             }
-            if env.contains_key(var_name) {
+            // OUT-ONLY by-ref params (preg_match/preg_match_all `$matches`,
+            // preg_replace/preg_replace_callback `$count`) overwrite the caller variable
+            // wholesale — PHP replaces it regardless of its prior value — so an already-defined
+            // variable (e.g. a subject reused as the out-param: `preg_match_all(…, $s, $s)`) must
+            // still be re-typed to the out-param output type. IN-OUT params (sort, array_push, …)
+            // mutate in place and keep the caller's existing (usually more specific) type, so they
+            // are skipped when already defined, preserving today's behavior.
+            if env.contains_key(var_name) && !builtin_out_only_ref_param(builtin_name, index) {
                 continue;
             }
             let inserted_ty = builtin_out_param_type(builtin_name, index);
@@ -588,6 +600,29 @@ impl Checker {
     }
 }
 
+/// Returns `true` when builtin `name`'s by-reference parameter at `index` is OUT-ONLY: the callee
+/// overwrites the argument wholesale, so PHP replaces the caller variable's value regardless of its
+/// prior contents. For such params an already-defined caller variable must be re-typed to the
+/// out-param's output type (`builtin_out_param_type`), which is what makes the aliased
+/// `preg_match_all('/…/', $s, $s)` shape (subject reused as `$matches`) re-type `$s` to the matches
+/// array instead of leaving it typed `string`.
+///
+/// IN-OUT by-reference params (`sort`, `rsort`, `array_push`, `array_shift`, `array_splice`,
+/// `array_walk`, `settype`, `end`/`reset`/…) are deliberately NOT listed: they mutate the argument
+/// in place, so the caller keeps its own (usually more specific) element type and the existing
+/// skip-if-defined behavior is correct. When it is unclear whether a param is out-only, it is
+/// treated as in-out — the safe default that preserves today's behavior. Matching is
+/// case-insensitive via `php_symbol_key`, consistent with the rest of the checker.
+fn builtin_out_only_ref_param(name: &str, index: usize) -> bool {
+    matches!(
+        (php_symbol_key(name).as_str(), index),
+        ("preg_match", 2)
+            | ("preg_match_all", 2)
+            | ("preg_replace", 4)
+            | ("preg_replace_callback", 4)
+    )
+}
+
 /// Returns the PHP-accurate type a builtin by-reference out-parameter writes into the caller's
 /// variable, used when auto-vivifying a previously-undefined plain `$variable`.
 ///
@@ -615,5 +650,114 @@ fn builtin_out_param_type(builtin: &str, index: usize) -> PhpType {
         // proc_open(&$pipes): array of process pipe resources.
         "proc_open" if index == 2 => PhpType::Array(Box::new(PhpType::Mixed)),
         _ => PhpType::Mixed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Convenience: the nested-array type `preg_match_all`'s `$matches` out-param produces.
+    fn preg_match_all_matches_type() -> PhpType {
+        PhpType::Array(Box::new(PhpType::Array(Box::new(PhpType::Str))))
+    }
+
+    /// Verifies the OUT-only classifier lists exactly the four wholesale-overwrite builtin
+    /// by-ref params (preg_match/preg_match_all `$matches` at index 2, preg_replace/
+    /// preg_replace_callback `$count` at index 4) and rejects the wrong index for each, so the
+    /// overwrite never fires on a non-out-only position of an out-only builtin.
+    #[test]
+    fn test_out_only_ref_param_lists_only_wholesale_overwrite_params() {
+        assert!(builtin_out_only_ref_param("preg_match", 2));
+        assert!(builtin_out_only_ref_param("preg_match_all", 2));
+        assert!(builtin_out_only_ref_param("preg_replace", 4));
+        assert!(builtin_out_only_ref_param("preg_replace_callback", 4));
+        // Wrong index for an out-only builtin is not out-only.
+        assert!(!builtin_out_only_ref_param("preg_match_all", 4));
+        assert!(!builtin_out_only_ref_param("preg_replace", 2));
+    }
+
+    /// Verifies IN-OUT by-ref builtins (sort, array_push, array_shift, array_splice,
+    /// array_walk, settype, end, reset) are NOT classified out-only, so an already-defined
+    /// caller variable keeps its own (more specific) type instead of being overwritten.
+    #[test]
+    fn test_out_only_ref_param_excludes_in_out_builtins() {
+        for name in [
+            "sort",
+            "rsort",
+            "array_push",
+            "array_shift",
+            "array_splice",
+            "array_walk",
+            "settype",
+            "end",
+            "reset",
+        ] {
+            assert!(
+                !builtin_out_only_ref_param(name, 0),
+                "{name} must be treated as in-out, not out-only",
+            );
+        }
+    }
+
+    /// Verifies the classifier matches builtin names case-insensitively (PHP function names are
+    /// case-insensitive), consistent with `php_symbol_key` usage elsewhere in the checker.
+    #[test]
+    fn test_out_only_ref_param_is_case_insensitive() {
+        assert!(builtin_out_only_ref_param("PREG_MATCH_ALL", 2));
+        assert!(builtin_out_only_ref_param("Preg_Replace", 4));
+    }
+
+    /// Verifies the crux fix: an ALREADY-defined caller variable reused as an OUT-only by-ref
+    /// out-param (the aliased `preg_match_all('/…/', $s, $s)` subject-as-out shape) STILL
+    /// produces an overwrite entry re-typing it to the out-param output type — instead of being
+    /// skipped and left as its prior `string` type.
+    #[test]
+    fn test_out_only_overwrites_already_defined_aliased_variable() {
+        let mut env = TypeEnv::new();
+        env.insert("s".to_string(), PhpType::Str);
+        let args = [
+            Expr::string_lit("/\\w/"),
+            Expr::var("s"),
+            Expr::var("s"),
+        ];
+        let outputs = Checker::builtin_call_by_ref_outputs("preg_match_all", &args, &env);
+        assert_eq!(
+            outputs,
+            vec![("s".to_string(), preg_match_all_matches_type())],
+        );
+    }
+
+    /// Verifies an IN-OUT by-ref builtin (`sort`) does NOT emit an entry for an already-defined
+    /// `array<int>` variable, so the consumer's overwrite never fires and the specific element
+    /// type is preserved (the regression this fix must not cause).
+    #[test]
+    fn test_in_out_leaves_already_defined_variable_untouched() {
+        let mut env = TypeEnv::new();
+        env.insert("a".to_string(), PhpType::Array(Box::new(PhpType::Int)));
+        let args = [Expr::var("a")];
+        let outputs = Checker::builtin_call_by_ref_outputs("sort", &args, &env);
+        assert!(
+            outputs.is_empty(),
+            "sort on an already-defined array must not re-type it: {outputs:?}",
+        );
+    }
+
+    /// Verifies the pre-existing undefined-variable path is unchanged: a fresh (undefined) plain
+    /// `$m` out-param is still defined with the builtin's out-param type, exactly as before.
+    #[test]
+    fn test_undefined_out_param_still_defined_with_out_type() {
+        let mut env = TypeEnv::new();
+        env.insert("s".to_string(), PhpType::Str);
+        let args = [
+            Expr::string_lit("/x/"),
+            Expr::var("s"),
+            Expr::var("m"),
+        ];
+        let outputs = Checker::builtin_call_by_ref_outputs("preg_match_all", &args, &env);
+        assert_eq!(
+            outputs,
+            vec![("m".to_string(), preg_match_all_matches_type())],
+        );
     }
 }

@@ -154,6 +154,19 @@ fn test_error_count_non_array_arg() {
     );
 }
 
+/// Verifies count() still rejects a concretely non-array string argument, confirming
+/// the by-ref OUT-only overwrite change did not blanket-accept non-array types through
+/// the gradual boundary. A plain `string` local is not aliased by any out-only by-ref
+/// call, so it stays `string` and `count()` on it remains a compile error. Input:
+/// `count("hello")`.
+#[test]
+fn test_error_count_string_arg() {
+    expect_error(
+        r#"<?php count("hello");"#,
+        "count() argument must be array or Countable object",
+    );
+}
+
 /// Verifies that error array sum wrong args.
 #[test]
 fn test_error_array_sum_wrong_args() {

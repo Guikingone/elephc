@@ -278,4 +278,37 @@ echo maybe_match("abc", false);
     assert_eq!(out, "0");
 }
 
+// --- by-ref IN-OUT params must NOT be re-typed by the out-only overwrite change ---
+
+/// Verifies an IN-OUT by-ref call (`sort`) mutates its array argument in place without
+/// destroying the caller's element type: `$a` stays `array<int>`, so `array_sum($a)`
+/// after `sort($a)` still type-checks and computes the sum. This guards the OUT-only vs
+/// IN-OUT distinction — sort is deliberately NOT classified out-only, so an already-defined
+/// `array<int>` local keeps its type. PHP: `sort([3,1,2])` -> `[1,2,3]`, sum `6`.
+#[test]
+fn test_sort_in_out_preserves_array_element_type() {
+    let out = compile_and_run(r#"<?php $a = [3, 1, 2]; sort($a); echo array_sum($a);"#);
+    assert_eq!(out, "6");
+}
+
+/// Verifies `array_push` (IN-OUT by-ref) keeps its target's `array<int>` type so a
+/// following `array_sum` still type-checks. PHP: push 4 onto `[1,2,3]`, sum `10`.
+#[test]
+fn test_array_push_in_out_preserves_array_element_type() {
+    let out = compile_and_run(
+        r#"<?php $b = [1, 2, 3]; array_push($b, 4); echo array_sum($b);"#,
+    );
+    assert_eq!(out, "10");
+}
+
+/// Verifies `array_shift` (IN-OUT by-ref) mutates in place and preserves the remaining
+/// array's element type. PHP: shift from `[10,20,30]` yields `10`, remaining sum `50`.
+#[test]
+fn test_array_shift_in_out_preserves_array_element_type() {
+    let out = compile_and_run(
+        r#"<?php $c = [10, 20, 30]; $first = array_shift($c); echo $first, "-", array_sum($c);"#,
+    );
+    assert_eq!(out, "10-50");
+}
+
 // --- Bug fix: compound assignment in for-loop update ---

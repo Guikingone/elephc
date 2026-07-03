@@ -274,10 +274,18 @@ impl Checker {
                 // the call's own inference recovers from an error (e.g. an unrecognized builtin
                 // routed through `check_function_call`), which would otherwise skip a post-call
                 // define and leave the next read reported as "Undefined variable".
+                //
+                // `builtin_call_by_ref_outputs` returns only entries that must be applied: an
+                // as-yet-undefined var (any by-ref param) OR an already-defined var bound to an
+                // OUT-ONLY param (preg_match/preg_match_all `$matches`, preg_replace/
+                // preg_replace_callback `$count`), which PHP overwrites wholesale. Using `insert`
+                // (not `or_insert`) therefore re-types the aliased subject-as-out-param shape
+                // `preg_match_all(…, $s, $s)` while leaving IN-OUT params untouched (they are never
+                // returned for an already-defined var, so their existing type is preserved).
                 for (var, out_ty) in
                     Checker::builtin_call_by_ref_outputs(builtin_name, &expanded_args, env)
                 {
-                    env.entry(var).or_insert(out_ty);
+                    env.insert(var, out_ty);
                 }
                 // Builtin by-reference out-parameter positions come from the canonical signature's
                 // `ref_params`. Such parameters (preg_match/preg_match_all &$matches, preg_replace
