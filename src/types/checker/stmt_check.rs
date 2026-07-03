@@ -11,7 +11,7 @@
 
 mod assignments;
 mod control_flow;
-mod narrowing;
+pub(crate) mod narrowing;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{ExprKind, Stmt, StmtKind};

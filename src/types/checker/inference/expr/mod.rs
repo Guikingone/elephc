@@ -345,19 +345,27 @@ impl Checker {
                 // then-branch and to its else-type while inferring the else-branch. The
                 // narrowing is scoped to cloned envs so it never leaks into the outer
                 // `env` — a use of the variable after the ternary still sees its join.
-                let (then_ty, else_ty) =
+                let member_then = self.member_path_guard_then(condition);
+                let (then_ty, else_ty) = if self.type_guard_narrowing(condition, env).is_some()
+                    || member_then.is_some()
+                {
+                    let mut then_env = env.clone();
+                    let mut else_env = env.clone();
                     if let Some(guard) = self.type_guard_narrowing(condition, env) {
-                        let mut then_env = env.clone();
                         then_env.insert(guard.var.clone(), guard.then_ty.clone());
-                        let mut else_env = env.clone();
                         else_env.insert(guard.var.clone(), guard.else_ty.clone());
-                        (
-                            self.infer_type(then_expr, &then_env)?,
-                            self.infer_type(else_expr, &else_env)?,
-                        )
-                    } else {
-                        (self.infer_type(then_expr, env)?, self.infer_type(else_expr, env)?)
-                    };
+                    }
+                    if let Some((key, then_ty)) = member_then {
+                        // then-branch only: the else-branch keeps the declared property type.
+                        then_env.insert(key, then_ty);
+                    }
+                    (
+                        self.infer_type(then_expr, &then_env)?,
+                        self.infer_type(else_expr, &else_env)?,
+                    )
+                } else {
+                    (self.infer_type(then_expr, env)?, self.infer_type(else_expr, env)?)
+                };
                 let result_ty = if then_ty == else_ty {
                     then_ty
                 } else if then_ty == PhpType::Str || else_ty == PhpType::Str {

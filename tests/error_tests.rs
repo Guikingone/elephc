@@ -221,6 +221,8 @@ mod image;
 mod absent_class;
 #[path = "error_tests/short_circuit_narrowing.rs"]
 mod short_circuit_narrowing;
+#[path = "error_tests/ternary_member_narrowing.rs"]
+mod ternary_member_narrowing;
 #[path = "error_tests/switch_case_narrowing.rs"]
 mod switch_case_narrowing;
 #[path = "error_tests/ctor_arg_propagation_cross_class.rs"]

@@ -65,6 +65,60 @@ impl Checker {
         Some(GuardNarrowing { var, then_ty, else_ty })
     }
 
+    /// Detects a **non-negated** type guard whose receiver is a single-hop member
+    /// path (`$this->prop instanceof X`, `is_int($this->prop)`, `$var->prop instanceof X`,
+    /// …) and returns the synthetic env key plus the guard-true (then) type. Only the
+    /// then-side is computed: WIN B narrows a member path only inside the guard-true
+    /// region of a ternary (the then-branch), never the else-branch (left at the
+    /// declared type — a sound over-approximation). Returns `None` for a negated guard
+    /// (narrowing the then-branch to the target would be unsound), a variable receiver
+    /// (handled by `type_guard_narrowing`), an `&&`/`||`/other condition, or an
+    /// unrecognized predicate.
+    pub(crate) fn member_path_guard_then(&self, condition: &Expr) -> Option<(String, PhpType)> {
+        // Negated top-level guards would make the then-branch the guard-FALSE region;
+        // narrowing it to the target is unsound. Only positive guards narrow the then side.
+        if matches!(condition.kind, ExprKind::Not(_)) {
+            return None;
+        }
+        let (key, target) = match &condition.kind {
+            ExprKind::FunctionCall { name, args } if args.len() == 1 => {
+                let ExprKind::PropertyAccess { object, property } = &args[0].kind else {
+                    return None;
+                };
+                let key = member_path_key(object, property)?;
+                let target = match name.as_str().to_ascii_lowercase().as_str() {
+                    "is_int" | "is_integer" | "is_long" => PhpType::Int,
+                    "is_float" | "is_double" => PhpType::Float,
+                    "is_string" => PhpType::Str,
+                    "is_bool" => PhpType::Bool,
+                    "is_countable" => PhpType::Union(vec![
+                        PhpType::Array(Box::new(PhpType::Mixed)),
+                        PhpType::Object("Countable".to_string()),
+                    ]),
+                    _ => return None,
+                };
+                (key, target)
+            }
+            ExprKind::InstanceOf { value, target } => {
+                let ExprKind::PropertyAccess { object, property } = &value.kind else {
+                    return None;
+                };
+                let InstanceOfTarget::Name(class) = target else {
+                    return None;
+                };
+                let key = member_path_key(object, property)?;
+                (
+                    key,
+                    self.resolve_relative_instanceof_target(PhpType::Object(
+                        class.as_str().to_string(),
+                    )),
+                )
+            }
+            _ => return None,
+        };
+        Some((key, target))
+    }
+
     /// Collects the guard-true (then) narrowings for a condition that is a single recognized guard
     /// or a pure `&&` chain of guards (`$a instanceof X && is_int($b) && ...`). Recurses only through
     /// `&&`; returns one `(var, then_type)` per distinct guarded variable, folding repeated guards on
@@ -264,6 +318,20 @@ fn guard_var_and_type(cond: &Expr) -> Option<(String, PhpType)> {
             };
             Some((var.clone(), PhpType::Object(class.as_str().to_string())))
         }
+        _ => None,
+    }
+}
+
+/// Builds the synthetic environment key used for member-path narrowing of a
+/// single-hop property access (`$this->prop` or `$var->prop`). Returns
+/// `Some("this->prop")` / `Some("var->prop")` for a `$this`- or plain-`$var`-rooted
+/// single property access, and `None` for any other receiver (deeper paths,
+/// method-call roots, etc.). The `->` in the key can never appear in a real PHP
+/// variable name, so it never collides with a variable's env entry.
+pub(crate) fn member_path_key(object: &Expr, property: &str) -> Option<String> {
+    match &object.kind {
+        ExprKind::This => Some(format!("this->{}", property)),
+        ExprKind::Variable(v) => Some(format!("{}->{}", v, property)),
         _ => None,
     }
 }

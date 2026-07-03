@@ -10,6 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
+use crate::types::checker::stmt_check::narrowing::member_path_key;
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::Checker;
@@ -27,6 +28,16 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        // Member-path narrowing overlay (WIN B): inside a `$this->prop instanceof X ? … : …`
+        // then-branch, the receiver was narrowed to `X` under a synthetic access-path key.
+        // Consult it first so `$this->prop->methodOnX()` resolves against the narrowed
+        // subtype. The overlay is only ever present in the ternary's cloned, discarded
+        // then-env (see the Ternary arms), so it never leaks past that sub-expression.
+        if let Some(key) = member_path_key(object, property) {
+            if let Some(narrowed) = env.get(&key) {
+                return Ok(narrowed.clone());
+            }
+        }
         let obj_ty = self.infer_type(object, env)?;
         if let PhpType::Object(class_name) = &obj_ty {
             return self.infer_property_on_class_type(class_name, property, expr);

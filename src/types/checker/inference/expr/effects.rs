@@ -213,6 +213,10 @@ impl Checker {
                     then_env.insert(guard.var.clone(), guard.then_ty.clone());
                     else_env.insert(guard.var.clone(), guard.else_ty.clone());
                 }
+                if let Some((key, then_ty)) = self.member_path_guard_then(condition) {
+                    // then-branch only (see WIN B): the else-branch keeps the declared type.
+                    then_env.insert(key, then_ty);
+                }
                 let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
                 let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
                 // By-reference call outputs in the cloned branches define their out-parameters for
