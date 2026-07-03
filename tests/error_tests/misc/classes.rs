@@ -548,6 +548,18 @@ fn test_error_instantiate_abstract_class() {
     );
 }
 
+/// Verifies that `new self()` inside an abstract class STILL reports "Cannot instantiate abstract
+/// class". This is the negative control documenting that the `new static()` late-static-binding
+/// fix is narrow to `static`: unlike `static`, `self` early-binds to the declaring (abstract)
+/// class, which can never be instantiated, so it must remain a fatal error like PHP.
+#[test]
+fn test_error_new_self_in_abstract_class_still_errors() {
+    expect_error(
+        "<?php abstract class Base { public function f(): self { return new self(); } } class Child extends Base {} echo (new Child())->f() === null ? \"n\" : \"y\";",
+        "Cannot instantiate abstract class: Base",
+    );
+}
+
 /// Verifies the error diagnostic for abstract method with body.
 #[test]
 fn test_error_abstract_method_with_body() {

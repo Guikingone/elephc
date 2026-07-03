@@ -16,11 +16,15 @@ use crate::types::{PhpType, TypeEnv};
 use super::super::super::Checker;
 
 impl Checker {
-    /// Validates `new` expressions on late-bound static constructor targets by inferring
-    /// the object type for every class that descends from `base_class`.
+    /// Validates `new static(...)` late-bound constructor targets by inferring the object type
+    /// for every CONCRETE class that is `base_class` or descends from it.
     ///
-    /// Used when `$obj::new(...)` or similar late-bound constructor syntax is used,
-    /// to ensure each possible class variant is well-typed.
+    /// `static` is late static binding: it resolves at runtime to the concrete class the method
+    /// was *called* on, which can never be abstract. Abstract classes in the hierarchy are skipped
+    /// so a valid `new static()` written inside an abstract class is not flagged with a false
+    /// "cannot instantiate abstract class". When no concrete target exists (an abstract class with
+    /// no concrete subclass in the closed world), the argument expressions are still inferred once
+    /// so genuine errors inside them are not masked.
     pub(super) fn validate_late_bound_constructor_targets(
         &mut self,
         base_class: &str,
@@ -28,13 +32,34 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<(), CompileError> {
+        // `static` late-binds to the concrete class the method is *called* on, which can never be
+        // abstract. Validate constructor args against every CONCRETE class in the hierarchy and skip
+        // abstract ones — flagging an abstract base/descendant here is a false "cannot instantiate
+        // abstract class" for the valid `new static()` pattern inside an abstract class.
         let mut class_names: Vec<String> = self
             .classes
             .keys()
-            .filter(|name| self.class_is_same_or_descends_from(name, base_class))
+            .filter(|name| {
+                self.class_is_same_or_descends_from(name, base_class)
+                    && !self
+                        .classes
+                        .get(name.as_str())
+                        .map(|info| info.is_abstract)
+                        .unwrap_or(false)
+            })
             .cloned()
             .collect();
         class_names.sort();
+
+        if class_names.is_empty() {
+            // No concrete runtime target exists yet (e.g. an abstract class with no concrete
+            // subclass in the closed world). Still infer the argument expressions once so errors
+            // inside them are not masked; there is no concrete constructor to validate against.
+            for arg in args {
+                self.infer_type(arg, env)?;
+            }
+            return Ok(());
+        }
 
         for class_name in class_names {
             self.infer_new_object_type(&class_name, args, expr, env)?;

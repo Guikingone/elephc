@@ -230,6 +230,18 @@ fn test_error_new_static_validates_child_constructor() {
     );
 }
 
+/// Verifies that `new static(...)` inside a method of an ABSTRACT class type-checks cleanly.
+/// `static` is late static binding: it resolves at runtime to the concrete called class, which
+/// can never be abstract, so the late-bound constructor validator must skip abstract classes in
+/// the hierarchy instead of falsely reporting "Cannot instantiate abstract class". Regression for
+/// the Symfony String `AbstractString::wrap` false positive.
+#[test]
+fn test_new_static_in_abstract_class_accepts() {
+    expect_ok(
+        "<?php abstract class AbstractString { public string $s = \"\"; public function make(string $v): static { return new static($v); } public function __construct(string $v) { $this->s = $v; } } class ByteString extends AbstractString {} class UnicodeString extends AbstractString {} $b = new ByteString(\"hi\"); echo $b->make(\"x\")->s;",
+    );
+}
+
 /// Verifies the builtin `DatePeriod` constructor enforces its 3-to-4 argument arity.
 #[test]
 fn test_error_date_period_too_few_args() {

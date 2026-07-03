@@ -260,3 +260,27 @@ fn test_static_return_static_factory_subclass_deferred() {
     );
     assert_eq!(out, "S");
 }
+
+/// Regression: `new static(...)` written inside a method of an ABSTRACT class must not be rejected
+/// with "Cannot instantiate abstract class". `static` is late static binding, so it resolves at
+/// runtime to the concrete called class (never abstract). The checker's late-bound constructor
+/// validator must skip abstract classes in the hierarchy. Here `AbstractString::make` returns
+/// `new static($v)`; calling it on a concrete `ByteString` receiver late-binds `static` to
+/// `ByteString`, so the resulting instance's `s` property is set and printed.
+#[test]
+fn test_new_static_in_abstract_class_binds_to_concrete_subclass() {
+    let out = compile_and_run(
+        "<?php
+        abstract class AbstractString {
+            public string $s = \"\";
+            public function make(string $v): static { return new static($v); }
+            public function __construct(string $v) { $this->s = $v; }
+        }
+        class ByteString extends AbstractString {}
+        class UnicodeString extends AbstractString {}
+        $b = new ByteString(\"hi\");
+        echo $b->make(\"x\")->s;
+        ",
+    );
+    assert_eq!(out, "x");
+}
