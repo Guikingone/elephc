@@ -80,6 +80,11 @@ pub(super) fn check_types_impl(
 
     let (mut flattened_classes, flatten_errors) = flatten_classes(program);
     errors.extend(flatten_errors);
+    // Record which flattened methods declare a `static` return BEFORE the substitution below
+    // collapses `static` to the declaring class. PHP's `: static` is late-bound to the receiver,
+    // but the collapse makes it indistinguishable from a genuine `: DeclaringClass` return. The
+    // recorded side-table lets method-call inference late-bind such returns to the receiver class.
+    checker.static_return_methods = collect_static_return_methods(&flattened_classes);
     // Resolve the relative class types `self`/`static`/`parent` in every member type annotation
     // now that inheritance and trait flattening have settled the concrete enclosing class. This
     // single pass feeds the schema signatures, the body-check pass, and codegen (which all read
@@ -348,6 +353,31 @@ fn flatten_enum_methods(program: &[Stmt]) -> Vec<FlattenedClass> {
         }
     }
     units
+}
+
+/// Scans each flattened class's methods for a `static` return type and records
+/// `(declaring_class, method_key)` for every method whose declared return type is (or contains, at
+/// the top level via `?static` / `static|X`) PHP's late-bound `static`.
+///
+/// Runs BEFORE `substitute_relative_class_types_in_flattened` collapses `static` to the declaring
+/// class, while the un-substituted annotation is still visible. The flattened `methods` vec merges
+/// only TRAIT methods (not `extends` parent methods), so a method is recorded under its true
+/// declaring class (`Base`, not the inheriting `Mid`). Method-call inference resolves the declaring
+/// class of the called method and consults this set to late-bind the return type to the receiver.
+fn collect_static_return_methods(classes: &[FlattenedClass]) -> HashSet<(String, String)> {
+    let mut set = HashSet::new();
+    for class in classes {
+        for method in &class.methods {
+            if method
+                .return_type
+                .as_ref()
+                .is_some_and(|ty| ty.is_or_contains_top_level_static())
+            {
+                set.insert((class.name.clone(), php_symbol_key(&method.name)));
+            }
+        }
+    }
+    set
 }
 
 /// Rewrites `self`/`static`/`parent` annotations across flattened class metadata.

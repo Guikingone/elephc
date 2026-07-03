@@ -701,3 +701,39 @@ class C implements I { public function f(): Animal { return new Animal(); } }
         "incompatible return type",
     );
 }
+
+/// Verifies that a genuine `: DeclaringClass` return (NOT `: static`) is early-bound to the
+/// declaring class and is NOT late-bound to the receiver. `Base::make(): Base` called on a `Sub`
+/// still yields `Base`, so a `Sub`-only method on the result is undefined. Guards that the
+/// late-static-binding refinement does not over-apply to explicit class-name returns (PHP
+/// late-binds only `: static`).
+#[test]
+fn test_error_declaring_class_return_not_late_bound() {
+    expect_error(
+        r#"<?php
+class Base { public function make(): Base { return new Base(); } }
+class Sub extends Base { public function only(): string { return "s"; } }
+$s = new Sub();
+$r = $s->make();
+echo $r->only();
+"#,
+        "Undefined method: Base::only",
+    );
+}
+
+/// Verifies that a `: self` return is early-bound to the declaring class (like an explicit class
+/// name) and is NOT late-bound to the receiver, mirroring PHP where only `: static` is late-bound.
+/// `Base::make(): self` on a `Sub` yields `Base`, so a `Sub`-only method on the result is undefined.
+#[test]
+fn test_error_self_return_not_late_bound() {
+    expect_error(
+        r#"<?php
+class Base { public function make(): self { return new Base(); } }
+class Sub extends Base { public function only(): string { return "s"; } }
+$s = new Sub();
+$r = $s->make();
+echo $r->only();
+"#,
+        "Undefined method: Base::only",
+    );
+}

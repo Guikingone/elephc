@@ -381,6 +381,7 @@ impl Checker {
             .get(&impl_class_name)
             .map(|class_info| Self::declared_method_param_flags(class_info, &method_key, false))
             .unwrap_or_default();
+        let mut resolved_return: Option<PhpType> = None;
         if let Some(class_info) = self.classes.get_mut(&impl_class_name) {
             if let Some(sig) = class_info.methods.get_mut(&method_key) {
                 let regular_param_count = if sig.variadic.is_some() {
@@ -432,8 +433,13 @@ impl Checker {
                             wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
-                return Ok(sig.return_type.clone());
+                resolved_return = Some(sig.return_type.clone());
             }
+        }
+        if let Some(ret) = resolved_return {
+            // Late-bind a `: static` return to the receiver class (PHP late static binding); a
+            // genuine `: DeclaringClass`/`: self` return is not in the side-table and passes through.
+            return Ok(self.resolve_static_return(&ret, class_name, method));
         }
         Ok(PhpType::Int)
     }
@@ -918,6 +924,7 @@ impl Checker {
                 .get(&direct_impl_class_name)
                 .map(|class_info| Self::declared_method_param_flags(class_info, method, false))
                 .unwrap_or_default();
+            let mut resolved_return: Option<PhpType> = None;
             if let Some(sig) = self
                 .classes
                 .get_mut(&direct_impl_class_name)
@@ -963,10 +970,83 @@ impl Checker {
                             wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
-                return Ok(sig.return_type.clone());
+                resolved_return = Some(sig.return_type.clone());
+            }
+            if let Some(ret) = resolved_return {
+                // `parent::`/`self::` are forwarding calls: a `: static` return late-binds to the
+                // current class (the runtime `$this` class), not the resolved parent/self class.
+                // The declaring class is looked up on the impl class, but the substitution target
+                // is `current_class`, so `parent::trimPrefix()` inside `UnicodeString` yields
+                // `UnicodeString`, not the parent's collapsed `AbstractUnicodeString`.
+                let bind = self
+                    .current_class
+                    .clone()
+                    .unwrap_or_else(|| class_name.to_string());
+                return Ok(self.resolve_static_return_bound(
+                    &ret,
+                    &direct_impl_class_name,
+                    &bind,
+                    method,
+                ));
             }
         }
         Ok(PhpType::Int)
+    }
+
+    /// Late-binds a `: static` instance-method return type to the receiver class (PHP late static
+    /// binding). Both the declaring-class lookup and the substitution target are the receiver, so
+    /// `$mid->append()` — where `append(): static` is declared in `Base` — returns `Mid`.
+    fn resolve_static_return(&self, ret: &PhpType, receiver_class: &str, method: &str) -> PhpType {
+        self.resolve_static_return_bound(ret, receiver_class, receiver_class, method)
+    }
+
+    /// Core late-static-binding substitution. Resolves the declaring class of `method` on
+    /// `declaring_lookup_class` (via `method_declaring_classes`, falling back to that class for a
+    /// directly declared method) and consults `static_return_methods`. When `(declaring, method)` is
+    /// a recorded `: static` return, the declaring-class `Object` — which the flatten pass collapsed
+    /// `static` into — is rewritten to `substitute_class`, preserving nullable/union shape.
+    /// Otherwise `ret` is returned unchanged, so a genuine `: DeclaringClass` / `: self` return stays
+    /// bound to its declaring class. `declaring_lookup_class` and `substitute_class` coincide for
+    /// direct instance dispatch but differ for `parent::`/`self::` forwarding calls, where `static`
+    /// binds to the current class rather than the resolved parent/self class.
+    fn resolve_static_return_bound(
+        &self,
+        ret: &PhpType,
+        declaring_lookup_class: &str,
+        substitute_class: &str,
+        method: &str,
+    ) -> PhpType {
+        let method_key = php_symbol_key(method);
+        let declaring = self
+            .classes
+            .get(declaring_lookup_class)
+            .and_then(|ci| ci.method_declaring_classes.get(&method_key))
+            .map(String::as_str)
+            .unwrap_or(declaring_lookup_class);
+        if !self
+            .static_return_methods
+            .contains(&(declaring.to_string(), method_key))
+        {
+            return ret.clone();
+        }
+        substitute_object_class(ret, substitute_class)
+    }
+}
+
+/// Replaces a bare `Object(_)` — or the `Object` members of a union — with `Object(receiver)`, used
+/// to late-bind a `static` return type to the receiver class. A `?static` return collapses to a
+/// `Union([Object(_), Void])`, so only the `Object` member is rewritten and the `Void` (null) arm is
+/// preserved. Non-object leaves pass through unchanged.
+fn substitute_object_class(ty: &PhpType, receiver: &str) -> PhpType {
+    match ty {
+        PhpType::Object(_) => PhpType::Object(receiver.to_string()),
+        PhpType::Union(members) => PhpType::Union(
+            members
+                .iter()
+                .map(|m| substitute_object_class(m, receiver))
+                .collect(),
+        ),
+        other => other.clone(),
     }
 }
 

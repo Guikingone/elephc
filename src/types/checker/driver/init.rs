@@ -131,6 +131,7 @@ impl Checker {
             first_class_callable_targets: HashMap::new(),
             interfaces: HashMap::new(),
             classes: HashMap::new(),
+            static_return_methods: HashSet::new(),
             declared_classes: HashSet::new(),
             enums: HashMap::new(),
             declared_interfaces: HashSet::new(),

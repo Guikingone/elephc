@@ -98,6 +98,12 @@ pub(crate) struct Checker {
     pub interfaces: HashMap<String, InterfaceInfo>,
     /// Class definitions collected during the first pass, keyed by canonical name.
     pub classes: HashMap<String, ClassInfo>,
+    /// Set of `(declaring_class, method_key)` pairs whose declared return type is (or contains, at
+    /// the top level) PHP's late-bound `static`. Populated from the flattened method annotations
+    /// BEFORE `substitute_relative_class_types` collapses `static` to the declaring class. Consulted
+    /// at method-call inference to substitute the RECEIVER's class for the return type, giving PHP's
+    /// late-static-binding semantics instead of the early-bound declaring class.
+    pub(crate) static_return_methods: HashSet<(String, String)>,
     /// Canonical class names declared in the program, available for forward references
     /// before the full class definitions are available.
     pub declared_classes: HashSet<String>,

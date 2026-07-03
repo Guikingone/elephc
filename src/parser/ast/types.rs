@@ -33,6 +33,22 @@ pub enum TypeExpr {
 }
 
 impl TypeExpr {
+    /// Returns true when `self` is PHP's late-bound `static` at the top level, including inside a
+    /// nullable (`?static`) or a top-level union member (`static|X`). Used to record late-static
+    /// return types before they are collapsed to the declaring class by
+    /// `substitute_relative_class_types`. Deep nesting (`array<static>`, `A&static`) is intentionally
+    /// not covered — it is out of scope for late-static-binding recovery.
+    pub fn is_or_contains_top_level_static(&self) -> bool {
+        match self {
+            TypeExpr::Named(name) => name.as_str().eq_ignore_ascii_case("static"),
+            TypeExpr::Nullable(inner) => inner.is_or_contains_top_level_static(),
+            TypeExpr::Union(members) => {
+                members.iter().any(|m| m.is_or_contains_top_level_static())
+            }
+            _ => false,
+        }
+    }
+
     /// Rewrites the relative class types `self`/`static` to `self_class` and `parent` to
     /// `parent_class`, recursing through nullable, union, array, and buffer members.
     ///
