@@ -223,6 +223,8 @@ mod absent_class;
 mod short_circuit_narrowing;
 #[path = "error_tests/switch_case_narrowing.rs"]
 mod switch_case_narrowing;
+#[path = "error_tests/ctor_arg_propagation_cross_class.rs"]
+mod ctor_arg_propagation_cross_class;
 
 // --- Iterator-related errors ---
 
