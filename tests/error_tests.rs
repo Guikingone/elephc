@@ -219,6 +219,8 @@ mod misc;
 mod image;
 #[path = "error_tests/absent_class.rs"]
 mod absent_class;
+#[path = "error_tests/short_circuit_narrowing.rs"]
+mod short_circuit_narrowing;
 
 // --- Iterator-related errors ---
 

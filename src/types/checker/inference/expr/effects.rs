@@ -7,6 +7,10 @@
 //!
 //! Key details:
 //! - Expression inference shares environments with statement checking, so variable and effect updates must stay synchronized.
+//! - Short-circuit `&&`/`||` chains thread a `chain_env` through their flattened operands so a
+//!   recognized type guard (`$v instanceof C`, `is_int/...($v)`, optionally `!`-negated) narrows the
+//!   guarded variable for the *subsequent* operands: guard-true (`then_ty`) for `&&`, guard-false
+//!   (`else_ty`) for `||`. Narrowing stays inside `chain_env` and never leaks past the chain.
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -34,8 +38,10 @@ impl Checker {
     ///
     /// # Key details
     /// - Assignment expressions call `check_assignment_expression` to properly register the binding.
-    /// - Binary `&&`/`||` clone the environment before the right branch to prevent assignments
-    ///   in the left branch from leaking into the right branch (PHP semantics).
+    /// - Binary `&&`/`||` flatten the same-operator chain and thread a cloned `chain_env` through
+    ///   the operands so an earlier operand's assignments are visible to later ones without leaking
+    ///   past the chain. Each operand's recognized type guard also narrows its variable in
+    ///   `chain_env` for the subsequent operands (`then_ty` for `&&`, `else_ty` for `||`).
     /// - Ternary, null coalesce, and match clone the environment per branch; the result type is
     ///   the wider of all branch types via `wider_type_syntactic`.
     /// - `preg_replace_callback` argument at index 1 is skipped (special handling for capture groups).
@@ -101,14 +107,40 @@ impl Checker {
                     // matching PHP's non-flow-sensitive undefined-variable behavior for out-params.
                     let mut operands = Vec::new();
                     flatten_short_circuit_operands(expr, op, &mut operands);
-                    let mut iter = operands.into_iter();
-                    if let Some(first) = iter.next() {
-                        self.infer_type_with_assignment_effects(first, env)?;
-                    }
+                    // Thread `chain_env` left-to-right so each operand is checked with the
+                    // assignments AND the type-guard narrowings implied by the operands that ran
+                    // before it. The first operand runs unconditionally, so it is inferred into
+                    // `env` (its definite assignments survive the chain); `chain_env` is then
+                    // re-cloned from `env` and every later operand mutates only `chain_env`.
                     let mut chain_env = env.clone();
-                    for operand in iter {
-                        self.infer_type_with_assignment_effects(operand, &mut chain_env)?;
-                        self.define_nested_by_ref_outputs(operand, env);
+                    for (i, &operand) in operands.iter().enumerate() {
+                        if i == 0 {
+                            self.infer_type_with_assignment_effects(operand, env)?;
+                            chain_env = env.clone();
+                        } else {
+                            self.infer_type_with_assignment_effects(operand, &mut chain_env)?;
+                            self.define_nested_by_ref_outputs(operand, env);
+                        }
+                        // Short-circuit type-guard narrowing: in a pure `&&` chain a later operand
+                        // runs only when this one was truthy, so a recognized type guard here
+                        // narrows its variable to the guard-true (`then_ty`) type for the operands
+                        // that follow; in a pure `||` chain a later operand runs only when this one
+                        // was falsy, so the guard-false (`else_ty`) complement applies. The narrowing
+                        // is read from and written to `chain_env` so repeated guards refine
+                        // cumulatively (e.g. `$x instanceof A && $x instanceof B`) and a variable
+                        // reassigned by an earlier operand is seen at its post-assignment type. This
+                        // runs for the FIRST operand too, which is frequently the guard itself
+                        // (`$q instanceof CQ && $q->m()`). Narrowing stays inside `chain_env`; the
+                        // `or_insert` surfacing below never overwrites an outer-scope type, so it
+                        // does not leak past the chain.
+                        if let Some(g) = self.type_guard_narrowing(operand, &chain_env) {
+                            let narrowed = if matches!(op, BinOp::And) {
+                                g.then_ty
+                            } else {
+                                g.else_ty
+                            };
+                            chain_env.insert(g.var, narrowed);
+                        }
                     }
                     // Surface ordinary assignments made in later (conditionally-evaluated) operands
                     // to the outer scope, mirroring the by-ref-output surfacing above and PHP's

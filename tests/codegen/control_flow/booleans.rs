@@ -364,3 +364,25 @@ echo $obj->n, ":", $arr[0], $arr[1];
     );
     assert_eq!(out, "42:78");
 }
+
+/// Verifies a type-guarded `&&` chain narrows its guarded variable for the right operand and runs
+/// correctly end-to-end. `is_int($x)` (operand 0) narrows the `int|string` parameter to `int`, so
+/// the right operand `$r = $x + 1` is checked and executed under the narrowed `int`; short-circuit
+/// semantics mean the assignment runs only when the guard is true. For `5` the guard is true so
+/// `$r` becomes `6`; for the string branch the guard is false, the RHS is skipped, and `$r` keeps
+/// its default `0`. This is the runtime evidence that short-circuit narrowing keeps codegen correct
+/// (the instanceof-subtype-method-call shape type-checks but is not yet lowerable by EIR).
+#[test]
+fn test_and_type_guard_narrows_right_operand_at_runtime() {
+    let out = compile_and_run(
+        r#"<?php
+function f(int|string $x): int {
+    $r = 0;
+    is_int($x) && ($r = $x + 1);
+    return $r;
+}
+echo f(5), ",", f("hi");
+"#,
+    );
+    assert_eq!(out, "6,0");
+}
