@@ -221,6 +221,8 @@ mod image;
 mod absent_class;
 #[path = "error_tests/short_circuit_narrowing.rs"]
 mod short_circuit_narrowing;
+#[path = "error_tests/switch_case_narrowing.rs"]
+mod switch_case_narrowing;
 
 // --- Iterator-related errors ---
 

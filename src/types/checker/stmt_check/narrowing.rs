@@ -3,7 +3,8 @@
 //! Narrows a union- or mixed-typed variable to the guarded type in the matching branch.
 //!
 //! Called from:
-//! - `crate::types::checker::stmt_check::control_flow` when checking `StmtKind::If`.
+//! - `crate::types::checker::stmt_check::control_flow` when checking `StmtKind::If` and
+//!   `switch (true)` case bodies.
 //!
 //! Key details:
 //! - Recognizes `is_int`/`is_float`/`is_string`/`is_bool`/`is_countable($var)` (and aliases) and
@@ -13,10 +14,14 @@
 //!   from previous guards). For a chain with no else where *every* clause body always diverges
 //!   (return/throw/exit/die/never-function), the accumulated complement is applied to the statements
 //!   after the entire if construct.
+//! - `and_chain_then_narrowings` collects the guard-true narrowings for a single guard or a pure
+//!   `&&` chain of guards, folding repeated guards on one variable cumulatively; it powers
+//!   `switch (true)` case-body narrowing. `case_body_terminates` gates that narrowing under
+//!   PHP fall-through (only a case that cannot be fallen into is narrowed by its own guard).
 //! - Conservative: a concrete (non-union, non-mixed) type is left unchanged, and an empty narrowing
 //!   result falls back to the original type, so valid code is never narrowed away to `Never`.
 
-use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -58,6 +63,49 @@ impl Checker {
             (matched, complement)
         };
         Some(GuardNarrowing { var, then_ty, else_ty })
+    }
+
+    /// Collects the guard-true (then) narrowings for a condition that is a single recognized guard
+    /// or a pure `&&` chain of guards (`$a instanceof X && is_int($b) && ...`). Recurses only through
+    /// `&&`; returns one `(var, then_type)` per distinct guarded variable, folding repeated guards on
+    /// the same variable cumulatively (so `$x instanceof A && $x instanceof B` intersects via
+    /// `narrow_to`). Returns an empty vector for `||`/mixed/`!`-top-level/non-guard conditions
+    /// (conservative — no narrowing rather than an unsound one). The else/complement side is
+    /// intentionally not computed: callers narrowing only a guard-true region (a `switch (true)`
+    /// case body) do not need it, and the `&&`-chain complement is a union this single-guard helper
+    /// must not approximate.
+    pub(crate) fn and_chain_then_narrowings(
+        &self,
+        cond: &Expr,
+        env: &TypeEnv,
+    ) -> Vec<(String, PhpType)> {
+        if let ExprKind::BinaryOp {
+            left,
+            op: BinOp::And,
+            right,
+        } = &cond.kind
+        {
+            // Process operands left-to-right, threading the accumulated narrowings. Each leaf's
+            // `then_ty` is already narrowed against the declared type in `env`; when two operands
+            // guard the same variable, intersect the accumulated type with the new one via
+            // `narrow_to` so repeated guards refine cumulatively.
+            let mut narrowings = self.and_chain_then_narrowings(left, env);
+            for (var, then_ty) in self.and_chain_then_narrowings(right, env) {
+                match narrowings.iter().position(|(v, _)| *v == var) {
+                    Some(idx) => {
+                        let existing = narrowings[idx].1.clone();
+                        narrowings[idx].1 = self.narrow_to(&existing, &then_ty);
+                    }
+                    None => narrowings.push((var, then_ty)),
+                }
+            }
+            narrowings
+        } else {
+            match self.type_guard_narrowing(cond, env) {
+                Some(g) => vec![(g.var, g.then_ty)],
+                None => vec![],
+            }
+        }
     }
 
     /// Resolves a relative class name (`self`/`static`/`parent`, case-insensitive) inside an
@@ -142,6 +190,23 @@ impl Checker {
             StmtKind::ExprStmt(expr) => self.expr_always_diverges(expr),
             _ => false,
         }
+    }
+
+    /// Returns true when a `switch` case body cannot fall through to the next case: its last
+    /// statement is `break`/`continue`/`return`/`throw`, or the body always diverges
+    /// (`exit`/`die`/never-returning call). Used to gate `switch (true)` case-body narrowing: a case
+    /// is only sound to narrow by its own guard when control cannot reach it by falling through from
+    /// a previous, non-terminating case (where the guard may be false at runtime).
+    pub(crate) fn case_body_terminates(&self, body: &[Stmt]) -> bool {
+        matches!(
+            body.last().map(|s| &s.kind),
+            Some(
+                StmtKind::Break(_)
+                    | StmtKind::Continue(_)
+                    | StmtKind::Return(_)
+                    | StmtKind::Throw(_)
+            )
+        ) || self.body_always_diverges(body)
     }
 
     /// Returns true if the expression is known to never return normally: a call to `exit()` or

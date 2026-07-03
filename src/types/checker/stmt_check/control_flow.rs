@@ -7,6 +7,9 @@
 //!
 //! Key details:
 //! - Branch and loop handling must preserve PHP execution order and conservative type environments.
+//! - `if`/elseif/else chains and `switch (true)` case bodies apply flow-sensitive type-guard
+//!   narrowing via `crate::types::checker::stmt_check::narrowing`; case-body narrowing is gated on
+//!   fall-in safety so a case reachable by fall-through from a non-terminating case is not narrowed.
 
 use crate::errors::CompileError;
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
@@ -151,8 +154,34 @@ impl Checker {
                     }
                 }
                 self.break_continue_depth += 1;
-                for (_, body) in cases {
-                    errors.extend(self.check_body(body, env));
+                // `switch (true)` runs a case body when the case guard is truthy, so the body should
+                // see that guard's narrowing (mirroring the if-then narrowing above). Only narrow a
+                // case body that cannot be reached by falling through from a previous, non-terminating
+                // case: otherwise the case's own guard may be false at runtime when control fell in.
+                // `fall_in_safe` is true for the first case and for any case whose predecessor
+                // terminates (break/continue/return/throw/diverge). The narrowing is inserted into a
+                // saved-and-restored `env`, so it never leaks past the case body or the switch.
+                let subject_is_true = matches!(&subject.kind, ExprKind::BoolLiteral(true));
+                let mut prev_terminates = true;
+                for (values, body) in cases {
+                    let fall_in_safe = prev_terminates;
+                    if subject_is_true && fall_in_safe && values.len() == 1 {
+                        let narrowings = self.and_chain_then_narrowings(&values[0], env);
+                        let saved: Vec<(String, Option<PhpType>)> = narrowings
+                            .iter()
+                            .map(|(var, _)| (var.clone(), env.get(var).cloned()))
+                            .collect();
+                        for (var, then_ty) in &narrowings {
+                            env.insert(var.clone(), then_ty.clone());
+                        }
+                        errors.extend(self.check_body(body, env));
+                        for (var, original) in &saved {
+                            restore_narrowed_var(env, var, original);
+                        }
+                    } else {
+                        errors.extend(self.check_body(body, env));
+                    }
+                    prev_terminates = self.case_body_terminates(body);
                 }
                 if let Some(body) = default {
                     errors.extend(self.check_body(body, env));
