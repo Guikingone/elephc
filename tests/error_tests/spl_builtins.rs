@@ -130,24 +130,46 @@ fn test_error_spl_autoload_extensions_rejects_dynamic_string_setter() {
     );
 }
 
-// Tests that `spl_object_id()` argument must be an object.
-// Fixture: typed `mixed` parameter in a user function, passed a non-object.
-/// Verifies that error SPL object ID rejects mixed.
+// Tests that `spl_object_id()` gradually accepts a `mixed`-typed argument.
+// Fixture: typed `mixed` parameter (the boxed value may be an object at runtime,
+// e.g. an instance of an uninstalled/unknown class inferred as `Mixed`).
+/// Verifies that `spl_object_id()` accepts a `mixed`-typed argument with no
+/// "argument must be an object" type error (gradual object acceptance).
 #[test]
-fn test_error_spl_object_id_rejects_mixed() {
+fn test_spl_object_id_accepts_mixed() {
+    expect_ok("<?php function id(mixed $value): int { return spl_object_id($value); }");
+}
+
+// Tests that `spl_object_hash()` gradually accepts a `mixed`-typed argument.
+// Fixture: typed `mixed` parameter (the boxed value may be an object at runtime,
+// e.g. an instance of an uninstalled/unknown class inferred as `Mixed`).
+/// Verifies that `spl_object_hash()` accepts a `mixed`-typed argument with no
+/// "argument must be an object" type error (gradual object acceptance).
+#[test]
+fn test_spl_object_hash_accepts_mixed() {
+    expect_ok(
+        "<?php function hash_value(mixed $value): string { return spl_object_hash($value); }",
+    );
+}
+
+// Negative control: `spl_object_id()` must still reject a bare scalar so genuine
+// "not an object" bugs keep surfacing under the gradual acceptance rule.
+/// Verifies that `spl_object_id()` still rejects a bare `Str` argument.
+#[test]
+fn test_error_spl_object_id_rejects_string() {
     expect_error(
-        "<?php function id(mixed $value): int { return spl_object_id($value); }",
+        "<?php spl_object_id(\"x\");",
         "spl_object_id() argument must be an object",
     );
 }
 
-// Tests that `spl_object_hash()` argument must be an object.
-// Fixture: typed `mixed` parameter in a user function, passed a non-object.
-/// Verifies that error SPL object hash rejects mixed.
+// Negative control: `spl_object_hash()` must still reject a bare scalar so genuine
+// "not an object" bugs keep surfacing under the gradual acceptance rule.
+/// Verifies that `spl_object_hash()` still rejects a bare `Int` argument.
 #[test]
-fn test_error_spl_object_hash_rejects_mixed() {
+fn test_error_spl_object_hash_rejects_int() {
     expect_error(
-        "<?php function hash_value(mixed $value): string { return spl_object_hash($value); }",
+        "<?php spl_object_hash(42);",
         "spl_object_hash() argument must be an object",
     );
 }

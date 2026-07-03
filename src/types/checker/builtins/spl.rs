@@ -23,6 +23,22 @@ type BuiltinResult = Result<Option<PhpType>, CompileError>;
 const ITERATOR_APPLY_UNKNOWN_STATIC_CALLBACK_SIG: &str =
     "iterator_apply() callback must have a statically known callable signature";
 
+/// Returns whether `ty` is gradually acceptable as an object argument to
+/// `spl_object_id`/`spl_object_hash`. Accepts a concrete object, `Mixed`
+/// (gradual — the boxed value may be an object at runtime, e.g. an instance of
+/// an uninstalled/unknown class inferred as `Mixed`), and a union that contains
+/// an object or `Mixed` member. Bare scalars (`Int`/`Bool`/`Str`/`Float`/etc.)
+/// are still rejected so genuine "not an object" bugs keep surfacing.
+fn spl_object_arg_is_gradually_acceptable(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(_) | PhpType::Mixed => true,
+        PhpType::Union(members) => members
+            .iter()
+            .any(|m| matches!(m, PhpType::Object(_) | PhpType::Mixed)),
+        _ => false,
+    }
+}
+
 /// Type-checks a call to an SPL autoload or object-helper builtin.
 ///
 /// Returns `Ok(None)` for unknown SPL builtins (caller falls through); `Ok(Some(t))`
@@ -125,7 +141,7 @@ pub(super) fn check_builtin(
                 ));
             }
             let ty = checker.infer_type(&args[0], env)?;
-            if !matches!(ty, PhpType::Object(_)) {
+            if !spl_object_arg_is_gradually_acceptable(&ty) {
                 return Err(CompileError::new(
                     span,
                     "spl_object_id() argument must be an object",
@@ -141,7 +157,7 @@ pub(super) fn check_builtin(
                 ));
             }
             let ty = checker.infer_type(&args[0], env)?;
-            if !matches!(ty, PhpType::Object(_)) {
+            if !spl_object_arg_is_gradually_acceptable(&ty) {
                 return Err(CompileError::new(
                     span,
                     "spl_object_hash() argument must be an object",
