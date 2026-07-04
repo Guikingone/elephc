@@ -532,7 +532,15 @@ fn parse_prefix_inc_dec(
     // infix binding power, 37), so binary operators stay with the enclosing context.
     if matches!(
         tokens.get(*pos).map(|(token, _)| token),
-        Some(Token::Variable(_) | Token::This)
+        Some(
+            Token::Variable(_)
+                | Token::This
+                | Token::Self_
+                | Token::Static
+                | Token::Parent
+                | Token::Identifier(_)
+                | Token::Backslash
+        )
     ) {
         let target = parse_expr_bp(tokens, pos, 38)?;
         if is_non_local_assignment_target(&target) {

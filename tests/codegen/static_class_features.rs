@@ -156,3 +156,45 @@ echo "|", C::$n;
     );
     assert_eq!(out, "7|7");
 }
+
+// --- prefix ++/-- on static-property l-values (parser gate #3) ---
+
+/// Verifies prefix `++self::$n` in a static method yields the new value (PHP semantics),
+/// mutating the static property in place. Previously failed with "Expected variable after '++'".
+#[test]
+fn test_prefix_increment_static_property_yields_new_value() {
+    let out = compile_and_run(
+        "<?php class C { public static int $n = 5; static function t(){ return ++self::$n; } } echo C::t();",
+    );
+    assert_eq!(out, "6");
+}
+
+/// Verifies prefix `--self::$n` decrements the static property and yields the new value.
+#[test]
+fn test_prefix_decrement_static_property_yields_new_value() {
+    let out = compile_and_run(
+        "<?php class C { public static int $n = 5; static function t(){ return --self::$n; } } echo C::t();",
+    );
+    assert_eq!(out, "4");
+}
+
+/// Verifies the postfix-vs-prefix sequence on a static property: `self::$n++` yields the old
+/// value, `++self::$n` yields the new value, and both mutate in place. Cross-checked against
+/// `php -r` (output `5,7,7`).
+#[test]
+fn test_static_property_post_then_prefix_incdec_sequence() {
+    let out = compile_and_run(
+        "<?php class C{ public static int $n=5; static function t(){ $a=self::$n++; $b=++self::$n; return \"$a,$b,\".self::$n; } } echo C::t();",
+    );
+    assert_eq!(out, "5,7,7");
+}
+
+/// Verifies prefix `++self::$n;` as a bare (result-discarded) statement mutates the static
+/// property in place — the statement-position path that the Symfony ErrorHandler exercises.
+#[test]
+fn test_prefix_increment_static_property_statement_position() {
+    let out = compile_and_run(
+        "<?php class C { public static int $n = 1; static function bump(){ ++self::$n; } } C::bump(); C::bump(); echo C::$n;",
+    );
+    assert_eq!(out, "3");
+}

@@ -351,6 +351,26 @@ pub(in crate::parser::stmt) fn try_parse_prefix_incdec(
         _ => return Ok(None),
     };
 
+    // A static-scope l-value target (`++self::$n;`, `--Foo::$n;`, `++\Ns\Foo::$n;`) begins
+    // with a static receiver token rather than a variable. It is parsed through the general
+    // expression grammar — which desugars the prefix increment to a compound assignment and
+    // rejects non-l-value operands (e.g. `++FOO;`) — and emitted as an expression statement,
+    // mirroring how the postfix form `self::$n++;` already parses at statement position.
+    if matches!(
+        tokens.get(start + 1).map(|(token, _)| token),
+        Some(
+            Token::Self_
+                | Token::Static
+                | Token::Parent
+                | Token::Identifier(_)
+                | Token::Backslash
+        )
+    ) {
+        let expr = parse_expr(tokens, pos)?;
+        expect_semicolon(tokens, pos)?;
+        return Ok(Some(Stmt::new(StmtKind::ExprStmt(expr), span)));
+    }
+
     // The l-value must begin with a variable or `$this`, and the token after it must
     // be a complex-target marker (`->`, `?->`, `[`). A bare `++$x;` (marker is `;`)
     // is left to `parse_incdec_stmt`, which keeps the `PreIncrement` node.

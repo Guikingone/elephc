@@ -428,3 +428,54 @@ fn test_plain_property_assignment_stays_a_statement() {
         stmts[0].kind
     );
 }
+
+/// Verifies that prefix `++`/`--` on a static-property l-value parses as a compound
+/// assignment whose target is a `StaticPropertyAccess`, for every static-scope receiver
+/// form (`self`, `static`, an unqualified class name, and a fully-qualified name).
+/// This is the parser-only gate #3 fix: prefix increment of `self::$n` previously failed
+/// with "Expected variable after '++'".
+#[test]
+fn test_prefix_incdec_static_property_parses() {
+    /// Parses `src` and returns the `StaticReceiver` of the `StaticPropertyAccess` that is
+    /// the target of the sole compound-assignment statement, asserting the property name.
+    fn static_prop_receiver(src: &str, property: &str) -> StaticReceiver {
+        let stmts = parse_source(src);
+        assert_eq!(stmts.len(), 1, "expected one statement for {src:?}");
+        let expr = match &stmts[0].kind {
+            StmtKind::ExprStmt(expr) => expr,
+            other => panic!("expected ExprStmt for {src:?}, got {other:?}"),
+        };
+        match &expr.kind {
+            ExprKind::Assignment { target, .. } => match &target.kind {
+                ExprKind::StaticPropertyAccess { receiver, property: prop } => {
+                    assert_eq!(prop, property, "property mismatch for {src:?}");
+                    receiver.clone()
+                }
+                other => panic!("expected StaticPropertyAccess target for {src:?}, got {other:?}"),
+            },
+            other => panic!("expected Assignment for {src:?}, got {other:?}"),
+        }
+    }
+
+    assert_eq!(static_prop_receiver("<?php ++self::$n;", "n"), StaticReceiver::Self_);
+    assert_eq!(static_prop_receiver("<?php --self::$n;", "n"), StaticReceiver::Self_);
+    assert_eq!(
+        static_prop_receiver("<?php ++static::$n;", "n"),
+        StaticReceiver::Static
+    );
+    assert!(matches!(
+        static_prop_receiver("<?php ++Foo::$n;", "n"),
+        StaticReceiver::Named(_)
+    ));
+    assert!(matches!(
+        static_prop_receiver("<?php ++\\Ns\\Foo::$n;", "n"),
+        StaticReceiver::Named(_)
+    ));
+}
+
+/// Regression guard: a prefix `++` on a non-l-value operand (a bare constant) must still
+/// fail to parse, confirming the broadened static-scope gate does not accept non-targets.
+#[test]
+fn test_prefix_increment_on_bare_constant_still_fails() {
+    assert!(parse_fails("<?php ++FOO;"));
+}
