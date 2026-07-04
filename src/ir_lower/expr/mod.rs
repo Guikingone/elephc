@@ -9950,7 +9950,10 @@ fn lower_instanceof(
 }
 
 /// Resolves lexical `instanceof` target keywords to concrete class names when possible.
-fn instanceof_target_name(ctx: &LoweringContext<'_, '_>, name: &str) -> String {
+///
+/// Shared with `crate::ir_lower::stmt::apply_instanceof_then_narrowing`, which reuses it to narrow
+/// an `instanceof`-guarded receiver in an `if` then-branch.
+pub(crate) fn instanceof_target_name(ctx: &LoweringContext<'_, '_>, name: &str) -> String {
     match name.trim_start_matches('\\') {
         "self" => ctx.current_class.clone().unwrap_or_else(|| name.to_string()),
         "parent" => ctx

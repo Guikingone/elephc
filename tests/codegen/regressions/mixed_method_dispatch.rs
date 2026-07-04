@@ -12,9 +12,12 @@
 //!   these fixtures assert PHP-equivalent stdout.
 //! - The `narrowed_interface_*` tests cover method calls on an interface-typed
 //!   receiver where the method is NOT on the interface (the checker accepted it
-//!   via `instanceof` narrowing to a concrete subtype). The backend falls back to
-//!   the same runtime class-id dispatch, gating the `__call`-resolving case with a
-//!   loud unsupported error so it can never miscompile.
+//!   via `instanceof` narrowing to a concrete subtype). For a direct
+//!   `if ($x instanceof C)` guard on a simple variable, ir_lower now narrows the
+//!   receiver to the concrete class so ordinary concrete dispatch (including
+//!   by-reference-return ref-cell aliasing) runs. Other guard shapes fall back to
+//!   runtime class-id dispatch; a residual un-narrowable `Mixed` by-ref
+//!   reference-bind is a loud unsupported error so it can never miscompile.
 
 use super::*;
 
@@ -207,16 +210,15 @@ echo f(new C());
     assert_eq!(out, "C");
 }
 
-/// Gate boundary (deferred): a by-reference-returning off-interface method (`Box::&ref`) called
-/// through an interface receiver MUST fail to compile with the loud unsupported error rather than
-/// miscompile. The checker types the off-interface result as `Mixed`, but the by-ref candidate
-/// returns a typed ref-cell pointer; storing it unboxed into the `Mixed` slot and rebinding it
-/// silently yields a wrong value, so the gate keeps the loud error until a follow-up threads the
-/// concrete return type through the narrowed ref-cell binding.
+/// A by-reference-returning off-interface method (`Box::&ref`) called through an interface receiver
+/// and reference-bound (`$r = &$c->ref()`). ir_lower narrows the `if ($c instanceof Box)` receiver
+/// to `Box`, so `method_call_result_type` resolves the concrete `&ref(): array` signature and the
+/// whole ref-cell chain (`bind_ref_cell_ptr`, `load_ref_cell`, `mixed_array_append`, the `implode`
+/// arg) is Array-typed instead of `Mixed`. The ordinary by-ref path then aliases the property cell
+/// correctly, so appending `'x'` and imploding produces `seed,x`.
 #[test]
-#[ignore = "Phase 3: narrowed by-reference-return dispatch SIGSEGVs (exit 139) — a defect INDEPENDENT of the __call args-array fix (Bug 2). The by-ref result deref/rebind through the narrowed Mixed-typed slot is still wrong; needs its own investigation before this can run."]
-fn test_narrowed_interface_by_reference_return_method_gate() {
-    compile_and_run(
+fn test_narrowed_interface_by_reference_return_method_dispatch() {
+    let out = compile_and_run(
         r#"<?php
 interface Container { function label(): string; }
 class Box implements Container {
@@ -235,6 +237,63 @@ function grab(Container $c): string {
 echo grab(new Box());
 "#,
     );
+    assert_eq!(out, "seed,x");
+}
+
+/// Value-read companion to the reference-bind case: a narrowed by-reference-return method
+/// (`Box::&ref`) whose result is consumed BY VALUE (`count($c->ref())`, no `=&`). With no downstream
+/// `BindRefCellPtr`, `store_method_call_result` takes the deref+box arm so the `Mixed` slot holds a
+/// well-formed boxed array, keeping that path covered.
+#[test]
+fn test_narrowed_interface_by_reference_return_value_read() {
+    let out = compile_and_run(
+        r#"<?php
+interface I { function base(): string; }
+class Box implements I {
+    public array $items = ['a','b'];
+    public function base(): string { return "b"; }
+    public function &ref(): array { return $this->items; }
+}
+function peek(I $c): int { if ($c instanceof Box) { return count($c->ref()); } return 0; }
+echo peek(new Box());
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// Plain-concrete (no interface, no narrowing) regression for the by-reference-return VALUE-READ
+/// bug (Fix #2): `count($b->ref())` consumes a by-reference-returning method by value. Before the
+/// fix, `store_method_call_result` stored the raw ref-cell pointer for the concrete-typed result,
+/// so `count()` read a pointer (garbage). The value-read arm now dereferences the cell and takes an
+/// owning COW reference, so the count is the real element count.
+#[test]
+fn test_plain_by_reference_return_value_read_count() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public array $items = ['a','b','c']; public function &ref(): array { return $this->items; } }
+$b = new Box();
+echo count($b->ref());
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+/// Plain-concrete regression that the by-reference-return value read is copy-on-write (Fix #2):
+/// `$x = $b->ref()` shares the property's array by refcount, and mutating `$x` must NOT mutate the
+/// property. Appending to `$x` grows it to 4 while `$b->ref()` still counts 3.
+#[test]
+fn test_plain_by_reference_return_value_read_is_cow() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public array $items = ['a','b','c']; public function &ref(): array { return $this->items; } }
+$b = new Box();
+$x = $b->ref();
+echo count($x);
+$x[] = 'z';
+echo count($x) . count($b->ref());
+"#,
+    );
+    assert_eq!(out, "343");
 }
 
 /// Nullable `?I` receiver: the narrowed dispatch runs through the nullable twin, which unboxes
@@ -287,4 +346,87 @@ echo $o->whatever();
 "#,
     );
     assert_eq!(out, "handled:whatever");
+}
+
+/// Virtual dispatch survives ir_lower's `if`-guard narrowing: with `if ($v instanceof A)` narrowing
+/// `$v` to `A`, a subclass that OVERRIDES the off-interface method (`C extends A` with its own
+/// `extra`) still virtual-dispatches. `f(new C())` runs `C::extra` (`"C"`) even though the guard
+/// names `A`, and `f(new A())` runs `A::extra` (`"X"`), so the output is `CX`.
+#[test]
+fn test_narrowed_if_guard_virtual_dispatch_survives_narrowing() {
+    let out = compile_and_run(
+        r#"<?php
+interface I { function base(): string; }
+class A implements I { function base(): string {return "A";} function extra(): string {return "X";} }
+class C extends A { function extra(): string {return "C";} }
+function f(I $v): string { if ($v instanceof A) { return $v->extra(); } return "n"; }
+echo f(new C()), f(new A());
+"#,
+    );
+    assert_eq!(out, "CX");
+}
+
+/// `__call` routing through an `if`-guard-narrowed receiver: `if ($v instanceof A)` narrows `$v` to
+/// `A`, and calling the off-interface method `extra("arg")` (which `A` resolves via `__call`) goes
+/// through the ordinary concrete-receiver path. The `__call` body reads `$a[0]`, so the result is
+/// `m:extra:arg`.
+#[test]
+fn test_narrowed_if_guard_magic_call_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+interface I { function base(): string; }
+class A implements I { function base(): string {return "A";} function __call($n, $a): string {return "m:$n:".$a[0];} }
+function f(I $v): string { if ($v instanceof A) { return $v->extra("arg"); } return $v->base(); }
+echo f(new A());
+"#,
+    );
+    assert_eq!(out, "m:extra:arg");
+}
+
+/// Heap cleanliness for the narrowed `if`-guard by-reference-return reference-bind, run in a loop:
+/// `grab()` reference-binds the `Box::&ref` property cell, appends to it, and returns an `implode`.
+/// The aliased array is the property's own storage, so the local `$r` must NOT release it. Asserts
+/// the output and that `allocs == frees` under gc_stats — no double-free of the property array and
+/// no leak across repeated calls.
+///
+/// IGNORED: this exposes an open, GENERAL object-destructor gap (tracked as by-ref bug #5), NOT a
+/// narrowing/bind bug. Any class that owns a reference property — one it exposes/returns by
+/// reference (`public function &ref(): array { return $this->items; }`) — allocates a 16-byte
+/// ref-cell per instance at construction (`emit_owned_reference_property_cell`). The per-class GC
+/// descriptor (`_class_gc_desc_N` in `src/codegen/runtime/data/user.rs`) tags every
+/// `reference_properties` entry `0` = "no cleanup", so `__rt_object_free_deep` never releases the
+/// cell OR the array it holds. The leak is purely instance-proportional: a bare
+/// `for (...) { $b = new Box(); }` loop (no method call, no `=&` bind) leaks ~4 blocks/iteration
+/// (`--heap-debug`). The correct fix is a two-target change to `__rt_object_free_deep` plus a new
+/// type-aware descriptor tag for OWNED reference-property cells (deref cell → decref payload → free
+/// cell), which is broad shared-GC surgery deferred per the spec's STOP-and-report clause.
+#[test]
+#[ignore = "open object-destructor gap: owned reference-property cells (and their arrays) leak (by-ref bug #5)"]
+fn test_narrowed_if_guard_by_reference_return_heap_clean() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+interface Container { function label(): string; }
+class Box implements Container {
+    public array $items = ['seed'];
+    public function label(): string { return "box"; }
+    public function &ref(): array { return $this->items; }
+}
+function grab(Container $c): string {
+    if ($c instanceof Box) {
+        $r = &$c->ref();
+        $r[] = 'x';
+        return implode(',', $r);
+    }
+    return "n";
+}
+for ($i = 0; $i < 3; $i++) {
+    $s = grab(new Box());
+    echo $s;
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "seed,xseed,xseed,x");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
 }

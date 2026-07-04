@@ -1179,3 +1179,32 @@ echo $total;
     let (allocs, frees) = parse_gc_stats(&out.stderr);
     assert_eq!(allocs, frees, "trim self-reassign loop leaked or double-freed");
 }
+
+/// Plain-concrete (no interface, no narrowing) heap regression for by-ref bug #5: a class that owns
+/// a reference property (one it returns by reference, `&ref()`) allocates a 16-byte ref-cell per
+/// instance at construction, but `__rt_object_free_deep` never releases that cell or the array it
+/// holds — the per-class GC descriptor tags owned reference properties `0` (no cleanup). The leak is
+/// purely instance-proportional: this loop only constructs objects (no method call, no `=&` bind)
+/// yet leaks ~4 blocks/iteration.
+///
+/// IGNORED: the correct fix is a two-target change to `__rt_object_free_deep` plus a new type-aware
+/// descriptor tag for OWNED reference-property cells (deref cell → decref payload → free cell), which
+/// is broad shared-GC surgery deferred per the by-ref spec's STOP-and-report clause. Once fixed, this
+/// loop must report `allocs == frees`.
+#[test]
+#[ignore = "open object-destructor gap: owned reference-property cells (and their arrays) leak (by-ref bug #5)"]
+fn test_owned_reference_property_object_freed_cleanly() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+class Box { public array $items = ['a']; public function &ref(): array { return $this->items; } }
+for ($i = 0; $i < 5; $i++) {
+    $b = new Box();
+}
+echo "ok";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ok");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "owned reference-property object leaked: {}", out.stderr);
+}

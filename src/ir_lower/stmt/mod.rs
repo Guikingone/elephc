@@ -25,7 +25,9 @@ use crate::ir_lower::expr::{
     type_satisfies_array_access_for_ir,
 };
 use crate::names::{php_symbol_key, property_hook_set_method};
-use crate::parser::ast::{CatchClause, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
+use crate::parser::ast::{
+    BinOp, CatchClause, Expr, ExprKind, InstanceOfTarget, StaticReceiver, Stmt, StmtKind,
+};
 use crate::span::Span;
 use crate::types::PhpType;
 
@@ -410,6 +412,7 @@ fn lower_if_chain(
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());
     ctx.restore_local_types(split_types.clone());
+    apply_instanceof_then_narrowing(ctx, condition);
     lower_block(ctx, then_body);
     let then_initialized = ctx.initialized_slots_snapshot();
     let then_types = ctx.local_types_snapshot();
@@ -463,6 +466,34 @@ fn lower_if_chain(
     );
     ctx.restore_local_types(merged_types);
     merge_reachable
+}
+
+/// Refines the flow-sensitive local types for an `if`'s then-branch using `instanceof` guards in
+/// the condition, mirroring the type checker's narrowing so the EIR backend sees the concrete
+/// class. Without this, a call to a method that exists only on the concrete subtype (accepted by
+/// the checker via `instanceof` narrowing) is lowered on the declared interface type, resolves to
+/// no signature, and falls back to `Mixed` — which mis-types by-reference-return ref-cell chains
+/// and crashes. Handles `$var instanceof Class` directly and both operands of a top-level `&&`
+/// chain; other guard shapes (member-path receivers, `||`, ternary) keep the runtime class-id
+/// fallback and are out of scope here.
+fn apply_instanceof_then_narrowing(ctx: &mut LoweringContext<'_, '_>, condition: &Expr) {
+    match &condition.kind {
+        ExprKind::InstanceOf { value, target: InstanceOfTarget::Name(name) } => {
+            if let ExprKind::Variable(var) = &value.kind {
+                let class_name = crate::ir_lower::expr::instanceof_target_name(ctx, name.as_str());
+                // Only narrow to a statically-known CLASS (the off-interface-method case). Narrowing
+                // to an interface would not resolve the method and is a needless de-refinement.
+                if ctx.classes.contains_key(&class_name) {
+                    ctx.set_local_type(var, PhpType::Object(class_name));
+                }
+            }
+        }
+        ExprKind::BinaryOp { left, op: BinOp::And, right } => {
+            apply_instanceof_then_narrowing(ctx, left);
+            apply_instanceof_then_narrowing(ctx, right);
+        }
+        _ => {}
+    }
 }
 
 /// Merges the flow-sensitive local-type facts from the reachable branches of an `if`.

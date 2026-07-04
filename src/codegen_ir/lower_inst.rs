@@ -4541,9 +4541,15 @@ pub(super) fn store_call_result(
 ///   type, and the downstream `bind_ref_cell_ptr` aliases that raw pointer directly. Store it
 ///   single-word and opaque so true aliasing works — unchanged behavior.
 /// - Narrowed dispatch: the checker cannot see the off-interface method's return type, so it types
-///   the SSA result as `Mixed`. Storing the raw ref-cell pointer into that `Mixed` slot makes
-///   `load_ref_cell` misread word@0 as a Mixed cell. Instead, dereference the typed cell to its
-///   concrete value and box it into the Mixed slot so downstream reads see a well-formed value.
+///   the SSA result as `Mixed`. Two sub-cases split on how the `Mixed` result is consumed:
+///   - Reference-bind (`$x = &$obj->m()`, a downstream `BindRefCellPtr` over this result): this is a
+///     LOUD unsupported gate. The supported path is ir_lower narrowing a direct
+///     `if ($x instanceof C)` guard to the concrete receiver, which makes the ref-cell chain
+///     Array-typed (not `Mixed`) so it never reaches here. A residual un-narrowable guard shape
+///     (ternary, member-path) that still produces a `Mixed` by-ref reference-bind would SIGSEGV
+///     downstream, so it is rejected at compile time rather than miscompiled.
+///   - Value-read: dereference the typed cell to its concrete value and box it into the Mixed slot
+///     so downstream reads see a well-formed value.
 fn store_method_call_result(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -4552,17 +4558,50 @@ fn store_method_call_result(
     if target.by_ref_return {
         if let Some(result) = inst.result {
             if matches!(ctx.value_php_type(result)?, PhpType::Mixed | PhpType::Union(_)) {
+                if value_is_reference_bound(ctx.function, result) {
+                    return Err(CodegenIrError::unsupported(
+                        "by-reference binding (`=&`) of a by-reference-returning method reached through \
+                         instanceof-narrowed interface dispatch is only supported when the guard is a direct \
+                         `if ($x instanceof C)` on a simple variable (which ir_lower narrows); this guard shape \
+                         could not be narrowed to a concrete receiver".to_string(),
+                    ));
+                } else {
+                    let return_repr = target.return_ty.codegen_repr();
+                    emit_deref_by_ref_cell_result(ctx, &return_repr);
+                    emit_box_current_value_as_mixed(ctx.emitter, &return_repr);
+                    ctx.store_result_value(result)?;
+                }
+            } else if value_is_reference_bound(ctx.function, result) {
+                // `$x = &$obj->m()`: the downstream `BindRefCellPtr` aliases the raw ref-cell
+                // pointer, so keep it single-word and opaque.
+                ctx.store_int_result_value(result)?;
+            } else {
+                // Value read (`$x = $obj->m()`, `count($obj->m())`, …): dereference the cell to its
+                // value and take an owning (COW) reference so downstream sees a well-formed owned
+                // value, matching PHP's copy-on-read of a by-reference return. `store_result_value`
+                // only moves/stores registers (no retain), so the explicit incref establishes the
+                // shared-refcount COW relationship with the property's array; exactly one decref then
+                // balances it at `$x`'s scope end.
                 let return_repr = target.return_ty.codegen_repr();
                 emit_deref_by_ref_cell_result(ctx, &return_repr);
-                emit_box_current_value_as_mixed(ctx.emitter, &return_repr);
+                abi::emit_incref_if_refcounted(ctx.emitter, &return_repr);
                 ctx.store_result_value(result)?;
-            } else {
-                ctx.store_int_result_value(result)?;
             }
         }
         return Ok(());
     }
     store_call_result(ctx, inst, &target.return_ty)
+}
+
+/// Returns whether `value` is consumed by a `BindRefCellPtr` (a `$x = &…` reference bind)
+/// anywhere in the function. A by-reference-return method result that is reference-bound must
+/// keep its RAW ref-cell pointer (so the alias targets the real cell); dereferencing and boxing
+/// it — correct for a value read — would orphan the cell and SIGSEGV on the aliased load.
+fn value_is_reference_bound(function: &Function, value: ValueId) -> bool {
+    function
+        .instructions
+        .iter()
+        .any(|inst| inst.op == Op::BindRefCellPtr && inst.operands.first() == Some(&value))
 }
 
 /// Dereferences a by-reference-return cell pointer currently in the integer result register into
