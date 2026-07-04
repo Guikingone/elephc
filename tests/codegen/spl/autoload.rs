@@ -2033,3 +2033,52 @@ fn test_uncalled_optional_helper_still_pruned_after_class_load_iteration() {
         result.err(),
     );
 }
+
+/// Verifies that when the entry file lives in a subdirectory (e.g. `pub/index.php`)
+/// and `composer.json` (with a PSR-4 map to a sibling `src/`) sits at the project
+/// root one level up, the compiler walks up to discover the composer root and
+/// resolves an app PSR-4 class. This mirrors Symfony's `public/index.php` layout and
+/// proves `find_composer_project_root` wires the autoload root to the composer.json
+/// directory rather than the entry directory. Exercised through the CLI so the real
+/// `pipeline::compile` walk-up path runs.
+#[test]
+fn test_psr4_autoload_walks_up_from_subdir_entry() {
+    let dir = make_cli_test_dir("elephc_autoload_walkup");
+    // composer.json at the project root maps App\ -> src/ (a sibling of pub/).
+    fs::write(
+        dir.join("composer.json"),
+        r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+    )
+    .unwrap();
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(
+        dir.join("src/Greeter.php"),
+        "<?php\nnamespace App;\nclass Greeter {\n    public function hello(): string { return \"walked-up\"; }\n}\n",
+    )
+    .unwrap();
+    // Entry point sits one level below the composer root, like Symfony's public/.
+    fs::create_dir_all(dir.join("pub")).unwrap();
+    let entry = dir.join("pub/index.php");
+    fs::write(
+        &entry,
+        "<?php\n$g = new App\\Greeter();\necho $g->hello();\n",
+    )
+    .unwrap();
+
+    let mut compile_cmd = elephc_cli_command(&dir);
+    compile_cmd.arg(&entry);
+    let compile_out = compile_cmd.output().expect("failed to run elephc CLI");
+    assert!(
+        compile_out.status.success(),
+        "compiling a subdir entry must walk up to the composer root and resolve App\\Greeter; \
+         stderr: {}",
+        String::from_utf8_lossy(&compile_out.stderr)
+    );
+
+    let bin_path = dir.join("pub/index");
+    let output = run_binary(&bin_path, &dir);
+    assert!(output.status.success(), "walk-up binary exited with error");
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "walked-up");
+
+    let _ = fs::remove_dir_all(&dir);
+}
