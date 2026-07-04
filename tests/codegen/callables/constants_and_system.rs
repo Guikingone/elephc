@@ -140,6 +140,59 @@ fn test_define_duplicate_is_checked_at_runtime() {
     assert_eq!(out.stderr, "");
 }
 
+// Regression (Bug B): a `define()` inside a function body is prescanned so a
+// bareword read of the constant resolves instead of SIGSEGV'ing.
+/// Verifies that an in-function `define()` is visible to a later bareword read.
+#[test]
+fn test_in_function_define_visible_to_bareword() {
+    let out = compile_and_run(
+        "<?php\nfunction once() { return define(\"RD\", 1); }\nonce();\necho RD;\n",
+    );
+    assert_eq!(out, "1");
+}
+
+// Regression (Bug B): `defined()` sees a constant defined inside a function body.
+/// Verifies that `defined()` reports true after an in-function `define()`.
+#[test]
+fn test_in_function_define_visible_to_defined() {
+    let out = compile_and_run(
+        "<?php\nfunction once() { define(\"RD\", 7); }\nonce();\nvar_dump(defined(\"RD\"));\n",
+    );
+    assert_eq!(out, "bool(true)\n");
+}
+
+// Regression (Bug B): `constant()` resolves a constant defined inside a function.
+/// Verifies that `constant()` returns the value of an in-function `define()`.
+#[test]
+fn test_in_function_define_visible_to_constant() {
+    let out = compile_and_run(
+        "<?php\nfunction once() { define(\"RD\", 7); }\nonce();\necho constant(\"RD\");\n",
+    );
+    assert_eq!(out, "7");
+}
+
+// Regression (Bug B): a `define()` nested inside an `if`/`for` within a function
+// body is still discovered by the prescan and resolves at every read path.
+/// Verifies that a define nested in control-flow inside a function resolves.
+#[test]
+fn test_define_nested_in_control_flow_in_function() {
+    let out = compile_and_run(
+        "<?php\nfunction setup() { if (true) { for ($i=0;$i<1;$i++) { define(\"NESTED\", 42); } } }\nsetup();\necho NESTED, \"|\", constant(\"NESTED\");\nvar_dump(defined(\"NESTED\"));\n",
+    );
+    assert_eq!(out, "42|42bool(true)\n");
+}
+
+// Regression (Bug B): a top-level `define()` still resolves (no regression from
+// extending the prescan walker to recurse into bodies).
+/// Verifies that a top-level `define()` remains visible after the walker change.
+#[test]
+fn test_top_level_define_still_visible() {
+    let out = compile_and_run(
+        "<?php\ndefine(\"RC\", 42);\necho RC, \"|\", constant(\"RC\");\nvar_dump(defined(\"RC\"));\n",
+    );
+    assert_eq!(out, "42|42bool(true)\n");
+}
+
 // Tests that two `const` declarations can be used together in an expression:
 // `const X = 10; const Y = 20; echo X + Y;` outputs "30".
 /// Verifies that const in expression.

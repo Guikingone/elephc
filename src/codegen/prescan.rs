@@ -234,9 +234,20 @@ pub(crate) fn collect_constants(
 /// Recursively scans statements for user-defined constant declarations.
 ///
 /// Visits `const` declarations and `define()` function calls, inserting each
-/// constant's name, expression, and inferred type into `constants`. Skips nested
-/// functions/classes; only processes statement bodies at the top level and within
-/// `IncludeOnceGuard` or synthetic bodies.
+/// constant's name, expression, and inferred type into `constants`. Recurses into
+/// every body-bearing statement kind — function/method bodies, control-flow bodies
+/// (if/loops/try/switch), namespace blocks, and include/synthetic bodies — so an
+/// in-function or in-method literal `define()` is discovered too.
+///
+/// AOT approximation: a `define()` found inside a function/method or a conditional
+/// branch is registered as program-wide defined regardless of whether or when the
+/// enclosing code actually runs. This mirrors the pre-existing approximation for a
+/// top-level `define()` and is strictly better than the previous behaviour, where an
+/// in-function `define()` was invisible and reads SIGSEGV'd. `.or_insert` keeps the
+/// first-found definition, and callers walk top-level statements first, so a
+/// top-level define consistently shadows an in-function one. A genuinely
+/// never-defined constant read remains out of scope (the `LoadGlobal` fallback should
+/// ideally throw `\Error` rather than SIGSEGV — separate hardening).
 fn collect_constant_decls(
     stmts: &[Stmt],
     constants: &mut HashMap<String, (ExprKind, PhpType)>,
@@ -249,23 +260,107 @@ fn collect_constant_decls(
                     .or_insert((value.kind.clone(), constant_expr_type(&value.kind)));
             }
             StmtKind::ExprStmt(expr) => {
-                if let ExprKind::FunctionCall { name, args } = &expr.kind {
-                    if name.as_str() == "define" && args.len() == 2 {
-                        if let ExprKind::StringLiteral(const_name) = &args[0].kind {
-                            constants.entry(const_name.clone()).or_insert((
-                                args[1].kind.clone(),
-                                constant_expr_type(&args[1].kind),
-                            ));
-                        }
-                    }
+                register_define_from_expr(&expr.kind, constants);
+            }
+            StmtKind::Return(Some(expr)) => {
+                register_define_from_expr(&expr.kind, constants);
+            }
+            StmtKind::FunctionDecl { body, .. }
+            | StmtKind::IncludeOnceGuard { body, .. }
+            | StmtKind::NamespaceBlock { body, .. } => {
+                collect_constant_decls(body, constants);
+            }
+            StmtKind::Synthetic(body) => {
+                collect_constant_decls(body, constants);
+            }
+            StmtKind::ClassDecl { methods, .. }
+            | StmtKind::TraitDecl { methods, .. }
+            | StmtKind::EnumDecl { methods, .. } => {
+                for method in methods {
+                    collect_constant_decls(&method.body, constants);
                 }
             }
-            StmtKind::IncludeOnceGuard { body, .. } | StmtKind::Synthetic(body) => {
-                collect_constant_decls(body, constants);
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                collect_constant_decls(then_body, constants);
+                for (_, body) in elseif_clauses {
+                    collect_constant_decls(body, constants);
+                }
+                if let Some(body) = else_body {
+                    collect_constant_decls(body, constants);
+                }
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. } => collect_constant_decls(body, constants),
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                collect_constant_decls(try_body, constants);
+                for catch_clause in catches {
+                    collect_constant_decls(&catch_clause.body, constants);
+                }
+                if let Some(body) = finally_body {
+                    collect_constant_decls(body, constants);
+                }
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    collect_constant_decls(body, constants);
+                }
+                if let Some(body) = default {
+                    collect_constant_decls(body, constants);
+                }
             }
             _ => {}
         }
     }
+}
+
+/// Registers a `define("NAME", <scalar-literal>)` call encountered as a statement
+/// expression (a bare `define(...)` or `return define(...)`).
+///
+/// Only inserts when arg0 is a `StringLiteral` and arg1 is a scalar literal; keeps
+/// `.or_insert` semantics so the first-found definition wins. Mirrors the top-level
+/// `define()` handling so an in-function `define()` becomes program-wide visible.
+fn register_define_from_expr(
+    kind: &ExprKind,
+    constants: &mut HashMap<String, (ExprKind, PhpType)>,
+) {
+    if let ExprKind::FunctionCall { name, args } = kind {
+        if name.as_str() == "define" && args.len() == 2 {
+            if let ExprKind::StringLiteral(const_name) = &args[0].kind {
+                if is_scalar_literal(&args[1].kind) {
+                    constants
+                        .entry(const_name.clone())
+                        .or_insert((args[1].kind.clone(), constant_expr_type(&args[1].kind)));
+                }
+            }
+        }
+    }
+}
+
+/// Reports whether an expression is a scalar literal usable as a constant value.
+///
+/// Only `Int`/`Float`/`Bool`/`Str`/`Null` literals qualify; any other expression
+/// (variables, calls, operations) is rejected so a non-constant `define()` argument
+/// is not prescanned as a compile-time constant.
+fn is_scalar_literal(kind: &ExprKind) -> bool {
+    matches!(
+        kind,
+        ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::Null
+    )
 }
 
 /// Infers the `PhpType` for a constant expression from its `ExprKind` variant.
