@@ -422,6 +422,7 @@ pub(crate) fn insert_enum_metadata(
             readonly_properties,
             reference_properties,
             owned_reference_properties: HashSet::new(),
+            rebound_reference_properties: HashSet::new(),
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),
             static_properties: Vec::new(),

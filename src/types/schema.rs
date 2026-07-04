@@ -165,6 +165,14 @@ pub struct ClassInfo {
     /// caller). The object allocates a cell per such property at construction and releases
     /// it on destruction.
     pub owned_reference_properties: HashSet<String>,
+    /// Reference properties that are EVER the TARGET of a `=&` reference-bind assignment
+    /// (`$obj->prop = &rhs`) anywhere in the program. Such a property's slot may be overwritten to
+    /// alias another object's ref-cell (`BindPropRefCell` shares the cell), so the destructor must
+    /// NOT free its cell: doing so would double-free the cell the aliased owner also frees. A
+    /// whole-program superset used to demote owned rebind-target cells back to tag-0 (leak, never
+    /// double-free) in `_class_gc_desc_N`. Populated in the checker's reference-bind handling and
+    /// propagated across the inheritance hierarchy like `owned_reference_properties`.
+    pub rebound_reference_properties: HashSet<String>,
     pub abstract_properties: HashSet<String>,
     pub abstract_property_hooks: HashMap<String, PropertyHookContract>,
     pub static_properties: Vec<(String, PhpType)>,

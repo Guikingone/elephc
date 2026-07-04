@@ -157,6 +157,7 @@ impl Checker {
             warnings: Vec::new(),
             absent_class_warnings: std::cell::RefCell::new(Vec::new()),
             reference_property_promotions: HashSet::new(),
+            reference_property_rebind_targets: HashSet::new(),
         }
     }
 }

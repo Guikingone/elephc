@@ -136,6 +136,7 @@ impl ClassBuildState {
             readonly_properties: self.readonly_properties,
             reference_properties: self.reference_properties,
             owned_reference_properties: HashSet::new(),
+            rebound_reference_properties: HashSet::new(),
             abstract_properties: self.abstract_properties,
             abstract_property_hooks: self.abstract_property_hooks,
             static_properties: self.static_prop_types,

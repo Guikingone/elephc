@@ -254,6 +254,11 @@ pub(super) fn check_ref_assign_to_target(
             {
                 checker
                     .reference_property_promotions
+                    .insert((class.clone(), property.clone()));
+                // The target slot is overwritten to alias another object's ref-cell, so its own
+                // cell must not be freed by the destructor (double-free guard).
+                checker
+                    .reference_property_rebind_targets
                     .insert((class, property.clone()));
             }
             // A property source shares its ref-cell, so promote it as well.

@@ -19,6 +19,79 @@ use crate::types::{ClassInfo, EnumInfo, FunctionSig, InterfaceInfo, PhpType};
 
 use super::instanceof::{escaped_ascii, escaped_bytes};
 
+/// `_class_gc_desc_N` tag for an object-owned reference-property cell whose payload is a
+/// REFCOUNTED value (`Str`/`Array`/`AssocArray`/`Object`/`Mixed`/`Union`/`Iterable`).
+/// `__rt_object_free_deep` derefs the 16-byte cell, `__rt_decref_any`s the payload at `[cell+0]`,
+/// then frees the cell. Must stay in sync with the tag-8 branch in
+/// `crate::codegen::runtime::arrays::object_free_deep`.
+pub(crate) const GC_TAG_OWNED_REF_CELL_REFCOUNTED: u8 = 8;
+
+/// `_class_gc_desc_N` tag for an object-owned reference-property cell whose payload is a SCALAR
+/// (`Int`/`Float`/`Bool`/`Resource`/other non-refcounted). `__rt_object_free_deep` frees the cell
+/// only (no payload decref). Value 9 is reserved for `Resource`, so scalar owned cells use 10.
+/// Must stay in sync with the tag-10 branch in
+/// `crate::codegen::runtime::arrays::object_free_deep`.
+pub(crate) const GC_TAG_OWNED_REF_CELL_SCALAR: u8 = 10;
+
+/// Returns the `_class_gc_desc_N` byte for one property, honoring object-owned reference cells.
+///
+/// An owned reference property (`owned_reference_properties`) that is NOT a whole-program `=&`
+/// rebind target (`rebound_reference_properties`) is safe to free from the destructor: its cell is
+/// uniquely owned by this object, so it is tagged 8 (refcounted payload → decref payload + free
+/// cell) or 10 (scalar payload → free cell only) by declared type. A borrowed reference property,
+/// or an owned one that is also a rebind target (its cell may be aliased by another object's slot),
+/// falls back to tag 0 (no cleanup, leaks as before, never double-frees). Non-reference properties
+/// keep their declared-type tag.
+fn gc_desc_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) -> u8 {
+    if class_info.owned_reference_properties.contains(prop_name)
+        && !class_info.rebound_reference_properties.contains(prop_name)
+    {
+        return if is_refcounted_payload(prop_ty) {
+            GC_TAG_OWNED_REF_CELL_REFCOUNTED
+        } else {
+            GC_TAG_OWNED_REF_CELL_SCALAR
+        };
+    }
+    if class_info.reference_properties.contains(prop_name) {
+        return 0;
+    }
+    match prop_ty {
+        PhpType::Int => 0,
+        PhpType::Str => 1,
+        PhpType::Float => 2,
+        PhpType::Bool => 3,
+        PhpType::Array(_) => 4,
+        PhpType::AssocArray { .. } => 5,
+        PhpType::Object(_) => 6,
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => 7,
+        PhpType::Resource(_) => 9,
+        PhpType::TaggedScalar => {
+            unreachable!("nullable scalar properties use the boxed Mixed representation")
+        }
+        PhpType::Callable
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_)
+        | PhpType::Packed(_)
+        | PhpType::Never
+        | PhpType::Void => 0,
+    }
+}
+
+/// Returns true when a property's declared type is heap-backed and refcounted, so an owned
+/// reference cell holding it must decref the payload before the cell is freed.
+fn is_refcounted_payload(prop_ty: &PhpType) -> bool {
+    matches!(
+        prop_ty,
+        PhpType::Str
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Object(_)
+            | PhpType::Mixed
+            | PhpType::Union(_)
+            | PhpType::Iterable
+    )
+}
+
 /// Emit the user-dependent data section — globals, statics, class metadata.
 /// This changes per program and cannot be cached.
 pub(crate) fn emit_runtime_data_user(
@@ -694,32 +767,7 @@ pub(crate) fn emit_runtime_data_user(
                     out.push_str(", ");
                 }
                 let prop_name = &class_info.properties[i].0;
-                let tag = if class_info.reference_properties.contains(prop_name) {
-                    0
-                } else {
-                    match prop_ty {
-                        PhpType::Int => 0,
-                        PhpType::Str => 1,
-                        PhpType::Float => 2,
-                        PhpType::Bool => 3,
-                        PhpType::Array(_) => 4,
-                        PhpType::AssocArray { .. } => 5,
-                        PhpType::Object(_) => 6,
-                        PhpType::Mixed => 7,
-                        PhpType::Union(_) => 7,
-                        PhpType::Iterable => 7,
-                        PhpType::Resource(_) => 9,
-                        PhpType::TaggedScalar => {
-                            unreachable!("nullable scalar properties use the boxed Mixed representation")
-                        }
-                        PhpType::Callable
-                        | PhpType::Pointer(_)
-                        | PhpType::Buffer(_)
-                        | PhpType::Packed(_)
-                        | PhpType::Never
-                        | PhpType::Void => 0,
-                    }
-                };
+                let tag = gc_desc_tag(class_info, prop_name, prop_ty);
                 out.push_str(&tag.to_string());
             }
             out.push('\n');
@@ -1243,6 +1291,7 @@ mod tests {
             readonly_properties: HashSet::new(),
             reference_properties: HashSet::new(),
             owned_reference_properties: HashSet::new(),
+            rebound_reference_properties: HashSet::new(),
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),
             static_properties: Vec::new(),

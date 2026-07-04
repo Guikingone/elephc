@@ -389,19 +389,23 @@ echo f(new A());
 /// the output and that `allocs == frees` under gc_stats — no double-free of the property array and
 /// no leak across repeated calls.
 ///
-/// IGNORED: this exposes an open, GENERAL object-destructor gap (tracked as by-ref bug #5), NOT a
-/// narrowing/bind bug. Any class that owns a reference property — one it exposes/returns by
-/// reference (`public function &ref(): array { return $this->items; }`) — allocates a 16-byte
-/// ref-cell per instance at construction (`emit_owned_reference_property_cell`). The per-class GC
-/// descriptor (`_class_gc_desc_N` in `src/codegen/runtime/data/user.rs`) tags every
-/// `reference_properties` entry `0` = "no cleanup", so `__rt_object_free_deep` never releases the
-/// cell OR the array it holds. The leak is purely instance-proportional: a bare
-/// `for (...) { $b = new Box(); }` loop (no method call, no `=&` bind) leaks ~4 blocks/iteration
-/// (`--heap-debug`). The correct fix is a two-target change to `__rt_object_free_deep` plus a new
-/// type-aware descriptor tag for OWNED reference-property cells (deref cell → decref payload → free
-/// cell), which is broad shared-GC surgery deferred per the spec's STOP-and-report clause.
+/// The owned reference-property destructor gap (by-ref bug #5) IS fixed: `_class_gc_desc_N` now
+/// tags an owned refcounted reference cell as 8 and `__rt_object_free_deep` derefs the cell,
+/// decrefs the array, and frees the 16-byte cell on both targets (see the passing runtime_gc
+/// trackers). The stdout half of this test is correct (narrowing + by-ref return semantics), but the
+/// `allocs == frees` assertion still fails on this fixture because of TWO pre-existing leaks that are
+/// independent of bug #5 and out of scope for the destructor fix:
+///   1. an inline `new Box()` passed directly as a function-call ARGUMENT is never freed — reproduced
+///      for a plain class with NO reference property at all (`grab(new Plain())` → allocs=15 frees=3),
+///      so the object subtree (including its owned cell) is never even reached by the destructor; and
+///   2. `implode(',', $r)` inside a function leaks ~2 blocks/iteration (a string-return leak),
+///      reproduced without any owned reference property.
+/// A class with no owned reference properties emits byte-identical GC descriptors before/after this
+/// change, so neither leak is a regression. Left IGNORED pending those separate fixes (call-argument
+/// temporary release + implode/string-return release); the destructor fix itself is validated by the
+/// heap-clean runtime_gc trackers using locals.
 #[test]
-#[ignore = "open object-destructor gap: owned reference-property cells (and their arrays) leak (by-ref bug #5)"]
+#[ignore = "pre-existing unrelated leaks (inline-new call-arg temp never freed; implode string-return) block heap-clean assertion; owned reference-cell destructor gap (bug #5) itself is fixed"]
 fn test_narrowed_if_guard_by_reference_return_heap_clean() {
     let out = compile_and_run_with_gc_stats(
         r#"<?php

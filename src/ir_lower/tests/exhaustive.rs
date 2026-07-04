@@ -178,6 +178,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         readonly_properties: Default::default(),
         reference_properties: Default::default(),
         owned_reference_properties: Default::default(),
+        rebound_reference_properties: Default::default(),
         abstract_properties: Default::default(),
         abstract_property_hooks: HashMap::new(),
         static_properties: Vec::new(),

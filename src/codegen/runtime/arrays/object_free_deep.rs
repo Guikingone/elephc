@@ -215,6 +215,10 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_object_free_deep_release_runtime");          // objects always release through the uniform helper
     emitter.instruction("cmp x15, #7");                                         // is this a compile-time mixed property?
     emitter.instruction("b.eq __rt_object_free_deep_release_runtime");          // mixed payloads may or may not be heap-backed, but decref_any handles both safely
+    emitter.instruction("cmp x15, #8");                                         // is this an owned reference cell holding a refcounted payload?
+    emitter.instruction("b.eq __rt_object_free_deep_owned_ref_refcounted");     // decref the payload, then free the ref cell
+    emitter.instruction("cmp x15, #10");                                        // is this an owned reference cell holding a scalar payload?
+    emitter.instruction("b.eq __rt_object_free_deep_owned_ref_scalar");         // free the ref cell only (no payload decref)
     emitter.instruction("b __rt_object_free_deep_next");                        // scalars and nulls need no cleanup
 
     emitter.label("__rt_object_free_deep_release_runtime");
@@ -227,6 +231,37 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     emitter.instruction("add x12, x12, #1");                                    // advance to the next property slot
     emitter.instruction("str x12, [sp, #24]");                                  // save the updated property index
     emitter.instruction("b __rt_object_free_deep_loop");                        // continue scanning property slots
+
+    // -- owned reference cell holding a refcounted payload (tag 8): decref payload, then free cell --
+    // x14 = cell pointer (property slot low word). The 16-byte cell holds the referenced value at
+    // +0. Release the payload BEFORE freeing the cell; reload the cell from the slot afterwards
+    // because __rt_decref_any clobbers x14. x12 (loop index) is preserved through [sp, #24].
+    emitter.label("__rt_object_free_deep_owned_ref_refcounted");
+    emitter.instruction("cbz x14, __rt_object_free_deep_next");                 // defensive: null cell owns nothing to release
+    emitter.instruction("str x12, [sp, #24]");                                  // preserve the property index across the decref call
+    emitter.instruction("ldr x0, [x14]");                                       // load the refcounted payload stored at cell + 0
+    emitter.instruction("bl __rt_decref_any");                                  // release the payload the reference cell holds
+    emitter.instruction("ldr x12, [sp, #24]");                                  // restore the property index after the decref call
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the object pointer to recompute the cell slot
+    emitter.instruction("mov x10, #16");                                        // each property slot occupies 16 bytes
+    emitter.instruction("mul x10, x12, x10");                                   // compute the property slot byte offset
+    emitter.instruction("add x10, x10, #8");                                    // skip the leading class_id field
+    emitter.instruction("ldr x0, [x9, x10]");                                   // reload the cell pointer from the property slot
+    emitter.instruction("str x12, [sp, #24]");                                  // preserve the property index across the heap free
+    emitter.instruction("bl __rt_heap_free");                                   // return the 16-byte reference cell to the heap
+    emitter.instruction("ldr x12, [sp, #24]");                                  // restore the property index after the heap free
+    emitter.instruction("b __rt_object_free_deep_next");                        // continue scanning the remaining property slots
+
+    // -- owned reference cell holding a scalar payload (tag 10): free the cell only --
+    // The payload is a non-refcounted scalar, so there is nothing to decref; just return the
+    // 16-byte cell to the heap. x14 already holds the cell pointer.
+    emitter.label("__rt_object_free_deep_owned_ref_scalar");
+    emitter.instruction("cbz x14, __rt_object_free_deep_next");                 // defensive: null cell owns nothing to free
+    emitter.instruction("mov x0, x14");                                         // pass the reference cell pointer to the heap free helper
+    emitter.instruction("str x12, [sp, #24]");                                  // preserve the property index across the heap free
+    emitter.instruction("bl __rt_heap_free");                                   // return the 16-byte reference cell to the heap
+    emitter.instruction("ldr x12, [sp, #24]");                                  // restore the property index after the heap free
+    emitter.instruction("b __rt_object_free_deep_next");                        // continue scanning the remaining property slots
 
     // -- free the object storage itself --
     emitter.label("__rt_object_free_deep_struct");
@@ -428,6 +463,10 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_object_free_deep_release_runtime");            // objects release through the uniform x86_64 decref_any helper
     emitter.instruction("cmp r8, 7");                                           // does the property hold a boxed mixed pointer?
     emitter.instruction("je __rt_object_free_deep_release_runtime");            // mixed cells release through the uniform x86_64 decref_any helper
+    emitter.instruction("cmp r8, 8");                                           // owned reference cell holding a refcounted payload?
+    emitter.instruction("je __rt_object_free_deep_owned_ref_refcounted");       // decref the payload, then free the ref cell
+    emitter.instruction("cmp r8, 10");                                          // owned reference cell holding a scalar payload?
+    emitter.instruction("je __rt_object_free_deep_owned_ref_scalar");           // free the ref cell only (no payload decref)
     emitter.instruction("jmp __rt_object_free_deep_next");                      // scalar, float, and null property slots need no heap cleanup
 
     emitter.label("__rt_object_free_deep_release_runtime");
@@ -436,6 +475,33 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_object_free_deep_next");
     emitter.instruction("add QWORD PTR [rbp - 32], 1");                         // advance the property index to the next slot in the object layout
     emitter.instruction("jmp __rt_object_free_deep_loop");                      // continue scanning property slots until the whole object payload is released
+
+    // -- owned reference cell holding a refcounted payload (tag 8): decref payload, then free cell --
+    // rax = cell pointer (property slot low word). The 16-byte cell holds the referenced value at
+    // +0. Release the payload BEFORE freeing the cell; reload the cell from the slot afterwards
+    // because __rt_decref_any clobbers rax. The loop index lives in memory ([rbp - 32]) and so is
+    // unaffected by the helper calls. Both helpers take their pointer argument in rax on x86_64.
+    emitter.label("__rt_object_free_deep_owned_ref_refcounted");
+    emitter.instruction("test rax, rax");                                       // defensive: null cell owns nothing to release
+    emitter.instruction("jz __rt_object_free_deep_next");                       // skip empty owned reference slots
+    emitter.instruction("mov rax, QWORD PTR [rax]");                            // load the refcounted payload stored at cell + 0
+    emitter.instruction("call __rt_decref_any");                                // release the payload the reference cell holds
+    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the object pointer to recompute the cell slot
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the current property index
+    emitter.instruction("shl rcx, 4");                                          // convert the property index into a 16-byte slot offset
+    emitter.instruction("add rcx, 8");                                          // skip the leading class_id field
+    emitter.instruction("mov rax, QWORD PTR [r11 + rcx]");                      // reload the cell pointer from the property slot
+    emitter.instruction("call __rt_heap_free");                                 // return the 16-byte reference cell to the heap
+    emitter.instruction("jmp __rt_object_free_deep_next");                      // continue scanning the remaining property slots
+
+    // -- owned reference cell holding a scalar payload (tag 10): free the cell only --
+    // The payload is a non-refcounted scalar, so there is nothing to decref; just return the
+    // 16-byte cell to the heap. rax already holds the cell pointer.
+    emitter.label("__rt_object_free_deep_owned_ref_scalar");
+    emitter.instruction("test rax, rax");                                       // defensive: null cell owns nothing to free
+    emitter.instruction("jz __rt_object_free_deep_next");                       // skip empty owned reference slots
+    emitter.instruction("call __rt_heap_free");                                 // free the 16-byte reference cell (pointer already in rax)
+    emitter.instruction("jmp __rt_object_free_deep_next");                      // continue scanning the remaining property slots
 
     emitter.label("__rt_object_free_deep_struct");
 

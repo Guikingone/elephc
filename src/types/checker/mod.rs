@@ -183,6 +183,12 @@ pub(crate) struct Checker {
     /// checking bodies and applied to `classes` after checking so every access lowers
     /// through the property's ref-cell. See `apply_reference_property_promotions`.
     pub reference_property_promotions: HashSet<(String, String)>,
+    /// `(class, property)` pairs for properties that are the TARGET of a `=&` reference-bind
+    /// assignment (`$obj->prop = &rhs`). Recorded while checking bodies and applied to `classes`
+    /// after checking as `ClassInfo::rebound_reference_properties`, so the object destructor never
+    /// frees a cell that another object's slot may alias (double-free guard). See
+    /// `apply_reference_property_promotions`.
+    pub reference_property_rebind_targets: HashSet<(String, String)>,
 }
 
 #[derive(Clone)]
@@ -301,6 +307,38 @@ fn apply_reference_property_promotions(checker: &mut Checker) {
             }
             info.reference_properties.insert(prop.clone());
             info.owned_reference_properties.insert(prop.clone());
+        }
+    }
+    apply_reference_property_rebind_targets(checker);
+}
+
+/// Records `=&` reference-bind targets on the class table as `rebound_reference_properties`.
+///
+/// A property that is ever the TARGET of `$obj->prop = &rhs` has its slot overwritten to alias
+/// another object's ref-cell (`BindPropRefCell` shares the cell), so the destructor must not free
+/// that cell — the aliased owner frees it. Propagation mirrors `apply_reference_property_promotions`:
+/// the flag is applied to the declaring class and every class inheriting the same declared property,
+/// so `_class_gc_desc_N` demotes such owned cells back to tag 0 (leak-as-before, never double-free).
+fn apply_reference_property_rebind_targets(checker: &mut Checker) {
+    let targets = std::mem::take(&mut checker.reference_property_rebind_targets);
+    for (access_class, prop) in targets {
+        let declaring = checker
+            .classes
+            .get(&access_class)
+            .and_then(|info| info.property_declaring_classes.get(&prop).cloned())
+            .unwrap_or_else(|| access_class.clone());
+        for info in checker.classes.values_mut() {
+            if !info.properties.iter().any(|(name, _)| name == &prop) {
+                continue;
+            }
+            let same_decl = info
+                .property_declaring_classes
+                .get(&prop)
+                .is_some_and(|decl| decl == &declaring);
+            if !same_decl {
+                continue;
+            }
+            info.rebound_reference_properties.insert(prop.clone());
         }
     }
 }

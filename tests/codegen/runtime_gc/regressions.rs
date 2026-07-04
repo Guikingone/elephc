@@ -1187,12 +1187,10 @@ echo $total;
 /// purely instance-proportional: this loop only constructs objects (no method call, no `=&` bind)
 /// yet leaks ~4 blocks/iteration.
 ///
-/// IGNORED: the correct fix is a two-target change to `__rt_object_free_deep` plus a new type-aware
-/// descriptor tag for OWNED reference-property cells (deref cell → decref payload → free cell), which
-/// is broad shared-GC surgery deferred per the by-ref spec's STOP-and-report clause. Once fixed, this
-/// loop must report `allocs == frees`.
+/// FIXED (by-ref bug #5): `__rt_object_free_deep` now emits descriptor tag 8 for owned
+/// reference-property cells with a refcounted payload (deref cell → `__rt_decref_any` payload →
+/// free cell) on both targets, so this construct-only loop reports `allocs == frees`.
 #[test]
-#[ignore = "open object-destructor gap: owned reference-property cells (and their arrays) leak (by-ref bug #5)"]
 fn test_owned_reference_property_object_freed_cleanly() {
     let out = compile_and_run_with_gc_stats(
         r#"<?php
@@ -1207,4 +1205,88 @@ echo "ok";
     assert_eq!(out.stdout, "ok");
     let (allocs, frees) = parse_gc_stats(&out.stderr);
     assert_eq!(allocs, frees, "owned reference-property object leaked: {}", out.stderr);
+}
+
+/// By-ref bug #5, tag 8 with a STRING payload: a class exposing a `string` property by reference
+/// (`public function &ref(): string`) owns a 16-byte ref-cell per instance holding a persisted
+/// string pointer. The destructor must decref the string then free the cell, so a construct-only
+/// loop stays heap-clean (`allocs == frees`).
+#[test]
+fn test_owned_string_reference_property_object_freed_cleanly() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+class S { public string $name = 'hello'; public function &ref(): string { return $this->name; } }
+for ($i = 0; $i < 4; $i++) {
+    $s = new S();
+}
+echo "ok";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ok");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "owned string reference-property object leaked: {}", out.stderr);
+}
+
+/// By-ref bug #5, tag 10 with a SCALAR payload: a class exposing an `int` property by reference
+/// (`public function &ref(): int`) owns a 16-byte ref-cell holding a non-refcounted scalar. The
+/// destructor must free the cell only (no payload decref), so a construct-only loop stays
+/// heap-clean (`allocs == frees`) with no spurious decref of an integer payload.
+#[test]
+fn test_owned_scalar_reference_property_object_freed_cleanly() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+class N { public int $n = 7; public function &ref(): int { return $this->n; } }
+for ($i = 0; $i < 4; $i++) {
+    $x = new N();
+}
+echo "ok";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ok");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "owned scalar reference-property object leaked: {}", out.stderr);
+}
+
+/// By-ref bug #5 double-free safety: `$h->data = &$b->items` overwrites Holder::data's slot with a
+/// pointer to Box::items's cell (`BindPropRefCell` shares the cell). Holder::data is a whole-program
+/// `=&` rebind target, so `rebound_reference_properties` demotes its owned cell back to descriptor
+/// tag 0 — only Box::items (tag 8) frees the shared cell, so the program must run cleanly and print
+/// the shared count (2) with no double-free/abort.
+#[test]
+fn test_cross_object_reference_bind_no_double_free() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+class Box { public array $items = ['a']; }
+class Holder { public array $data = []; }
+$b = new Box();
+$h = new Holder();
+$h->data = &$b->items;
+$h->data[] = 'y';
+echo count($b->items);
+"#,
+    );
+    assert!(out.success, "cross-object reference bind aborted (double-free?): {}", out.stderr);
+    assert_eq!(out.stdout, "2");
+}
+
+/// By-ref bug #5 double-free safety, the narrow case: `$b1->items = &$b2->items` makes Box::items
+/// itself both a `=&` source and target. Because Box::items is a rebind target anywhere in the
+/// program, `rebound_reference_properties` demotes ALL Box::items cells to tag 0 (leak-as-before),
+/// guaranteeing the shared cell is never freed twice. The program must run cleanly and print 2.
+#[test]
+fn test_same_class_reference_bind_no_double_free() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+class Box { public array $items = ['a']; }
+$b1 = new Box();
+$b2 = new Box();
+$b1->items = &$b2->items;
+$b1->items[] = 'y';
+echo count($b2->items);
+"#,
+    );
+    assert!(out.success, "same-class reference bind aborted (double-free?): {}", out.stderr);
+    assert_eq!(out.stdout, "2");
 }
