@@ -177,6 +177,15 @@ fn parse_postfix_ref_assign(
             "Reference assignment source must be a variable, array/property element, or a by-reference call",
         ));
     }
+    // A static-property source is only supported into a plain-variable target
+    // (`$e = &self::$n`); aliasing it into a complex lvalue (`$obj->prop = &self::$n`)
+    // is a later slice. Reject it here so it does not silently become a value copy.
+    if matches!(source.kind, ExprKind::StaticPropertyAccess { .. }) {
+        return Err(CompileError::new(
+            span,
+            "Reference assignment source must be a variable, array/property element, or a by-reference call",
+        ));
+    }
     if !matches!(
         lhs_expr.kind,
         ExprKind::PropertyAccess { .. } | ExprKind::ArrayAccess { .. }

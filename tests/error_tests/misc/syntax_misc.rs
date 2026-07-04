@@ -38,6 +38,28 @@ fn test_error_reference_assignment_rejects_computed_source() {
     );
 }
 
+/// A plain static property is a valid reference source (`$e = &self::$n`), but a static
+/// *array-element* source (`&self::$a[$k]`) is a deferred slice: it is rejected rather than
+/// silently miscompiled. Asserts the deferral message stays explicit.
+#[test]
+fn test_error_reference_to_static_array_element_source_deferred() {
+    expect_error(
+        "<?php class C { public static array $a = [1, 2]; static function t() { $k = 0; $e = &self::$a[$k]; return $e; } } echo C::t();",
+        "Reference assignment source must be a variable",
+    );
+}
+
+/// A static-property reference source is only supported into a plain-variable target
+/// (`$e = &self::$n`); aliasing it into a complex lvalue (`$this->p = &self::$n`) is a
+/// deferred slice and must error cleanly instead of becoming a value copy.
+#[test]
+fn test_error_reference_static_property_into_complex_target_deferred() {
+    expect_error(
+        "<?php class C { public static int $n = 5; public int $p = 0; function t() { $this->p = &self::$n; return $this->p; } } $c = new C(); echo $c->t();",
+        "Reference assignment source must be a variable",
+    );
+}
+
 /// Tests that two `use` statements with the same alias name produce a
 /// "Duplicate import alias" error.
 #[test]

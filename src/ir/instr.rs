@@ -342,6 +342,12 @@ pub enum Op {
     /// without dereferencing it. Used to alias a local to `$obj->prop` and to return
     /// `$this->prop` by reference. Operand: object; immediate: property name data id.
     LoadPropRefCell,
+    /// Loads the address of a static property's global storage as a ref-cell pointer,
+    /// without dereferencing it. Used to alias a local to `$x = &self::$n` (write-through).
+    /// No operands; immediate: `Class::prop` label data id (same shape as `LoadStaticProperty`).
+    /// Late static binding (`static::$n`) resolves the concrete class at bind time by the
+    /// runtime called-class id, so the bound address is fixed at the point of `=&`.
+    LoadStaticPropRefCell,
     /// Binds a local slot as a non-owning reference alias to a ref-cell pointer value.
     /// Operand: the cell pointer (SSA value); immediate: target local slot. The local
     /// does not own the cell (no release at scope exit); the owner is the object/source.
@@ -449,7 +455,7 @@ impl Op {
             },
             AliasLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL,
             ReleaseLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
-            LoadGlobal | LoadStaticProperty | ScopedConstantGet | ClassAttrNames
+            LoadGlobal | LoadStaticProperty | LoadStaticPropRefCell | ScopedConstantGet | ClassAttrNames
             | ClassAttrArgs | ClassGetAttributes | CatchCurrent => E::READS_GLOBAL,
             StoreGlobal | StoreStaticLocal | StoreStaticProperty | InitStaticLocal | IncludeOnceMark
             | FunctionVariantMark | TryPushHandler | TryPopHandler => E::WRITES_GLOBAL,
@@ -681,6 +687,7 @@ impl Op {
             PropGet => "prop_get",
             PropSet => "prop_set",
             LoadPropRefCell => "load_prop_ref_cell",
+            LoadStaticPropRefCell => "load_static_prop_ref_cell",
             BindRefCellPtr => "bind_ref_cell_ptr",
             BindPropRefCell => "bind_prop_ref_cell",
             DynamicPropGet => "dynamic_prop_get",

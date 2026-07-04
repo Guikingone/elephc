@@ -8873,6 +8873,36 @@ fn normalize_union_members(members: Vec<PhpType>) -> Option<PhpType> {
     }
 }
 
+/// Lowers `$target = &self::$n`: binds the local `$target` to the static property's
+/// global storage so reads/writes of either side go through the same slot (write-through).
+///
+/// A static property is an always-addressable global symbol, so its storage address is a
+/// stable ref-cell pointer. `LoadStaticPropRefCell` materializes that address (resolving
+/// late static binding at bind time) and `bind_local_ref_cell_ptr` aliases the local to it
+/// without taking ownership (the slot is global, never freed at scope exit).
+pub(crate) fn lower_ref_assign_static_property(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &str,
+    source: &Expr,
+    span: Span,
+) {
+    let ExprKind::StaticPropertyAccess { receiver, property } = &source.kind else {
+        return;
+    };
+    let name = format!("{}::{}", receiver_name(receiver), property);
+    let data = ctx.intern_string(&name);
+    let value_type = static_property_result_type(ctx, receiver, property, source);
+    let cell_ptr = ctx.emit_value(
+        Op::LoadStaticPropRefCell,
+        Vec::new(),
+        Some(Immediate::Data(data)),
+        value_type.clone(),
+        Op::LoadStaticPropRefCell.default_effects(),
+        Some(span),
+    );
+    ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+}
+
 /// Lowers a static property read.
 fn lower_static_property_get(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticReceiver, property: &str, expr: &Expr) -> LoweredValue {
     let name = format!("{}::{}", receiver_name(receiver), property);

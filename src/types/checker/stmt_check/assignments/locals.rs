@@ -211,6 +211,17 @@ pub(super) fn check_ref_assign(
             clear_callable_metadata(checker, target);
             Ok(())
         }
+        ExprKind::StaticPropertyAccess { .. } => {
+            // `$e = &self::$n`: the local aliases the static property's global storage.
+            // The static property is an always-addressable global slot, so no promotion
+            // bookkeeping is needed; the local is typed to the property type and marked
+            // by-reference so codegen routes its loads/stores through the shared slot.
+            let target_ty = checker.infer_type(source, env)?;
+            env.insert(target.to_string(), target_ty);
+            checker.active_ref_params.insert(target.to_string());
+            clear_callable_metadata(checker, target);
+            Ok(())
+        }
         ExprKind::FunctionCall { .. }
         | ExprKind::MethodCall { .. }
         | ExprKind::StaticMethodCall { .. }

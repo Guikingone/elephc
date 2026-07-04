@@ -15,6 +15,10 @@
 //!   non-owning. The cell pointer is one machine word for every element type — including
 //!   `string` (a `{ptr,len}` cell) and `float` (a `d`-register cell) — so it travels in the
 //!   integer result register, never split across the string/float result registers.
+//! - A static property is a global symbol whose storage matches the ref-cell payload layout,
+//!   so `$e = &self::$n` binds the local's ref cell to the property's address (write-through in
+//!   both directions). This slice covers scalar statics only (`int`/`float`/`bool`/`?int`);
+//!   late static binding (`&static::$c`) resolves the concrete class's slot at the `=&` point.
 
 use crate::support::*;
 
@@ -656,4 +660,104 @@ echo C::inner(5);
 "#,
     );
     assert_eq!(out, "wasnull:5");
+}
+
+/// `$e = &self::$n` aliases a scalar static property's global storage: writing through the
+/// local alias is observed by a later `self::$n` read (write-through).
+#[test]
+fn test_reference_to_static_property_writes_through() {
+    let out = compile_and_run(
+        "<?php
+        class C {
+            public static int $n = 5;
+            static function t() {
+                $e = &self::$n;
+                $e = 9;
+                return self::$n;
+            }
+        }
+        echo C::t();",
+    );
+    assert_eq!(out, "9");
+}
+
+/// A static-property reference alias reflects a later direct write to the property
+/// (read-through): after `$e = &self::$n`, assigning `self::$n = 7` is observed via `$e`.
+#[test]
+fn test_reference_to_static_property_reads_through() {
+    let out = compile_and_run(
+        "<?php
+        class C {
+            public static int $n = 5;
+            static function t() {
+                $e = &self::$n;
+                self::$n = 7;
+                return $e;
+            }
+        }
+        echo C::t();",
+    );
+    assert_eq!(out, "7");
+}
+
+/// A named-class static property (`&Foo::$n`) is a valid write-through reference source.
+#[test]
+fn test_reference_to_named_static_property_writes_through() {
+    let out = compile_and_run(
+        "<?php
+        class Foo { public static int $n = 1; }
+        function viaFoo() {
+            $e = &Foo::$n;
+            $e = 100;
+            return Foo::$n;
+        }
+        echo viaFoo();",
+    );
+    assert_eq!(out, "100");
+}
+
+/// A late-static-bound static property (`&static::$c`) binds the concrete class's slot at the
+/// point of `=&`, so `Base::bump()` mutates `Base::$c` and `Sub::bump()` mutates `Sub::$c`.
+#[test]
+fn test_reference_to_late_static_bound_property_writes_through() {
+    let out = compile_and_run(
+        "<?php
+        class Base {
+            public static int $c = 10;
+            static function bump() {
+                $e = &static::$c;
+                $e = 42;
+                return static::$c;
+            }
+        }
+        class Sub extends Base {
+            public static int $c = 20;
+        }
+        echo Base::bump();
+        echo \"\\n\";
+        echo Sub::bump();
+        echo \"\\n\";
+        echo Base::$c;
+        echo \"\\n\";
+        echo Sub::$c;",
+    );
+    assert_eq!(out, "42\n42\n42\n42");
+}
+
+/// A `float` static property alias writes through the `d`-register cell path.
+#[test]
+fn test_reference_to_float_static_property_writes_through() {
+    let out = compile_and_run(
+        "<?php
+        class C {
+            public static float $f = 1.5;
+            static function t() {
+                $e = &self::$f;
+                $e = 3.25;
+                return self::$f;
+            }
+        }
+        echo C::t();",
+    );
+    assert_eq!(out, "3.25");
 }

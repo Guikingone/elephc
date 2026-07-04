@@ -79,6 +79,96 @@ pub(super) fn lower_store_static_property(ctx: &mut FunctionContext<'_>, inst: &
     Ok(())
 }
 
+/// Lowers `LoadStaticPropRefCell`: materializes the address of a static property's global
+/// storage as a ref-cell pointer for `$x = &self::$n` (write-through aliasing).
+///
+/// The pointer is one machine word stored single-word into the instruction result; a later
+/// `BindRefCellPtr` aliases a local to it. Restricted to scalar (refcount-free) static
+/// properties this slice — string/array/object/Mixed statics would need reference-aware
+/// ownership discipline and are rejected loudly for a follow-up.
+pub(super) fn lower_load_static_prop_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let slot = resolve_static_property_slot(ctx, inst)?;
+    ensure_static_property_ref_type_supported(&slot.php_type, inst)?;
+    let int_reg = abi::int_result_reg(ctx.emitter).to_string();
+    if slot.late_bound && !slot.branches.is_empty() {
+        let class_id_reg = class_id_work_reg(ctx.emitter);
+        if emit_called_class_id_to_reg(ctx, class_id_reg)? {
+            emit_dynamic_static_prop_ref_cell_address(ctx, &slot, class_id_reg, &int_reg)?;
+            return store_static_prop_ref_cell_result(ctx, inst);
+        }
+    }
+    abi::emit_symbol_address(ctx.emitter, &int_reg, &slot.symbol);
+    store_static_prop_ref_cell_result(ctx, inst)
+}
+
+/// Emits the address of the late-bound static property slot selected by the runtime called-class id.
+fn emit_dynamic_static_prop_ref_cell_address(
+    ctx: &mut FunctionContext<'_>,
+    slot: &StaticPropertySlot,
+    class_id_reg: &str,
+    int_reg: &str,
+) -> Result<()> {
+    let done = ctx.next_label("static_prop_ref_cell_done");
+    let mut labels = Vec::new();
+    for branch in &slot.branches {
+        let label = ctx.next_label("static_prop_ref_cell_branch");
+        emit_branch_if_class_id_matches(ctx, class_id_reg, branch.class_id, &label);
+        labels.push((label, branch));
+    }
+    abi::emit_symbol_address(ctx.emitter, int_reg, &slot.symbol);
+    abi::emit_jump(ctx.emitter, &done);
+    for (label, branch) in labels {
+        ctx.emitter.label(&label);
+        if branch.private_inaccessible {
+            emit_private_static_property_access_fatal(ctx);
+            continue;
+        }
+        let branch_slot = branch_static_property_slot(ctx, slot, branch);
+        abi::emit_symbol_address(ctx.emitter, int_reg, &branch_slot.symbol);
+        abi::emit_jump(ctx.emitter, &done);
+    }
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Stores the materialized static-property ref-cell pointer as a single machine word.
+///
+/// The cell pointer is one pointer-sized word regardless of the aliased element type, so it
+/// must bypass the type-driven result store (which would split a `Str`/`Float` result pair).
+fn store_static_prop_ref_cell_result(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if let Some(result) = inst.result {
+        ctx.store_int_result_value(result)?;
+    }
+    Ok(())
+}
+
+/// Verifies this slice can alias the static property's storage as a plain ref cell.
+///
+/// Only refcount-free scalar representations are supported: a string/array/object/Mixed
+/// static property would need reference-aware ownership handling (release-on-overwrite,
+/// incref-on-store) that plain ref-cell load/store does not provide, so it is rejected.
+fn ensure_static_property_ref_type_supported(php_type: &PhpType, inst: &Instruction) -> Result<()> {
+    match php_type.codegen_repr() {
+        PhpType::Bool
+        | PhpType::Int
+        | PhpType::Float
+        | PhpType::TaggedScalar
+        | PhpType::Void
+        | PhpType::Never => Ok(()),
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} for non-scalar static property PHP type {:?}",
+            inst.op.name(),
+            other
+        ))),
+    }
+}
+
 /// Returns true when a store writes back the same static slot it just loaded.
 fn value_is_same_static_property_load(
     ctx: &FunctionContext<'_>,

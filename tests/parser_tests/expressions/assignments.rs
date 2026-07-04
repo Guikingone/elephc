@@ -55,6 +55,23 @@ fn test_parse_reference_assignment() {
     }
 }
 
+/// Verifies that a static-property reference source (`$e = &self::$n`) is accepted by the
+/// parser and lowered to a `RefAssign` carrying the `StaticPropertyAccess` source.
+#[test]
+fn test_parse_reference_assignment_from_static_property() {
+    let stmts = parse_source("<?php $e =& self::$n;");
+    match &stmts[0].kind {
+        StmtKind::RefAssign { target, source } => {
+            assert_eq!(target, "e");
+            assert!(matches!(
+                &source.kind,
+                ExprKind::StaticPropertyAccess { property, .. } if property == "n"
+            ));
+        }
+        other => panic!("expected RefAssign, got {:?}", other),
+    }
+}
+
 /// Verifies that reference assignment into a property lvalue (`$o->p = &$v`) parses as a
 /// `RefAssignToTarget` statement carrying the property access target and the variable source.
 #[test]

@@ -273,7 +273,8 @@ fn validate_instruction_immediate(inst_id: InstId, inst: &Instruction) -> Result
         ConstF64 => require_immediate(inst_id, inst, "f64", |imm| matches!(imm, Imm::F64(_))),
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
         ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
-        | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell | BindPropRefCell => {
+        | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell | LoadStaticPropRefCell
+        | BindPropRefCell => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
         }
         LoadLocal | StoreLocal | UnsetLocal | LoadRefCell | StoreRefCell | ReleaseLocalRefCell
@@ -396,7 +397,8 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
             check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
         }
         BufferNew => check_unary(function, inst_id, inst, IrType::I64, "I64"),
-        LoadLocal | LoadRefCell | LoadGlobal | LoadStaticLocal | LoadStaticProperty | ExternGlobalLoad => {
+        LoadLocal | LoadRefCell | LoadGlobal | LoadStaticLocal | LoadStaticProperty
+        | LoadStaticPropRefCell | ExternGlobalLoad => {
             check_count(inst_id, inst, 0, "0")
         }
         UnsetLocal | PromoteLocalRefCell | AliasLocalRefCell | ReleaseLocalRefCell => {
