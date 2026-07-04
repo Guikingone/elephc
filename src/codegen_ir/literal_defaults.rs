@@ -461,7 +461,10 @@ fn literal_array_key(context: &str, expr: &ExprKind, op_name: &str) -> Result<Li
 }
 
 /// Allocates an indexed array sized for a literal property/static-property default.
-fn emit_array_literal_allocation(
+///
+/// Widened to `pub(super)` so `lower_inst` can reuse it when building the Mixed `$args`
+/// array forwarded to a `__call($name, $args)` magic method. No behavior change.
+pub(super) fn emit_array_literal_allocation(
     ctx: &mut FunctionContext<'_>,
     elem_type: &PhpType,
     element_count: usize,
@@ -597,7 +600,12 @@ fn append_string_array_literal_element(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Appends the current refcounted result and releases the temporary owner after insertion.
-fn append_refcounted_array_literal_element(ctx: &mut FunctionContext<'_>, value_type: &PhpType) {
+///
+/// Widened to `pub(super)` so `lower_inst` can reuse it when packing each owned Mixed-boxed
+/// argument into the `$args` array forwarded to a `__call($name, $args)` magic method. It
+/// increfs the value into the array and releases the pushed temporary owner, so the caller
+/// must hand it an owning reference. No behavior change.
+pub(super) fn append_refcounted_array_literal_element(ctx: &mut FunctionContext<'_>, value_type: &PhpType) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_pop_reg(ctx.emitter, "x9");

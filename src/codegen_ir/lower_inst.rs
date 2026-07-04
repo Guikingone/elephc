@@ -10,7 +10,7 @@
 //! - Unsupported opcodes fail explicitly instead of falling back to legacy AST codegen.
 
 use crate::codegen::{
-    abi, callable_descriptor, emit_box_current_value_as_mixed,
+    abi, callable_descriptor, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
     emit_box_runtime_payload_as_mixed, runtime, runtime_value_tag,
 };
 use crate::codegen::builtins::arrays::call_user_func_array::INVOKER_ARG_REF_CELL_TAG;
@@ -33,6 +33,8 @@ use crate::types::{
 
 use super::context::FunctionContext;
 use super::function_variants;
+use super::literal_defaults;
+use super::literal_defaults::emit_string_literal_default_to_result;
 use super::{CodegenIrError, Result};
 
 mod arithmetic;
@@ -2610,7 +2612,7 @@ fn lower_mixed_method_call(
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
-        lower_mixed_method_candidate_call(ctx, inst, receiver_reg, candidate)?;
+        lower_mixed_method_candidate_call(ctx, inst, receiver_reg, candidate, method_name)?;
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
@@ -2621,8 +2623,30 @@ fn lower_mixed_method_call(
     Ok(())
 }
 
-/// Emits one concrete class branch for a `Mixed` receiver method call.
+/// Emits one runtime class-id branch for a `Mixed`/narrowed-interface receiver method call,
+/// dispatching on how the matched candidate reaches its method: a literal method (a direct method
+/// call) or PHP's `__call($name, $args)` magic forwarding. `method_name` is the originally called
+/// method name, needed to build `__call`'s name argument on the magic path.
 fn lower_mixed_method_candidate_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    receiver_reg: &str,
+    candidate: &MixedMethodCandidate,
+    method_name: &str,
+) -> Result<()> {
+    match candidate.dispatch {
+        MethodDispatchKind::Literal => {
+            lower_literal_method_candidate_call(ctx, inst, receiver_reg, candidate)
+        }
+        MethodDispatchKind::MagicCall => {
+            lower_magic_call_candidate(ctx, inst, receiver_reg, candidate, method_name)
+        }
+    }
+}
+
+/// Emits a concrete class branch that calls the candidate's literally declared method directly,
+/// marshaling the original call operands with the candidate's signature.
+fn lower_literal_method_candidate_call(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     receiver_reg: &str,
@@ -2659,6 +2683,122 @@ fn lower_mixed_method_candidate_call(
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
+/// Emits a concrete class branch that forwards the call to the candidate's `__call($name, $args)`
+/// magic method (the class declares no literal method of that name). Builds the forwarded `$args`
+/// Mixed array by hand from `inst.operands[1..]`, stages the `(receiver, method_name, $args)` call,
+/// invokes `__call`, stores the (possibly by-reference) result, then releases the temporary array.
+///
+/// GC ordering: the temp-array release runs strictly AFTER `store_method_call_result` has copied
+/// the return value out, because the release clobbers the result registers. It reuses
+/// `emit_call_arg_temp_cleanups` so the alias-aware decref and ordering are inherited.
+fn lower_magic_call_candidate(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    receiver_reg: &str,
+    candidate: &MixedMethodCandidate,
+    method_name: &str,
+) -> Result<()> {
+    let forwarded = &inst.operands[1..];
+    let receiver_ty = PhpType::Object(candidate.class_name.clone());
+    let args_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    let abi_param_types = vec![
+        receiver_ty.codegen_repr(),
+        PhpType::Str,
+        args_array_ty.clone(),
+    ];
+    let assignments =
+        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &abi_param_types, 0);
+
+    // Reserve the cleanup slot that holds the temporary `$args` array pointer for release after
+    // the call result has been copied out.
+    let cleanup = CallArgTempCleanup {
+        param_index: 2,
+        offset: 0,
+        ty: args_array_ty.clone(),
+    };
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+
+    // Stage the receiver object pointer as the first argument.
+    move_reg_to_int_result(ctx, receiver_reg);
+    abi::emit_push_result_value(ctx.emitter, &receiver_ty);
+
+    // Stage the forwarded method name string (rodata, no refcount) as the second argument.
+    emit_string_literal_default_to_result(ctx, method_name);
+    abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
+
+    // Build the Mixed-boxed `$args` array from the forwarded operands and stash it in the reserved
+    // cleanup slot before pushing it as the third argument. `arg_temp_bytes` is the receiver plus
+    // name staging size already pushed above the reserved cleanup slot.
+    let arg_temp_bytes =
+        call_arg_temp_slot_size(&abi_param_types[0]) + call_arg_temp_slot_size(&abi_param_types[1]);
+    emit_magic_call_args_array(ctx, forwarded)?;
+    save_call_arg_temp_cleanup(ctx, &cleanup, arg_temp_bytes);
+    abi::emit_push_result_value(ctx.emitter, &args_array_ty);
+
+    let overflow_bytes = abi::materialize_outgoing_args(ctx.emitter, &assignments);
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    if let Some(slot) = candidate.target.dynamic_slot {
+        emit_dynamic_instance_method_call(ctx, slot);
+    } else {
+        abi::emit_call_label(
+            ctx.emitter,
+            &method_symbol(&candidate.target.impl_class, &candidate.target.method_key),
+        );
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
+    store_method_call_result(ctx, inst, &candidate.target)?;
+
+    // Release the temporary `$args` array AFTER the result has been copied out. Reusing
+    // `emit_call_arg_temp_cleanups` inherits the result-alias skip and the recursive
+    // `__rt_decref_array` (which decrefs each owned Mixed element) so refcounts stay balanced.
+    let cleanup_material = CallArgMaterialization {
+        overflow_bytes: 0,
+        ref_writebacks: Vec::new(),
+        cleanup_slots: vec![cleanup],
+        cleanup_bytes: 16,
+        borrowed_stack_arg_bytes: 0,
+    };
+    emit_call_arg_temp_cleanups(ctx, &cleanup_material, inst.result)
+}
+
+/// Builds an indexed array with Mixed element slots from forwarded call operands, leaving the array
+/// pointer in the integer result register. Each element is boxed into an OWNING Mixed cell using
+/// the exact owned/borrowed/Mixed-incref selection of `store_value_to_local`, except that an
+/// already-`Mixed` source needs an explicit incref (the box helper no-ops on it) because the array
+/// is a NEW owner, not a move target. Under-counting here silently leaks or use-after-frees borrowed
+/// locals, so this must mirror the ownership rules precisely.
+fn emit_magic_call_args_array(
+    ctx: &mut FunctionContext<'_>,
+    forwarded: &[ValueId],
+) -> Result<()> {
+    literal_defaults::emit_array_literal_allocation(ctx, &PhpType::Mixed, forwarded.len())?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    for operand in forwarded {
+        let value_type = ctx.load_value_to_result(*operand)?;
+        match value_type {
+            PhpType::Mixed | PhpType::Union(_) => {
+                // The box helpers no-op on a Mixed source, so a new owning reference for the array
+                // requires an explicit incref (precedent: `lower_mixed_to_mixed_indexed_array`).
+                abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+            }
+            _ if ctx.value_can_own_mixed_box_source(*operand)? => {
+                // A fresh owned producer (ArrayNew/ObjectNew/Call/…) transfers ownership into the
+                // Mixed box without an extra copy or incref.
+                emit_box_current_owned_value_as_mixed(ctx.emitter, &value_type);
+            }
+            _ => {
+                // A borrowed scalar/string/object local is boxed into a fresh owning Mixed cell.
+                emit_box_current_value_as_mixed(ctx.emitter, &value_type);
+            }
+        }
+        literal_defaults::append_refcounted_array_literal_element(ctx, &PhpType::Mixed);
+    }
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    Ok(())
+}
+
 /// Collects concrete class-method candidates for a boxed `Mixed` receiver.
 fn mixed_method_candidates(
     ctx: &FunctionContext<'_>,
@@ -2666,6 +2806,7 @@ fn mixed_method_candidates(
     operand_count: usize,
 ) -> Result<Vec<MixedMethodCandidate>> {
     let method_key = php_symbol_key(method_name);
+    let call_key = php_symbol_key("__call");
     let mut candidates = Vec::new();
     for (class_name, class_info) in &ctx.module.class_infos {
         let Some(signature) = class_info.methods.get(&method_key) else {
@@ -2679,6 +2820,27 @@ fn mixed_method_candidates(
             class_id: class_info.class_id,
             class_name: class_name.clone(),
             target,
+            dispatch: MethodDispatchKind::Literal,
+        });
+    }
+    // Second pass: any class that does not declare the method literally but declares a
+    // `__call($name, $args)` magic method resolves the call through `__call` at runtime. Its
+    // branch forwards `(receiver, "method", [args…])` to `__call`, so the candidate's target is
+    // always `__call` with arity 3 (receiver + name + args), independent of the original call's
+    // operand count. Soundness comes from the runtime class-id compare — a class whose id never
+    // reaches this receiver is simply a dead branch, so no interface-membership filter is needed.
+    for (class_name, class_info) in &ctx.module.class_infos {
+        if class_info.methods.get(&method_key).is_some()
+            || class_info.methods.get(&call_key).is_none()
+        {
+            continue;
+        }
+        let target = resolve_method_call_target(ctx, class_name, "__call", 3)?;
+        candidates.push(MixedMethodCandidate {
+            class_id: class_info.class_id,
+            class_name: class_name.clone(),
+            target,
+            dispatch: MethodDispatchKind::MagicCall,
         });
     }
     candidates.sort_by_key(|candidate| candidate.class_id);
@@ -2825,10 +2987,10 @@ fn resolve_interface_call_signature(
 
 /// Lowers a method call on an interface-typed receiver where the method is NOT declared on
 /// the interface (accepted by the checker via `instanceof` narrowing to a concrete subtype).
-/// Dispatches by the receiver's runtime class-id over the concrete implementors that declare
-/// the method literally — reusing the same machinery as `lower_mixed_method_call`, but without
-/// the Mixed unbox (an interface receiver is already a bare object pointer). Defers the `__call`
-/// case by keeping the loud unsupported error (see the gate), so this never miscompiles.
+/// Dispatches by the receiver's runtime class-id over the concrete implementors — those that
+/// declare the method literally AND those that resolve it via `__call($name, $args)` — reusing the
+/// same machinery as `lower_mixed_method_call`, but without the Mixed unbox (an interface receiver
+/// is already a bare object pointer).
 fn lower_narrowed_interface_method_call(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -2849,6 +3011,7 @@ fn lower_narrowed_interface_method_call(
         inst,
         receiver_reg,
         &candidates,
+        method_name,
         &no_match_label,
         &done_label,
     )?;
@@ -2861,10 +3024,10 @@ fn lower_narrowed_interface_method_call(
 }
 
 /// Lowers a nullable interface-typed receiver method call where the method is NOT declared on the
-/// interface (accepted by the checker via `instanceof` narrowing). Reuses the same gate, candidate
-/// scan, and class-id dispatch as `lower_narrowed_interface_method_call`, but sources the bare
-/// object pointer from the nullable receiver's non-null-guarded payload (routing PHP null to the
-/// member-call-on-null fatal). Defers the `__call` case via the shared gate.
+/// interface (accepted by the checker via `instanceof` narrowing). Reuses the same candidate scan
+/// and class-id dispatch as `lower_narrowed_interface_method_call` (literal and `__call`-forwarding
+/// implementors), but sources the bare object pointer from the nullable receiver's non-null-guarded
+/// payload (routing PHP null to the member-call-on-null fatal).
 fn lower_narrowed_nullable_interface_method_call(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -2886,6 +3049,7 @@ fn lower_narrowed_nullable_interface_method_call(
         inst,
         receiver_reg,
         &candidates,
+        method_name,
         &no_match_label,
         &done_label,
     )?;
@@ -2900,47 +3064,24 @@ fn lower_narrowed_nullable_interface_method_call(
     Ok(())
 }
 
-/// Applies the `__call` gate and collects the literal-method candidates for a narrowed interface
-/// method call. Returns the class-id-ordered candidates on success, or the loud unsupported
-/// diagnostic when an implementor would resolve the method via `__call` (deferred to a follow-up)
-/// or when no concrete implementor declares it literally at this arity.
+/// Collects the runtime class-id candidates for a narrowed interface method call. Candidates now
+/// include both literal-method implementors and `__call($name, $args)`-forwarding implementors
+/// (via `mixed_method_candidates`), and by-reference-returning candidates are threaded through the
+/// shared result store, so the earlier `__call`/by-ref gates are gone. Returns the class-id-ordered
+/// candidates, or the loud unsupported diagnostic only when no implementor can dispatch the method
+/// literally or via `__call` — a genuinely undispatchable interface method.
 fn narrowed_interface_candidates(
     ctx: &FunctionContext<'_>,
     interface_name: &str,
     method_name: &str,
     operand_count: usize,
 ) -> Result<Vec<MixedMethodCandidate>> {
-    // GATE: if any implementor of this interface would resolve the method via `__call`
-    // (declares no literal method of that name but declares `__call`), a literal-only class-id
-    // switch could match no candidate at runtime and wrongly fatal. Keep the loud error until
-    // commit 2 adds `__call`-forwarding candidates.
-    if interface_impl_relies_on_magic_call(ctx, interface_name, method_name) {
-        return Err(CodegenIrError::unsupported(format!(
-            "interface method call to unknown method {}::{} (narrowed dispatch through a __call-resolving implementor is not yet supported)",
-            interface_name, method_name
-        )));
-    }
     let candidates = mixed_method_candidates(ctx, method_name, operand_count)?;
     if candidates.is_empty() {
-        // No concrete implementor declares the method literally at this arity — nothing to
-        // dispatch. Preserve the original diagnostic.
+        // No concrete implementor declares the method literally at this arity nor resolves it via
+        // `__call` — nothing to dispatch. Preserve the original diagnostic.
         return Err(CodegenIrError::unsupported(format!(
             "interface method call to unknown method {}::{}",
-            interface_name, method_name
-        )));
-    }
-    // GATE: the checker cannot see the return type of an off-interface method, so it types the
-    // call result as `Mixed`. A by-reference-returning candidate hands back a typed ref-cell
-    // pointer, which the shared candidate machinery stores unboxed into that `Mixed` result slot;
-    // the downstream `bind_ref_cell_ptr`/`load_ref_cell` then misread the cell and silently
-    // produce a wrong value. Keep the loud error instead of that miscompile until a follow-up
-    // makes the narrowed path carry the concrete return type through the ref-cell binding.
-    if candidates
-        .iter()
-        .any(|candidate| candidate.target.by_ref_return)
-    {
-        return Err(CodegenIrError::unsupported(format!(
-            "interface method call to unknown method {}::{} (narrowed dispatch to a by-reference-returning method is not yet supported)",
             interface_name, method_name
         )));
     }
@@ -2957,6 +3098,7 @@ fn emit_narrowed_interface_class_dispatch(
     inst: &Instruction,
     receiver_reg: &str,
     candidates: &[MixedMethodCandidate],
+    method_name: &str,
     no_match_label: &str,
     done_label: &str,
 ) -> Result<()> {
@@ -2972,7 +3114,7 @@ fn emit_narrowed_interface_class_dispatch(
     emit_mixed_method_class_dispatch(ctx, receiver_reg, candidates, &match_labels, no_match_label);
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
-        lower_mixed_method_candidate_call(ctx, inst, receiver_reg, candidate)?;
+        lower_mixed_method_candidate_call(ctx, inst, receiver_reg, candidate, method_name)?;
         abi::emit_jump(ctx.emitter, done_label);
     }
     Ok(())
@@ -2990,28 +3132,6 @@ fn emit_bare_object_receiver_into_reg(ctx: &mut FunctionContext<'_>, receiver_re
             ctx.emitter.instruction(&format!("mov {}, rax", receiver_reg));     // stage the bare interface object pointer as the dispatch receiver
         }
     }
-}
-
-/// Returns whether any concrete class implementing `interface_name` would resolve `method_name`
-/// via `__call` (it declares no literal method of that name but does declare `__call`). Used to
-/// gate the narrowed interface dispatch: a literal-only class-id switch cannot dispatch such a
-/// class, so we keep the loud unsupported error instead of silently fataling at runtime.
-fn interface_impl_relies_on_magic_call(
-    ctx: &FunctionContext<'_>,
-    interface_name: &str,
-    method_name: &str,
-) -> bool {
-    let method_key = php_symbol_key(method_name);
-    let call_key = php_symbol_key("__call");
-    let normalized = interface_name.trim_start_matches('\\');
-    ctx.module.class_infos.values().any(|class_info| {
-        class_info
-            .interfaces
-            .iter()
-            .any(|impl_iface| impl_iface.trim_start_matches('\\') == normalized)
-            && class_info.methods.get(&method_key).is_none()
-            && class_info.methods.get(&call_key).is_some()
-    })
 }
 
 /// Lowers a method call after an earlier EIR guard has proven a nullable receiver non-null.
@@ -4161,11 +4281,19 @@ struct MethodCallTarget {
     by_ref_return: bool,
 }
 
+/// How a runtime class-id dispatch candidate reaches its method: a literal method, or PHP's
+/// `__call($name, $args)` magic forwarding for a class that does not declare the method literally.
+enum MethodDispatchKind {
+    Literal,
+    MagicCall,
+}
+
 /// Concrete runtime class branch available to a `Mixed` receiver method call.
 struct MixedMethodCandidate {
     class_id: u64,
     class_name: String,
     target: MethodCallTarget,
+    dispatch: MethodDispatchKind,
 }
 
 /// Outgoing call argument state that must be cleaned up after the call returns.
@@ -4348,9 +4476,15 @@ pub(super) fn store_call_result(
 
 /// Stores a resolved method call's result, honoring by-reference returns.
 ///
-/// A by-reference-returning method hands back a single-word reference-cell pointer in the
-/// integer result register (the method body's `Terminator::Return` placed it there), so the
-/// result is stored single-word rather than split by the declared `Str`/`Float` return type.
+/// A by-reference-returning method hands back a single-word reference-cell pointer in the integer
+/// result register (the method body's `Terminator::Return` placed it there). Two consumers:
+/// - Ordinary `=&`-binding (`$x = &$obj->m()`): the SSA result carries the method's concrete return
+///   type, and the downstream `bind_ref_cell_ptr` aliases that raw pointer directly. Store it
+///   single-word and opaque so true aliasing works — unchanged behavior.
+/// - Narrowed dispatch: the checker cannot see the off-interface method's return type, so it types
+///   the SSA result as `Mixed`. Storing the raw ref-cell pointer into that `Mixed` slot makes
+///   `load_ref_cell` misread word@0 as a Mixed cell. Instead, dereference the typed cell to its
+///   concrete value and box it into the Mixed slot so downstream reads see a well-formed value.
 fn store_method_call_result(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -4358,11 +4492,50 @@ fn store_method_call_result(
 ) -> Result<()> {
     if target.by_ref_return {
         if let Some(result) = inst.result {
-            ctx.store_int_result_value(result)?;
+            if matches!(ctx.value_php_type(result)?, PhpType::Mixed | PhpType::Union(_)) {
+                let return_repr = target.return_ty.codegen_repr();
+                emit_deref_by_ref_cell_result(ctx, &return_repr);
+                emit_box_current_value_as_mixed(ctx.emitter, &return_repr);
+                ctx.store_result_value(result)?;
+            } else {
+                ctx.store_int_result_value(result)?;
+            }
         }
         return Ok(());
     }
     store_call_result(ctx, inst, &target.return_ty)
+}
+
+/// Dereferences a by-reference-return cell pointer currently in the integer result register into
+/// the target's canonical result register(s), keyed by the cell's element `codegen_repr` (mirrors
+/// `FunctionContext::load_ref_cell_local_to_result`, but the pointer comes from the call's return
+/// register rather than a local slot): `Str` = ptr@0 + len@8, `Float` = @0, `TaggedScalar` =
+/// payload@0 + tag@8, otherwise a single word@0.
+fn emit_deref_by_ref_cell_result(ctx: &mut FunctionContext<'_>, return_repr: &PhpType) {
+    let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, pointer_reg, abi::int_result_reg(ctx.emitter));
+    match return_repr {
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            abi::emit_load_from_address(ctx.emitter, ptr_reg, pointer_reg, 0);
+            abi::emit_load_from_address(ctx.emitter, len_reg, pointer_reg, 8);
+        }
+        PhpType::Float => {
+            abi::emit_load_from_address(ctx.emitter, abi::float_result_reg(ctx.emitter), pointer_reg, 0);
+        }
+        PhpType::TaggedScalar => {
+            abi::emit_load_from_address(ctx.emitter, abi::int_result_reg(ctx.emitter), pointer_reg, 0);
+            abi::emit_load_from_address(
+                ctx.emitter,
+                crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter),
+                pointer_reg,
+                8,
+            );
+        }
+        _ => {
+            abi::emit_load_from_address(ctx.emitter, abi::int_result_reg(ctx.emitter), pointer_reg, 0);
+        }
+    }
 }
 
 /// Resolves an instruction data immediate as a method name.
