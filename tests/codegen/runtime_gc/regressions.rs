@@ -1545,3 +1545,77 @@ echo $last;
         out.stderr
     );
 }
+
+/// Verifies (Bug A) that an inline `new C()` passed directly as a user-call
+/// argument is released after the call. The callee `grab(Plain $p): int` borrows
+/// the object and returns an `int`, so the caller owns the temporary; before the
+/// fix the owning `object_new` argument was never released and leaked 1 block per
+/// loop iteration. The heap must be clean after 5 iterations.
+#[test]
+fn test_inline_new_call_arg_released_after_user_call() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Plain { public int $v = 1; public function get(): int { return $this->v; } }
+function grab(Plain $p): int { return $p->get(); }
+$t = 0;
+for ($i = 0; $i < 5; $i++) { $t += grab(new Plain()); }
+echo $t;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "5");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies (Bug A control) that assigning `new C()` to a local first and passing
+/// the local stays heap-clean — the argument is a `load_local`, not an owning
+/// temporary, so it must not be released by the caller (no regression, no
+/// double-free). The local is released by ordinary scope cleanup.
+#[test]
+fn test_local_object_call_arg_stays_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Plain { public int $v = 1; public function get(): int { return $this->v; } }
+function grab(Plain $p): int { return $p->get(); }
+$t = 0;
+for ($i = 0; $i < 5; $i++) { $o = new Plain(); $t += grab($o); }
+echo $t;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "5");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies (Bug A no-double-free) that when a call returns its own inline-`new`
+/// argument (identity passthrough `f(Plain $p): Plain { return $p; }`), the
+/// returned object is NOT released early by the caller-side arg cleanup. The
+/// result aliases the argument, so `call_result_may_alias_arg` must skip it; the
+/// value survives to be read, and the heap stays clean over the loop.
+#[test]
+fn test_identity_passthrough_inline_new_not_double_freed() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Plain { public int $v = 7; }
+function f(Plain $p): Plain { return $p; }
+$s = 0;
+for ($i = 0; $i < 5; $i++) { $x = f(new Plain()); $s += $x->v; }
+echo $s;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "35");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}

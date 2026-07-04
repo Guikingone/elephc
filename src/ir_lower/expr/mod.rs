@@ -1887,25 +1887,29 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     };
     if is_extern {
         let data = ctx.intern_function_name(canonical);
-        return ctx.emit_value(
+        let call = ctx.emit_value(
             Op::ExternCall,
-            operands,
+            operands.clone(),
             Some(Immediate::Data(data)),
             php_type,
             Op::ExternCall.default_effects(),
             Some(expr.span),
         );
+        release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), expr.span);
+        return call;
     }
     if is_user_function {
         let data = ctx.intern_function_name(canonical);
-        return ctx.emit_value(
+        let call = ctx.emit_value(
             Op::Call,
-            operands,
+            operands.clone(),
             Some(Immediate::Data(data)),
             php_type,
             effects_lookup::user_call_effects(canonical),
             Some(expr.span),
         );
+        release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), expr.span);
+        return call;
     }
     emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span)
 }
