@@ -2700,7 +2700,21 @@ fn lower_magic_call_candidate(
 ) -> Result<()> {
     let forwarded = &inst.operands[1..];
     let receiver_ty = PhpType::Object(candidate.class_name.clone());
-    let args_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    // The `__call` body was compiled against the checker-specialized signature, whose second
+    // parameter (`$args`) carries the concrete element type refined from the call site (e.g.
+    // `array<string>`). The body reads `$args[i]` with the static layout keyed by that element
+    // type, so the hand-built array MUST use the same element representation — a plain
+    // `array<mixed>` would be mis-read. Recover it from the resolved `__call` target signature.
+    let args_array_ty = candidate
+        .target
+        .params
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Mixed)));
+    let args_elem_ty = match &args_array_ty {
+        PhpType::Array(elem) => (**elem).clone(),
+        _ => PhpType::Mixed,
+    };
     let abi_param_types = vec![
         receiver_ty.codegen_repr(),
         PhpType::Str,
@@ -2726,12 +2740,13 @@ fn lower_magic_call_candidate(
     emit_string_literal_default_to_result(ctx, method_name);
     abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
 
-    // Build the Mixed-boxed `$args` array from the forwarded operands and stash it in the reserved
-    // cleanup slot before pushing it as the third argument. `arg_temp_bytes` is the receiver plus
-    // name staging size already pushed above the reserved cleanup slot.
+    // Build the `$args` array (with the signature's element representation) from the forwarded
+    // operands and stash it in the reserved cleanup slot before pushing it as the third argument.
+    // `arg_temp_bytes` is the receiver plus name staging size already pushed above the reserved
+    // cleanup slot.
     let arg_temp_bytes =
         call_arg_temp_slot_size(&abi_param_types[0]) + call_arg_temp_slot_size(&abi_param_types[1]);
-    emit_magic_call_args_array(ctx, forwarded)?;
+    emit_magic_call_args_array(ctx, forwarded, &args_elem_ty)?;
     save_call_arg_temp_cleanup(ctx, &cleanup, arg_temp_bytes);
     abi::emit_push_result_value(ctx.emitter, &args_array_ty);
 
@@ -2763,37 +2778,74 @@ fn lower_magic_call_candidate(
     emit_call_arg_temp_cleanups(ctx, &cleanup_material, inst.result)
 }
 
-/// Builds an indexed array with Mixed element slots from forwarded call operands, leaving the array
-/// pointer in the integer result register. Each element is boxed into an OWNING Mixed cell using
-/// the exact owned/borrowed/Mixed-incref selection of `store_value_to_local`, except that an
-/// already-`Mixed` source needs an explicit incref (the box helper no-ops on it) because the array
-/// is a NEW owner, not a move target. Under-counting here silently leaks or use-after-frees borrowed
-/// locals, so this must mirror the ownership rules precisely.
+/// Builds the `$args` array forwarded to `__call($name, $args)` from the call operands, using
+/// `elem_ty` — the element representation the `__call` body was compiled against (the checker
+/// specializes `$args` to the concrete argument element type, e.g. `array<string>`). The body reads
+/// `$args[i]` with the static layout keyed by that element type, so the array must be allocated and
+/// appended with the SAME representation; a `Mixed`-boxed array would be mis-read (empty/garbage).
+/// Leaves the array pointer in the integer result register.
+///
+/// - A `Mixed`/`Union`/`Iterable` element boxes each operand into an OWNING Mixed cell using the
+///   owned/borrowed/Mixed-incref selection (an already-`Mixed` source needs an explicit incref since
+///   the box helper no-ops on it), then appends the refcounted cell.
+/// - A homogeneous scalar/string element appends by value: `__rt_array_push_str` persists a heap copy
+///   (so a borrowed string is owned safely) and scalar pushes have no ownership concern.
+/// - An operand whose representation does not match `elem_ty` is a loud error rather than a silent
+///   mis-store; the checker derives the specialized element type FROM these operands, so a mismatch
+///   at a single site should not occur.
 fn emit_magic_call_args_array(
     ctx: &mut FunctionContext<'_>,
     forwarded: &[ValueId],
+    elem_ty: &PhpType,
 ) -> Result<()> {
-    literal_defaults::emit_array_literal_allocation(ctx, &PhpType::Mixed, forwarded.len())?;
+    let elem_repr = elem_ty.codegen_repr();
+    // A homogeneous scalar/string signature element (`array<string>`/`array<int>`/…) reads with a
+    // typed inline layout, so append by value. Anything else — `Mixed`/`Union`, or the un-specialized
+    // base `__call` signature (`array<never>`, whose `codegen_repr` is `Void`) — reads Mixed-boxed
+    // 8-byte cells, so box each operand into an owning Mixed cell.
+    let use_typed_elements = matches!(
+        elem_repr,
+        PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool
+    );
+    let alloc_ty = if use_typed_elements {
+        elem_repr.clone()
+    } else {
+        PhpType::Mixed
+    };
+    literal_defaults::emit_array_literal_allocation(ctx, &alloc_ty, forwarded.len())?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     for operand in forwarded {
         let value_type = ctx.load_value_to_result(*operand)?;
-        match value_type {
-            PhpType::Mixed | PhpType::Union(_) => {
-                // The box helpers no-op on a Mixed source, so a new owning reference for the array
-                // requires an explicit incref (precedent: `lower_mixed_to_mixed_indexed_array`).
-                abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        if use_typed_elements {
+            // Homogeneous typed array: the body reads elements with this exact representation, so
+            // append by value (`__rt_array_push_str` persists a heap copy — borrowed strings become
+            // owned; scalar pushes have no ownership concern).
+            if value_type.codegen_repr() != elem_repr {
+                return Err(CodegenIrError::unsupported(format!(
+                    "__call args array element type mismatch: signature expects {:?}, forwarded argument is {:?}",
+                    elem_repr, value_type
+                )));
             }
-            _ if ctx.value_can_own_mixed_box_source(*operand)? => {
-                // A fresh owned producer (ArrayNew/ObjectNew/Call/…) transfers ownership into the
-                // Mixed box without an extra copy or incref.
-                emit_box_current_owned_value_as_mixed(ctx.emitter, &value_type);
+            literal_defaults::append_array_literal_element(ctx, &elem_repr, &value_type)?;
+        } else {
+            match value_type {
+                PhpType::Mixed | PhpType::Union(_) => {
+                    // The box helpers no-op on a Mixed source, so a new owning reference for the
+                    // array requires an explicit incref (precedent: `lower_mixed_to_mixed_indexed_array`).
+                    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+                }
+                _ if ctx.value_can_own_mixed_box_source(*operand)? => {
+                    // A fresh owned producer (ArrayNew/ObjectNew/Call/…) transfers ownership into
+                    // the Mixed box without an extra copy or incref.
+                    emit_box_current_owned_value_as_mixed(ctx.emitter, &value_type);
+                }
+                _ => {
+                    // A borrowed scalar/string/object local is boxed into a fresh owning Mixed cell.
+                    emit_box_current_value_as_mixed(ctx.emitter, &value_type);
+                }
             }
-            _ => {
-                // A borrowed scalar/string/object local is boxed into a fresh owning Mixed cell.
-                emit_box_current_value_as_mixed(ctx.emitter, &value_type);
-            }
+            literal_defaults::append_refcounted_array_literal_element(ctx, &PhpType::Mixed);
         }
-        literal_defaults::append_refcounted_array_literal_element(ctx, &PhpType::Mixed);
     }
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     Ok(())
@@ -4467,7 +4519,14 @@ pub(super) fn store_call_result(
             return Ok(());
         }
         if matches!(result_ty, PhpType::Mixed | PhpType::Union(_)) && return_ty != PhpType::Mixed {
-            emit_box_current_value_as_mixed(ctx.emitter, &return_ty);
+            // The value in the result register is a call return — an OWNED value the callee handed
+            // back. Box it into the Mixed result slot by TRANSFERRING that ownership into the cell
+            // (`emit_box_current_owned_value_as_mixed`), not by persisting a fresh copy: the borrowed
+            // box (`emit_box_current_value_as_mixed`) would copy a refcounted payload (e.g. a heap
+            // string) and orphan the original owned value, leaking one block per call whenever a
+            // non-`Mixed`-returning call feeds a `Mixed`-typed result slot (e.g. narrowed dispatch,
+            // whose off-interface result the checker types `Mixed`).
+            emit_box_current_owned_value_as_mixed(ctx.emitter, &return_ty);
         }
         ctx.store_result_value(result)?;
     }

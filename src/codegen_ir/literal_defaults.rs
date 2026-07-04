@@ -522,8 +522,14 @@ fn emit_array_element_value(
     }
 }
 
-/// Appends the current literal element value to the array pointer saved on the stack.
-fn append_array_literal_element(
+/// Appends the current result-register value to the array pointer saved on the stack, dispatching
+/// by the array's element representation (Mixed-boxed / string / scalar / float).
+///
+/// Widened to `pub(super)` so `lower_inst` can reuse it when packing a homogeneously-typed `$args`
+/// array forwarded to a `__call($name, $args)` magic method whose body was compiled against a
+/// specialized element type (e.g. `array<string>`). `__rt_array_push_str` persists a heap copy, so a
+/// borrowed string element is owned safely. No behavior change.
+pub(super) fn append_array_literal_element(
     ctx: &mut FunctionContext<'_>,
     elem_type: &PhpType,
     value_type: &PhpType,

@@ -214,7 +214,7 @@ echo f(new C());
 /// silently yields a wrong value, so the gate keeps the loud error until a follow-up threads the
 /// concrete return type through the narrowed ref-cell binding.
 #[test]
-#[ignore = "Phase 3 commit-2 WIP: by-ref gate removed in the WIP; narrowed by-ref-return dispatch not yet correct at runtime — see scratchpad/spec_narrowed_dispatch_part2 (Bug 2 / by-ref)"]
+#[ignore = "Phase 3: narrowed by-reference-return dispatch SIGSEGVs (exit 139) — a defect INDEPENDENT of the __call args-array fix (Bug 2). The by-ref result deref/rebind through the narrowed Mixed-typed slot is still wrong; needs its own investigation before this can run."]
 fn test_narrowed_interface_by_reference_return_method_gate() {
     compile_and_run(
         r#"<?php
@@ -253,19 +253,38 @@ echo g(new A()), g(null);
     assert_eq!(out, "Xn");
 }
 
-/// Gate boundary (deferred to commit 2): an implementor that resolves the off-interface method
-/// via `__call` rather than a literal method MUST still fail to compile with the loud unsupported
-/// error. A literal-only class-id switch cannot dispatch `__call`, so the gate keeps the loud
-/// error to guarantee the narrowed path never miscompiles.
+/// An implementor that resolves the off-interface method via `__call` is dispatched through the
+/// runtime class-id switch, which forwards to `__call($name, $args)` by hand-building the args
+/// array with the SIGNATURE's element representation. Reading `$args[0]` inside `__call` must return
+/// the forwarded argument (regression for the Bug 2 element-representation mismatch: a `Mixed`-boxed
+/// args array is mis-read by the specialized `array<string>` body).
 #[test]
-#[ignore = "Phase 3 commit-2 WIP: __call gate removed in the WIP; __call dispatch works but direct $a[0] extraction from the hand-built args array is broken — see scratchpad/spec_narrowed_dispatch_part2 (Bug 2)"]
-fn test_narrowed_interface_magic_call_gate_still_errors() {
-    compile_and_run(
+fn test_narrowed_interface_magic_call_dispatches_and_reads_args() {
+    let out = compile_and_run(
         r#"<?php
 interface I { function base(): string; }
-class A implements I { function base(): string {return "A";} function __call($n, $a): string {return "m:$n";} }
-function f(I $v): string { return $v instanceof A ? $v->extra() : $v->base(); }
+class A implements I { function base(): string {return "A";} function __call($n, $a): string {return "m:$n:".$a[0];} }
+function f(I $v): string { return $v instanceof A ? $v->extra("arg") : $v->base(); }
 echo f(new A());
 "#,
     );
+    assert_eq!(out, "m:extra:arg");
+}
+
+/// `__call` forwarding through the class-id switch on a `Mixed` receiver: the pre-existing gap where
+/// a `Mixed`/`Union`-typed receiver whose class resolves the method via `__call` was dropped from the
+/// literal-only candidate scan (a spurious fatal) is now covered — the class-id switch forwards the
+/// call name to `__call($name, …)` and returns its result. (Reading heterogeneous `$args` elements
+/// on an *unspecialized* `Mixed`-receiver `__call` signature is a separate, deferred edge.)
+#[test]
+fn test_mixed_receiver_magic_call_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public function __call($n, $a): string { return "handled:" . $n; } }
+function mk(int $i): mixed { return new P(); }
+$o = mk(0);
+echo $o->whatever();
+"#,
+    );
+    assert_eq!(out, "handled:whatever");
 }
