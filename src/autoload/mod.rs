@@ -95,6 +95,25 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
     "stdClass",
 ];
 
+/// Walks up from `start` (the entry file's directory) to the nearest ancestor that
+/// contains a `composer.json`, returning that directory as the composer project root.
+/// Falls back to `start` when no composer.json is found (a non-composer program).
+/// PSR-4/classmap targets and the `vendor/` tree are resolved relative to this root, so
+/// an entry in a subdirectory (e.g. Symfony's `public/index.php`) still discovers the
+/// root autoload map.
+pub fn find_composer_project_root(start: &Path) -> PathBuf {
+    let mut dir = start;
+    loop {
+        if dir.join("composer.json").is_file() {
+            return dir.to_path_buf();
+        }
+        match dir.parent() {
+            Some(p) => dir = p,
+            None => return start.to_path_buf(),
+        }
+    }
+}
+
 /// Run the autoload pass over a fully resolver+name_resolver-processed
 /// program. For every canonical class reference that isn't declared in
 /// the program, look it up first in the composer.json PSR-4 index and

@@ -62,6 +62,12 @@ pub(crate) fn compile(config: CliConfig) {
     let filename = filename.as_str();
     codegen::set_null_repr(null_repr);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
+    // Autoload (Composer PSR-4/classmap + `vendor/`) is resolved relative to the
+    // composer project root, which may sit ABOVE the entry directory (e.g. Symfony's
+    // `public/index.php` with composer.json at the app root). Walk up to find it.
+    // Include resolution still uses `parent` (the entry dir) so relative includes in
+    // the entry file resolve against its own directory, unaffected by this.
+    let autoload_root = autoload::find_composer_project_root(parent);
     let output_paths = output_paths(filename, target, emit);
     let mut timings = CompileTimings::new(emit_timings);
 
@@ -103,7 +109,7 @@ pub(crate) fn compile(config: CliConfig) {
     let parsed = conditional::apply(parsed, &defines);
 
     let phase_started = Instant::now();
-    let (autoload_registry, parsed) = autoload::Registry::build(parent, parsed);
+    let (autoload_registry, parsed) = autoload::Registry::build(&autoload_root, parsed);
     codegen::set_autoload_rule_count(autoload_registry.rule_count());
     for warning in autoload_registry.warnings() {
         errors::report_warning(warning);
@@ -171,7 +177,7 @@ pub(crate) fn compile(config: CliConfig) {
     timings.record_since("name-resolve", phase_started);
 
     let phase_started = Instant::now();
-    let ast = match autoload::run(ast, parent, &autoload_registry) {
+    let ast = match autoload::run(ast, &autoload_root, &autoload_registry) {
         Ok((resolved, autoload_warnings)) => {
             for warning in &autoload_warnings {
                 errors::report_warning(warning);
