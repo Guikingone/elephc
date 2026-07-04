@@ -53,7 +53,10 @@ pub(crate) use fiber::patch_builtin_fiber_signatures;
 /// For `__set`: parameter 0 is `PhpType::Str`, parameter 1 is `PhpType::Mixed`.
 /// For `__call`: parameter 0 is `PhpType::Str`, parameter 1 is `PhpType::Array` of `PhpType::Never`.
 /// Does nothing for classes that do not declare these methods.
-pub(crate) use magic_methods::{patch_magic_method_signatures, validate_magic_method_contracts};
+pub(crate) use magic_methods::{
+    finalize_magic_call_arg_signatures, patch_magic_method_signatures,
+    validate_magic_method_contracts,
+};
 pub(crate) use reflection::{inject_builtin_reflection, patch_builtin_reflection_signatures};
 
 /// Injects the five built-in DOM shell types (`DOMNode`, `DOMDocument`, `DOMElement`,

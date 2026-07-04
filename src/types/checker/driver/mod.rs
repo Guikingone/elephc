@@ -20,8 +20,8 @@ use crate::types::{
 };
 
 use super::builtin_types::{
-    inject_builtin_date_period, inject_builtin_datetime, inject_builtin_dom,
-    inject_builtin_reflection, inject_builtin_throwables,
+    finalize_magic_call_arg_signatures, inject_builtin_date_period, inject_builtin_datetime,
+    inject_builtin_dom, inject_builtin_reflection, inject_builtin_throwables,
     patch_builtin_exception_signatures,
     patch_builtin_fiber_signatures, patch_builtin_reflection_signatures,
     patch_magic_method_signatures, InterfaceDeclInfo,
@@ -308,6 +308,14 @@ pub(super) fn check_types_impl(
     if !errors.is_empty() {
         return Err(CompileError::from_many(errors));
     }
+
+    // All expression inference (and thus per-site `__call`/`__callStatic`
+    // argument-array specialization) has now run. Any magic-dispatch signature
+    // whose `params[1]` is still `Array(Never)` was never pinned by a singular
+    // concrete receiver; widen it to `Array(Mixed)` so a Mixed-receiver dispatch
+    // reads the forwarded arguments as boxed 8-byte cells (matching how
+    // `emit_magic_call_args_array` builds them) instead of a 16-byte stride.
+    finalize_magic_call_arg_signatures(&mut checker);
 
     Ok((checker, final_global_env))
 }

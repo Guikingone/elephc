@@ -330,11 +330,9 @@ echo f(new A());
     assert_eq!(out, "m:extra:arg");
 }
 
-/// `__call` forwarding through the class-id switch on a `Mixed` receiver: the pre-existing gap where
-/// a `Mixed`/`Union`-typed receiver whose class resolves the method via `__call` was dropped from the
-/// literal-only candidate scan (a spurious fatal) is now covered — the class-id switch forwards the
-/// call name to `__call($name, …)` and returns its result. (Reading heterogeneous `$args` elements
-/// on an *unspecialized* `Mixed`-receiver `__call` signature is a separate, deferred edge.)
+/// `__call` forwarding through the class-id switch on a `Mixed` receiver: a `Mixed`/`Union`-typed
+/// receiver whose class resolves the method via `__call` forwards the call name to `__call($name, …)`
+/// and returns its result. Covers the base case that reads no `$args` element.
 #[test]
 fn test_mixed_receiver_magic_call_dispatch() {
     let out = compile_and_run(
@@ -346,6 +344,41 @@ echo $o->whatever();
 "#,
     );
     assert_eq!(out, "handled:whatever");
+}
+
+/// `__call` on an *unspecialized* `Mixed`-receiver signature reads a forwarded argument element:
+/// because the receiver has no singular concrete class, per-site specialization never pins
+/// `params[1]`, so the checker finalization widens the leftover `Array(Never)` to `Array(Mixed)`.
+/// The body reads `$a[0]` with an 8-byte Mixed stride matching `emit_magic_call_args_array`'s build,
+/// so the forwarded string prints correctly (was garbage / "heap exhausted" under the 16-byte read).
+#[test]
+fn test_mixed_receiver_magic_call_reads_string_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public function __call($n, $a): string { return "h:" . $a[0]; } }
+function mk(int $i): mixed { return new P(); }
+$o = mk(0);
+echo $o->whatever("z");
+"#,
+    );
+    assert_eq!(out, "h:z");
+}
+
+/// Heterogeneous forwarded arguments on an unspecialized `Mixed`-receiver `__call`: the args array
+/// mixes an int and a string, so `Array(Mixed)` (8-byte boxed cells) is the only correct
+/// representation. Reading `$a[0]` (int `1`) and `$a[1]` (string `x`) both round-trip, printing
+/// `1|x`.
+#[test]
+fn test_mixed_receiver_magic_call_reads_heterogeneous_args() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public function __call($n, $a): string { return $a[0] . "|" . $a[1]; } }
+function mk(int $i): mixed { return new P(); }
+$o = mk(0);
+echo $o->whatever(1, "x");
+"#,
+    );
+    assert_eq!(out, "1|x");
 }
 
 /// Virtual dispatch survives ir_lower's `if`-guard narrowing: with `if ($v instanceof A)` narrowing
