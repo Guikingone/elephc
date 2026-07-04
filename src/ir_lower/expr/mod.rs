@@ -10195,14 +10195,24 @@ fn coerce_value_for_temp(
         return value;
     }
     match target_ty {
-        PhpType::Mixed => ctx.emit_value(
-            Op::MixedBox,
-            vec![value.value],
-            None,
-            PhpType::Mixed,
-            Op::MixedBox.default_effects(),
-            Some(span),
-        ),
+        PhpType::Mixed => {
+            let boxed = ctx.emit_value(
+                Op::MixedBox,
+                vec![value.value],
+                None,
+                PhpType::Mixed,
+                Op::MixedBox.default_effects(),
+                Some(span),
+            );
+            // `MixedBox` persists strings and increfs heap children, so the box owns
+            // an independent reference to the payload. Release the original owned
+            // source temporary now, otherwise it leaks on every store into the merge
+            // temp (e.g. a method-call result consumed through a ternary branch).
+            if ctx.value_needs_release_after_retaining_store(value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            }
+            boxed
+        }
         PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never => {
             coerce_to_int_at_span(ctx, value, Some(span))
         }

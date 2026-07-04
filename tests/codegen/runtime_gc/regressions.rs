@@ -1323,3 +1323,225 @@ for ($i = 0; $i < 5; $i++) {
     let (allocs, frees) = parse_gc_stats(&out.stderr);
     assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
 }
+
+/// Regression: a refcounted method-call result consumed through a ternary must
+/// not leak. The ternary merge temp is typed `Mixed` (a method call's syntactic
+/// type is `Mixed` before lowering), so each branch value is `MixedBox`-ed. The
+/// box persists strings / increfs heap children into its own reference, so the
+/// original owned method-call result must be released after boxing; previously it
+/// leaked ~2-3 blocks per call. A runtime-unknown `$argc` keeps the ternary from
+/// being folded away. Heap must be clean at exit.
+#[test]
+fn test_regression_ternary_then_method_result_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A { public function g(): string { return "v" . strlen("ab"); } }
+function f(A $a, int $c): string { return $c ? $a->g() : "z"; }
+$a = new A();
+$last = "";
+for ($i = 0; $i < 50; $i++) { $last = f($a, $argc); }
+echo $last;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "v2");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression: the direct-return baseline (no ternary) of a method-call result
+/// must stay clean. Kept alongside the ternary shapes as a control so a future
+/// change that breaks the plain return path is caught here too.
+#[test]
+fn test_regression_direct_return_method_result_baseline_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A { public function g(): string { return "v" . strlen("ab"); } }
+function f(A $a): string { return $a->g(); }
+$a = new A();
+$last = "";
+for ($i = 0; $i < 50; $i++) { $last = f($a); }
+echo $last;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "v2");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression: a ternary method-call result stored to a local and then returned
+/// must not leak. This isolates the merge-temp store path (the box's original
+/// source release) from the return-coercion path.
+#[test]
+fn test_regression_ternary_result_stored_then_returned_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A { public function g(): string { return "v" . strlen("ab"); } }
+function f(A $a, int $c): string { $x = $c ? $a->g() : "z"; return $x; }
+$a = new A();
+$last = "";
+for ($i = 0; $i < 50; $i++) { $last = f($a, $argc); }
+echo $last;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "v2");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression: the owning branch of a ternary in the else position must not leak.
+/// The condition is false at runtime (`$argc > 100`) so the method-call branch
+/// actually executes; the boxed merge temp and its return coercion must both
+/// release their owned sources.
+#[test]
+fn test_regression_ternary_else_method_result_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A { public function g(): string { return "v" . strlen("ab"); } }
+function f(A $a, int $c): string { return $c > 100 ? "z" : $a->g(); }
+$a = new A();
+$last = "";
+for ($i = 0; $i < 50; $i++) { $last = f($a, $argc); }
+echo $last;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "v2");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression: a discarded ternary expression-statement whose taken branch owns a
+/// method-call result must not leak. With the result discarded, the merge temp is
+/// released at the merge block; the leak here came purely from the boxed branch
+/// value's original source never being released.
+#[test]
+fn test_regression_discarded_ternary_method_result_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A { public function g(): string { return "v" . strlen("ab"); } }
+function f(A $a, int $c): void { $c ? $a->g() : "z"; }
+$a = new A();
+for ($i = 0; $i < 50; $i++) { f($a, $argc); }
+echo "ok";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ok");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression: a short-ternary (`?:`) over a method-call result must not leak. It
+/// shares the merge-temp machinery with the full ternary, so the boxed value's
+/// source release and the return coercion release must both fire.
+#[test]
+fn test_regression_short_ternary_method_result_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A { public function g(): string { return "v" . strlen("ab"); } }
+function f(A $a): string { return $a->g() ?: "z"; }
+$a = new A();
+$last = "";
+for ($i = 0; $i < 50; $i++) { $last = f($a); }
+echo $last;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "v2");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression: a nested ternary whose innermost taken branch owns a method-call
+/// result must not leak. Each ternary level allocates its own boxed merge temp;
+/// all owned sources must be released.
+#[test]
+fn test_regression_nested_ternary_method_result_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A { public function g(): string { return "v" . strlen("ab"); } }
+function f(A $a, int $c): string { return $c ? ($c > 1 ? $a->g() : "y") : "z"; }
+$a = new A();
+$last = "";
+for ($i = 0; $i < 50; $i++) { $last = f($a, $argc); }
+echo $last;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "y");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression: an array-returning method consumed through a ternary must not leak.
+/// The array return path unboxes the Mixed merge temp back to a concrete array via
+/// a runtime clone; the source box must be released after the unbox, otherwise the
+/// box and its retained array child leak on every call.
+#[test]
+fn test_regression_ternary_array_method_result_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A { public function arr(): array { return [1, 2, 3, 4]; } }
+function f(A $a, int $c): array { return $c ? $a->arr() : []; }
+$a = new A();
+$n = 0;
+for ($i = 0; $i < 50; $i++) { $r = f($a, $argc); $n = count($r); }
+echo $n;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "4");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression: a method returning an unannotated (`Mixed`) value consumed through
+/// a ternary with a `Mixed` function return must not leak. This exercises the
+/// concrete-to-Mixed return coercion (`MixedBox`) release path.
+#[test]
+fn test_regression_ternary_mixed_return_method_result_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A { public function g(): string { return "v" . strlen("ab"); } }
+function f(A $a, int $c) { return $c ? $a->g() : "z"; }
+$a = new A();
+$last = "";
+for ($i = 0; $i < 50; $i++) { $last = f($a, $argc); }
+echo $last;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "v2");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}

@@ -2971,24 +2971,52 @@ fn coerce_to_return_type(
         IrType::Str => coerce_to_string(ctx, value, span),
         IrType::TaggedScalar => coerce_to_tagged_scalar(ctx, value, span),
         IrType::Heap(_) if ctx.return_php_type.codegen_repr() == PhpType::Mixed => {
-            ctx.emit_value(
+            let boxed = ctx.emit_value(
                 Op::MixedBox,
                 vec![value.value],
                 None,
                 ctx.return_php_type.clone(),
                 Op::MixedBox.default_effects(),
                 span,
-            )
+            );
+            release_coercion_source_if_owned(ctx, value, boxed, span);
+            boxed
         }
-        IrType::Heap(_) => ctx.emit_value(
-            Op::RuntimeCall,
-            vec![value.value],
-            None,
-            ctx.return_php_type.clone(),
-            effects_lookup::runtime_effects(),
-            span,
-        ),
+        IrType::Heap(_) => {
+            // Unboxing a Mixed cell into a concrete heap return type rebuilds/clones
+            // a freshly owned payload, so it never aliases the source box.
+            let unboxed = ctx.emit_value(
+                Op::RuntimeCall,
+                vec![value.value],
+                None,
+                ctx.return_php_type.clone(),
+                effects_lookup::runtime_effects(),
+                span,
+            );
+            release_coercion_source_if_owned(ctx, value, unboxed, span);
+            unboxed
+        }
         IrType::Void => value,
+    }
+}
+
+/// Releases an owned source temporary consumed by a return-type coercion.
+///
+/// The heap return coercions (`MixedBox` for a Mixed return, the unbox
+/// `RuntimeCall` for a concrete heap return) allocate a fresh owned result that
+/// retains or clones the payload independently of the source. When the source is
+/// an owning temporary (for example a Mixed box taken from a ternary merge temp),
+/// it must be released once the coercion has produced its own reference, otherwise
+/// it leaks on every return. The release is skipped when the coercion returned the
+/// source unchanged so no double-release can occur.
+fn release_coercion_source_if_owned(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    result: LoweredValue,
+    span: Option<Span>,
+) {
+    if result.value != source.value && ctx.value_needs_release_after_retaining_store(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, span);
     }
 }
 
@@ -3150,14 +3178,23 @@ fn coerce_to_string(
             Op::FToStr.default_effects(),
             span,
         ),
-        _ => ctx.emit_value(
-            Op::Cast,
-            vec![value.value],
-            Some(Immediate::CastTarget(IrType::Str)),
-            PhpType::Str,
-            Op::Cast.default_effects(),
-            span,
-        ),
+        _ => {
+            let result = ctx.emit_value(
+                Op::Cast,
+                vec![value.value],
+                Some(Immediate::CastTarget(IrType::Str)),
+                PhpType::Str,
+                Op::Cast.default_effects(),
+                span,
+            );
+            // The Mixed/heap → string cast allocates a fresh, detached string copy
+            // (`__rt_mixed_cast_string` persists the payload), so it never aliases
+            // the source storage. An owned source temporary (for example a Mixed box
+            // produced by a ternary merge temp) must be released here, otherwise it
+            // leaks when the return value is coerced to a narrower string type.
+            release_coercion_source_if_owned(ctx, value, result, span);
+            result
+        }
     }
 }
 
