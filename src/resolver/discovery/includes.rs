@@ -18,6 +18,7 @@ use super::output::{DiscoveryOutput, FunctionVariantRegistry};
 use super::stmts::discover_stmts;
 use super::super::declarations::extract_discoverable_declarations;
 use super::super::engine::resolve_stmts;
+use super::super::engine_includes::is_composer_autoloader_entry;
 use super::super::files::{parse_file, resolve_path};
 use super::super::include_path::{fold_include_path, runtime_dynamic_include_path_detail};
 use super::super::state::ResolveState;
@@ -71,6 +72,15 @@ pub(super) fn discover_include(
     };
     let resolved = resolve_path(&path_str, base_dir);
     let canonical = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
+
+    // elephc's `crate::autoload` reads composer.json (PSR-4/PSR-0/classmap/files) directly and
+    // replaces composer's runtime autoloader wholesale, so the composer autoloader entry and its
+    // generated machinery must not be followed by declaration discovery either. Skipping it here
+    // keeps discovery consistent with `resolve_include_stmt`, which no-ops the same entry, and
+    // avoids exposing composer's dynamic `include $file;` machinery to the strict resolver.
+    if is_composer_autoloader_entry(&resolved) {
+        return Ok(());
+    }
 
     if !resolved.exists() {
         if required {

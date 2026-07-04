@@ -77,6 +77,16 @@ pub(super) fn resolve_include_stmt(
     let resolved = resolve_path(&path_str, base_dir);
     let canonical = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
 
+    // elephc's `crate::autoload` reads composer.json (PSR-4/PSR-0/classmap/files) directly and
+    // splices the referenced classes and `autoload.files` helpers itself, fully replacing
+    // composer's runtime autoloader. Following composer's autoloader entry / machinery here is
+    // therefore redundant, and only exposes composer's own dynamic `include $file;` machinery to
+    // the strict include resolver. Treat the entry / machinery as a resolver no-op so class
+    // discovery is owned exclusively by `crate::autoload`.
+    if is_composer_autoloader_entry(&resolved) {
+        return Ok(Some(Vec::new()));
+    }
+
     if !resolved.exists() {
         if required {
             return Err(CompileError::new(
@@ -162,6 +172,40 @@ pub(super) fn resolve_include_stmt(
             stmt.span,
         ),
     ]))
+}
+
+/// Returns `true` when `path` refers to composer's autoloader entry or its internal machinery,
+/// which elephc's `crate::autoload` replaces wholesale and must therefore not splice into the
+/// program via the include resolver.
+///
+/// The detector is intentionally narrow so ordinary vendor class files
+/// (`vendor/<pkg>/src/*.php`) and `autoload.files` helpers are never skipped. It matches only:
+/// - `autoload.php` or `autoload_runtime.php` whose immediate parent directory is named `vendor`
+///   (the composer autoloader entry points), or
+/// - any path under a `vendor/composer/` directory (the generated autoloader machinery:
+///   `ClassLoader.php`, `autoload_real.php`, `autoload_static.php`, `installed.php`, …).
+pub(super) fn is_composer_autoloader_entry(path: &Path) -> bool {
+    let file_name = path.file_name().and_then(|n| n.to_str());
+    let parent_name = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str());
+
+    // `vendor/autoload.php` or `vendor/autoload_runtime.php` entry points.
+    if matches!(file_name, Some("autoload.php") | Some("autoload_runtime.php"))
+        && parent_name == Some("vendor")
+    {
+        return true;
+    }
+
+    // Anything under a `vendor/composer/` directory is generated autoloader machinery.
+    let components: Vec<&str> = path
+        .components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .collect();
+    components
+        .windows(2)
+        .any(|w| w == ["vendor", "composer"])
 }
 
 /// Expands an expression-position `include`/`require` (`$x = require X;` or `return require X;`)

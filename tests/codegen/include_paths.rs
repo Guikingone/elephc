@@ -35,6 +35,31 @@ fn test_include_with_dunder_dir_concat() {
     assert_eq!(out, "innerafter");
 }
 
+/// Regression: `require 'vendor/autoload.php'` must be a resolver no-op so composer projects
+/// compile. elephc's `crate::autoload` reads composer.json directly and replaces composer's
+/// runtime autoloader, so the autoloader entry must NOT be followed into its dynamic
+/// `include $x;` machinery (which the strict include resolver would otherwise reject). The fake
+/// `vendor/autoload.php` here contains a top-level dynamic `include $x;`; compilation must skip
+/// past it entirely rather than hard-erroring on the runtime-dynamic include path.
+#[test]
+fn test_composer_autoload_entry_is_resolver_noop() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire __DIR__ . '/vendor/autoload.php';\necho 'after';\n",
+            ),
+            (
+                "vendor/autoload.php",
+                "<?php\n$x = 'nope.php';\ninclude $x;\necho 'entry';\n",
+            ),
+        ],
+        "main.php",
+    );
+    // The autoload entry (and its dynamic include) is skipped, so only the caller's `echo` runs.
+    assert_eq!(out, "after");
+}
+
 /// Verifies `require LIB . '/inner.php'` where `LIB` is a top-level `const`
 /// defined before the require. The resolver resolves the const reference to
 /// the string `'lib'` before path resolution.
