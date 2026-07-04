@@ -198,3 +198,56 @@ fn test_prefix_increment_static_property_statement_position() {
     );
     assert_eq!(out, "3");
 }
+
+// --- $obj::CONST dynamic class-constant access ---
+
+/// Verifies `$o::K` reads the class constant on the object's static class (`C::K`).
+/// Cross-checked against `php -r` (output `42`).
+#[test]
+fn test_dynamic_class_constant_on_typed_object() {
+    let out = compile_and_run(
+        "<?php class C { const K = 42; } function f(C $o): int { return $o::K; } echo f(new C());",
+    );
+    assert_eq!(out, "42");
+}
+
+/// Verifies `$o::K` resolves an *inherited* class constant through the parent chain.
+/// Cross-checked against `php -r` (output `7`).
+#[test]
+fn test_dynamic_class_constant_inherited() {
+    let out = compile_and_run(
+        "<?php class B { const K = 7; } class C extends B {} function f(C $o): int { return $o::K; } echo f(new C());",
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies `$o::K` resolves an *interface* constant when the receiver is typed by the
+/// interface. Cross-checked against `php -r` (output `3`).
+#[test]
+fn test_dynamic_class_constant_interface() {
+    let out = compile_and_run(
+        "<?php interface I { const K = 3; } class C implements I {} function f(I $o): int { return $o::K; } echo f(new C());",
+    );
+    assert_eq!(out, "3");
+}
+
+/// Verifies a string class constant read through an object composes in an expression.
+/// Cross-checked against `php -r` (output `ceex`).
+#[test]
+fn test_dynamic_class_constant_string_in_expression() {
+    let out = compile_and_run(
+        "<?php class C { const NAME = \"cee\"; } function f(C $o): string { return $o::NAME . \"x\"; } echo f(new C());",
+    );
+    assert_eq!(out, "ceex");
+}
+
+/// Verifies the object expression is evaluated exactly once for its side effects when its
+/// class constant is read (`mk()::K` prints `m` once, then the constant). Cross-checked
+/// against `php -r` (output `m42`).
+#[test]
+fn test_dynamic_class_constant_object_evaluated_once() {
+    let out = compile_and_run(
+        "<?php class C { const K = 42; } function mk(): C { echo \"m\"; return new C(); } echo mk()::K;",
+    );
+    assert_eq!(out, "m42");
+}

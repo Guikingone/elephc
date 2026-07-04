@@ -373,6 +373,9 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         // `resolve_property_const_defaults`); anything still unresolved here falls back to `Mixed`
         // rather than misreporting the value as a string.
         ExprKind::ScopedConstantAccess { .. } => PhpType::Mixed,
+        // `$obj::CONST` — the constant's type depends on the object's runtime class, which
+        // this syntactic pass cannot resolve; fall back to `Mixed`.
+        ExprKind::DynamicClassConstantAccess { .. } => PhpType::Mixed,
         ExprKind::This => PhpType::Object(String::new()),
         ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => PhpType::Callable,
         ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),

@@ -96,9 +96,13 @@ pub(super) fn parse_expr_bp(
                     );
                     continue;
                 }
+                // Track the bare-identifier member name so a `::CONST` (not followed by
+                // `(`) can lower to a dynamic class-constant access instead of a call.
+                let mut identifier_member: Option<String> = None;
                 let member = match tokens.get(*pos).map(|(token, s)| (token.clone(), *s)) {
                     Some((Token::Identifier(name), name_span)) => {
                         *pos += 1;
+                        identifier_member = Some(name.clone());
                         Expr::new(ExprKind::StringLiteral(name), name_span)
                     }
                     Some((Token::Variable(name), var_span)) => {
@@ -132,10 +136,20 @@ pub(super) fn parse_expr_bp(
                         },
                         span,
                     );
+                } else if let Some(const_name) = identifier_member {
+                    // `$obj::CONST` — a class constant accessed through an object/variable.
+                    // The class is resolved from `object`'s static type in the checker.
+                    lhs = Expr::new(
+                        ExprKind::DynamicClassConstantAccess {
+                            object: Box::new(lhs),
+                            name: const_name,
+                        },
+                        span,
+                    );
                 } else {
                     return Err(CompileError::new(
                         span,
-                        "Dynamic class access (`$class::X`) is only supported for method calls",
+                        "Dynamic static property access (`$class::$prop`) is not supported yet",
                     ));
                 }
             }

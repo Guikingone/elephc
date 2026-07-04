@@ -391,6 +391,14 @@ pub(super) fn resolve_expr(
             prelude: prelude.clone(),
             conditional_value_temp: conditional_value_temp.clone(),
         },
+        // `$obj::CONST` — resolve names inside the evaluated object sub-expression; the
+        // constant name is a runtime-class member and is not namespace-rewritten.
+        ExprKind::DynamicClassConstantAccess { object, name } => {
+            ExprKind::DynamicClassConstantAccess {
+                object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
+                name: name.clone(),
+            }
+        }
         _ => expr.kind.clone(),
     };
     Expr::new(kind, expr.span)

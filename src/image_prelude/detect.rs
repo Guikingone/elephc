@@ -350,6 +350,8 @@ fn expr_refs_image(expr: &Expr) -> bool {
         }
         ExprKind::ClassConstant { receiver }
         | ExprKind::ScopedConstantAccess { receiver, .. } => receiver_refs_image(receiver),
+        // `$obj::CONST` — recurse into the evaluated object expression.
+        ExprKind::DynamicClassConstantAccess { object, .. } => expr_refs_image(object),
         ExprKind::NewScopedObject { receiver, args } => {
             receiver_refs_image(receiver) || args.iter().any(expr_refs_image)
         }

@@ -97,6 +97,50 @@ impl Checker {
         expr: &Expr,
     ) -> Result<PhpType, CompileError> {
         let class_name = self.resolve_static_receiver_class(receiver, expr.span)?;
+        self.infer_class_constant_type_by_name(&class_name, name, expr)
+    }
+
+    /// Infers the type of a class constant `$obj::CONST` accessed through an object or
+    /// variable whose class is only known by type (closed world). The object expression is
+    /// still evaluated for its side effects; the constant value itself is compile-time.
+    ///
+    /// Resolves a single concrete class from `object`'s inferred type (a lone `Object(T)`,
+    /// or a union — such as a nullable object — that names exactly one class), then reuses
+    /// the same class-constant lookup as `MyClass::CONST`. A value whose class is not
+    /// statically a unique class (`Mixed`, a scalar, or a multi-class union) is a clear error.
+    pub(crate) fn infer_dynamic_class_constant_access(
+        &mut self,
+        object: &Expr,
+        name: &str,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let object_type = self.infer_type(object, env)?;
+        let class_name = unique_object_class_name(&object_type).ok_or_else(|| {
+            CompileError::new(
+                expr.span,
+                &format!(
+                    "Cannot resolve class constant `{}` on a value of type `{}`; \
+                     the class must be statically known (a single object type)",
+                    name, object_type
+                ),
+            )
+        })?;
+        self.infer_class_constant_type_by_name(&class_name, name, expr)
+    }
+
+    /// Shared class-constant / enum-case lookup by resolved class name, used by both
+    /// `MyClass::CONST` (static receiver) and `$obj::CONST` (dynamic receiver). Prefers enum
+    /// cases, then walks the class parent chain, then implemented/parent interfaces, and
+    /// degrades an entirely-unknown class to `Mixed` with a warning (absent optional
+    /// dependency). A missing constant on a known class is a hard error.
+    fn infer_class_constant_type_by_name(
+        &mut self,
+        class_name: &str,
+        name: &str,
+        expr: &Expr,
+    ) -> Result<PhpType, CompileError> {
+        let class_name = class_name.to_string();
         // First: enum case access (`Color::Red`). Enums shadow classes for
         // this syntax in PHP since 8.1. A name that is not a declared case is an enum *constant*
         // (`Scale::FACTOR`), which is resolved through the class-constant table below.
@@ -246,5 +290,38 @@ impl Checker {
                 }
             }
         }
+    }
+}
+
+/// Returns the single concrete class name named by an object-typed value, or `None` when the
+/// type does not resolve to exactly one class. `Object(T)`/`Packed(T)` yield `T`; a `Union`
+/// (e.g. a nullable object `T|null`) yields the class only when it names exactly one distinct
+/// class across its members. Scalars, `Mixed`, and multi-class unions return `None`, which the
+/// caller turns into a clear "class must be statically known" error.
+fn unique_object_class_name(ty: &PhpType) -> Option<String> {
+    let mut names = std::collections::BTreeSet::new();
+    collect_object_class_names(ty, &mut names);
+    if names.len() == 1 {
+        names.into_iter().next()
+    } else {
+        None
+    }
+}
+
+/// Accumulates every distinct object/packed class name reachable in `ty`, descending into
+/// `Union` members. Non-object members contribute nothing so a nullable object still resolves.
+fn collect_object_class_names(ty: &PhpType, names: &mut std::collections::BTreeSet<String>) {
+    match ty {
+        // An empty class name is an unknown/untyped object (`Object("")`), which is not a
+        // statically-known class; skip it so the receiver resolves to "unresolvable".
+        PhpType::Object(name) | PhpType::Packed(name) if !name.is_empty() => {
+            names.insert(name.clone());
+        }
+        PhpType::Union(members) => {
+            for member in members {
+                collect_object_class_names(member, names);
+            }
+        }
+        _ => {}
     }
 }

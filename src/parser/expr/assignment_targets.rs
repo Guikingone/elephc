@@ -442,6 +442,10 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         | ExprKind::Yield { .. }
         | ExprKind::YieldFrom(_)
         | ExprKind::MagicConstant(_) => {}
+        // `$obj::CONST` — the object sub-expression may reference dependency variables.
+        ExprKind::DynamicClassConstantAccess { object, .. } => {
+            collect_assignment_target_dependencies(object, dependencies);
+        }
     }
 }
 
@@ -603,6 +607,10 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
         | ExprKind::Yield { .. }
         | ExprKind::YieldFrom(_)
         | ExprKind::MagicConstant(_) => false,
+        // `$obj::CONST` — writes can only come from evaluating the object sub-expression.
+        ExprKind::DynamicClassConstantAccess { object, .. } => {
+            expr_may_write_dependency(object, dependencies)
+        }
     }
 }
 
@@ -815,6 +823,10 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => false,
+        // `$obj::CONST` — the needle may match inside the object sub-expression.
+        ExprKind::DynamicClassConstantAccess { object, .. } => {
+            expr_contains_equivalent(object, needle)
+        }
     }
 }
 

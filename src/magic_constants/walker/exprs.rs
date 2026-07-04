@@ -270,6 +270,13 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         ExprKind::ScopedConstantAccess { receiver, name } => {
             ExprKind::ScopedConstantAccess { receiver, name }
         }
+        // `$obj::CONST` — walk the object sub-expression; the constant name is not a magic constant.
+        ExprKind::DynamicClassConstantAccess { object, name } => {
+            ExprKind::DynamicClassConstantAccess {
+                object: Box::new(walk_expr(*object, pass)),
+                name,
+            }
+        }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),

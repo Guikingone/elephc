@@ -230,6 +230,14 @@ pub enum ExprKind {
         receiver: StaticReceiver,
         name: String,
     },
+    /// `$obj::CONST` / `expr::CONST` — a class constant accessed through an object or
+    /// variable whose class is only known by type. The class is resolved from `object`'s
+    /// static type at type-check time (closed world); the constant value is compile-time.
+    /// The `object` sub-expression is still evaluated for its side effects.
+    DynamicClassConstantAccess {
+        object: Box<Expr>,
+        name: String,
+    },
     /// `new self()`, `new static()`, `new parent()`. Distinct from `NewObject`
     /// which uses a fixed class name; this variant carries a `StaticReceiver`
     /// so that codegen can apply late static binding for `static`.

@@ -251,6 +251,13 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         ExprKind::ScopedConstantAccess { receiver, name } => {
             ExprKind::ScopedConstantAccess { receiver, name }
         }
+        // `$obj::CONST` — prune the object sub-expression; the constant access is unchanged.
+        ExprKind::DynamicClassConstantAccess { object, name } => {
+            ExprKind::DynamicClassConstantAccess {
+                object: Box::new(prune_expr(*object)),
+                name,
+            }
+        }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,
             args: args.into_iter().map(prune_expr).collect(),

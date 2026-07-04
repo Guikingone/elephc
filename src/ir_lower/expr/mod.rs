@@ -174,6 +174,9 @@ fn lower_expr_dispatch(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowere
         ExprKind::ScopedConstantAccess { receiver, name } => {
             lower_scoped_constant(ctx, receiver, name, expr)
         }
+        ExprKind::DynamicClassConstantAccess { object, name } => {
+            lower_dynamic_class_constant(ctx, object, name, expr)
+        }
         ExprKind::NewScopedObject { receiver, args } => lower_new_scoped_object(ctx, receiver, args, expr),
         ExprKind::MagicConstant(kind) => lower_magic_constant(ctx, kind, expr),
         ExprKind::Yield { key, value } => lower_yield(ctx, key.as_deref(), value.as_deref(), expr),
@@ -853,6 +856,10 @@ fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => false,
+        // `$obj::CONST` — evaluating the object may run a call that resets concat storage.
+        ExprKind::DynamicClassConstantAccess { object, .. } => {
+            expr_can_reset_concat_storage(object)
+        }
     }
 }
 
@@ -9731,6 +9738,54 @@ fn lower_scoped_constant(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticRec
         Op::ScopedConstantGet.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Lowers `$obj::CONST` — a class constant accessed through an object/variable. The `object`
+/// sub-expression is evaluated for its side effects, its owning temporary (if any) is released
+/// because the object value itself is discarded, and the resolved class constant is then emitted
+/// exactly like `T::CONST`. The class `T` is read from the object value's inferred PHP type
+/// (closed world); the constant value is compile-time, so no runtime class-id dispatch is needed.
+fn lower_dynamic_class_constant(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    name: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    let object_value = lower_expr(ctx, object);
+    let object_type = ctx.builder.value_php_type(object_value.value);
+    // The object value is discarded (only its side effects matter); release an owned temporary.
+    release_discarded_branch_value(ctx, object_value, expr.span);
+    let class_name = dynamic_constant_object_class_name(&object_type);
+    let receiver = StaticReceiver::Named(Name::from(class_name));
+    lower_scoped_constant(ctx, &receiver, name, expr)
+}
+
+/// Extracts the single object class name from a dynamic-constant object's PHP type. `Object(T)`
+/// / `Packed(T)` yield `T`; a `Union` (e.g. a nullable object) yields its lone class name when
+/// unique. Falls back to an empty string only when the type is not a resolvable single class —
+/// the checker has already rejected that case, so `lower_scoped_constant` merely emits a
+/// best-effort `ScopedConstantGet`.
+fn dynamic_constant_object_class_name(ty: &PhpType) -> String {
+    fn collect(ty: &PhpType, names: &mut std::collections::BTreeSet<String>) {
+        match ty {
+            PhpType::Object(name) | PhpType::Packed(name) => {
+                names.insert(name.clone());
+            }
+            PhpType::Union(members) => {
+                for member in members {
+                    collect(member, names);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut names = std::collections::BTreeSet::new();
+    collect(ty, &mut names);
+    if names.len() == 1 {
+        names.into_iter().next().unwrap_or_default()
+    } else {
+        String::new()
+    }
 }
 
 /// Returns the class name to use for a scoped constant lookup.

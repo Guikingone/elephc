@@ -377,6 +377,13 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::ScopedConstantAccess { receiver, name } => {
             ExprKind::ScopedConstantAccess { receiver, name }
         }
+        // `$obj::CONST` — fold within the object sub-expression; the constant is resolved later.
+        ExprKind::DynamicClassConstantAccess { object, name } => {
+            ExprKind::DynamicClassConstantAccess {
+                object: Box::new(fold_expr(*object)),
+                name,
+            }
+        }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,
             args: args.into_iter().map(fold_expr).collect(),

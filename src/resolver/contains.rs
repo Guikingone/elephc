@@ -251,6 +251,8 @@ fn expr_has_includes(expr: &Expr) -> bool {
         | ExprKind::Yield { .. }
         | ExprKind::YieldFrom(_)
         | ExprKind::MagicConstant(_) => false,
+        // `$obj::CONST` — an include can only hide inside the object sub-expression.
+        ExprKind::DynamicClassConstantAccess { object, .. } => expr_has_includes(object),
     }
 }
 

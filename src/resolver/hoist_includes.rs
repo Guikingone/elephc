@@ -568,6 +568,13 @@ impl HoistCtx<'_> {
             // (`resolve_params`) in isolation via `resolve_expr`, which re-enters this hoister at
             // the closure's own scope; hoisting here would run the include in the wrong scope.
             closure @ ExprKind::Closure { .. } => closure,
+            // `$obj::CONST` — hoist any value-include inside the evaluated object sub-expression.
+            ExprKind::DynamicClassConstantAccess { object, name } => {
+                ExprKind::DynamicClassConstantAccess {
+                    object: self.hoist_boxed(object)?,
+                    name,
+                }
+            }
             // Leaf expressions with no include-bearing children (mirrors the `false` group in
             // `contains::expr_has_includes`).
             leaf @ (ExprKind::StringLiteral(_)

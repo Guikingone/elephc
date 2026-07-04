@@ -330,6 +330,10 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
         | ExprKind::ConstRef(_)
         | ExprKind::This => false,
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => false,
+        // `$obj::CONST` — the variable may appear in the evaluated object expression.
+        ExprKind::DynamicClassConstantAccess { object, .. } => {
+            expr_uses_variable(object, needle)
+        }
         ExprKind::NewScopedObject { args, .. } => {
             args.iter().any(|arg| expr_uses_variable(arg, needle))
         }

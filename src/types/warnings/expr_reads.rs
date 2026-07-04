@@ -198,6 +198,10 @@ pub(super) fn collect_expr_reads(
         ExprKind::StaticPropertyAccess { .. } => {},
         ExprKind::BufferNew { len, .. } => collect_expr_reads(len, scope, warnings),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {}
+        // `$obj::CONST` — collect variable reads from the evaluated object sub-expression.
+        ExprKind::DynamicClassConstantAccess { object, .. } => {
+            collect_expr_reads(object, scope, warnings);
+        }
         ExprKind::NewScopedObject { args, .. } => {
             for arg in args {
                 collect_expr_reads(arg, scope, warnings);

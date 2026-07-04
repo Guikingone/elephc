@@ -212,6 +212,10 @@ pub(super) fn discover_expr(
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => {}
+        // `$obj::CONST` — discover declarations inside the evaluated object sub-expression.
+        ExprKind::DynamicClassConstantAccess { object, .. } => {
+            discover_expr(object, base_dir, loaded_paths, include_chain, state, output)?;
+        }
         ExprKind::Yield { key, value } => {
             if let Some(k) = key {
                 discover_expr(k, base_dir, loaded_paths, include_chain, state, output)?;

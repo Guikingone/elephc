@@ -306,6 +306,14 @@ fn rewrite_expr(
             receiver: receiver.clone(),
             args: rewrite_expr_list(args, class_name, parent_name)?,
         },
+        // `$obj::CONST` — rewrite lexical receivers inside the object; the constant name
+        // is left as-is (it names a constant on the runtime class).
+        ExprKind::DynamicClassConstantAccess { object, name } => {
+            ExprKind::DynamicClassConstantAccess {
+                object: Box::new(rewrite_expr(object, class_name, parent_name)?),
+                name: name.clone(),
+            }
+        }
         ExprKind::Yield { key, value } => ExprKind::Yield {
             key: key
                 .as_ref()

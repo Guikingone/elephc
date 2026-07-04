@@ -490,6 +490,10 @@ fn collect_arrow_expr_captures(
         | ExprKind::FirstClassCallable(_)
         | ExprKind::This
         | ExprKind::MagicConstant(_) => {}
+        // `$obj::CONST` — the object sub-expression may reference captured variables.
+        ExprKind::DynamicClassConstantAccess { object, .. } => {
+            collect_arrow_expr_captures(object, bound, seen, captures);
+        }
     }
 }
 

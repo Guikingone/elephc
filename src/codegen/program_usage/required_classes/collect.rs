@@ -466,6 +466,11 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
                 names.insert(name.as_str().to_string());
             }
         }
+        // `$obj::CONST` — the resolved class is only known by type; recurse into the
+        // object expression, which constructs/holds the class instance that makes it required.
+        ExprKind::DynamicClassConstantAccess { object, .. } => {
+            collect_required_class_names_in_expr(object, names);
+        }
         ExprKind::NewScopedObject { receiver, args } => {
             if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
                 names.insert(name.as_str().to_string());

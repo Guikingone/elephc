@@ -444,6 +444,8 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         | ExprKind::ScopedConstantAccess { receiver, .. } => {
             static_receiver_has_regex_call(receiver)
         }
+        // `$obj::CONST` — recurse into the evaluated object expression.
+        ExprKind::DynamicClassConstantAccess { object, .. } => expr_has_regex_call(object),
         ExprKind::BufferNew { len, .. } => expr_has_regex_call(len),
         ExprKind::Yield { key, value } => {
             key.as_deref().is_some_and(expr_has_regex_call)
@@ -748,6 +750,10 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         ExprKind::StaticPropertyAccess { .. }
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. } => false,
+        // `$obj::CONST` — recurse into the evaluated object expression.
+        ExprKind::DynamicClassConstantAccess { object, .. } => {
+            expr_needs_descriptor_invoker(object)
+        }
         ExprKind::BufferNew { len, .. } => expr_needs_descriptor_invoker(len),
         ExprKind::Yield { key, value } => {
             key.as_deref().is_some_and(expr_needs_descriptor_invoker)

@@ -264,6 +264,10 @@ fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
         | ExprKind::This
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. } => false,
+        // `$obj::CONST` — recurse into the object, which may contain a dynamic instanceof.
+        ExprKind::DynamicClassConstantAccess { object, .. } => {
+            expr_has_dynamic_instanceof(object)
+        }
         ExprKind::Yield { key, value } => {
             key.as_ref().is_some_and(|k| expr_has_dynamic_instanceof(k))
                 || value

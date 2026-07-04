@@ -300,6 +300,13 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         ExprKind::ScopedConstantAccess { receiver, name } => {
             ExprKind::ScopedConstantAccess { receiver, name }
         }
+        // `$obj::CONST` — propagate into the object sub-expression; the constant is unchanged.
+        ExprKind::DynamicClassConstantAccess { object, name } => {
+            ExprKind::DynamicClassConstantAccess {
+                object: Box::new(propagate_expr(*object, env)),
+                name,
+            }
+        }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,
             args: propagate_args(args, None),

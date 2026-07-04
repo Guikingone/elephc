@@ -53,6 +53,17 @@ fn test_error_undefined_property() {
     );
 }
 
+/// Verifies that `$x::CONST` on a receiver whose class is not statically a single object
+/// type (here a `mixed` value) reports a clear "class must be statically known" error rather
+/// than crashing or silently degrading.
+#[test]
+fn test_error_dynamic_class_constant_on_mixed() {
+    expect_error(
+        "<?php class C { const K = 42; } function f(mixed $o): int { return $o::K; } echo f(new C());",
+        "Cannot resolve class constant `K` on a value of type `mixed`",
+    );
+}
+
 /// Verifies the error diagnostic for undefined method.
 #[test]
 fn test_error_undefined_method() {

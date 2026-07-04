@@ -628,6 +628,9 @@ impl Checker {
             ExprKind::ScopedConstantAccess { receiver, name } => {
                 self.infer_scoped_constant_access(receiver, name, expr)
             }
+            ExprKind::DynamicClassConstantAccess { object, name } => {
+                self.infer_dynamic_class_constant_access(object, name, expr, env)
+            }
             ExprKind::NewScopedObject { receiver, args } => {
                 let class_name = match receiver {
                     crate::parser::ast::StaticReceiver::Self_ => {
