@@ -38,6 +38,8 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_free_deep_value_any");                 // boxed mixed cells release through the uniform dispatcher
     emitter.instruction("cmp x9, #10");                                         // does the boxed payload hold a callable descriptor?
     emitter.instruction("b.eq __rt_mixed_free_deep_callable");                  // callable descriptors release through the descriptor helper
+    emitter.instruction("cmp x9, #11");                                         // does the boxed payload hold a reference cell?
+    emitter.instruction("b.eq __rt_mixed_free_deep_value_any");                 // reference cells release through the uniform dispatcher
     emitter.instruction("cmp x9, #7");                                          // restore the heap-backed upper-bound comparison for array/hash/object tags
     emitter.instruction("b.hi __rt_mixed_free_deep_box");                       // unknown tags are ignored by mixed deep-free
     emitter.label("__rt_mixed_free_deep_value_any");
@@ -88,6 +90,8 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_free_deep_value_any");                   // boxed mixed cells release through the uniform dispatcher
     emitter.instruction("cmp r10, 10");                                         // does the boxed payload hold a callable descriptor?
     emitter.instruction("je __rt_mixed_free_deep_callable");                    // callable descriptors release through the descriptor helper
+    emitter.instruction("cmp r10, 11");                                         // does the boxed payload hold a reference cell?
+    emitter.instruction("je __rt_mixed_free_deep_value_any");                   // reference cells release through the uniform x86_64 dispatcher
     emitter.instruction("cmp r10, 7");                                          // restore the heap-backed upper-bound comparison for array/hash/object tags
     emitter.instruction("jg __rt_mixed_free_deep_box");                         // unknown tags are ignored by the current x86_64 mixed deep-free helper
     emitter.label("__rt_mixed_free_deep_value_any");

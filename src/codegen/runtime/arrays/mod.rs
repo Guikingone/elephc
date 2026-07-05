@@ -99,6 +99,7 @@ mod hash_fnv1a;
 mod hash_free_deep;
 mod hash_get;
 mod hash_grow;
+mod hash_ref_element;
 mod hash_array_union;
 mod hash_key_eq;
 mod hash_key_hash;
@@ -123,6 +124,7 @@ mod ksort;
 mod natsort;
 mod object_free_deep;
 mod range;
+mod ref_cell;
 mod incref;
 mod iterable_unsupported_kind;
 mod iterable_write_stdout;
@@ -401,6 +403,13 @@ pub use object_free_deep::emit_object_free_deep;
 /// Emit deep object free helper.
 pub use range::emit_range;
 /// Emit range helper.
+pub use hash_ref_element::emit_hash_ref_element;
+/// Emit the `$x = &$arr[$k]` element-to-reference-cell promotion helper.
+pub use ref_cell::{
+    emit_deref_if_reference, emit_ref_cell_alloc, emit_ref_cell_decref, emit_ref_cell_free_deep,
+    emit_ref_cell_incref,
+};
+/// Emit kind-6 refcounted reference-cell helpers (alloc/incref/decref/free_deep) + read-deref.
 pub use refcount::emit_refcount;
 /// Emit reference count helper.
 pub use shuffle::emit_shuffle;

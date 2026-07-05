@@ -761,3 +761,103 @@ fn test_reference_to_float_static_property_writes_through() {
     );
     assert_eq!(out, "3.25");
 }
+
+/// Compiles `source` with heap-debug instrumentation, asserts it printed `expected` on stdout,
+/// and asserts the exit heap summary reports no leak (`live_blocks == 0`). Used by the
+/// array-element reference tests, whose whole point is balanced refcounts across promotion,
+/// COW, unset, and Mixed boxing.
+fn assert_ref_array_element_heap_clean(source: &str, expected: &str) {
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, expected, "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// `$x = &$a['k']` on a hash aliases the element: a write through the alias updates the element
+/// (write-through), and the refcounts stay balanced (`--heap-debug` clean).
+#[test]
+fn test_ref_array_element_hash_write_through() {
+    assert_ref_array_element_heap_clean(
+        "<?php $a = ['k' => 1, 'j' => 2]; $x = &$a['k']; $x = 9; echo $a['k'];",
+        "9",
+    );
+}
+
+/// After `$x = &$a['k']`, a direct write to the element (`$a['k'] = 7`) is observed through the
+/// alias (`echo $x`), confirming read-through in the element→alias direction.
+#[test]
+fn test_ref_array_element_hash_read_through() {
+    assert_ref_array_element_heap_clean(
+        "<?php $a = ['k' => 1, 'j' => 2]; $x = &$a['k']; $x = 9; $a['k'] = 7; echo $x;",
+        "7",
+    );
+}
+
+/// H2: a normal (non-alias) read of the referenced element sees the current value in every
+/// consumer — direct `echo`, arithmetic (`$a['k'] + 1`), and by-value `foreach` — rather than
+/// misreading the raw reference-cell pointer.
+#[test]
+fn test_ref_array_element_normal_read_derefs_reference() {
+    assert_ref_array_element_heap_clean(
+        "<?php $a = ['k' => 1, 'j' => 2]; $x = &$a['k']; $x = 5; \
+         echo $a['k'], ' ', $a['k'] + 1, '|'; foreach ($a as $v) { echo $v; }",
+        "5 6|52",
+    );
+}
+
+/// COW share: a reference survives an array copy (`$b = $a`); a write through the copy's element
+/// (`$b['k'] = 42`) is visible through the original alias `$x`, matching PHP's reference-copy
+/// semantics (cross-checked with `php -r`).
+#[test]
+fn test_ref_array_element_cow_share_survives_copy() {
+    assert_ref_array_element_heap_clean(
+        "<?php $a = ['k' => 1]; $x = &$a['k']; $b = $a; $b['k'] = 42; echo $x;",
+        "42",
+    );
+}
+
+/// Lifetime: after `$x = &$a['k']`, `unset($a)` keeps the shared reference cell alive for the
+/// alias, so a later write through `$x` still works and the heap stays balanced.
+#[test]
+fn test_ref_array_element_alias_outlives_unset_of_array() {
+    assert_ref_array_element_heap_clean(
+        "<?php $a = ['k' => 3]; $x = &$a['k']; unset($a); $x = 8; echo $x;",
+        "8",
+    );
+}
+
+/// Mixed sink (H4): reading the referenced element into a plain local (`$m = $a['k']`) derefs to
+/// the inner value with no use-after-free, even though the fetched element word is a reference cell.
+#[test]
+fn test_ref_array_element_read_into_mixed_sink() {
+    assert_ref_array_element_heap_clean(
+        "<?php $a = ['k' => 1]; $x = &$a['k']; $m = $a['k']; echo $m;",
+        "1",
+    );
+}
+
+/// Indexed → hash promotion: taking a reference into an indexed array de-packs it to a hash
+/// (Zend behavior); the write-through alias then works and the promoted hash is released as a
+/// hash at scope exit (`--heap-debug` clean; regression for the promoted-hash leak).
+///
+/// (`array_is_list()` is intentionally not asserted here: it is not yet implemented in elephc,
+/// and PHP actually reports `true` for this case — the keys stay a contiguous list even though
+/// storage de-packs — contradicting the campaign design's original `false` assumption.)
+#[test]
+fn test_ref_array_element_indexed_promotes_to_hash() {
+    assert_ref_array_element_heap_clean(
+        "<?php $a = [10, 20, 30]; $x = &$a[1]; $x = 99; echo $a[1];",
+        "99",
+    );
+}
+
+// Test #8 — GC self-cycle (`$a['k'] = &$a` + forced collection) — is STAGED FOR SLICE 2.
+// It requires a reference INTO an array element (`$arr[$k] = &$src`), which is a SLICE 2 form
+// that currently loud-errors in the checker (see
+// `error_tests::type_system::test_error_ref_assign_into_array_element_unsupported`). The kind-6 /
+// tag-11 GC-collector awareness landed in Phase B, but it cannot be exercised end-to-end until
+// SLICE 2 can construct a ref-cell cycle, so the runtime GC-cycle test is deferred to that slice.

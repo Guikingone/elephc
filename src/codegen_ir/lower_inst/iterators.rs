@@ -1331,19 +1331,55 @@ fn load_current_hash_key_as_mixed_x86_64(ctx: &mut FunctionContext<'_>, offset: 
 }
 
 /// Boxes the current AArch64 hash value payload saved by `IterNext` into `Mixed`.
+///
+/// A by-value `foreach` over a hash whose entry is a tag-11 reference must read THROUGH the
+/// reference cell (H2), so a tag-11 entry is normalized to its inner value + tag before boxing.
 fn load_current_hash_value_as_mixed_aarch64(ctx: &mut FunctionContext<'_>, offset: usize) {
     abi::load_at_offset(ctx.emitter, "x5", offset - ITER_VALUE_TAG_OFFSET_DELTA);
     abi::load_at_offset(ctx.emitter, "x3", offset - ITER_VALUE_LO_OFFSET_DELTA);
     abi::load_at_offset(ctx.emitter, "x4", offset - ITER_VALUE_HI_OFFSET_DELTA);
+    deref_current_hash_value_if_reference_aarch64(ctx);
     box_hash_payload_as_mixed_aarch64(ctx);
 }
 
 /// Boxes the current x86_64 hash value payload saved by `IterNext` into `Mixed`.
+///
+/// A by-value `foreach` over a hash whose entry is a tag-11 reference must read THROUGH the
+/// reference cell (H2), so a tag-11 entry is normalized to its inner value + tag before boxing.
 fn load_current_hash_value_as_mixed_x86_64(ctx: &mut FunctionContext<'_>, offset: usize) {
     abi::load_at_offset(ctx.emitter, "r9", offset - ITER_VALUE_TAG_OFFSET_DELTA);
     abi::load_at_offset(ctx.emitter, "rcx", offset - ITER_VALUE_LO_OFFSET_DELTA);
     abi::load_at_offset(ctx.emitter, "r8", offset - ITER_VALUE_HI_OFFSET_DELTA);
+    deref_current_hash_value_if_reference_x86_64(ctx);
     box_hash_payload_as_mixed_x86_64(ctx);
+}
+
+/// Derefs a tag-11 foreach hash value (AArch64) through `__rt_deref_if_reference`.
+///
+/// The loader holds `value_tag` in `x5`, `value_lo` in `x3`, `value_hi` in `x4`, but the deref
+/// helper takes/returns `value_lo` in `x1` and `value_tag` in `x3`, so the words are marshaled
+/// in and back out. `value_hi` (`x4`) is left untouched because a reference cell holds a
+/// single-word inner value; for a non-reference entry the helper is a no-op.
+fn deref_current_hash_value_if_reference_aarch64(ctx: &mut FunctionContext<'_>) {
+    ctx.emitter.instruction("mov x1, x3");                                      // pass value_lo to the reference-deref helper
+    ctx.emitter.instruction("mov x3, x5");                                      // pass value_tag to the reference-deref helper
+    abi::emit_call_label(ctx.emitter, "__rt_deref_if_reference");
+    ctx.emitter.instruction("mov x5, x3");                                      // move the (possibly derefed) value_tag back to the box register
+    ctx.emitter.instruction("mov x3, x1");                                      // move the (possibly derefed) value_lo back to the box register
+}
+
+/// Derefs a tag-11 foreach hash value (x86_64) through `__rt_deref_if_reference`.
+///
+/// The loader holds `value_tag` in `r9`, `value_lo` in `rcx`, `value_hi` in `r8`, but the deref
+/// helper takes/returns `value_lo` in `rdi` and `value_tag` in `rcx`, so the words are marshaled
+/// in and back out. `value_hi` (`r8`) is left untouched because a reference cell holds a
+/// single-word inner value; for a non-reference entry the helper is a no-op.
+fn deref_current_hash_value_if_reference_x86_64(ctx: &mut FunctionContext<'_>) {
+    ctx.emitter.instruction("mov rdi, rcx");                                    // pass value_lo to the reference-deref helper
+    ctx.emitter.instruction("mov rcx, r9");                                     // pass value_tag to the reference-deref helper
+    abi::emit_call_label(ctx.emitter, "__rt_deref_if_reference");
+    ctx.emitter.instruction("mov r9, rcx");                                     // move the (possibly derefed) value_tag back to the box register
+    ctx.emitter.instruction("mov rcx, rdi");                                    // move the (possibly derefed) value_lo back to the box register
 }
 
 /// Boxes or retains an AArch64 hash payload as an owned `Mixed` value.

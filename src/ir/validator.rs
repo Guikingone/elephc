@@ -282,7 +282,7 @@ fn validate_instruction_immediate(inst_id: InstId, inst: &Instruction) -> Result
         | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
         }),
-        PromoteLocalRefCell | AliasLocalRefCell => require_immediate(inst_id, inst, "local slot pair", |imm| {
+        PromoteLocalRefCell | AliasLocalRefCell | AdoptRefCell => require_immediate(inst_id, inst, "local slot pair", |imm| {
             matches!(imm, Imm::LocalSlotPair { .. })
         }),
         ICmp | FCmp => require_immediate(inst_id, inst, "comparison predicate", |imm| {
@@ -405,7 +405,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
             check_count(inst_id, inst, 0, "0")
         }
         StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal | StoreStaticProperty | ExternGlobalStore
-        | StoreRefCell | BindRefCellPtr | Acquire | Release | Move | Borrow | EnsureOwned
+        | StoreRefCell | BindRefCellPtr | AdoptRefCell | Acquire | Release | Move | Borrow | EnsureOwned
         | EchoValue | PrintValue | WriteStdout | WriteStrStdout | VarDump | PrintR
         | ThrowException | GeneratorReturn | PtrCheckNonnull => {
             check_count(inst_id, inst, 1, "1")
@@ -424,7 +424,8 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Mixed), "Heap(Mixed)")
         }
-        HashLen | HashGet | HashIsset | HashSet | HashAppend | HashEnsureUnique | HashCloneShallow => {
+        HashLen | HashGet | HashIsset | HashSet | HashAppend | HashEnsureUnique | HashCloneShallow
+        | HashRefElement => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")
         }
         IterCurrentValueRef => check_count(inst_id, inst, 1, "1"),

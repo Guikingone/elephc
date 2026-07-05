@@ -828,3 +828,37 @@ fn test_error_increment_on_object_is_rejected() {
         "Cannot increment/decrement",
     );
 }
+
+/// Verifies that a reference INTO an array element (`$arr[$k] = &$src`, the SLICE 2 form) still
+/// hard-errors: only aliasing FROM an element (`$x = &$arr[$k]`) is implemented, and the reverse
+/// bind must loud-error rather than silently miscompile.
+#[test]
+fn test_error_ref_assign_into_array_element_unsupported() {
+    expect_error(
+        "<?php $a = [\"k\" => 1]; $s = 5; $a[\"k\"] = &$s;",
+        "Reference assignment into an array element is not supported",
+    );
+}
+
+/// Verifies that a reference to a static-property array element (`$x = &self::$arr[$k]`, the
+/// SLICE 3 form) loud-errors: SLICE 1 only supports a plain local-variable array base, so the
+/// static-property base is rejected cleanly instead of reaching an internal lowering mismatch.
+#[test]
+fn test_error_ref_assign_static_property_array_element_unsupported() {
+    expect_error(
+        "<?php class C { public static $a = [1, 2]; \
+         static function t() { $x = &self::$a[0]; return $x; } }",
+        "Reference to an array element is only supported on a plain array variable",
+    );
+}
+
+/// Verifies that a by-reference assignment in expression position (`if (null !== $x = &$a[$k])`,
+/// the SLICE 4 form) is a parse error: `=&` is statement-only, so the `&` is rejected rather than
+/// silently accepted as a bitwise operator.
+#[test]
+fn test_error_ref_assign_in_expression_position_unsupported() {
+    expect_error(
+        "<?php $a = [\"k\" => 1]; if (null !== $x = &$a[\"k\"]) { echo \"y\"; }",
+        "Unexpected token",
+    );
+}

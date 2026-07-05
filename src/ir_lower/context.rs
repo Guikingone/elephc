@@ -424,6 +424,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.local_types.insert(name.to_string(), ty);
     }
 
+    /// Sets a local's storage and logical type exactly, bypassing the widening lattice.
+    ///
+    /// Used for an authoritative representation change such as promoting an indexed array to a
+    /// hash for `$x = &$arr[$k]`: the old indexed value is replaced by the promoted hash, so the
+    /// slot must be typed `AssocArray` (freed at scope exit via `__rt_decref_hash`) rather than
+    /// widened to `Mixed` (which would free the raw hash with `__rt_decref_mixed` and leak it).
+    pub(crate) fn set_local_type_exact(&mut self, name: &str, ty: PhpType) {
+        if let Some(slot) = self.local_slots.get(name).copied() {
+            self.builder.set_local_storage_type(slot, ty.clone());
+        }
+        self.local_types.insert(name.to_string(), ty);
+    }
+
     /// Declares a local slot if it does not already exist.
     pub(crate) fn declare_local(&mut self, name: &str, php_type: PhpType) -> LocalSlotId {
         self.declare_local_with_kind(name, php_type, LocalKind::PhpLocal)
@@ -961,6 +974,43 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         );
         self.mark_ref_bound_local(name);
         self.initialized_slots.insert(slot);
+        self.initialized_slots.insert(owner_slot);
+    }
+
+    /// Binds `target` as an OWNING alias to a pre-existing external kind-6 refcounted reference
+    /// cell (`$x = &$arr[$k]`). Declares a hidden `LocalKind::RefCell` owner slot so scope exit
+    /// releases the shared cell (refcount-aware, via the backend's `AdoptRefCell` lowering), and
+    /// emits `Op::AdoptRefCell` with the cell pointer operand. Unlike `promote_local_ref_cell`, no
+    /// cell is allocated here — the cell already exists (created by the element promotion) and is
+    /// only retained.
+    pub(crate) fn adopt_ref_cell(
+        &mut self,
+        target: &str,
+        cell_ptr: LoweredValue,
+        value_type: PhpType,
+        span: Option<Span>,
+    ) {
+        self.clear_static_callable_local(target);
+        self.clear_fiber_start_sig(target);
+        self.release_replaced_local_before_ref_alias(target, span);
+        let target_slot = self.declare_local(target, value_type.clone());
+        let owner_slot = self.declare_ref_cell_owner(target, value_type.clone());
+        self.set_local_type(target, value_type.clone());
+        self.builder.emit_with_effects(
+            Op::AdoptRefCell,
+            vec![cell_ptr.value],
+            Some(Immediate::LocalSlotPair {
+                first: target_slot,
+                second: owner_slot,
+            }),
+            IrType::Void,
+            value_type,
+            Ownership::NonHeap,
+            Op::AdoptRefCell.default_effects(),
+            span,
+        );
+        self.mark_ref_bound_local(target);
+        self.initialized_slots.insert(target_slot);
         self.initialized_slots.insert(owner_slot);
     }
 

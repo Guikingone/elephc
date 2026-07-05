@@ -233,6 +233,50 @@ pub(super) fn check_ref_assign(
             clear_callable_metadata(checker, target);
             Ok(())
         }
+        ExprKind::ArrayAccess { array, .. } => {
+            // `$x = &$arr[$k]`: the local aliases the array element's reference cell. Type the
+            // target to the element type and mark it by-reference so codegen routes its
+            // loads/stores through the shared cell (write-through / read-through).
+            //
+            // SLICE 1 only supports a plain local-variable array base. A property or static
+            // property element base (`&$this->prop[$k]`, `&self::$arr[$k]`) is a later slice, so
+            // loud-error here instead of falling through to a lowering path that cannot promote it.
+            if !matches!(array.kind, ExprKind::Variable(_)) {
+                return Err(CompileError::new(
+                    span,
+                    "Reference to an array element is only supported on a plain array variable",
+                ));
+            }
+            let element_ty = checker.infer_type(source, env)?;
+            // A kind-6 reference cell holds a single inner value word; a multi-word string element
+            // would drop its length, so reject it loudly instead of miscompiling.
+            if element_ty.codegen_repr() == PhpType::Str {
+                return Err(CompileError::new(
+                    span,
+                    "Reference to a string array element is not yet supported",
+                ));
+            }
+            // Taking a reference into an indexed array de-packs it into a hash (Zend behavior):
+            // retype the base variable to an associative array so downstream reads, cleanup, and
+            // `array_is_list()` all agree with the promoted runtime representation.
+            if let ExprKind::Variable(array_name) = &array.kind {
+                if let Some(PhpType::Array(_)) =
+                    env.get(array_name).map(|ty| ty.codegen_repr())
+                {
+                    env.insert(
+                        array_name.clone(),
+                        PhpType::AssocArray {
+                            key: Box::new(PhpType::Mixed),
+                            value: Box::new(element_ty.clone()),
+                        },
+                    );
+                }
+            }
+            env.insert(target.to_string(), element_ty);
+            checker.active_ref_params.insert(target.to_string());
+            clear_callable_metadata(checker, target);
+            Ok(())
+        }
         _ => Err(CompileError::new(
             span,
             "Reference assignment source must be a variable, array/property element, or a by-reference call",

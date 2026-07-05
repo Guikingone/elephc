@@ -80,6 +80,8 @@ pub fn emit_array_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_array_clone_shallow_refs");                  // boxed mixed payloads also need retains
     emitter.instruction("cmp x9, #10");                                         // is this an array of callable descriptors?
     emitter.instruction("b.eq __rt_array_clone_shallow_refs");                  // callable descriptor slots need retains for the clone
+    emitter.instruction("cmp x9, #11");                                         // is this an array of reference cells?
+    emitter.instruction("b.eq __rt_array_clone_shallow_refs");                  // reference cells survive the COW copy: share and retain each cell
     emitter.instruction("b __rt_array_clone_shallow_done");                     // scalar payloads are already correct after the byte copy
 
     // -- string arrays must own their own persisted payloads after the split --
@@ -190,6 +192,8 @@ fn emit_array_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_array_clone_shallow_refs");                    // retain every live child pointer for boxed mixed payloads
     emitter.instruction("cmp r9, 10");                                          // does the clone store callable descriptors that need a retain for the cloned owner?
     emitter.instruction("je __rt_array_clone_shallow_refs");                    // retain every callable descriptor for callable payloads
+    emitter.instruction("cmp r9, 11");                                          // does the clone store reference cells that must survive the COW copy?
+    emitter.instruction("je __rt_array_clone_shallow_refs");                    // share and retain every reference cell for the cloned owner
     emitter.instruction("jmp __rt_array_clone_shallow_done");                   // scalar and float payloads are already correct after the shallow byte copy
     emitter.label("__rt_array_clone_shallow_strings");
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // start the cloned string-slot fixup loop from the first live indexed-array slot

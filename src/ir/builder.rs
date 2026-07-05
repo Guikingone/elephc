@@ -101,6 +101,19 @@ impl<'f> Builder<'f> {
         local.php_type = storage_type;
     }
 
+    /// Sets a local slot's frame storage type exactly, bypassing the widening lattice.
+    ///
+    /// Used when a lowering step performs an authoritative representation change (for example
+    /// promoting an indexed array to an associative hash for `$x = &$arr[$k]`), where the old
+    /// value is genuinely replaced rather than merged: widening Array with AssocArray would
+    /// otherwise fall back to `Mixed`, mis-typing the slot and freeing the raw hash with the
+    /// wrong scope-exit routine.
+    pub fn set_local_storage_type(&mut self, slot: LocalSlotId, php_type: PhpType) {
+        let local = &mut self.func.locals[slot.as_raw() as usize];
+        local.ir_type = local_storage_ir_type(&php_type);
+        local.php_type = php_type;
+    }
+
     /// Returns the current frame storage PHP type for a local slot.
     pub fn local_php_type(&self, slot: LocalSlotId) -> PhpType {
         self.func.locals[slot.as_raw() as usize].php_type.clone()

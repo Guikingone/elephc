@@ -35,6 +35,7 @@ pub(super) struct FunctionContext<'a> {
     pub(super) callee_saved_offsets: Vec<(&'static str, usize)>,
     local_offsets: HashMap<LocalSlotId, usize>,
     promoted_ref_cells: HashSet<LocalSlotId>,
+    adopted_ref_cell_owners: HashSet<LocalSlotId>,
     try_handler_offsets: HashMap<i64, usize>,
     pub(super) frame_size: usize,
     pub(super) concat_base_offset: usize,
@@ -70,6 +71,7 @@ impl<'a> FunctionContext<'a> {
             callee_saved_offsets: layout.callee_saved_offsets,
             local_offsets: layout.local_offsets,
             promoted_ref_cells: HashSet::new(),
+            adopted_ref_cell_owners: HashSet::new(),
             try_handler_offsets: layout.try_handler_offsets,
             frame_size: layout.frame_size,
             concat_base_offset: layout.concat_base_offset,
@@ -213,6 +215,18 @@ impl<'a> FunctionContext<'a> {
     /// Returns true when a local slot stores a heap reference-cell pointer.
     pub(super) fn local_stores_ref_cell_pointer(&self, slot: LocalSlotId) -> bool {
         self.is_by_ref_param_slot(slot) || self.is_promoted_ref_cell(slot)
+    }
+
+    /// Marks a hidden owner slot as owning a shared kind-6 refcounted reference cell, so its
+    /// scope-exit cleanup uses `__rt_ref_cell_decref` (refcount-aware) instead of the raw
+    /// unconditional cell free used for single-owner kind-0 cells.
+    pub(super) fn mark_adopted_ref_cell_owner(&mut self, owner_slot: LocalSlotId) {
+        self.adopted_ref_cell_owners.insert(owner_slot);
+    }
+
+    /// Returns true when a hidden owner slot owns a shared kind-6 refcounted reference cell.
+    pub(super) fn is_adopted_ref_cell_owner(&self, owner_slot: LocalSlotId) -> bool {
+        self.adopted_ref_cell_owners.contains(&owner_slot)
     }
 
     /// Returns true when the local slot is the storage slot for a by-reference parameter.

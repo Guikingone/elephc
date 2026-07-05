@@ -207,6 +207,16 @@ pub enum Op {
     PromoteLocalRefCell,
     AliasLocalRefCell,
     ReleaseLocalRefCell,
+    /// Binds a target local slot as an OWNING alias to a pre-existing external kind-6 refcounted
+    /// reference cell: increfs the cell and registers a refcount-aware scope-exit release
+    /// (`__rt_ref_cell_decref`). Operand: the cell pointer (SSA value); immediate:
+    /// `LocalSlotPair { first: target slot, second: hidden owner slot }`. Distinct from
+    /// `PromoteLocalRefCell` (which allocs + moves a value in) and `BindRefCellPtr` (non-owning).
+    AdoptRefCell,
+    /// Promotes a hash element to a kind-6 reference cell in place (`$x = &$arr[$k]`) and yields the
+    /// shared cell pointer. Operands: the hash, then the key. Backed by `__rt_hash_ref_element`,
+    /// which may relocate the hash; the backend writes the returned hash back to the array local.
+    HashRefElement,
     LoadGlobal,
     StoreGlobal,
     LoadStaticLocal,
@@ -455,6 +465,10 @@ impl Op {
             },
             AliasLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL,
             ReleaseLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
+            AdoptRefCell => E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
+            HashRefElement => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::WRITES_LOCAL | E::REFCOUNT_OP
+            }
             LoadGlobal | LoadStaticProperty | LoadStaticPropRefCell | ScopedConstantGet | ClassAttrNames
             | ClassAttrArgs | ClassGetAttributes | CatchCurrent => E::READS_GLOBAL,
             StoreGlobal | StoreStaticLocal | StoreStaticProperty | InitStaticLocal | IncludeOnceMark
@@ -571,6 +585,8 @@ impl Op {
             PromoteLocalRefCell => "promote_local_ref_cell",
             AliasLocalRefCell => "alias_local_ref_cell",
             ReleaseLocalRefCell => "release_local_ref_cell",
+            AdoptRefCell => "adopt_ref_cell",
+            HashRefElement => "hash_ref_element",
             LoadGlobal => "load_global",
             StoreGlobal => "store_global",
             LoadStaticLocal => "load_static_local",

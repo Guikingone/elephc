@@ -109,6 +109,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::PromoteLocalRefCell => lower_promote_local_ref_cell(ctx, &inst),
         Op::AliasLocalRefCell => lower_alias_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalRefCell => lower_release_local_ref_cell(ctx, &inst),
+        Op::AdoptRefCell => lower_adopt_ref_cell(ctx, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),
         Op::StoreGlobal => lower_store_global(ctx, &inst),
         Op::ExternGlobalLoad => lower_extern_global_load(ctx, &inst),
@@ -177,6 +178,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::HashNew => hashes::lower_hash_new(ctx, &inst),
         Op::HashLen => hashes::lower_hash_len(ctx, &inst),
         Op::HashGet => hashes::lower_hash_get(ctx, &inst),
+        Op::HashRefElement => hashes::lower_hash_ref_element(ctx, &inst),
         Op::HashIsset => builtins::lower_hash_isset(ctx, &inst),
         Op::HashSet => hashes::lower_hash_set(ctx, &inst),
         Op::HashUnset => hashes::lower_hash_unset(ctx, &inst),
@@ -6447,6 +6449,37 @@ fn lower_bind_ref_cell_ptr(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
         abi::tertiary_scratch_reg(ctx.emitter),
     );
     ctx.mark_promoted_ref_cell(target_slot);
+    Ok(())
+}
+
+/// Lowers `AdoptRefCell`: binds the target local slot as an OWNING alias to a pre-existing
+/// external kind-6 refcounted reference cell (operand 0). Stores the cell pointer into both the
+/// visible target slot and the hidden owner slot, increfs the cell so the alias owns a share, and
+/// marks the target as a promoted ref cell (so loads/stores dereference it) and the owner slot as an
+/// adopted refcounted cell (so scope-exit uses `__rt_ref_cell_decref`, not the raw single-owner free).
+fn lower_adopt_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let (target_slot, owner_slot) = expect_local_slot_pair(inst)?;
+    let value = expect_operand(inst, 0)?;
+    let target_offset = ctx.local_offset(target_slot)?;
+    let owner_offset = ctx.local_offset(owner_slot)?;
+    let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(value, pointer_reg)?;
+    abi::store_at_offset_scratch(
+        ctx.emitter,
+        pointer_reg,
+        target_offset,
+        abi::tertiary_scratch_reg(ctx.emitter),
+    );
+    abi::store_at_offset_scratch(
+        ctx.emitter,
+        pointer_reg,
+        owner_offset,
+        abi::tertiary_scratch_reg(ctx.emitter),
+    );
+    ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_call_label(ctx.emitter, "__rt_ref_cell_incref");
+    ctx.mark_promoted_ref_cell(target_slot);
+    ctx.mark_adopted_ref_cell_owner(owner_slot);
     Ok(())
 }
 

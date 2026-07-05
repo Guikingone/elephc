@@ -45,7 +45,7 @@ fn test_error_reference_assignment_rejects_computed_source() {
 fn test_error_reference_to_static_array_element_source_deferred() {
     expect_error(
         "<?php class C { public static array $a = [1, 2]; static function t() { $k = 0; $e = &self::$a[$k]; return $e; } } echo C::t();",
-        "Reference assignment source must be a variable",
+        "Reference to an array element is only supported on a plain array variable",
     );
 }
 

@@ -438,27 +438,47 @@ fn emit_ref_cell_owner_epilogue_cleanup_for(
     ctx: &mut FunctionContext<'_>,
     owners: Vec<(String, LocalSlotId, PhpType, usize)>,
 ) {
-    for (name, _, ty, offset) in owners {
+    for (name, slot, ty, offset) in owners {
         ctx.emitter.comment(&format!("epilogue cleanup ref-cell owner ${}", name));
-        emit_ref_cell_owner_cleanup(ctx, offset, &ty);
+        emit_ref_cell_owner_cleanup(ctx, slot, offset, &ty);
     }
 }
 
 /// Releases the owner slot's ref-cell pointer when it is non-null, then clears the owner.
-fn emit_ref_cell_owner_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty: &PhpType) {
+///
+/// An adopted owner (a shared kind-6 refcounted cell from `$x = &$arr[$k]`) is released with
+/// `__rt_ref_cell_decref` so the cell survives while other owners (the array slot, copies) still
+/// reference it; a raw single-owner cell uses the unconditional `emit_release_local_ref_cell`.
+fn emit_ref_cell_owner_cleanup(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    offset: usize,
+    ty: &PhpType,
+) {
+    let adopted = ctx.is_adopted_ref_cell_owner(slot);
     let done = ctx.next_label("ref_cell_owner_cleanup_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::load_at_offset_scratch(ctx.emitter, "x9", offset, "x11");
             ctx.emitter.instruction(&format!("cbz x9, {}", done));              // skip released or never-created fallback ref-cells
-            abi::emit_release_local_ref_cell(ctx.emitter, "x9", ty);
+            if adopted {
+                ctx.emitter.instruction("mov x0, x9");                          // pass the shared reference cell to the refcount-aware release
+                abi::emit_call_label(ctx.emitter, "__rt_ref_cell_decref");
+            } else {
+                abi::emit_release_local_ref_cell(ctx.emitter, "x9", ty);
+            }
             abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
         }
         Arch::X86_64 => {
             abi::load_at_offset_scratch(ctx.emitter, "r11", offset, "r10");
             ctx.emitter.instruction("test r11, r11");                           // check whether this owner still holds a fallback ref-cell
             ctx.emitter.instruction(&format!("je {}", done));                   // skip released or never-created fallback ref-cells
-            abi::emit_release_local_ref_cell(ctx.emitter, "r11", ty);
+            if adopted {
+                ctx.emitter.instruction("mov rax, r11");                        // pass the shared reference cell to the refcount-aware release
+                abi::emit_call_label(ctx.emitter, "__rt_ref_cell_decref");
+            } else {
+                abi::emit_release_local_ref_cell(ctx.emitter, "r11", ty);
+            }
             abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
         }
     }
@@ -502,6 +522,9 @@ fn promoted_ref_cell_local_slots(function: &Function) -> HashSet<LocalSlotId> {
                 Some(first)
             }
             Some(Immediate::LocalSlotPair { first, .. }) if inst.op == Op::AliasLocalRefCell => {
+                Some(first)
+            }
+            Some(Immediate::LocalSlotPair { first, .. }) if inst.op == Op::AdoptRefCell => {
                 Some(first)
             }
             _ => None,

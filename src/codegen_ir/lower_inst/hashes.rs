@@ -108,6 +108,45 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     Ok(())
 }
 
+/// Lowers `HashRefElement`: promotes a hash element to a kind-6 reference cell (`$x = &$arr[$k]`).
+///
+/// Calls `__rt_hash_ref_element(hash, key)`, which returns the possibly-relocated hash and the
+/// shared cell pointer. The relocated hash is written back to the array source local (and any global
+/// source), and the cell pointer becomes the instruction result (consumed by `AdoptRefCell`).
+pub(super) fn lower_hash_ref_element(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    require_hash(ctx.value_php_type(hash)?, inst)?;
+    let source_local = source_load_local_slot(ctx, hash)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            materialize_hash_key_aarch64(ctx, key)?;
+            ctx.load_value_to_reg(hash, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_hash_ref_element");
+            abi::emit_push_reg(ctx.emitter, "x1");
+            ctx.store_result_value(hash)?;
+            if let Some(slot) = source_local {
+                ctx.store_value_to_local(slot, hash)?;
+            }
+            ctx.writeback_global_array_source(hash)?;
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            materialize_hash_key_x86_64(ctx, key)?;
+            ctx.load_value_to_reg(hash, "rdi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_hash_ref_element");
+            abi::emit_push_reg(ctx.emitter, "rdx");
+            ctx.store_result_value(hash)?;
+            if let Some(slot) = source_local {
+                ctx.store_value_to_local(slot, hash)?;
+            }
+            ctx.writeback_global_array_source(hash)?;
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `unset($hash[$key])` for associative arrays through the shared hash-unset helper.
 ///
 /// Materializes the key into the hash ABI key registers, then calls `__rt_hash_unset`, which
@@ -888,6 +927,9 @@ fn emit_hash_get_success_aarch64(
     value_ty: &PhpType,
     result_ty: &PhpType,
 ) -> Result<()> {
+    // A referenced element (value-tag 11) holds a kind-6 cell pointer; normalize it to the current
+    // inner value + inner tag so every consumer reads through the reference (H2).
+    abi::emit_call_label(ctx.emitter, "__rt_deref_if_reference");
     match value_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.emitter.instruction("mov x0, x1");                              // move the borrowed hash scalar payload into the standard integer result
@@ -925,6 +967,9 @@ fn emit_hash_get_success_x86_64(
     value_ty: &PhpType,
     result_ty: &PhpType,
 ) -> Result<()> {
+    // A referenced element (value-tag 11) holds a kind-6 cell pointer; normalize it to the current
+    // inner value + inner tag so every consumer reads through the reference (H2).
+    abi::emit_call_label(ctx.emitter, "__rt_deref_if_reference");
     match value_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.emitter.instruction("mov rax, rdi");                            // move the borrowed hash scalar payload into the standard integer result

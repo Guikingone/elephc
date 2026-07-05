@@ -14,8 +14,8 @@ use std::collections::HashSet;
 mod loop_types;
 
 use crate::ir::{
-    BlockId, CmpPredicate, Immediate, IrType, LocalKind, LocalSlotId, Op, Ownership, SwitchCase,
-    Terminator,
+    BlockId, CmpPredicate, Immediate, IrHeapKind, IrType, LocalKind, LocalSlotId, Op, Ownership,
+    SwitchCase, Terminator,
 };
 use crate::ir_lower::context::{FinallyFrame, LoopCleanup, LoopFrame, LoweredValue, LoweringContext};
 use crate::ir_lower::effects_lookup;
@@ -325,11 +325,81 @@ fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, source: &Ex
         | ExprKind::ExprCall { .. } => {
             crate::ir_lower::expr::lower_ref_assign_call(ctx, target, source, span);
         }
+        ExprKind::ArrayAccess { array, index } => {
+            lower_ref_assign_array_element(ctx, target, array, index, span);
+        }
         _ => {
-            // Other source shapes (e.g. array elements) are rejected by the checker;
-            // evaluate for side effects to keep lowering total.
+            // Other source shapes are rejected by the checker; evaluate for side effects.
             lower_expr(ctx, source);
         }
+    }
+}
+
+/// Lowers `$target = &$arr[$k]`: promote the hash element to a kind-6 reference cell (via
+/// `HashRefElement`) and bind `$target` as an owning alias to that cell (via `adopt_ref_cell`).
+///
+/// Indexed arrays cannot carry a per-element reference tag, so a plain-variable indexed array is
+/// promoted to a hash first and stored back to its local, matching Zend's de-packing behavior.
+fn lower_ref_assign_array_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &str,
+    array: &Expr,
+    index: &Expr,
+    span: Span,
+) {
+    let array_value = lower_expr(ctx, array);
+    // For an indexed array, promote to a hash first (Zend de-packs on reference-take). Defer the
+    // write-back of the promoted hash to its local until after `HashRefElement`, matching the clean
+    // ordering of the string-key promotion path (store the container last, once fully mutated).
+    let (hash_value, promotion) = if let IrType::Heap(IrHeapKind::Array) = array_value.ir_type {
+        if let ExprKind::Variable(array_name) = &array.kind {
+            let current_ty = ctx.builder.value_php_type(array_value.value);
+            let element_ty = reference_element_type(&current_ty);
+            let assoc_ty = promoted_assoc_array_type(current_ty, element_ty);
+            let hash = ctx.emit_value(
+                Op::ArrayToHash,
+                vec![array_value.value],
+                None,
+                assoc_ty.clone(),
+                Op::ArrayToHash.default_effects(),
+                Some(span),
+            );
+            (hash, Some((array_name.clone(), assoc_ty)))
+        } else {
+            (array_value, None)
+        }
+    } else {
+        (array_value, None)
+    };
+    let index_value = lower_expr(ctx, index);
+    let element_ty = reference_element_type(&ctx.builder.value_php_type(hash_value.value));
+    let cell_ptr = ctx.emit_value(
+        Op::HashRefElement,
+        vec![hash_value.value, index_value.value],
+        None,
+        element_ty.clone(),
+        Op::HashRefElement.default_effects(),
+        Some(span),
+    );
+    // `HashRefElement` left the promoted (possibly relocated) hash in `hash_value`'s home, so store
+    // it back to the array local now.
+    if let Some((array_name, assoc_ty)) = promotion {
+        ctx.store_mutated_local(&array_name, hash_value, assoc_ty.clone(), Some(span));
+        // The promotion is an authoritative representation change (indexed Array → hash): force the
+        // slot's storage type to the promoted AssocArray so scope-exit cleanup releases it with
+        // `__rt_decref_hash`. `store_mutated_local` widens Array + AssocArray to `Mixed`, which
+        // would free the raw hash with `__rt_decref_mixed` and leak it.
+        ctx.set_local_type_exact(&array_name, assoc_ty);
+    }
+    ctx.adopt_ref_cell(target, cell_ptr, element_ty, Some(span));
+}
+
+/// Returns the referenced element's PHP type for a hash/array container (defaulting to `Mixed`).
+fn reference_element_type(container: &PhpType) -> PhpType {
+    match container.codegen_repr() {
+        PhpType::AssocArray { value, .. } => (*value).clone(),
+        PhpType::Array(element) => (*element).clone(),
+        _ => PhpType::Mixed,
     }
 }
 
