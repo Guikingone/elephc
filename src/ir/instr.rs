@@ -223,6 +223,12 @@ pub enum Op {
     StoreStaticLocal,
     InitStaticLocal,
     LoadStaticProperty,
+    /// Loads a static property selected by a runtime name string (`self::${$expr}`).
+    /// Operand: the runtime property-name (a `Str` value). Immediate: the receiver class name
+    /// data id; codegen enumerates that class's declared static properties and dispatches on the
+    /// runtime name via `__rt_str_eq`, loading the matching global symbol. An unmatched name
+    /// fatals ("Access to undefined static property").
+    LoadDynamicStaticProperty,
     StoreStaticProperty,
     IAdd,
     ISub,
@@ -514,6 +520,9 @@ impl Op {
             // Reads the receiver heap to dispatch on the runtime property name; an unmatched
             // name compiles to a runtime fatal, so it is conservatively may-fatal.
             LoadDynamicPropRefCell => E::READS_HEAP | E::MAY_FATAL,
+            // Reads a static property's global storage selected by a runtime name; an unmatched
+            // name compiles to a runtime fatal, so it is conservatively may-fatal.
+            LoadDynamicStaticProperty => E::READS_HEAP | E::MAY_FATAL,
             BindRefCellPtr => E::WRITES_LOCAL,
             BindPropRefCell => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
             ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
@@ -603,6 +612,7 @@ impl Op {
             StoreStaticLocal => "store_static_local",
             InitStaticLocal => "init_static_local",
             LoadStaticProperty => "load_static_property",
+            LoadDynamicStaticProperty => "load_dynamic_static_property",
             StoreStaticProperty => "store_static_property",
             IAdd => "iadd",
             ISub => "isub",

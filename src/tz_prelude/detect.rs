@@ -227,6 +227,7 @@ fn expr_refs_tz(expr: &Expr) -> bool {
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => false,
         // `$obj::CONST` — recurse into the evaluated object expression.
         ExprKind::DynamicClassConstantAccess { object, .. } => expr_refs_tz(object),
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_refs_tz(property),
         ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_refs_tz),
         ExprKind::Yield { key, value } => {
             key.as_deref().is_some_and(expr_refs_tz)

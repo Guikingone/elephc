@@ -258,6 +258,13 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
                 name,
             }
         }
+        // `self::${$expr}` — prune the dynamic property-name expression; the access is unchanged.
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            ExprKind::DynamicStaticPropertyAccess {
+                receiver,
+                property: Box::new(prune_expr(*property)),
+            }
+        }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,
             args: args.into_iter().map(prune_expr).collect(),

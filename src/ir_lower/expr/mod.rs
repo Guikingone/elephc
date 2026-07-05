@@ -159,6 +159,9 @@ fn lower_expr_dispatch(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowere
         ExprKind::StaticPropertyAccess { receiver, property } => {
             lower_static_property_get(ctx, receiver, property, expr)
         }
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            lower_dynamic_static_property_get(ctx, receiver, property, expr)
+        }
         ExprKind::MethodCall { object, method, args } => lower_method_call(ctx, object, method, args, Op::MethodCall, expr),
         ExprKind::NullsafeMethodCall { object, method, args } => {
             lower_nullsafe_method_call(ctx, object, method, args, expr)
@@ -859,6 +862,10 @@ fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
         // `$obj::CONST` — evaluating the object may run a call that resets concat storage.
         ExprKind::DynamicClassConstantAccess { object, .. } => {
             expr_can_reset_concat_storage(object)
+        }
+        // `self::${$expr}` — evaluating the name expression may run a call that resets concat.
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            expr_can_reset_concat_storage(property)
         }
     }
 }
@@ -8978,6 +8985,62 @@ fn lower_static_property_get(ctx: &mut LoweringContext<'_, '_>, receiver: &Stati
         Op::LoadStaticProperty.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Lowers a dynamic static property read (`self::${$expr}`).
+///
+/// Evaluates the property-name expression and coerces it to a string, then emits
+/// `LoadDynamicStaticProperty` with that name as the sole operand and the receiver's concrete
+/// class name as the immediate. Codegen enumerates the class's declared static properties and
+/// dispatches on the runtime name. The result type is the common declared type of those
+/// properties (or `Mixed` when heterogeneous / unknown).
+fn lower_dynamic_static_property_get(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let name_value = lower_expr(ctx, property);
+    let name_str = coerce_to_string_at_span(ctx, name_value, Some(property.span));
+    let class_name =
+        static_receiver_class_name(ctx, receiver).unwrap_or_else(|| receiver_name(receiver));
+    let data = ctx.intern_string(&class_name);
+    let result_type = dynamic_static_property_result_type(ctx, receiver, expr);
+    ctx.emit_value(
+        Op::LoadDynamicStaticProperty,
+        vec![name_str.value],
+        Some(Immediate::Data(data)),
+        result_type,
+        Op::LoadDynamicStaticProperty.default_effects(),
+        Some(expr.span),
+    )
+}
+
+/// Returns the common declared type of a class's static properties for a dynamic read, or
+/// `Mixed` when the class is unknown or its static properties have differing types.
+fn dynamic_static_property_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    expr: &Expr,
+) -> PhpType {
+    let Some(class_name) = static_receiver_class_name(ctx, receiver) else {
+        return fallback_expr_type(expr);
+    };
+    let Some(class_info) = ctx.classes.get(class_name.as_str()) else {
+        return fallback_expr_type(expr);
+    };
+    let mut types = class_info
+        .static_properties
+        .iter()
+        .map(|(_, ty)| normalize_value_php_type(ty.codegen_repr()));
+    let Some(first) = types.next() else {
+        return fallback_expr_type(expr);
+    };
+    if types.all(|ty| ty == first) {
+        first
+    } else {
+        PhpType::Mixed
+    }
 }
 
 /// Returns precise PHP metadata for a static property read when class metadata is available.

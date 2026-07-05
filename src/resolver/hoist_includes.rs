@@ -575,6 +575,13 @@ impl HoistCtx<'_> {
                     name,
                 }
             }
+            // `self::${$expr}` — hoist any value-include inside the dynamic property-name expr.
+            ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+                ExprKind::DynamicStaticPropertyAccess {
+                    receiver,
+                    property: self.hoist_boxed(property)?,
+                }
+            }
             // Leaf expressions with no include-bearing children (mirrors the `false` group in
             // `contains::expr_has_includes`).
             leaf @ (ExprKind::StringLiteral(_)

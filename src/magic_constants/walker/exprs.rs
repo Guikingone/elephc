@@ -277,6 +277,13 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
                 name,
             }
         }
+        // `self::${$expr}` — walk the dynamic property-name expression for magic constants.
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            ExprKind::DynamicStaticPropertyAccess {
+                receiver,
+                property: Box::new(walk_expr(*property, pass)),
+            }
+        }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),

@@ -307,6 +307,14 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
                 name,
             }
         }
+        // `self::${$expr}` — propagate into the dynamic property-name expression; the receiver
+        // is a static class reference and stays unchanged.
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            ExprKind::DynamicStaticPropertyAccess {
+                receiver,
+                property: Box::new(propagate_expr(*property, env)),
+            }
+        }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,
             args: propagate_args(args, None),

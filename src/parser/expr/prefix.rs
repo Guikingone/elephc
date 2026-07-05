@@ -273,6 +273,14 @@ pub(super) fn parse_prefix(
             Ok(crate::parser::stmt::try_parse_value_include(tokens, pos)?
                 .expect("include keyword guarantees a value-include expression"))
         }
+        // A bare `$` in prefix (non-receiver) position is a local variable-variable
+        // (`$$name` / `${expr}`). The lexer emits `Token::Dollar` without context; only a
+        // static receiver's `::` promotes it to a dynamic static property access, so here it
+        // is always the unsupported variable-variable form.
+        Token::Dollar => Err(CompileError::new(
+            span,
+            "Variable variables (`$$name`) are not supported: variable names must be known at compile time",
+        )),
         other => Err(CompileError::new(
             span,
             &format!("Unexpected token: {:?}", other),
@@ -398,6 +406,10 @@ pub(crate) fn token_starts_prefix_expression(token: &Token) -> bool {
             | Token::IncludeOnce
             | Token::Require
             | Token::RequireOnce
+            // Bare `$` (variable-variable marker): routed to the prefix parser so a
+            // statement-position `$$name` / `${expr}` reports the unsupported-variable-variable
+            // diagnostic instead of a generic "unexpected token".
+            | Token::Dollar
     )
 }
 

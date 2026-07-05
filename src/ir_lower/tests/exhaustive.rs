@@ -327,6 +327,7 @@ fn lowers_every_expr_variant_smoke() {
         expr(ExprKind::ClassConstant { receiver: StaticReceiver::Parent }),
         expr(ExprKind::ScopedConstantAccess { receiver: StaticReceiver::Named(name("C")), name: "K".to_string() }),
         expr(ExprKind::DynamicClassConstantAccess { object: Box::new(object.clone()), name: "K".to_string() }),
+        expr(ExprKind::DynamicStaticPropertyAccess { receiver: StaticReceiver::Named(name("C")), property: Box::new(str_lit("p")) }),
         expr(ExprKind::NewScopedObject { receiver: StaticReceiver::Named(name("C")), args: Vec::new() }),
         expr(ExprKind::MagicConstant(MagicConstant::File)),
         expr(ExprKind::Yield { key: Some(Box::new(int(1))), value: Some(Box::new(str_lit("v"))) }),

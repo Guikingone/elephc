@@ -234,6 +234,7 @@ fn expr_refs_listid(expr: &Expr) -> bool {
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => false,
         // `$obj::CONST` — recurse into the evaluated object expression.
         ExprKind::DynamicClassConstantAccess { object, .. } => expr_refs_listid(object),
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_refs_listid(property),
         ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_refs_listid),
         ExprKind::Yield { key, value } => {
             key.as_deref().is_some_and(expr_refs_listid)

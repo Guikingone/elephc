@@ -446,6 +446,10 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         ExprKind::DynamicClassConstantAccess { object, .. } => {
             collect_assignment_target_dependencies(object, dependencies);
         }
+        // `self::${$expr}` — the dynamic property-name expression may reference dependencies.
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            collect_assignment_target_dependencies(property, dependencies);
+        }
     }
 }
 
@@ -610,6 +614,10 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
         // `$obj::CONST` — writes can only come from evaluating the object sub-expression.
         ExprKind::DynamicClassConstantAccess { object, .. } => {
             expr_may_write_dependency(object, dependencies)
+        }
+        // `self::${$expr}` — writes can only come from evaluating the property-name expression.
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            expr_may_write_dependency(property, dependencies)
         }
     }
 }
@@ -826,6 +834,10 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
         // `$obj::CONST` — the needle may match inside the object sub-expression.
         ExprKind::DynamicClassConstantAccess { object, .. } => {
             expr_contains_equivalent(object, needle)
+        }
+        // `self::${$expr}` — the needle may match inside the property-name expression.
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            expr_contains_equivalent(property, needle)
         }
     }
 }

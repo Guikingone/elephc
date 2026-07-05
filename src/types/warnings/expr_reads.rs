@@ -202,6 +202,10 @@ pub(super) fn collect_expr_reads(
         ExprKind::DynamicClassConstantAccess { object, .. } => {
             collect_expr_reads(object, scope, warnings);
         }
+        // `self::${$expr}` — collect variable reads from the dynamic property-name expression.
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            collect_expr_reads(property, scope, warnings);
+        }
         ExprKind::NewScopedObject { args, .. } => {
             for arg in args {
                 collect_expr_reads(arg, scope, warnings);

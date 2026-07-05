@@ -376,3 +376,43 @@ echo Registry::$items["name"];
     );
     assert_eq!(out, "7");
 }
+
+/// Verifies a dynamic-named static property read (`C::${$n}`) selects the property whose name
+/// matches the runtime string, dispatching among several candidates of the same class.
+#[test]
+fn test_dynamic_static_property_read_named_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class Config {
+    public static int $timeout = 30;
+    public static int $retries = 5;
+    public static string $name = "prod";
+}
+$k = 'retries';
+echo Config::${$k};
+echo "|";
+$k2 = 'name';
+echo Config::${$k2};
+"#,
+    );
+    assert_eq!(out, "5|prod");
+}
+
+/// Verifies a dynamic-named static property read through a `self::` receiver inside a method,
+/// selecting among array-typed static properties by runtime name.
+#[test]
+fn test_dynamic_static_property_read_self_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class Reg {
+    public static array $errors = ['a', 'b'];
+    public static array $warnings = ['w'];
+    public static function count(string $n): int { return count(self::${$n}); }
+}
+echo Reg::count('errors');
+echo "|";
+echo Reg::count('warnings');
+"#,
+    );
+    assert_eq!(out, "2|1");
+}

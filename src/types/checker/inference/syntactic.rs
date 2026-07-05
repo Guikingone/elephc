@@ -376,6 +376,9 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         // `$obj::CONST` — the constant's type depends on the object's runtime class, which
         // this syntactic pass cannot resolve; fall back to `Mixed`.
         ExprKind::DynamicClassConstantAccess { .. } => PhpType::Mixed,
+        // `self::${$expr}` — the property's type depends on the runtime name; this syntactic
+        // pass cannot resolve which static property is selected, so fall back to `Mixed`.
+        ExprKind::DynamicStaticPropertyAccess { .. } => PhpType::Mixed,
         ExprKind::This => PhpType::Object(String::new()),
         ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => PhpType::Callable,
         ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),

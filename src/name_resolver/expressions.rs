@@ -399,6 +399,19 @@ pub(super) fn resolve_expr(
                 name: name.clone(),
             }
         }
+        // `self::${$expr}` — namespace-rewrite a named receiver (like `StaticPropertyAccess`)
+        // and resolve names inside the dynamic property-name expression.
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            ExprKind::DynamicStaticPropertyAccess {
+                receiver: match receiver {
+                    StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
+                        resolve_special_or_class_name(name, current_namespace, imports, symbols),
+                    )),
+                    _ => receiver.clone(),
+                },
+                property: Box::new(resolve_expr(property, current_namespace, imports, symbols)),
+            }
+        }
         _ => expr.kind.clone(),
     };
     Expr::new(kind, expr.span)

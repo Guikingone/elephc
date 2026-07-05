@@ -253,6 +253,7 @@ fn expr_has_includes(expr: &Expr) -> bool {
         | ExprKind::MagicConstant(_) => false,
         // `$obj::CONST` — an include can only hide inside the object sub-expression.
         ExprKind::DynamicClassConstantAccess { object, .. } => expr_has_includes(object),
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_has_includes(property),
     }
 }
 

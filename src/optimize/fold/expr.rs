@@ -384,6 +384,14 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                 name,
             }
         }
+        // `self::${$expr}` — fold within the dynamic property-name expression; the access node
+        // itself stays dynamic (Phase A does not fold a constant name to a static access).
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            ExprKind::DynamicStaticPropertyAccess {
+                receiver,
+                property: Box::new(fold_expr(*property)),
+            }
+        }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,
             args: args.into_iter().map(fold_expr).collect(),

@@ -601,6 +601,9 @@ impl Checker {
             ExprKind::StaticPropertyAccess { receiver, property } => {
                 self.infer_static_property_access_type(receiver, property, expr)
             }
+            ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+                self.infer_dynamic_static_property_access_type(receiver, property, expr, env)
+            }
             ExprKind::MethodCall {
                 object,
                 method,

@@ -471,6 +471,14 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
         ExprKind::DynamicClassConstantAccess { object, .. } => {
             collect_required_class_names_in_expr(object, names);
         }
+        // `self::${$expr}` — a named receiver makes its class required (like
+        // `StaticPropertyAccess`); recurse into the dynamic property-name expression.
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
+                names.insert(name.as_str().to_string());
+            }
+            collect_required_class_names_in_expr(property, names);
+        }
         ExprKind::NewScopedObject { receiver, args } => {
             if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
                 names.insert(name.as_str().to_string());

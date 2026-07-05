@@ -494,6 +494,10 @@ fn collect_arrow_expr_captures(
         ExprKind::DynamicClassConstantAccess { object, .. } => {
             collect_arrow_expr_captures(object, bound, seen, captures);
         }
+        // `self::${$expr}` — the property-name expression may reference captured variables.
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            collect_arrow_expr_captures(property, bound, seen, captures);
+        }
     }
 }
 
@@ -684,6 +688,18 @@ pub(super) fn parse_named_expr(
         }
     } else if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleColon {
         *pos += 1;
+        if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Dollar)) {
+            // `C::${$expr}` / `C::$$var` — a static property named at runtime on a named class.
+            let property =
+                super::calls::parse_dynamic_static_property_name(tokens, pos, span)?;
+            return Ok(Expr::new(
+                ExprKind::DynamicStaticPropertyAccess {
+                    receiver: StaticReceiver::Named(name),
+                    property: Box::new(property),
+                },
+                span,
+            ));
+        }
         let member = match tokens.get(*pos).map(|(token, _)| token) {
             Some(Token::Variable(property)) => {
                 let property = property.clone();

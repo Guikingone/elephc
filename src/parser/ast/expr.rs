@@ -192,6 +192,15 @@ pub enum ExprKind {
         receiver: StaticReceiver,
         property: String,
     },
+    /// `self::${$expr}` / `C::${$expr}` — a static property accessed by a name computed
+    /// at runtime. The receiver's class is statically known (self/static/parent/Named);
+    /// only the property name is dynamic. The `property` sub-expression is evaluated for
+    /// its value (coerced to a string) and its side effects, then matched against the
+    /// class's declared static properties at codegen time.
+    DynamicStaticPropertyAccess {
+        receiver: StaticReceiver,
+        property: Box<Expr>,
+    },
     MethodCall {
         object: Box<Expr>,
         method: String,

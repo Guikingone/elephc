@@ -21,6 +21,7 @@ use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
 use super::super::context::FunctionContext;
+use super::objects::{emit_branch_if_dynamic_name_matches, label_fragment};
 use super::{expect_data, expect_operand, store_if_result};
 use crate::codegen_ir::{CodegenIrError, Result};
 
@@ -57,6 +58,163 @@ pub(super) fn lower_load_static_property(ctx: &mut FunctionContext<'_>, inst: &I
     }
     emit_direct_load_static_property_result(ctx, &slot);
     store_if_result(ctx, inst)
+}
+
+/// Lowers a dynamic-named static property read (`self::${$expr}`) by dispatching on the runtime
+/// property-name string across the receiver class's declared static properties.
+///
+/// The instruction's immediate carries the receiver's concrete class name; its sole operand is
+/// the runtime name (a `Str`). The class's declared static properties are enumerated as
+/// candidates: the runtime name (ptr/len) is staged on the temporary stack, then compared to each
+/// candidate name via `__rt_str_eq`. A match loads the matching global symbol into the result
+/// (boxing to `Mixed` when the result type is heterogeneous); an unmatched name fatals at runtime.
+pub(super) fn lower_load_dynamic_static_property(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let name_value = expect_operand(inst, 0)?;
+    ensure_runtime_dynamic_static_property_name(ctx, name_value, inst)?;
+    let class_name = static_property_label(ctx, inst)?.trim_start_matches('\\').to_string();
+    let slots = dynamic_static_property_candidates(ctx, &class_name, inst)?;
+    if slots.is_empty() {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} on class {} with no static property",
+            inst.op.name(),
+            class_name
+        )));
+    }
+    let result_ty = inst.result_php_type.codegen_repr();
+    for slot in &slots {
+        ensure_static_property_type_supported(&slot.php_type, inst)?;
+        if result_ty != PhpType::Mixed && slot.php_type.codegen_repr() != result_ty {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} with candidate {}::${} PHP type {:?} and result PHP type {:?}",
+                inst.op.name(),
+                slot.declaring_class,
+                slot.property,
+                slot.php_type,
+                inst.result_php_type
+            )));
+        }
+    }
+
+    let match_labels = slots
+        .iter()
+        .map(|slot| ctx.next_label(&format!("dyn_static_prop_{}", label_fragment(&slot.property))))
+        .collect::<Vec<_>>();
+    let miss_label = ctx.next_label("dyn_static_prop_miss");
+    let done_label = ctx.next_label("dyn_static_prop_done");
+
+    // Stage the runtime name (ptr/len) on the temporary stack so the compare-chain can reload it
+    // from slots 0/8 per candidate without clobbering the dispatch registers.
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(name_value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+
+    for (slot, label) in slots.iter().zip(match_labels.iter()) {
+        emit_branch_if_dynamic_name_matches(ctx, &slot.property, label);
+    }
+    abi::emit_jump(ctx.emitter, &miss_label);
+
+    for (slot, label) in slots.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        emit_direct_load_static_property_result(ctx, slot);
+        if result_ty == PhpType::Mixed && slot.php_type.codegen_repr() != PhpType::Mixed {
+            emit_box_current_value_as_mixed(ctx.emitter, &slot.php_type.codegen_repr());
+        }
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&miss_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    emit_undefined_dynamic_static_property_fatal(ctx, &class_name);
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
+}
+
+/// Verifies that the runtime dynamic static property name is already a materialized string.
+fn ensure_runtime_dynamic_static_property_name(
+    ctx: &FunctionContext<'_>,
+    name_value: ValueId,
+    inst: &Instruction,
+) -> Result<()> {
+    let name_ty = ctx.value_php_type(name_value)?;
+    if name_ty == PhpType::Str {
+        Ok(())
+    } else {
+        Err(CodegenIrError::unsupported(format!(
+            "{} with runtime property name PHP type {:?}",
+            inst.op.name(),
+            name_ty
+        )))
+    }
+}
+
+/// Builds direct symbol metadata for every declared static property of the receiver class,
+/// forming the candidate set a dynamic-named static read may dispatch to.
+fn dynamic_static_property_candidates(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    inst: &Instruction,
+) -> Result<Vec<StaticPropertySlot>> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .ok_or_else(|| CodegenIrError::unsupported(format!(
+            "{} for unknown class {}",
+            inst.op.name(),
+            class_name
+        )))?;
+    let mut slots = Vec::new();
+    for (property, php_type) in &class_info.static_properties {
+        let declaring_class = class_info
+            .static_property_declaring_classes
+            .get(property)
+            .map(String::as_str)
+            .unwrap_or(class_name);
+        let is_declared = ctx
+            .module
+            .class_infos
+            .get(declaring_class)
+            .is_some_and(|info| info.declared_static_properties.contains(property));
+        slots.push(StaticPropertySlot {
+            declaring_class: declaring_class.to_string(),
+            property: property.clone(),
+            php_type: php_type.clone(),
+            symbol: static_property_symbol(declaring_class, property),
+            is_declared,
+            late_bound: false,
+            branches: Vec::new(),
+        });
+    }
+    Ok(slots)
+}
+
+/// Emits a PHP fatal for a dynamic static property name that matched no declared property.
+fn emit_undefined_dynamic_static_property_fatal(ctx: &mut FunctionContext<'_>, class_name: &str) {
+    let message = format!(
+        "Fatal error: Access to undefined static property {}::$\n",
+        class_name
+    );
+    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the undefined dynamic static-property fatal
+            abi::emit_symbol_address(ctx.emitter, "x1", &message_label);
+            ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // pass the fatal diagnostic byte length to write()
+            ctx.emitter.syscall(4);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
+            ctx.emitter.instruction(&format!("mov edx, {}", message_len));      // pass the fatal diagnostic byte length to write()
+            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the undefined dynamic static-property fatal
+            ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall
+            ctx.emitter.instruction("syscall");                                 // write the undefined dynamic static-property fatal diagnostic
+        }
+    }
+    abi::emit_exit(ctx.emitter, 1);
 }
 
 /// Lowers a direct static property write from one SSA operand into symbol-backed storage.

@@ -334,6 +334,10 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
         ExprKind::DynamicClassConstantAccess { object, .. } => {
             expr_uses_variable(object, needle)
         }
+        // `self::${$expr}` — the variable may appear in the dynamic property-name expression.
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            expr_uses_variable(property, needle)
+        }
         ExprKind::NewScopedObject { args, .. } => {
             args.iter().any(|arg| expr_uses_variable(arg, needle))
         }

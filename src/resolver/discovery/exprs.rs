@@ -216,6 +216,10 @@ pub(super) fn discover_expr(
         ExprKind::DynamicClassConstantAccess { object, .. } => {
             discover_expr(object, base_dir, loaded_paths, include_chain, state, output)?;
         }
+        // `self::${$expr}` — discover declarations inside the dynamic property-name expr.
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            discover_expr(property, base_dir, loaded_paths, include_chain, state, output)?;
+        }
         ExprKind::Yield { key, value } => {
             if let Some(k) = key {
                 discover_expr(k, base_dir, loaded_paths, include_chain, state, output)?;

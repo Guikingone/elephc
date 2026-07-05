@@ -412,6 +412,7 @@ fn visit_expr(expr: &Expr, st: &mut State) {
         | ExprKind::MagicConstant(_) => {}
         // `$obj::CONST` — a yield can only appear inside the object sub-expression.
         ExprKind::DynamicClassConstantAccess { object, .. } => visit_expr(object, st),
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => visit_expr(property, st),
         ExprKind::Print(inner) => visit_expr(inner, st),
         ExprKind::Assignment { target, value, .. } => {
             visit_expr(target, st);

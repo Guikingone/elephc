@@ -35,6 +35,17 @@ pub(super) fn parse_scoped_static_call(
         ));
     }
     *pos += 1;
+    if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Dollar)) {
+        // `self::${$expr}` / `self::$$var` — a static property named at runtime.
+        let property = parse_dynamic_static_property_name(tokens, pos, span)?;
+        return Ok(Expr::new(
+            ExprKind::DynamicStaticPropertyAccess {
+                receiver,
+                property: Box::new(property),
+            },
+            span,
+        ));
+    }
     let method = match tokens.get(*pos).map(|(token, _)| token) {
         Some(Token::Variable(property)) => {
             let property = property.clone();
@@ -121,6 +132,40 @@ pub(super) fn parse_scoped_static_call(
             },
             span,
         ))
+    }
+}
+
+/// Parses the dynamic property-name expression of a dynamic static property access, starting at
+/// a `Token::Dollar` that immediately follows a static receiver's `::`. Consumes the `$` marker,
+/// then either `{ <expr> }` (for `self::${$expr}`) or a `Variable` (for `self::$$var`), returning
+/// the parsed name expression. Returns an error if neither form follows the `$`.
+pub(super) fn parse_dynamic_static_property_name(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Expr, CompileError> {
+    *pos += 1; // consume the bare `$` marker
+    match tokens.get(*pos).map(|(token, _)| token.clone()) {
+        Some(Token::LBrace) => {
+            *pos += 1; // consume `{`
+            let name_expr = crate::parser::expr::parse_expr(tokens, pos)?;
+            if *pos >= tokens.len() || tokens[*pos].0 != Token::RBrace {
+                return Err(CompileError::new(
+                    span,
+                    "Expected '}' after dynamic static property name",
+                ));
+            }
+            *pos += 1; // consume `}`
+            Ok(name_expr)
+        }
+        Some(Token::Variable(var)) => {
+            *pos += 1; // consume the variable
+            Ok(Expr::new(ExprKind::Variable(var), span))
+        }
+        _ => Err(CompileError::new(
+            span,
+            "Expected '{' or variable after '$' in dynamic static property access",
+        )),
     }
 }
 

@@ -328,6 +328,9 @@ pub fn emit_expr(
         ExprKind::DynamicClassConstantAccess { .. } => {
             unreachable!("DynamicClassConstantAccess is lowered only through the EIR backend")
         }
+        ExprKind::DynamicStaticPropertyAccess { .. } => {
+            unreachable!("DynamicStaticPropertyAccess is lowered only through the EIR backend")
+        }
         ExprKind::NewScopedObject { receiver, args } => {
             objects::emit_new_scoped_object(receiver, args, emitter, ctx, data)
         }

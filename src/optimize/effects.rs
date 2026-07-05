@@ -340,6 +340,12 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => Effect::PURE,
         // `$obj::CONST` — the constant read is pure; effects come from evaluating the object.
         ExprKind::DynamicClassConstantAccess { object, .. } => expr_effect(object),
+        // `self::${$expr}` — reads a static property selected by a runtime name; the name expr
+        // is evaluated (its effects propagate) and an undefined property can fatal, so this is
+        // not pure.
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            expr_effect(property).with_may_throw()
+        }
         ExprKind::NewScopedObject { args, .. } => combine_effects(args.iter().map(expr_effect))
             .with_side_effects()
             .with_may_throw(),

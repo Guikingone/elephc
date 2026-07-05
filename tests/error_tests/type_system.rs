@@ -728,6 +728,28 @@ fn test_error_variable_variables_unsupported() {
     );
 }
 
+/// Verifies the local variable-variable expression form `${$name}` still reports the preserved
+/// unsupported-variable-variable diagnostic, now that the lexer emits a bare `$` token and the
+/// parser (not the lexer) owns the rejection outside a static-receiver `::` context.
+#[test]
+fn test_error_variable_variable_brace_form_unsupported() {
+    expect_error(
+        "<?php $x = \"y\"; echo ${$x};",
+        "Variable variables (`$$name`) are not supported",
+    );
+}
+
+/// Verifies a dynamic static property read on a class that is not statically known
+/// (`Nonexistent::${$n}`) is a loud error, since codegen cannot enumerate candidate static
+/// properties without a resolvable class.
+#[test]
+fn test_error_dynamic_static_property_unknown_class() {
+    expect_error(
+        "<?php $n = 'x'; echo Nonexistent::${$n};",
+        "Dynamic static property access requires a statically-known class",
+    );
+}
+
 /// Verifies that the nullable shorthand cannot be combined with an intersection type (`?A&B`),
 /// which is a syntax error in PHP. Previously this silently parsed and dropped a member.
 #[test]

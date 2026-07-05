@@ -472,6 +472,53 @@ impl Checker {
             })
     }
 
+    /// Infers the result type of a dynamic static property access (`self::${$expr}`).
+    ///
+    /// The receiver's class must be statically known (self/static/parent/Named); the property
+    /// name is a runtime string. Evaluates the name expression (for validation/side effects),
+    /// then requires the class to be resolvable so codegen can enumerate its declared static
+    /// properties. Returns the common declared type of those static properties, or `Mixed` when
+    /// they are heterogeneous. Errors loudly when the class is not statically known (unknown or
+    /// absent), because a dynamic access cannot be lowered without candidate properties.
+    pub(crate) fn infer_dynamic_static_property_access_type(
+        &mut self,
+        receiver: &StaticReceiver,
+        property: &Expr,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        // Evaluate the name expression for its type (gradual: string-ish or Mixed is fine).
+        let name_ty = self.infer_type(property, env)?;
+        if !matches!(name_ty, PhpType::Str | PhpType::Mixed | PhpType::Int) {
+            return Err(CompileError::new(
+                property.span,
+                &format!(
+                    "Dynamic static property name must be a string, got `{}`",
+                    name_ty
+                ),
+            ));
+        }
+        let class_name = self.resolve_static_property_receiver(receiver, expr)?;
+        let Some(class_info) = self.classes.get(&class_name) else {
+            return Err(CompileError::new(
+                expr.span,
+                "Dynamic static property access requires a statically-known class",
+            ));
+        };
+        let mut types = class_info.static_properties.iter().map(|(_, ty)| ty.clone());
+        let Some(first) = types.next() else {
+            return Err(CompileError::new(
+                expr.span,
+                &format!("Class {} has no static properties", class_name),
+            ));
+        };
+        if types.all(|ty| ty == first) {
+            Ok(first)
+        } else {
+            Ok(PhpType::Mixed)
+        }
+    }
+
     /// Resolves a static property receiver to its class name.
     ///
     /// `Named` returns the class directly. `Self_`/`Static` require a class

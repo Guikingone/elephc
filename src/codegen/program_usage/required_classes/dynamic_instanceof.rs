@@ -268,6 +268,10 @@ fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
         ExprKind::DynamicClassConstantAccess { object, .. } => {
             expr_has_dynamic_instanceof(object)
         }
+        // `self::${$expr}` — recurse into the dynamic property-name expression.
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            expr_has_dynamic_instanceof(property)
+        }
         ExprKind::Yield { key, value } => {
             key.as_ref().is_some_and(|k| expr_has_dynamic_instanceof(k))
                 || value

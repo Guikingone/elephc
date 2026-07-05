@@ -3151,7 +3151,7 @@ fn emit_dynamic_property_miss_result(ctx: &mut FunctionContext<'_>, inst: &Instr
 }
 
 /// Emits a runtime string comparison branch against one declared property name.
-fn emit_branch_if_dynamic_name_matches(
+pub(super) fn emit_branch_if_dynamic_name_matches(
     ctx: &mut FunctionContext<'_>,
     property: &str,
     target_label: &str,
@@ -3179,7 +3179,7 @@ fn emit_branch_if_dynamic_name_matches(
 }
 
 /// Converts arbitrary names into assembly-label-safe fragments.
-fn label_fragment(value: &str) -> String {
+pub(super) fn label_fragment(value: &str) -> String {
     value
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })

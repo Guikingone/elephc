@@ -314,6 +314,13 @@ fn rewrite_expr(
                 name: name.clone(),
             }
         }
+        // `self::${$expr}` — rewrite the lexical receiver and the dynamic name expression.
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            ExprKind::DynamicStaticPropertyAccess {
+                receiver: rewrite_constant_receiver(receiver, class_name, parent_name, expr.span)?,
+                property: Box::new(rewrite_expr(property, class_name, parent_name)?),
+            }
+        }
         ExprKind::Yield { key, value } => ExprKind::Yield {
             key: key
                 .as_ref()

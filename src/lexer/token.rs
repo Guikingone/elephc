@@ -131,6 +131,7 @@ pub enum Token {
     Dot,            // .
     Comma,          // ,
     Backslash,      // \
+    Dollar,         // bare `$` (before `{`/`$`): dynamic-name marker, e.g. `self::${$n}`
     LBracket,       // [
     RBracket,       // ]
     Question,       // ?

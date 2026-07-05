@@ -445,6 +445,7 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => Some(HashSet::new()),
         // `$obj::CONST` — the constant read writes nothing; writes come from the object.
         ExprKind::DynamicClassConstantAccess { object, .. } => expr_local_writes(object),
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_local_writes(property),
     }
 }
 

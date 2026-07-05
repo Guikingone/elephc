@@ -446,6 +446,8 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         }
         // `$obj::CONST` — recurse into the evaluated object expression.
         ExprKind::DynamicClassConstantAccess { object, .. } => expr_has_regex_call(object),
+        // `self::${$expr}` — recurse into the dynamic property-name expression.
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_has_regex_call(property),
         ExprKind::BufferNew { len, .. } => expr_has_regex_call(len),
         ExprKind::Yield { key, value } => {
             key.as_deref().is_some_and(expr_has_regex_call)
@@ -753,6 +755,10 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         // `$obj::CONST` — recurse into the evaluated object expression.
         ExprKind::DynamicClassConstantAccess { object, .. } => {
             expr_needs_descriptor_invoker(object)
+        }
+        // `self::${$expr}` — recurse into the dynamic property-name expression.
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            expr_needs_descriptor_invoker(property)
         }
         ExprKind::BufferNew { len, .. } => expr_needs_descriptor_invoker(len),
         ExprKind::Yield { key, value } => {
