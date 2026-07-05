@@ -211,6 +211,9 @@ pub(super) fn check_ref_assign(
             clear_callable_metadata(checker, target);
             Ok(())
         }
+        ExprKind::DynamicPropertyAccess { object, property: _ } => {
+            check_ref_assign_dynamic_property(checker, target, object, span, env)
+        }
         ExprKind::StaticPropertyAccess { .. } => {
             // `$e = &self::$n`: the local aliases the static property's global storage.
             // The static property is an always-addressable global slot, so no promotion
@@ -282,6 +285,75 @@ pub(super) fn check_ref_assign(
             "Reference assignment source must be a variable, array/property element, or a by-reference call",
         )),
     }
+}
+
+/// Type-checks a reference alias whose source is a DYNAMIC-named property (`$x = &$this->$name`).
+///
+/// The runtime property name is unknown at compile time, so any array-typed declared property of
+/// the receiver class could be the target. Every such candidate is promoted to a reference
+/// property program-wide (reusing the same `reference_property_promotions` mechanism the static
+/// `PropertyAccess` arm uses), so each candidate holds a ref-cell and its reads/writes stay
+/// ref-correct regardless of which name is selected at runtime. The target local is typed to the
+/// candidates' common element type, or `Mixed` when they are heterogeneous, and marked as
+/// by-reference storage. A non-object (`Mixed`/`Union`/unknown) receiver is a loud, deferred error
+/// rather than a silent miscompile.
+fn check_ref_assign_dynamic_property(
+    checker: &mut Checker,
+    target: &str,
+    object: &Expr,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let object_ty = checker.infer_type(object, env)?;
+    let Some(class) = crate::types::checker::single_object_class_name(&object_ty) else {
+        return Err(CompileError::new(
+            span,
+            "Reference to a dynamic property is only supported on a statically-typed object receiver",
+        ));
+    };
+    // Collect the class's array-typed declared properties — the candidates the static arm would
+    // have accepted. A single machine-word ref-cell cannot represent a multi-word (string) slot,
+    // so only array-typed properties are reference-eligible for the runtime-name path.
+    let candidates: Vec<(String, PhpType)> = checker
+        .classes
+        .get(&class)
+        .map(|info| {
+            info.properties
+                .iter()
+                .filter(|(_, ty)| {
+                    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if candidates.is_empty() {
+        return Err(CompileError::new(
+            span,
+            "Reference to a dynamic property requires the object to declare at least one array-typed property",
+        ));
+    }
+    // Promote every candidate program-wide via the same mechanism the static `PropertyAccess`
+    // arm uses, so each candidate slot holds a ref-cell for the object's lifetime.
+    for (property, _) in &candidates {
+        checker
+            .reference_property_promotions
+            .insert((class.clone(), property.clone()));
+    }
+    // Type the target to the candidates' common element type, widening to `Mixed` when the
+    // array-typed candidates are heterogeneous.
+    let first_ty = candidates[0].1.clone();
+    let target_ty = if candidates.iter().all(|(_, ty)| *ty == first_ty) {
+        first_ty
+    } else {
+        PhpType::Mixed
+    };
+    // The target of a reference-alias is a plain variable, mirroring the static arm's storage
+    // restriction (enforced by the `RefAssign` parser producing a `target: String`).
+    env.insert(target.to_string(), target_ty);
+    checker.active_ref_params.insert(target.to_string());
+    clear_callable_metadata(checker, target);
+    Ok(())
 }
 
 /// Type-checks a reference assignment whose left-hand side is a property access

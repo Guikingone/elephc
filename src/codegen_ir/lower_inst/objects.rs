@@ -2924,6 +2924,75 @@ fn lower_runtime_dynamic_declared_prop_get(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `LoadDynamicPropRefCell`: loads the raw reference-cell pointer of a DYNAMIC-named
+/// reference property (`$x = &$obj->$name`) without dereferencing it.
+///
+/// The runtime name is unknown at compile time, so this dispatches on it across the receiver
+/// class's reference-property slots (promoted by the checker), loading the matching slot's cell
+/// pointer. It mirrors `lower_runtime_dynamic_declared_prop_get` but filters to reference slots,
+/// loads the cell pointer (no deref), and stores it as a single pointer word. A name that matches
+/// no reference property compiles to a runtime fatal instead of miscompiling.
+pub(super) fn lower_load_dynamic_prop_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    let property_value = expect_operand(inst, 1)?;
+    let class_name = dynamic_property_object_class(ctx, object, inst)?;
+    ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
+    let slots: Vec<PropertySlot> = declared_dynamic_property_slots(ctx, &class_name, inst)?
+        .into_iter()
+        .filter(|slot| slot.is_reference)
+        .collect();
+    if slots.is_empty() {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} on class {} with no reference property",
+            inst.op.name(),
+            class_name
+        )));
+    }
+    let match_labels = slots
+        .iter()
+        .map(|slot| ctx.next_label(&format!("dyn_propref_{}", label_fragment(&slot.property))))
+        .collect::<Vec<_>>();
+    let miss_label = ctx.next_label("dyn_propref_miss");
+    let done_label = ctx.next_label("dyn_propref_done");
+
+    // Save the receiver pointer and the runtime name (ptr/len) on the temporary stack so the
+    // compare-chain can reload them per candidate without clobbering the dispatch registers.
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, object_reg)?;
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+
+    for (slot, label) in slots.iter().zip(match_labels.iter()) {
+        emit_branch_if_dynamic_name_matches(ctx, &slot.property, label);
+    }
+    abi::emit_jump(ctx.emitter, &miss_label);
+
+    for (slot, label) in slots.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
+        let int_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset); // load the reference-cell pointer from the property slot (no deref)
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&miss_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    super::emit_unsupported_feature_fatal(
+        ctx,
+        "Fatal error: Cannot take reference to undefined dynamic property\n",
+    );
+
+    ctx.emitter.label(&done_label);
+    store_ref_cell_pointer_result(ctx, inst)
+}
+
 /// Returns the normalized class name for object receivers supported by dynamic property dispatch.
 fn dynamic_property_object_class(
     ctx: &FunctionContext<'_>,
@@ -3027,9 +3096,15 @@ fn ensure_dynamic_property_slot_results_supported(
 }
 
 /// Verifies that a runtime miss can be materialized in the EIR result register shape.
+///
+/// An array-typed result materializes a miss as the pointer-sized null sentinel (a null array
+/// pointer), matching PHP's read-of-undefined-property → `null` semantics; this makes a dynamic
+/// read of a statically-array-typed property compilable (its dead miss branch has a defined
+/// result) even though the live match path derefs the real array.
 fn ensure_dynamic_property_miss_supported(inst: &Instruction) -> Result<()> {
     match inst.result_php_type.codegen_repr() {
         PhpType::Mixed | PhpType::Bool | PhpType::Int => Ok(()),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => Ok(()),
         ty => Err(CodegenIrError::unsupported(format!(
             "{} runtime miss for result PHP type {:?}",
             inst.op.name(),

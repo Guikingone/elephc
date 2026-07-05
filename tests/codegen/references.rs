@@ -861,3 +861,84 @@ fn test_ref_array_element_indexed_promotes_to_hash() {
 // `error_tests::type_system::test_error_ref_assign_into_array_element_unsupported`). The kind-6 /
 // tag-11 GC-collector awareness landed in Phase B, but it cannot be exercised end-to-end until
 // SLICE 2 can construct a ref-cell cycle, so the runtime GC-cycle test is deferred to that slice.
+
+/// SLICE 5 — `$passes = &$this->$property` (DYNAMIC property NAME) aliases the runtime-named
+/// array property; appends through the alias are visible via a STATIC-named getter, matching the
+/// Symfony `PassConfig::addPass()` write-through pattern the slice targets.
+///
+/// The write-through values are asserted via indexed reads (`at()`). The distinct-priority
+/// `count()` is intentionally not asserted here: `count()` over a reference property that was
+/// written through a NESTED index (`$r[$k][] = …`) is a pre-existing reference-machinery bug that
+/// reproduces identically on the STATIC-name path (`$r = &$this->v`), so it is out of scope for
+/// this slice. A flat-append `count()` over a dynamic-named reference property is correct.
+#[test]
+fn test_ref_dynamic_property_write_through() {
+    let out = compile_and_run(
+        "<?php
+        class PassConfig {
+            public array $beforeOptimization = [];
+            public array $afterRemoving = [];
+            private function addPass(string $property, int $priority, int $pass): void {
+                $passes = &$this->$property;
+                if (!isset($passes[$priority])) { $passes[$priority] = []; }
+                $passes[$priority][] = $pass;
+            }
+            public function add(int $priority, int $pass): void {
+                $this->addPass('beforeOptimization', $priority, $pass);
+            }
+            public function at(int $priority, int $idx): int {
+                return $this->beforeOptimization[$priority][$idx];
+            }
+        }
+        $pc = new PassConfig();
+        $pc->add(10, 100);
+        $pc->add(10, 200);
+        $pc->add(20, 300);
+        echo $pc->at(10, 0), ',', $pc->at(10, 1), ',', $pc->at(20, 0);",
+    );
+    assert_eq!(out, "100,200,300");
+}
+
+/// H2 guard: after binding a reference to a dynamic-named array property, a later DYNAMIC read
+/// of the SAME property (`$this->$p`) must dereference the tag-11 reference cell to the array —
+/// so `count()` sees the appended elements — instead of misreading the raw cell pointer.
+#[test]
+fn test_ref_dynamic_property_read_back_derefs() {
+    let out = compile_and_run(
+        "<?php
+        class C {
+            public array $v = [];
+            public function t(string $p): int {
+                $r = &$this->$p;
+                $r[] = 5;
+                $r[] = 6;
+                $back = $this->$p;
+                return count($back);
+            }
+        }
+        $o = new C();
+        echo $o->t('v');",
+    );
+    assert_eq!(out, "2");
+}
+
+/// The dynamic-named reference-property write-through shape stays heap-balanced: the promoted
+/// property cell and its array payload are released at scope exit (`--heap-debug` clean).
+#[test]
+fn test_ref_dynamic_property_heap_clean() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        class C {
+            public array $v = [];
+            public function t(string $p): string {
+                $r = &$this->$p;
+                $r[] = 1;
+                $r[] = 2;
+                return implode(',', $this->v);
+            }
+        }
+        $o = new C();
+        echo $o->t('v');",
+        "1,2",
+    );
+}

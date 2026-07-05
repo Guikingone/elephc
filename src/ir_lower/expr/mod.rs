@@ -8492,6 +8492,68 @@ pub(crate) fn lower_ref_assign_property(
     ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
 }
 
+/// Lowers `$target = &$obj->$name`: binds the local `$target` to the reference cell stored in
+/// the object's DYNAMIC-named reference-property slot, so reads/writes of either side go through
+/// the same cell (write-through). The receiver class's array-typed properties were promoted to
+/// reference properties by the checker, so codegen dispatches on the runtime name across those
+/// slots and returns the matching cell pointer. The name expression is coerced to a string; the
+/// bound local is typed to the property element type the checker computed for `$target`.
+pub(crate) fn lower_ref_assign_dynamic_property(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &str,
+    source: &Expr,
+    span: Span,
+) {
+    let ExprKind::DynamicPropertyAccess { object, property } = &source.kind else {
+        return;
+    };
+    let object = lower_expr(ctx, object);
+    // Derive the cell's element type from the receiver class's array-typed properties (the checker's
+    // promotion candidates), so the bound local dereferences the cell with the right shape on later
+    // loads/stores. A single candidate type is used directly; heterogeneous candidates widen to Mixed.
+    let object_ty = ctx.builder.value_php_type(object.value);
+    let value_type = dynamic_ref_property_cell_type(ctx, &object_ty);
+    let name = lower_expr(ctx, property);
+    let name = coerce_to_string(ctx, name, source);
+    let cell_ptr = ctx.emit_value(
+        Op::LoadDynamicPropRefCell,
+        vec![object.value, name.value],
+        None,
+        value_type.clone(),
+        Op::LoadDynamicPropRefCell.default_effects(),
+        Some(span),
+    );
+    ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+}
+
+/// Returns the element type a `$x = &$obj->$name` reference cell holds for a statically-typed
+/// object receiver: the common type of the receiver class's array-typed declared properties (the
+/// checker's promotion candidates), or `Mixed` when they are heterogeneous or the class is unknown.
+fn dynamic_ref_property_cell_type(
+    ctx: &LoweringContext<'_, '_>,
+    object_ty: &PhpType,
+) -> PhpType {
+    let Some((class_name, _)) = singular_object_class(object_ty) else {
+        return PhpType::Mixed;
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    let Some(class_info) = ctx.classes.get(normalized) else {
+        return PhpType::Mixed;
+    };
+    let mut candidate: Option<PhpType> = None;
+    for (_, ty) in &class_info.properties {
+        if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            continue;
+        }
+        match &candidate {
+            None => candidate = Some(ty.clone()),
+            Some(existing) if existing == ty => {}
+            Some(_) => return PhpType::Mixed,
+        }
+    }
+    candidate.unwrap_or(PhpType::Mixed)
+}
+
 /// Lowers `$obj->prop = &$src->q`: stores the source property's reference-cell pointer
 /// into the target property's slot so both properties alias the same cell (forward bind).
 ///

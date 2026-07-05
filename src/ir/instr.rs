@@ -352,6 +352,13 @@ pub enum Op {
     /// without dereferencing it. Used to alias a local to `$obj->prop` and to return
     /// `$this->prop` by reference. Operand: object; immediate: property name data id.
     LoadPropRefCell,
+    /// Loads the raw reference-cell pointer of a DYNAMIC-named reference property, without
+    /// dereferencing it. Used to alias a local to `$x = &$obj->$name` (write-through). Operands:
+    /// object, then the runtime property-name string; NO immediate. The receiver class's
+    /// array-typed properties were promoted to reference properties by the checker, so codegen
+    /// dispatches on the runtime name across those declared slots and yields the matching cell
+    /// pointer. Same borrowed-cell result ownership as `LoadPropRefCell`.
+    LoadDynamicPropRefCell,
     /// Loads the address of a static property's global storage as a ref-cell pointer,
     /// without dereferencing it. Used to alias a local to `$x = &self::$n` (write-through).
     /// No operands; immediate: `Class::prop` label data id (same shape as `LoadStaticProperty`).
@@ -504,6 +511,9 @@ impl Op {
             ArrayLen | HashLen | ArrayKeyExists | OffsetExists | PropGet | LoadPropRefCell => {
                 E::READS_HEAP
             }
+            // Reads the receiver heap to dispatch on the runtime property name; an unmatched
+            // name compiles to a runtime fatal, so it is conservatively may-fatal.
+            LoadDynamicPropRefCell => E::READS_HEAP | E::MAY_FATAL,
             BindRefCellPtr => E::WRITES_LOCAL,
             BindPropRefCell => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
             ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
@@ -703,6 +713,7 @@ impl Op {
             PropGet => "prop_get",
             PropSet => "prop_set",
             LoadPropRefCell => "load_prop_ref_cell",
+            LoadDynamicPropRefCell => "load_dynamic_prop_ref_cell",
             LoadStaticPropRefCell => "load_static_prop_ref_cell",
             BindRefCellPtr => "bind_ref_cell_ptr",
             BindPropRefCell => "bind_prop_ref_cell",

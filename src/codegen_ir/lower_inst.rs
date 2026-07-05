@@ -200,6 +200,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::DynamicObjectNewMixed => objects::lower_dynamic_object_new_mixed(ctx, &inst),
         Op::PropGet => objects::lower_prop_get(ctx, &inst),
         Op::LoadPropRefCell => objects::lower_load_prop_ref_cell(ctx, &inst),
+        Op::LoadDynamicPropRefCell => objects::lower_load_dynamic_prop_ref_cell(ctx, &inst),
         Op::BindRefCellPtr => lower_bind_ref_cell_ptr(ctx, &inst),
         Op::BindPropRefCell => objects::lower_bind_prop_ref_cell(ctx, &inst),
         Op::NullsafePropGet => objects::lower_nullsafe_prop_get(ctx, &inst),

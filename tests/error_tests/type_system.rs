@@ -862,3 +862,14 @@ fn test_error_ref_assign_in_expression_position_unsupported() {
         "Unexpected token",
     );
 }
+
+/// Verifies that a reference to a DYNAMIC-named property on an untyped/`Mixed` receiver (`$x =
+/// &$obj->$p` where `$obj` has no static class) loud-errors instead of silently miscompiling: the
+/// SLICE 5 runtime-name dispatch needs a concrete class to enumerate promotable slots.
+#[test]
+fn test_error_ref_dynamic_property_on_mixed_receiver_unsupported() {
+    expect_error(
+        "<?php function f($obj, $p) { $x = &$obj->$p; return $x; }",
+        "Reference to a dynamic property is only supported on a statically-typed object receiver",
+    );
+}

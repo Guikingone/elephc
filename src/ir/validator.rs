@@ -433,6 +433,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         BufferLen | BufferGet | BufferSet | BufferFree => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Buffer, "Heap(Buffer)")
         }
+        LoadDynamicPropRefCell => check_count(inst_id, inst, 2, "2"),
         PropGet | PropSet | LoadPropRefCell | BindPropRefCell | DynamicPropGet | DynamicPropSet
         | NullsafePropGet
         | NullsafeMethodCall | MethodLookup | MethodCall | InstanceOf | InstanceOfDynamic => {
