@@ -218,6 +218,13 @@ impl<'a> Analyzer<'a> {
                 self.scan_expr(index, ctx);
                 self.scan_expr(value, ctx);
             }
+            StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
+                self.scan_expr(property, ctx);
+                if let Some(index) = index {
+                    self.scan_expr(index, ctx);
+                }
+                self.scan_expr(value, ctx);
+            }
             StmtKind::Include { path, .. } => self.scan_expr(path, ctx),
             // Declarations (lazy) and leaf statements with no scannable expression.
             _ => {}

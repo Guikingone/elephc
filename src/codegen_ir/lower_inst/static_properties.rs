@@ -72,6 +72,107 @@ pub(super) fn lower_load_dynamic_static_property(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    let result_ty = inst.result_php_type.codegen_repr();
+    dispatch_dynamic_static_property(ctx, inst, |ctx, slot| {
+        if result_ty != PhpType::Mixed && slot.php_type.codegen_repr() != result_ty {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} with candidate {}::${} PHP type {:?} and result PHP type {:?}",
+                inst.op.name(),
+                slot.declaring_class,
+                slot.property,
+                slot.php_type,
+                inst.result_php_type
+            )));
+        }
+        emit_direct_load_static_property_result(ctx, slot);
+        if result_ty == PhpType::Mixed && slot.php_type.codegen_repr() != PhpType::Mixed {
+            emit_box_current_value_as_mixed(ctx.emitter, &slot.php_type.codegen_repr());
+        }
+        Ok(())
+    })?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a dynamic-named static property write (`self::${$expr} = v`) by dispatching on the
+/// runtime property-name string across the receiver class's declared static properties and
+/// storing the value operand into the matching global symbol.
+///
+/// Operands are `[name, value]`; the immediate carries the receiver's concrete class name. Each
+/// match arm materializes the value into the result register(s) and stores it to the candidate's
+/// symbol. `release_previous` is suppressed when the value is the array just loaded from the same
+/// dynamic static property (the array-element write-back), preventing a double free; otherwise the
+/// previous refcounted value is released like `StoreStaticProperty`. An unmatched name fatals.
+///
+/// Because the runtime name selects among candidates whose declared types may differ, a candidate
+/// whose declared type cannot receive the value's static type emits a runtime type-mismatch fatal
+/// in its arm instead of failing codegen: only the matching arm runs, so a value/type mismatch is
+/// a PHP-observable fatal (the property named at runtime is incompatible), not a miscompile.
+pub(super) fn lower_store_dynamic_static_property(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let value = expect_operand(inst, 1)?;
+    let value_ty = ctx.value_php_type(value)?;
+    let release_previous = !value_is_same_dynamic_static_property_load(ctx, value, inst)?;
+    let class_name = static_property_label(ctx, inst)?.trim_start_matches('\\').to_string();
+    dispatch_dynamic_static_property(ctx, inst, |ctx, slot| {
+        if ensure_static_property_value_supported(slot, &value_ty, inst).is_err() {
+            emit_dynamic_static_property_type_mismatch_fatal(ctx, &class_name, &slot.property);
+            return Ok(());
+        }
+        load_static_property_store_value_to_result(ctx, value, &slot.php_type)?;
+        emit_direct_store_static_property_result(ctx, slot, release_previous);
+        Ok(())
+    })
+}
+
+/// Emits a PHP fatal for a dynamic static property write whose runtime-selected property has a
+/// declared type incompatible with the value's static type. Only reachable when the runtime name
+/// selects this specific candidate, so it is a genuine type error rather than a miscompile.
+fn emit_dynamic_static_property_type_mismatch_fatal(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+) {
+    let message = format!(
+        "Fatal error: Cannot assign incompatible value to static property {}::${}\n",
+        class_name, property
+    );
+    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the dynamic static-property type-mismatch fatal
+            abi::emit_symbol_address(ctx.emitter, "x1", &message_label);
+            ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // pass the fatal diagnostic byte length to write()
+            ctx.emitter.syscall(4);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
+            ctx.emitter.instruction(&format!("mov edx, {}", message_len));      // pass the fatal diagnostic byte length to write()
+            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the dynamic static-property type-mismatch fatal
+            ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall
+            ctx.emitter.instruction("syscall");                                 // write the dynamic static-property type-mismatch fatal diagnostic
+        }
+    }
+    abi::emit_exit(ctx.emitter, 1);
+}
+
+/// Shared scaffolding for a dynamic-named static property dispatch (read or write).
+///
+/// Validates that the runtime name (operand 0) is a string, enumerates the receiver class's
+/// static-property candidates from the class-name immediate, stages the name (ptr/len) on the
+/// temporary stack, and emits the `__rt_str_eq` compare-chain. `per_slot` is invoked inside each
+/// candidate's match arm (with the name still staged and control already dispatched to that arm);
+/// a name matching no candidate fatals. The scaffold releases the staged name after each arm and
+/// after the miss, so `per_slot` must not itself touch the temporary stack.
+fn dispatch_dynamic_static_property<F>(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    mut per_slot: F,
+) -> Result<()>
+where
+    F: FnMut(&mut FunctionContext<'_>, &StaticPropertySlot) -> Result<()>,
+{
     let name_value = expect_operand(inst, 0)?;
     ensure_runtime_dynamic_static_property_name(ctx, name_value, inst)?;
     let class_name = static_property_label(ctx, inst)?.trim_start_matches('\\').to_string();
@@ -83,19 +184,8 @@ pub(super) fn lower_load_dynamic_static_property(
             class_name
         )));
     }
-    let result_ty = inst.result_php_type.codegen_repr();
     for slot in &slots {
         ensure_static_property_type_supported(&slot.php_type, inst)?;
-        if result_ty != PhpType::Mixed && slot.php_type.codegen_repr() != result_ty {
-            return Err(CodegenIrError::unsupported(format!(
-                "{} with candidate {}::${} PHP type {:?} and result PHP type {:?}",
-                inst.op.name(),
-                slot.declaring_class,
-                slot.property,
-                slot.php_type,
-                inst.result_php_type
-            )));
-        }
     }
 
     let match_labels = slots
@@ -118,10 +208,7 @@ pub(super) fn lower_load_dynamic_static_property(
 
     for (slot, label) in slots.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
-        emit_direct_load_static_property_result(ctx, slot);
-        if result_ty == PhpType::Mixed && slot.php_type.codegen_repr() != PhpType::Mixed {
-            emit_box_current_value_as_mixed(ctx.emitter, &slot.php_type.codegen_repr());
-        }
+        per_slot(ctx, slot)?;
         abi::emit_release_temporary_stack(ctx.emitter, 16);
         abi::emit_jump(ctx.emitter, &done_label);
     }
@@ -130,7 +217,31 @@ pub(super) fn lower_load_dynamic_static_property(
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     emit_undefined_dynamic_static_property_fatal(ctx, &class_name);
     ctx.emitter.label(&done_label);
-    store_if_result(ctx, inst)
+    Ok(())
+}
+
+/// Returns true when `value` is the result of a `LoadDynamicStaticProperty` on the same receiver
+/// class as `inst` (identical class-name immediate). This detects the array-element write-back
+/// (`self::${$n}[$k] = v` loads the array, mutates it in place, then stores the same array back),
+/// so the store must not release the "previous" value it is about to re-store.
+fn value_is_same_dynamic_static_property_load(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+    inst: &Instruction,
+) -> Result<bool> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst: def_inst, .. } = value_ref.def else {
+        return Ok(false);
+    };
+    let Some(def) = ctx.function.instruction(def_inst) else {
+        return Err(CodegenIrError::missing_entry("instruction", def_inst.as_raw()));
+    };
+    if def.op != crate::ir::Op::LoadDynamicStaticProperty {
+        return Ok(false);
+    }
+    Ok(static_property_label(ctx, def)? == static_property_label(ctx, inst)?)
 }
 
 /// Verifies that the runtime dynamic static property name is already a materialized string.

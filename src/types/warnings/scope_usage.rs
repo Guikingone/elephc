@@ -294,6 +294,13 @@ pub(super) fn collect_scope_reads(
                 collect_expr_reads(index, scope, warnings);
                 collect_expr_reads(value, scope, warnings);
             }
+            StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
+                collect_expr_reads(property, scope, warnings);
+                if let Some(index) = index {
+                    collect_expr_reads(index, scope, warnings);
+                }
+                collect_expr_reads(value, scope, warnings);
+            }
             StmtKind::PropertyArrayPush {
                 object,
                 value,

@@ -194,6 +194,98 @@ pub(super) fn check_static_property_array_assign(
     Ok(())
 }
 
+/// Type-checks a write through a dynamic-named static property (`self::${$n} = v`,
+/// `self::${$n}[$k] = v`, `self::${$n}[] = v`).
+///
+/// The property name is a runtime string, so no single candidate can be pinpointed: the receiver
+/// class must be statically known (else a loud deferred error, as in the read path) and must
+/// declare at least one static property. Operands are inferred in source order (name, index,
+/// value) for their assignment effects. Value/element type checking is intentionally permissive
+/// (gradual): since the runtime name selects among candidates, individual candidate types are not
+/// narrowed here — codegen picks and coerces the matching one.
+pub(super) fn check_dynamic_static_property_write(
+    checker: &mut Checker,
+    receiver: &StaticReceiver,
+    property: &Expr,
+    index: Option<&Expr>,
+    value: &Expr,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let name_ty = checker.infer_type_with_assignment_effects(property, env)?;
+    if !matches!(name_ty, PhpType::Str | PhpType::Mixed | PhpType::Int) {
+        return Err(CompileError::new(
+            property.span,
+            &format!(
+                "Dynamic static property name must be a string, got `{}`",
+                name_ty
+            ),
+        ));
+    }
+    if let Some(index) = index {
+        checker.infer_type_with_assignment_effects(index, env)?;
+    }
+    checker.infer_type_with_assignment_effects(value, env)?;
+
+    let class_name = resolve_dynamic_static_write_class(checker, receiver, span)?;
+    let class_info = checker.classes.get(&class_name).ok_or_else(|| {
+        CompileError::new(
+            span,
+            "Dynamic static property access requires a statically-known class",
+        )
+    })?;
+    if class_info.static_properties.is_empty() {
+        return Err(CompileError::new(
+            span,
+            &format!("Class {} has no static properties", class_name),
+        ));
+    }
+    Ok(())
+}
+
+/// Resolves the receiver of a dynamic static property write to a statically-known class name.
+///
+/// `Named` returns the class directly; `Self_`/`Static` require a class context; `Parent` returns
+/// the current class's parent. Errors when the class is not statically resolvable so the write
+/// stays a loud deferred error rather than a silent miscompile.
+fn resolve_dynamic_static_write_class(
+    checker: &Checker,
+    receiver: &StaticReceiver,
+    span: Span,
+) -> Result<String, CompileError> {
+    match receiver {
+        StaticReceiver::Named(class_name) => Ok(class_name.as_str().to_string()),
+        StaticReceiver::Self_ | StaticReceiver::Static => checker
+            .current_class
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| {
+                CompileError::new(
+                    span,
+                    "Dynamic static property access requires a statically-known class",
+                )
+            }),
+        StaticReceiver::Parent => {
+            let current_class = checker.current_class.as_ref().ok_or_else(|| {
+                CompileError::new(
+                    span,
+                    "Dynamic static property access requires a statically-known class",
+                )
+            })?;
+            checker
+                .classes
+                .get(current_class)
+                .and_then(|info| info.parent.clone())
+                .ok_or_else(|| {
+                    CompileError::new(
+                        span,
+                        &format!("Class {} has no parent class", current_class),
+                    )
+                })
+        }
+    }
+}
+
 /// Resolves `receiver` to a class name and fetches static property metadata.
 ///
 /// Returns `StaticPropertyAssignmentTarget` with class name, declaring class,

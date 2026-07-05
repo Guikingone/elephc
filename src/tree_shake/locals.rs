@@ -544,6 +544,13 @@ fn collect_stmt_sources<'a>(stmt: &'a Stmt, sources: &mut HashMap<String, Vec<So
             collect_expr_sources(index, sources);
             collect_expr_sources(value, sources);
         }
+        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
+            collect_expr_sources(property, sources);
+            if let Some(index) = index {
+                collect_expr_sources(index, sources);
+            }
+            collect_expr_sources(value, sources);
+        }
         // Declarations (separate scopes) and leaf statements bind no local in this scope.
         _ => {}
     }

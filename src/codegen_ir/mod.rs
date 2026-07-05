@@ -749,7 +749,10 @@ fn referenced_static_property_class_names(module: &Module) -> HashSet<String> {
         for inst in &function.instructions {
             if !matches!(
                 inst.op,
-                Op::LoadStaticProperty | Op::StoreStaticProperty | Op::LoadDynamicStaticProperty
+                Op::LoadStaticProperty
+                    | Op::StoreStaticProperty
+                    | Op::LoadDynamicStaticProperty
+                    | Op::StoreDynamicStaticProperty
             ) {
                 continue;
             }
@@ -759,9 +762,12 @@ fn referenced_static_property_class_names(module: &Module) -> HashSet<String> {
             let Some(label) = module.data.strings.get(data.as_raw() as usize) else {
                 continue;
             };
-            // `LoadDynamicStaticProperty` carries the bare receiver-class name as its immediate
+            // The dynamic static-property ops carry the bare receiver-class name as their immediate
             // (no `::prop` suffix); the named-property ops carry `class::prop`.
-            let class_name = if inst.op == Op::LoadDynamicStaticProperty {
+            let class_name = if matches!(
+                inst.op,
+                Op::LoadDynamicStaticProperty | Op::StoreDynamicStaticProperty
+            ) {
                 label.as_str()
             } else {
                 let Some((class_name, _)) = label.rsplit_once("::") else {

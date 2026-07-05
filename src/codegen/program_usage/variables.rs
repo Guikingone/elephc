@@ -143,6 +143,11 @@ fn stmt_uses_variable(stmt: &Stmt, needle: &str) -> bool {
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_uses_variable(index, needle) || expr_uses_variable(value, needle)
         }
+        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
+            expr_uses_variable(property, needle)
+                || index.as_ref().is_some_and(|i| expr_uses_variable(i, needle))
+                || expr_uses_variable(value, needle)
+        }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_uses_variable(object, needle) || expr_uses_variable(value, needle)
         }

@@ -322,6 +322,14 @@ pub(super) fn collect_closure_warnings_in_stmt(stmt: &Stmt, warnings: &mut Vec<C
             collect_expr_reads(index, &mut scope, warnings);
             collect_expr_reads(value, &mut scope, warnings);
         }
+        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
+            let mut scope = ScopeUsage::default();
+            collect_expr_reads(property, &mut scope, warnings);
+            if let Some(index) = index {
+                collect_expr_reads(index, &mut scope, warnings);
+            }
+            collect_expr_reads(value, &mut scope, warnings);
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             let mut scope = ScopeUsage::default();
             collect_expr_reads(target, &mut scope, warnings);

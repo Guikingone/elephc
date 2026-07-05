@@ -164,6 +164,21 @@ impl Checker {
                 stmt.span,
                 env,
             ),
+            StmtKind::DynamicStaticPropertyWrite {
+                receiver,
+                property,
+                index,
+                value,
+                ..
+            } => static_properties::check_dynamic_static_property_write(
+                self,
+                receiver,
+                property,
+                index.as_ref(),
+                value,
+                stmt.span,
+                env,
+            ),
             _ => unreachable!("non-assignment statement routed to assignment checker"),
         }
     }

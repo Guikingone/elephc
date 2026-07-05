@@ -322,6 +322,23 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             span,
             attributes: Vec::new(),
         }],
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            append,
+            value,
+        } => vec![Stmt {
+            kind: StmtKind::DynamicStaticPropertyWrite {
+                receiver,
+                property: Box::new(prune_expr(*property)),
+                index: index.map(prune_expr),
+                append,
+                value: prune_expr(value),
+            },
+            span,
+            attributes: Vec::new(),
+        }],
         StmtKind::PropertyArrayAssign {
             object,
             property,

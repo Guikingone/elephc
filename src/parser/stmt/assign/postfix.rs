@@ -456,12 +456,33 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
                 value,
             }
         }
+        // `self::${$n}[] = v` — a push through a dynamic-named static property.
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } if is_append => {
+            StmtKind::DynamicStaticPropertyWrite {
+                receiver,
+                property,
+                index: None,
+                append: true,
+                value,
+            }
+        }
         ExprKind::ArrayAccess { array, index } => match array.kind {
             ExprKind::StaticPropertyAccess { receiver, property } => {
                 StmtKind::StaticPropertyArrayAssign {
                     receiver,
                     property,
                     index: *index,
+                    value,
+                }
+            }
+            // `self::${$n}[$k] = v` — an array-element write through a dynamic-named static
+            // property (the DebugClassLoader shape).
+            ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+                StmtKind::DynamicStaticPropertyWrite {
+                    receiver,
+                    property,
+                    index: Some(*index),
+                    append: false,
                     value,
                 }
             }
@@ -475,6 +496,16 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
             property,
             value,
         },
+        // `self::${$n} = v` — a direct write through a dynamic-named static property.
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            StmtKind::DynamicStaticPropertyWrite {
+                receiver,
+                property,
+                index: None,
+                append: false,
+                value,
+            }
+        }
         _ => return Err(CompileError::new(span, "Invalid assignment target")),
     };
 
@@ -577,6 +608,9 @@ fn find_top_level_postfix_incdec(tokens: &[(Token, Span)], start: usize) -> Opti
 pub(crate) fn can_replay_assignment_target(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            can_replay_assignment_target(property)
+        }
         ExprKind::ArrayAccess { array, index } => {
             can_replay_assignment_target(array) && can_replay_assignment_target(index)
         }

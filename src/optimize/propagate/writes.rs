@@ -286,6 +286,16 @@ pub(crate) fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
             expr_local_writes(index)?,
             expr_local_writes(value)?,
         ]),
+        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
+            let mut merged = merge_write_sets([
+                expr_local_writes(property)?,
+                expr_local_writes(value)?,
+            ])?;
+            if let Some(index) = index {
+                merged.extend(expr_local_writes(index)?);
+            }
+            Some(merged)
+        }
         StmtKind::PropertyArrayAssign {
             object,
             index,

@@ -45,6 +45,11 @@ fn stmt_has_includes(stmt: &Stmt) -> bool {
         StmtKind::NestedArrayAssign { target, value } => {
             expr_has_includes(target) || expr_has_includes(value)
         }
+        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
+            expr_has_includes(property)
+                || index.as_ref().is_some_and(expr_has_includes)
+                || expr_has_includes(value)
+        }
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_has_includes(object) || expr_has_includes(value)
@@ -307,6 +312,11 @@ pub(super) fn stmt_has_value_include(stmt: &Stmt) -> bool {
         }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_has_includes(target) || expr_has_includes(value)
+        }
+        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
+            expr_has_includes(property)
+                || index.as_ref().is_some_and(expr_has_includes)
+                || expr_has_includes(value)
         }
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {

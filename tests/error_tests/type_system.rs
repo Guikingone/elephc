@@ -750,6 +750,17 @@ fn test_error_dynamic_static_property_unknown_class() {
     );
 }
 
+/// Verifies a WRITE through a dynamic-named static property on a class that is not statically
+/// known is a loud deferred error (the receiver class must be resolvable so codegen can enumerate
+/// candidate static properties), mirroring the read-side rejection.
+#[test]
+fn test_error_dynamic_static_property_write_unknown_class() {
+    expect_error(
+        "<?php $n = 'x'; Nonexistent::${$n} = 5;",
+        "Dynamic static property access requires a statically-known class",
+    );
+}
+
 /// Verifies that the nullable shorthand cannot be combined with an intersection type (`?A&B`),
 /// which is a syntax error in PHP. Previously this silently parsed and dropped a member.
 #[test]

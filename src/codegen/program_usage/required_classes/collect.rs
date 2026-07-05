@@ -232,6 +232,22 @@ fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<Stri
                 collect_required_class_names_in_expr(index, names);
                 collect_required_class_names_in_expr(value, names);
             }
+            StmtKind::DynamicStaticPropertyWrite {
+                receiver,
+                property,
+                index,
+                value,
+                ..
+            } => {
+                if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
+                    names.insert(name.as_str().to_string());
+                }
+                collect_required_class_names_in_expr(property, names);
+                if let Some(index) = index {
+                    collect_required_class_names_in_expr(index, names);
+                }
+                collect_required_class_names_in_expr(value, names);
+            }
             _ => {}
         }
     }

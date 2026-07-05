@@ -286,6 +286,20 @@ pub enum StmtKind {
         index: Expr,
         value: Expr,
     },
+    /// A write through a dynamic-named static property (`self::${$expr} = v`,
+    /// `self::${$expr}[$k] = v`, `self::${$expr}[] = v`) whose receiver class is statically
+    /// known. `property` is the runtime name expression; `index`/`append` select the write
+    /// shape: `index: None, append: false` is a direct write, `index: Some(k)` is an
+    /// array-element write, and `append: true` is an array push. Mirrors the
+    /// `StaticProperty*` triplet but with a computed property name resolved by the codegen
+    /// compare-chain.
+    DynamicStaticPropertyWrite {
+        receiver: StaticReceiver,
+        property: Box<Expr>,
+        index: Option<Expr>,
+        append: bool,
+        value: Expr,
+    },
     PropertyArrayPush {
         object: Box<Expr>,
         property: String,

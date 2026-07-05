@@ -349,6 +349,20 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut Refs) {
             collect_refs_expr(index, out);
             collect_refs_expr(value, out);
         }
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            value,
+            ..
+        } => {
+            collect_static_receiver(receiver, out);
+            collect_refs_expr(property, out);
+            if let Some(index) = index {
+                collect_refs_expr(index, out);
+            }
+            collect_refs_expr(value, out);
+        }
         StmtKind::ArrayAssign { value, index, .. } => {
             collect_refs_expr(value, out);
             collect_refs_expr(index, out);

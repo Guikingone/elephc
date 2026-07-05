@@ -230,6 +230,13 @@ pub enum Op {
     /// fatals ("Access to undefined static property").
     LoadDynamicStaticProperty,
     StoreStaticProperty,
+    /// Stores a value into a static property selected by a runtime name string
+    /// (`self::${$expr} = v`). Operands: `[name, value]` — the runtime property-name (a `Str`)
+    /// and the value. Immediate: the receiver class name data id; codegen enumerates that
+    /// class's declared static properties, dispatches on the runtime name via `__rt_str_eq`, and
+    /// stores into the matching global symbol (releasing the previous value like
+    /// `StoreStaticProperty`). An unmatched name fatals ("Access to undefined static property").
+    StoreDynamicStaticProperty,
     IAdd,
     ISub,
     IMul,
@@ -523,6 +530,11 @@ impl Op {
             // Reads a static property's global storage selected by a runtime name; an unmatched
             // name compiles to a runtime fatal, so it is conservatively may-fatal.
             LoadDynamicStaticProperty => E::READS_HEAP | E::MAY_FATAL,
+            // Writes a static property's global storage selected by a runtime name; reads the heap
+            // to dispatch, releases the previous refcounted value, and fatals on an unmatched name.
+            StoreDynamicStaticProperty => {
+                E::WRITES_HEAP | E::READS_HEAP | E::MAY_FATAL | E::REFCOUNT_OP
+            }
             BindRefCellPtr => E::WRITES_LOCAL,
             BindPropRefCell => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
             ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
@@ -613,6 +625,7 @@ impl Op {
             InitStaticLocal => "init_static_local",
             LoadStaticProperty => "load_static_property",
             LoadDynamicStaticProperty => "load_dynamic_static_property",
+            StoreDynamicStaticProperty => "store_dynamic_static_property",
             StoreStaticProperty => "store_static_property",
             IAdd => "iadd",
             ISub => "isub",

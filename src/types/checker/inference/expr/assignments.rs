@@ -90,6 +90,15 @@ impl Checker {
                         value: value.clone(),
                     }
                 }
+                ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+                    StmtKind::DynamicStaticPropertyWrite {
+                        receiver: receiver.clone(),
+                        property: property.clone(),
+                        index: Some(*index.clone()),
+                        append: false,
+                        value: value.clone(),
+                    }
+                }
                 _ => StmtKind::NestedArrayAssign {
                     target: target.clone(),
                     value: value.clone(),
@@ -104,6 +113,15 @@ impl Checker {
                 StmtKind::StaticPropertyAssign {
                     receiver: receiver.clone(),
                     property: property.clone(),
+                    value: value.clone(),
+                }
+            }
+            ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+                StmtKind::DynamicStaticPropertyWrite {
+                    receiver: receiver.clone(),
+                    property: property.clone(),
+                    index: None,
+                    append: false,
                     value: value.clone(),
                 }
             }

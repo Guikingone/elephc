@@ -248,6 +248,21 @@ pub(super) fn resolve_stmt_exprs(
             index: resolve_expr(index, base_dir, declared_once, include_chain, state, function_variants)?,
             value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
         },
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            append,
+            value,
+        } => StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property: Box::new(resolve_expr(*property, base_dir, declared_once, include_chain, state, function_variants)?),
+            index: index
+                .map(|i| resolve_expr(i, base_dir, declared_once, include_chain, state, function_variants))
+                .transpose()?,
+            append,
+            value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
+        },
         StmtKind::If {
             condition,
             then_body,

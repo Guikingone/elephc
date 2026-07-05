@@ -220,6 +220,13 @@ fn visit_stmt(stmt: &Stmt, st: &mut State) {
             visit_expr(index, st);
             visit_expr(value, st);
         }
+        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
+            visit_expr(property, st);
+            if let Some(index) = index {
+                visit_expr(index, st);
+            }
+            visit_expr(value, st);
+        }
         // Statements that don't carry expressions or sub-bodies for yield checks.
         StmtKind::Break(_)
         | StmtKind::Continue(_)

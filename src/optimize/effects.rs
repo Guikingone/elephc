@@ -70,6 +70,13 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
                 .with_side_effects()
                 .with_may_throw()
         }
+        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
+            let mut effect = expr_effect(property).combine(expr_effect(value));
+            if let Some(index) = index {
+                effect = effect.combine(expr_effect(index));
+            }
+            effect.with_side_effects().with_may_throw()
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_effect(target)
                 .combine(expr_effect(value))

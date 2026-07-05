@@ -212,6 +212,19 @@ pub(super) fn resolve_regular_stmt(
             index: ctx.expr(index),
             value: ctx.expr(value),
         },
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            append,
+            value,
+        } => StmtKind::DynamicStaticPropertyWrite {
+            receiver: ctx.static_receiver(receiver),
+            property: Box::new(ctx.expr(property)),
+            index: index.as_ref().map(|i| ctx.expr(i)),
+            append: *append,
+            value: ctx.expr(value),
+        },
         StmtKind::PropertyArrayPush {
             object,
             property,

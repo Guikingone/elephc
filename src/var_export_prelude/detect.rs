@@ -394,6 +394,11 @@ fn stmt_refs_ve(stmt: &Stmt) -> bool {
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_refs_ve(index) || expr_refs_ve(value)
         }
+        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
+            expr_refs_ve(property)
+                || index.as_ref().is_some_and(expr_refs_ve)
+                || expr_refs_ve(value)
+        }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs_ve(object) || expr_refs_ve(value)
         }

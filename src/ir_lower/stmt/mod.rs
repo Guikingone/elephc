@@ -162,6 +162,21 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             index,
             value,
         } => lower_static_property_array_assign(ctx, receiver, property, index, value, stmt.span),
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            append,
+            value,
+        } => lower_dynamic_static_property_write(
+            ctx,
+            receiver,
+            property,
+            index.as_ref(),
+            *append,
+            value,
+            stmt.span,
+        ),
         StmtKind::PropertyArrayPush {
             object,
             property,
@@ -2599,6 +2614,193 @@ fn lower_static_property_array_assign(
         effects_lookup::runtime_effects(),
         Some(span),
     );
+}
+
+/// Lowers a write through a dynamic-named static property (`self::${$n} = v`,
+/// `self::${$n}[$k] = v`, `self::${$n}[] = v`).
+///
+/// The runtime property-name expression is evaluated exactly once and coerced to a string, then
+/// reused for both the load and the store so its side effects run once and both compare-chains
+/// select the same candidate. Array-element and push forms mirror the static-named indexed path:
+/// the array is loaded, mutated with `ArraySet`/`ArrayPush`, and stored back to the selected
+/// symbol (codegen suppresses the store's `release_previous` for this same-array write-back).
+/// These forms are supported when the receiver class's static properties share one indexed-array
+/// type; a heterogeneous class, an associative/`Mixed` array, or a string key remains a loud
+/// codegen error (associative static-property storage is a pre-existing, shared limitation). The
+/// direct form stores the value straight into the selected symbol.
+fn lower_dynamic_static_property_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &Expr,
+    index: Option<&Expr>,
+    append: bool,
+    value: &Expr,
+    span: Span,
+) {
+    let name_value = lower_expr(ctx, property);
+    let name_str = coerce_to_string(ctx, name_value, Some(span));
+    let name = name_str.value;
+    let common_ty = dynamic_static_property_common_type(ctx, receiver);
+
+    if append {
+        // A homogeneous indexed-array class pushes and stores the array back; any other common
+        // type uses the generic runtime append (valid EIR; degrades/fatals at runtime instead of a
+        // silent lost write).
+        if let Some(array_ty) = common_ty.clone().filter(is_indexed_array_type) {
+            let array_value = load_dynamic_static_property_as(ctx, receiver, name, array_ty, span);
+            let value = lower_expr(ctx, value);
+            ctx.emit_void(
+                Op::ArrayPush,
+                vec![array_value.value, value.value],
+                None,
+                Op::ArrayPush.default_effects(),
+                Some(span),
+            );
+            store_dynamic_static_property(ctx, receiver, name, array_value.value, span);
+            return;
+        }
+        let array_ty = common_ty
+            .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty))
+            .unwrap_or(PhpType::Mixed);
+        let array_value = load_dynamic_static_property_as(ctx, receiver, name, array_ty, span);
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![array_value.value, value.value],
+            None,
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        return;
+    }
+
+    if let Some(index) = index {
+        lower_dynamic_static_array_element_set(
+            ctx, receiver, name, common_ty, index, value, span,
+        );
+        return;
+    }
+
+    let value = lower_expr(ctx, value);
+    store_dynamic_static_property(ctx, receiver, name, value.value, span);
+}
+
+/// Lowers the array-element write of a dynamic-named static property (`self::${$n}[$k] = v`).
+///
+/// Mirrors the static-named indexed `lower_static_property_array_assign`: a homogeneous
+/// indexed-array class loads the array, mutates it in place with `ArraySet`, then stores it back
+/// (codegen suppresses `release_previous` because the stored value is the same loaded array). Any
+/// other common type uses the generic runtime array-access call (valid EIR). A string key into an
+/// `Array`-typed static property remains a loud codegen error, exactly as for the static-named
+/// path — associative storage in a typed `array` static property is a pre-existing, shared
+/// limitation.
+fn lower_dynamic_static_array_element_set(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    name: crate::ir::ValueId,
+    common_ty: Option<PhpType>,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+) {
+    if let Some(array_ty) = common_ty.clone().filter(is_indexed_array_type) {
+        let element_array_ty = array_ty.clone();
+        let array_value = load_dynamic_static_property_as(ctx, receiver, name, array_ty, span);
+        let index_value = lower_expr(ctx, index);
+        let value_value = lower_expr(ctx, value);
+        let value_value =
+            coerce_indexed_array_set_value(ctx, &element_array_ty, value_value, Some(span));
+        ctx.emit_void(
+            Op::ArraySet,
+            vec![array_value.value, index_value.value, value_value.value],
+            None,
+            Op::ArraySet.default_effects(),
+            Some(span),
+        );
+        store_dynamic_static_property(ctx, receiver, name, array_value.value, span);
+        return;
+    }
+
+    let array_ty = common_ty
+        .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty))
+        .unwrap_or(PhpType::Mixed);
+    let array_value = load_dynamic_static_property_as(ctx, receiver, name, array_ty, span);
+    let index_value = lower_expr(ctx, index);
+    let value_value = lower_expr(ctx, value);
+    ctx.emit_void(
+        Op::RuntimeCall,
+        vec![array_value.value, index_value.value, value_value.value],
+        None,
+        effects_lookup::runtime_effects(),
+        Some(span),
+    );
+}
+
+/// Loads a dynamic-named static property (`self::${$n}`) using a pre-computed runtime name value.
+///
+/// `name` is a `Str` SSA value produced once by the caller. The receiver's concrete class name is
+/// carried as the immediate so codegen can enumerate that class's declared static properties.
+fn load_dynamic_static_property_as(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    name: crate::ir::ValueId,
+    php_type: PhpType,
+    span: Span,
+) -> LoweredValue {
+    let class_name =
+        static_receiver_class_name(ctx, receiver).unwrap_or_else(|| receiver_name(receiver));
+    let data = ctx.intern_string(&class_name);
+    ctx.emit_value(
+        Op::LoadDynamicStaticProperty,
+        vec![name],
+        Some(Immediate::Data(data)),
+        php_type,
+        Op::LoadDynamicStaticProperty.default_effects(),
+        Some(span),
+    )
+}
+
+/// Stores a value into a dynamic-named static property (`self::${$n} = v`) using a pre-computed
+/// runtime name value. The receiver's concrete class name is the immediate; codegen dispatches on
+/// the runtime name across the class's static properties and writes the matching symbol.
+fn store_dynamic_static_property(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    name: crate::ir::ValueId,
+    value: crate::ir::ValueId,
+    span: Span,
+) {
+    let class_name =
+        static_receiver_class_name(ctx, receiver).unwrap_or_else(|| receiver_name(receiver));
+    let data = ctx.intern_string(&class_name);
+    ctx.emit_void(
+        Op::StoreDynamicStaticProperty,
+        vec![name, value],
+        Some(Immediate::Data(data)),
+        Op::StoreDynamicStaticProperty.default_effects(),
+        Some(span),
+    );
+}
+
+/// Returns the common declared type of a receiver class's static properties, or `Mixed` when they
+/// are heterogeneous. Used to pick the load/store shape for a dynamic-named static property write.
+/// Returns `None` when the receiver class is not statically resolvable.
+fn dynamic_static_property_common_type(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+) -> Option<PhpType> {
+    let class_name = static_receiver_class_name(ctx, receiver)?;
+    let class_info = ctx.classes.get(class_name.as_str())?;
+    let mut types = class_info
+        .static_properties
+        .iter()
+        .map(|(_, property_ty)| normalize_value_php_type(property_ty.codegen_repr()));
+    let first = types.next()?;
+    if types.all(|ty| ty == first) {
+        Some(first)
+    } else {
+        Some(PhpType::Mixed)
+    }
 }
 
 /// Lowers `$object->prop[] = value` (array append onto an object property).

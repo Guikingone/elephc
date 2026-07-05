@@ -153,6 +153,19 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             index: walk_expr(index, pass),
             value: walk_expr(value, pass),
         },
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            append,
+            value,
+        } => StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property: Box::new(walk_expr(*property, pass)),
+            index: index.map(|i| walk_expr(i, pass)),
+            append,
+            value: walk_expr(value, pass),
+        },
         StmtKind::If {
             condition,
             then_body,

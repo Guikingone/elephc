@@ -342,6 +342,13 @@ fn discover_stmt(
             discover_expr(index, base_dir, loaded_paths, include_chain, state, output)?;
             discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
         }
+        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
+            discover_expr(property, base_dir, loaded_paths, include_chain, state, output)?;
+            if let Some(index) = index {
+                discover_expr(index, base_dir, loaded_paths, include_chain, state, output)?;
+            }
+            discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             discover_expr(target, base_dir, loaded_paths, include_chain, state, output)?;
             discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;

@@ -401,6 +401,11 @@ fn stmt_refs_listid(stmt: &Stmt) -> bool {
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_refs_listid(index) || expr_refs_listid(value)
         }
+        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
+            expr_refs_listid(property)
+                || index.as_ref().is_some_and(expr_refs_listid)
+                || expr_refs_listid(value)
+        }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs_listid(object) || expr_refs_listid(value)
         }

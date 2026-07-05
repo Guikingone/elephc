@@ -310,6 +310,13 @@ pub fn collect_local_vars(
                 collect_assignment_expr_vars(index, ctx, sig);
                 collect_assignment_expr_vars(value, ctx, sig);
             }
+            StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
+                collect_assignment_expr_vars(property, ctx, sig);
+                if let Some(index) = index {
+                    collect_assignment_expr_vars(index, ctx, sig);
+                }
+                collect_assignment_expr_vars(value, ctx, sig);
+            }
             StmtKind::ArrayPush { value, .. }
             | StmtKind::StaticPropertyAssign { value, .. }
             | StmtKind::StaticPropertyArrayPush { value, .. }

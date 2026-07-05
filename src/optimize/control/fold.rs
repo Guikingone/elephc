@@ -309,6 +309,19 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             index: fold_expr(index),
             value: fold_expr(value),
         },
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            append,
+            value,
+        } => StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property: Box::new(fold_expr(*property)),
+            index: index.map(fold_expr),
+            append,
+            value: fold_expr(value),
+        },
         StmtKind::PropertyArrayPush {
             object,
             property,

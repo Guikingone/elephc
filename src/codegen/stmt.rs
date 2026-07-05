@@ -414,6 +414,9 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                 data,
             );
         }
+        StmtKind::DynamicStaticPropertyWrite { .. } => {
+            unreachable!("DynamicStaticPropertyWrite is lowered only through the EIR backend")
+        }
         StmtKind::PropertyArrayPush {
             object,
             property,

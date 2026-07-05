@@ -798,6 +798,13 @@ fn collect_dynamic_object_factory_classes_in_stmt(
             collect_dynamic_object_factory_classes_in_expr(index, classes, names);
             collect_dynamic_object_factory_classes_in_expr(value, classes, names);
         }
+        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
+            collect_dynamic_object_factory_classes_in_expr(property, classes, names);
+            if let Some(index) = index {
+                collect_dynamic_object_factory_classes_in_expr(index, classes, names);
+            }
+            collect_dynamic_object_factory_classes_in_expr(value, classes, names);
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             collect_dynamic_object_factory_classes_in_expr(target, classes, names);
             collect_dynamic_object_factory_classes_in_expr(value, classes, names);

@@ -557,6 +557,18 @@ fn stmt_refs_image(stmt: &Stmt) -> bool {
             value,
             ..
         } => receiver_refs_image(receiver) || expr_refs_image(index) || expr_refs_image(value),
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            value,
+            ..
+        } => {
+            receiver_refs_image(receiver)
+                || expr_refs_image(property)
+                || index.as_ref().is_some_and(expr_refs_image)
+                || expr_refs_image(value)
+        }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs_image(object) || expr_refs_image(value)
         }

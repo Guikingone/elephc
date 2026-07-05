@@ -215,6 +215,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::InitStaticLocal => static_locals::lower_init_static_local(ctx, &inst),
         Op::LoadStaticProperty => static_properties::lower_load_static_property(ctx, &inst),
         Op::LoadDynamicStaticProperty => static_properties::lower_load_dynamic_static_property(ctx, &inst),
+        Op::StoreDynamicStaticProperty => static_properties::lower_store_dynamic_static_property(ctx, &inst),
         Op::LoadStaticPropRefCell => static_properties::lower_load_static_prop_ref_cell(ctx, &inst),
         Op::StoreStaticProperty => static_properties::lower_store_static_property(ctx, &inst),
         Op::Call => lower_direct_call(ctx, &inst),

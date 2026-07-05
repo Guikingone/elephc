@@ -438,6 +438,10 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
             check_count(inst_id, inst, 1, "1")?;
             check_operand_type(function, inst_id, inst, 0, IrType::Str, "Str")
         }
+        StoreDynamicStaticProperty => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Str, "Str")
+        }
         PropGet | PropSet | LoadPropRefCell | BindPropRefCell | DynamicPropGet | DynamicPropSet
         | NullsafePropGet
         | NullsafeMethodCall | MethodLookup | MethodCall | InstanceOf | InstanceOfDynamic => {

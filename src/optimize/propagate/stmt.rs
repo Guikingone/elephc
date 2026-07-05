@@ -516,6 +516,36 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
                 next_env,
             )
         }
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            append,
+            value,
+        } => {
+            let property = propagate_expr(*property, &env);
+            let index = index.map(|i| propagate_expr(i, &env));
+            let value = propagate_expr(value, &env);
+            let mut effect_exprs: Vec<&Expr> = vec![&property];
+            if let Some(index) = &index {
+                effect_exprs.push(index);
+            }
+            effect_exprs.push(&value);
+            let next_env = env_after_expr_side_effects(env, &effect_exprs);
+            (
+                Stmt::new(
+                    StmtKind::DynamicStaticPropertyWrite {
+                        receiver,
+                        property: Box::new(property),
+                        index,
+                        append,
+                        value,
+                    },
+                    span,
+                ),
+                next_env,
+            )
+        }
         StmtKind::PropertyArrayPush {
             object,
             property,

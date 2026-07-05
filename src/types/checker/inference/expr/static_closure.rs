@@ -81,6 +81,13 @@ fn stmt_must_not_use_this(stmt: &Stmt, span: Span) -> Result<(), CompileError> {
             expr_must_not_use_this(index, span)?;
             expr_must_not_use_this(value, span)
         }
+        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
+            expr_must_not_use_this(property, span)?;
+            if let Some(index) = index {
+                expr_must_not_use_this(index, span)?;
+            }
+            expr_must_not_use_this(value, span)
+        }
         StmtKind::If {
             condition,
             then_body,

@@ -416,3 +416,98 @@ echo Reg::count('warnings');
     );
     assert_eq!(out, "2|1");
 }
+
+/// Verifies a direct write through a dynamic-named static property (`self::${$n} = v`) stores into
+/// the property selected by the runtime name, choosing the right candidate among ≥2.
+#[test]
+fn test_dynamic_static_property_write() {
+    let out = compile_and_run(
+        r#"<?php
+class Cfg {
+    public static int $x = 0;
+    public static int $y = 0;
+}
+$n = 'x';
+Cfg::${$n} = 5;
+$m = 'y';
+Cfg::${$m} = 9;
+echo Cfg::$x;
+echo "|";
+echo Cfg::$y;
+"#,
+    );
+    assert_eq!(out, "5|9");
+}
+
+/// Verifies a dynamic-named static property write leaves no leaked heap: the runtime name string
+/// and dispatch temporaries are function-local, and scalar static storage frees cleanly at exit.
+#[test]
+fn test_dynamic_static_property_write_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Cfg {
+    public static int $a = 0;
+    public static int $b = 0;
+}
+function setit(string $n, int $v): void { Cfg::${$n} = $v; }
+setit('a', 7);
+setit('b', 9);
+echo Cfg::$a;
+echo Cfg::$b;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "79", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies an array-element write through a dynamic-named static property
+/// (`self::${$n}[$k] = v`) mutates and re-persists the selected array, choosing the right
+/// candidate among ≥2 indexed-array properties.
+#[test]
+fn test_dynamic_static_property_array_element_write() {
+    let out = compile_and_run(
+        r#"<?php
+class Store {
+    public static array $cache = [];
+    public static array $other = [];
+}
+$n = 'cache';
+Store::${$n}[0] = 'v';
+Store::${$n}[1] = 'x';
+$n2 = 'other';
+Store::${$n2}[0] = 'w';
+echo Store::$cache[0];
+echo Store::$cache[1];
+echo "|";
+echo Store::$other[0];
+"#,
+    );
+    assert_eq!(out, "vx|w");
+}
+
+/// Verifies an array push through a dynamic-named static property (`self::${$n}[] = v`) appends to
+/// the selected array and re-persists it, then a later indexed write updates it in place.
+#[test]
+fn test_dynamic_static_property_array_push() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    public static array $items = [];
+    public static array $tags = [];
+}
+$n = 'items';
+Bag::${$n}[] = 'a';
+Bag::${$n}[] = 'b';
+Bag::${$n}[0] = 'z';
+echo Bag::$items[0];
+echo Bag::$items[1];
+echo count(Bag::$items);
+"#,
+    );
+    assert_eq!(out, "zb2");
+}

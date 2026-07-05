@@ -181,6 +181,19 @@ impl HoistCtx<'_> {
                 index: self.hoist_expr(index)?,
                 value: self.hoist_expr(value)?,
             },
+            StmtKind::DynamicStaticPropertyWrite {
+                receiver,
+                property,
+                index,
+                append,
+                value,
+            } => StmtKind::DynamicStaticPropertyWrite {
+                receiver,
+                property: self.hoist_boxed(property)?,
+                index: index.map(|i| self.hoist_expr(i)).transpose()?,
+                append,
+                value: self.hoist_expr(value)?,
+            },
             StmtKind::PropertyAssign {
                 object,
                 property,

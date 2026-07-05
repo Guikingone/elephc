@@ -1779,6 +1779,15 @@ fn non_local_assignment_stmt_kind(target: &Expr, value: &Expr) -> Option<StmtKin
                     value: value.clone(),
                 })
             }
+            ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+                Some(StmtKind::DynamicStaticPropertyWrite {
+                    receiver: receiver.clone(),
+                    property: property.clone(),
+                    index: Some((**index).clone()),
+                    append: false,
+                    value: value.clone(),
+                })
+            }
             _ => Some(StmtKind::NestedArrayAssign {
                 target: target.clone(),
                 value: value.clone(),
@@ -1793,6 +1802,15 @@ fn non_local_assignment_stmt_kind(target: &Expr, value: &Expr) -> Option<StmtKin
             Some(StmtKind::StaticPropertyAssign {
                 receiver: receiver.clone(),
                 property: property.clone(),
+                value: value.clone(),
+            })
+        }
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            Some(StmtKind::DynamicStaticPropertyWrite {
+                receiver: receiver.clone(),
+                property: property.clone(),
+                index: None,
+                append: false,
                 value: value.clone(),
             })
         }

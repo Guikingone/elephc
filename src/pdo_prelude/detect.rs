@@ -485,6 +485,18 @@ fn stmt_refs_pdo(stmt: &Stmt) -> bool {
             value,
             ..
         } => receiver_refs_pdo(receiver) || expr_refs_pdo(index) || expr_refs_pdo(value),
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            value,
+            ..
+        } => {
+            receiver_refs_pdo(receiver)
+                || expr_refs_pdo(property)
+                || index.as_ref().is_some_and(expr_refs_pdo)
+                || expr_refs_pdo(value)
+        }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs_pdo(object) || expr_refs_pdo(value)
         }

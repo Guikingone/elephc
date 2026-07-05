@@ -389,6 +389,11 @@ fn stmt_refs_tz(stmt: &Stmt) -> bool {
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_refs_tz(index) || expr_refs_tz(value)
         }
+        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
+            expr_refs_tz(property)
+                || index.as_ref().is_some_and(expr_refs_tz)
+                || expr_refs_tz(value)
+        }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs_tz(object) || expr_refs_tz(value)
         }
