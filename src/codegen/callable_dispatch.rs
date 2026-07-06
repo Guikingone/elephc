@@ -805,6 +805,17 @@ fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
             | "is_a" | "is_subclass_of"
             | "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits"
             | "function_exists"
+            // random_bytes is an EIR-only builtin: its lowering lives in the active
+            // EIR backend (`__rt_random_bytes`) and it has no frozen legacy-backend
+            // emitter in src/codegen/builtins/. When the wrapper body emitted by
+            // function_wrapper_body() calls it, the legacy backend falls through to a
+            // user-function-call path and emits an unresolved _fn_random_bytes
+            // reference that the linker cannot satisfy. It has no legacy first-class
+            // callable path (unlike random_int, which the legacy backend lowers to
+            // `__rt_random_uniform`), so excluding it here matches every other
+            // EIR-only builtin above. Direct calls and EIR first-class-callable use
+            // still work through the EIR path.
+            | "random_bytes"
     )
 }
 

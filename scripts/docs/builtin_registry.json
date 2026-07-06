@@ -13345,6 +13345,51 @@
   },
   {
     "area": "Math",
+    "canonical_name": "random_bytes",
+    "description": "Get a cryptographically secure random string of the given length.",
+    "in_catalog": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/math/random.rs",
+      "codegen_function": "lower_random_bytes",
+      "codegen_line": 57,
+      "notes": [
+        "Lowers `random_bytes()` into an owned CSPRNG binary string of the given length.",
+        "Materializes the single length operand as an integer, passes it to the",
+        "`__rt_random_bytes` runtime helper (length in `x0` on AArch64, `rdi` on",
+        "x86_64), and stores the returned owned string result (`x1`/`x2` on AArch64,",
+        "`rax`/`rdx` on x86_64) into the instruction's result slot. The runtime helper",
+        "owns allocation, the cryptographic fill, and the fatal paths for a length",
+        "below 1 or an unavailable entropy source."
+      ],
+      "runtime_helpers": [
+        "__rt_random_bytes"
+      ],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/random_bytes.rs",
+      "sig_line": null
+    },
+    "name": "random_bytes",
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "length",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "random_bytes",
+    "sub_area": "Math"
+  },
+  {
+    "area": "Math",
     "canonical_name": "random_int",
     "description": "Get a cryptographically secure, uniformly selected integer.",
     "in_catalog": true,
@@ -13358,7 +13403,9 @@
       "notes": [
         "Lowers `random_int()` over an inclusive integer range."
       ],
-      "runtime_helpers": [],
+      "runtime_helpers": [
+        "__rt_random_bytes"
+      ],
       "sig_arm": null,
       "sig_file": "src/builtins/math/random_int.rs",
       "sig_line": null
