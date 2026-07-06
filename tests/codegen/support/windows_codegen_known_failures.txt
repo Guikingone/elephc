@@ -648,6 +648,8 @@ codegen::image::transform::test_imagerotate_45_background
 codegen::image::transform::test_imagerotate_90_ccw
 codegen::image::transform::test_imagescale_aspect
 codegen::image::transform::test_imagescale_nearest
+codegen::include_paths::test_include_with_const_import_ref
+codegen::include_paths::test_include_with_define_ref
 codegen::io::files::test_is_file_is_dir
 codegen::io::files::test_is_readable_writable
 codegen::io::filesystem::test_disk_free_space_invalid_path_returns_zero

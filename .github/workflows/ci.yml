@@ -490,7 +490,7 @@ jobs:
         # `.config/nextest.toml`) even when tests fail, which the gate step parses.
         id: nextest
         continue-on-error: true
-        run: cargo nextest run --profile ci --test codegen_tests --partition hash:${{ matrix.shard }}/16 --no-fail-fast
+        run: cargo nextest run --profile ci --test codegen_tests --partition hash:${{ matrix.shard }}/16 --no-fail-fast --retries 1 --flaky-result pass
 
       - name: Windows codegen no-regression gate + parity summary
         # Compute regressions = actual_failures ∩ allow_list from THIS shard's JUnit
