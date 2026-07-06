@@ -246,6 +246,7 @@ jobs:
       - image-api-sync
       - builtins-docs-sync
       - windows-pe-cross-compile
+      - windows-codegen-gate
     if: always()
     steps:
       - name: Verify test jobs
@@ -255,6 +256,7 @@ jobs:
           test "${{ needs.image-api-sync.result }}" = "success"
           test "${{ needs.builtins-docs-sync.result }}" = "success"
           test "${{ needs.windows-pe-cross-compile.result }}" = "success"
+          test "${{ needs.windows-codegen-gate.result }}" = "success"
 
   benchmark:
     name: Benchmark Suite
@@ -384,21 +386,28 @@ jobs:
           cargo run -- --target windows-x86_64 /tmp/concat.php
           file /tmp/concat.exe | grep -q "PE32+ executable"
 
-  # TEMPORARY parity-measurement job (informational only): runs the full codegen
-  # test suite cross-compiled to windows-x86_64 and executed under Wine, to measure
-  # how many fixtures already pass on Windows. It is intentionally NON-BLOCKING
-  # (`continue-on-error: true`, and deliberately NOT listed in the `test` gate's
-  # `needs`), so a red result here never blocks a merge. Interpreting results: a
-  # test that "passes" here is either a real Windows pass OR a graceful skip
-  # (harness `ELEPHC_TEST_TARGET` skip when MinGW/Wine are missing, or a raw-asm
-  # exit-harness fixture that cannot target Windows); a "failure" is a genuine
-  # Windows codegen/runtime divergence (the `ci` nextest profile's 60s slow-timeout
-  # kills and reports hung binaries, so a crashing `.exe` cannot stall a shard).
-  # Remove this job once Windows is promoted to a first-class supported target.
+  # Windows codegen parity MEASUREMENT + no-regression GATE (unified, sharded 16x).
+  # Runs the full codegen suite cross-compiled to windows-x86_64 and executed under
+  # Wine, then does two things from that single run:
+  #   1. MEASURE (informational): emits passed / failed / parity% for the shard to
+  #      the job summary, so the overall Windows parity picture stays visible.
+  #   2. GATE (blocking): fails the shard iff any test in the curated allow-list
+  #      (`tests/codegen/support/windows_codegen_allowlist.txt`, the tests that
+  #      currently PASS on Windows) failed. Tests NOT in the allow-list -- the known
+  #      failures AND any brand-new / native-only fixtures -- never fail the gate, so
+  #      Windows parity can only improve, never regress.
+  # The nextest run step is `continue-on-error: true` so ordinary (non-allow-listed)
+  # failures do not fail the job; only the post-run gate step decides pass/fail via
+  # `actual_failures ∩ allow_list`. The aggregating `windows-codegen-gate` job (which
+  # needs all 16 shards) is the single entry wired into the `test` gate.
+  # Interpreting a "pass": a real Windows pass OR a graceful skip (harness skip when
+  # MinGW/Wine are missing, or a raw-asm exit-harness fixture that cannot target
+  # Windows). A crashing `.exe` cannot stall a shard: the `ci` profile's 60s
+  # slow-timeout kills and reports a hung binary as a failure. Refresh the allow-list
+  # as parity grows (see docs/compiling/targets.md, "Windows codegen parity gate").
   windows-codegen-parity:
-    name: Windows Codegen Parity (measurement ${{ matrix.shard }}/16)
+    name: Windows Codegen Parity + Gate (${{ matrix.shard }}/16)
     runs-on: ubuntu-24.04
-    continue-on-error: true
     timeout-minutes: 75
     strategy:
       fail-fast: false
@@ -473,6 +482,52 @@ jobs:
         run: cargo build $BRIDGE_CRATES
 
       - name: Run codegen test shard under windows-x86_64
-        # `--no-fail-fast` so the shard measures every fixture; the job's
-        # `continue-on-error` keeps a red shard from failing the workflow.
+        # `--no-fail-fast` so the shard measures every fixture. `continue-on-error`
+        # is on the STEP (not the job): ordinary test failures -- including the
+        # ~1874 known Windows failures -- must not fail the job here, because the
+        # gate step below is the sole arbiter of pass/fail. nextest still writes its
+        # JUnit report (`target/nextest/ci/junit.xml`, configured in
+        # `.config/nextest.toml`) even when tests fail, which the gate step parses.
+        id: nextest
+        continue-on-error: true
         run: cargo nextest run --profile ci --test codegen_tests --partition hash:${{ matrix.shard }}/16 --no-fail-fast
+
+      - name: Windows codegen no-regression gate + parity summary
+        # Compute regressions = actual_failures ∩ allow_list from THIS shard's JUnit
+        # report. Emits passed / failed / parity% to the job summary (measurement),
+        # then exits non-zero -- failing the shard -- iff any allow-listed test
+        # regressed. Non-allow-listed failures (known failures + brand-new tests)
+        # are ignored, so this never blocks native-only fixtures.
+        run: |
+          python3 scripts/gen_windows_codegen_allowlist.py gate \
+            --allowlist tests/codegen/support/windows_codegen_allowlist.txt \
+            --junit target/nextest/ci/junit.xml \
+            --shard "${{ matrix.shard }}/16"
+
+      - name: Upload shard JUnit report
+        # Retained so a maintainer can refresh the allow-list from a real parity run
+        # by feeding these 16 reports to `gen_windows_codegen_allowlist.py generate`.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-codegen-junit-${{ matrix.shard }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: warn
+
+  # Aggregating gate: a single job that is green iff every sharded
+  # `windows-codegen-parity` job was green (i.e. no allow-listed Windows codegen
+  # test regressed on any shard). A matrix job's `result` in `needs` is `success`
+  # only when ALL of its shards succeeded, so this collapses the 16 shards into the
+  # one entry wired into the `test` gate's `needs` below. Kept separate from the
+  # measurement/gate shards so the `test` gate lists one dependency, not sixteen.
+  windows-codegen-gate:
+    name: Windows Codegen No-Regression Gate
+    runs-on: ubuntu-latest
+    needs:
+      - windows-codegen-parity
+    if: always()
+    steps:
+      - name: Verify no allow-listed Windows codegen regressions
+        run: |
+          echo "windows-codegen-parity result: ${{ needs.windows-codegen-parity.result }}"
+          test "${{ needs.windows-codegen-parity.result }}" = "success"
