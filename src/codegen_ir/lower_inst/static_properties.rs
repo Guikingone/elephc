@@ -439,24 +439,45 @@ fn ensure_static_property_ref_type_supported(php_type: &PhpType, inst: &Instruct
 }
 
 /// Returns true when a store writes back the same static slot it just loaded.
+///
+/// Traces the stored value's defining instruction back through the container-threading opcodes
+/// that carry the loaded static-property container forward without replacing it —
+/// `ArrayToHash` (indexed→hash de-pack), `HashRefElement` and `HashBindRefElement`
+/// (element reference-binding, `self::$a[$dir] = &self::$a[$k]`) — following operand 0 (the
+/// container) until it reaches a `LoadStaticProperty`. When that load names the same symbol as
+/// the store, the store is a same-container round-trip and `release_previous` must be suppressed
+/// (the old value is the very container being written back — releasing it would double-free).
 fn value_is_same_static_property_load(
     ctx: &FunctionContext<'_>,
     value: ValueId,
     slot: &StaticPropertySlot,
 ) -> Result<bool> {
-    let Some(value_ref) = ctx.function.value(value) else {
-        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
-    };
-    let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Ok(false);
-    };
-    let Some(inst_ref) = ctx.function.instruction(inst) else {
-        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
-    };
-    if inst_ref.op != crate::ir::Op::LoadStaticProperty {
-        return Ok(false);
+    use crate::ir::Op;
+    let mut current = value;
+    loop {
+        let Some(value_ref) = ctx.function.value(current) else {
+            return Err(CodegenIrError::missing_entry("value", current.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(false);
+        };
+        let Some(inst_ref) = ctx.function.instruction(inst) else {
+            return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+        };
+        match inst_ref.op {
+            Op::LoadStaticProperty => {
+                return Ok(resolve_static_property_slot(ctx, inst_ref)?.symbol == slot.symbol);
+            }
+            Op::ArrayToHash | Op::HashRefElement | Op::HashBindRefElement => {
+                // These thread the loaded container through operand 0 (the array/hash) unchanged.
+                match inst_ref.operands.first() {
+                    Some(&operand) => current = operand,
+                    None => return Ok(false),
+                }
+            }
+            _ => return Ok(false),
+        }
     }
-    Ok(resolve_static_property_slot(ctx, inst_ref)?.symbol == slot.symbol)
 }
 
 /// Resolves a static property immediate into declaring-class symbol metadata.

@@ -451,10 +451,98 @@ fn lower_ref_assign_to_target(
                 lower_property_assign(ctx, object, property, source, span);
             }
         },
+        // `self::$a[$dir] = &self::$a[$k]`: aliasing a static-property array element. The checker has
+        // validated both operands (same static array) and de-packed the property to a hash type.
+        ExprKind::ArrayAccess { array, index }
+            if matches!(array.kind, ExprKind::StaticPropertyAccess { .. }) =>
+        {
+            if let ExprKind::StaticPropertyAccess { receiver, property } = &array.kind {
+                lower_ref_assign_static_prop_element(
+                    ctx, receiver, property, index, source, span,
+                );
+            }
+        }
         _ => {
             lower_expr(ctx, source);
         }
     }
+}
+
+/// Lowers `self::$a[$dir] = &self::$a[$k]`: reference-binds one element of a static-property array
+/// as an alias of another element of the SAME static array (SLICE 2/3, the DebugClassLoader gate).
+///
+/// The target static property has been de-packed to a hash type by the checker, so it is loaded
+/// once as the promoted `AssocArray`. The source element `&self::$a[$k]` is promoted to a kind-6
+/// reference cell via `HashRefElement` (reusing SLICE 1's machinery over the static-prop hash), and
+/// that cell is bound into `hash[$dir]` via the new `HashBindRefElement`. The SAME loaded hash is
+/// threaded load → (ArrayToHash) → HashRefElement($k) → HashBindRefElement($dir) → store, so codegen
+/// suppresses the store's `release_previous` for this round-trip of the same container.
+fn lower_ref_assign_static_prop_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    target_index: &Expr,
+    source: &Expr,
+    span: Span,
+) {
+    // The checker guarantees the source is `&self::$SRC[$k]` naming the SAME static property.
+    let ExprKind::ArrayAccess {
+        index: source_index,
+        ..
+    } = &source.kind
+    else {
+        // Defensive: the checker rejects any other source shape; evaluate for side effects.
+        lower_expr(ctx, source);
+        return;
+    };
+
+    // Load the (de-packed) static-property array once as a hash. If the runtime value is still an
+    // indexed array, promote it in place with `ArrayToHash` (Zend de-packs on reference-take).
+    let hash_ty = static_property_type(ctx, receiver, property).unwrap_or(PhpType::Mixed);
+    let mut hash = load_static_property_as(ctx, receiver, property, hash_ty, span);
+    if let IrType::Heap(IrHeapKind::Array) = hash.ir_type {
+        let current_ty = ctx.builder.value_php_type(hash.value);
+        let element_ty = reference_element_type(&current_ty);
+        let assoc_ty = promoted_assoc_array_type(current_ty, element_ty);
+        hash = ctx.emit_value(
+            Op::ArrayToHash,
+            vec![hash.value],
+            None,
+            assoc_ty,
+            Op::ArrayToHash.default_effects(),
+            Some(span),
+        );
+    }
+
+    // SOURCE `&self::$a[$k]`: promote the element at `$k` to a kind-6 reference cell over the SAME
+    // loaded hash, threading the possibly-relocated hash forward.
+    let element_ty = reference_element_type(&ctx.builder.value_php_type(hash.value));
+    let source_key = lower_expr(ctx, source_index);
+    let cell = ctx.emit_value(
+        Op::HashRefElement,
+        vec![hash.value, source_key.value],
+        None,
+        element_ty,
+        Op::HashRefElement.default_effects(),
+        Some(span),
+    );
+    let hash_ty_after = ctx.builder.value_php_type(hash.value);
+
+    // TARGET `self::$a[$dir]`: bind the shared cell into `hash[$dir]` with value-tag 11, threading
+    // the final relocated hash back for the store.
+    let target_key = lower_expr(ctx, target_index);
+    let bound_hash = ctx.emit_value(
+        Op::HashBindRefElement,
+        vec![hash.value, target_key.value, cell.value],
+        None,
+        hash_ty_after,
+        Op::HashBindRefElement.default_effects(),
+        Some(span),
+    );
+
+    // Store the mutated container back. Codegen suppresses `release_previous` because the stored
+    // value traces back to the just-loaded static property (same container round-trip).
+    store_static_property(ctx, receiver, property, bound_hash.value, span);
 }
 
 /// Lowers an `if` / `elseif` / `else` chain and terminates unreachable merge blocks explicitly.
@@ -2593,6 +2681,30 @@ fn lower_static_property_array_assign(
             Op::ArraySet.default_effects(),
             Some(span),
         );
+        store_static_property(ctx, receiver, property, property_value.value, span);
+        return;
+    }
+
+    // A string/int/mixed-key write into an ASSOCIATIVE static array — including one de-packed to a
+    // hash by a reference-alias (`self::$a[$dir] = &self::$a[$k]`). Mirror the local string-key
+    // hash write: load as a hash, `HashSet` in place, store the (possibly relocated) hash back.
+    // `HashSet` mutates operand 0 and codegen writes the relocation into its SSA home, so storing
+    // that same loaded value back is a same-container round-trip (codegen suppresses the release).
+    if let Some(property_ty) =
+        static_property_type(ctx, receiver, property).filter(is_assoc_array_type)
+    {
+        let property_value = load_static_property_as(ctx, receiver, property, property_ty, span);
+        let index = lower_expr(ctx, index);
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::HashSet,
+            vec![property_value.value, index.value, value.value],
+            None,
+            Op::HashSet.default_effects(),
+            Some(span),
+        );
+        release_persisted_string_operand(ctx, index, span);
+        release_persisted_string_operand(ctx, value, span);
         store_static_property(ctx, receiver, property, property_value.value, span);
         return;
     }

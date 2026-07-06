@@ -217,6 +217,13 @@ pub enum Op {
     /// shared cell pointer. Operands: the hash, then the key. Backed by `__rt_hash_ref_element`,
     /// which may relocate the hash; the backend writes the returned hash back to the array local.
     HashRefElement,
+    /// Binds a hash element as a reference alias of an existing kind-6 cell
+    /// (`self::$a[$dir] = &self::$a[$k]`) and yields the possibly-relocated hash. Operands: the
+    /// hash, the key, then the cell pointer. Backed by `__rt_hash_bind_ref_element`, which increfs
+    /// the cell, releases any prior value at the key, and writes the cell into `hash[key]` with
+    /// value-tag 11 (Reference). Distinct from `HashRefElement` (which *produces* a cell from an
+    /// element); this *consumes* a cell into an element.
+    HashBindRefElement,
     LoadGlobal,
     StoreGlobal,
     LoadStaticLocal,
@@ -489,6 +496,9 @@ impl Op {
             HashRefElement => {
                 E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::WRITES_LOCAL | E::REFCOUNT_OP
             }
+            HashBindRefElement => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::WRITES_LOCAL | E::REFCOUNT_OP
+            }
             LoadGlobal | LoadStaticProperty | LoadStaticPropRefCell | ScopedConstantGet | ClassAttrNames
             | ClassAttrArgs | ClassGetAttributes | CatchCurrent => E::READS_GLOBAL,
             StoreGlobal | StoreStaticLocal | StoreStaticProperty | InitStaticLocal | IncludeOnceMark
@@ -618,6 +628,7 @@ impl Op {
             ReleaseLocalRefCell => "release_local_ref_cell",
             AdoptRefCell => "adopt_ref_cell",
             HashRefElement => "hash_ref_element",
+            HashBindRefElement => "hash_bind_ref_element",
             LoadGlobal => "load_global",
             StoreGlobal => "store_global",
             LoadStaticLocal => "load_static_local",

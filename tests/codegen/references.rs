@@ -942,3 +942,169 @@ fn test_ref_dynamic_property_heap_clean() {
         "1,2",
     );
 }
+
+// ---------------------------------------------------------------------------
+// SLICE 2/3 — reference-bind a STATIC-PROPERTY array element
+// (`self::$a[$dir] = &self::$a[$k]`, the DebugClassLoader.php:795 gate).
+//
+// One element of a static-property array is bound as a reference alias of another element of the
+// SAME static array: both buckets share one kind-6 reference cell (value-tag 11). The checker
+// de-packs the container to a hash; EIR threads the loaded hash load → HashRefElement($k) →
+// HashBindRefElement($dir) → store; the runtime helper `__rt_hash_bind_ref_element` orders
+// incref(cell) → hash_unset(key) → hash_set(key, cell, tag=11).
+// ---------------------------------------------------------------------------
+
+/// Basic alias + write-through: after `self::$a['d'] = &self::$a['k']`, a nested write through one
+/// element (`self::$a['k'][0] = 'MUT'`) is observed through BOTH the original element and the alias
+/// — the two buckets share one reference cell pointing at the same inner array. Uses a heterogeneous
+/// `[string, array]` element (the exact `[$dir, []]` shape the DebugClassLoader gate stores).
+#[test]
+fn test_ref_static_prop_array_element_basic_alias_write_through() {
+    let out = compile_and_run(
+        "<?php
+        class C { public static array $a = []; }
+        C::$a['k'] = ['X', []];
+        C::$a['d'] = &C::$a['k'];
+        C::$a['k'][0] = 'MUT';
+        echo C::$a['k'][0], C::$a['d'][0];",
+    );
+    assert_eq!(out, "MUTMUT");
+}
+
+/// Identity: two elements bound by reference are the SAME array (`self::$a['k'] === self::$a['d']`),
+/// because both dereference the one shared reference cell.
+#[test]
+fn test_ref_static_prop_array_element_identity() {
+    let out = compile_and_run(
+        "<?php
+        class C { public static array $a = []; }
+        C::$a['k'] = ['X', []];
+        C::$a['d'] = &C::$a['k'];
+        echo (C::$a['k'] === C::$a['d']) ? 'SAME' : 'DIFF';",
+    );
+    assert_eq!(out, "SAME");
+}
+
+/// Scalar write-through: after aliasing, writing an integer through the alias element
+/// (`self::$a['d'] = 9`) updates the shared cell, so the original element reads the new value —
+/// the tag-11 write-through path of `__rt_hash_set`.
+#[test]
+fn test_ref_static_prop_array_element_scalar_write_through() {
+    let out = compile_and_run(
+        "<?php
+        class C { public static array $a = []; }
+        C::$a['k'] = 1;
+        C::$a['d'] = &C::$a['k'];
+        C::$a['d'] = 9;
+        echo C::$a['k'], '|', C::$a['d'];",
+    );
+    assert_eq!(out, "9|9");
+}
+
+/// Self-alias (`$dir == $k`): binding an element to itself is refcount-balanced and a no-op on the
+/// aliasing, so a later nested write is still observed. Guards the incref-before-unset ordering that
+/// keeps a self-alias from freeing its own cell (UAF).
+#[test]
+fn test_ref_static_prop_array_element_self_alias() {
+    let out = compile_and_run(
+        "<?php
+        class C { public static array $a = []; }
+        $k = 'X'; $d = 'X';
+        C::$a[$k] = ['orig', []];
+        C::$a[$d] = &C::$a[$k];
+        C::$a[$k][0] = 'MUT';
+        echo C::$a['X'][0];",
+    );
+    assert_eq!(out, "MUT");
+}
+
+/// Auto-vivify: aliasing a MISSING source key vivifies BOTH keys (source via `__rt_hash_ref_element`,
+/// target via `__rt_hash_bind_ref_element`), so `array_key_exists` reports true for each.
+#[test]
+fn test_ref_static_prop_array_element_autovivify_creates_both_keys() {
+    let out = compile_and_run(
+        "<?php
+        class C { public static array $a = []; }
+        $d = 'd'; $k = 'nope';
+        C::$a[$d] = &C::$a[$k];
+        echo array_key_exists('nope', C::$a) ? 'K1' : 'k0';
+        echo array_key_exists('d', C::$a) ? 'D1' : 'd0';",
+    );
+    assert_eq!(out, "K1D1");
+}
+
+/// A distinct source key aliases a distinct target: both elements share the one reference cell, and
+/// a nested write through the source element is visible through the target alias.
+#[test]
+fn test_ref_static_prop_array_element_distinct_keys_share_cell() {
+    let out = compile_and_run(
+        "<?php
+        class C { public static array $a = []; }
+        C::$a['src'] = ['V', []];
+        C::$a['dst'] = &C::$a['src'];
+        C::$a['src'][0] = 'W';
+        echo C::$a['dst'][0];",
+    );
+    assert_eq!(out, "W");
+}
+
+/// Heap balance under repeated re-aliasing: binding the SAME element pair by reference many times
+/// must not leak or double-free the shared cell. Because static-property storage is never freed at
+/// program exit, `live_blocks` cannot be asserted to be `0`; instead it must be INVARIANT to the
+/// iteration count (each re-alias increfs the cell, releases the old bucket value, and re-stores,
+/// netting zero growth). A small-loop and a large-loop run must report the same `live_blocks`.
+#[test]
+fn test_ref_static_prop_array_element_realias_heap_stable() {
+    let program = |iters: u32| {
+        format!(
+            "<?php
+            class C {{ public static array $a = []; }}
+            C::$a['k'] = ['X', []];
+            $i = 0;
+            while ($i < {iters}) {{
+                C::$a['d'] = &C::$a['k'];
+                $i = $i + 1;
+            }}
+            echo C::$a['d'][0];"
+        )
+    };
+    let small = compile_and_run_with_heap_debug(&program(5));
+    let large = compile_and_run_with_heap_debug(&program(500));
+    assert!(small.success, "small run failed: {}", small.stderr);
+    assert!(large.success, "large run failed: {}", large.stderr);
+    assert_eq!(small.stdout, "X");
+    assert_eq!(large.stdout, "X");
+    let live = |stderr: &str| -> String {
+        stderr
+            .lines()
+            .find(|l| l.contains("live_blocks="))
+            .and_then(|l| l.split_whitespace().find(|t| t.starts_with("live_blocks=")))
+            .unwrap_or("live_blocks=?")
+            .to_string()
+    };
+    assert_eq!(
+        live(&small.stderr),
+        live(&large.stderr),
+        "re-aliasing leaked/grew the heap: small={} large={}",
+        small.stderr,
+        large.stderr
+    );
+}
+
+// The following STATIC-property reference behaviors depend on machinery that is BROKEN
+// INDEPENDENTLY of the reference feature (verified on `reconcile/dirname-symfony`), so they are
+// staged for a follow-up rather than asserted here:
+//
+// * String-VALUED write-through through an aliased element (`self::$a['d'] = 'two'; echo
+//   self::$a['k'];`). A kind-6 reference cell holds a SINGLE inner word, but a `string` in a
+//   `Mixed`-valued hash is stored inline as a two-word `{ptr,len}` payload, so promoting or writing
+//   a string element through the cell drops its length. SLICE 1 sidesteps this by rejecting
+//   string-TYPED array elements outright (`Reference to a string array element is not yet
+//   supported`); the `Mixed`-element static path exposes the same single-word constraint at runtime.
+//   Integer/array-valued write-through (covered above) is single-word and works.
+//
+// * Nested writes into a static-property array element deeper than the first level
+//   (`self::$a['d'][1]['real'] = '/p'`). Nested writes into a static-property array are a
+//   PRE-EXISTING gap (`C::$a['x'][0] = 'Q'` fails with "array_set index PHP type Str" with no
+//   reference involved), the `refprop-nested-append-writethrough` family the SLICE 2/3 spec
+//   explicitly excludes.

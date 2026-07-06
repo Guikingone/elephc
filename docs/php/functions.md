@@ -437,8 +437,28 @@ $a->refs["x"] = 1;
 echo count($b->refs);   // 1
 ```
 
-Reference assignment into an array element (`$arr[$key] = &$source`) is not supported and
-is reported as a compile-time error.
+One element of a **static-property array** can be reference-aliased to another element of the
+same static array with `self::$a[$dir] = &self::$a[$k]` (also `static::` / `Class::`). Both
+elements then share one storage cell, so a write through either element — or a re-assignment of
+either element — is observed through the other:
+
+```php
+<?php
+class Cache {
+    public static array $entries = [];
+}
+
+Cache::$entries['k'] = ['first', []];
+Cache::$entries['d'] = &Cache::$entries['k'];  // 'd' aliases 'k'
+Cache::$entries['k'][0] = 'updated';
+echo Cache::$entries['d'][0];                  // updated
+echo (Cache::$entries['k'] === Cache::$entries['d']) ? 'same' : 'diff'; // same
+```
+
+The reference source must itself be an element of the same static-property array; aliasing from a
+plain variable, from a different static property, or into a non-static array element is reported as
+a compile-time error (those forms are follow-up features). Reference assignment into a plain local
+array element (`$arr[$key] = &$source`) is likewise not yet supported and is a compile-time error.
 
 ## Reference returns
 

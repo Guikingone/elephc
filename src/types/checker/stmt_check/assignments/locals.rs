@@ -421,10 +421,21 @@ pub(super) fn check_ref_assign_to_target(
             }
             Ok(())
         }
-        ExprKind::ArrayAccess { .. } => Err(CompileError::new(
-            span,
-            "Reference assignment into an array element is not supported",
-        )),
+        ExprKind::ArrayAccess { array, .. } => match &array.kind {
+            // `self::$a[$dir] = &self::$a[$k]`: aliasing an element of a static-property array.
+            // The dedicated helper resolves + validates both operands and de-packs the container.
+            ExprKind::StaticPropertyAccess { receiver, property } => {
+                super::static_properties::check_ref_assign_static_prop_element(
+                    checker, receiver, property, source, span,
+                )
+            }
+            // A pure-local array element (`$loc[$k] = &$x`) or instance-property-base element
+            // (`$obj->arr[$k] = &$x`) target is a follow-up slice.
+            _ => Err(CompileError::new(
+                span,
+                "Reference assignment into an array element is not supported",
+            )),
+        },
         _ => Err(CompileError::new(
             span,
             "Reference assignment target must be a variable, array element, or object property",

@@ -885,6 +885,51 @@ fn test_error_ref_assign_static_property_array_element_unsupported() {
     );
 }
 
+/// SLICE 2/3: binding a static-property array element by reference (`self::$a[$d] = &self::$a[$k]`)
+/// against an UNKNOWN class must loud-error at the checker (via
+/// `resolve_static_property_assignment_target`) rather than miscompile the aliasing.
+#[test]
+fn test_error_ref_assign_static_prop_element_unknown_class() {
+    expect_error(
+        "<?php U::$a[$d] = &U::$a[$k];",
+        "Undefined class: U",
+    );
+}
+
+/// SLICE 2/3: the reference SOURCE for a static-property array element must itself be a
+/// static-property array element. A plain-variable source (`self::$a[$d] = &$local`) is a follow-up
+/// slice and must loud-error, not silently become a value copy.
+#[test]
+fn test_error_ref_assign_static_prop_element_non_static_source() {
+    expect_error(
+        "<?php class C { public static array $a = []; \
+         static function t() { $x = 1; self::$a[\"d\"] = &$x; } }",
+        "Reference source for a static-property array element must be another static-property array element",
+    );
+}
+
+/// SLICE 2/3: aliasing across TWO DIFFERENT static-property arrays (`self::$a[$d] = &self::$b[$k]`)
+/// is a follow-up slice; only the same-array GATE is supported, so the cross-array form loud-errors.
+#[test]
+fn test_error_ref_assign_static_prop_element_cross_array_source() {
+    expect_error(
+        "<?php class C { public static array $a = []; public static array $b = []; \
+         static function t() { $k = \"k\"; $d = \"d\"; self::$a[$d] = &self::$b[$k]; } }",
+        "Reference between two different static-property arrays is not yet supported",
+    );
+}
+
+/// SLICE 2/3: a NON-array static property cannot back a reference-into-element alias; the checker
+/// rejects `self::$n[0] = &self::$n[1]` on a scalar static property loudly.
+#[test]
+fn test_error_ref_assign_static_prop_element_non_array_property() {
+    expect_error(
+        "<?php class C { public static int $n = 0; \
+         static function t() { self::$n[0] = &self::$n[1]; } }",
+        "Reference assignment into a static-property array element requires an array static property",
+    );
+}
+
 /// Verifies that a by-reference assignment in expression position (`if (null !== $x = &$a[$k])`,
 /// the SLICE 4 form) is a parse error: `=&` is statement-only, so the `&` is rejected rather than
 /// silently accepted as a bitwise operator.

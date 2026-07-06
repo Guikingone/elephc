@@ -441,6 +441,17 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     }
 
     *pos = assign_pos + 1;
+    // `self::$a[$dir] = &self::$a[$k]`: reference assignment into a static-property
+    // array element. The leading `&` after the `=` routes to the shared reference-assign
+    // parser (mirroring the property/array-element form in `try_parse_postfix_assignment`),
+    // which validates the target/source shapes and emits `RefAssignToTarget`. The `!is_append`
+    // guard keeps `self::$a[] = &$x` (append + reference) erroring instead of mis-parsing.
+    if op == AssignmentOperator::Assign
+        && !is_append
+        && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
+    {
+        return parse_postfix_ref_assign(lhs_expr, tokens, pos, span).map(Some);
+    }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {

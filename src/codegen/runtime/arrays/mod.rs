@@ -100,6 +100,7 @@ mod hash_free_deep;
 mod hash_get;
 mod hash_grow;
 mod hash_ref_element;
+mod hash_bind_ref_element;
 mod hash_array_union;
 mod hash_key_eq;
 mod hash_key_hash;
@@ -405,6 +406,8 @@ pub use range::emit_range;
 /// Emit range helper.
 pub use hash_ref_element::emit_hash_ref_element;
 /// Emit the `$x = &$arr[$k]` element-to-reference-cell promotion helper.
+pub use hash_bind_ref_element::emit_hash_bind_ref_element;
+/// Emit the `self::$a[$dir] = &self::$a[$k]` element reference-bind helper.
 pub use ref_cell::{
     emit_deref_if_reference, emit_ref_cell_alloc, emit_ref_cell_decref, emit_ref_cell_free_deep,
     emit_ref_cell_incref,
