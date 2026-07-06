@@ -370,9 +370,13 @@ pub(super) fn check_ref_assign_to_target(
     checker: &mut Checker,
     target: &Expr,
     source: &Expr,
+    append: bool,
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    if append {
+        return check_ref_assign_append_target(checker, target, source, span, env);
+    }
     match &target.kind {
         ExprKind::PropertyAccess { object, property } => {
             let object_ty = checker.infer_type(object, env)?;
@@ -429,8 +433,12 @@ pub(super) fn check_ref_assign_to_target(
                     checker, receiver, property, source, span,
                 )
             }
-            // A pure-local array element (`$loc[$k] = &$x`) or instance-property-base element
-            // (`$obj->arr[$k] = &$x`) target is a follow-up slice.
+            // `$a[$k] = &$var`: aliasing an explicit-key element of a plain LOCAL array to a
+            // plain-variable source (the reverse-bind, mirroring the SLICE-1 `$x = &$a[$k]` shape).
+            ExprKind::Variable(array_name) => check_ref_assign_local_array_element(
+                checker, array_name, source, false, span, env,
+            ),
+            // An instance-property-base element (`$obj->arr[$k] = &$x`) target is a follow-up slice.
             _ => Err(CompileError::new(
                 span,
                 "Reference assignment into an array element is not supported",
@@ -441,6 +449,142 @@ pub(super) fn check_ref_assign_to_target(
             "Reference assignment target must be a variable, array element, or object property",
         )),
     }
+}
+
+/// Type-checks an append reference-assignment target (`$a[] = &$var`, `$a[$k][] = &$var`, or the
+/// out-of-scope `self::$a[] = &$var` / `$obj->p[] = &$var`).
+///
+/// For the append form the `target` is the CONTAINER itself. Only a plain LOCAL array variable
+/// (`$a[] = &$var`, flat) or a nested LOCAL array element (`$a[$k][] = &$var`, whose base is a
+/// plain variable) are supported; appending a reference into a static or instance property array
+/// is a loud, deferred error (a follow-up slice) rather than a silent value copy.
+fn check_ref_assign_append_target(
+    checker: &mut Checker,
+    target: &Expr,
+    source: &Expr,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    match &target.kind {
+        // `$a[] = &$var`: append a reference into a flat local array.
+        ExprKind::Variable(array_name) => {
+            check_ref_assign_local_array_element(checker, array_name, source, false, span, env)
+        }
+        // `$a[$k][] = &$var`: append a reference into a nested local array element.
+        ExprKind::ArrayAccess { array, .. } => match &array.kind {
+            ExprKind::Variable(array_name) => {
+                check_ref_assign_local_array_element(checker, array_name, source, true, span, env)
+            }
+            _ => Err(CompileError::new(
+                span,
+                "Appending a reference into a nested array element is only supported on a plain local array variable base",
+            )),
+        },
+        // `self::$a[] = &$var` / `$obj->p[] = &$var`: appending a reference into a static or
+        // instance property array is not supported (a follow-up slice).
+        _ => Err(CompileError::new(
+            span,
+            "Appending a reference into a static or instance property array is not supported",
+        )),
+    }
+}
+
+/// Type-checks a reference alias INTO a LOCAL array element whose source is a plain variable:
+/// `$a[$k] = &$var` (explicit-key, `nested == false`), `$a[] = &$var` (flat append,
+/// `nested == false`), or `$a[$k][] = &$var` (nested append, `nested == true`).
+///
+/// The container local must be array-typed; the source must be a plain variable whose value fits in
+/// one reference-cell word (a multi-word string source is a loud, deferred error, mirroring the
+/// SLICE-1 string-element guard). The container is de-packed to the promoted associative hash type
+/// (nested containers to a two-level hash) so codegen loads/stores/frees it as a hash, and the
+/// source variable is reverse-bound: it is retyped to the element type, marked as active
+/// by-reference storage, and stripped of any callable metadata so its reads/writes route through the
+/// shared cell.
+fn check_ref_assign_local_array_element(
+    checker: &mut Checker,
+    array_name: &str,
+    source: &Expr,
+    nested: bool,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    // Container eligibility: the base local must be a defined array variable.
+    let Some(container_ty) = env.get(array_name).cloned() else {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "Reference assignment into an array element requires an array variable (${array_name} is undefined)"
+            ),
+        ));
+    };
+    if !matches!(
+        container_ty.codegen_repr(),
+        PhpType::Array(_) | PhpType::AssocArray { .. }
+    ) {
+        return Err(CompileError::new(
+            span,
+            "Reference assignment into an array element requires an array variable",
+        ));
+    }
+    // The reference source MUST be a plain variable for this slice; any other shape (element,
+    // property, call) is a follow-up slice and is loud-errored rather than silently value-copied.
+    let ExprKind::Variable(src_name) = &source.kind else {
+        return Err(CompileError::new(
+            span,
+            "Reference source for a local array-element reference must be a plain variable (e.g. &$x)",
+        ));
+    };
+    if !env.contains_key(src_name) {
+        return Err(CompileError::new(
+            span,
+            &format!("Undefined variable: ${src_name}"),
+        ));
+    }
+    let element_ty = env.get(src_name).cloned().unwrap_or(PhpType::Mixed);
+    // A kind-6 reference cell holds a single inner value word; a multi-word string source would drop
+    // its length, so reject it loudly instead of miscompiling.
+    if element_ty.codegen_repr() == PhpType::Str {
+        return Err(CompileError::new(
+            span,
+            "Reference to a string-valued source in a local array element is not yet supported",
+        ));
+    }
+    // De-pack retype (checker soundness only; codegen re-derives the de-pack via
+    // `set_local_type_exact`). Taking a reference into an indexed array promotes it to a hash so
+    // downstream reads, cleanup, and `array_is_list()` agree with the runtime representation. A
+    // nested append types the outer container as a two-level hash so both levels de-pack.
+    let current_repr = env.get(array_name).map(|ty| ty.codegen_repr());
+    if nested {
+        if matches!(
+            current_repr,
+            Some(PhpType::Array(_)) | Some(PhpType::AssocArray { .. })
+        ) {
+            env.insert(
+                array_name.to_string(),
+                PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::AssocArray {
+                        key: Box::new(PhpType::Mixed),
+                        value: Box::new(element_ty.clone()),
+                    }),
+                },
+            );
+        }
+    } else if matches!(current_repr, Some(PhpType::Array(_))) {
+        env.insert(
+            array_name.to_string(),
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(element_ty.clone()),
+            },
+        );
+    }
+    // Reverse-bind: the source variable aliases the element's reference cell, so it follows the
+    // element type and becomes active by-reference storage.
+    env.insert(src_name.clone(), element_ty);
+    checker.active_ref_params.insert(src_name.clone());
+    clear_callable_metadata(checker, src_name);
+    Ok(())
 }
 
 /// Type-checks `$target =& $source` where the source is a plain variable.

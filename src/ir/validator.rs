@@ -432,6 +432,11 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
             check_count(inst_id, inst, 3, "3")?;
             check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")
         }
+        HashRefAppendElement => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")
+        }
+        LocalRefEnsure => check_count(inst_id, inst, 0, "0"),
         IterCurrentValueRef => check_count(inst_id, inst, 1, "1"),
         ArrayKeyExists | OffsetExists => check_count_at_least(inst_id, inst, 1, "at least 1"),
         BufferLen | BufferGet | BufferSet | BufferFree => {

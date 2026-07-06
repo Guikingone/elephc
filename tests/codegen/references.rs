@@ -1108,3 +1108,215 @@ fn test_ref_static_prop_array_element_realias_heap_stable() {
 //   PRE-EXISTING gap (`C::$a['x'][0] = 'Q'` fails with "array_set index PHP type Str" with no
 //   reference involved), the `refprop-nested-append-writethrough` family the SLICE 2/3 spec
 //   explicitly excludes.
+
+// -- Reference INTO a LOCAL array element (`$a[$k] = &$var`, `$a[] = &$var`, `$loops[$k][] = &$var`) --
+
+/// `$a[] = &$var` (flat append): the appended element aliases `$var`, so mutating `$var` after the
+/// append is observed through the element. Cross-checked with `php -r` (prints `9`).
+#[test]
+fn test_ref_local_array_append_aliases_source() {
+    let out = compile_and_run(
+        "<?php
+        $a = [];
+        $x = 5;
+        $a[] = &$x;
+        $x = 9;
+        echo $a[0];",
+    );
+    assert_eq!(out, "9");
+}
+
+/// `$a[$k] = &$var` (explicit key into an indexed local array): aliasing an existing element to a
+/// plain-variable source de-packs the array and writes through the shared cell. Cross-checked with
+/// `php -r` (prints `8`).
+#[test]
+fn test_ref_local_array_explicit_key_aliases_source() {
+    let out = compile_and_run(
+        "<?php
+        $a = [1, 2];
+        $x = 7;
+        $a[0] = &$x;
+        $x = 8;
+        echo $a[0];",
+    );
+    assert_eq!(out, "8");
+}
+
+/// `$loops[$k][] = &$var` (the `PhpDumper.php:459` gate): appending a reference into a nested local
+/// array element aliases `$var`; a later mutation of `$var` (here appending to the aliased array) is
+/// observed through the appended element. Cross-checked with `php -r` (prints `2`).
+#[test]
+fn test_ref_local_array_nested_append_aliases_source() {
+    let out = compile_and_run(
+        "<?php
+        $loops = [];
+        $k = 'c';
+        $p = [1];
+        $loops[$k][] = &$p;
+        $p[] = 2;
+        echo count($loops[$k][0]);",
+    );
+    assert_eq!(out, "2");
+}
+
+/// `$loops[$k][] = &$var` when `$loops[$k]` did not previously exist auto-vivifies the inner hash
+/// and binds the appended element; both the appended alias and `$var` observe `$var`'s final state.
+/// Cross-checked with `php -r` (prints `2|9`).
+#[test]
+fn test_ref_local_array_nested_append_auto_vivifies_inner() {
+    let out = compile_and_run(
+        "<?php
+        $loops = [];
+        $k = 'c';
+        $p = [7];
+        $loops[$k][] = &$p;
+        $p[] = 9;
+        echo count($loops[$k][0]), '|', $loops[$k][0][1];",
+    );
+    assert_eq!(out, "2|9");
+}
+
+/// Two DISTINCT sources appended under two keys each alias their own source; mutating each source is
+/// observed through its element. Cross-checked with `php -r` (prints `20,30`).
+#[test]
+fn test_ref_local_array_append_multi_key_distinct_sources() {
+    let out = compile_and_run(
+        "<?php
+        $p = 1;
+        $q = 2;
+        $a = [];
+        $a['x'][] = &$p;
+        $a['y'][] = &$q;
+        $p = 20;
+        $q = 30;
+        echo $a['x'][0], ',', $a['y'][0];",
+    );
+    assert_eq!(out, "20,30");
+}
+
+/// T5: the SAME source appended under two keys shares ONE persistent reference cell (Zend
+/// semantics): mutating `$p` after both appends is observed through BOTH elements. This is the case
+/// the PhpDumper:459 loop triggers (the same `$pathInLoop` bound under every key). Cross-checked with
+/// `php -r` (prints `99,99`).
+#[test]
+fn test_ref_local_array_append_multi_key_same_source() {
+    let out = compile_and_run(
+        "<?php
+        $a = [];
+        $p = 1;
+        $a['x'][] = &$p;
+        $a['y'][] = &$p;
+        $p = 99;
+        echo $a['x'][0], ',', $a['y'][0];",
+    );
+    assert_eq!(out, "99,99");
+}
+
+/// T5b: straight-line explicit-key binds of the SAME source share one cell; a later write to `$p`
+/// is observed through both aliased elements. Cross-checked with `php -r` (prints `77`).
+#[test]
+fn test_ref_local_array_explicit_key_same_source_shares_cell() {
+    let out = compile_and_run(
+        "<?php
+        $a = [0, 0];
+        $p = 1;
+        $a[0] = &$p;
+        $a[1] = &$p;
+        $p = 7;
+        echo $a[0], $a[1];",
+    );
+    assert_eq!(out, "77");
+}
+
+/// T5c: the PhpDumper-loop reduction — the SAME source variable is nested-appended under every key
+/// of a loop, then mutated once. The get-or-promote of `$p`'s cell is runtime-idempotent (the loop
+/// body's single `&$p` promotes on the first iteration and reuses the same cell thereafter), so all
+/// keys observe the mutation. Cross-checked with `php -r` (prints `999`).
+#[test]
+fn test_ref_local_array_nested_append_loop_same_source() {
+    let out = compile_and_run(
+        "<?php
+        $loops = [];
+        $p = [0];
+        foreach (['a', 'b', 'c'] as $k) {
+            $loops[$k][] = &$p;
+        }
+        $p[0] = 9;
+        echo $loops['a'][0][0], $loops['b'][0][0], $loops['c'][0][0];",
+    );
+    assert_eq!(out, "999");
+}
+
+/// `unset($a)` after `$a[] = &$x` drops the container's share of the shared cell; the source `$x`
+/// keeps the value alive (the cell survives at refcount 1, owned by `$x`). This verifies the
+/// cell-survival property from the container side. Cross-checked with `php -r` (prints `3`).
+///
+/// (The mirror `unset($x); echo $a[0]` — cell kept alive by the array element — additionally trips a
+/// PRE-EXISTING reference-cell / cycle-collector interaction on `unset` that also affects the SLICE-1
+/// producer `$x = &$arr[$k]; unset($x); echo $arr[$k]`, so it is left to the shared-machinery fix.)
+#[test]
+fn test_ref_local_array_append_unset_container_keeps_source() {
+    let out = compile_and_run(
+        "<?php
+        $a = [];
+        $x = 3;
+        $a[] = &$x;
+        unset($a);
+        echo $x;",
+    );
+    assert_eq!(out, "3");
+}
+
+/// Heap balance under repeated reference-append aliasing: appending `&$p` into a fresh nested local
+/// array many times, freeing the array each iteration, must not leak or double-free the shared cells.
+/// Because the container is rebuilt and released every iteration, `live_blocks` must be INVARIANT to
+/// the iteration count — a small-loop and a large-loop run must report the same `live_blocks` and
+/// balanced frees (mirroring the SLICE 2/3 endurance test).
+///
+/// The inner element is read through a temporary (`$inner = $loops['k']`) rather than the chained
+/// index `$loops['k'][0]`: a chained read of a nested array element leaks the intermediate container
+/// temporary PRE-EXISTINGLY, independent of references (`$a['k'][0]` leaks the same way with no `&`
+/// involved), so chaining here would measure that unrelated bug rather than the reference append.
+#[test]
+fn test_ref_local_array_append_heap_stable() {
+    let program = |iters: u32| {
+        format!(
+            "<?php
+            $i = 0;
+            while ($i < {iters}) {{
+                $loops = [];
+                $p = [$i];
+                $loops['k'][] = &$p;
+                $p[] = $i + 1;
+                $inner = $loops['k'];
+                $sum = count($inner);
+                unset($loops);
+                unset($p);
+                unset($inner);
+                $i = $i + 1;
+            }}
+            echo $sum;"
+        )
+    };
+    let small = compile_and_run_with_heap_debug(&program(50));
+    let large = compile_and_run_with_heap_debug(&program(300));
+    assert!(small.success, "small run failed: {}", small.stderr);
+    assert!(large.success, "large run failed: {}", large.stderr);
+    assert_eq!(small.stdout, "1");
+    assert_eq!(large.stdout, "1");
+    let live = |stderr: &str| -> String {
+        stderr
+            .lines()
+            .find(|l| l.contains("live_blocks="))
+            .and_then(|l| l.split_whitespace().find(|t| t.starts_with("live_blocks=")))
+            .unwrap_or("live_blocks=?")
+            .to_string()
+    };
+    assert_eq!(
+        live(&small.stderr),
+        live(&large.stderr),
+        "reference-append aliasing leaked/grew the heap: small={} large={}",
+        small.stderr,
+        large.stderr
+    );
+}

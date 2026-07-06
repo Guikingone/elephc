@@ -421,7 +421,7 @@ fn collect_stmt_sources<'a>(stmt: &'a Stmt, sources: &mut HashMap<String, Vec<So
             push(sources, target, Source::Any);
             collect_expr_sources(source, sources);
         }
-        StmtKind::RefAssignToTarget { target, source } => {
+        StmtKind::RefAssignToTarget { target, source, .. } => {
             collect_expr_sources(target, sources);
             collect_expr_sources(source, sources);
         }

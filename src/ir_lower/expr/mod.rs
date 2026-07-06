@@ -10302,7 +10302,7 @@ fn store_expr_into_temp(
 }
 
 /// Stores an already lowered value into a hidden merge temporary.
-fn store_value_into_temp(
+pub(crate) fn store_value_into_temp(
     ctx: &mut LoweringContext<'_, '_>,
     temp_name: &str,
     temp_type: PhpType,

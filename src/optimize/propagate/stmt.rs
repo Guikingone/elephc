@@ -132,7 +132,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
                 HashMap::new(),
             )
         }
-        StmtKind::RefAssignToTarget { target, source } => {
+        StmtKind::RefAssignToTarget { target, source, append } => {
             // The target lvalue's storage is aliased to `source`; a plain-variable
             // source can be changed invisibly through the target, so it must not carry
             // a constant. The target/source stay literal lvalues (never propagated to a
@@ -141,7 +141,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
                 mark_reference_volatile(source_name);
             }
             (
-                Stmt::new(StmtKind::RefAssignToTarget { target, source }, span),
+                Stmt::new(StmtKind::RefAssignToTarget { target, source, append }, span),
                 HashMap::new(),
             )
         }

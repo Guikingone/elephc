@@ -199,6 +199,54 @@ pub(super) fn lower_hash_bind_ref_element(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `HashRefAppendElement`: appends an EXISTING kind-6 reference cell (operand 1, `$var`'s
+/// persistent cell) as a new element at the hash's next automatic integer key (`$a[] = &$var`,
+/// `$a[$k][] = &$var`).
+///
+/// Calls `__rt_hash_ref_append_element(hash, cell)`, which increfs the cell (the new element owns a
+/// share) and appends it with value-tag 11, returning the possibly-relocated hash. The relocated hash
+/// is written back to the array source (local/global) and becomes the instruction result.
+pub(super) fn lower_hash_ref_append_element(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    let cell = expect_operand(inst, 1)?;
+    require_hash(ctx.value_php_type(hash)?, inst)?;
+    let source_local = source_load_local_slot(ctx, hash)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(cell, "x1")?;
+            abi::emit_push_reg(ctx.emitter, "x1");
+            ctx.load_value_to_reg(hash, "x0")?;
+            abi::emit_pop_reg(ctx.emitter, "x1");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_ref_append_element");
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.store_result_value(hash)?;
+            if let Some(slot) = source_local {
+                ctx.store_value_to_local(slot, hash)?;
+            }
+            ctx.writeback_global_array_source(hash)?;
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(cell, "rsi")?;
+            abi::emit_push_reg(ctx.emitter, "rsi");
+            ctx.load_value_to_reg(hash, "rdi")?;
+            abi::emit_pop_reg(ctx.emitter, "rsi");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_ref_append_element");
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.store_result_value(hash)?;
+            if let Some(slot) = source_local {
+                ctx.store_value_to_local(slot, hash)?;
+            }
+            ctx.writeback_global_array_source(hash)?;
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `unset($hash[$key])` for associative arrays through the shared hash-unset helper.
 ///
 /// Materializes the key into the hash ABI key registers, then calls `__rt_hash_unset`, which

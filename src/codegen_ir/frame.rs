@@ -527,6 +527,9 @@ fn promoted_ref_cell_local_slots(function: &Function) -> HashSet<LocalSlotId> {
             Some(Immediate::LocalSlotPair { first, .. }) if inst.op == Op::AdoptRefCell => {
                 Some(first)
             }
+            Some(Immediate::LocalSlotPair { first, .. }) if inst.op == Op::LocalRefEnsure => {
+                Some(first)
+            }
             _ => None,
         })
         .collect()

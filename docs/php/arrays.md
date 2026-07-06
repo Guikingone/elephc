@@ -114,6 +114,28 @@ echo count($b); // 1
 > Removing an element from an array passed **by reference** (`function f(array &$a)`) is not yet
 > supported and reports a compile error.
 
+## Reference into a local array element
+
+An element of a **local array** can be reference-aliased to a plain variable with `= &$var`, so the
+element and the variable then share one storage cell — a write through either side is observed through
+the other. This works for an explicit key (`$a[$k] = &$var`), an appended element (`$a[] = &$var`), and
+an appended element of a nested local array (`$loops[$k][] = &$var`, auto-vivifying `$loops[$k]` when
+absent):
+
+```php
+<?php
+$loops = [];
+$path  = [1];
+$loops["c"][] = &$path;  // the appended element aliases $path
+$path[] = 2;             // mutating $path is visible through the element
+echo count($loops["c"][0]); // 2
+```
+
+The reference **source** must be a plain variable whose value fits in one machine word (an array,
+object, or scalar). A source that is itself an array element (`&$b[$j]`), a property (`&$o->p`), or a
+string-valued variable is a compile-time error, as is appending a reference into a static-property or
+instance-property array (`self::$a[] = &$var`, `$o->p[] = &$var`) — those forms are follow-up features.
+
 ## Array union
 
 `+` between arrays follows PHP union semantics: keys from the left operand win, and only keys that are missing from the left are copied from the right.

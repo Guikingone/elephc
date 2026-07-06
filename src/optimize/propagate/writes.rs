@@ -128,7 +128,7 @@ pub(crate) fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
             }
             Some(writes)
         }
-        StmtKind::RefAssignToTarget { target, source } => {
+        StmtKind::RefAssignToTarget { target, source, .. } => {
             // The target is a property/array lvalue (writes no local); a plain-variable
             // source is aliased to that storage, so it can change invisibly and counts
             // as written. Nested writes inside the target/source expressions are collected too.

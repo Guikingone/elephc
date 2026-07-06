@@ -77,12 +77,13 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     *pos = assign_pos + 1;
     // `$obj->prop = &$src` / `$arr[$k] = &$src`: reference assignment into a
     // property or array-element lvalue. The plain-variable form is handled by the
-    // simple-variable assignment parser; here the LHS is a complex lvalue.
+    // simple-variable assignment parser; here the LHS is a complex lvalue. The
+    // append form (`$a[] = &$src`, `$a[$k][] = &$src`) routes here too and is
+    // distinguished by `is_append`, with `lhs_expr` naming the CONTAINER.
     if op == AssignmentOperator::Assign
-        && !is_append
         && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
     {
-        return parse_postfix_ref_assign(lhs_expr, tokens, pos, span).map(Some);
+        return parse_postfix_ref_assign(lhs_expr, tokens, pos, is_append, span).map(Some);
     }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
@@ -155,18 +156,22 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     Ok(Some(Stmt::new(stmt, span)))
 }
 
-/// Parses reference assignment into a complex lvalue (`$obj->prop = &$src` or
-/// `$arr[$k] = &$src`) after the leading `&` has been detected.
+/// Parses reference assignment into a complex lvalue (`$obj->prop = &$src`,
+/// `$arr[$k] = &$src`, or an append `$arr[] = &$src` / `$arr[$k][] = &$src`) after
+/// the leading `&` has been detected.
 ///
-/// `lhs_expr` is the already-parsed target lvalue. Consumes the `&`, parses the
-/// reference source, validates that the source is a legal reference source and
-/// that the target is a property or array-element lvalue, then returns a
-/// `RefAssignToTarget` statement. Plain-variable reference assignment is handled
-/// by the simple-variable assignment parser instead.
+/// `lhs_expr` is the already-parsed target lvalue. When `append` is `true`, `lhs_expr`
+/// is the CONTAINER (a `Variable`, `ArrayAccess`, `PropertyAccess`, or
+/// `StaticPropertyAccess`) with no sentinel index. Consumes the `&`, parses the
+/// reference source, validates that the source is a legal reference source and that the
+/// target has a supported lvalue shape, then returns a `RefAssignToTarget` statement.
+/// Plain-variable reference assignment is handled by the simple-variable assignment
+/// parser instead.
 fn parse_postfix_ref_assign(
     lhs_expr: Expr,
     tokens: &[(Token, Span)],
     pos: &mut usize,
+    append: bool,
     span: Span,
 ) -> Result<Stmt, CompileError> {
     *pos += 1; // consume the `&`
@@ -186,10 +191,25 @@ fn parse_postfix_ref_assign(
             "Reference assignment source must be a variable, array/property element, or a by-reference call",
         ));
     }
-    if !matches!(
-        lhs_expr.kind,
-        ExprKind::PropertyAccess { .. } | ExprKind::ArrayAccess { .. }
-    ) {
+    // Non-append targets are a property or an explicit-key array element. Append targets are
+    // instead the CONTAINER itself: a plain `Variable` (`$a[] = &…`), a nested `ArrayAccess`
+    // (`$a[$k][] = &…`), or a property/static-property container (the checker then rejects the
+    // property-container append forms as unsupported).
+    let target_shape_ok = if append {
+        matches!(
+            lhs_expr.kind,
+            ExprKind::Variable(_)
+                | ExprKind::ArrayAccess { .. }
+                | ExprKind::PropertyAccess { .. }
+                | ExprKind::StaticPropertyAccess { .. }
+        )
+    } else {
+        matches!(
+            lhs_expr.kind,
+            ExprKind::PropertyAccess { .. } | ExprKind::ArrayAccess { .. }
+        )
+    };
+    if !target_shape_ok {
         return Err(CompileError::new(
             span,
             "Reference assignment target must be a variable, array element, or object property",
@@ -200,6 +220,7 @@ fn parse_postfix_ref_assign(
         StmtKind::RefAssignToTarget {
             target: lhs_expr,
             source,
+            append,
         },
         span,
     ))
@@ -444,13 +465,13 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     // `self::$a[$dir] = &self::$a[$k]`: reference assignment into a static-property
     // array element. The leading `&` after the `=` routes to the shared reference-assign
     // parser (mirroring the property/array-element form in `try_parse_postfix_assignment`),
-    // which validates the target/source shapes and emits `RefAssignToTarget`. The `!is_append`
-    // guard keeps `self::$a[] = &$x` (append + reference) erroring instead of mis-parsing.
+    // which validates the target/source shapes and emits `RefAssignToTarget`. The append form
+    // (`self::$a[] = &$x`) parses here too (with `is_append`) and is rejected by the checker
+    // as an unsupported static-property append target rather than mis-parsing.
     if op == AssignmentOperator::Assign
-        && !is_append
         && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
     {
-        return parse_postfix_ref_assign(lhs_expr, tokens, pos, span).map(Some);
+        return parse_postfix_ref_assign(lhs_expr, tokens, pos, is_append, span).map(Some);
     }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;

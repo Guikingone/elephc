@@ -78,7 +78,8 @@ fn test_parse_reference_assignment_from_static_property() {
 fn test_parse_reference_assignment_into_property() {
     let stmts = parse_source("<?php $o->p = &$v;");
     match &stmts[0].kind {
-        StmtKind::RefAssignToTarget { target, source } => {
+        StmtKind::RefAssignToTarget { target, source, append } => {
+            assert!(!append);
             assert!(matches!(
                 &target.kind,
                 ExprKind::PropertyAccess { property, .. } if property == "p"
@@ -95,7 +96,8 @@ fn test_parse_reference_assignment_into_property() {
 fn test_parse_reference_assignment_into_array_element() {
     let stmts = parse_source("<?php $a[$k] = &$v;");
     match &stmts[0].kind {
-        StmtKind::RefAssignToTarget { target, source } => {
+        StmtKind::RefAssignToTarget { target, source, append } => {
+            assert!(!append);
             assert!(matches!(&target.kind, ExprKind::ArrayAccess { .. }));
             assert!(matches!(&source.kind, ExprKind::Variable(name) if name == "v"));
         }

@@ -36,9 +36,10 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             value: fold_expr(value),
         },
         StmtKind::RefAssign { target, source } => StmtKind::RefAssign { target, source },
-        StmtKind::RefAssignToTarget { target, source } => StmtKind::RefAssignToTarget {
+        StmtKind::RefAssignToTarget { target, source, append } => StmtKind::RefAssignToTarget {
             target: fold_expr(target),
             source: fold_expr(source),
+            append,
         },
         StmtKind::If {
             condition,

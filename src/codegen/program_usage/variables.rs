@@ -31,7 +31,7 @@ fn stmt_uses_variable(stmt: &Stmt, needle: &str) -> bool {
         StmtKind::RefAssign { target, source } => {
             target == needle || expr_uses_variable(source, needle)
         }
-        StmtKind::RefAssignToTarget { target, source } => {
+        StmtKind::RefAssignToTarget { target, source, .. } => {
             expr_uses_variable(target, needle) || expr_uses_variable(source, needle)
         }
         StmtKind::Return(Some(value)) => expr_uses_variable(value, needle),

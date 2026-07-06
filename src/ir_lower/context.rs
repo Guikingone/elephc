@@ -1014,6 +1014,41 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.initialized_slots.insert(owner_slot);
     }
 
+    /// Get-or-promotes `name`'s PERSISTENT kind-6 reference cell for `&$name` and returns the cell
+    /// pointer, marking the local a by-reference alias (Zend: once a reference, always a reference for
+    /// the scope). Emits `Op::LocalRefEnsure`, which is runtime-idempotent: the first execution
+    /// promotes the local (its slot then holds the cell) and later executions — e.g. later iterations
+    /// of a loop body whose single `&$name` statement is lowered once — reuse the same cell. The cell
+    /// is shared across every bind, so an element bound to it and the variable always observe one
+    /// storage; the caller increfs it once per binding (via `HashRefAppendElement` /
+    /// `HashBindRefElement`). Unlike `promote_local_ref_cell` (legacy two-word capture cells), this
+    /// produces a kind-6 refcounted cell compatible with tag-11 array elements.
+    pub(crate) fn ensure_local_ref_cell(&mut self, name: &str, span: Option<Span>) -> LoweredValue {
+        let value_ty = self.local_type(name);
+        self.clear_static_callable_local(name);
+        self.clear_fiber_start_sig(name);
+        let main_slot = self.declare_local(name, value_ty.clone());
+        let owner_slot = self
+            .ref_cell_owner_slot(name)
+            .unwrap_or_else(|| self.declare_ref_cell_owner(name, value_ty.clone()));
+        let cell = self.emit_value(
+            Op::LocalRefEnsure,
+            Vec::new(),
+            Some(Immediate::LocalSlotPair {
+                first: main_slot,
+                second: owner_slot,
+            }),
+            value_ty.clone(),
+            Op::LocalRefEnsure.default_effects(),
+            span,
+        );
+        self.mark_ref_bound_local(name);
+        self.set_local_type(name, value_ty);
+        self.initialized_slots.insert(main_slot);
+        self.initialized_slots.insert(owner_slot);
+        cell
+    }
+
     /// Binds one local name to the same ref-cell pointer as another local.
     pub(crate) fn alias_local_ref_cell(&mut self, target: &str, source: &str, span: Option<Span>) {
         if target == source {

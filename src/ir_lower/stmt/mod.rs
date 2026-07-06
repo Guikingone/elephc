@@ -21,7 +21,7 @@ use crate::ir_lower::context::{FinallyFrame, LoopCleanup, LoopFrame, LoweredValu
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
     coerce_to_int_at_span, lower_callable_array_for_assignment, lower_closure_for_assignment, lower_expr,
-    static_callable_binding_for_expr, string_op_uses_scratch_storage,
+    static_callable_binding_for_expr, store_value_into_temp, string_op_uses_scratch_storage,
     type_satisfies_array_access_for_ir,
 };
 use crate::names::{php_symbol_key, property_hook_set_method};
@@ -48,8 +48,8 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         StmtKind::Echo(expr) => lower_echo(ctx, expr, stmt.span),
         StmtKind::Assign { name, value } => lower_assign(ctx, name, value, stmt.span),
         StmtKind::RefAssign { target, source } => lower_ref_assign(ctx, target, source, stmt.span),
-        StmtKind::RefAssignToTarget { target, source } => {
-            lower_ref_assign_to_target(ctx, target, source, stmt.span)
+        StmtKind::RefAssignToTarget { target, source, append } => {
+            lower_ref_assign_to_target(ctx, target, source, *append, stmt.span)
         }
         StmtKind::If {
             condition,
@@ -435,8 +435,16 @@ fn lower_ref_assign_to_target(
     ctx: &mut LoweringContext<'_, '_>,
     target: &Expr,
     source: &Expr,
+    append: bool,
     span: Span,
 ) {
+    // Append targets (`$a[] = &$var`, `$a[$k][] = &$var`) name the CONTAINER. The checker has
+    // already rejected static/instance-property append containers, so only a plain LOCAL array
+    // variable (flat) or a nested LOCAL array element (whose base is a plain variable) reach here.
+    if append {
+        lower_ref_assign_local_array_element(ctx, target, source, true, span);
+        return;
+    }
     match &target.kind {
         ExprKind::PropertyAccess { object, property } => match &source.kind {
             ExprKind::PropertyAccess { .. } => {
@@ -461,6 +469,11 @@ fn lower_ref_assign_to_target(
                     ctx, receiver, property, index, source, span,
                 );
             }
+        }
+        // `$a[$k] = &$var`: aliasing an explicit-key element of a plain LOCAL array to a
+        // plain-variable source (checker-validated + de-packed).
+        ExprKind::ArrayAccess { array, .. } if matches!(array.kind, ExprKind::Variable(_)) => {
+            lower_ref_assign_local_array_element(ctx, target, source, false, span);
         }
         _ => {
             lower_expr(ctx, source);
@@ -543,6 +556,249 @@ fn lower_ref_assign_static_prop_element(
     // Store the mutated container back. Codegen suppresses `release_previous` because the stored
     // value traces back to the just-loaded static property (same container round-trip).
     store_static_property(ctx, receiver, property, bound_hash.value, span);
+}
+
+/// Lowers a reference alias INTO a LOCAL array element whose source is a plain variable:
+/// `$a[$k] = &$var` (explicit key, `append == false`), `$a[] = &$var` (flat append,
+/// `append == true`), or `$loops[$k][] = &$var` (nested append, `append == true` with an
+/// `ArrayAccess` container).
+///
+/// Every form uses the same REVERSE-BIND shape the checker validated: the source variable's value is
+/// materialized into the element's kind-6 reference cell, then the source local adopts that cell
+/// (`adopt_ref_cell`), which releases the local's prior direct share and increfs the cell so the
+/// element (alias) and the local (owner) each hold one share. The container is de-packed to a hash so
+/// it can carry a per-element reference tag, and the possibly-relocated hash is written back to the
+/// local. The source is checker-guaranteed to be a plain variable.
+fn lower_ref_assign_local_array_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    source: &Expr,
+    append: bool,
+    span: Span,
+) {
+    let ExprKind::Variable(var_name) = &source.kind else {
+        // Defensive: the checker rejects any non-variable source; evaluate for side effects.
+        lower_expr(ctx, source);
+        return;
+    };
+    match (&target.kind, append) {
+        // `$a[$k] = &$var`: explicit-key alias into a flat local array.
+        (ExprKind::ArrayAccess { array, index }, false)
+            if matches!(array.kind, ExprKind::Variable(_)) =>
+        {
+            if let ExprKind::Variable(array_name) = &array.kind {
+                lower_ref_assign_local_element_explicit_key(ctx, array_name, index, var_name, span);
+            }
+        }
+        // `$a[] = &$var`: append a reference into a flat local array.
+        (ExprKind::Variable(array_name), true) => {
+            lower_ref_append_into_local_hash(ctx, array_name, var_name, span);
+        }
+        // `$loops[$k][] = &$var`: append a reference into a nested local array element.
+        (ExprKind::ArrayAccess { array, index }, true)
+            if matches!(array.kind, ExprKind::Variable(_)) =>
+        {
+            if let ExprKind::Variable(outer_name) = &array.kind {
+                lower_ref_assign_local_nested_append(ctx, outer_name, index, var_name, span);
+            }
+        }
+        _ => {
+            // Defensive: the checker rejects any other target shape; evaluate for side effects.
+            lower_expr(ctx, source);
+        }
+    }
+}
+
+/// Loads a local array as a hash, de-packing an indexed array in place (Zend de-packs on
+/// reference-take). Returns the loaded hash value plus an optional `(name, promoted_type)` write-back
+/// obligation to run after the container has been fully mutated (mirroring
+/// `lower_ref_assign_array_element`).
+fn load_local_array_as_hash(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_name: &str,
+    span: Span,
+) -> (LoweredValue, Option<(String, PhpType)>) {
+    let array_value = ctx.load_local(array_name, Some(span));
+    if let IrType::Heap(IrHeapKind::Array) = array_value.ir_type {
+        let current_ty = ctx.builder.value_php_type(array_value.value);
+        let element_ty = reference_element_type(&current_ty);
+        let assoc_ty = promoted_assoc_array_type(current_ty, element_ty);
+        let hash = ctx.emit_value(
+            Op::ArrayToHash,
+            vec![array_value.value],
+            None,
+            assoc_ty.clone(),
+            Op::ArrayToHash.default_effects(),
+            Some(span),
+        );
+        (hash, Some((array_name.to_string(), assoc_ty)))
+    } else {
+        (array_value, None)
+    }
+}
+
+/// Appends a reference to `$var` into the hash held by the LOCAL `array_name` (`$a[] = &$var`, and the
+/// per-level primitive reused by the nested form on a temporary inner hash).
+///
+/// Get-or-promotes `$var`'s PERSISTENT kind-6 cell (shared across every bind — Zend semantics), then
+/// appends THAT cell into the hash at the next int key with an incref (`HashRefAppendElement`), and
+/// writes the possibly-relocated hash back to the local.
+fn lower_ref_append_into_local_hash(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_name: &str,
+    var_name: &str,
+    span: Span,
+) {
+    // Bind `$var`'s ONE persistent cell (marks `$var` a reference; idempotent for loop bodies).
+    let cell = ctx.ensure_local_ref_cell(var_name, Some(span));
+    let (hash, promotion) = load_local_array_as_hash(ctx, array_name, span);
+    let hash_ty = ctx.builder.value_php_type(hash.value);
+    let new_hash = ctx.emit_value(
+        Op::HashRefAppendElement,
+        vec![hash.value, cell.value],
+        None,
+        hash_ty,
+        Op::HashRefAppendElement.default_effects(),
+        Some(span),
+    );
+    // On the ArrayToHash (indexed-container) path the op cannot auto-store the relocated hash (it
+    // traces to `ArrayToHash`, not `LoadLocal`), so write it back explicitly.
+    if let Some((name, assoc_ty)) = promotion {
+        ctx.store_mutated_local(&name, new_hash, assoc_ty.clone(), Some(span));
+        ctx.set_local_type_exact(&name, assoc_ty);
+    }
+}
+
+/// Lowers `$a[$k] = &$var`: aliases an explicit-key element of a flat local array to `$var`.
+///
+/// Get-or-promotes `$var`'s PERSISTENT kind-6 cell, then binds THAT cell into `hash[$k]` with an
+/// incref (`HashBindRefElement`, value-tag 11), and writes the relocated hash back.
+fn lower_ref_assign_local_element_explicit_key(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_name: &str,
+    index: &Expr,
+    var_name: &str,
+    span: Span,
+) {
+    let cell = ctx.ensure_local_ref_cell(var_name, Some(span));
+    let (hash, promotion) = load_local_array_as_hash(ctx, array_name, span);
+    let key = lower_expr(ctx, index);
+    let hash_ty = ctx.builder.value_php_type(hash.value);
+    let new_hash = ctx.emit_value(
+        Op::HashBindRefElement,
+        vec![hash.value, key.value, cell.value],
+        None,
+        hash_ty,
+        Op::HashBindRefElement.default_effects(),
+        Some(span),
+    );
+    if let Some((name, assoc_ty)) = promotion {
+        ctx.store_mutated_local(&name, new_hash, assoc_ty.clone(), Some(span));
+        ctx.set_local_type_exact(&name, assoc_ty);
+    }
+}
+
+/// Lowers `$loops[$k][] = &$var`: appends a reference to `$var` into a NESTED local array element
+/// (the `PhpDumper.php:459` gate).
+///
+/// The outer local is loaded once as a hash. The inner element `$loops[$k]` is produced into a hidden
+/// temporary that OWNS a share (so the reference append copy-on-write splits it away from the outer,
+/// side-stepping `refprop-nested-append-writethrough`): when the key already exists the inner hash is
+/// read and retained, otherwise a fresh empty hash is vivified. The reference is appended into that
+/// temporary (reusing the flat per-level primitive), then the relocated inner is explicitly written
+/// back into `outer[$k]` and the relocated outer is stored to the local.
+fn lower_ref_assign_local_nested_append(
+    ctx: &mut LoweringContext<'_, '_>,
+    outer_name: &str,
+    index: &Expr,
+    var_name: &str,
+    span: Span,
+) {
+    let (outer, promotion) = load_local_array_as_hash(ctx, outer_name, span);
+    let inner_hash_ty = reference_element_type(&ctx.builder.value_php_type(outer.value));
+    let key = lower_expr(ctx, index);
+
+    // Produce the inner hash into an owned hidden temp, vivifying an empty hash when the key is
+    // absent. Owning a share forces the subsequent reference append to copy-on-write split the inner
+    // away from `outer[$k]`, so the final write-back is not a same-pointer round-trip.
+    let inner_temp = ctx.declare_owned_hidden_temp(inner_hash_ty.clone());
+    let exists = ctx.emit_value(
+        Op::HashIsset,
+        vec![outer.value, key.value],
+        None,
+        PhpType::Bool,
+        Op::HashIsset.default_effects(),
+        Some(span),
+    );
+    let split_initialized = ctx.initialized_slots_snapshot();
+    let present_block = ctx.builder.create_named_block("nref.present", Vec::new());
+    let vivify_block = ctx.builder.create_named_block("nref.vivify", Vec::new());
+    let merge = ctx.builder.create_named_block("nref.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: exists.value,
+        then_target: present_block,
+        then_args: Vec::new(),
+        else_target: vivify_block,
+        else_args: Vec::new(),
+    });
+
+    // Present: read the existing inner element and retain it into the temp.
+    ctx.builder.position_at_end(present_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
+    let existing = ctx.emit_value(
+        Op::HashGet,
+        vec![outer.value, key.value],
+        None,
+        inner_hash_ty.clone(),
+        Op::HashGet.default_effects(),
+        Some(span),
+    );
+    store_value_into_temp(ctx, &inner_temp, inner_hash_ty.clone(), existing, span);
+    branch_to(ctx, merge);
+
+    // Absent: vivify a fresh empty hash into the temp.
+    ctx.builder.position_at_end(vivify_block);
+    ctx.restore_initialized_slots(split_initialized);
+    let vivified = ctx.emit_value(
+        Op::HashNew,
+        Vec::new(),
+        Some(Immediate::Capacity(0)),
+        inner_hash_ty.clone(),
+        Op::HashNew.default_effects(),
+        Some(span),
+    );
+    store_value_into_temp(ctx, &inner_temp, inner_hash_ty.clone(), vivified, span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+
+    // Append the reference into the (now-uniquely-owned) inner temp and reverse-bind `$var`.
+    lower_ref_append_into_local_hash(ctx, &inner_temp, var_name, span);
+
+    // Write the relocated inner hash back into `outer[$k]`. `HashSet`'s value materialization retains
+    // the borrowed inner (refcount 2: temp + `outer[$k]`); the temp's redundant share is then released
+    // with the inner's ACTUAL hash type (not via `unset`, which would first widen the slot toward
+    // `Void`/`Mixed` and decref through the wrong runtime helper — leaking the hash), leaving
+    // `outer[$k]` the sole owner (refcount 1) so the container frees cleanly. The void `HashSet`
+    // codegen writes the possibly-relocated outer hash back to its SSA home and — when `outer` traces
+    // directly to a `LoadLocal` (already a hash, `promotion == None`) — to the outer local as well.
+    let inner_final = ctx.load_local(&inner_temp, Some(span));
+    ctx.emit_void(
+        Op::HashSet,
+        vec![outer.value, key.value, inner_final.value],
+        None,
+        Op::HashSet.default_effects(),
+        Some(span),
+    );
+    let inner_slot = ctx.declare_local(&inner_temp, inner_hash_ty.clone());
+    ctx.release_stored_local_value(&inner_temp, inner_slot, Some(span));
+    ctx.clear_owned_hidden_temp(&inner_temp, Some(span));
+    // Only the ArrayToHash (indexed-container) case needs an explicit write-back: there `outer`
+    // traces to `ArrayToHash`, not a `LoadLocal`, so the `HashSet` codegen cannot auto-store it.
+    if let Some((_, assoc_ty)) = promotion {
+        ctx.store_mutated_local(outer_name, outer, assoc_ty.clone(), Some(span));
+        ctx.set_local_type_exact(outer_name, assoc_ty);
+    }
 }
 
 /// Lowers an `if` / `elseif` / `else` chain and terminates unreachable merge blocks explicitly.

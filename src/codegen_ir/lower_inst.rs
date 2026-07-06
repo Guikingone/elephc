@@ -110,6 +110,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::AliasLocalRefCell => lower_alias_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalRefCell => lower_release_local_ref_cell(ctx, &inst),
         Op::AdoptRefCell => lower_adopt_ref_cell(ctx, &inst),
+        Op::LocalRefEnsure => lower_local_ref_ensure(ctx, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),
         Op::StoreGlobal => lower_store_global(ctx, &inst),
         Op::ExternGlobalLoad => lower_extern_global_load(ctx, &inst),
@@ -180,6 +181,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::HashGet => hashes::lower_hash_get(ctx, &inst),
         Op::HashRefElement => hashes::lower_hash_ref_element(ctx, &inst),
         Op::HashBindRefElement => hashes::lower_hash_bind_ref_element(ctx, &inst),
+        Op::HashRefAppendElement => hashes::lower_hash_ref_append_element(ctx, &inst),
         Op::HashIsset => builtins::lower_hash_isset(ctx, &inst),
         Op::HashSet => hashes::lower_hash_set(ctx, &inst),
         Op::HashUnset => hashes::lower_hash_unset(ctx, &inst),
@@ -6454,6 +6456,40 @@ fn lower_bind_ref_cell_ptr(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     );
     ctx.mark_promoted_ref_cell(target_slot);
     Ok(())
+}
+
+/// Lowers `LocalRefEnsure`: get-or-promotes a local's PERSISTENT kind-6 reference cell for `&$var`.
+///
+/// Loads the visible slot word, calls `__rt_ref_cell_ensure(value, tag)` — which reuses the word when
+/// it is already a kind-6 cell (idempotent across loop iterations) and otherwise allocates a fresh
+/// cell MOVING the value in — then stores the returned cell into both the visible slot and the hidden
+/// owner slot, marks the local a promoted ref-cell owner (so later reads/writes dereference the cell
+/// and scope-exit releases via `__rt_ref_cell_decref`), and yields the cell as the instruction result.
+fn lower_local_ref_ensure(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let (main_slot, owner_slot) = expect_local_slot_pair(inst)?;
+    let main_offset = ctx.local_offset(main_slot)?;
+    let owner_offset = ctx.local_offset(owner_slot)?;
+    let tag = crate::codegen::runtime_value_tag(&inst.result_php_type.codegen_repr()) as i64;
+    let scratch = abi::tertiary_scratch_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::load_at_offset(ctx.emitter, "x0", main_offset);
+            abi::emit_load_int_immediate(ctx.emitter, "x1", tag);
+            abi::emit_call_label(ctx.emitter, "__rt_ref_cell_ensure");
+            abi::store_at_offset_scratch(ctx.emitter, "x0", main_offset, scratch);
+            abi::store_at_offset_scratch(ctx.emitter, "x0", owner_offset, scratch);
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset(ctx.emitter, "rdi", main_offset);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", tag);
+            abi::emit_call_label(ctx.emitter, "__rt_ref_cell_ensure");
+            abi::store_at_offset_scratch(ctx.emitter, "rax", main_offset, scratch);
+            abi::store_at_offset_scratch(ctx.emitter, "rax", owner_offset, scratch);
+        }
+    }
+    ctx.mark_promoted_ref_cell(main_slot);
+    ctx.mark_adopted_ref_cell_owner(owner_slot);
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `AdoptRefCell`: binds the target local slot as an OWNING alias to a pre-existing

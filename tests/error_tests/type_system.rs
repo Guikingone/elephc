@@ -862,13 +862,14 @@ fn test_error_increment_on_object_is_rejected() {
     );
 }
 
-/// Verifies that a reference INTO an array element (`$arr[$k] = &$src`, the SLICE 2 form) still
-/// hard-errors: only aliasing FROM an element (`$x = &$arr[$k]`) is implemented, and the reverse
-/// bind must loud-error rather than silently miscompile.
+/// Verifies that a reference INTO an INSTANCE-property array element (`$o->arr[$k] = &$src`) still
+/// hard-errors: the local-array-element form (`$a[$k] = &$src`) is implemented, but a
+/// property-base element target is a follow-up slice and must loud-error rather than miscompile.
 #[test]
-fn test_error_ref_assign_into_array_element_unsupported() {
+fn test_error_ref_assign_into_property_array_element_unsupported() {
     expect_error(
-        "<?php $a = [\"k\" => 1]; $s = 5; $a[\"k\"] = &$s;",
+        "<?php class C { public array $arr = []; } \
+         $o = new C(); $s = 5; $o->arr[\"k\"] = &$s;",
         "Reference assignment into an array element is not supported",
     );
 }
@@ -949,5 +950,49 @@ fn test_error_ref_dynamic_property_on_mixed_receiver_unsupported() {
     expect_error(
         "<?php function f($obj, $p) { $x = &$obj->$p; return $x; }",
         "Reference to a dynamic property is only supported on a statically-typed object receiver",
+    );
+}
+
+/// SLICE 2 (local): the reference SOURCE for a local array-element reference must be a plain
+/// variable (`&$x`). Aliasing an array element (`$a[] = &$b[$j]`) is a follow-up slice and is
+/// rejected loudly rather than silently value-copied.
+#[test]
+fn test_error_ref_local_array_append_non_variable_source() {
+    expect_error(
+        "<?php $a = []; $b = [1, 2]; $a[] = &$b[0];",
+        "Reference source for a local array-element reference must be a plain variable",
+    );
+}
+
+/// SLICE 2 (local): a string-VALUED source cannot back a reference-into-element alias — a kind-6
+/// reference cell holds a single machine word, so a two-word `{ptr,len}` string would drop its
+/// length. `$a[] = &$s` for a string `$s` is rejected loudly (mirrors the SLICE-1 string guard).
+#[test]
+fn test_error_ref_local_array_append_string_source() {
+    expect_error(
+        "<?php $a = []; $s = \"x\"; $a[] = &$s;",
+        "Reference to a string-valued source in a local array element is not yet supported",
+    );
+}
+
+/// SLICE 2 (local): appending a reference into a STATIC-property array (`self::$a[] = &$x`) is a
+/// follow-up slice, not the local-array-element form; the checker rejects it loudly.
+#[test]
+fn test_error_ref_local_array_append_into_static_property() {
+    expect_error(
+        "<?php class C { public static array $a = []; \
+         static function t() { $x = 1; self::$a[] = &$x; } }",
+        "Appending a reference into a static or instance property array is not supported",
+    );
+}
+
+/// SLICE 2 (local): appending a reference into an INSTANCE-property array (`$o->p[] = &$x`) is a
+/// follow-up slice, not the local-array-element form; the checker rejects it loudly.
+#[test]
+fn test_error_ref_local_array_append_into_instance_property() {
+    expect_error(
+        "<?php class C { public array $p = []; } \
+         $o = new C(); $x = 1; $o->p[] = &$x;",
+        "Appending a reference into a static or instance property array is not supported",
     );
 }

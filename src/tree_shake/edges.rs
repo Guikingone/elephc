@@ -126,7 +126,7 @@ impl<'a> Analyzer<'a> {
             | StmtKind::ArrayPush { value: expr, .. }
             | StmtKind::ListUnpack { value: expr, .. } => self.scan_value(expr, ctx),
             StmtKind::RefAssign { source, .. } => self.scan_expr(source, ctx),
-            StmtKind::RefAssignToTarget { target, source } => {
+            StmtKind::RefAssignToTarget { target, source, .. } => {
                 self.scan_expr(target, ctx);
                 self.scan_expr(source, ctx);
             }

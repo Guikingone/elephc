@@ -92,10 +92,19 @@ pub enum StmtKind {
     RefAssignToTarget {
         /// The target lvalue: a `PropertyAccess` (`$obj->prop`) or an
         /// `ArrayAccess` (`$arr[$k]`) that becomes an alias to `source`.
+        ///
+        /// When `append` is `true`, `target` is the CONTAINER expression itself
+        /// with no sentinel index: `Variable($a)` for `$a[] = &…`,
+        /// `ArrayAccess { array, index }` for `$a[$k][] = &…`, or a
+        /// `PropertyAccess` / `StaticPropertyAccess` container (which the checker
+        /// then rejects as an unsupported append target).
         target: Expr,
         /// The reference source lvalue: a plain `Variable`, a `PropertyAccess`,
         /// an `ArrayAccess`, or a by-reference-returning call.
         source: Expr,
+        /// Whether the assignment appends a NEW element to `target` (`$a[] = &…`)
+        /// rather than aliasing an existing lvalue (`$a[$k] = &…`).
+        append: bool,
     },
     If {
         condition: Expr,

@@ -224,6 +224,23 @@ pub enum Op {
     /// value-tag 11 (Reference). Distinct from `HashRefElement` (which *produces* a cell from an
     /// element); this *consumes* a cell into an element.
     HashBindRefElement,
+    /// Appends an EXISTING kind-6 reference cell as a new element at a hash's next automatic integer
+    /// key (`$a[] = &$var`, `$a[$k][] = &$var`) and yields the possibly-relocated hash. Operands: the
+    /// hash, then the shared cell pointer (`$var`'s persistent cell, from `LocalRefEnsure`). Backed by
+    /// `__rt_hash_ref_append_element`, which increfs the cell (the new element owns a share) and
+    /// appends it with value-tag 11 (Reference). The backend writes the relocated hash back to the
+    /// array local. Distinct from `HashBindRefElement` (binds an existing cell at an EXPLICIT key) —
+    /// this appends at the next int key. The cell is NOT freshly allocated: Zend keeps ONE cell per
+    /// referenced variable, shared across every bind, so binding a fresh cell would diverge the alias.
+    HashRefAppendElement,
+    /// Get-or-promotes a local's PERSISTENT kind-6 reference cell for `&$var` and yields the cell
+    /// pointer. Immediate: `LocalSlotPair { first: the visible local slot, second: the hidden owner
+    /// slot }`; no operands. Backed by `__rt_ref_cell_ensure`: it reads the slot word, and when it is
+    /// already a kind-6 cell reuses it (idempotent — a loop body's single `&$var` promotes on the
+    /// first iteration and reuses thereafter), otherwise allocates a fresh cell that MOVES the value
+    /// in. The backend stores the cell into both slots and marks the local a promoted ref-cell owner
+    /// (so later reads/writes dereference it and scope-exit releases via `__rt_ref_cell_decref`).
+    LocalRefEnsure,
     LoadGlobal,
     StoreGlobal,
     LoadStaticLocal,
@@ -496,8 +513,11 @@ impl Op {
             HashRefElement => {
                 E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::WRITES_LOCAL | E::REFCOUNT_OP
             }
-            HashBindRefElement => {
+            HashBindRefElement | HashRefAppendElement => {
                 E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::WRITES_LOCAL | E::REFCOUNT_OP
+            }
+            LocalRefEnsure => {
+                E::READS_LOCAL | E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
             LoadGlobal | LoadStaticProperty | LoadStaticPropRefCell | ScopedConstantGet | ClassAttrNames
             | ClassAttrArgs | ClassGetAttributes | CatchCurrent => E::READS_GLOBAL,
@@ -629,6 +649,8 @@ impl Op {
             AdoptRefCell => "adopt_ref_cell",
             HashRefElement => "hash_ref_element",
             HashBindRefElement => "hash_bind_ref_element",
+            HashRefAppendElement => "hash_ref_append_element",
+            LocalRefEnsure => "local_ref_ensure",
             LoadGlobal => "load_global",
             StoreGlobal => "store_global",
             LoadStaticLocal => "load_static_local",

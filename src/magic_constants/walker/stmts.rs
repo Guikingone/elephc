@@ -53,9 +53,10 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             value: walk_expr(value, pass),
         },
         StmtKind::RefAssign { target, source } => StmtKind::RefAssign { target, source },
-        StmtKind::RefAssignToTarget { target, source } => StmtKind::RefAssignToTarget {
+        StmtKind::RefAssignToTarget { target, source, append } => StmtKind::RefAssignToTarget {
             target: walk_expr(target, pass),
             source: walk_expr(source, pass),
+            append,
         },
         StmtKind::TypedAssign {
             type_expr,
