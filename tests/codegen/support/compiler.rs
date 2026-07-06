@@ -201,6 +201,7 @@ pub(crate) fn compile_harness_expect_failure(
     heap_size: usize,
     harness: &str,
 ) -> String {
+    skip_if_windows_harness_fixture();
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -229,6 +230,7 @@ pub(crate) fn compile_harness_expect_failure(
 // by the caller (e.g., a printf replacement). Cleans up the temporary directory after execution.
 /// Provides the Compile harness and run helper used by the compiler module.
 pub(crate) fn compile_harness_and_run(source: &str, heap_size: usize, harness: &str) -> String {
+    skip_if_windows_harness_fixture();
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -260,6 +262,7 @@ pub(crate) fn compile_harness_and_run_with_heap_debug(
     heap_size: usize,
     harness: &str,
 ) -> String {
+    skip_if_windows_harness_fixture();
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
