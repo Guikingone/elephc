@@ -109,14 +109,12 @@ pub(super) fn emit_runtime_callable_invoker(
 
 /// Loads the descriptor entry slot from the first invoker argument into `call_reg`.
 fn emit_descriptor_entry_to_call_reg(emitter: &mut Emitter, call_reg: &str) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("mov {}, x0", call_reg)); // keep descriptor while loading its native entry
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, rdi", call_reg)); // keep descriptor while loading its native entry
-        }
-    }
+    // The invoker receives the descriptor in its first ABI argument register, which is
+    // the target's user-call ABI (rdi on Linux x86_64, rcx on Windows x86_64, x0 on
+    // AArch64). Reading a hardcoded `rdi` would lose the descriptor on Windows, where
+    // the caller materializes it in `rcx`.
+    let descriptor_reg = abi::int_arg_reg_name(emitter.target, 0);
+    emitter.instruction(&format!("mov {}, {}", call_reg, descriptor_reg));      // keep the descriptor pointer while loading the target entry
     callable_descriptor::emit_load_entry_from_descriptor(emitter, call_reg, call_reg);
 }
 
