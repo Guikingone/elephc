@@ -18,15 +18,9 @@
 
 use crate::support::*;
 
-/// Checks whether the MinGW-w64 x86_64 toolchain is available on the host.
-/// Returns `true` if `x86_64-w64-mingw32-gcc` is found in PATH.
-fn has_mingw() -> bool {
-    Command::new("x86_64-w64-mingw32-gcc")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
+// `has_mingw`, `has_wine`, and `wine_binary` are shared with the parameterized
+// codegen harness and live in `crate::support` (imported via the glob above), so
+// there is a single source of truth for MinGW/Wine detection.
 
 /// Compiles a PHP source string to a Windows PE32+ binary and verifies the output.
 /// Skips the test if MinGW-w64 is not installed.
@@ -108,37 +102,6 @@ fn test_windows_loop() {
 #[test]
 fn test_windows_string_concat() {
     compile_windows_pe("<?php echo 'Hello' . ' ' . 'World';");
-}
-
-/// Checks whether Wine is available on the host, needed to actually execute
-/// cross-compiled Windows PE binaries. Tries `wine64` first (the native 64-bit
-/// loader), then falls back to `wine` (which also runs PE32+ binaries on most
-/// modern distros). Returns `true` if either responds to `--version`.
-fn has_wine() -> bool {
-    Command::new("wine64")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-        || Command::new("wine")
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-}
-
-/// Returns the preferred Wine binary name: `wine64` if present, else `wine`.
-fn wine_binary() -> &'static str {
-    if Command::new("wine64")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-    {
-        "wine64"
-    } else {
-        "wine"
-    }
 }
 
 /// Compiles a PHP source string to a Windows PE32+ binary, executes it under

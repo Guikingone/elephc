@@ -54,6 +54,17 @@ const DEFAULT_BINARY_TIMEOUT_SECS: u64 = 60;
 /// Assemble `asm` to `obj_path` by piping the source through `as`'s stdin so
 /// no intermediate `.s` file is created.
 fn assemble_from_stdin(asm: &str, obj_path: &Path) {
+    ensure_windows_runnable_or_skip();
+    // Rewrite the shared x86_64 backend's raw Linux syscalls into windows shim
+    // calls before assembling; a no-op on native targets, so their bytes are
+    // unchanged (the borrowed `asm` is fed straight through).
+    let windows_asm;
+    let asm = if target().platform == Platform::Windows {
+        windows_asm = finalize_asm_for_target(asm);
+        windows_asm.as_str()
+    } else {
+        asm
+    };
     let mut cmd = Command::new(assembler_cmd());
     if target().platform == Platform::MacOS {
         cmd.args(["-arch", target().darwin_arch_name()]);
@@ -95,6 +106,9 @@ pub(crate) fn get_runtime_obj() -> &'static Path {
 /// runtimes and custom heap sizes get distinct objects while repeated tests can
 /// still share the assembled output.
 pub(crate) fn runtime_obj_for_asm(runtime_asm: &str) -> std::path::PathBuf {
+    ensure_windows_runnable_or_skip();
+    // Key the cache on the untransformed runtime assembly: the windows rewrite is
+    // deterministic, so identical raw assembly still shares one assembled object.
     let hash = runtime_asm_hash(runtime_asm);
     let cache = RUNTIME_OBJS_BY_ASM.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     let mut cache = cache.lock().expect("runtime asm cache poisoned");
@@ -106,6 +120,15 @@ pub(crate) fn runtime_obj_for_asm(runtime_asm: &str) -> std::path::PathBuf {
     fs::create_dir_all(&dir).unwrap();
     let asm_path = dir.join(format!("runtime_{hash:016x}.s"));
     let obj_path = dir.join(format!("runtime_{hash:016x}.o"));
+    // Apply the windows syscall→shim rewrite before writing/assembling; a no-op on
+    // native targets, so the runtime bytes are unchanged there.
+    let windows_asm;
+    let runtime_asm = if target().platform == Platform::Windows {
+        windows_asm = finalize_asm_for_target(runtime_asm);
+        windows_asm.as_str()
+    } else {
+        runtime_asm
+    };
     fs::write(&asm_path, runtime_asm).unwrap();
 
     let mut cmd = Command::new(assembler_cmd());
@@ -358,30 +381,92 @@ pub(crate) fn link_binary(
             );
         }
         Platform::Windows => {
-            panic!("Windows target is not yet supported (see issue #379)");
+            // MinGW GCC (`x86_64-w64-mingw32-gcc`) links the user + runtime objects
+            // into a PE32+ `.exe`, mirroring the production windows arm in
+            // `src/linker.rs`. The `.exe` suffix matches what MinGW emits and what
+            // the Wine runner then executes.
+            let mut ld_cmd = Command::new(gcc_cmd());
+            ld_cmd.arg("-o").arg(target_binary_path(bin_path));
+            ld_cmd.arg(obj_path);
+            ld_cmd.arg(runtime_obj);
+            if needs_bridge_staticlib {
+                ld_cmd.arg(format!("-L{}", bridge_staticlib_dir));
+            }
+            for path in extra_link_paths {
+                ld_cmd.arg(format!("-L{}", path));
+            }
+            for lib in &actual_link_libs {
+                ld_cmd.arg(format!("-l{}", lib));
+            }
+            // Windows system import libraries the runtime shims resolve against
+            // (WriteFile/ReadFile/HeapAlloc/BCryptGenRandom/...); same set as the
+            // production linker.
+            ld_cmd.args([
+                "-lkernel32",
+                "-lmsvcrt",
+                "-lwinmm",
+                "-lws2_32",
+                "-lbcrypt",
+                "-lshlwapi",
+            ]);
+            let ld_out = ld_cmd.output().expect("failed to run linker");
+            assert!(
+                ld_out.status.success(),
+                "linker failed:\n{}",
+                String::from_utf8_lossy(&ld_out.stderr)
+            );
         }
     }
 }
 
-/// Runs a compiled binary directly, using qemu on Linux x86_64 to emulate ARM64.
-/// On other platform/arch combinations, execs the binary natively.
-/// Used for post-link execution of already-assembled test binaries.
-pub(crate) fn run_binary(bin_path: &Path, dir: &Path) -> Output {
-    if target().platform == Platform::Linux
-        && target().arch == Arch::AArch64
-        && cfg!(target_arch = "x86_64")
-    {
-        let mut cmd = Command::new("qemu-aarch64-static");
-        if let Some(sysroot) = qemu_sysroot() {
-            cmd.args(["-L", sysroot]);
-        }
-        cmd.arg(bin_path).current_dir(dir);
-        run_command_with_timeout(cmd)
+/// Returns the on-disk path of the compiled binary for the current target. For
+/// windows-x86_64 this is `<bin>.exe` (MinGW emits a `.exe` and Wine runs it);
+/// every other target uses the bare binary path unchanged.
+fn target_binary_path(bin_path: &Path) -> std::path::PathBuf {
+    if target().platform == Platform::Windows {
+        bin_path.with_extension("exe")
     } else {
-        let mut cmd = Command::new(bin_path);
-        cmd.current_dir(dir);
-        run_command_with_timeout(cmd)
+        bin_path.to_path_buf()
     }
+}
+
+/// Builds the base `Command` that executes a compiled codegen fixture for the
+/// current target: a direct exec on the host, `qemu-aarch64-static` when running
+/// ARM64 binaries on an x86_64 host, or Wine running the `.exe` for the
+/// windows-x86_64 target. The caller sets the working directory and wires
+/// args/stdin/stdout as needed. Centralizing run-dispatch here keeps every runner
+/// path (plain, capture, stdin) on the same target-correct launcher, and leaves the
+/// native/qemu commands byte-identical to the previous inline logic.
+pub(crate) fn build_run_command(bin_path: &Path) -> Command {
+    match target().platform {
+        Platform::Windows => {
+            let mut cmd = Command::new(wine_binary());
+            cmd.arg(target_binary_path(bin_path));
+            // Silence Wine's diagnostic chatter so it never pollutes captured stdout.
+            cmd.env("WINEDEBUG", "-all");
+            cmd
+        }
+        Platform::Linux if target().arch == Arch::AArch64 && cfg!(target_arch = "x86_64") => {
+            let mut cmd = Command::new("qemu-aarch64-static");
+            if let Some(sysroot) = qemu_sysroot() {
+                cmd.args(["-L", sysroot]);
+            }
+            cmd.arg(bin_path);
+            cmd
+        }
+        _ => Command::new(bin_path),
+    }
+}
+
+/// Runs a compiled binary for the current target, capturing stdout/stderr under a
+/// timeout. Uses qemu to emulate ARM64 on an x86_64 host and Wine to run the `.exe`
+/// on the windows-x86_64 target; execs natively otherwise. Used for post-link
+/// execution of already-assembled test binaries.
+pub(crate) fn run_binary(bin_path: &Path, dir: &Path) -> Output {
+    ensure_windows_runnable_or_skip();
+    let mut cmd = build_run_command(bin_path);
+    cmd.current_dir(dir);
+    run_command_with_timeout(cmd)
 }
 
 /// Runs a child command with a timeout and captures stdout/stderr.

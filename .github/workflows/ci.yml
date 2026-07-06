@@ -383,3 +383,96 @@ jobs:
           echo '<?php echo "Hello" . " " . "World";' > /tmp/concat.php
           cargo run -- --target windows-x86_64 /tmp/concat.php
           file /tmp/concat.exe | grep -q "PE32+ executable"
+
+  # TEMPORARY parity-measurement job (informational only): runs the full codegen
+  # test suite cross-compiled to windows-x86_64 and executed under Wine, to measure
+  # how many fixtures already pass on Windows. It is intentionally NON-BLOCKING
+  # (`continue-on-error: true`, and deliberately NOT listed in the `test` gate's
+  # `needs`), so a red result here never blocks a merge. Interpreting results: a
+  # test that "passes" here is either a real Windows pass OR a graceful skip
+  # (harness `ELEPHC_TEST_TARGET` skip when MinGW/Wine are missing, or a raw-asm
+  # exit-harness fixture that cannot target Windows); a "failure" is a genuine
+  # Windows codegen/runtime divergence (the `ci` nextest profile's 60s slow-timeout
+  # kills and reports hung binaries, so a crashing `.exe` cannot stall a shard).
+  # Remove this job once Windows is promoted to a first-class supported target.
+  windows-codegen-parity:
+    name: Windows Codegen Parity (measurement ${{ matrix.shard }}/16)
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    env:
+      # Cross-compile + run every codegen fixture as windows-x86_64 (via Wine).
+      ELEPHC_TEST_TARGET: windows-x86_64
+      # Silence Wine's diagnostic chatter so it never pollutes captured stdout/stderr.
+      WINEDEBUG: -all
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-windows-parity-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-windows-parity-
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils \
+            build-essential \
+            file \
+            libbz2-dev \
+            libpcre2-dev \
+            libssl-dev \
+            pkg-config \
+            tzdata \
+            zlib1g-dev
+
+      - name: Install MinGW-w64 cross-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils-mingw-w64-x86-64 \
+            gcc-mingw-w64-x86-64 \
+            file
+
+      - name: Install Wine
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine64 wine
+          # On ubuntu-24.04 the wine64 package only ships the internal
+          # /usr/lib/wine/wine64 loader; the callable binary on PATH is `wine`
+          # (dispatches to the 64-bit loader since wine32/i386 is not installed
+          # and is not needed for x86_64-only PE binaries).
+          command -v wine64 >/dev/null 2>&1 && wine64 --version || wine --version
+
+      - name: Initialize Wine prefix
+        run: |
+          wineboot --init || true
+          wineserver --wait || true
+
+      - name: Build bridge/native support crates
+        # Match the native codegen-tests job so bridge-linking fixtures build their
+        # host staticlibs up front instead of triggering serialized on-demand builds
+        # mid-shard.
+        run: cargo build $BRIDGE_CRATES
+
+      - name: Run codegen test shard under windows-x86_64
+        # `--no-fail-fast` so the shard measures every fixture; the job's
+        # `continue-on-error` keeps a red shard from failing the workflow.
+        run: cargo nextest run --profile ci --test codegen_tests --partition hash:${{ matrix.shard }}/16 --no-fail-fast
