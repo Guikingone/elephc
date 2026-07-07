@@ -15,6 +15,8 @@ sidebar:
 | [`passthru()`](./process/passthru.md) | `(string $command): void` | `void` |
 | [`pclose()`](./process/pclose.md) | `(resource $handle): int` | `int` |
 | [`popen()`](./process/popen.md) | `(string $command, string $mode): mixed` | `mixed` |
+| [`proc_close()`](./process/proc_close.md) | `(mixed $process): int` | `int` |
+| [`proc_open()`](./process/proc_open.md) | `(array $descriptor_spec, string $command, array &$pipes): mixed` | `mixed` |
 | [`readline()`](./process/readline.md) | `(string $prompt = null): mixed` | `mixed` |
 | [`shell_exec()`](./process/shell_exec.md) | `(string $command): string` | `string` |
 | [`sleep()`](./process/sleep.md) | `(int $seconds): int` | `int` |

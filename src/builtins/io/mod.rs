@@ -122,6 +122,8 @@ pub mod pclose;
 pub mod pfsockopen;
 pub mod popen;
 pub mod print_r;
+pub mod proc_close;
+pub mod proc_open;
 pub mod readdir;
 pub mod readfile;
 pub mod readline;

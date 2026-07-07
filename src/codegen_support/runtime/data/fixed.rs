@@ -269,6 +269,12 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _eof_flags, 256, 3\n");
     out.push_str(".comm _popen_files, 2048, 3\n");
     out.push_str(".comm _dir_handles, 2048, 3\n");
+    // Per-process tables for proc_open (256 fds × 8B each). _proc_pids stores the
+    // child PID keyed by the parent-side pipe fd; _proc_child_fds stores the child
+    // process handle (Windows) / pid mirror used by proc_close to reap the child.
+    // C1a declares the storage; C1b/C1c populate it from the real runtime helpers.
+    out.push_str(".comm _proc_pids, 2048, 3\n");
+    out.push_str(".comm _proc_child_fds, 2048, 3\n");
     // Per-fd glob:// state pointers (256 fds × 8B). Each slot is a pointer to
     // a heap-allocated glob_state struct (pathv ptr + pathc + index + the
     // libc glob_t whose lifetime globfree() needs at closedir time). The

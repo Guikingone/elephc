@@ -16,8 +16,8 @@
 //!   check hook does not re-check it; the return type is always `Str`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen_ir::context::FunctionContext;
-use crate::codegen_ir::CodegenIrError;
+use crate::codegen::context::FunctionContext;
+use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
 use crate::ir::Instruction;
 use crate::parser::ast::ExprKind;
@@ -55,5 +55,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
 /// Lowers a `random_bytes` call by dispatching to the shared CSPRNG byte-string emitter.
 fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen_ir::lower_inst::builtins::math::lower_random_bytes(ctx, inst)
+    crate::codegen::lower_inst::builtins::math::lower_random_bytes(ctx, inst)
 }

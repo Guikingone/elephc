@@ -83,21 +83,6 @@ pub(crate) fn int_arg_reg_name(target: Target, idx: usize) -> &'static str {
     }
 }
 
-/// Returns the `idx`-th integer argument register for a `__rt_*` runtime helper call.
-///
-/// Runtime helpers are emitted with the System V AMD64 ABI on every x86_64 target
-/// (including Windows, where user/extern calls use the MSx64 ABI). On AArch64 the
-/// runtime ABI matches the platform ABI, so this returns the same register as
-/// [`int_arg_reg_name`]. Call sites that pass arguments to `__rt_*` helpers must use
-/// this instead of [`int_arg_reg_name`], which returns the target's user-call ABI
-/// (MSx64 `rcx`/`rdx` on Windows) and would hand the helper the wrong registers.
-pub(crate) fn runtime_int_arg_reg_name(target: Target, idx: usize) -> &'static str {
-    match target.arch {
-        Arch::AArch64 => int_arg_reg_name(target, idx),
-        Arch::X86_64 => ["rdi", "rsi", "rdx", "rcx", "r8", "r9"][idx],
-    }
-}
-
 /// Returns the register name for the `idx`-th float argument register.
 /// Panics if `idx >= float_arg_reg_limit(target)`.
 pub(crate) fn float_arg_reg_name(target: Target, idx: usize) -> &'static str {

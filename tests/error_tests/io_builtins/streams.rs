@@ -840,6 +840,24 @@ fn test_error_pclose_requires_resource() {
     );
 }
 
+/// Verifies proc_open rejects too few arguments at compile time.
+#[test]
+fn test_error_proc_open_wrong_args() {
+    expect_error(
+        r#"<?php
+$pipes = [];
+proc_open([], "echo hi");
+"#,
+        "proc_open() takes exactly 3 arguments",
+    );
+}
+
+/// Verifies proc_close rejects too few arguments at compile time.
+#[test]
+fn test_error_proc_close_wrong_args() {
+    expect_error("<?php proc_close();", "proc_close() takes exactly 1 argument");
+}
+
 /// Verifies the invalid-call diagnostic for error opendir wrong args.
 #[test]
 fn test_error_opendir_wrong_args() {

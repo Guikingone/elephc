@@ -3640,6 +3640,68 @@ pub(crate) fn lower_pclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     store_if_result(ctx, inst)
 }
 
+/// Lowers `proc_open(descriptor_spec, command, pipes)` and boxes the process as
+/// `resource|false`. The `pipes` array is passed by reference so the runtime can
+/// populate it with the child's pipe descriptors.
+///
+/// Runtime ABI: AArch64 `x0` = descriptor_spec array pointer, `x1` = command
+/// pointer, `x2` = command length, `x3` = pipes array pointer; x86_64 `rdi` =
+/// descriptor_spec pointer, `rsi` = command pointer, `rdx` = command length,
+/// `rcx` = pipes array pointer.
+pub(crate) fn lower_proc_open(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "proc_open", 3)?;
+    let descriptor_spec = expect_operand(inst, 0)?;
+    let command = expect_operand(inst, 1)?;
+    let pipes = expect_operand(inst, 2)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // -- load and stack the descriptor_spec array pointer (x0) --
+            ctx.load_value_to_result(descriptor_spec)?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            // -- load and stack the command string (x1 ptr, x2 len) --
+            load_string_to_result(ctx, command, "proc_open command")?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            // -- load the pipes array pointer into x0, then move it to x3 --
+            ctx.load_value_to_result(pipes)?;
+            ctx.emitter.instruction("mov x3, x0");                              // pass the pipes array pointer as the fourth runtime argument
+            // -- restore command (x1 ptr, x2 len) and descriptor_spec (x0) --
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            // -- load and stack the descriptor_spec array pointer (rax) --
+            ctx.load_value_to_result(descriptor_spec)?;
+            abi::emit_push_reg(ctx.emitter, "rax");
+            // -- load and stack the command string (rax ptr, rdx len) --
+            load_string_to_result(ctx, command, "proc_open command")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            // -- load the pipes array pointer into rax, then move it to rcx --
+            ctx.load_value_to_result(pipes)?;
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the pipes array pointer as the fourth runtime argument
+            // -- restore command (rsi ptr, rdx len) and descriptor_spec (rdi) --
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_proc_open");
+    box_stream_fd_or_false_result_kind(ctx, "proc_open", 5);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `proc_close(process)` and returns the child process exit status.
+pub(crate) fn lower_proc_close(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "proc_close", 1)?;
+    let handle = expect_operand(inst, 0)?;
+    let captured = capture_resource_box_for_release(ctx, handle)?;
+    load_stream_fd_to_result(ctx, handle, "proc_close")?;
+    apply_resource_release_sentinel(ctx, captured);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the process descriptor to the runtime close helper
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_proc_close");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `fsockopen(host, port, errno?, errstr?, timeout?)`.
 pub(crate) fn lower_fsockopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "fsockopen", 2, 5)?;

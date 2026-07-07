@@ -353,3 +353,17 @@ fn test_windows_popen_pclose_system_shell_exec_compile() {
 fn test_windows_stream_select_compile() {
     compile_windows_pe("<?php $r=[]; $w=[]; $e=[]; stream_select($r, $w, $e, 0); echo 'ok';");
 }
+
+/// Verifies proc_open/proc_close compile for the Windows PE target (C1a surface).
+/// Compile-only because the C1a runtime helpers are loud stubs returning -1; this
+/// catches link failures from the new `__rt_proc_open`/`__rt_proc_close` stubs and
+/// the kind-5 mixed-free destructor arm. Runtime behavior is exercised by CI under
+/// Wine once C1c lands.
+#[test]
+fn test_windows_proc_open_close_compile() {
+    compile_windows_pe(r#"<?php
+$pipes = [];
+$r = proc_open([0 => ["pipe", "r"], 1 => ["pipe", "w"]], "echo hi", $pipes);
+proc_close($r);
+"#);
+}

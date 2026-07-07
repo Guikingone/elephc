@@ -405,6 +405,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_stream_socket_pair(emitter);
     io::emit_popen(emitter);
     io::emit_pclose(emitter);
+    io::emit_proc_open(emitter);
+    io::emit_proc_close(emitter);
     io::emit_opendir(emitter);
     io::emit_readdir(emitter);
     io::emit_closedir(emitter);
