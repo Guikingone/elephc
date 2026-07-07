@@ -147,6 +147,7 @@ const WIN32_IMPORTS: &[&str] = &[
     "setsockopt",
     "getsockopt",
     "ioctlsocket",
+    "select",
     "WSAGetLastError",
     "getpid",
     "_putenv",
@@ -168,6 +169,11 @@ const WIN32_IMPORTS: &[&str] = &[
     "SetFileTime",
     "_mkgmtime",
     "_execvp",
+    "_popen",
+    "_pclose",
+    "_fileno",
+    "fgetc",
+    "system",
     "OpenProcess",
     "TerminateProcess",
     "GlobalMemoryStatusEx",
@@ -1272,12 +1278,282 @@ fn emit_shim_statfs(emitter: &mut Emitter) {
     emitter.blank();
 }
 
-/// Emits a pselect6 shim — Windows doesn't have pselect6, return -1 (ENOSYS).
-/// PHP's stream_select() uses select() via ws2_32 on Windows.
+/// Emits the `__rt_sys_pselect6` shim: converts the Linux `pselect6` syscall
+/// (syscall 270) to ws2_32 `select`. elephc's `__rt_stream_select` x86_64 path
+/// builds Linux fd_set bitmaps (one qword per set, nfds=64) and emits
+/// `syscall(270)` with SysV args, which the Windows syscall transform routes
+/// here as a normal `call`.
+///
+/// SysV args received (passed in SysV registers by the transform):
+/// - `edi` = nfds (int; elephc always passes 64 — the bitmap is one qword)
+/// - `rsi` = readfds (Linux fd_set* bitmap; NULL allowed)
+/// - `rdx` = writefds (Linux fd_set* bitmap; NULL allowed)
+/// - `r10` = exceptfds (Linux fd_set* bitmap; NULL allowed)
+/// - `r8`  = timeout (struct timespec* : sec@0 i64, nsec@8 i64; NULL = block)
+/// - `r9`  = sigmask (NULL — ignored entirely)
+///
+/// Conversion:
+/// - Each non-NULL Linux fd_set bitmap (qword) is converted into a Windows
+///   `fd_set` (winsock2, 520 bytes: `u_int fd_count` @0, 4-byte pad, `SOCKET
+///   fd_array[64]` @8). For each set bit `b` (0..nfds-1), `b` is appended to
+///   `fd_array` and `fd_count` incremented. NULL sets pass NULL to `select`.
+/// - The Linux `struct timespec` (sec i64, nsec i64) is converted to the
+///   Windows `struct timeval` (tv_sec i32 @0, tv_usec i32 @4): tv_sec = sec
+///   (low 32 bits), tv_usec = nsec / 1000. A NULL timeout passes NULL (block).
+/// - After `select` returns: on SOCKET_ERROR (-1), the three Linux bitmaps are
+///   zeroed (only the non-NULL ones) and -1 is returned. On success, each
+///   non-NULL Linux bitmap is zeroed and rebuilt from the post-select Windows
+///   `fd_set` (which `select` rewrites in place to contain only ready
+///   descriptors): for each fd in `fd_array[0..fd_count)`, bit `fd` is set in
+///   the Linux bitmap qword (`or [linux_fds], 1 << fd`).
+///
+/// Frame: 1688 bytes (`sub rsp, 1688`; 1688 ≡ 8 mod 16, so rsp ≡ 0 at the
+/// `call select` since the shim is entered via `call` with rsp ≡ 8). Layout:
+/// - [rsp+0..32)    shadow space (MSx64)
+/// - [rsp+32]       nfds spill (edi, zero-extended to 64 bits)
+/// - [rsp+40]       readfds ptr (rsi)
+/// - [rsp+48]       writefds ptr (rdx)
+/// - [rsp+56]       exceptfds ptr (r10)
+/// - [rsp+64]       timeout ptr (r8)
+/// - [rsp+72]       saved select result
+/// - [rsp+80]       win_read ptr  (select arg2)
+/// - [rsp+88]       win_write ptr (select arg3)
+/// - [rsp+96]       win_except ptr (select arg4)
+/// - [rsp+104]      win_timeval ptr (select arg5)
+/// - [rsp+112]      win_read fd_set (520 bytes)
+/// - [rsp+632]      win_write fd_set (520 bytes)
+/// - [rsp+1152]     win_except fd_set (520 bytes)
+/// - [rsp+1672]     win_timeval (8 bytes: tv_sec i32 @0, tv_usec i32 @4)
+/// - [rsp+1680]     padding (8 bytes)
 fn emit_shim_pselect6(emitter: &mut Emitter) {
     emitter.label_global("__rt_sys_pselect6");
-    emitter.instruction("mov rax, -1");                                         // return -1 (not directly supported)
-    emitter.instruction("ret");                                                 // return
+    // -- frame: 1688 bytes; 1688 ≡ 8 mod 16 keeps rsp ≡ 0 at the ws2_32 select call --
+    emitter.instruction("sub rsp, 1688");                                       // allocate frame (1688 ≡ 8 mod 16)
+    // -- spill incoming SysV args (volatile across fd_set build and select call) --
+    emitter.instruction("mov eax, edi");                                        // zero-extend nfds (edi, 32-bit) into rax
+    emitter.instruction("mov QWORD PTR [rsp + 32], rax");                       // spill nfds
+    emitter.instruction("mov QWORD PTR [rsp + 40], rsi");                       // spill readfds ptr
+    emitter.instruction("mov QWORD PTR [rsp + 48], rdx");                       // spill writefds ptr
+    emitter.instruction("mov QWORD PTR [rsp + 56], r10");                       // spill exceptfds ptr
+    emitter.instruction("mov QWORD PTR [rsp + 64], r8");                        // spill timeout ptr
+    // -- build win_read fd_set from Linux readfds bitmap (rsi) --
+    emitter.instruction("mov rax, QWORD PTR [rsp + 40]");                       // readfds ptr
+    emitter.instruction("test rax, rax");                                       // NULL?
+    emitter.instruction("jz .Lpselect6_read_null");                             // → pass NULL to select
+    emitter.instruction("lea rdi, [rsp + 112]");                                // win_read fd_set base
+    emitter.instruction("xor eax, eax");                                        // fill value = 0
+    emitter.instruction("mov rcx, 65");                                         // 65 qwords = 520 bytes
+    emitter.instruction("rep stosq");                                           // zero win_read fd_set (fd_count + array)
+    emitter.instruction("mov rax, QWORD PTR [rsp + 40]");                       // reload readfds ptr (clobbered by rep stosq)
+    emitter.instruction("mov r11, QWORD PTR [rax]");                            // Linux bitmap qword (bits 0..63)
+    emitter.instruction("lea rdi, [rsp + 112]");                                // win_read fd_set base (for array writes)
+    emitter.instruction("xor r10d, r10d");                                      // bit counter b = 0
+    emitter.label(".Lpselect6_read_loop");
+    emitter.instruction("cmp r10d, 64");                                        // b < 64?
+    emitter.instruction("jge .Lpselect6_read_done");                            // → done scanning bitmap
+    emitter.instruction("mov rdx, 1");                                          // rdx = 1
+    emitter.instruction("mov rcx, r10d");                                       // shift count = b
+    emitter.instruction("shl rdx, cl");                                         // rdx = 1 << b
+    emitter.instruction("test r11, rdx");                                       // bit b set in Linux bitmap?
+    emitter.instruction("jz .Lpselect6_read_next");                             // → skip
+    emitter.instruction("mov ecx, DWORD PTR [rdi]");                            // fd_count (u_int @0)
+    emitter.instruction("mov QWORD PTR [rdi + 8 + rcx*8], r10");                // fd_array[fd_count] = b (SOCKET, 8 bytes)
+    emitter.instruction("inc ecx");                                             // fd_count++
+    emitter.instruction("mov DWORD PTR [rdi], ecx");                            // store updated fd_count
+    emitter.label(".Lpselect6_read_next");
+    emitter.instruction("inc r10d");                                            // b++
+    emitter.instruction("jmp .Lpselect6_read_loop");                            // next bit
+    emitter.label(".Lpselect6_read_done");
+    emitter.instruction("lea rax, [rsp + 112]");                                // win_read ptr for select
+    emitter.instruction("mov QWORD PTR [rsp + 80], rax");                       // store select arg2
+    emitter.instruction("jmp .Lpselect6_read_end");                             // skip NULL path
+    emitter.label(".Lpselect6_read_null");
+    emitter.instruction("mov QWORD PTR [rsp + 80], 0");                         // pass NULL for readfds
+    emitter.label(".Lpselect6_read_end");
+    // -- build win_write fd_set from Linux writefds bitmap (rdx) --
+    emitter.instruction("mov rax, QWORD PTR [rsp + 48]");                       // writefds ptr
+    emitter.instruction("test rax, rax");                                       // NULL?
+    emitter.instruction("jz .Lpselect6_write_null");                            // → pass NULL to select
+    emitter.instruction("lea rdi, [rsp + 632]");                                // win_write fd_set base
+    emitter.instruction("xor eax, eax");                                        // fill value = 0
+    emitter.instruction("mov rcx, 65");                                         // 65 qwords = 520 bytes
+    emitter.instruction("rep stosq");                                           // zero win_write fd_set
+    emitter.instruction("mov rax, QWORD PTR [rsp + 48]");                       // reload writefds ptr
+    emitter.instruction("mov r11, QWORD PTR [rax]");                            // Linux bitmap qword
+    emitter.instruction("lea rdi, [rsp + 632]");                                // win_write fd_set base
+    emitter.instruction("xor r10d, r10d");                                      // bit counter b = 0
+    emitter.label(".Lpselect6_write_loop");
+    emitter.instruction("cmp r10d, 64");                                        // b < 64?
+    emitter.instruction("jge .Lpselect6_write_done");                           // → done
+    emitter.instruction("mov rdx, 1");                                          // rdx = 1
+    emitter.instruction("mov rcx, r10d");                                       // shift count = b
+    emitter.instruction("shl rdx, cl");                                         // rdx = 1 << b
+    emitter.instruction("test r11, rdx");                                       // bit b set?
+    emitter.instruction("jz .Lpselect6_write_next");                            // → skip
+    emitter.instruction("mov ecx, DWORD PTR [rdi]");                            // fd_count
+    emitter.instruction("mov QWORD PTR [rdi + 8 + rcx*8], r10");                // fd_array[fd_count] = b
+    emitter.instruction("inc ecx");                                             // fd_count++
+    emitter.instruction("mov DWORD PTR [rdi], ecx");                            // store fd_count
+    emitter.label(".Lpselect6_write_next");
+    emitter.instruction("inc r10d");                                            // b++
+    emitter.instruction("jmp .Lpselect6_write_loop");                           // next bit
+    emitter.label(".Lpselect6_write_done");
+    emitter.instruction("lea rax, [rsp + 632]");                                // win_write ptr for select
+    emitter.instruction("mov QWORD PTR [rsp + 88], rax");                       // store select arg3
+    emitter.instruction("jmp .Lpselect6_write_end");                            // skip NULL path
+    emitter.label(".Lpselect6_write_null");
+    emitter.instruction("mov QWORD PTR [rsp + 88], 0");                         // pass NULL for writefds
+    emitter.label(".Lpselect6_write_end");
+    // -- build win_except fd_set from Linux exceptfds bitmap (r10) --
+    emitter.instruction("mov rax, QWORD PTR [rsp + 56]");                       // exceptfds ptr
+    emitter.instruction("test rax, rax");                                       // NULL?
+    emitter.instruction("jz .Lpselect6_except_null");                           // → pass NULL to select
+    emitter.instruction("lea rdi, [rsp + 1152]");                               // win_except fd_set base
+    emitter.instruction("xor eax, eax");                                        // fill value = 0
+    emitter.instruction("mov rcx, 65");                                         // 65 qwords = 520 bytes
+    emitter.instruction("rep stosq");                                           // zero win_except fd_set
+    emitter.instruction("mov rax, QWORD PTR [rsp + 56]");                       // reload exceptfds ptr
+    emitter.instruction("mov r11, QWORD PTR [rax]");                            // Linux bitmap qword
+    emitter.instruction("lea rdi, [rsp + 1152]");                               // win_except fd_set base
+    emitter.instruction("xor r10d, r10d");                                      // bit counter b = 0
+    emitter.label(".Lpselect6_except_loop");
+    emitter.instruction("cmp r10d, 64");                                        // b < 64?
+    emitter.instruction("jge .Lpselect6_except_done");                          // → done
+    emitter.instruction("mov rdx, 1");                                          // rdx = 1
+    emitter.instruction("mov rcx, r10d");                                       // shift count = b
+    emitter.instruction("shl rdx, cl");                                         // rdx = 1 << b
+    emitter.instruction("test r11, rdx");                                       // bit b set?
+    emitter.instruction("jz .Lpselect6_except_next");                           // → skip
+    emitter.instruction("mov ecx, DWORD PTR [rdi]");                            // fd_count
+    emitter.instruction("mov QWORD PTR [rdi + 8 + rcx*8], r10");                // fd_array[fd_count] = b
+    emitter.instruction("inc ecx");                                             // fd_count++
+    emitter.instruction("mov DWORD PTR [rdi], ecx");                            // store fd_count
+    emitter.label(".Lpselect6_except_next");
+    emitter.instruction("inc r10d");                                            // b++
+    emitter.instruction("jmp .Lpselect6_except_loop");                          // next bit
+    emitter.label(".Lpselect6_except_done");
+    emitter.instruction("lea rax, [rsp + 1152]");                               // win_except ptr for select
+    emitter.instruction("mov QWORD PTR [rsp + 96], rax");                       // store select arg4
+    emitter.instruction("jmp .Lpselect6_except_end");                           // skip NULL path
+    emitter.label(".Lpselect6_except_null");
+    emitter.instruction("mov QWORD PTR [rsp + 96], 0");                         // pass NULL for exceptfds
+    emitter.label(".Lpselect6_except_end");
+    // -- build win_timeval from Linux struct timespec (r8) --
+    emitter.instruction("mov rax, QWORD PTR [rsp + 64]");                       // timeout ptr
+    emitter.instruction("test rax, rax");                                       // NULL?
+    emitter.instruction("jz .Lpselect6_tv_null");                               // → pass NULL (block indefinitely)
+    emitter.instruction("mov rcx, QWORD PTR [rax]");                            // sec (i64 @0)
+    emitter.instruction("mov DWORD PTR [rsp + 1672], ecx");                     // tv_sec (low 32 bits @0)
+    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // nsec (i64 @8)
+    emitter.instruction("xor rdx, rdx");                                        // clear high half of dividend
+    emitter.instruction("mov ecx, 1000");                                       // divisor: 1000 (nsec → usec)
+    emitter.instruction("div rcx");                                             // rax = nsec / 1000 = tv_usec
+    emitter.instruction("mov DWORD PTR [rsp + 1676], eax");                     // tv_usec (32-bit @4)
+    emitter.instruction("lea rax, [rsp + 1672]");                               // win_timeval ptr
+    emitter.instruction("mov QWORD PTR [rsp + 104], rax");                      // store select arg5
+    emitter.instruction("jmp .Lpselect6_tv_end");                               // skip NULL path
+    emitter.label(".Lpselect6_tv_null");
+    emitter.instruction("mov QWORD PTR [rsp + 104], 0");                        // pass NULL timeout (block)
+    emitter.label(".Lpselect6_tv_end");
+    // -- materialize MSx64 args and call ws2_32 select --
+    emitter.instruction("mov rcx, QWORD PTR [rsp + 32]");                       // nfds (select arg1)
+    emitter.instruction("mov rdx, QWORD PTR [rsp + 80]");                       // readfds (select arg2)
+    emitter.instruction("mov r8, QWORD PTR [rsp + 88]");                        // writefds (select arg3)
+    emitter.instruction("mov r9, QWORD PTR [rsp + 96]");                        // exceptfds (select arg4)
+    emitter.instruction("mov rax, QWORD PTR [rsp + 104]");                      // win_timeval ptr
+    emitter.instruction("mov QWORD PTR [rsp + 32], rax");                       // select arg5 (5th arg at [rsp+32])
+    emitter.instruction("call select");                                         // ws2_32 select → rax (ready count or -1)
+    emitter.instruction("mov QWORD PTR [rsp + 72], rax");                       // save result
+    emitter.instruction("cmp rax, -1");                                         // SOCKET_ERROR?
+    emitter.instruction("je .Lpselect6_error");                                 // → zero Linux bitmaps, return -1
+    // -- success: writeback ready fds into the three Linux bitmaps --
+    // -- read writeback: zero Linux bitmap, then set bits from win_read fd_array --
+    emitter.instruction("mov rax, QWORD PTR [rsp + 40]");                       // readfds ptr
+    emitter.instruction("test rax, rax");                                       // NULL (was not built)?
+    emitter.instruction("jz .Lpselect6_wb_read_skip");                          // → nothing to write back
+    emitter.instruction("mov QWORD PTR [rax], 0");                              // zero Linux read bitmap
+    emitter.instruction("lea rdi, [rsp + 112]");                                // win_read fd_set base
+    emitter.instruction("mov r11d, DWORD PTR [rdi]");                           // post-select fd_count
+    emitter.instruction("xor r10d, r10d");                                      // loop index i = 0
+    emitter.label(".Lpselect6_wb_read_loop");
+    emitter.instruction("cmp r10d, r11d");                                      // i < fd_count?
+    emitter.instruction("jge .Lpselect6_wb_read_done");                         // → done
+    emitter.instruction("mov r9, QWORD PTR [rdi + 8 + r10*8]");                 // fd = fd_array[i] (SOCKET, 8 bytes)
+    emitter.instruction("mov rax, 1");                                          // rax = 1
+    emitter.instruction("mov rcx, r9");                                         // shift count = fd
+    emitter.instruction("shl rax, cl");                                         // rax = 1 << fd
+    emitter.instruction("mov rdx, QWORD PTR [rsp + 40]");                       // readfds ptr
+    emitter.instruction("or QWORD PTR [rdx], rax");                             // set bit fd in Linux read bitmap
+    emitter.instruction("inc r10d");                                            // i++
+    emitter.instruction("jmp .Lpselect6_wb_read_loop");                         // next fd
+    emitter.label(".Lpselect6_wb_read_done");
+    emitter.label(".Lpselect6_wb_read_skip");
+    // -- write writeback: zero Linux bitmap, then set bits from win_write fd_array --
+    emitter.instruction("mov rax, QWORD PTR [rsp + 48]");                       // writefds ptr
+    emitter.instruction("test rax, rax");                                       // NULL?
+    emitter.instruction("jz .Lpselect6_wb_write_skip");                         // → nothing to write back
+    emitter.instruction("mov QWORD PTR [rax], 0");                              // zero Linux write bitmap
+    emitter.instruction("lea rdi, [rsp + 632]");                                // win_write fd_set base
+    emitter.instruction("mov r11d, DWORD PTR [rdi]");                           // post-select fd_count
+    emitter.instruction("xor r10d, r10d");                                      // loop index i = 0
+    emitter.label(".Lpselect6_wb_write_loop");
+    emitter.instruction("cmp r10d, r11d");                                      // i < fd_count?
+    emitter.instruction("jge .Lpselect6_wb_write_done");                        // → done
+    emitter.instruction("mov r9, QWORD PTR [rdi + 8 + r10*8]");                 // fd = fd_array[i]
+    emitter.instruction("mov rax, 1");                                          // rax = 1
+    emitter.instruction("mov rcx, r9");                                         // shift count = fd
+    emitter.instruction("shl rax, cl");                                         // rax = 1 << fd
+    emitter.instruction("mov rdx, QWORD PTR [rsp + 48]");                       // writefds ptr
+    emitter.instruction("or QWORD PTR [rdx], rax");                             // set bit fd in Linux write bitmap
+    emitter.instruction("inc r10d");                                            // i++
+    emitter.instruction("jmp .Lpselect6_wb_write_loop");                        // next fd
+    emitter.label(".Lpselect6_wb_write_done");
+    emitter.label(".Lpselect6_wb_write_skip");
+    // -- except writeback: zero Linux bitmap, then set bits from win_except fd_array --
+    emitter.instruction("mov rax, QWORD PTR [rsp + 56]");                       // exceptfds ptr
+    emitter.instruction("test rax, rax");                                       // NULL?
+    emitter.instruction("jz .Lpselect6_wb_except_skip");                        // → nothing to write back
+    emitter.instruction("mov QWORD PTR [rax], 0");                              // zero Linux except bitmap
+    emitter.instruction("lea rdi, [rsp + 1152]");                               // win_except fd_set base
+    emitter.instruction("mov r11d, DWORD PTR [rdi]");                           // post-select fd_count
+    emitter.instruction("xor r10d, r10d");                                      // loop index i = 0
+    emitter.label(".Lpselect6_wb_except_loop");
+    emitter.instruction("cmp r10d, r11d");                                      // i < fd_count?
+    emitter.instruction("jge .Lpselect6_wb_except_done");                       // → done
+    emitter.instruction("mov r9, QWORD PTR [rdi + 8 + r10*8]");                 // fd = fd_array[i]
+    emitter.instruction("mov rax, 1");                                          // rax = 1
+    emitter.instruction("mov rcx, r9");                                         // shift count = fd
+    emitter.instruction("shl rax, cl");                                         // rax = 1 << fd
+    emitter.instruction("mov rdx, QWORD PTR [rsp + 56]");                       // exceptfds ptr
+    emitter.instruction("or QWORD PTR [rdx], rax");                             // set bit fd in Linux except bitmap
+    emitter.instruction("inc r10d");                                            // i++
+    emitter.instruction("jmp .Lpselect6_wb_except_loop");                       // next fd
+    emitter.label(".Lpselect6_wb_except_done");
+    emitter.label(".Lpselect6_wb_except_skip");
+    // -- common success return: rax = saved select result --
+    emitter.instruction("mov rax, QWORD PTR [rsp + 72]");                       // reload saved result
+    emitter.instruction("add rsp, 1688");                                       // restore stack
+    emitter.instruction("ret");                                                 // return ready count (≥ 0)
+    // -- error path (SOCKET_ERROR): zero all non-NULL Linux bitmaps, return -1 --
+    emitter.label(".Lpselect6_error");
+    emitter.instruction("mov rax, QWORD PTR [rsp + 40]");                       // readfds ptr
+    emitter.instruction("test rax, rax");                                       // NULL?
+    emitter.instruction("jz .Lpselect6_err_w_skip");                            // → skip
+    emitter.instruction("mov QWORD PTR [rax], 0");                              // zero Linux read bitmap
+    emitter.label(".Lpselect6_err_w_skip");
+    emitter.instruction("mov rax, QWORD PTR [rsp + 48]");                       // writefds ptr
+    emitter.instruction("test rax, rax");                                       // NULL?
+    emitter.instruction("jz .Lpselect6_err_x_skip");                            // → skip
+    emitter.instruction("mov QWORD PTR [rax], 0");                              // zero Linux write bitmap
+    emitter.label(".Lpselect6_err_x_skip");
+    emitter.instruction("mov rax, QWORD PTR [rsp + 56]");                       // exceptfds ptr
+    emitter.instruction("test rax, rax");                                       // NULL?
+    emitter.instruction("jz .Lpselect6_err_ret");                               // → skip
+    emitter.instruction("mov QWORD PTR [rax], 0");                              // zero Linux except bitmap
+    emitter.label(".Lpselect6_err_ret");
+    emitter.instruction("mov rax, -1");                                         // return -1 (SOCKET_ERROR)
+    emitter.instruction("add rsp, 1688");                                       // restore stack
+    emitter.instruction("ret");                                                 // return -1
     emitter.blank();
 }
 
@@ -1983,6 +2259,62 @@ fn emit_shim_c_symbols(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // libc usleep returns 0 on success
     emitter.instruction("add rsp, 40");                                         // restore stack
     emitter.instruction("ret");                                                 // return 0
+    emitter.blank();
+
+    // popen: convert SysV `popen(command, mode)` to msvcrt `_popen`.
+    // SysV: rdi=command, rsi=mode → MSx64: rcx=command, rdx=mode. Returns FILE* in rax.
+    emitter.label_global("popen");
+    // -- popen: SysV→MSx64 for msvcrt _popen --
+    emitter.instruction("mov rcx, rdi");                                        // command (SysV arg1) → MSx64 arg1
+    emitter.instruction("mov rdx, rsi");                                        // mode (SysV arg2) → MSx64 arg2
+    emitter.instruction("sub rsp, 40");                                         // shadow(32) + alignment(8) for _popen call
+    emitter.instruction("call _popen");                                         // _popen(command, mode) → FILE* in rax
+    emitter.instruction("add rsp, 40");                                         // restore stack
+    emitter.instruction("ret");                                                 // return FILE*
+    emitter.blank();
+
+    // pclose: convert SysV `pclose(FILE*)` to msvcrt `_pclose`.
+    // SysV: rdi=stream → MSx64: rcx=stream. Returns int in eax.
+    emitter.label_global("pclose");
+    // -- pclose: SysV→MSx64 for msvcrt _pclose --
+    emitter.instruction("mov rcx, rdi");                                        // stream (SysV arg1) → MSx64 arg1
+    emitter.instruction("sub rsp, 40");                                         // shadow(32) + alignment(8) for _pclose call
+    emitter.instruction("call _pclose");                                        // _pclose(stream) → int in eax
+    emitter.instruction("add rsp, 40");                                         // restore stack
+    emitter.instruction("ret");                                                 // return int
+    emitter.blank();
+
+    // fileno: convert SysV `fileno(FILE*)` to msvcrt `_fileno`.
+    // SysV: rdi=stream → MSx64: rcx=stream. Returns int in eax.
+    emitter.label_global("fileno");
+    // -- fileno: SysV→MSx64 for msvcrt _fileno --
+    emitter.instruction("mov rcx, rdi");                                        // stream (SysV arg1) → MSx64 arg1
+    emitter.instruction("sub rsp, 40");                                         // shadow(32) + alignment(8) for _fileno call
+    emitter.instruction("call _fileno");                                        // _fileno(stream) → int in eax
+    emitter.instruction("add rsp, 40");                                         // restore stack
+    emitter.instruction("ret");                                                 // return int
+    emitter.blank();
+
+    // fgetc: convert SysV `fgetc(FILE*)` to msvcrt `fgetc`.
+    // SysV: rdi=stream → MSx64: rcx=stream. Returns int in eax (char or EOF).
+    emitter.label_global("fgetc");
+    // -- fgetc: SysV→MSx64 for msvcrt fgetc --
+    emitter.instruction("mov rcx, rdi");                                        // stream (SysV arg1) → MSx64 arg1
+    emitter.instruction("sub rsp, 40");                                         // shadow(32) + alignment(8) for fgetc call
+    emitter.instruction("call fgetc");                                          // fgetc(stream) → int in eax
+    emitter.instruction("add rsp, 40");                                         // restore stack
+    emitter.instruction("ret");                                                 // return int
+    emitter.blank();
+
+    // system: convert SysV `system(command)` to msvcrt `system`.
+    // SysV: rdi=command → MSx64: rcx=command. Returns int in eax.
+    emitter.label_global("system");
+    // -- system: SysV→MSx64 for msvcrt system --
+    emitter.instruction("mov rcx, rdi");                                        // command (SysV arg1) → MSx64 arg1
+    emitter.instruction("sub rsp, 40");                                         // shadow(32) + alignment(8) for system call
+    emitter.instruction("call system");                                         // system(command) → int in eax
+    emitter.instruction("add rsp, 40");                                         // restore stack
+    emitter.instruction("ret");                                                 // return int
     emitter.blank();
 
     // mkdir: delegate to CreateDirectoryA
@@ -2756,5 +3088,100 @@ mod tests {
         emit_win32_shims(&mut emitter);
         let asm = emitter.output();
         assert!(asm.contains(".globl __rt_sys_getrusage\n"));
+    }
+
+    /// Verifies that the `popen`, `pclose`, `fileno`, `fgetc`, and `system`
+    /// C-symbol stubs are emitted with their `.globl` labels and that each body
+    /// calls the corresponding msvcrt import (`_popen`, `_pclose`, `_fileno`,
+    /// `fgetc`, `system`) — never the libc-name self-recursion form.
+    #[test]
+    fn test_popen_pclose_fileno_fgetc_system_stubs_emitted() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_shim_c_symbols(&mut emitter);
+        let asm = emitter.output();
+        for (name, import) in [
+            ("popen", "call _popen"),
+            ("pclose", "call _pclose"),
+            ("fileno", "call _fileno"),
+            ("fgetc", "call fgetc"),
+            ("system", "call system"),
+        ] {
+            assert!(
+                asm.contains(&format!(".globl {}\n", name)),
+                "{} C-symbol stub missing",
+                name
+            );
+            let section = asm
+                .split(&format!(".globl {}\n", name))
+                .nth(1)
+                .unwrap_or("");
+            assert!(
+                section.contains(import),
+                "{} stub must call {} (msvcrt import)",
+                name,
+                import
+            );
+        }
+    }
+
+    /// Verifies that the msvcrt imports `_popen`, `_pclose`, `_fileno`, `fgetc`,
+    /// `system` and the ws2_32 `select` import are declared as `.extern` so the
+    /// MinGW linker resolves them against msvcrt/ws2_32.
+    #[test]
+    fn test_popen_msvcrt_and_select_imports_declared() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_win32_shims(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains(".extern _popen"), "missing .extern _popen");
+        assert!(asm.contains(".extern _pclose"), "missing .extern _pclose");
+        assert!(asm.contains(".extern _fileno"), "missing .extern _fileno");
+        assert!(asm.contains(".extern fgetc"), "missing .extern fgetc");
+        assert!(asm.contains(".extern system"), "missing .extern system");
+        assert!(asm.contains(".extern select"), "missing .extern select");
+    }
+
+    /// Verifies that the `__rt_sys_pselect6` shim calls ws2_32 `select` instead
+    /// of being the old `-1`/`ret` ENOSYS stub.
+    #[test]
+    fn test_pselect6_shim_calls_ws2_32_select() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_shim_pselect6(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains(".globl __rt_sys_pselect6\n"));
+        assert!(
+            asm.contains("call select"),
+            "pselect6 shim must call ws2_32 select"
+        );
+    }
+
+    /// Verifies that the `__rt_sys_pselect6` shim's `sub rsp, <N>` frame size
+    /// satisfies `N % 16 == 8`, keeping rsp 16-byte aligned at the inner
+    /// `call select` (the shim is entered via `call` with rsp ≡ 8 mod 16).
+    #[test]
+    fn test_pselect6_shim_frame_stack_alignment() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_shim_pselect6(&mut emitter);
+        let asm = emitter.output();
+        let section = asm
+            .split(".globl __rt_sys_pselect6\n")
+            .nth(1)
+            .unwrap_or("");
+        // First `sub rsp, <N>` after the label is the frame allocation.
+        let sub_line = section
+            .lines()
+            .find(|l| l.trim_start().starts_with("sub rsp,"))
+            .unwrap_or_else(|| panic!("no `sub rsp,` in pselect6 shim"));
+        let n: i64 = sub_line
+            .trim()
+            .trim_start_matches("sub rsp,")
+            .trim()
+            .parse()
+            .unwrap_or_else(|_| panic!("could not parse frame size from: {}", sub_line));
+        assert_eq!(
+            n % 16,
+            8,
+            "pselect6 frame size {} must satisfy N % 16 == 8",
+            n
+        );
     }
 }

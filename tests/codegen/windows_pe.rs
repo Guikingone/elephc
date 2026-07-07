@@ -327,3 +327,29 @@ fn test_windows_sleep_usleep_compile() {
 fn test_windows_getrusage_runtime_links() {
     compile_windows_pe("<?php echo 'ok';");
 }
+
+/// Verifies that `popen`, `pclose`, `system`, and `shell_exec` compile to a
+/// valid Windows PE32+ binary. Compile-only because the actual subprocess
+/// behavior is exercised by CI under Wine; this catches link failures from the
+/// new `popen`/`pclose`/`fileno`/`fgetc`/`system` C-symbol stubs (which delegate
+/// to msvcrt `_popen`/`_pclose`/`_fileno`/`fgetc`/`system`) that the shared
+/// `popen`/`pclose`/`shell_exec`/`system` lowering emits as `call popen`/
+/// `call pclose`/`call fgetc`/`call system`.
+#[test]
+fn test_windows_popen_pclose_system_shell_exec_compile() {
+    compile_windows_pe(
+        "<?php $p = popen('echo hi', 'r'); pclose($p); echo system('echo ok'); echo shell_exec('echo done');",
+    );
+}
+
+/// Verifies that `stream_select` compiles to a valid Windows PE32+ binary.
+/// Compile-only because `__rt_stream_select` always emits the `pselect6`
+/// syscall (syscall 270) regardless of the PHP argument shape, so no specific
+/// PHP path is needed to trigger it — compiling any `stream_select` call
+/// validates that the new `__rt_sys_pselect6` shim (which calls ws2_32
+/// `select`) assembles and links, resolving the `.extern select` import.
+/// Runtime behavior (ready-descriptor writeback) is CI-validated under Wine.
+#[test]
+fn test_windows_stream_select_compile() {
+    compile_windows_pe("<?php $r=[]; $w=[]; $e=[]; stream_select($r, $w, $e, 0); echo 'ok';");
+}
