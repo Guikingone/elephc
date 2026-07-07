@@ -62,6 +62,7 @@ pub(crate) fn emit_win32_shims(emitter: &mut Emitter) {
     emit_winsock_cleanup(emitter);
     emit_shim_access(emitter);
     emit_shim_ftruncate(emitter);
+    emit_shim_getrusage(emitter);
     emit_shim_ioctl(emitter);
     emit_shim_dup_shims(emitter);
     emit_shim_getuid_shims(emitter);
@@ -177,6 +178,8 @@ const WIN32_IMPORTS: &[&str] = &[
     "WSACleanup",
     "SetFilePointerEx",
     "SetEndOfFile",
+    "Sleep",
+    "GetProcessTimes",
 ];
 
 /// Emits a shim that converts SysV `write(fd, buf, len)` to Win32 `WriteFile`.
@@ -919,6 +922,101 @@ fn emit_shim_ftruncate(emitter: &mut Emitter) {
     emitter.label(".Lftruncate_fail");
     emitter.instruction("mov eax, -1");                                         // return -1 (failure)
     emitter.instruction("add rsp, 40");                                         // restore stack
+    emitter.instruction("ret");                                                 // return
+    emitter.blank();
+}
+
+/// Emits the `__rt_sys_getrusage` shim: converts Linux `getrusage(who, rusage*)`
+/// (syscall 98) to Win32 `GetProcessTimes` and fills a Linux `struct rusage`.
+///
+/// SysV: rdi = `who` (int: 0 = RUSAGE_SELF, -1 = RUSAGE_CHILDREN, 1 = RUSAGE_THREAD),
+/// rsi = `struct rusage*` out. Only `RUSAGE_SELF` (who == 0) is populated: the user
+/// and kernel FILETIMEs from `GetProcessTimes` are converted to `ru_utime`/`ru_stime`
+/// (struct timeval: tv_sec @+0/+16, tv_usec @+8/+24). All other fields
+/// (ru_maxrss..ru_nivcsw, offsets 32..144 = 14 qwords) are zeroed — Windows has no
+/// clean RSS/page-fault equivalent and tests only check the time fields. For
+/// `RUSAGE_CHILDREN`/`RUSAGE_THREAD` the whole struct is zeroed and 0 returned
+/// (no child handle is available). Returns 0 on success, -1 on `GetProcessTimes`
+/// failure.
+///
+/// `struct rusage` (Linux x86_64) layout, hardcoded here with offsets:
+/// - 0: ru_utime.tv_sec (i64), 8: ru_utime.tv_usec (i64)
+/// - 16: ru_stime.tv_sec (i64), 24: ru_stime.tv_usec (i64)
+/// - 32..144: ru_maxrss..ru_nivcsw (14 × i64), total struct = 144 bytes.
+///
+/// FILETIME is a 64-bit count of 100ns intervals. tv_sec = ft / 10_000_000;
+/// tv_usec = (ft % 10_000_000) / 10.
+fn emit_shim_getrusage(emitter: &mut Emitter) {
+    emitter.label_global("__rt_sys_getrusage");
+    // -- frame: shadow(32) + 5th-arg slot(8) + 4 FILETIMEs(32) + spill rusage(8) +
+    //    spill who(8) = 88 bytes; 88 ≡ 8 mod 16 so rsp ≡ 0 at the Win32 call site --
+    //    [rsp+32] = lpUserTime ptr (MSx64 stack-arg slot)
+    //    [rsp+40] = creation FILETIME, [rsp+48] = exit, [rsp+56] = kernel, [rsp+64] = user
+    //    [rsp+72] = spill rusage ptr, [rsp+80] = spill who
+    emitter.instruction("sub rsp, 88");                                         // allocate frame (88 ≡ 8 mod 16)
+    emitter.instruction("mov QWORD PTR [rsp + 72], rsi");                       // spill rusage out-pointer (rsi is volatile on MSx64)
+    emitter.instruction("mov DWORD PTR [rsp + 80], edi");                       // spill who (edi — 32-bit int, SysV arg1)
+    emitter.instruction("cmp DWORD PTR [rsp + 80], 0");                         // who == RUSAGE_SELF (0)?
+    emitter.instruction("jne .Lgetrusage_zero");                                // → no child/thread handle: zero struct, return 0
+    // -- GetProcessTimes(GetCurrentProcess()=(HANDLE)-1, &creation, &exit, &kernel, &user) --
+    emitter.instruction("mov rcx, -1");                                         // hProcess = current-process pseudo-handle (HANDLE)-1
+    emitter.instruction("lea rdx, [rsp + 40]");                                 // lpCreationTime = &creation FILETIME
+    emitter.instruction("lea r8, [rsp + 48]");                                  // lpExitTime = &exit FILETIME
+    emitter.instruction("lea r9, [rsp + 56]");                                  // lpKernelTime = &kernel FILETIME
+    emitter.instruction("lea rax, [rsp + 64]");                                 // lpUserTime = &user FILETIME
+    emitter.instruction("mov QWORD PTR [rsp + 32], rax");                       // 5th arg (lpUserTime) goes in the MSx64 stack-arg slot
+    emitter.instruction("call GetProcessTimes");                                // fill the four FILETIMEs; eax = 0 on failure
+    emitter.instruction("test eax, eax");                                       // GetProcessTimes succeeded?
+    emitter.instruction("jz .Lgetrusage_fail");                                 // → failure: zero struct, return -1
+    // -- convert kernel FILETIME → ru_stime (tv_sec @+16, tv_usec @+24) --
+    emitter.instruction("mov r11, QWORD PTR [rsp + 72]");                       // rusage pointer (reloaded; r11 stays across no further calls)
+    emitter.instruction("mov rax, QWORD PTR [rsp + 56]");                       // kernel FILETIME (64-bit 100ns count)
+    emitter.instruction("xor rdx, rdx");                                        // clear high half of dividend before unsigned div
+    emitter.instruction("mov ecx, 10000000");                                   // divisor: 10_000_000 (100ns units per second)
+    emitter.instruction("div rcx");                                             // rax = tv_sec, rdx = remainder (100ns units)
+    emitter.instruction("mov QWORD PTR [r11 + 16], rax");                       // ru_stime.tv_sec = kernel_seconds
+    emitter.instruction("mov rax, rdx");                                        // remainder (100ns units within the last second)
+    emitter.instruction("xor rdx, rdx");                                        // clear high half of dividend before unsigned div
+    emitter.instruction("mov ecx, 10");                                         // divisor: 10 (100ns units per microsecond)
+    emitter.instruction("div rcx");                                             // rax = tv_usec
+    emitter.instruction("mov QWORD PTR [r11 + 24], rax");                       // ru_stime.tv_usec = kernel_useconds
+    // -- convert user FILETIME → ru_utime (tv_sec @+0, tv_usec @+8) --
+    emitter.instruction("mov rax, QWORD PTR [rsp + 64]");                       // user FILETIME (64-bit 100ns count)
+    emitter.instruction("xor rdx, rdx");                                        // clear high half of dividend before unsigned div
+    emitter.instruction("mov ecx, 10000000");                                   // divisor: 10_000_000 (100ns units per second)
+    emitter.instruction("div rcx");                                             // rax = tv_sec, rdx = remainder (100ns units)
+    emitter.instruction("mov QWORD PTR [r11 + 0], rax");                        // ru_utime.tv_sec = user_seconds
+    emitter.instruction("mov rax, rdx");                                        // remainder (100ns units within the last second)
+    emitter.instruction("xor rdx, rdx");                                        // clear high half of dividend before unsigned div
+    emitter.instruction("mov ecx, 10");                                         // divisor: 10 (100ns units per microsecond)
+    emitter.instruction("div rcx");                                             // rax = tv_usec
+    emitter.instruction("mov QWORD PTR [r11 + 8], rax");                        // ru_utime.tv_usec = user_useconds
+    // -- zero ru_maxrss..ru_nivcsw (offsets 32..144, 14 qwords) --
+    emitter.instruction("mov rdi, r11");                                        // rep stosq destination = rusage base
+    emitter.instruction("add rdi, 32");                                         // point at ru_maxrss (offset 32)
+    emitter.instruction("xor rax, rax");                                        // fill value = 0
+    emitter.instruction("mov rcx, 14");                                         // 14 qwords (112 bytes) cover ru_maxrss..ru_nivcsw
+    emitter.instruction("rep stosq");                                           // zero the remaining rusage fields
+    emitter.instruction("xor eax, eax");                                        // return 0 (success)
+    emitter.instruction("add rsp, 88");                                         // restore stack
+    emitter.instruction("ret");                                                 // return
+    // -- who != RUSAGE_SELF: zero the whole struct (18 qwords = 144 bytes) and return 0 --
+    emitter.label(".Lgetrusage_zero");
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 72]");                       // rusage pointer
+    emitter.instruction("xor rax, rax");                                        // fill value = 0
+    emitter.instruction("mov rcx, 18");                                         // 18 qwords (144 bytes) = full struct rusage
+    emitter.instruction("rep stosq");                                           // zero the entire struct
+    emitter.instruction("xor eax, eax");                                        // return 0 (success, but no times available)
+    emitter.instruction("add rsp, 88");                                         // restore stack
+    emitter.instruction("ret");                                                 // return
+    // -- GetProcessTimes failed: zero the whole struct and return -1 --
+    emitter.label(".Lgetrusage_fail");
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 72]");                       // rusage pointer
+    emitter.instruction("xor rax, rax");                                        // fill value = 0
+    emitter.instruction("mov rcx, 18");                                         // 18 qwords (144 bytes) = full struct rusage
+    emitter.instruction("rep stosq");                                           // zero the entire struct
+    emitter.instruction("mov eax, -1");                                         // return -1 (failure)
+    emitter.instruction("add rsp, 88");                                         // restore stack
     emitter.instruction("ret");                                                 // return
     emitter.blank();
 }
@@ -1856,6 +1954,37 @@ fn emit_shim_c_symbols(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
     emitter.blank();
 
+    // sleep: convert SysV `sleep(unsigned seconds)` to Win32 `Sleep(DWORD ms)`.
+    // libc `sleep` returns 0 when not interrupted by a signal; Win32 `Sleep` has no
+    // early-wakeup contract here, so we always return 0.
+    emitter.label_global("sleep");
+    // -- frame: shadow(32) + pad(8), 40 ≡ 8 mod 16 keeps rsp ≡ 0 at the call --
+    emitter.instruction("sub rsp, 40");                                         // shadow(32) + alignment(8) for Sleep call
+    emitter.instruction("imul rcx, rdi, 1000");                                 // seconds (SysV arg1, rdi) → milliseconds for Win32 Sleep
+    emitter.instruction("call Sleep");                                          // Sleep(ms) — blocks the current thread, no return value used
+    emitter.instruction("xor eax, eax");                                        // libc sleep returns 0 (no signal interruption on Windows)
+    emitter.instruction("add rsp, 40");                                         // restore stack
+    emitter.instruction("ret");                                                 // return 0
+    emitter.blank();
+
+    // usleep: convert SysV `usleep(useconds_t usec)` to Win32 `Sleep(DWORD ms)`.
+    // libc `usleep` returns 0 on success; Win32 `Sleep` has no early-wakeup contract
+    // here, so we always return 0. `usleep(0)` → `Sleep(0)` yields the timeslice,
+    // matching POSIX semantics.
+    emitter.label_global("usleep");
+    // -- frame: shadow(32) + pad(8), 40 ≡ 8 mod 16 keeps rsp ≡ 0 at the call --
+    emitter.instruction("sub rsp, 40");                                         // shadow(32) + alignment(8) for Sleep call
+    emitter.instruction("mov rax, rdi");                                        // microseconds (SysV arg1, rdi) → rax for division
+    emitter.instruction("xor rdx, rdx");                                        // clear high half of dividend before unsigned div
+    emitter.instruction("mov ecx, 1000");                                       // divisor: 1000 (usec → ms)
+    emitter.instruction("div rcx");                                             // rax = usec / 1000 = milliseconds, rdx = remainder
+    emitter.instruction("mov rcx, rax");                                        // milliseconds for Win32 Sleep
+    emitter.instruction("call Sleep");                                          // Sleep(ms) — blocks the current thread, no return value used
+    emitter.instruction("xor eax, eax");                                        // libc usleep returns 0 on success
+    emitter.instruction("add rsp, 40");                                         // restore stack
+    emitter.instruction("ret");                                                 // return 0
+    emitter.blank();
+
     // mkdir: delegate to CreateDirectoryA
     emitter.label_global("mkdir");
     emitter.instruction("sub rsp, 8");                                          // align stack
@@ -2545,5 +2674,87 @@ mod tests {
         assert!(asm.contains(".extern WSACleanup"));
         assert!(asm.contains(".extern SetFilePointerEx"));
         assert!(asm.contains(".extern SetEndOfFile"));
+    }
+
+    /// Verifies that the `sleep` and `usleep` C-symbol stubs are emitted (so direct
+    /// `call sleep`/`call usleep` sites from the shared `lower_sleep`/`lower_usleep`
+    /// lowering resolve on Windows) and that both delegate to `Sleep`.
+    #[test]
+    fn test_sleep_usleep_c_symbol_stubs_emitted() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_shim_c_symbols(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains(".globl sleep\n"), "sleep C-symbol stub missing");
+        assert!(asm.contains(".globl usleep\n"), "usleep C-symbol stub missing");
+        // Both stubs convert to milliseconds and call Win32 Sleep.
+        assert!(asm.contains("call Sleep"), "sleep/usleep must call Win32 Sleep");
+        // sleep: seconds → ms via imul rcx, rdi, 1000.
+        let sleep_section = asm.split(".globl sleep\n").nth(1).unwrap_or("");
+        assert!(
+            sleep_section.contains("imul rcx, rdi, 1000"),
+            "sleep must convert seconds→ms with imul rcx, rdi, 1000"
+        );
+        // usleep: microseconds → ms via div by 1000.
+        let usleep_section = asm.split(".globl usleep\n").nth(1).unwrap_or("");
+        assert!(
+            usleep_section.contains("div rcx"),
+            "usleep must convert usec→ms with a div"
+        );
+    }
+
+    /// Verifies that `__rt_sys_getrusage` is emitted, calls `GetProcessTimes`, uses
+    /// the current-process pseudo-handle (`mov rcx, -1`), and lays out the 5th
+    /// argument (lpUserTime) in the MSx64 stack-arg slot `[rsp + 32]`.
+    #[test]
+    fn test_getrusage_shim_uses_get_process_times() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_shim_getrusage(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains(".globl __rt_sys_getrusage\n"));
+        assert!(asm.contains("call GetProcessTimes"));
+        assert!(
+            asm.contains("mov rcx, -1"),
+            "getrusage must use the current-process pseudo-handle (HANDLE)-1"
+        );
+        // 5th arg (lpUserTime) goes in the MSx64 stack-arg slot at [rsp+32].
+        assert!(
+            asm.contains("[rsp + 32], rax"),
+            "getrusage must pass lpUserTime via the [rsp+32] stack-arg slot"
+        );
+        // FILETIME→timeval conversion uses the 10_000_000 divisor (100ns units per second).
+        assert!(
+            asm.contains("mov ecx, 10000000"),
+            "getrusage must divide FILETIME by 10_000_000 to get tv_sec"
+        );
+        // RUSAGE_SELF guard branches and the two terminal paths.
+        assert!(asm.contains(".Lgetrusage_zero"));
+        assert!(asm.contains(".Lgetrusage_fail"));
+        assert!(asm.contains("rep stosq"), "getrusage must zero rusage fields with rep stosq");
+        assert!(
+            asm.contains("mov rcx, 14"),
+            "getrusage success path must zero 14 qwords (ru_maxrss..ru_nivcsw, offsets 32..144)"
+        );
+    }
+
+    /// Verifies that `Sleep` and `GetProcessTimes` are declared as Win32 imports so
+    /// the MinGW linker resolves them against kernel32.
+    #[test]
+    fn test_sleep_getprocesstimes_imports_declared() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_win32_shims(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains(".extern Sleep"));
+        assert!(asm.contains(".extern GetProcessTimes"));
+    }
+
+    /// Verifies that the `__rt_sys_getrusage` shim is registered in the full Win32
+    /// shim set emitted by `emit_win32_shims` (so the syscall-98 transform target
+    /// resolves at link time).
+    #[test]
+    fn test_getrusage_shim_registered_in_full_set() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_win32_shims(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains(".globl __rt_sys_getrusage\n"));
     }
 }

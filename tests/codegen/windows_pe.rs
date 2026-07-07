@@ -304,3 +304,26 @@ fn test_windows_run_random_bytes_length() {
 fn test_windows_path_constants_compile() {
     compile_windows_pe("<?php echo PHP_EOL; echo DIRECTORY_SEPARATOR; echo PATH_SEPARATOR;");
 }
+
+/// Verifies that `sleep()` and `usleep()` compile to a valid Windows PE32+ binary.
+/// Compile-only because the actual delay behavior is exercised by CI under Wine;
+/// this catches link failures from the `sleep`/`usleep` C-symbol stubs (which
+/// delegate to Win32 `Sleep`) that the shared `lower_sleep`/`lower_usleep`
+/// lowering emits as `call sleep`/`call usleep`.
+#[test]
+fn test_windows_sleep_usleep_compile() {
+    compile_windows_pe("<?php sleep(0); usleep(0); echo 'ok';");
+}
+
+/// Verifies that the Windows runtime — which now includes the `__rt_sys_getrusage`
+/// shim (syscall 98 → `GetProcessTimes`) — assembles and links into a valid PE32+
+/// binary. `getrusage` is not a user-visible PHP builtin in elephc, so no PHP
+/// source directly triggers syscall 98; the shim is nonetheless always emitted
+/// into the Windows runtime object, so any PE compile exercises it. This test is a
+/// dedicated marker that catches assembly/link failures from the getrusage shim
+/// (bad register use, missing `GetProcessTimes` import, frame-alignment errors).
+/// Runtime behavior (non-zero process times for RUSAGE_SELF) is CI-validated.
+#[test]
+fn test_windows_getrusage_runtime_links() {
+    compile_windows_pe("<?php echo 'ok';");
+}

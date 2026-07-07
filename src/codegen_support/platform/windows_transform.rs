@@ -79,6 +79,7 @@ fn linux_syscall_to_shim(linux_num: u32) -> Option<&'static str> {
         94 => Some("__rt_sys_lchown"),
         96 => Some("__rt_sys_getpriority"),
         97 => Some("__rt_sys_setpriority"),
+        98 => Some("__rt_sys_getrusage"),
         102 => Some("__rt_sys_getuid"),
         104 => Some("__rt_sys_getgid"),
         105 => Some("__rt_sys_setuid"),
@@ -241,6 +242,7 @@ mod tests {
         assert_eq!(linux_syscall_to_shim(60), Some("__rt_sys_exit"));
         assert_eq!(linux_syscall_to_shim(77), Some("__rt_sys_ftruncate"));
         assert_eq!(linux_syscall_to_shim(82), Some("__rt_sys_rename"));
+        assert_eq!(linux_syscall_to_shim(98), Some("__rt_sys_getrusage"));
         assert_eq!(linux_syscall_to_shim(999), None);
     }
 
