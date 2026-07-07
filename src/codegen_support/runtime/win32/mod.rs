@@ -1352,7 +1352,7 @@ fn emit_shim_pselect6(emitter: &mut Emitter) {
     emitter.instruction("cmp r10d, 64");                                        // b < 64?
     emitter.instruction("jge .Lpselect6_read_done");                            // → done scanning bitmap
     emitter.instruction("mov rdx, 1");                                          // rdx = 1
-    emitter.instruction("mov rcx, r10d");                                       // shift count = b
+    emitter.instruction("mov ecx, r10d");                                       // shift count = b (32-bit mov zero-extends to rcx)
     emitter.instruction("shl rdx, cl");                                         // rdx = 1 << b
     emitter.instruction("test r11, rdx");                                       // bit b set in Linux bitmap?
     emitter.instruction("jz .Lpselect6_read_next");                             // → skip
@@ -1386,7 +1386,7 @@ fn emit_shim_pselect6(emitter: &mut Emitter) {
     emitter.instruction("cmp r10d, 64");                                        // b < 64?
     emitter.instruction("jge .Lpselect6_write_done");                           // → done
     emitter.instruction("mov rdx, 1");                                          // rdx = 1
-    emitter.instruction("mov rcx, r10d");                                       // shift count = b
+    emitter.instruction("mov ecx, r10d");                                       // shift count = b (32-bit mov zero-extends to rcx)
     emitter.instruction("shl rdx, cl");                                         // rdx = 1 << b
     emitter.instruction("test r11, rdx");                                       // bit b set?
     emitter.instruction("jz .Lpselect6_write_next");                            // → skip
@@ -1420,7 +1420,7 @@ fn emit_shim_pselect6(emitter: &mut Emitter) {
     emitter.instruction("cmp r10d, 64");                                        // b < 64?
     emitter.instruction("jge .Lpselect6_except_done");                          // → done
     emitter.instruction("mov rdx, 1");                                          // rdx = 1
-    emitter.instruction("mov rcx, r10d");                                       // shift count = b
+    emitter.instruction("mov ecx, r10d");                                       // shift count = b (32-bit mov zero-extends to rcx)
     emitter.instruction("shl rdx, cl");                                         // rdx = 1 << b
     emitter.instruction("test r11, rdx");                                       // bit b set?
     emitter.instruction("jz .Lpselect6_except_next");                           // → skip
