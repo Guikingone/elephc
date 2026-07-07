@@ -298,7 +298,7 @@ pub(super) fn resolve_constant_name(
         return name.as_canonical();
     }
     if name.is_unqualified() {
-        if matches!(name.as_str(), "PHP_OS") {
+        if matches!(name.as_str(), "PHP_OS" | "PHP_EOL" | "DIRECTORY_SEPARATOR" | "PATH_SEPARATOR") {
             return name.as_canonical();
         }
         if let Some(alias) = name
@@ -350,6 +350,9 @@ fn is_builtin_global_constant(name: &str) -> bool {
     if matches!(
         name,
         "PHP_OS"
+            | "PHP_EOL"
+            | "DIRECTORY_SEPARATOR"
+            | "PATH_SEPARATOR"
             | "PATHINFO_DIRNAME"
             | "PATHINFO_BASENAME"
             | "PATHINFO_EXTENSION"

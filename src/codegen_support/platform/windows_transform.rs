@@ -37,6 +37,7 @@ fn linux_syscall_to_shim(linux_num: u32) -> Option<&'static str> {
         12 => Some("__rt_sys_brk"),
         16 => Some("__rt_sys_ioctl"),
         20 => Some("__rt_sys_writev"),
+        21 => Some("__rt_sys_access"),
         28 => Some("__rt_sys_accept4"),
         32 => Some("__rt_sys_dup2"),
         33 => Some("__rt_sys_dup"),
@@ -60,9 +61,11 @@ fn linux_syscall_to_shim(linux_num: u32) -> Option<&'static str> {
         62 => Some("__rt_sys_kill"),
         63 => Some("__rt_sys_uname"),
         72 => Some("__rt_sys_fcntl"),
+        77 => Some("__rt_sys_ftruncate"),
         78 => Some("__rt_sys_getdents"),
         79 => Some("__rt_sys_getcwd"),
         80 => Some("__rt_sys_chdir"),
+        82 => Some("__rt_sys_rename"),
         83 => Some("__rt_sys_mkdir"),
         84 => Some("__rt_sys_rmdir"),
         85 => Some("__rt_sys_creat"),
@@ -234,7 +237,10 @@ mod tests {
         assert_eq!(linux_syscall_to_shim(1), Some("__rt_sys_write"));
         assert_eq!(linux_syscall_to_shim(3), Some("__rt_sys_close"));
         assert_eq!(linux_syscall_to_shim(9), Some("__rt_sys_mmap"));
+        assert_eq!(linux_syscall_to_shim(21), Some("__rt_sys_access"));
         assert_eq!(linux_syscall_to_shim(60), Some("__rt_sys_exit"));
+        assert_eq!(linux_syscall_to_shim(77), Some("__rt_sys_ftruncate"));
+        assert_eq!(linux_syscall_to_shim(82), Some("__rt_sys_rename"));
         assert_eq!(linux_syscall_to_shim(999), None);
     }
 

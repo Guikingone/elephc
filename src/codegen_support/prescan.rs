@@ -22,7 +22,9 @@ use crate::types::PhpType;
 /// Seeds the constant map with built-in PHP constants and user-defined constants.
 ///
 /// Built-in constants include platform-specific values (e.g., `FNM_*` flags differ
-/// between macOS and Linux), `PATHINFO_*` bitmask values, stream handles (`STDIN`/`STDOUT`/`STDERR`),
+/// between macOS and Linux), the target-aware path constants `PHP_OS`, `PHP_EOL`,
+/// `DIRECTORY_SEPARATOR`, and `PATH_SEPARATOR` (which differ on Windows),
+/// `PATHINFO_*` bitmask values, stream handles (`STDIN`/`STDOUT`/`STDERR`),
 /// `LOCK_*` values, array callback-mode constants, `JSON_*` integer constants, and
 /// `PREG_*` integer constants. User constants come from `const` declarations and
 /// `define()` calls discovered by `collect_constant_decls`.
@@ -35,6 +37,27 @@ pub(crate) fn collect_constants(
         "PHP_OS".to_string(),
         (
             ExprKind::StringLiteral(target_platform.php_os_name().to_string()),
+            PhpType::Str,
+        ),
+    );
+    constants.insert(
+        "PHP_EOL".to_string(),
+        (
+            ExprKind::StringLiteral(target_platform.php_eol().to_string()),
+            PhpType::Str,
+        ),
+    );
+    constants.insert(
+        "DIRECTORY_SEPARATOR".to_string(),
+        (
+            ExprKind::StringLiteral(target_platform.directory_separator().to_string()),
+            PhpType::Str,
+        ),
+    );
+    constants.insert(
+        "PATH_SEPARATOR".to_string(),
+        (
+            ExprKind::StringLiteral(target_platform.path_separator().to_string()),
             PhpType::Str,
         ),
     );

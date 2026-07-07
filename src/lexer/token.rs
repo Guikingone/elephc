@@ -95,6 +95,7 @@ pub enum Token {
     PhpEol,
     PhpOs,
     DirectorySeparator,
+    PathSeparator,
     DunderDir,
     DunderFile,
     DunderLine,

@@ -2203,6 +2203,15 @@ fn test_directory_separator() {
     assert_eq!(out, "/");
 }
 
+// Tests `echo PATH_SEPARATOR;` outputs ":" (Unix path separator). PHP on Unix uses
+// ":" to separate include_path entries; Windows uses ";".
+/// Verifies that path separator.
+#[test]
+fn test_path_separator() {
+    let out = compile_and_run("<?php echo PATH_SEPARATOR;");
+    assert_eq!(out, ":");
+}
+
 // -- v0.8 time / microtime --
 
 // Tests `time()` returns a Unix timestamp greater than 1 billion (valid date after ~2001).

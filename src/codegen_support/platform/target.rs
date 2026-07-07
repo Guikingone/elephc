@@ -65,6 +65,39 @@ impl Platform {
         }
     }
 
+    /// Returns the PHP-compatible end-of-line sequence for this platform.
+    ///
+    /// Windows uses `"\r\n"` (CRLF); macOS and Linux use `"\n"` (LF), matching PHP's
+    /// `PHP_EOL` constant.
+    pub fn php_eol(&self) -> &'static str {
+        match self {
+            Platform::Windows => "\r\n",
+            Platform::MacOS | Platform::Linux => "\n",
+        }
+    }
+
+    /// Returns the PHP-compatible directory separator for this platform.
+    ///
+    /// Windows uses `"\\"`; macOS and Linux use `"/"`, matching PHP's
+    /// `DIRECTORY_SEPARATOR` constant.
+    pub fn directory_separator(&self) -> &'static str {
+        match self {
+            Platform::Windows => "\\",
+            Platform::MacOS | Platform::Linux => "/",
+        }
+    }
+
+    /// Returns the PHP-compatible `PATH_SEPARATOR` for this platform.
+    ///
+    /// Windows uses `";"` to separate entries in `include_path`/`PATH`-like lists;
+    /// macOS and Linux use `":"`, matching PHP's `PATH_SEPARATOR` constant.
+    pub fn path_separator(&self) -> &'static str {
+        match self {
+            Platform::Windows => ";",
+            Platform::MacOS | Platform::Linux => ":",
+        }
+    }
+
     /// Returns the `O_WRONLY | O_CREAT | O_TRUNC` flag combination for `open()`.
     ///
     /// These flags open a file for writing, creating it if it does not exist,

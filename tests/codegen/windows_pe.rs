@@ -295,3 +295,12 @@ fn test_windows_run_exit_code() {
 fn test_windows_run_random_bytes_length() {
     compile_and_run_windows("<?php echo strlen(random_bytes(16));", "16");
 }
+
+/// Verifies that target-aware path constants (`PHP_EOL`, `DIRECTORY_SEPARATOR`,
+/// `PATH_SEPARATOR`) compile to a valid Windows PE32+ binary. Compile-only because
+/// the path-constant resolution fires for the Windows target at prescan time; the
+/// values themselves (`"\r\n"`, `"\\"`, `";"`) are exercised by CI under Wine.
+#[test]
+fn test_windows_path_constants_compile() {
+    compile_windows_pe("<?php echo PHP_EOL; echo DIRECTORY_SEPARATOR; echo PATH_SEPARATOR;");
+}

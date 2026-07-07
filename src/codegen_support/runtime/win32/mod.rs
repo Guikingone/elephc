@@ -58,6 +58,10 @@ pub(crate) fn emit_win32_shims(emitter: &mut Emitter) {
     emit_shim_getenv_shim(emitter);
     emit_shim_gethostname(emitter);
     emit_shim_socket_shims(emitter);
+    emit_winsock_init(emitter);
+    emit_winsock_cleanup(emitter);
+    emit_shim_access(emitter);
+    emit_shim_ftruncate(emitter);
     emit_shim_ioctl(emitter);
     emit_shim_dup_shims(emitter);
     emit_shim_getuid_shims(emitter);
@@ -169,6 +173,10 @@ const WIN32_IMPORTS: &[&str] = &[
     "PathMatchSpecA",
     "_dup",
     "_dup2",
+    "WSAStartup",
+    "WSACleanup",
+    "SetFilePointerEx",
+    "SetEndOfFile",
 ];
 
 /// Emits a shim that converts SysV `write(fd, buf, len)` to Win32 `WriteFile`.
@@ -282,11 +290,22 @@ fn emit_shim_unsupported_syscall(emitter: &mut Emitter) {
 /// `pop rbp` leaves it at 8) and explicit `exit($n)` reach `ExitProcess`
 /// correctly aligned; Wine's process-exit path uses aligned SSE and faults
 /// otherwise. The shim never returns, so clobbering rsp with the `and` is safe.
+///
+/// Alignment arithmetic: `and rsp, -16` forces rsp ≡ 0 mod 16 (the shim can be
+/// reached at any alignment, so it must force-align). After that, the prologue
+/// `sub rsp, N` MUST have `N ≡ 0 mod 16` so rsp stays ≡ 0 at each `call` site —
+/// the opposite rule from shims entered normally (rsp ≡ 8 at entry, which need
+/// `N ≡ 8 mod 16`). Using `N ≡ 8` here (e.g. 40) would leave rsp ≡ 8 at the
+/// `call __rt_winsock_cleanup` and `call ExitProcess` sites, misaligning the
+/// SSE registers Wine's process-exit path reads and crashing with a #GP.
 fn emit_shim_exit(emitter: &mut Emitter) {
     emitter.label_global("__rt_sys_exit");
-    emitter.instruction("mov rcx, rdi");                                        // MSx64 arg1 = exit code (from the SysV rdi register)
-    emitter.instruction("and rsp, -16");                                        // force 16-byte stack alignment before the Win32 call (shim never returns; clobbering rsp is safe)
-    emitter.instruction("sub rsp, 32");                                         // MSx64 32-byte shadow space (multiple of 16 preserves alignment)
+    emitter.instruction("and rsp, -16");                                        // force rsp ≡ 0 mod 16 before any Win32 call (shim never returns; clobbering rsp is safe)
+    emitter.instruction("sub rsp, 48");                                         // shadow(32) + spill(8) + pad(8), 16-byte aligned (and rsp,-16 forces ≡0, so sub must be ≡0 mod 16)
+    emitter.instruction("mov QWORD PTR [rsp + 32], rdi");                       // spill the exit code (rdi is volatile on MSx64) across the cleanup call
+    // -- release Winsock resources before terminating --
+    emitter.instruction("call __rt_winsock_cleanup");                           // WSACleanup() — safe to call even if WSAStartup was never invoked
+    emitter.instruction("mov rcx, QWORD PTR [rsp + 32]");                       // MSx64 arg1 = exit code (reloaded after the cleanup call)
     emitter.instruction("call ExitProcess");                                    // terminate the process (never returns)
     emitter.blank();
 }
@@ -801,6 +820,105 @@ fn emit_shim_socket_shims(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, rdi");                                        // socket → rcx (1st arg)
     emitter.instruction("call recvfrom");                                       // recvfrom(socket, buf, len, flags, src_addr, &addrlen)
     emitter.instruction("add rsp, 56");                                         // restore stack
+    emitter.instruction("ret");                                                 // return
+    emitter.blank();
+}
+
+/// Emits the `__rt_winsock_init` helper that calls `WSAStartup(MAKEWORD(2,2), &wsadata)`.
+///
+/// Allocates a 400-byte `WSADATA` buffer on the stack, loads `MAKEWORD(2,2)` (0x0202)
+/// into the SysV first arg (`edi`), zero-inits the WSADATA buffer, shuffles to MSx64
+/// (`rcx`=version, `rdx`=&wsadata), and calls `WSAStartup`. The return value is ignored
+/// (Winsock init is best-effort; socket calls will fail with a meaningful WSAGetLastError
+/// if startup failed). Called from the Windows `main` wrapper before `__elephc_main`.
+fn emit_winsock_init(emitter: &mut Emitter) {
+    emitter.label_global("__rt_winsock_init");
+    // -- stack frame: shadow(32) + WSADATA(400) + version spill(8) + pad to 16-byte align --
+    // 32 + 400 + 8 = 440; round up to 456 (456 ≡ 8 mod 16, re-aligning the entry rsp ≡ 8).
+    emitter.instruction("sub rsp, 456");                                        // shadow(32) + WSADATA(400) + spill(8) + pad(16), 16-byte aligned
+    // -- zero the 400-byte WSADATA buffer at [rsp+32..432) --
+    emitter.instruction("cld");                                                 // forward direction for rep stosb
+    emitter.instruction("lea rdi, [rsp + 32]");                                 // dest = WSADATA buffer start (above shadow space)
+    emitter.instruction("xor eax, eax");                                        // zero fill byte
+    emitter.instruction("mov ecx, 400");                                        // WSADATA size in bytes (Microsoft's MAXGETHOSTSTRUCT-equivalent for v2.2)
+    emitter.instruction("rep stosb");                                           // zero the whole WSADATA buffer so unused fields are determinate
+    // -- WSAStartup(MAKEWORD(2,2), &wsadata) --
+    emitter.instruction("mov edi, 0x0202");                                     // MAKEWORD(2,2) = 0x0202 (minor=2, major=2) — SysV arg1
+    emitter.instruction("lea rsi, [rsp + 32]");                                 // &wsadata — SysV arg2
+    emitter.instruction("mov rcx, rdi");                                        // MSx64 arg1 = version (MAKEWORD(2,2))
+    emitter.instruction("mov rdx, rsi");                                        // MSx64 arg2 = &wsadata
+    emitter.instruction("call WSAStartup");                                     // initialize Winsock 2.2 (return in eax: 0 = success, ignored)
+    emitter.instruction("add rsp, 456");                                        // restore stack
+    emitter.instruction("ret");                                                 // return to caller
+    emitter.blank();
+}
+
+/// Emits the `__rt_winsock_cleanup` helper that calls `WSACleanup()`.
+///
+/// Releases Winsock resources. Safe to call even when `WSAStartup` was never invoked
+/// (Winsock returns an error in that case, which we ignore). Called from `__rt_sys_exit`
+/// before `ExitProcess` so socket resources are released on process termination.
+fn emit_winsock_cleanup(emitter: &mut Emitter) {
+    emitter.label_global("__rt_winsock_cleanup");
+    emitter.instruction("sub rsp, 40");                                         // shadow space (16-byte aligned: entry ≡ 8, 40 ≡ 8 → 0)
+    emitter.instruction("call WSACleanup");                                     // release Winsock resources (return ignored)
+    emitter.instruction("add rsp, 40");                                         // restore stack
+    emitter.instruction("ret");                                                 // return to caller
+    emitter.blank();
+}
+
+/// Emits a shim that converts `access(path, mode)` to `GetFileAttributesA`.
+///
+/// SysV: rdi=path, rsi=mode. Windows `access` only reliably supports `F_OK` (existence);
+/// this shim returns 0 if the path resolves (file exists) and -1 otherwise, matching
+/// php-src's Windows `access` semantics. `GetFileAttributesA` returns
+/// `INVALID_FILE_ATTRIBUTES` (0xFFFFFFFF) when the path does not resolve.
+fn emit_shim_access(emitter: &mut Emitter) {
+    emitter.label_global("__rt_sys_access");
+    emitter.instruction("sub rsp, 40");                                         // shadow space
+    emitter.instruction("mov rcx, rdi");                                        // lpFileName = path (SysV arg1)
+    emitter.instruction("call GetFileAttributesA");                             // query file attributes (eax = attributes, or 0xFFFFFFFF)
+    emitter.instruction("cmp eax, 0xFFFFFFFF");                                 // INVALID_FILE_ATTRIBUTES?
+    emitter.instruction("je .Laccess_fail");                                    // → file does not exist
+    emitter.instruction("xor eax, eax");                                        // return 0 (F_OK success)
+    emitter.instruction("add rsp, 40");                                         // restore stack
+    emitter.instruction("ret");                                                 // return
+    emitter.label(".Laccess_fail");
+    emitter.instruction("mov eax, -1");                                         // return -1 (path not found)
+    emitter.instruction("add rsp, 40");                                         // restore stack
+    emitter.instruction("ret");                                                 // return
+    emitter.blank();
+}
+
+/// Emits a shim that converts `ftruncate(fd, length)` to `SetFilePointerEx` + `SetEndOfFile`.
+///
+/// SysV: rdi=fd, rsi=length. Seeks to `length` from FILE_BEGIN via `SetFilePointerEx`
+/// (the 64-bit pointer variant), then truncates the file at that position with
+/// `SetEndOfFile`. Returns 0 on success, -1 on failure (matching libc `ftruncate`).
+fn emit_shim_ftruncate(emitter: &mut Emitter) {
+    emitter.label_global("__rt_sys_ftruncate");
+    // -- stack frame: shadow(32) + spill fd(8), 16-byte aligned (40 ≡ 8 mod 16) --
+    emitter.instruction("sub rsp, 40");                                         // shadow(32) + spill(8), 16-byte aligned
+    emitter.instruction("mov QWORD PTR [rsp + 32], rdi");                       // spill fd (rdi is volatile on MSx64) across the SetFilePointerEx call
+    // -- SetFilePointerEx(handle, length, NULL, FILE_BEGIN) — 4 args, all in registers --
+    emitter.instruction("mov rcx, rdi");                                        // hFile = fd (SysV arg1)
+    emitter.instruction("mov rdx, rsi");                                        // liDistanceToMove = length (SysV arg2, by-value 64-bit)
+    emitter.instruction("xor r8, r8");                                          // lpNewFilePointer = NULL
+    emitter.instruction("mov r9d, 0");                                          // dwMoveMethod = FILE_BEGIN (0)
+    emitter.instruction("call SetFilePointerEx");                               // seek to the target offset from the start of the file
+    emitter.instruction("test eax, eax");                                       // seek succeeded?
+    emitter.instruction("jz .Lftruncate_fail");                                 // → failure
+    // -- SetEndOfFile(handle) --
+    emitter.instruction("mov rcx, QWORD PTR [rsp + 32]");                       // hFile = fd (reloaded after the seek call)
+    emitter.instruction("call SetEndOfFile");                                   // truncate the file at the current pointer
+    emitter.instruction("test eax, eax");                                       // truncate succeeded?
+    emitter.instruction("jz .Lftruncate_fail");                                 // → failure
+    emitter.instruction("xor eax, eax");                                        // return 0 (success)
+    emitter.instruction("add rsp, 40");                                         // restore stack
+    emitter.instruction("ret");                                                 // return
+    emitter.label(".Lftruncate_fail");
+    emitter.instruction("mov eax, -1");                                         // return -1 (failure)
+    emitter.instruction("add rsp, 40");                                         // restore stack
     emitter.instruction("ret");                                                 // return
     emitter.blank();
 }
@@ -1716,6 +1834,28 @@ fn emit_shim_c_symbols(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
     emitter.blank();
 
+    // access: delegate to __rt_sys_access (GetFileAttributesA)
+    emitter.label_global("access");
+    emitter.instruction("sub rsp, 8");                                          // align stack
+    emitter.instruction("call __rt_sys_access");                                // call GetFileAttributesA shim
+    emitter.instruction("add rsp, 8");                                          // restore stack
+    emitter.instruction("ret");                                                 // return
+    emitter.blank();
+
+    // ftruncate: delegate to __rt_sys_ftruncate (SetFilePointerEx + SetEndOfFile)
+    emitter.label_global("ftruncate");
+    emitter.instruction("sub rsp, 8");                                          // align stack
+    emitter.instruction("call __rt_sys_ftruncate");                             // call SetFilePointerEx+SetEndOfFile shim
+    emitter.instruction("add rsp, 8");                                          // restore stack
+    emitter.instruction("ret");                                                 // return
+    emitter.blank();
+
+    // umask: no-op on Windows (php-src treats umask as a no-op on Windows)
+    emitter.label_global("umask");
+    emitter.instruction("xor eax, eax");                                        // return 0 (previous mask = 0; umask is a no-op on Windows)
+    emitter.instruction("ret");                                                 // return
+    emitter.blank();
+
     // mkdir: delegate to CreateDirectoryA
     emitter.label_global("mkdir");
     emitter.instruction("sub rsp, 8");                                          // align stack
@@ -1804,11 +1944,15 @@ fn emit_shim_c_symbols(emitter: &mut Emitter) {
 /// rdi=argc, rsi=argv. This wrapper shuffles the arguments.
 pub(crate) fn emit_main_wrapper(emitter: &mut Emitter) {
     emitter.label_global("main");
-    emitter.instruction("sub rsp, 8");                                          // align stack to 16 bytes
-    emitter.instruction("mov rdi, rcx");                                        // SysV arg1 = argc (from MSx64 rcx)
-    emitter.instruction("mov rsi, rdx");                                        // SysV arg2 = argv (from MSx64 rdx)
+    emitter.instruction("sub rsp, 24");                                         // align stack to 16 bytes + spill slots for argc/argv
+    emitter.instruction("mov QWORD PTR [rsp + 0], rcx");                        // spill argc (rcx is volatile on MSx64) across the init call
+    emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                        // spill argv (rdx is volatile on MSx64) across the init call
+    // -- initialize Winsock before any socket use --
+    emitter.instruction("call __rt_winsock_init");                              // WSAStartup(MAKEWORD(2,2), &wsadata) — idempotent across re-entry
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                        // SysV arg1 = argc (reloaded after the init call)
+    emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                        // SysV arg2 = argv (reloaded after the init call)
     emitter.instruction("call __elephc_main");                                  // call the real program entry
-    emitter.instruction("add rsp, 8");                                          // restore stack
+    emitter.instruction("add rsp, 24");                                         // restore stack
     emitter.instruction("ret");                                                 // return to CRT
     emitter.blank();
 }
@@ -1862,15 +2006,25 @@ mod tests {
         assert!(asm.contains("STD_INPUT_HANDLE") || asm.contains("-10"));
     }
 
-    /// Verifies that the main wrapper shuffles MSx64 args to SysV.
+    /// Verifies that the main wrapper shuffles MSx64 args to SysV and initializes Winsock.
     #[test]
     fn test_main_wrapper_shuffles_args() {
         let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
         emit_main_wrapper(&mut emitter);
         let asm = emitter.output();
-        assert!(asm.contains("mov rdi, rcx"));
-        assert!(asm.contains("mov rsi, rdx"));
+        assert!(asm.contains("call __rt_winsock_init"), "main wrapper must call winsock init");
         assert!(asm.contains("call __elephc_main"));
+        // argc/argv are spilled to the stack across the winsock init call (rcx/rdx
+        // are volatile on MSx64 and clobbered by WSAStartup) and reloaded into the
+        // SysV arg registers rdi/rsi before __elephc_main.
+        assert!(asm.contains("mov QWORD PTR [rsp + 0], rcx"), "argc must be spilled before the init call");
+        assert!(asm.contains("mov QWORD PTR [rsp + 8], rdx"), "argv must be spilled before the init call");
+        assert!(asm.contains("mov rdi, QWORD PTR [rsp + 0]"), "argc must be reloaded into rdi after the init call");
+        assert!(asm.contains("mov rsi, QWORD PTR [rsp + 8]"), "argv must be reloaded into rsi after the init call");
+        // The winsock init call must occur before __elephc_main so sockets work.
+        let init_pos = asm.find("call __rt_winsock_init");
+        let main_pos = asm.find("call __elephc_main");
+        assert!(init_pos.is_some() && main_pos.is_some() && init_pos < main_pos);
     }
 
     /// Verifies that newly added shims for previously-missing syscalls are emitted.
@@ -2255,5 +2409,141 @@ mod tests {
             asm.contains("call ExitProcess"),
             "the unsupported-syscall helper must terminate via ExitProcess"
         );
+    }
+
+    /// Verifies that Winsock init/cleanup shims are emitted with the right Win32 calls.
+    #[test]
+    fn test_winsock_init_and_cleanup_emitted() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_win32_shims(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains(".globl __rt_winsock_init\n"), "winsock init shim missing");
+        assert!(asm.contains("call WSAStartup"), "winsock init must call WSAStartup");
+        assert!(asm.contains("0x0202"), "winsock init must load MAKEWORD(2,2)");
+        assert!(asm.contains(".globl __rt_winsock_cleanup\n"), "winsock cleanup shim missing");
+        assert!(asm.contains("call WSACleanup"), "winsock cleanup must call WSACleanup");
+    }
+
+    /// Verifies that `__rt_sys_exit` calls `__rt_winsock_cleanup` before `ExitProcess`
+    /// so Winsock resources are released on process termination.
+    #[test]
+    fn test_exit_calls_winsock_cleanup_before_exit_process() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_shim_exit(&mut emitter);
+        let asm = emitter.output();
+        let cleanup_pos = asm.find("call __rt_winsock_cleanup");
+        let exit_pos = asm.find("call ExitProcess");
+        assert!(cleanup_pos.is_some(), "exit shim must call winsock cleanup");
+        assert!(exit_pos.is_some(), "exit shim must call ExitProcess");
+        assert!(cleanup_pos < exit_pos, "winsock cleanup must run before ExitProcess");
+    }
+
+    /// Regression test for the Windows exit-crash class: `emit_shim_exit` starts with
+    /// `and rsp, -16` (forced alignment, since the shim can be reached at any
+    /// alignment), so the following `sub rsp, <N>` MUST have `N ≡ 0 mod 16` to keep
+    /// rsp ≡ 0 at the `call __rt_winsock_cleanup` and `call ExitProcess` sites.
+    /// Using `N ≡ 8 mod 16` (e.g. 40) would leave rsp ≡ 8 at both call sites — the
+    /// exact SSE #GP crash class that the original `and rsp, -16` fix was added for
+    /// (Wine's process-exit path reads aligned SSE registers). This test parses the
+    /// emitted asm, finds the `and rsp, -16` line, reads the next `sub rsp, <N>`,
+    /// and asserts `N % 16 == 0`, locking the invariant so it can't regress.
+    #[test]
+    fn test_exit_shim_stack_alignment() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_shim_exit(&mut emitter);
+        let asm = emitter.output();
+        let lines: Vec<&str> = asm.lines().collect();
+        // Find the `and rsp, -16` line, then the next `sub rsp, <N>` line.
+        let and_pos = lines
+            .iter()
+            .position(|l| l.trim().starts_with("and rsp, -16"))
+            .expect("exit shim must start with `and rsp, -16`");
+        let sub_line = lines[and_pos + 1..]
+            .iter()
+            .find(|l| l.trim().starts_with("sub rsp, "))
+            .expect("exit shim must have a `sub rsp, <N>` after `and rsp, -16`");
+        let n_str = sub_line
+            .trim()
+            .strip_prefix("sub rsp, ")
+            .and_then(|rest| rest.split_whitespace().next())
+            .expect("`sub rsp, <N>` must have a numeric operand");
+        let n: u64 = n_str
+            .parse()
+            .unwrap_or_else(|_| panic!("`sub rsp, <N>` operand `{}` is not an integer", n_str));
+        assert_eq!(
+            n % 16,
+            0,
+            "exit shim: after `and rsp, -16` (forces rsp ≡ 0), `sub rsp, {}` must be ≡ 0 mod 16 \
+             so rsp stays ≡ 0 at the Win32 call sites; got N ≡ {} mod 16 (misaligned → SSE #GP)",
+            n,
+            n % 16
+        );
+        // Both Win32 calls must appear after the aligned prologue.
+        assert!(
+            asm.contains("call __rt_winsock_cleanup"),
+            "exit shim must call __rt_winsock_cleanup"
+        );
+        assert!(
+            asm.contains("call ExitProcess"),
+            "exit shim must call ExitProcess"
+        );
+    }
+
+    /// Verifies that `__rt_sys_access` emits the GetFileAttributesA-based existence
+    /// check with the INVALID_FILE_ATTRIBUTES (0xFFFFFFFF) failure path.
+    #[test]
+    fn test_access_shim_uses_get_file_attributes() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_shim_access(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains(".globl __rt_sys_access\n"));
+        assert!(asm.contains("call GetFileAttributesA"));
+        assert!(asm.contains("0xFFFFFFFF"), "access must check INVALID_FILE_ATTRIBUTES");
+        assert!(asm.contains(".Laccess_fail"));
+    }
+
+    /// Verifies that `__rt_sys_ftruncate` uses SetFilePointerEx + SetEndOfFile and
+    /// spills the fd across the intervening seek call (rdi is volatile on MSx64).
+    #[test]
+    fn test_ftruncate_shim_uses_set_file_pointer_ex_and_set_end_of_file() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_shim_ftruncate(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains(".globl __rt_sys_ftruncate\n"));
+        assert!(asm.contains("call SetFilePointerEx"));
+        assert!(asm.contains("call SetEndOfFile"));
+        assert!(asm.contains("mov QWORD PTR [rsp + 32], rdi"), "fd must be spilled before the seek call");
+        assert!(asm.contains("mov rcx, QWORD PTR [rsp + 32]"), "fd must be reloaded for SetEndOfFile");
+        assert!(asm.contains(".Lftruncate_fail"));
+    }
+
+    /// Verifies that the C-symbol stubs for `access`, `ftruncate`, and `umask` are
+    /// emitted so direct `call <name>` sites in the shared runtime resolve on Windows.
+    #[test]
+    fn test_c_symbol_stubs_for_access_ftruncate_umask() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_shim_c_symbols(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains(".globl access\n"), "access C-symbol stub missing");
+        assert!(asm.contains("call __rt_sys_access"));
+        assert!(asm.contains(".globl ftruncate\n"), "ftruncate C-symbol stub missing");
+        assert!(asm.contains("call __rt_sys_ftruncate"));
+        assert!(asm.contains(".globl umask\n"), "umask C-symbol stub missing");
+        // umask is a no-op on Windows (php-src behavior): returns 0 without calling any Win32 API.
+        let umask_section = asm.split(".globl umask\n").nth(1).unwrap_or("");
+        assert!(umask_section.contains("xor eax, eax"), "umask stub must return 0 (no-op)");
+    }
+
+    /// Verifies that WSAStartup, WSACleanup, SetFilePointerEx, and SetEndOfFile are
+    /// declared as Win32 imports so the MinGW linker resolves them against ws2_32/kernel32.
+    #[test]
+    fn test_new_win32_imports_declared() {
+        let mut emitter = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        emit_win32_shims(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains(".extern WSAStartup"));
+        assert!(asm.contains(".extern WSACleanup"));
+        assert!(asm.contains(".extern SetFilePointerEx"));
+        assert!(asm.contains(".extern SetEndOfFile"));
     }
 }
