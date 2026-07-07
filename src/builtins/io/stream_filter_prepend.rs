@@ -40,7 +40,7 @@ builtin! {
 /// Validates the stream resource and links required filter libraries for known literal filter names.
 ///
 /// Checks that arg[0] is a stream resource. For a string-literal arg[1], links the appropriate
-/// system library: `z` for zlib filters, `iconv` (macOS only) for iconv filters, `bz2` for
+/// system library: `z` for zlib filters, `iconv` (macOS and Windows) for iconv filters, `bz2` for
 /// bzip2 filters. Dynamic filter names are routed through the runtime filter registry. Returns `Mixed`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     crate::types::checker::builtins::io::common::ensure_stream_resource(
@@ -57,10 +57,11 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                 cx.checker.require_builtin_library("z");
             }
             // convert.iconv.* uses libc iconv: in libc on Linux
-            // (glibc/musl) but a separate library on macOS, so only
-            // macOS needs explicit -liconv linkage.
+            // (glibc/musl) but a separate library on macOS and on Windows
+            // (msvcrt ships no iconv), so both need explicit -liconv linkage.
             if filter.starts_with("convert.iconv.") {
                 cx.checker.require_macos_builtin_library("iconv");
+                cx.checker.require_windows_builtin_library("iconv");
             }
             // The bzip2.* filters call into libbz2 (BZ2_bz*), so any
             // program that attaches one must link against -lbz2. The

@@ -393,6 +393,13 @@ pub(crate) fn link_binary(
             ld_cmd.arg("-o").arg(target_binary_path(bin_path));
             ld_cmd.arg(obj_path);
             ld_cmd.arg(runtime_obj);
+            // Surface the CI MinGW sysroot (cross-built PCRE2/bzip2/zlib/iconv)
+            // before any `-l` args so MinGW resolves those C symbols. Mirrors the
+            // production arm in `src/linker.rs`; gated on the env var so local
+            // non-CI runs are unaffected.
+            for path in mingw_sysroot_link_paths() {
+                ld_cmd.arg(format!("-L{}", path));
+            }
             if needs_bridge_staticlib {
                 ld_cmd.arg(format!("-L{}", bridge_staticlib_dir));
             }
@@ -421,6 +428,31 @@ pub(crate) fn link_binary(
             );
         }
     }
+}
+
+/// Returns the `-L` search paths derived from the `ELEPHC_MINGW_SYSROOT` env
+/// var, mirroring `src/linker.rs::mingw_sysroot_link_paths` for the test
+/// harness. CI sets the env var to a cross-built MinGW sysroot (PCRE2, bzip2,
+/// zlib, libiconv) so the MinGW linker resolves the C symbols those codegen
+/// fixtures call. Unset on local non-CI runs, so no missing-directory warnings.
+fn mingw_sysroot_link_paths() -> Vec<String> {
+    let Some(dir) = std::env::var_os("ELEPHC_MINGW_SYSROOT") else {
+        return Vec::new();
+    };
+    let base = std::path::PathBuf::from(dir);
+    if !base.is_dir() {
+        return Vec::new();
+    }
+    let mut paths = Vec::new();
+    let lib = base.join("lib");
+    if lib.is_dir() {
+        paths.push(lib.to_string_lossy().into_owned());
+    }
+    let lib64 = base.join("lib64");
+    if lib64.is_dir() {
+        paths.push(lib64.to_string_lossy().into_owned());
+    }
+    paths
 }
 
 /// Returns the on-disk path of the compiled binary for the current target. For

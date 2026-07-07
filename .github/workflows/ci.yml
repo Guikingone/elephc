@@ -770,7 +770,94 @@ jobs:
           sudo apt-get install -y \
             binutils-mingw-w64-x86-64 \
             gcc-mingw-w64-x86-64 \
+            cmake \
             file
+
+      - name: Cache MinGW cross-built sysroot (PCRE2/bzip2/zlib/iconv)
+        id: mingw-sysroot-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/mingw-sysroot
+          key: mingw-sysroot-${{ runner.os }}-pcre2-10.42-zlib-1.3.1-bzip2-1.0.8-iconv-1.17-v1
+
+      - name: Cross-build MinGW sysroot (PCRE2/bzip2/zlib/iconv)
+        # The ubuntu runner's `libpcre2-dev`/`libbz2-dev`/`zlib1g-dev` are ELF
+        # archives and cannot link into MinGW PE binaries, so cross-build PE/COFF
+        # static archives of PCRE2 (libpcre2-8 + libpcre2-posix), bzip2, zlib,
+        # and libiconv into a sysroot the Windows link arm picks up via
+        # ELEPHC_MINGW_SYSROOT. Restored from cache when the key matches.
+        if: steps.mingw-sysroot-cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          SYSROOT: ${{ runner.temp }}/mingw-sysroot
+          HOST: x86_64-w64-mingw32
+        run: |
+          set -euo pipefail
+          mkdir -p "$SYSROOT"
+          export CC="${HOST}-gcc"
+          export AR="${HOST}-ar"
+          export RANLIB="${HOST}-ranlib"
+          export STRIP="${HOST}-strip"
+          WORK="$(mktemp -d)"
+          trap 'rm -rf "$WORK"' EXIT
+          cd "$WORK"
+
+          # -- zlib 1.3.1 (cmake; cross-builds cleanly with a Windows toolchain) --
+          curl -fsSL https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz -o zlib.tgz
+          tar xzf zlib.tgz
+          cd zlib-1.3.1
+          cmake -S . -B build \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_C_COMPILER="$CC" \
+            -DCMAKE_AR="$AR" \
+            -DCMAKE_RANLIB="$RANLIB" \
+            -DCMAKE_INSTALL_PREFIX="$SYSROOT" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build build --config Release -j"$(nproc)"
+          cmake --install build --config Release
+          cd "$WORK"
+
+          # -- bzip2 1.0.8 (plain Makefile; override CC/AR/RANLIB) --
+          curl -fsSL https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz -o bzip2.tgz
+          tar xzf bzip2.tgz
+          cd bzip2-1.0.8
+          make -j"$(nproc)" CC="$CC" AR="$AR" RANLIB="$RANLIB" libbz2.a
+          install -D -m 0644 libbz2.a "$SYSROOT/lib/libbz2.a"
+          install -D -m 0644 bzlib.h "$SYSROOT/include/bzlib.h"
+          cd "$WORK"
+
+          # -- libiconv 1.17 (autotools; provides iconv_open/iconv/iconv_close) --
+          curl -fsSL https://ftp.gnu.org/pub/gnu/libiconv/libiconv-1.17.tar.gz -o libiconv.tgz
+          tar xzf libiconv.tgz
+          cd libiconv-1.17
+          ./configure --host="$HOST" --prefix="$SYSROOT" --enable-static --disable-shared --with-pic
+          make -j"$(nproc)"
+          make install
+          cd "$WORK"
+
+          # -- PCRE2 10.42 (autotools; builds libpcre2-8 + libpcre2-posix) --
+          # libpcre2-posix is built automatically whenever libpcre2-8 is
+          # enabled (the default), so no separate posix enable flag is needed.
+          curl -fsSL https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.42/pcre2-10.42.tar.gz -o pcre2.tgz
+          tar xzf pcre2.tgz
+          cd pcre2-10.42
+          ./configure --host="$HOST" --prefix="$SYSROOT" --enable-static --disable-shared --with-pic --enable-unicode --enable-pcre2-8
+          make -j"$(nproc)"
+          make install
+          cd "$WORK"
+
+          # Sanity: confirm the PE/COFF archives landed in the sysroot.
+          ls -l "$SYSROOT/lib/libpcre2-8.a" "$SYSROOT/lib/libpcre2-posix.a" "$SYSROOT/lib/libbz2.a" "$SYSROOT/lib/libz.a" "$SYSROOT/lib/libiconv.a"
+
+      - name: Expose MinGW sysroot to the link
+        # Surface the cross-built sysroot to both the production linker
+        # (`src/linker.rs`) and the test-harness linker
+        # (`tests/codegen/support/runner.rs`) via ELEPHC_MINGW_SYSROOT; both add
+        # `-L$SYSROOT/lib` only when the env var points at an existing dir.
+        shell: bash
+        run: |
+          echo "ELEPHC_MINGW_SYSROOT=${{ runner.temp }}/mingw-sysroot" >> "$GITHUB_ENV"
 
       - name: Install Wine
         run: |

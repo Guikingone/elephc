@@ -249,6 +249,44 @@ pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
     run_tool("Assembler", &mut as_cmd);
 }
 
+/// Returns the `-L` search paths derived from the `ELEPHC_MINGW_SYSROOT` env
+/// var for the Windows MinGW link, when that variable is set and points at an
+/// existing directory. CI sets it to a cross-built MinGW sysroot containing
+/// PE/COFF static archives of PCRE2 (`libpcre2-8.a`, `libpcre2-posix.a`),
+/// bzip2 (`libbz2.a`), zlib (`libz.a`), and libiconv (`libiconv.a`), so the
+/// `x86_64-w64-mingw32-gcc` link resolves those C symbols. The variable is
+/// unset on local non-CI builds, so this returns an empty `Vec` and the link
+/// command emits no missing-directory warnings.
+///
+/// Both `$SYSROOT/lib` and `$SYSROOT/lib64` are added when present, so a
+/// sysroot that installs either layout works without per-lib configuration.
+fn mingw_sysroot_link_paths() -> Vec<String> {
+    let Some(dir) = std::env::var_os("ELEPHC_MINGW_SYSROOT") else {
+        return Vec::new();
+    };
+    mingw_sysroot_link_paths_from(&PathBuf::from(dir))
+}
+
+/// Pure core of [`mingw_sysroot_link_paths`]: returns the `-L` search paths for
+/// a given sysroot base directory when it exists, or an empty `Vec` otherwise.
+/// Split out so the gating logic can be unit-tested without mutating the
+/// process environment (which is racy under parallel test execution).
+fn mingw_sysroot_link_paths_from(base: &Path) -> Vec<String> {
+    if !base.is_dir() {
+        return Vec::new();
+    }
+    let mut paths = Vec::new();
+    let lib = base.join("lib");
+    if lib.is_dir() {
+        paths.push(lib.to_string_lossy().into_owned());
+    }
+    let lib64 = base.join("lib64");
+    if lib64.is_dir() {
+        paths.push(lib64.to_string_lossy().into_owned());
+    }
+    paths
+}
+
 /// Links object files and runtime objects into a final binary.
 /// - `target`: Compiler target (controls platform, linker command, and flags).
 /// - `emit`: Output kind. `Executable` produces a standalone binary; `Cdylib`
@@ -363,6 +401,16 @@ pub(crate) fn link(
             cmd.arg("-o").arg(bin_path);
             cmd.arg(obj_path);
             cmd.arg(runtime_object_path);
+            // Surface a CI-provided MinGW sysroot (cross-built PCRE2, bzip2,
+            // zlib, libiconv) before the system import libs and any
+            // `extra_link_libs` (`-lpcre2-8`, `-lbz2`, `-lz`, `-liconv`) so the
+            // MinGW linker resolves those C symbols against PE/COFF archives
+            // instead of the ELF dev packages the ubuntu runner also installs.
+            // Gated on `ELEPHC_MINGW_SYSROOT` so local non-CI builds — which
+            // never set the env var — see no missing-directory warnings.
+            for path in mingw_sysroot_link_paths() {
+                cmd.arg(format!("-L{}", path));
+            }
             cmd.args(["-lkernel32", "-lmsvcrt", "-lwinmm", "-lws2_32", "-lbcrypt", "-lshlwapi"]);
             cmd
         }
@@ -801,5 +849,43 @@ mod tests {
         assert_eq!(bridge_lib_for_flag("elephc_pdo"), None);
         assert!(crate_flag_names().contains(&"pdo"));
         assert_eq!(crate_flag_names().len(), BRIDGES.len());
+    }
+
+    /// Verifies a non-existent sysroot base produces no search paths, so a
+    /// stray `ELEPHC_MINGW_SYSROOT` value can never emit a missing-directory
+    /// linker warning.
+    #[test]
+    fn mingw_sysroot_paths_empty_for_missing_dir() {
+        let paths = mingw_sysroot_link_paths_from(Path::new("/nonexistent/elephc-mingw-sysroot-123"));
+        assert!(paths.is_empty(), "got: {paths:?}");
+    }
+
+    /// Verifies a real sysroot with a `lib` directory is surfaced as a `-L`
+    /// path, and that `lib64` is also added when present, so a CI cross-built
+    /// sysroot is picked up regardless of which layout the libs installed into.
+    #[test]
+    fn mingw_sysroot_paths_from_real_dir() {
+        let tmp = std::env::temp_dir().join(format!("elephc-mingw-sysroot-test-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::create_dir_all(tmp.join("lib")).unwrap();
+        std::fs::create_dir_all(tmp.join("lib64")).unwrap();
+        let paths = mingw_sysroot_link_paths_from(&tmp);
+        assert_eq!(paths.len(), 2);
+        assert!(paths[0].ends_with("lib"), "got: {paths:?}");
+        assert!(paths[1].ends_with("lib64"), "got: {paths:?}");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// Verifies only `lib` is returned when `lib64` is absent, so sysroots
+    /// that install solely into `lib` do not produce a phantom `lib64` entry.
+    #[test]
+    fn mingw_sysroot_paths_lib_only() {
+        let tmp = std::env::temp_dir().join(format!("elephc-mingw-sysroot-lib-only-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::create_dir_all(tmp.join("lib")).unwrap();
+        let paths = mingw_sysroot_link_paths_from(&tmp);
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].ends_with("lib"), "got: {paths:?}");
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }

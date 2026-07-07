@@ -53,6 +53,21 @@ impl Checker {
         }
     }
 
+    /// Records that a Windows target requires the given shared library.
+    ///
+    /// No-op on non-Windows targets. Used for libraries that live in libc on
+    /// Linux (glibc/musl) and libSystem on macOS but need explicit linkage on
+    /// Windows because msvcrt does not ship them — e.g. `iconv`, which the
+    /// `convert.iconv.*` stream filter lowers to `iconv_open`/`iconv`/
+    /// `iconv_close` C symbols resolved by a cross-built libiconv in CI.
+    pub(crate) fn require_windows_builtin_library(&mut self, library: &str) {
+        if self.target_platform == crate::codegen::platform::Platform::Windows
+            && !self.required_libraries.iter().any(|lib| lib == library)
+        {
+            self.required_libraries.push(library.to_string());
+        }
+    }
+
     /// Type-checks a PHP builtin function call, returning the inferred return type or `None` if unhandled.
     pub fn check_builtin(
         &mut self,
