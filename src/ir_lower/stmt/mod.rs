@@ -650,6 +650,11 @@ fn lower_ref_append_into_local_hash(
     span: Span,
 ) {
     // Bind `$var`'s ONE persistent cell (marks `$var` a reference; idempotent for loop bodies).
+    // The alias keeps the original element type (checker `check_ref_assign_local_array_element`):
+    // the slot's storage type stays the pre-bind type, so `Op::LocalRefEnsure` carries the matching
+    // runtime value-tag and the cell's inner-tag stays in sync with its inner value. A
+    // type-changing reassign is read back through the ELEMENT value type (Mixed), not the alias —
+    // `__rt_ref_cell_store` stamps the NEW value's runtime tag at `[cell+8]` independently.
     let cell = ctx.ensure_local_ref_cell(var_name, Some(span));
     let (hash, promotion) = load_local_array_as_hash(ctx, array_name, span);
     let hash_ty = ctx.builder.value_php_type(hash.value);
@@ -680,6 +685,10 @@ fn lower_ref_assign_local_element_explicit_key(
     var_name: &str,
     span: Span,
 ) {
+    // Bind `$var`'s ONE persistent cell (marks `$var` a reference; idempotent for loop bodies).
+    // The alias keeps the original element type — see `lower_ref_append_into_local_hash` for the
+    // rationale (the slot's storage type stays the pre-bind type so `Op::LocalRefEnsure`'s tag
+    // matches the slot value; a type-changing reassign is read back through the Mixed element).
     let cell = ctx.ensure_local_ref_cell(var_name, Some(span));
     let (hash, promotion) = load_local_array_as_hash(ctx, array_name, span);
     let key = lower_expr(ctx, index);

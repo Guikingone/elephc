@@ -57,8 +57,20 @@ pub fn emit_ref_cell_ensure(emitter: &mut Emitter) {
     // -- reuse an existing kind-6 cell in place --
     emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap kind word
     emitter.instruction(&format!("cmp x9, #{}", REF_CELL_KIND));                // is the slot word already a kind-6 reference cell?
-    emitter.instruction("b.ne __rt_ref_cell_ensure_alloc");                     // a different heap kind (array/hash/object) → promote it
+    emitter.instruction("b.ne __rt_ref_cell_ensure_probe");                     // a different heap kind → probe for Mixed-box tag override
     emitter.instruction("ret");                                                 // reuse: x0 already holds the shared reference cell
+
+    // -- probe: when the value is a Mixed box (heap kind 5), the compile-time tag may be wrong --
+    // store_local boxes adopted-ref-bound values as Mixed before local_ref_ensure, but the
+    // instruction's result_php_type is still the declared type (e.g. int → tag 0). If the cell
+    // is created with tag 0 but holds a Mixed box, __rt_ref_cell_store/free_deep will skip the
+    // inner release (tag < 4 = scalar, no heap storage) and leak the Mixed box. Override tag to
+    // 7 (Mixed) when the heap kind is 5 so the cell's inner_tag matches the actual value shape.
+    emitter.label("__rt_ref_cell_ensure_probe");
+    emitter.instruction("cmp x9, #5");                                          // is the value a Mixed box (heap kind 5)?
+    emitter.instruction("b.ne __rt_ref_cell_ensure_alloc");                     // not a Mixed box → use the compile-time tag as-is
+    emitter.instruction("mov x1, #7");                                          // override inner tag to Mixed (7) to match the boxed value
+    emitter.instruction("b __rt_ref_cell_alloc");                               // move the value word into a fresh cell (x0=value, x1=7 → x0=cell)
 
     emitter.label("__rt_ref_cell_ensure_alloc");
     emitter.instruction("b __rt_ref_cell_alloc");                               // move the value word into a fresh cell (x0=value, x1=tag → x0=cell)
@@ -85,9 +97,20 @@ fn emit_ref_cell_ensure_linux_x86_64(emitter: &mut Emitter) {
     // -- reuse an existing kind-6 cell in place --
     emitter.instruction("mov r10d, DWORD PTR [rdi - 8]");                       // load the low 32 bits of the uniform kind word
     emitter.instruction(&format!("cmp r10d, {}", REF_CELL_KIND));               // is the slot word already a kind-6 reference cell?
-    emitter.instruction("jne __rt_ref_cell_ensure_alloc");                      // a different heap kind (array/hash/object) → promote it
+    emitter.instruction("jne __rt_ref_cell_ensure_probe");                      // a different heap kind → probe for Mixed-box tag override
     emitter.instruction("mov rax, rdi");                                        // reuse: return the shared reference cell unchanged
     emitter.instruction("ret");                                                 // done — no allocation
+
+    // -- probe: when the value is a Mixed box (heap kind 5), override the inner tag to 7 (Mixed) --
+    // store_local boxes adopted-ref-bound values as Mixed before local_ref_ensure, but the
+    // instruction's result_php_type is still the declared type (e.g. int → tag 0). Without the
+    // override, the cell's inner_tag would say Int while holding a Mixed box, causing leaks on
+    // later __rt_ref_cell_store/free_deep (tag < 4 → skip inner release).
+    emitter.label("__rt_ref_cell_ensure_probe");
+    emitter.instruction("cmp r10d, 5");                                         // is the value a Mixed box (heap kind 5)?
+    emitter.instruction("jne __rt_ref_cell_ensure_alloc");                      // not a Mixed box → use the compile-time tag as-is
+    emitter.instruction("mov esi, 7");                                          // override inner tag to Mixed (7) to match the boxed value
+    emitter.instruction("jmp __rt_ref_cell_alloc");                             // move the value word into a fresh cell (rdi=value, rsi=7 → rax=cell)
 
     emitter.label("__rt_ref_cell_ensure_alloc");
     emitter.instruction("jmp __rt_ref_cell_alloc");                             // move the value word into a fresh cell (rdi=value, rsi=tag → rax=cell)

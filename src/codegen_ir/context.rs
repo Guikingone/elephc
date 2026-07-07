@@ -36,6 +36,7 @@ pub(super) struct FunctionContext<'a> {
     local_offsets: HashMap<LocalSlotId, usize>,
     promoted_ref_cells: HashSet<LocalSlotId>,
     adopted_ref_cell_owners: HashSet<LocalSlotId>,
+    adopted_ref_cell_locals: HashSet<LocalSlotId>,
     try_handler_offsets: HashMap<i64, usize>,
     pub(super) frame_size: usize,
     pub(super) concat_base_offset: usize,
@@ -72,6 +73,7 @@ impl<'a> FunctionContext<'a> {
             local_offsets: layout.local_offsets,
             promoted_ref_cells: HashSet::new(),
             adopted_ref_cell_owners: HashSet::new(),
+            adopted_ref_cell_locals: HashSet::new(),
             try_handler_offsets: layout.try_handler_offsets,
             frame_size: layout.frame_size,
             concat_base_offset: layout.concat_base_offset,
@@ -227,6 +229,20 @@ impl<'a> FunctionContext<'a> {
     /// Returns true when a hidden owner slot owns a shared kind-6 refcounted reference cell.
     pub(super) fn is_adopted_ref_cell_owner(&self, owner_slot: LocalSlotId) -> bool {
         self.adopted_ref_cell_owners.contains(&owner_slot)
+    }
+
+    /// Marks a visible local slot as an adopted kind-6 reference cell (shared owner), so a
+    /// whole-value reassign routes through `__rt_ref_cell_store` (releasing the prior inner
+    /// value tag-gated and stamping the new inner tag) instead of the raw single-word store.
+    pub(super) fn mark_adopted_ref_cell_local(&mut self, slot: LocalSlotId) {
+        self.adopted_ref_cell_locals.insert(slot);
+    }
+
+    /// Returns true when a visible local slot is an adopted kind-6 reference cell (shared
+    /// owner). By-reference parameter slots and promoted-non-adopted foreach fallback cells
+    /// are NOT in this set, so they keep their existing single-owner / raw-store semantics.
+    pub(super) fn is_adopted_ref_cell_local(&self, slot: LocalSlotId) -> bool {
+        self.adopted_ref_cell_locals.contains(&slot)
     }
 
     /// Returns true when the local slot is the storage slot for a by-reference parameter.

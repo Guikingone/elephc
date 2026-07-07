@@ -1,6 +1,7 @@
 //! Purpose:
 //! Emits the kind-6 refcounted reference-cell runtime helpers: `__rt_ref_cell_alloc`,
-//! `__rt_ref_cell_incref`, `__rt_ref_cell_decref`, and `__rt_ref_cell_free_deep`.
+//! `__rt_ref_cell_incref`, `__rt_ref_cell_decref`, `__rt_ref_cell_free_deep`, and
+//! `__rt_ref_cell_store`.
 //! Keeps PHP array/hash storage, heap ownership, and target-specific ABI variants in one focused emitter.
 //!
 //! Called from:
@@ -283,6 +284,118 @@ fn emit_ref_cell_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits `__rt_ref_cell_store`: whole-value store through a shared kind-6 reference cell.
+///
+/// Releases the cell's PRIOR inner value (tag-gated on the old `[cell+8]`, mirroring
+/// `__rt_ref_cell_free_deep`'s inner-release: callable descriptors release through the
+/// descriptor helper, strings and heap-backed tags 4..=7 through `__rt_decref_any`, and
+/// scalar tags 0/2/3/8/9 own nothing), then writes the new `value` word to `[cell+0]` and
+/// the new inner value-tag to `[cell+8]`. Used by the adopted kind-6 owner store path
+/// (`store_value_to_ref_cell_as`) so a whole reassign of a reference-bound local that
+/// CHANGES the inner type (int→array, int→string) stamps the new tag, letting
+/// `__rt_deref_if_reference` read the value back with the correct tag. Null cells are a
+/// defensive no-op.
+///
+/// # ABI
+/// - ARM64: `x0` = cell pointer, `x1` = new inner value word, `x2` = new inner value-tag.
+/// - x86_64: `rdi` = cell pointer, `rsi` = new inner value word, `rdx` = new inner value-tag.
+pub fn emit_ref_cell_store(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_ref_cell_store_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: ref_cell_store ---");
+    emitter.label_global("__rt_ref_cell_store");
+
+    emitter.instruction("cbz x0, __rt_ref_cell_store_done");                    // defensive no-op for a null reference cell
+    emitter.instruction("sub sp, sp, #48");                                     // allocate a frame to spill cell, value, and tag across the release call
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // set up the new frame pointer
+    emitter.instruction("stp x0, x1, [sp, #0]");                                // save the cell pointer and the new inner value word
+    emitter.instruction("str x2, [sp, #16]");                                   // save the new inner value-tag
+
+    // -- release the cell's prior inner value (tag-gated on the old [cell+8]) --
+    emitter.instruction("ldr x9, [x0, #8]");                                    // load the prior inner value-tag stored at cell+8
+    emitter.instruction("cmp x9, #10");                                         // does the cell hold a callable descriptor?
+    emitter.instruction("b.eq __rt_ref_cell_store_callable");                   // callable descriptors release through the descriptor helper
+    emitter.instruction("cmp x9, #1");                                          // does the cell hold a persisted string?
+    emitter.instruction("b.eq __rt_ref_cell_store_release");                    // strings release through the uniform dispatcher
+    emitter.instruction("cmp x9, #4");                                          // is the prior value below the heap-backed value-tag range?
+    emitter.instruction("b.lo __rt_ref_cell_store_write");                      // scalar prior values (0/2/3) own no heap storage
+    emitter.instruction("cmp x9, #7");                                          // is the prior value above the heap-backed value-tag range?
+    emitter.instruction("b.hi __rt_ref_cell_store_write");                      // non-heap prior tags (8/9) own no releasable storage here
+    emitter.label("__rt_ref_cell_store_release");
+    emitter.instruction("ldr x0, [x0]");                                        // load the prior inner value pointer from cell+0
+    emitter.instruction("bl __rt_decref_any");                                  // refcount-aware release of the heap-backed prior inner value
+    emitter.instruction("b __rt_ref_cell_store_write");                         // proceed to install the new value and tag
+
+    emitter.label("__rt_ref_cell_store_callable");
+    emitter.instruction("ldr x0, [x0]");                                        // load the prior callable descriptor pointer from cell+0
+    emitter.instruction("bl __rt_callable_descriptor_release");                 // release the callable descriptor previously owned by the cell
+
+    // -- install the new inner value word and its value-tag --
+    emitter.label("__rt_ref_cell_store_write");
+    emitter.instruction("ldp x0, x1, [sp, #0]");                                // reload the cell pointer and the new inner value word
+    emitter.instruction("ldr x2, [sp, #16]");                                   // reload the new inner value-tag
+    emitter.instruction("str x1, [x0]");                                        // store the new inner value word at cell+0
+    emitter.instruction("str x2, [x0, #8]");                                    // store the new inner value-tag at cell+8
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // deallocate the frame
+
+    emitter.label("__rt_ref_cell_store_done");
+    emitter.instruction("ret");                                                 // return to caller
+}
+
+/// Emits the x86_64 Linux variant of `__rt_ref_cell_store`.
+fn emit_ref_cell_store_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: ref_cell_store ---");
+    emitter.label_global("__rt_ref_cell_store");
+
+    emitter.instruction("test rdi, rdi");                                       // defensive check for a null reference cell
+    emitter.instruction("jz __rt_ref_cell_store_done");                         // null cells own no inner storage to replace
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before spilling the cell pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the spill slots
+    emitter.instruction("sub rsp, 32");                                         // reserve local storage for the cell pointer, value word, and tag
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the cell pointer across the inner-value release call
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the new inner value word across the release call
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the new inner value-tag across the release call
+
+    // -- release the cell's prior inner value (tag-gated on the old [cell+8]) --
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the prior inner value-tag stored at cell+8
+    emitter.instruction("cmp r10, 10");                                         // does the cell hold a callable descriptor?
+    emitter.instruction("je __rt_ref_cell_store_callable");                     // callable descriptors release through the descriptor helper
+    emitter.instruction("cmp r10, 1");                                          // does the cell hold a persisted string?
+    emitter.instruction("je __rt_ref_cell_store_release");                      // strings release through the uniform dispatcher
+    emitter.instruction("cmp r10, 4");                                          // is the prior value below the heap-backed value-tag range?
+    emitter.instruction("jb __rt_ref_cell_store_write");                        // scalar prior values (0/2/3) own no heap storage
+    emitter.instruction("cmp r10, 7");                                          // is the prior value above the heap-backed value-tag range?
+    emitter.instruction("ja __rt_ref_cell_store_write");                        // non-heap prior tags (8/9) own no releasable storage here
+    emitter.label("__rt_ref_cell_store_release");
+    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the prior inner value pointer from cell+0
+    emitter.instruction("call __rt_decref_any");                                // refcount-aware release of the heap-backed prior inner value
+    emitter.instruction("jmp __rt_ref_cell_store_write");                       // proceed to install the new value and tag
+
+    emitter.label("__rt_ref_cell_store_callable");
+    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the prior callable descriptor pointer from cell+0
+    emitter.instruction("call __rt_callable_descriptor_release");               // release the callable descriptor previously owned by the cell
+
+    // -- install the new inner value word and its value-tag --
+    emitter.label("__rt_ref_cell_store_write");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the cell pointer after the inner-value release
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the new inner value word after the release
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the new inner value-tag after the release
+    emitter.instruction("mov QWORD PTR [rdi], rsi");                            // store the new inner value word at cell+0
+    emitter.instruction("mov QWORD PTR [rdi + 8], rdx");                        // store the new inner value-tag at cell+8
+    emitter.instruction("add rsp, 32");                                         // release the spill slots reserved for the cell, value, and tag
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
+
+    emitter.label("__rt_ref_cell_store_done");
+    emitter.instruction("ret");                                                 // return to caller
+}
+
 /// Emits `__rt_deref_if_reference`: normalize a fetched hash element that may be a reference.
 ///
 /// If the runtime value-tag equals 11 (Reference), the value word is a kind-6 cell pointer; this
@@ -333,6 +446,7 @@ mod tests {
         emit_ref_cell_incref(&mut emitter);
         emit_ref_cell_decref(&mut emitter);
         emit_ref_cell_free_deep(&mut emitter);
+        emit_ref_cell_store(&mut emitter);
         emitter.output()
     }
 

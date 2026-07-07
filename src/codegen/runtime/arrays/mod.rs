@@ -416,7 +416,7 @@ pub use ref_cell_ensure::emit_ref_cell_ensure;
 /// Emit the idempotent get-or-promote helper for a local's persistent reference cell.
 pub use ref_cell::{
     emit_deref_if_reference, emit_ref_cell_alloc, emit_ref_cell_decref, emit_ref_cell_free_deep,
-    emit_ref_cell_incref,
+    emit_ref_cell_incref, emit_ref_cell_store,
 };
 /// Emit kind-6 refcounted reference-cell helpers (alloc/incref/decref/free_deep) + read-deref.
 pub use refcount::emit_refcount;

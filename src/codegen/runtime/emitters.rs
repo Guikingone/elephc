@@ -316,6 +316,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_ref_cell_decref(emitter);
     arrays::emit_ref_cell_free_deep(emitter);
     arrays::emit_deref_if_reference(emitter);
+    arrays::emit_ref_cell_store(emitter);
     arrays::emit_hash_ref_element(emitter);
     arrays::emit_hash_bind_ref_element(emitter);
     arrays::emit_hash_ref_append_element(emitter);

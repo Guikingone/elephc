@@ -261,7 +261,13 @@ pub(super) fn check_ref_assign(
             }
             // Taking a reference into an indexed array de-packs it into a hash (Zend behavior):
             // retype the base variable to an associative array so downstream reads, cleanup, and
-            // `array_is_list()` all agree with the promoted runtime representation.
+            // `array_is_list()` all agree with the promoted runtime representation. The element
+            // value is widened to Mixed so a whole-value reassign through the reference that
+            // changes the inner type (int->array, int->string) is read back through the runtime
+            // value-tag stamped by `__rt_ref_cell_store` (`__rt_deref_if_reference` returns the
+            // cell's inner tag, and the Mixed read path dispatches on it). The LOCAL alias keeps
+            // the original element type so the int->int / array->array store fast path (which
+            // routes through the alias, not the element type) is preserved.
             if let ExprKind::Variable(array_name) = &array.kind {
                 if let Some(PhpType::Array(_)) =
                     env.get(array_name).map(|ty| ty.codegen_repr())
@@ -270,7 +276,7 @@ pub(super) fn check_ref_assign(
                         array_name.clone(),
                         PhpType::AssocArray {
                             key: Box::new(PhpType::Mixed),
-                            value: Box::new(element_ty.clone()),
+                            value: Box::new(PhpType::Mixed),
                         },
                     );
                 }
@@ -565,7 +571,7 @@ fn check_ref_assign_local_array_element(
                     key: Box::new(PhpType::Mixed),
                     value: Box::new(PhpType::AssocArray {
                         key: Box::new(PhpType::Mixed),
-                        value: Box::new(element_ty.clone()),
+                        value: Box::new(PhpType::Mixed),
                     }),
                 },
             );
@@ -575,12 +581,18 @@ fn check_ref_assign_local_array_element(
             array_name.to_string(),
             PhpType::AssocArray {
                 key: Box::new(PhpType::Mixed),
-                value: Box::new(element_ty.clone()),
+                value: Box::new(PhpType::Mixed),
             },
         );
     }
-    // Reverse-bind: the source variable aliases the element's reference cell, so it follows the
-    // element type and becomes active by-reference storage.
+    // Reverse-bind: the source variable aliases the element's reference cell. The LOCAL alias
+    // keeps the original element type (mirroring the non-append SLICE-1 alias typing at line 284)
+    // so the same-type store fast path (`int->int`, `array->array`) routes through the alias
+    // without boxing. A whole-value reassign that changes the inner type (int->array, int->string)
+    // is read back through the ELEMENT value type (Mixed, widened above): `__rt_deref_if_reference`
+    // returns the cell's inner value-tag stamped by `__rt_ref_cell_store`, and the Mixed read
+    // path dispatches on it. The alias type only governs how the store represents the value word
+    // in the slot; `__rt_ref_cell_store` carries the NEW value's runtime tag independently.
     env.insert(src_name.clone(), element_ty);
     checker.active_ref_params.insert(src_name.clone());
     clear_callable_metadata(checker, src_name);

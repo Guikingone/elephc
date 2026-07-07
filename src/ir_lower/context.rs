@@ -138,6 +138,14 @@ pub(crate) struct LoweringContext<'m, 'f> {
     static_callable_locals: HashMap<String, StaticCallableBinding>,
     fiber_start_sigs: HashMap<String, FunctionSig>,
     ref_bound_locals: HashSet<String>,
+    /// Ref-bound locals that own a shared kind-6 reference cell via `adopt_ref_cell` or
+    /// `ensure_local_ref_cell` (`$x = &$arr[$k]`, `&$p`). A whole-value reassign of these
+    /// routes through `__rt_ref_cell_store` at the backend, which releases the prior inner
+    /// value tag-gated; the SSA-level `release_stored_local_value` is skipped for them so
+    /// the prior inner is released exactly once (the runtime helper owns it). By-reference
+    /// parameter locals and promoted-non-adopted foreach fallback cells are NOT in this
+    /// set, so they keep the existing SSA release + raw store semantics.
+    adopted_ref_bound_locals: HashSet<String>,
     ref_cell_owner_locals: HashMap<String, LocalSlotId>,
     /// foreach loop-key locals whose source is a concretely-indexed array
     /// (`Array` of a non-Mixed element type), so the runtime key is always an
@@ -213,6 +221,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             static_callable_locals: HashMap::new(),
             fiber_start_sigs: HashMap::new(),
             ref_bound_locals: HashSet::new(),
+            adopted_ref_bound_locals: HashSet::new(),
             ref_cell_owner_locals: HashMap::new(),
             foreach_int_key_locals: HashSet::new(),
             return_type,
@@ -524,6 +533,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.ref_bound_locals.contains(name)
     }
 
+    /// Returns true when `name` is an adopted kind-6 reference-cell owner whose whole-value
+    /// reassign routes through `__rt_ref_cell_store` at the backend, so the SSA-level
+    /// `release_stored_local_value` must be skipped for it (the runtime helper owns the
+    /// prior-inner release, tag-gated on the actual `[cell+8]`).
+    pub(crate) fn is_adopted_ref_bound_local(&self, name: &str) -> bool {
+        self.adopted_ref_bound_locals.contains(name)
+    }
+
     /// Declares a fresh hidden temporary slot and returns its synthetic name.
     pub(crate) fn declare_hidden_temp(&mut self, php_type: PhpType) -> String {
         let name = format!("__eir_tmp{}", self.hidden_temp_counter);
@@ -736,7 +753,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let release_source_after_store = self.value_needs_release_after_retaining_store(value);
         let transfer_callable_source_to_store = source_is_owning_temporary
             && matches!(php_type.codegen_repr(), PhpType::Callable);
+        // An adopted kind-6 reference-cell owner routes its whole-value reassign through
+        // `__rt_ref_cell_store` at the backend, which releases the prior inner value
+        // tag-gated on the actual `[cell+8]`. The SSA-level `release_stored_local_value`
+        // uses the (stale) alias storage type, so it would either no-op (scalar alias) and
+        // leak a refcounted prior inner on a type change, or double-release when the alias
+        // type is refcounted. Skip it for adopted owners; the runtime helper owns the
+        // prior-inner release. By-ref parameters and promoted-non-adopted foreach cells
+        // are not in `adopted_ref_bound_locals`, so they keep the SSA release.
+        let adopted_owner = self.is_adopted_ref_bound_local(name);
         if !uses_global
+            && !adopted_owner
             && local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_some_and(|slot| self.initialized_slots.contains(&slot))
         {
@@ -745,6 +772,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // A loop-carried slot can exist globally without being definitely initialized
         // on this CFG path. Release the runtime occupant before overwriting it.
         if !uses_global
+            && !adopted_owner
             && local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_some_and(|slot| !self.initialized_slots.contains(&slot))
             && !self.loop_stack.is_empty()
@@ -759,14 +787,30 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // zero-initialized in the prologue, so the first iteration safely releases a null
         // slot; subsequent iterations release the prior value.
         if !uses_global
+            && !adopted_owner
             && local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_none()
             && !self.loop_stack.is_empty()
         {
             self.release_stored_local_value(name, slot, span);
         }
+        // An adopted kind-6 ref-cell owner whose whole-value reassign is boxed as a Mixed cell
+        // (by `coerce_ref_cell_store_value` when the alias is `Mixed`, or by the backend's
+        // `store_value_to_ref_cell_as` when the source representation differs from the alias)
+        // would be double-retained: `acquire_if_refcounted` increfs the source, then the boxing
+        // helper `__rt_mixed_from_value` retains the child again, and the post-store
+        // `release_if_owned` only decrefs once — leaving the child over-retained and leaking
+        // it when the cell is eventually freed. Skip the acquire whenever the backend will box
+        // a refcounted source whose representation differs from the alias; the boxing's retain
+        // is the cell's acquire, and `release_if_owned` still drops the source's original ref.
+        let previous_repr = previous_type.codegen_repr();
+        let source_repr = php_type.codegen_repr();
+        let skip_acquire_for_mixed_boxing = adopted_owner
+            && source_repr.is_refcounted()
+            && source_repr != previous_repr;
         let value = if (uses_global || previous_kind == LocalKind::PhpLocal)
             && !transfer_callable_source_to_store
+            && !skip_acquire_for_mixed_boxing
         {
             crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
         } else {
@@ -932,6 +976,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             span,
         );
         self.unmark_ref_bound_local(name);
+        self.adopted_ref_bound_locals.remove(name);
         self.set_local_type(name, PhpType::Void);
         self.initialized_slots.insert(slot);
         null
@@ -1012,6 +1057,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.mark_ref_bound_local(target);
         self.initialized_slots.insert(target_slot);
         self.initialized_slots.insert(owner_slot);
+        self.adopted_ref_bound_locals.insert(target.to_string());
     }
 
     /// Get-or-promotes `name`'s PERSISTENT kind-6 reference cell for `&$name` and returns the cell
@@ -1046,6 +1092,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.set_local_type(name, value_ty);
         self.initialized_slots.insert(main_slot);
         self.initialized_slots.insert(owner_slot);
+        self.adopted_ref_bound_locals.insert(name.to_string());
         cell
     }
 

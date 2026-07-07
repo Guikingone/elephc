@@ -1320,3 +1320,265 @@ fn test_ref_local_array_append_heap_stable() {
         large.stderr
     );
 }
+
+// -- Whole-value reassign + unset of a reference-bound LOCAL (kind-6 adopted owner) --
+//
+// These cover the two whole-value operations that were broken on a reference-bound local
+// `$x = &$arr[0]` (an adopted kind-6 refcounted cell):
+//   (b) a whole reassign `$x = <new type>` must write BOTH the cell value word and the
+//       inner value-tag so a type change (int->array, int->string) is read back correctly;
+//   (c) `unset($x)` must `__rt_ref_cell_decref` (keep the shared value alive for the other
+//       binding) instead of raw-freeing the cell.
+// All expectations cross-checked with `php -r`.
+
+/// (b) int->array type change: the reassign writes the array pointer and stamps the Array
+/// value-tag at `[cell+8]`, so reading `$arr[0]` observes the new array. `php -r` prints `6`.
+#[test]
+fn test_ref_bound_local_reassign_int_to_array() {
+    let out = compile_and_run(
+        "<?php
+        $arr = [1];
+        $x = &$arr[0];
+        $x = [5, 6];
+        echo $arr[0][1];",
+    );
+    assert_eq!(out, "6");
+}
+
+/// (b) int->string type change: the reassign writes the string pointer and stamps the Str
+/// value-tag at `[cell+8]`, so reading `$arr[0]` observes the new string. `php -r` prints `hi`.
+#[test]
+fn test_ref_bound_local_reassign_int_to_string() {
+    let out = compile_and_run(
+        "<?php
+        $arr = [1];
+        $x = &$arr[0];
+        $x = \"hi\";
+        echo $arr[0];",
+    );
+    assert_eq!(out, "hi");
+}
+
+/// (b) same-type regression: an int->int reassign still writes through and reads back. The
+/// `__rt_ref_cell_store` helper must not disturb the working int->int fast path.
+/// `php -r` prints `5`.
+#[test]
+fn test_ref_bound_local_reassign_same_type_int() {
+    let out = compile_and_run(
+        "<?php
+        $arr = [1];
+        $x = &$arr[0];
+        $x = 5;
+        echo $arr[0];",
+    );
+    assert_eq!(out, "5");
+}
+
+/// (c) unset-keeps-element: `unset($x)` on an adopted owner decrements the shared cell
+/// instead of freeing it, so the element value survives. `php -r` prints `7`.
+#[test]
+fn test_ref_bound_local_unset_keeps_element() {
+    let out = compile_and_run(
+        "<?php
+        $arr = [7];
+        $x = &$arr[0];
+        unset($x);
+        echo $arr[0];",
+    );
+    assert_eq!(out, "7");
+}
+
+/// (c) after unset, the OTHER binding is still mutable: `$arr[0]` can be reassigned and
+/// read back, since the cell survives the unset (decref, not free). `php -r` prints `8`.
+#[test]
+fn test_ref_bound_local_unset_then_other_binding_mutable() {
+    let out = compile_and_run(
+        "<?php
+        $arr = [7];
+        $x = &$arr[0];
+        unset($x);
+        $arr[0] = 8;
+        echo $arr[0];",
+    );
+    assert_eq!(out, "8");
+}
+
+/// (b) SLICE-2 producer form: `$a[] = &$p` then `$p = [5, 6]` reassigns the shared cell to an
+/// array; reading the element observes the new array. `php -r` prints `6`.
+#[test]
+fn test_ref_bound_local_slice2_reassign_int_to_array() {
+    let out = compile_and_run(
+        "<?php
+        $a = [];
+        $p = 1;
+        $a[] = &$p;
+        $p = [5, 6];
+        echo $a[0][1];",
+    );
+    assert_eq!(out, "6");
+}
+
+/// (c) SLICE-2 producer form: `unset($p)` after `$a[] = &$p` decrements the shared cell, so
+/// the element value survives. `php -r` prints `1`.
+#[test]
+fn test_ref_bound_local_slice2_unset_keeps_element() {
+    let out = compile_and_run(
+        "<?php
+        $a = [];
+        $p = 1;
+        $a[] = &$p;
+        unset($p);
+        echo $a[0];",
+    );
+    assert_eq!(out, "1");
+}
+
+/// Heap balance: a type-change reassign of a reference-bound local must not leak or
+/// double-free. Each (b)/(c) operation in a loop must leave `live_blocks` invariant
+/// between a small and a large run.
+#[test]
+fn test_ref_bound_local_type_change_and_unset_heap_stable() {
+    let program = |iters: u32| {
+        format!(
+            "<?php
+            $i = 0;
+            while ($i < {iters}) {{
+                $arr = [1];
+                $x = &$arr[0];
+                $x = [5, 6];
+                $x = \"hi\";
+                unset($x);
+                $i = $i + 1;
+            }}
+            echo $arr[0];"
+        )
+    };
+    let small = compile_and_run_with_heap_debug(&program(50));
+    let large = compile_and_run_with_heap_debug(&program(300));
+    assert!(small.success, "small run failed: {}", small.stderr);
+    assert!(large.success, "large run failed: {}", large.stderr);
+    assert_eq!(small.stdout, "hi");
+    assert_eq!(large.stdout, "hi");
+    let live = |stderr: &str| -> String {
+        stderr
+            .lines()
+            .find(|l| l.contains("live_blocks="))
+            .and_then(|l| l.split_whitespace().find(|t| t.starts_with("live_blocks=")))
+            .unwrap_or("live_blocks=?")
+            .to_string()
+    };
+    assert_eq!(
+        live(&small.stderr),
+        live(&large.stderr),
+        "ref-bound type-change/unset leaked/grew the heap: small={} large={}",
+        small.stderr,
+        large.stderr
+    );
+}
+
+/// (b)+(c) per-operation heap balance: each individual (b)/(c) operation must leave
+/// `live_blocks=0` at exit (no leak, no double-free). Verifies the runtime helper releases
+/// the prior inner exactly once and the unset decrefs the shared cell exactly once.
+///
+/// Reads go through the OWNER (`$x`/`$p`) rather than the array element (`$arr[0][1]`):
+/// reading an array element and then indexing it (`$arr[0][1]`) has a pre-existing
+/// read-path leak (the intermediate Mixed box from the read is not released after
+/// indexing) that is out of scope for this fix. Reading through the owner exercises
+/// the same `__rt_ref_cell_store` / `__rt_ref_cell_decref` paths without touching the
+/// separate read+index leak, so the heap balance reflects only the (b)/(c) operation.
+#[test]
+fn test_ref_bound_local_operations_live_blocks_zero() {
+    let check = |src: &str, label: &str| {
+        let out = compile_and_run_with_heap_debug(src);
+        assert!(out.success, "{label} failed: {}", out.stderr);
+        let live = out
+            .stderr
+            .lines()
+            .find(|l| l.contains("live_blocks="))
+            .and_then(|l| l.split_whitespace().find(|t| t.starts_with("live_blocks=")))
+            .unwrap_or("live_blocks=?");
+        assert_eq!(
+            live, "live_blocks=0",
+            "{label} did not balance: {}\n{}",
+            label,
+            out.stderr
+        );
+    };
+    check(
+        "<?php
+        $arr = [1];
+        $x = &$arr[0];
+        $x = [5, 6];
+        echo $x[1];",
+        "int->array",
+    );
+    check(
+        "<?php
+        $arr = [1];
+        $x = &$arr[0];
+        $x = \"hi\";
+        echo $x;",
+        "int->string",
+    );
+    check(
+        "<?php
+        $arr = [1];
+        $x = &$arr[0];
+        $x = 5;
+        echo $x;",
+        "same-type int",
+    );
+    check(
+        "<?php
+        $arr = [7];
+        $x = &$arr[0];
+        unset($x);
+        echo $arr[0];",
+        "unset-keeps-element",
+    );
+    check(
+        // SLICE-2 int->array: the alias `$p` keeps the original element type (Int), so
+        // indexing `$p[1]` does not type-check, and reading `$a[0]` hits a pre-existing
+        // read-path leak (the intermediate Mixed box from the read is not released after
+        // echo). Use a store-only program: the (b) operation (`$p = [5, 6]` through
+        // `__rt_ref_cell_store` with Mixed tag) and the scope-exit cleanup
+        // (`__rt_ref_cell_decref` + hash free-deep) are exercised without touching the
+        // separate read leak, so the heap balance reflects only the (b) operation. Value
+        // correctness for int->array is covered by the non-SLICE-2 `echo $x[1]` case above.
+        "<?php
+        $a = [];
+        $p = 1;
+        $a[] = &$p;
+        $p = [5, 6];",
+        "slice2 int->array",
+    );
+    check(
+        "<?php
+        $a = [];
+        $p = 1;
+        $a[] = &$p;
+        unset($p);
+        echo $a[0];",
+        "slice2 unset-keeps-element",
+    );
+}
+
+/// Regression guard (the gate): by-ref function PARAM mutation and foreach-by-ref must be
+/// UNCHANGED by the adopted kind-6 store/unset fix. By-ref params use a raw 2-word caller slot
+/// (no inner_tag), and promoted-non-adopted foreach fallback cells use a kind-0 two-word cell —
+/// neither is an adopted kind-6 owner, so the `__rt_ref_cell_store` / `__rt_ref_cell_decref`
+/// paths must NOT fire for them. `php -r` prints `9\n7\n`.
+#[test]
+fn test_ref_bound_local_regression_by_ref_param_and_foreach() {
+    let out = compile_and_run(
+        "<?php
+        function f(&$p) { $p = 9; }
+        $x = 1;
+        f($x);
+        echo $x, \"\\n\";
+        $arr = [1, 2, 3];
+        foreach ($arr as &$v) { $v = $v + 5; }
+        echo $arr[1], \"\\n\";",
+    );
+    assert_eq!(out, "9\n7\n");
+}

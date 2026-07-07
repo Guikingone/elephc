@@ -6489,6 +6489,7 @@ fn lower_local_ref_ensure(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     }
     ctx.mark_promoted_ref_cell(main_slot);
     ctx.mark_adopted_ref_cell_owner(owner_slot);
+    ctx.mark_adopted_ref_cell_local(main_slot);
     store_if_result(ctx, inst)
 }
 
@@ -6520,6 +6521,7 @@ fn lower_adopt_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
     abi::emit_call_label(ctx.emitter, "__rt_ref_cell_incref");
     ctx.mark_promoted_ref_cell(target_slot);
     ctx.mark_adopted_ref_cell_owner(owner_slot);
+    ctx.mark_adopted_ref_cell_local(target_slot);
     Ok(())
 }
 
@@ -6530,29 +6532,18 @@ fn lower_release_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instructio
 }
 
 /// Releases the owned ref-cell pointer in an owner slot and clears that owner.
+///
+/// Delegates to the shared `release_ref_cell_owner_slot` so an adopted kind-6 shared owner
+/// (from `$x = &$arr[$k]` or `&$p`) decrements the shared cell via `__rt_ref_cell_decref`
+/// (keeping the value alive for the other owners) while a raw single-owner kind-0 cell uses
+/// the unconditional `emit_release_local_ref_cell`. This is the (c) `unset($x)` path.
 fn release_local_ref_cell_owner(
     ctx: &mut FunctionContext<'_>,
     owner_slot: LocalSlotId,
     value_ty: &PhpType,
 ) -> Result<()> {
     let owner_offset = ctx.local_offset(owner_slot)?;
-    let done = ctx.next_label("release_ref_cell_owner_done");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::load_at_offset_scratch(ctx.emitter, "x9", owner_offset, "x11");
-            ctx.emitter.instruction(&format!("cbz x9, {}", done));              // skip release when this variable no longer owns a fallback ref-cell
-            abi::emit_release_local_ref_cell(ctx.emitter, "x9", value_ty);
-            abi::emit_store_zero_to_local_slot(ctx.emitter, owner_offset);
-        }
-        Arch::X86_64 => {
-            abi::load_at_offset_scratch(ctx.emitter, "r11", owner_offset, "r10");
-            ctx.emitter.instruction("test r11, r11");                           // check whether this variable owns a fallback ref-cell
-            ctx.emitter.instruction(&format!("je {}", done));                   // skip release when the fallback owner is already clear
-            abi::emit_release_local_ref_cell(ctx.emitter, "r11", value_ty);
-            abi::emit_store_zero_to_local_slot(ctx.emitter, owner_offset);
-        }
-    }
-    ctx.emitter.label(&done);
+    super::frame::release_ref_cell_owner_slot(ctx, owner_slot, owner_offset, value_ty);
     Ok(())
 }
 
@@ -6616,6 +6607,70 @@ fn store_value_to_ref_cell_as(
     let source_ty = ctx.load_value_to_result(value)?;
     let target_ty = target_ty.codegen_repr();
     reject_multiword_ref_param_local(&target_ty, "store")?;
+    let source_repr = source_ty.codegen_repr();
+    // Adopted kind-6 shared owners (`$x = &$arr[$k]`, `&$p`) route the whole-value store
+    // through `__rt_ref_cell_store`, which releases the prior inner value (tag-gated on the
+    // old [cell+8]) and stamps the new inner value-tag at [cell+8] so a type change
+    // (int→array, int→string) is read back correctly via `__rt_deref_if_reference`. By-ref
+    // PARAM slots and promoted-non-adopted foreach fallback cells keep the raw single-word
+    // store below. TaggedScalar carries its tag in a dedicated register (not a runtime
+    // value-tag) and Float lives in the float result register, so both keep the existing
+    // branch for the rare adopted alias of those types.
+    if ctx.is_adopted_ref_cell_local(slot)
+        && !matches!(source_repr, PhpType::TaggedScalar | PhpType::Float)
+        && !matches!(target_ty, PhpType::TaggedScalar)
+    {
+        // For an adopted owner, the gate owns all value shaping; do NOT call
+        // `coerce_ref_cell_store_value` here. Its concrete->Mixed boxing path re-persists
+        // strings through `__rt_mixed_from_value`, which orphans the EIR-lowered persist
+        // that the SSA store path already produced (and that the adopted `store_local`
+        // skip-release keeps alive).
+        if source_repr == PhpType::Mixed && target_ty != PhpType::Mixed {
+            // Mixed source into a concrete alias: unbox to the alias shape so the cell
+            // stores the raw concrete value with its native tag.
+            coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
+            let unboxed_repr = target_ty.clone();
+            let tag = crate::codegen::runtime_value_tag(&unboxed_repr) as i64;
+            return emit_ref_cell_store_call(ctx, slot, tag, unboxed_repr);
+        }
+        // Decide whether to box the source as a Mixed cell before installation.
+        //
+        // When the alias type (target_ty) is Mixed — i.e. the hash is `array<mixed, mixed>`
+        // (SLICE-2 `$a[] = &$p`, or `$x = &$arr[0]` on a Mixed hash) — the hash read path
+        // expects every element to be a Mixed box with value-tag 7, and the cell's
+        // deep-free releases through `__rt_decref_any` on the Mixed box. A raw value with
+        // its native tag would break both paths, so non-Mixed sources are boxed first.
+        //
+        // When the alias type is concrete (e.g. `array<string, int>`), the hash read path
+        // expects raw values with their native tags. Boxing as Mixed would make
+        // `__rt_deref_if_reference` return a Mixed-box pointer that the typed hash read
+        // path misreads as a scalar (printing pointer values). Store the raw value with
+        // its native tag instead — `__rt_ref_cell_store` releases the prior inner
+        // (tag-gated) and stamps the new tag so a type change is read back correctly.
+        if target_ty == PhpType::Mixed && source_repr != PhpType::Mixed {
+            // Strings use the owned-transfer variant: the EIR lowering already persisted
+            // the literal and the adopted `store_local` skip-release keeps that persist
+            // alive, so a fresh `__rt_mixed_from_value` re-persist would orphan it.
+            // `emit_box_current_owned_value_as_mixed` transfers the already-owned string
+            // into the Mixed box without re-persisting. Scalars and other refcounted
+            // containers (Array/AssocArray/Object/Callable) are retained into the box
+            // through `emit_box_current_value_as_mixed` (scalars own no heap storage, so
+            // boxing just stamps the tag; refcounted containers are incref'd and the
+            // source temp is released by the SSA store path).
+            if source_repr == PhpType::Str {
+                emit_box_current_owned_value_as_mixed(ctx.emitter, &source_repr);
+            } else {
+                emit_box_current_value_as_mixed(ctx.emitter, &source_repr);
+            }
+            let tag = crate::codegen::runtime_value_tag(&PhpType::Mixed) as i64;
+            return emit_ref_cell_store_call(ctx, slot, tag, PhpType::Mixed);
+        }
+        // Concrete target or already-Mixed source: store the raw value with its native
+        // tag. `__rt_ref_cell_store` releases the prior inner (tag-gated on old [cell+8])
+        // and writes both the new value word and the new inner tag.
+        let tag = crate::codegen::runtime_value_tag(&source_repr) as i64;
+        return emit_ref_cell_store_call(ctx, slot, tag, source_repr.clone());
+    }
     coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
     let offset = ctx.local_offset(slot)?;
     let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
@@ -6642,6 +6697,46 @@ fn store_value_to_ref_cell_as(
             abi::emit_store_to_address(ctx.emitter, abi::int_result_reg(ctx.emitter), pointer_reg, 0);
         }
     }
+    Ok(())
+}
+
+/// Calls `__rt_ref_cell_store(cell, value, tag)` for an adopted kind-6 reference-cell owner.
+///
+/// The new inner value word is already in the integer result register (for non-string values)
+/// or the string pointer register (for `Str`); the tag is the `runtime_value_tag` of the new
+/// value's representation. The cell pointer is loaded from the visible local slot. The helper
+/// releases the prior inner value tag-gated and writes both the new value word and the new
+/// inner tag, so a whole reassign that changes the inner type is read back with the correct tag.
+fn emit_ref_cell_store_call(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    tag: i64,
+    source_repr: PhpType,
+) -> Result<()> {
+    let offset = ctx.local_offset(slot)?;
+    let cell_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let value_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let tag_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let int_reg = abi::int_result_reg(ctx.emitter);
+    let str_ptr_reg = abi::string_result_regs(ctx.emitter).0;
+    // The value word lives in `int_reg` for every handled type except `Str`, where it lives
+    // in the string pointer register. The cell pointer is loaded into a scratch first so the
+    // value is not clobbered before it is moved into the value-argument register.
+    let value_src = if source_repr == PhpType::Str {
+        str_ptr_reg
+    } else {
+        int_reg
+    };
+    let scratch = abi::symbol_scratch_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, scratch, offset);
+    if value_src != value_arg {
+        ctx.emitter
+            .instruction(&format!("mov {}, {}", value_arg, value_src));          // move the new inner value word into the value-argument register
+    }
+    ctx.emitter
+        .instruction(&format!("mov {}, {}", cell_arg, scratch));                 // load the shared reference-cell pointer into the cell-argument register
+    abi::emit_load_int_immediate(ctx.emitter, tag_arg, tag);                     // materialize the new inner value-tag into the tag-argument register
+    abi::emit_call_label(ctx.emitter, "__rt_ref_cell_store");                    // release the prior inner and install the new value + tag through the helper
     Ok(())
 }
 

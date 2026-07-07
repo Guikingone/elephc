@@ -449,7 +449,7 @@ fn emit_ref_cell_owner_epilogue_cleanup_for(
 /// An adopted owner (a shared kind-6 refcounted cell from `$x = &$arr[$k]`) is released with
 /// `__rt_ref_cell_decref` so the cell survives while other owners (the array slot, copies) still
 /// reference it; a raw single-owner cell uses the unconditional `emit_release_local_ref_cell`.
-fn emit_ref_cell_owner_cleanup(
+pub(super) fn release_ref_cell_owner_slot(
     ctx: &mut FunctionContext<'_>,
     slot: LocalSlotId,
     offset: usize,
@@ -483,6 +483,20 @@ fn emit_ref_cell_owner_cleanup(
         }
     }
     ctx.emitter.label(&done);
+}
+
+/// Releases the owner slot's ref-cell pointer when it is non-null, then clears the owner.
+///
+/// An adopted owner (a shared kind-6 refcounted cell from `$x = &$arr[$k]`) is released with
+/// `__rt_ref_cell_decref` so the cell survives while other owners (the array slot, copies) still
+/// reference it; a raw single-owner cell uses the unconditional `emit_release_local_ref_cell`.
+fn emit_ref_cell_owner_cleanup(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    offset: usize,
+    ty: &PhpType,
+) {
+    release_ref_cell_owner_slot(ctx, slot, offset, ty)
 }
 
 /// Returns hidden owner locals that track promoted fallback ref-cells.
