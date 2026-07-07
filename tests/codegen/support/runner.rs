@@ -178,12 +178,25 @@ fn requested_bridge_staticlibs<'a>(actual_link_libs: &[&str]) -> Vec<&'a TestBri
         .collect()
 }
 
-/// Builds any requested bridge staticlibs missing from the debug target directory.
+/// Builds any requested bridge staticlibs missing from the target's debug
+/// directory.
+///
+/// On the windows-x86_64 test target the bridge staticlibs must be cross-built
+/// for `x86_64-pc-windows-gnu` (PE/COFF) so MinGW can link them into the `.exe`;
+/// MinGW cannot link host ELF archives into a PE binary. To that end the
+/// `cargo build -p <package>` command gains `--target x86_64-pc-windows-gnu` and
+/// the `CC_x86_64_pc_windows_gnu`/`AR_x86_64_pc_windows_gnu`/`RANLIB_*` env vars
+/// that cc-rs needs to compile bundled C (PDO's `libsqlite3-sys` amalgamation)
+/// with the MinGW toolchain. On every other target the command is byte-identical
+/// to the pre-Tier-2 path: no `--target`, no extra env, so macOS/Linux bridge
+/// builds are unchanged.
 fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &str) {
     let _guard = BRIDGE_STATICLIB_BUILD_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
         .expect("bridge staticlib build lock poisoned");
+    let platform = target().platform;
+    let cargo_target = bridge_staticlib_cargo_target(platform);
     for bridge in requested_bridge_staticlibs(actual_link_libs) {
         let archive_path =
             Path::new(bridge_staticlib_dir).join(format!("lib{}.a", bridge.lib_name));
@@ -191,8 +204,15 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
             continue;
         }
 
-        let status = Command::new("cargo")
-            .args(["build", "-p", bridge.package])
+        let mut cmd = Command::new("cargo");
+        cmd.args(["build", "-p", bridge.package]);
+        if let Some(triple) = cargo_target {
+            cmd.args(["--target", triple]);
+            for (key, value) in bridge_staticlib_cross_env(platform) {
+                cmd.env(key, value);
+            }
+        }
+        let status = cmd
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .status()
             .unwrap_or_else(|err| {
@@ -212,6 +232,50 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
             bridge.package,
             archive_path.display()
         );
+    }
+}
+
+/// Returns the `cargo build --target` triple the bridge staticlib build should
+/// target, or `None` when building for the host. Only the windows-x86_64 test
+/// target cross-compiles the bridges; every other target returns `None` so the
+/// `cargo build` command stays byte-identical to the pre-Tier-2 path. Split out
+/// as a pure helper so the gating can be unit-tested without mutating process
+/// environment (which is racy under parallel test execution).
+fn bridge_staticlib_cargo_target(platform: Platform) -> Option<&'static str> {
+    match platform {
+        Platform::Windows => Some("x86_64-pc-windows-gnu"),
+        _ => None,
+    }
+}
+
+/// Returns the `CC`/`AR`/`RANLIB` env vars cc-rs needs to compile bundled C
+/// (PDO's `libsqlite3-sys` amalgamation) for the windows-x86_64 cross target
+/// using the MinGW-w64 toolchain. Empty slice on non-Windows targets, so no env
+/// is injected into the host `cargo build` command there.
+fn bridge_staticlib_cross_env(platform: Platform) -> &'static [(&'static str, &'static str)] {
+    static WINDOWS: [(&str, &str); 3] = [
+        ("CC_x86_64_pc_windows_gnu", "x86_64-w64-mingw32-gcc"),
+        ("AR_x86_64_pc_windows_gnu", "x86_64-w64-mingw32-ar"),
+        ("RANLIB_x86_64_pc_windows_gnu", "x86_64-w64-mingw32-ranlib"),
+    ];
+    static OTHER: [(&str, &str); 0] = [];
+    match platform {
+        Platform::Windows => &WINDOWS,
+        _ => &OTHER,
+    }
+}
+
+/// Returns the subdirectory under the cargo target dir where bridge staticlibs
+/// land. For the windows-x86_64 cross target, `cargo build --target
+/// x86_64-pc-windows-gnu` emits archives under
+/// `<target>/x86_64-pc-windows-gnu/debug`, so MinGW finds the PE/COFF archives
+/// there; every other target uses `<target>/debug` (the host cargo output dir),
+/// preserving the pre-Tier-2 layout on macOS/Linux. Pure helper so the dir
+/// resolution can be unit-tested without env mutation.
+fn bridge_staticlib_subdir(platform: Platform) -> &'static str {
+    match platform {
+        Platform::Windows => "x86_64-pc-windows-gnu/debug",
+        _ => "debug",
     }
 }
 
@@ -300,8 +364,14 @@ pub(crate) fn link_binary(
             || *l == "elephc_image"
     });
     let bridge_staticlib_dir = match std::env::var("CARGO_TARGET_DIR") {
-        Ok(dir) if !dir.is_empty() => format!("{}/debug", dir),
-        _ => format!("{}/target/debug", env!("CARGO_MANIFEST_DIR")),
+        Ok(dir) if !dir.is_empty() => {
+            format!("{}/{}", dir, bridge_staticlib_subdir(target().platform))
+        }
+        _ => format!(
+            "{}/target/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            bridge_staticlib_subdir(target().platform)
+        ),
     };
     if needs_bridge_staticlib {
         ensure_bridge_staticlibs(&actual_link_libs, &bridge_staticlib_dir);
@@ -679,4 +749,56 @@ pub(crate) fn assemble_and_run_expect_failure(
     assert!(!output.status.success(), "binary unexpectedly succeeded");
 
     String::from_utf8(output.stderr).unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies the windows-x86_64 target cross-compiles bridge staticlibs for
+    /// `x86_64-pc-windows-gnu` so MinGW can link the PE/COFF archives, while
+    /// macOS/Linux build for the host (no `--target`) and stay on the pre-Tier-2
+    /// path.
+    #[test]
+    fn bridge_staticlib_cargo_target_gated_on_windows() {
+        assert_eq!(
+            bridge_staticlib_cargo_target(Platform::Windows),
+            Some("x86_64-pc-windows-gnu")
+        );
+        assert_eq!(bridge_staticlib_cargo_target(Platform::MacOS), None);
+        assert_eq!(bridge_staticlib_cargo_target(Platform::Linux), None);
+    }
+
+    /// Verifies the cc-rs `CC`/`AR`/`RANLIB` env vars are surfaced only for the
+    /// windows-x86_64 cross target, so PDO's bundled `libsqlite3-sys` amalgamation
+    /// is compiled by `x86_64-w64-mingw32-gcc` and not the host cc. Non-Windows
+    /// targets get an empty slice so the host `cargo build` command is unchanged.
+    #[test]
+    fn bridge_staticlib_cross_env_only_on_windows() {
+        let env = bridge_staticlib_cross_env(Platform::Windows);
+        assert_eq!(env.len(), 3);
+        assert!(env.iter().any(|(k, v)| *k == "CC_x86_64_pc_windows_gnu"
+            && *v == "x86_64-w64-mingw32-gcc"));
+        assert!(env.iter().any(|(k, v)| *k == "AR_x86_64_pc_windows_gnu"
+            && *v == "x86_64-w64-mingw32-ar"));
+        assert!(env.iter().any(|(k, v)| *k == "RANLIB_x86_64_pc_windows_gnu"
+            && *v == "x86_64-w64-mingw32-ranlib"));
+        assert!(bridge_staticlib_cross_env(Platform::MacOS).is_empty());
+        assert!(bridge_staticlib_cross_env(Platform::Linux).is_empty());
+    }
+
+    /// Verifies bridge staticlibs are looked up under
+    /// `x86_64-pc-windows-gnu/debug` for the windows-x86_64 cross target (where
+    /// `cargo build --target x86_64-pc-windows-gnu` emits archives) and under
+    /// `debug` for every other target, preserving the pre-Tier-2 host layout on
+    /// macOS/Linux.
+    #[test]
+    fn bridge_staticlib_subdir_gated_on_windows() {
+        assert_eq!(
+            bridge_staticlib_subdir(Platform::Windows),
+            "x86_64-pc-windows-gnu/debug"
+        );
+        assert_eq!(bridge_staticlib_subdir(Platform::MacOS), "debug");
+        assert_eq!(bridge_staticlib_subdir(Platform::Linux), "debug");
+    }
 }

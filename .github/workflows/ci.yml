@@ -22,6 +22,18 @@ env:
     -p elephc-tz
     -p elephc-image
     -p elephc-web
+  # Windows parity prebuild subset: only the Tier 2 bridges that cross-build
+  # cleanly for x86_64-pc-windows-gnu. elephc-phar (bzip2-sys links the system
+  # libbz2, ELF-only on the ubuntu host) and elephc-tls (ring's asm paths are
+  # target-sensitive) are excluded so their C/cc-rs deps cannot block the
+  # Windows parity job; if a Windows fixture links phar/tls the on-demand
+  # `ensure_bridge_staticlibs` path in the test harness still attempts the
+  # cross-build and nextest isolates the individual failure.
+  BRIDGE_CRATES_WINDOWS: >-
+    -p elephc-image
+    -p elephc-pdo
+    -p elephc-crypto
+    -p elephc-tz
 
 jobs:
   # Compile each platform once, then let that platform's tests start as soon as
@@ -736,6 +748,12 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Add x86_64-pc-windows-gnu Rust target
+        # Bridge staticlibs (elephc-image/pdo/crypto/tz) are cross-built for
+        # windows-x86_64 so MinGW can link the PE/COFF archives into the `.exe`;
+        # the rust target must be installed before that prebuild step runs.
+        run: rustup target add x86_64-pc-windows-gnu
+
       - name: Cache Rust build state
         uses: actions/cache@v4
         with:
@@ -876,9 +894,24 @@ jobs:
 
       - name: Build bridge/native support crates
         # Match the native codegen-tests job so bridge-linking fixtures build their
-        # host staticlibs up front instead of triggering serialized on-demand builds
-        # mid-shard.
-        run: cargo build $BRIDGE_CRATES
+        # staticlibs up front instead of triggering serialized on-demand builds
+        # mid-shard. Cross-build for x86_64-pc-windows-gnu so MinGW can link the
+        # PE/COFF archives (MinGW cannot link host ELF archives into a PE binary);
+        # the CC/AR/RANLIB env vars let cc-rs compile bundled C (PDO's
+        # libsqlite3-sys amalgamation) with the MinGW-w64 toolchain. Uses
+        # BRIDGE_CRATES_WINDOWS (image/pdo/crypto/tz only) -- elephc-phar
+        # (bzip2-sys system libbz2, ELF-only on the ubuntu host) and elephc-tls
+        # (ring asm) are excluded so their C/cc-rs deps cannot block this job;
+        # if a Windows fixture links phar/tls the on-demand
+        # `ensure_bridge_staticlibs` path in the test harness still attempts the
+        # cross-build and nextest isolates the individual failure. The native
+        # codegen-tests jobs at the top of this file keep using $BRIDGE_CRATES
+        # with no --target, so this Windows-only cross-build does not affect them.
+        env:
+          CC_x86_64_pc_windows_gnu: x86_64-w64-mingw32-gcc
+          AR_x86_64_pc_windows_gnu: x86_64-w64-mingw32-ar
+          RANLIB_x86_64_pc_windows_gnu: x86_64-w64-mingw32-ranlib
+        run: cargo build $BRIDGE_CRATES_WINDOWS --target x86_64-pc-windows-gnu
 
       - name: Run codegen test shard under windows-x86_64
         # `--no-fail-fast` so the shard measures every fixture. `continue-on-error`
