@@ -812,10 +812,21 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$SYSROOT"
-          export CC="${HOST}-gcc"
-          export AR="${HOST}-ar"
-          export RANLIB="${HOST}-ranlib"
-          export STRIP="${HOST}-strip"
+          # Resolve the MinGW tools to absolute paths. On newer Ubuntu 24.04
+          # runner images CMake's bare-name resolution for AR/RANLIB breaks (the
+          # link step looks up `<HOST>-ar` relative to the source dir and fails
+          # with "no such file or directory"), so hand CMake absolute paths and
+          # fail loudly if a tool is genuinely missing.
+          export CC="$(command -v "${HOST}-gcc")"
+          export AR="$(command -v "${HOST}-ar")"
+          export RANLIB="$(command -v "${HOST}-ranlib")"
+          export STRIP="$(command -v "${HOST}-strip")"
+          for _t in CC AR RANLIB STRIP; do
+            if [ -z "${!_t:-}" ]; then
+              echo "::error::MinGW cross-tool ${_t} not found on PATH (HOST=${HOST}); ensure binutils-mingw-w64-x86-64 and gcc-mingw-w64-x86-64 are installed"
+              exit 1
+            fi
+          done
           WORK="$(mktemp -d)"
           trap 'rm -rf "$WORK"' EXIT
           cd "$WORK"
