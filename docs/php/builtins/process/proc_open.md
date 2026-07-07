@@ -2,38 +2,33 @@
 title: "proc_open()"
 description: "Execute a command and open file pointers for I/O."
 sidebar:
-  order: 307
+  order: 308
 ---
 
 ## proc_open()
 
 ```php
-function proc_open(array $descriptor_spec, string $command, array &$pipes): mixed
+function proc_open(string $descriptor_spec, string $command, array $pipes): mixed
 ```
 
-Executes a command and opens file pointers for I/O. The C1a implementation
-ships a stub runtime that always returns `false`; the real fork/pipe/exec
-implementation lands in a later slice.
+Execute a command and open file pointers for I/O.
 
 **Parameters**:
-- `$descriptor_spec` (`array`) — indexed array describing the child's pipes. Each
-  entry is `[fd => ["pipe", "r"|"w"]]` (pipe-only in C1a).
-- `$command` (`string`) — the command to execute.
-- `&$pipes` (`array`) — by-reference array populated by the runtime with the
-  parent-side pipe descriptors.
+- `$descriptor_spec` (`string`)
+- `$command` (`string`)
+- `$pipes` (`array`), passed by reference
 
-**Returns**: `mixed` — a process resource on success, or `false` on failure. The
-C1a stub always returns `false`.
+**Returns**: `mixed`
 
-> **Note**: The `cwd`, `env`, and `options` parameters from PHP are not yet
-> supported and will be added in a later slice.
+_No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-```php
-<?php
-$pipes = [];
-$r = proc_open([0 => ["pipe", "r"], 1 => ["pipe", "w"]], "echo hi", $pipes);
-if ($r === false) {
-    echo "failed to start process";
-}
-proc_close($r);
-```
+
+
+
+
+
+
+## Internals
+
+For how `proc_open` is implemented in the compiler, see [the internals page](../../../internals/builtins/process/proc_open.md).
+

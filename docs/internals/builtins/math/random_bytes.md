@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/random_bytes.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/random_bytes.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math/random.rs`:58](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math/random.rs#L58) (`lower_random_bytes`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math/random.rs`:58](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math/random.rs#L58) (`lower_random_bytes`)
 - **Function symbol**: `lower_random_bytes()`
 
 

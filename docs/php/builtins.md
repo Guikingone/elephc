@@ -315,8 +315,8 @@ sidebar:
 | [`passthru()`](./builtins/process/passthru.md) | `(string $command): void` | `void` |
 | [`pclose()`](./builtins/process/pclose.md) | `(resource $handle): int` | `int` |
 | [`popen()`](./builtins/process/popen.md) | `(string $command, string $mode): mixed` | `mixed` |
-| [`proc_close()`](./builtins/process/proc_close.md) | `(mixed $process): int` | `int` |
-| [`proc_open()`](./builtins/process/proc_open.md) | `(array $descriptor_spec, string $command, array &$pipes): mixed` | `mixed` |
+| [`proc_close()`](./builtins/process/proc_close.md) | `(resource $process): int` | `int` |
+| [`proc_open()`](./builtins/process/proc_open.md) | `(string $descriptor_spec, string $command, array $pipes): mixed` | `mixed` |
 | [`readline()`](./builtins/process/readline.md) | `(string $prompt = null): mixed` | `mixed` |
 | [`shell_exec()`](./builtins/process/shell_exec.md) | `(string $command): string` | `string` |
 | [`sleep()`](./builtins/process/sleep.md) | `(int $seconds): int` | `int` |
