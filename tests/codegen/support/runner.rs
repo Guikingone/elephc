@@ -669,8 +669,10 @@ pub(crate) fn assemble_and_run(
     let output = run_binary(&bin_path, dir);
     assert!(
         output.status.success(),
-        "binary exited with error: {}",
-        String::from_utf8_lossy(&output.stderr)
+        "binary exited with error: {}\nstdout:\n{}\nexit-code:{:?}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout),
+        output.status.code()
     );
 
     String::from_utf8(output.stdout).unwrap()
