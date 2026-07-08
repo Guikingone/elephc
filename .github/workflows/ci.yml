@@ -740,8 +740,10 @@ jobs:
     env:
       # Cross-compile + run every codegen fixture as windows-x86_64 (via Wine).
       ELEPHC_TEST_TARGET: windows-x86_64
-      # Silence Wine's diagnostic chatter so it never pollutes captured stdout/stderr.
-      WINEDEBUG: -all
+      # DIAGNOSTIC: enable Wine's seh (exception/fault) channel so crashing .exe
+      # binaries surface their fault address + failing instruction pointer in the
+      # captured stderr, instead of the empty stderr produced by -all.
+      WINEDEBUG: +seh
     steps:
       - uses: actions/checkout@v4
 
