@@ -161,6 +161,7 @@ pub enum Op {
     ConstBool,
     ConstClassName,
     ConstEnumCase,
+    LoadCalledClassId,
     DataAddr,
     LoadLocal,
     StoreLocal,
@@ -180,6 +181,9 @@ pub enum Op {
     IAdd,
     ISub,
     IMul,
+    ICheckedAdd,
+    ICheckedSub,
+    ICheckedMul,
     IDiv,
     ISDiv,
     ISMod,
@@ -244,9 +248,11 @@ pub enum Op {
     ArrayLen,
     HashLen,
     ArrayGet,
+    ArrayGetSilent,
     HashGet,
     ArrayIsset,
     HashIsset,
+    ArrayElemAddr,
     ArraySet,
     HashSet,
     HashUnset,
@@ -261,7 +267,11 @@ pub enum Op {
     HashUnion,
     ArrayHashUnion,
     HashArrayUnion,
+    HashSpread,
     ArrayToHash,
+    ArraySetMixedKey,
+    ArrayGetMixedKey,
+    ArrayGetMixedKeySilent,
     ArrayKeyExists,
     OffsetExists,
     OffsetUnset,
@@ -294,6 +304,18 @@ pub enum Op {
     MethodLookup,
     MethodCall,
     StaticMethodCall,
+    /// Coerces a PHP numeric string operand to its integer value for an int-backed enum
+    /// `from()`/`tryFrom()` call. Operand: the string. Immediate: data id of the PHP
+    /// `TypeError` message thrown when the string is not numeric. Result: `I64`.
+    EnumBackingStringToInt,
+    /// Coerces a `Mixed` (dynamically-typed) operand to the integer backing value for an
+    /// int-backed enum `from()`/`tryFrom()` call, dispatching on the runtime tag: int/bool
+    /// forward the payload, float truncates, null becomes 0, a numeric string coerces (a
+    /// non-numeric string throws `TypeError`), and array/object/resource/callable throw
+    /// `TypeError`. Operand: the Mixed value. Immediate: data id of the PHP `TypeError`
+    /// message prefix (`"E::from(): Argument #1 ($value) must be of type int, "`), to which
+    /// codegen appends the runtime type word. Result: `I64`.
+    EnumBackingMixedToInt,
     ClassConstant,
     ScopedConstantGet,
     ClassAttrNames,
@@ -375,7 +397,9 @@ impl Op {
             | MixedTagOf | IsNull | IsTruthy | IsEmpty | FunctionVariantDispatch | PtrCast
             | PtrOffset | Move | Borrow | Nop => E::PURE,
             IDiv | ISDiv | ISMod | PtrCheckNonnull => E::MAY_FATAL,
+            ICheckedAdd | ICheckedSub | ICheckedMul => E::ALLOC_HEAP | E::READS_HEAP,
             ConstEnumCase => E::ALLOC_HEAP,
+            LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
             StoreLocal | UnsetLocal | StoreRefCell | ListUnpack | CatchBind | FinallyEnter
             | FinallyExit => E::WRITES_LOCAL,
@@ -398,11 +422,12 @@ impl Op {
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | BufferNew | GeneratorNew => {
                 E::ALLOC_HEAP
             }
-            MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat | ArrayGet | HashGet
+            MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat | ArrayGetSilent | HashGet
             | ArrayIsset | HashIsset | BufferGet | BufferLen | PackedFieldGet | PtrRead
             | PtrReadString => {
                 E::READS_HEAP | E::MAY_FATAL
             }
+            ArrayGet => E::READS_HEAP | E::MAY_FATAL | E::MAY_WARN,
             StrPersist | ArrayEnsureUnique | HashEnsureUnique | ArrayCloneShallow
             | HashCloneShallow => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             ArrayLen | HashLen | ArrayKeyExists | OffsetExists | PropGet | LoadPropRefCell => {
@@ -413,9 +438,15 @@ impl Op {
             | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
+            ArrayElemAddr | ArraySetMixedKey => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP
+            }
+            ArrayGetMixedKey => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::MAY_WARN,
+            ArrayGetMixedKeySilent => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
             ArrayUnion | HashUnion | ArrayHashUnion | HashArrayUnion | ArrayToHash => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
+            HashSpread => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             IterStart | IterCurrentKey | IterCurrentValue | IteratorMethodCall
             | SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed | DynamicPropGet | NullsafePropGet
             | NullsafeMethodCall | MethodLookup | MethodCall | StaticMethodCall
@@ -426,6 +457,9 @@ impl Op {
                 E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT
             }
             StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | InstanceOf => E::READS_HEAP,
+            EnumBackingStringToInt | EnumBackingMixedToInt => {
+                E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW
+            }
             Call | FunctionVariantCall | BuiltinCall | RuntimeCall | ClosureCall | ExprCall
             | CallableDescriptorInvoke | PipeCall | FiberRuntimeCall => {
                 E::all().difference(E::REFCOUNT_OP)
@@ -475,6 +509,7 @@ impl Op {
             ConstBool => "const_bool",
             ConstClassName => "const_class_name",
             ConstEnumCase => "const_enum_case",
+            LoadCalledClassId => "load_called_class_id",
             DataAddr => "data_addr",
             LoadLocal => "load_local",
             StoreLocal => "store_local",
@@ -494,6 +529,9 @@ impl Op {
             IAdd => "iadd",
             ISub => "isub",
             IMul => "imul",
+            ICheckedAdd => "ichecked_add",
+            ICheckedSub => "ichecked_sub",
+            ICheckedMul => "ichecked_mul",
             IDiv => "idiv",
             ISDiv => "isdiv",
             ISMod => "ismod",
@@ -558,9 +596,11 @@ impl Op {
             ArrayLen => "array_len",
             HashLen => "hash_len",
             ArrayGet => "array_get",
+            ArrayGetSilent => "array_get_silent",
             HashGet => "hash_get",
             ArrayIsset => "array_isset",
             HashIsset => "hash_isset",
+            ArrayElemAddr => "array_elem_addr",
             ArraySet => "array_set",
             HashSet => "hash_set",
             HashUnset => "hash_unset",
@@ -575,7 +615,11 @@ impl Op {
             HashUnion => "hash_union",
             ArrayHashUnion => "array_hash_union",
             HashArrayUnion => "hash_array_union",
+            HashSpread => "hash_spread",
             ArrayToHash => "array_to_hash",
+            ArraySetMixedKey => "array_set_mixed_key",
+            ArrayGetMixedKey => "array_get_mixed_key",
+            ArrayGetMixedKeySilent => "array_get_mixed_key_silent",
             ArrayKeyExists => "array_key_exists",
             OffsetExists => "offset_exists",
             OffsetUnset => "offset_unset",
@@ -602,6 +646,8 @@ impl Op {
             MethodLookup => "method_lookup",
             MethodCall => "method_call",
             StaticMethodCall => "static_method_call",
+            EnumBackingStringToInt => "enum_backing_string_to_int",
+            EnumBackingMixedToInt => "enum_backing_mixed_to_int",
             ClassConstant => "class_constant",
             ScopedConstantGet => "scoped_constant_get",
             ClassAttrNames => "class_attr_names",

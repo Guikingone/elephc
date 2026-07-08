@@ -32,6 +32,11 @@ struct BridgeStaticlib {
     /// Cargo package that produces the staticlib (e.g. `"elephc-tls"`), used for
     /// the source-checkout auto-build and workspace detection.
     crate_name: &'static str,
+    /// User-facing short name for the `--with-<flag_name>` force flag (e.g.
+    /// `"pdo"` → `--with-pdo`). Conventionally `crate_name` minus the `elephc-`
+    /// prefix. `--with-<flag_name>` force-links this bridge (whole-archived so it
+    /// survives dead-stripping) regardless of feature auto-detection.
+    flag_name: &'static str,
     /// When true the whole archive is force-loaded so the staticlib's link-time
     /// side effects survive (e.g. rustls provider registration); when false a
     /// plain `-l` is enough.
@@ -52,6 +57,7 @@ const BRIDGES: &[BridgeStaticlib] = &[
         lib_name: "elephc_tls",
         env_var: "ELEPHC_TLS_LIB_DIR",
         crate_name: "elephc-tls",
+        flag_name: "tls",
         whole_archive: true,
         macos_frameworks: &[],
         needs_libdl: true,
@@ -60,6 +66,7 @@ const BRIDGES: &[BridgeStaticlib] = &[
         lib_name: "elephc_pdo",
         env_var: "ELEPHC_PDO_LIB_DIR",
         crate_name: "elephc-pdo",
+        flag_name: "pdo",
         whole_archive: false,
         // The PostgreSQL driver pulls in `whoami` (to default the connection
         // user), which references CoreFoundation / SystemConfiguration on macOS.
@@ -70,6 +77,7 @@ const BRIDGES: &[BridgeStaticlib] = &[
         lib_name: "elephc_crypto",
         env_var: "ELEPHC_CRYPTO_LIB_DIR",
         crate_name: "elephc-crypto",
+        flag_name: "crypto",
         // Pure-Rust hashing: no link-time side effects (unlike rustls' provider
         // registration), so a plain `-l elephc_crypto` is sufficient.
         whole_archive: false,
@@ -82,6 +90,7 @@ const BRIDGES: &[BridgeStaticlib] = &[
         lib_name: "elephc_phar",
         env_var: "ELEPHC_PHAR_LIB_DIR",
         crate_name: "elephc-phar",
+        flag_name: "phar",
         whole_archive: false,
         macos_frameworks: &[],
         needs_libdl: true,
@@ -90,6 +99,7 @@ const BRIDGES: &[BridgeStaticlib] = &[
         lib_name: "elephc_tz",
         env_var: "ELEPHC_TZ_LIB_DIR",
         crate_name: "elephc-tz",
+        flag_name: "tz",
         // Timezone-introspection tables baked from PHP and embedded with
         // include_str!: pure data lookup, no link-time side effects, so a plain
         // `-l elephc_tz` is sufficient.
@@ -104,6 +114,7 @@ const BRIDGES: &[BridgeStaticlib] = &[
         lib_name: "elephc_image",
         env_var: "ELEPHC_IMAGE_LIB_DIR",
         crate_name: "elephc-image",
+        flag_name: "image",
         // Pure-Rust image codecs/drawing: no link-time side effects, so a plain
         // `-l elephc_image` suffices.
         whole_archive: false,
@@ -115,6 +126,7 @@ const BRIDGES: &[BridgeStaticlib] = &[
         lib_name: "elephc_web",
         env_var: "ELEPHC_WEB_LIB_DIR",
         crate_name: "elephc-web",
+        flag_name: "web",
         // The bridge owns the program entry (elephc_web_run) and tokio/hyper
         // link-time machinery, so the whole archive is force-loaded.
         whole_archive: true,
@@ -123,6 +135,22 @@ const BRIDGES: &[BridgeStaticlib] = &[
         needs_libdl: true,
     },
 ];
+
+/// Resolves a `--with-<flag>` crate flag to its bridge `lib_name`, or `None`
+/// when `flag` does not name a known bridge crate. Used by the CLI to validate
+/// `--with-<crate>` and by the pipeline to force-link the matching staticlib.
+pub(crate) fn bridge_lib_for_flag(flag: &str) -> Option<&'static str> {
+    BRIDGES
+        .iter()
+        .find(|bridge| bridge.flag_name == flag)
+        .map(|bridge| bridge.lib_name)
+}
+
+/// Returns every user-facing `--with-<flag>` crate flag name, in table order,
+/// so the CLI can list the accepted crates in its error message.
+pub(crate) fn crate_flag_names() -> Vec<&'static str> {
+    BRIDGES.iter().map(|bridge| bridge.flag_name).collect()
+}
 
 impl BridgeStaticlib {
     /// Returns the `lib<name>.a` archive filename this bridge produces.
@@ -221,6 +249,44 @@ pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
     run_tool("Assembler", &mut as_cmd);
 }
 
+/// Returns the `-L` search paths derived from the `ELEPHC_MINGW_SYSROOT` env
+/// var for the Windows MinGW link, when that variable is set and points at an
+/// existing directory. CI sets it to a cross-built MinGW sysroot containing
+/// PE/COFF static archives of PCRE2 (`libpcre2-8.a`, `libpcre2-posix.a`),
+/// bzip2 (`libbz2.a`), zlib (`libz.a`), and libiconv (`libiconv.a`), so the
+/// `x86_64-w64-mingw32-gcc` link resolves those C symbols. The variable is
+/// unset on local non-CI builds, so this returns an empty `Vec` and the link
+/// command emits no missing-directory warnings.
+///
+/// Both `$SYSROOT/lib` and `$SYSROOT/lib64` are added when present, so a
+/// sysroot that installs either layout works without per-lib configuration.
+fn mingw_sysroot_link_paths() -> Vec<String> {
+    let Some(dir) = std::env::var_os("ELEPHC_MINGW_SYSROOT") else {
+        return Vec::new();
+    };
+    mingw_sysroot_link_paths_from(&PathBuf::from(dir))
+}
+
+/// Pure core of [`mingw_sysroot_link_paths`]: returns the `-L` search paths for
+/// a given sysroot base directory when it exists, or an empty `Vec` otherwise.
+/// Split out so the gating logic can be unit-tested without mutating the
+/// process environment (which is racy under parallel test execution).
+fn mingw_sysroot_link_paths_from(base: &Path) -> Vec<String> {
+    if !base.is_dir() {
+        return Vec::new();
+    }
+    let mut paths = Vec::new();
+    let lib = base.join("lib");
+    if lib.is_dir() {
+        paths.push(lib.to_string_lossy().into_owned());
+    }
+    let lib64 = base.join("lib64");
+    if lib64.is_dir() {
+        paths.push(lib64.to_string_lossy().into_owned());
+    }
+    paths
+}
+
 /// Links object files and runtime objects into a final binary.
 /// - `target`: Compiler target (controls platform, linker command, and flags).
 /// - `emit`: Output kind. `Executable` produces a standalone binary; `Cdylib`
@@ -247,6 +313,7 @@ pub(crate) fn link(
     extra_link_libs: &[String],
     extra_link_paths: &[String],
     extra_frameworks: &[String],
+    forced_whole_archive: &[String],
 ) {
     // Bridge staticlibs this program actually links, paired with the directory
     // each one resolved to (`None` when it could not be located/built). Driven
@@ -256,6 +323,10 @@ pub(crate) fn link(
         .filter(|bridge| extra_link_libs.iter().any(|l| l.as_str() == bridge.lib_name))
         .map(|bridge| (bridge, bridge.lib_dir()))
         .collect();
+    // A bridge is force-loaded either because its `BRIDGES` entry demands it
+    // (link-time side effects / owned entry point) or because the user passed
+    // `--with-<crate>` (`forced_whole_archive`), which guarantees the staticlib
+    // is retained even when no program symbol references it.
     let needs_libdl = needed_bridges.iter().any(|(bridge, _)| bridge.needs_libdl);
 
     let mut ld_cmd = match target.platform {
@@ -267,6 +338,11 @@ pub(crate) fn link(
             match emit {
                 Emit::Executable => {
                     cmd.args(["-e", "_main"]);
+                    // The runtime object is emitted with `.subsections_via_symbols`
+                    // and `L`-prefixed (assembler-local) internal labels, so
+                    // `-dead_strip` drops whole unreferenced `__rt_*` helpers (the
+                    // macOS analogue of the Linux `--gc-sections` path).
+                    cmd.arg("-dead_strip");
                 }
                 Emit::Cdylib => {
                     // `-dylib` selects shared-library output and drops the executable
@@ -298,12 +374,14 @@ pub(crate) fn link(
                     // output are mutually exclusive, so we never add `-static`
                     // here even when no extra libs are requested. User-code
                     // codegen routes cross-object data references through the
-                    // GOT (`@GOTPCREL` on x86_64, `:got:`/`:got_lo12:` on
-                    // AArch64) in PIC mode so the loader can fix them up at
+                    // GOT (`@GOTPCREL` on x86_64, `:got:`/`@got_lo12:` on AArch64)
+                    // in PIC mode so the loader can fix them up at
                     // dlopen time without text-segment relocations.
                     cmd.arg("-shared");
                 }
-                Emit::Executable => {}
+                Emit::Executable => {
+                    cmd.arg("-Wl,--gc-sections");
+                }
             }
             cmd.arg("-o").arg(bin_path).arg(obj_path).arg(runtime_object_path);
             if matches!(emit, Emit::Executable) && extra_link_libs.is_empty() {
@@ -316,6 +394,24 @@ pub(crate) fn link(
             if needs_libdl {
                 cmd.arg("-ldl");
             }
+            cmd
+        }
+        Platform::Windows => {
+            let mut cmd = Command::new(target.linker_cmd());
+            cmd.arg("-o").arg(bin_path);
+            cmd.arg(obj_path);
+            cmd.arg(runtime_object_path);
+            // Surface a CI-provided MinGW sysroot (cross-built PCRE2, bzip2,
+            // zlib, libiconv) before the system import libs and any
+            // `extra_link_libs` (`-lpcre2-8`, `-lbz2`, `-lz`, `-liconv`) so the
+            // MinGW linker resolves those C symbols against PE/COFF archives
+            // instead of the ELF dev packages the ubuntu runner also installs.
+            // Gated on `ELEPHC_MINGW_SYSROOT` so local non-CI builds — which
+            // never set the env var — see no missing-directory warnings.
+            for path in mingw_sysroot_link_paths() {
+                cmd.arg(format!("-L{}", path));
+            }
+            cmd.args(["-lkernel32", "-lmsvcrt", "-lwinmm", "-lws2_32", "-lbcrypt", "-lshlwapi"]);
             cmd
         }
     };
@@ -345,7 +441,12 @@ pub(crate) fn link(
         .filter_map(|lib| {
             needed_bridges
                 .iter()
-                .find(|(b, d)| b.lib_name == lib.as_str() && b.whole_archive && d.is_some())
+                .find(|(b, d)| {
+                    b.lib_name == lib.as_str()
+                        && (b.whole_archive
+                            || forced_whole_archive.iter().any(|l| l.as_str() == b.lib_name))
+                        && d.is_some()
+                })
                 .map(|(b, _)| (*b, lib.as_str()))
         })
         .collect();
@@ -389,6 +490,8 @@ pub(crate) fn link(
                 }
                 dedup_scratch = Some(scratch);
             }
+            Platform::Windows => {
+            }
         }
     }
     for lib in extra_link_libs {
@@ -399,7 +502,10 @@ pub(crate) fn link(
         // is force-loaded so its link-time side effects survive; everything else
         // links with a plain `-l`.
         let whole_archive_bridge = needed_bridges.iter().find(|(bridge, dir)| {
-            bridge.lib_name == lib.as_str() && bridge.whole_archive && dir.is_some()
+            bridge.lib_name == lib.as_str()
+                && (bridge.whole_archive
+                    || forced_whole_archive.iter().any(|l| l.as_str() == bridge.lib_name))
+                && dir.is_some()
         });
         match whole_archive_bridge {
             Some((bridge, dir)) => {
@@ -414,6 +520,11 @@ pub(crate) fn link(
                         ld_cmd.arg("-force_load").arg(path);
                     }
                     Platform::Linux => {
+                        ld_cmd.arg("-Wl,--whole-archive");
+                        ld_cmd.arg(format!("-l{}", bridge.lib_name));
+                        ld_cmd.arg("-Wl,--no-whole-archive");
+                    }
+                    Platform::Windows => {
                         ld_cmd.arg("-Wl,--whole-archive");
                         ld_cmd.arg(format!("-l{}", bridge.lib_name));
                         ld_cmd.arg("-Wl,--no-whole-archive");
@@ -709,5 +820,72 @@ mod tests {
         assert_eq!(entry.env_var, "ELEPHC_TZ_LIB_DIR");
         assert_eq!(entry.archive_filename(), "libelephc_tz.a");
         assert!(!entry.whole_archive, "tz bridge must not force-load (no link-time side effects)");
+    }
+
+    /// Verifies every bridge exposes a non-empty `--with-<flag>` name and that
+    /// `bridge_lib_for_flag` maps each one back to its `lib_name`, so the CLI's
+    /// `--with-<crate>` validation stays in lockstep with the `BRIDGES` table.
+    #[test]
+    fn crate_flags_map_back_to_bridge_lib_names() {
+        for bridge in BRIDGES {
+            assert!(!bridge.flag_name.is_empty(), "{} has no flag_name", bridge.lib_name);
+            assert_eq!(
+                bridge_lib_for_flag(bridge.flag_name),
+                Some(bridge.lib_name),
+                "flag {} must resolve to {}",
+                bridge.flag_name,
+                bridge.lib_name
+            );
+        }
+        assert_eq!(bridge_lib_for_flag("pdo"), Some("elephc_pdo"));
+        assert_eq!(bridge_lib_for_flag("web"), Some("elephc_web"));
+    }
+
+    /// Verifies an unknown crate flag resolves to `None` so the CLI rejects
+    /// `--with-<bogus>` instead of silently ignoring it.
+    #[test]
+    fn unknown_crate_flag_resolves_to_none() {
+        assert_eq!(bridge_lib_for_flag("bogus"), None);
+        assert_eq!(bridge_lib_for_flag("elephc_pdo"), None);
+        assert!(crate_flag_names().contains(&"pdo"));
+        assert_eq!(crate_flag_names().len(), BRIDGES.len());
+    }
+
+    /// Verifies a non-existent sysroot base produces no search paths, so a
+    /// stray `ELEPHC_MINGW_SYSROOT` value can never emit a missing-directory
+    /// linker warning.
+    #[test]
+    fn mingw_sysroot_paths_empty_for_missing_dir() {
+        let paths = mingw_sysroot_link_paths_from(Path::new("/nonexistent/elephc-mingw-sysroot-123"));
+        assert!(paths.is_empty(), "got: {paths:?}");
+    }
+
+    /// Verifies a real sysroot with a `lib` directory is surfaced as a `-L`
+    /// path, and that `lib64` is also added when present, so a CI cross-built
+    /// sysroot is picked up regardless of which layout the libs installed into.
+    #[test]
+    fn mingw_sysroot_paths_from_real_dir() {
+        let tmp = std::env::temp_dir().join(format!("elephc-mingw-sysroot-test-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::create_dir_all(tmp.join("lib")).unwrap();
+        std::fs::create_dir_all(tmp.join("lib64")).unwrap();
+        let paths = mingw_sysroot_link_paths_from(&tmp);
+        assert_eq!(paths.len(), 2);
+        assert!(paths[0].ends_with("lib"), "got: {paths:?}");
+        assert!(paths[1].ends_with("lib64"), "got: {paths:?}");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// Verifies only `lib` is returned when `lib64` is absent, so sysroots
+    /// that install solely into `lib` do not produce a phantom `lib64` entry.
+    #[test]
+    fn mingw_sysroot_paths_lib_only() {
+        let tmp = std::env::temp_dir().join(format!("elephc-mingw-sysroot-lib-only-{}", std::process::id()));
+        std::fs::remove_dir_all(&tmp).ok();
+        std::fs::create_dir_all(tmp.join("lib")).unwrap();
+        let paths = mingw_sysroot_link_paths_from(&tmp);
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].ends_with("lib"), "got: {paths:?}");
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }

@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel superseded runs for the same ref (e.g. when a branch is force-pushed or
+# rebased) so stale jobs stop consuming runners the moment a newer commit lands.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   BRIDGE_CRATES: >-
@@ -16,25 +22,27 @@ env:
     -p elephc-tz
     -p elephc-image
     -p elephc-web
+  # Windows parity prebuild subset: only the Tier 2 bridges that cross-build
+  # cleanly for x86_64-pc-windows-gnu. elephc-phar (bzip2-sys links the system
+  # libbz2, ELF-only on the ubuntu host) and elephc-tls (ring's asm paths are
+  # target-sensitive) are excluded so their C/cc-rs deps cannot block the
+  # Windows parity job; if a Windows fixture links phar/tls the on-demand
+  # `ensure_bridge_staticlibs` path in the test harness still attempts the
+  # cross-build and nextest isolates the individual failure.
+  BRIDGE_CRATES_WINDOWS: >-
+    -p elephc-image
+    -p elephc-pdo
+    -p elephc-crypto
+    -p elephc-tz
 
 jobs:
-  non-codegen-tests:
-    name: Build & Non-Codegen Tests (${{ matrix.platform.name }})
-    runs-on: ${{ matrix.platform.runner }}
+  # Compile each platform once, then let that platform's tests start as soon as
+  # its archive is uploaded. This avoids a matrix-wide barrier where Linux tests
+  # wait for a queued or slower macOS archive job.
+  build-archive-macos-aarch64:
+    name: Build & Archive Tests (macos-aarch64)
+    runs-on: macos-14
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - name: macos-aarch64
-            runner: macos-14
-            nextest_jobs: 1
-          - name: linux-x86_64
-            runner: ubuntu-24.04
-            nextest_jobs: 1
-          - name: linux-aarch64
-            runner: ubuntu-24.04-arm
-            nextest_jobs: 1
     steps:
       - uses: actions/checkout@v4
 
@@ -48,19 +56,74 @@ jobs:
             ~/.cargo/git
             ~/.cargo/registry
             target
-          key: rust-${{ matrix.platform.name }}-${{ hashFiles('Cargo.lock') }}
+          key: rust-macos-aarch64-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            rust-${{ matrix.platform.name }}-
+            rust-macos-aarch64-
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
-      - name: Install native test dependencies (macOS)
-        if: runner.os == 'macOS'
+      - name: Install native test dependencies
         run: brew install pcre2
 
-      - name: Install native test dependencies (Linux)
-        if: runner.os == 'Linux'
+      - name: Check (no warnings)
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
+          ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
+
+      - name: Build bridge/native support crates
+        # The codegen test runner links compiled programs against bridge
+        # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
+        # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
+        # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
+        # (GD / Exif / Imagick / Gmagick / Cairo), and libelephc_web.a. Build
+        # them before archiving so the archive can capture the .a files (see the
+        # archive include list in .config/nextest.toml).
+        run: cargo build $BRIDGE_CRATES
+
+      - name: Archive test binaries
+        run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+
+      - name: Run doctests
+        # Doctests cannot run from a nextest archive, so run them here where the
+        # workspace is already built.
+        run: cargo test --workspace --doc
+
+      - name: Upload test archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}/nextest-archive.tar.zst
+          retention-days: 1
+          if-no-files-found: error
+
+  build-archive-linux-x86_64:
+    name: Build & Archive Tests (linux-x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-linux-x86_64-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-linux-x86_64-
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -86,35 +149,31 @@ jobs:
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
         # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), and libelephc_web.a.
-        # Build all of them up front so every CI platform validates native support
-        # crates before integration tests need them.
+        # (GD / Exif / Imagick / Gmagick / Cairo), and libelephc_web.a. Build
+        # them before archiving so the archive can capture the .a files (see the
+        # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
 
-      - name: Run non-codegen tests
-        run: cargo nextest run --profile ci --workspace -E 'not binary(codegen_tests)' --no-fail-fast --retries 1 --flaky-result pass -j ${{ matrix.platform.nextest_jobs }}
+      - name: Archive test binaries
+        run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
 
       - name: Run doctests
+        # Doctests cannot run from a nextest archive, so run them here where the
+        # workspace is already built.
         run: cargo test --workspace --doc
 
-  codegen-tests:
-    name: Codegen Tests (${{ matrix.platform.name }} ${{ matrix.shard }}/16)
-    runs-on: ${{ matrix.platform.runner }}
-    timeout-minutes: 75
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - name: macos-aarch64
-            runner: macos-14
-            nextest_jobs: 1
-          - name: linux-x86_64
-            runner: ubuntu-24.04
-            nextest_jobs: 1
-          - name: linux-aarch64
-            runner: ubuntu-24.04-arm
-            nextest_jobs: 1
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+      - name: Upload test archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-archive-linux-x86_64
+          path: ${{ runner.temp }}/nextest-archive.tar.zst
+          retention-days: 1
+          if-no-files-found: error
+
+  build-archive-linux-aarch64:
+    name: Build & Archive Tests (linux-aarch64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -128,19 +187,14 @@ jobs:
             ~/.cargo/git
             ~/.cargo/registry
             target
-          key: rust-${{ matrix.platform.name }}-${{ hashFiles('Cargo.lock') }}
+          key: rust-linux-aarch64-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            rust-${{ matrix.platform.name }}-
+            rust-linux-aarch64-
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
-      - name: Install native test dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: brew install pcre2
-
-      - name: Install native test dependencies (Linux)
-        if: runner.os == 'Linux'
+      - name: Install native test dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -154,18 +208,271 @@ jobs:
             tzdata \
             zlib1g-dev
 
+      - name: Check (no warnings)
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
+          ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
+
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
         # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), and libelephc_web.a.
-        # Build all of them up front so every CI platform validates native support
-        # crates before integration tests need them.
+        # (GD / Exif / Imagick / Gmagick / Cairo), and libelephc_web.a. Build
+        # them before archiving so the archive can capture the .a files (see the
+        # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
 
+      - name: Archive test binaries
+        run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+
+      - name: Run doctests
+        # Doctests cannot run from a nextest archive, so run them here where the
+        # workspace is already built.
+        run: cargo test --workspace --doc
+
+      - name: Upload test archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-archive-linux-aarch64
+          path: ${{ runner.temp }}/nextest-archive.tar.zst
+          retention-days: 1
+          if-no-files-found: error
+
+  non-codegen-tests-macos-aarch64:
+    name: Non-Codegen Tests (macos-aarch64)
+    needs: build-archive-macos-aarch64
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies
+        run: brew install pcre2
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Run non-codegen tests
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'not binary(codegen_tests)' \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 1
+
+  non-codegen-tests-linux-x86_64:
+    name: Non-Codegen Tests (linux-x86_64)
+    needs: build-archive-linux-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils \
+            build-essential \
+            file \
+            libbz2-dev \
+            libpcre2-dev \
+            libssl-dev \
+            pkg-config \
+            tzdata \
+            zlib1g-dev
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-linux-x86_64
+          path: ${{ runner.temp }}
+
+      - name: Run non-codegen tests
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'not binary(codegen_tests)' \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 1
+
+  non-codegen-tests-linux-aarch64:
+    name: Non-Codegen Tests (linux-aarch64)
+    needs: build-archive-linux-aarch64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils \
+            build-essential \
+            file \
+            libbz2-dev \
+            libpcre2-dev \
+            libssl-dev \
+            pkg-config \
+            tzdata \
+            zlib1g-dev
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-linux-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Run non-codegen tests
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'not binary(codegen_tests)' \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 1
+
+  codegen-tests-macos-aarch64:
+    name: Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
+    needs: build-archive-macos-aarch64
+    runs-on: macos-14
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies
+        run: brew install pcre2
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
       - name: Run codegen test shard
-        run: cargo nextest run --profile ci --test codegen_tests --partition hash:${{ matrix.shard }}/16 --no-fail-fast --retries 1 --flaky-result pass -j ${{ matrix.platform.nextest_jobs }}
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'binary(codegen_tests)' \
+            --partition hash:${{ matrix.shard }}/16 \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 1
+
+  codegen-tests-linux-x86_64:
+    name: Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
+    needs: build-archive-linux-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils \
+            build-essential \
+            file \
+            libbz2-dev \
+            libpcre2-dev \
+            libssl-dev \
+            pkg-config \
+            tzdata \
+            zlib1g-dev
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-linux-x86_64
+          path: ${{ runner.temp }}
+
+      - name: Run codegen test shard
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'binary(codegen_tests)' \
+            --partition hash:${{ matrix.shard }}/16 \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 1
+
+  codegen-tests-linux-aarch64:
+    name: Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
+    needs: build-archive-linux-aarch64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils \
+            build-essential \
+            file \
+            libbz2-dev \
+            libpcre2-dev \
+            libssl-dev \
+            pkg-config \
+            tzdata \
+            zlib1g-dev
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-linux-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Run codegen test shard
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            -E 'binary(codegen_tests)' \
+            --partition hash:${{ matrix.shard }}/16 \
+            --no-fail-fast --retries 1 --flaky-result pass \
+            -j 1
 
   image-api-sync:
     name: Image API stubs in sync
@@ -195,6 +502,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-builtins-docs-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-builtins-docs-
+
+      - name: Build the builtin docs exporter
+        # The docs generator reads the single-source `builtin!` registry via the
+        # `gen_builtins` binary (`extract.py` prefers the prebuilt binary at
+        # target/debug/gen_builtins), so it must be built before regeneration.
+        run: cargo build --bin gen_builtins
+
       - name: Regenerate builtins documentation
         # Re-run the generator; the committed Markdown pages and JSON registry
         # must come back byte-identical. A diff means someone changed a builtin
@@ -221,22 +548,43 @@ jobs:
     name: Build & Test
     runs-on: ubuntu-latest
     needs:
-      - non-codegen-tests
-      - codegen-tests
+      - build-archive-macos-aarch64
+      - build-archive-linux-x86_64
+      - build-archive-linux-aarch64
+      - non-codegen-tests-macos-aarch64
+      - non-codegen-tests-linux-x86_64
+      - non-codegen-tests-linux-aarch64
+      - codegen-tests-macos-aarch64
+      - codegen-tests-linux-x86_64
+      - codegen-tests-linux-aarch64
       - image-api-sync
       - builtins-docs-sync
+      - windows-pe-cross-compile
+      - windows-codegen-gate
     if: always()
     steps:
       - name: Verify test jobs
         run: |
-          test "${{ needs.non-codegen-tests.result }}" = "success"
-          test "${{ needs.codegen-tests.result }}" = "success"
+          test "${{ needs.build-archive-macos-aarch64.result }}" = "success"
+          test "${{ needs.build-archive-linux-x86_64.result }}" = "success"
+          test "${{ needs.build-archive-linux-aarch64.result }}" = "success"
+          test "${{ needs.non-codegen-tests-macos-aarch64.result }}" = "success"
+          test "${{ needs.non-codegen-tests-linux-x86_64.result }}" = "success"
+          test "${{ needs.non-codegen-tests-linux-aarch64.result }}" = "success"
+          test "${{ needs.codegen-tests-macos-aarch64.result }}" = "success"
+          test "${{ needs.codegen-tests-linux-x86_64.result }}" = "success"
+          test "${{ needs.codegen-tests-linux-aarch64.result }}" = "success"
           test "${{ needs.image-api-sync.result }}" = "success"
           test "${{ needs.builtins-docs-sync.result }}" = "success"
+          test "${{ needs.windows-pe-cross-compile.result }}" = "success"
+          test "${{ needs.windows-codegen-gate.result }}" = "success"
 
   benchmark:
     name: Benchmark Suite
     runs-on: macos-14  # Apple Silicon runner
+    # The benchmark suite does a full release build and only tracks trends, so it
+    # runs on pushes to main rather than on every pull request.
+    if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
 
@@ -262,3 +610,382 @@ jobs:
           path: |
             benchmark-results.json
             benchmark-results.md
+
+  windows-pe-cross-compile:
+    name: Windows PE Cross-Compile Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      # Silence Wine's diagnostic chatter so it never pollutes captured stdout/stderr.
+      WINEDEBUG: -all
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-windows-pe-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-windows-pe-
+
+      - name: Install MinGW-w64 cross-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils-mingw-w64-x86-64 \
+            gcc-mingw-w64-x86-64 \
+            file
+
+      - name: Install Wine
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine64 wine
+          # On ubuntu-24.04 the wine64 package only ships the internal
+          # /usr/lib/wine/wine64 loader; the callable binary on PATH is `wine`
+          # (dispatches to the 64-bit loader since wine32/i386 is not installed
+          # and is not needed for x86_64-only PE binaries).
+          command -v wine64 >/dev/null 2>&1 && wine64 --version || wine --version
+
+      - name: Initialize Wine prefix
+        run: |
+          wineboot --init || true
+          wineserver --wait || true
+
+      - name: Check (no warnings)
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
+          ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
+
+      - name: Run Windows PE tests
+        run: cargo test --test codegen_tests -- windows_pe --nocapture
+
+      - name: Cross-compile hello-world
+        run: |
+          echo '<?php echo "Hello from Windows!\n";' > /tmp/hello.php
+          cargo run -- --target windows-x86_64 /tmp/hello.php
+          file /tmp/hello.exe
+          # Verify it is a valid PE32+ executable
+          file /tmp/hello.exe | grep -q "PE32+ executable (console) x86-64"
+          # Verify imports include kernel32
+          x86_64-w64-mingw32-objdump -x /tmp/hello.exe | grep -q "KERNEL32.dll"
+
+      - name: Run hello-world under Wine
+        run: |
+          WINE_BIN=wine64
+          command -v wine64 >/dev/null 2>&1 || WINE_BIN=wine
+          "$WINE_BIN" /tmp/hello.exe > /tmp/hello.out
+          cat /tmp/hello.out
+          grep -q "Hello from Windows!" /tmp/hello.out
+
+      - name: Cross-compile arithmetic test
+        run: |
+          echo '<?php echo 1 + 2 * 3;' > /tmp/arith.php
+          cargo run -- --target windows-x86_64 /tmp/arith.php
+          file /tmp/arith.exe | grep -q "PE32+ executable"
+
+      - name: Cross-compile function call test
+        run: |
+          echo '<?php function add($a, $b) { return $a + $b; } echo add(10, 20);' > /tmp/func.php
+          cargo run -- --target windows-x86_64 /tmp/func.php
+          file /tmp/func.exe | grep -q "PE32+ executable"
+
+      - name: Cross-compile loop test
+        run: |
+          echo '<?php for ($i = 0; $i < 5; $i++) { echo $i; }' > /tmp/loop.php
+          cargo run -- --target windows-x86_64 /tmp/loop.php
+          file /tmp/loop.exe | grep -q "PE32+ executable"
+
+      - name: Cross-compile string concatenation test
+        run: |
+          echo '<?php echo "Hello" . " " . "World";' > /tmp/concat.php
+          cargo run -- --target windows-x86_64 /tmp/concat.php
+          file /tmp/concat.exe | grep -q "PE32+ executable"
+
+  # Windows codegen parity MEASUREMENT + no-regression GATE (unified, sharded 16x).
+  # Runs the full codegen suite cross-compiled to windows-x86_64 and executed under
+  # Wine, then does two things from that single run:
+  #   1. MEASURE (informational): emits passed / failed / parity% for the shard to
+  #      the job summary, so the overall Windows parity picture stays visible.
+  #   2. GATE (blocking): fails the shard iff any test in the curated allow-list
+  #      (`tests/codegen/support/windows_codegen_allowlist.txt`, the tests that
+  #      currently PASS on Windows) failed. Tests NOT in the allow-list -- the known
+  #      failures AND any brand-new / native-only fixtures -- never fail the gate, so
+  #      Windows parity can only improve, never regress.
+  # The nextest run step is `continue-on-error: true` so ordinary (non-allow-listed)
+  # failures do not fail the job; only the post-run gate step decides pass/fail via
+  # `actual_failures ∩ allow_list`. The aggregating `windows-codegen-gate` job (which
+  # needs all 16 shards) is the single entry wired into the `test` gate.
+  # Interpreting a "pass": a real Windows pass OR a graceful skip (harness skip when
+  # MinGW/Wine are missing, or a raw-asm exit-harness fixture that cannot target
+  # Windows). A crashing `.exe` cannot stall a shard: the `ci` profile's 60s
+  # slow-timeout kills and reports a hung binary as a failure. Refresh the allow-list
+  # as parity grows (see docs/compiling/targets.md, "Windows codegen parity gate").
+  windows-codegen-parity:
+    name: Windows Codegen Parity + Gate (${{ matrix.shard }}/16)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    env:
+      # Cross-compile + run every codegen fixture as windows-x86_64 (via Wine).
+      ELEPHC_TEST_TARGET: windows-x86_64
+      # DIAGNOSTIC: enable Wine's seh (exception/fault) channel so crashing .exe
+      # binaries surface their fault address + failing instruction pointer in the
+      # captured stderr, instead of the empty stderr produced by -all.
+      WINEDEBUG: +seh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add x86_64-pc-windows-gnu Rust target
+        # Bridge staticlibs (elephc-image/pdo/crypto/tz) are cross-built for
+        # windows-x86_64 so MinGW can link the PE/COFF archives into the `.exe`;
+        # the rust target must be installed before that prebuild step runs.
+        run: rustup target add x86_64-pc-windows-gnu
+
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-windows-parity-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-windows-parity-
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils \
+            build-essential \
+            file \
+            libbz2-dev \
+            libpcre2-dev \
+            libssl-dev \
+            pkg-config \
+            tzdata \
+            zlib1g-dev
+
+      - name: Install MinGW-w64 cross-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils-mingw-w64-x86-64 \
+            gcc-mingw-w64-x86-64 \
+            cmake \
+            file
+
+      - name: Cache MinGW cross-built sysroot (PCRE2/bzip2/zlib/iconv)
+        id: mingw-sysroot-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/mingw-sysroot
+          key: mingw-sysroot-${{ runner.os }}-pcre2-10.42-zlib-1.3.1-bzip2-1.0.8-iconv-1.17-v2
+
+      - name: Cross-build MinGW sysroot (PCRE2/bzip2/zlib/iconv)
+        # The ubuntu runner's `libpcre2-dev`/`libbz2-dev`/`zlib1g-dev` are ELF
+        # archives and cannot link into MinGW PE binaries, so cross-build PE/COFF
+        # static archives of PCRE2 (libpcre2-8 + libpcre2-posix), bzip2, zlib,
+        # and libiconv into a sysroot the Windows link arm picks up via
+        # ELEPHC_MINGW_SYSROOT. Restored from cache when the key matches.
+        if: steps.mingw-sysroot-cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          SYSROOT: ${{ runner.temp }}/mingw-sysroot
+          HOST: x86_64-w64-mingw32
+        run: |
+          set -euo pipefail
+          mkdir -p "$SYSROOT"
+          # Resolve the MinGW tools to absolute paths. On newer Ubuntu 24.04
+          # runner images CMake's bare-name resolution for AR/RANLIB breaks (the
+          # link step looks up `<HOST>-ar` relative to the source dir and fails
+          # with "no such file or directory"), so hand CMake absolute paths and
+          # fail loudly if a tool is genuinely missing.
+          export CC="$(command -v "${HOST}-gcc")"
+          export AR="$(command -v "${HOST}-ar")"
+          export RANLIB="$(command -v "${HOST}-ranlib")"
+          export STRIP="$(command -v "${HOST}-strip")"
+          for _t in CC AR RANLIB STRIP; do
+            if [ -z "${!_t:-}" ]; then
+              echo "::error::MinGW cross-tool ${_t} not found on PATH (HOST=${HOST}); ensure binutils-mingw-w64-x86-64 and gcc-mingw-w64-x86-64 are installed"
+              exit 1
+            fi
+          done
+          WORK="$(mktemp -d)"
+          trap 'rm -rf "$WORK"' EXIT
+          cd "$WORK"
+
+          # -- zlib 1.3.1 (cmake; cross-builds cleanly with a Windows toolchain) --
+          curl -fsSL https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz -o zlib.tgz
+          tar xzf zlib.tgz
+          cd zlib-1.3.1
+          cmake -S . -B build \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_C_COMPILER="$CC" \
+            -DCMAKE_AR="$AR" \
+            -DCMAKE_RANLIB="$RANLIB" \
+            -DCMAKE_INSTALL_PREFIX="$SYSROOT" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build build --config Release -j"$(nproc)"
+          cmake --install build --config Release
+          # CMake names the static archive libzlibstatic.a (and, despite
+          # -DBUILD_SHARED_LIBS=OFF on the current image, a shared import lib
+          # libzlib.dll.a); neither matches the -lz stem the elephc link arm and
+          # the sanity ls below expect. Alias the static archive to the canonical
+          # libz.a so -lz resolves to the static lib and the ls finds it.
+          ln -sf libzlibstatic.a "$SYSROOT/lib/libz.a"
+          cd "$WORK"
+
+          # -- bzip2 1.0.8 (plain Makefile; override CC/AR/RANLIB) --
+          curl -fsSL https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz -o bzip2.tgz
+          tar xzf bzip2.tgz
+          cd bzip2-1.0.8
+          make -j"$(nproc)" CC="$CC" AR="$AR" RANLIB="$RANLIB" libbz2.a
+          install -D -m 0644 libbz2.a "$SYSROOT/lib/libbz2.a"
+          install -D -m 0644 bzlib.h "$SYSROOT/include/bzlib.h"
+          cd "$WORK"
+
+          # -- libiconv 1.17 (autotools; provides iconv_open/iconv/iconv_close) --
+          curl -fsSL https://ftp.gnu.org/pub/gnu/libiconv/libiconv-1.17.tar.gz -o libiconv.tgz
+          tar xzf libiconv.tgz
+          cd libiconv-1.17
+          ./configure --host="$HOST" --prefix="$SYSROOT" --enable-static --disable-shared --with-pic
+          make -j"$(nproc)"
+          make install
+          cd "$WORK"
+
+          # -- PCRE2 10.42 (autotools; builds libpcre2-8 + libpcre2-posix) --
+          # PCRE2 has no configure flag to drop the POSIX wrapper, and its
+          # pcre2posix_test.exe test binary (a noinst_PROGRAMS entry) fails to
+          # link static-only on the current MinGW toolchain: the test expects
+          # __imp_pcre2_reg* dllimport stubs the static libpcre2-posix cannot
+          # provide (undefined reference, ld exit 1, make exit 2). The lib
+          # itself links fine; only the test binary breaks. Skip it (the only
+          # noinst program under our flags) by overriding noinst_PROGRAMS= on
+          # both make and make install. elephc links only -lpcre2-8, so the
+          # unused libpcre2-posix.a landing in the sysroot is harmless.
+          curl -fsSL https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.42/pcre2-10.42.tar.gz -o pcre2.tgz
+          tar xzf pcre2.tgz
+          cd pcre2-10.42
+          ./configure --host="$HOST" --prefix="$SYSROOT" --enable-static --disable-shared --with-pic --enable-unicode --enable-pcre2-8
+          make -j"$(nproc)" noinst_PROGRAMS=
+          make install noinst_PROGRAMS=
+          cd "$WORK"
+
+          # Sanity: confirm the PE/COFF archives landed in the sysroot.
+          ls -l "$SYSROOT/lib/libpcre2-8.a" "$SYSROOT/lib/libpcre2-posix.a" "$SYSROOT/lib/libbz2.a" "$SYSROOT/lib/libz.a" "$SYSROOT/lib/libiconv.a"
+
+      - name: Expose MinGW sysroot to the link
+        # Surface the cross-built sysroot to both the production linker
+        # (`src/linker.rs`) and the test-harness linker
+        # (`tests/codegen/support/runner.rs`) via ELEPHC_MINGW_SYSROOT; both add
+        # `-L$SYSROOT/lib` only when the env var points at an existing dir.
+        shell: bash
+        run: |
+          echo "ELEPHC_MINGW_SYSROOT=${{ runner.temp }}/mingw-sysroot" >> "$GITHUB_ENV"
+
+      - name: Install Wine
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine64 wine
+          # On ubuntu-24.04 the wine64 package only ships the internal
+          # /usr/lib/wine/wine64 loader; the callable binary on PATH is `wine`
+          # (dispatches to the 64-bit loader since wine32/i386 is not installed
+          # and is not needed for x86_64-only PE binaries).
+          command -v wine64 >/dev/null 2>&1 && wine64 --version || wine --version
+
+      - name: Initialize Wine prefix
+        run: |
+          wineboot --init || true
+          wineserver --wait || true
+
+      - name: Build bridge/native support crates
+        # Match the native codegen-tests job so bridge-linking fixtures build their
+        # staticlibs up front instead of triggering serialized on-demand builds
+        # mid-shard. Cross-build for x86_64-pc-windows-gnu so MinGW can link the
+        # PE/COFF archives (MinGW cannot link host ELF archives into a PE binary);
+        # the CC/AR/RANLIB env vars let cc-rs compile bundled C (PDO's
+        # libsqlite3-sys amalgamation) with the MinGW-w64 toolchain. Uses
+        # BRIDGE_CRATES_WINDOWS (image/pdo/crypto/tz only) -- elephc-phar
+        # (bzip2-sys system libbz2, ELF-only on the ubuntu host) and elephc-tls
+        # (ring asm) are excluded so their C/cc-rs deps cannot block this job;
+        # if a Windows fixture links phar/tls the on-demand
+        # `ensure_bridge_staticlibs` path in the test harness still attempts the
+        # cross-build and nextest isolates the individual failure. The native
+        # codegen-tests jobs at the top of this file keep using $BRIDGE_CRATES
+        # with no --target, so this Windows-only cross-build does not affect them.
+        env:
+          CC_x86_64_pc_windows_gnu: x86_64-w64-mingw32-gcc
+          AR_x86_64_pc_windows_gnu: x86_64-w64-mingw32-ar
+          RANLIB_x86_64_pc_windows_gnu: x86_64-w64-mingw32-ranlib
+        run: cargo build $BRIDGE_CRATES_WINDOWS --target x86_64-pc-windows-gnu
+
+      - name: Run codegen test shard under windows-x86_64
+        # `--no-fail-fast` so the shard measures every fixture. `continue-on-error`
+        # is on the STEP (not the job): ordinary test failures -- including the
+        # ~1874 known Windows failures -- must not fail the job here, because the
+        # gate step below is the sole arbiter of pass/fail. nextest still writes its
+        # JUnit report (`target/nextest/ci/junit.xml`, configured in
+        # `.config/nextest.toml`) even when tests fail, which the gate step parses.
+        id: nextest
+        continue-on-error: true
+        run: cargo nextest run --profile ci --test codegen_tests --partition hash:${{ matrix.shard }}/16 --no-fail-fast --retries 1 --flaky-result pass
+
+      - name: Windows codegen no-regression gate + parity summary
+        # Compute regressions = actual_failures ∩ allow_list from THIS shard's JUnit
+        # report. Emits passed / failed / parity% to the job summary (measurement),
+        # then exits non-zero -- failing the shard -- iff any allow-listed test
+        # regressed. Non-allow-listed failures (known failures + brand-new tests)
+        # are ignored, so this never blocks native-only fixtures.
+        run: |
+          python3 scripts/gen_windows_codegen_allowlist.py gate \
+            --allowlist tests/codegen/support/windows_codegen_allowlist.txt \
+            --junit target/nextest/ci/junit.xml \
+            --shard "${{ matrix.shard }}/16"
+
+      - name: Upload shard JUnit report
+        # Retained so a maintainer can refresh the allow-list from a real parity run
+        # by feeding these 16 reports to `gen_windows_codegen_allowlist.py generate`.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-codegen-junit-${{ matrix.shard }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: warn
+
+  # Aggregating gate: a single job that is green iff every sharded
+  # `windows-codegen-parity` job was green (i.e. no allow-listed Windows codegen
+  # test regressed on any shard). A matrix job's `result` in `needs` is `success`
+  # only when ALL of its shards succeeded, so this collapses the 16 shards into the
+  # one entry wired into the `test` gate's `needs` below. Kept separate from the
+  # measurement/gate shards so the `test` gate lists one dependency, not sixteen.
+  windows-codegen-gate:
+    name: Windows Codegen No-Regression Gate
+    runs-on: ubuntu-latest
+    needs:
+      - windows-codegen-parity
+    if: always()
+    steps:
+      - name: Verify no allow-listed Windows codegen regressions
+        run: |
+          echo "windows-codegen-parity result: ${{ needs.windows-codegen-parity.result }}"
+          test "${{ needs.windows-codegen-parity.result }}" = "success"

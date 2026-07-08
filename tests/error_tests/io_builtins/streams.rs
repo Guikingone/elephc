@@ -626,6 +626,51 @@ fn test_error_stream_filter_append_wrong_args() {
     );
 }
 
+/// Verifies the arity diagnostic for `stream_filter_prepend()` (2 to 4 args), mirroring append.
+#[test]
+fn test_error_stream_filter_prepend_wrong_args() {
+    expect_error(
+        "<?php stream_filter_prepend(STDIN);",
+        "stream_filter_prepend() takes 2 to 4 arguments",
+    );
+}
+
+/// Verifies the arity diagnostic for `stream_set_chunk_size()` (exactly 2 args).
+#[test]
+fn test_error_stream_set_chunk_size_wrong_args() {
+    expect_error(
+        "<?php stream_set_chunk_size(STDIN);",
+        "stream_set_chunk_size() takes exactly 2 arguments",
+    );
+}
+
+/// Verifies the arity diagnostic for `stream_set_read_buffer()` (exactly 2 args).
+#[test]
+fn test_error_stream_set_read_buffer_wrong_args() {
+    expect_error(
+        "<?php stream_set_read_buffer(STDIN);",
+        "stream_set_read_buffer() takes exactly 2 arguments",
+    );
+}
+
+/// Verifies the arity diagnostic for `stream_set_write_buffer()` (exactly 2 args).
+#[test]
+fn test_error_stream_set_write_buffer_wrong_args() {
+    expect_error(
+        "<?php stream_set_write_buffer(STDIN);",
+        "stream_set_write_buffer() takes exactly 2 arguments",
+    );
+}
+
+/// Verifies the arity diagnostic for `stream_bucket_prepend()` (exactly 2 args), mirroring append.
+#[test]
+fn test_error_stream_bucket_prepend_wrong_args() {
+    expect_error(
+        "<?php stream_bucket_prepend(1);",
+        "stream_bucket_prepend() takes exactly 2 arguments",
+    );
+}
+
 // stream_filter_append() with an unknown filter name no longer fails at
 // compile time: unknown built-in names are routed through the user-filter
 // registry (Phase 10 tier 3), and an unregistered name resolves to PHP
@@ -793,6 +838,24 @@ fn test_error_pclose_requires_resource() {
         "<?php pclose(1);",
         "pclose() expects resource, got int",
     );
+}
+
+/// Verifies proc_open rejects too few arguments at compile time.
+#[test]
+fn test_error_proc_open_wrong_args() {
+    expect_error(
+        r#"<?php
+$pipes = [];
+proc_open([], "echo hi");
+"#,
+        "proc_open() takes exactly 3 arguments",
+    );
+}
+
+/// Verifies proc_close rejects too few arguments at compile time.
+#[test]
+fn test_error_proc_close_wrong_args() {
+    expect_error("<?php proc_close();", "proc_close() takes exactly 1 argument");
 }
 
 /// Verifies the invalid-call diagnostic for error opendir wrong args.

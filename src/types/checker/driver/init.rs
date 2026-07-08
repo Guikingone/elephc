@@ -37,6 +37,9 @@ impl Checker {
     pub(super) fn new(target_platform: Platform) -> Self {
         let mut constants = HashMap::new();
         constants.insert("PHP_OS".to_string(), PhpType::Str);
+        constants.insert("PHP_EOL".to_string(), PhpType::Str);
+        constants.insert("DIRECTORY_SEPARATOR".to_string(), PhpType::Str);
+        constants.insert("PATH_SEPARATOR".to_string(), PhpType::Str);
         constants.insert("PATHINFO_DIRNAME".to_string(), PhpType::Int);
         constants.insert("PATHINFO_BASENAME".to_string(), PhpType::Int);
         constants.insert("PATHINFO_EXTENSION".to_string(), PhpType::Int);
@@ -74,6 +77,7 @@ impl Checker {
             fn_decls: HashMap::new(),
             function_variant_groups: HashMap::new(),
             functions: HashMap::new(),
+            resolving_functions: HashSet::new(),
             constants,
             closure_return_types: HashMap::new(),
             callable_sigs: HashMap::new(),
@@ -104,10 +108,12 @@ impl Checker {
             active_ref_params: HashSet::new(),
             active_globals: HashSet::new(),
             active_statics: HashSet::new(),
+            foreach_key_locals: HashSet::new(),
             break_continue_depth: 0,
             finally_break_continue_bases: Vec::new(),
             warnings: Vec::new(),
             reference_property_promotions: HashSet::new(),
+            throw_access_sites: HashMap::new(),
         }
     }
 }

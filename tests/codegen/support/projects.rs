@@ -10,12 +10,10 @@
 use super::*;
 
 /// Combines checker-required libraries with libraries required by feature-gated runtime helpers.
-fn required_libraries_for_codegen(
-    program: &elephc::parser::ast::Program,
+fn required_libraries_for_runtime_features(
     check_result: &elephc::types::CheckResult,
+    runtime_features: elephc::codegen::RuntimeFeatures,
 ) -> Vec<String> {
-    let runtime_features =
-        elephc::codegen::runtime_features_for_program_and_classes(program, &check_result.classes);
     let mut required_libraries = check_result.required_libraries.clone();
     for lib in elephc::codegen::required_libraries_for_runtime_features(runtime_features) {
         if !required_libraries.contains(&lib) {
@@ -23,6 +21,35 @@ fn required_libraries_for_codegen(
         }
     }
     required_libraries
+}
+
+/// Generates user and runtime assembly for project fixtures through the canonical EIR backend.
+fn generate_project_asm(
+    program: &elephc::parser::ast::Program,
+    check_result: &elephc::types::CheckResult,
+    heap_size: usize,
+    gc_stats: bool,
+    heap_debug: bool,
+    requires_elephc_tls: bool,
+) -> (String, String, elephc::codegen::RuntimeFeatures) {
+    let ir_module = lower_and_validate_ir_for_codegen_fixture(program, check_result);
+    let exported_functions = HashMap::new();
+    let regalloc_linear = !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
+    let user_asm = elephc::codegen::generate_user_asm_from_ir_with_options(
+        &ir_module,
+        gc_stats,
+        heap_debug,
+        requires_elephc_tls,
+        elephc::codegen::Emit::Executable,
+        &exported_functions,
+        regalloc_linear,
+        false,
+    )
+    .expect("EIR backend codegen failed for project fixture");
+    let runtime_features = ir_module.required_runtime_features;
+    let runtime_asm =
+        elephc::codegen::generate_runtime_with_features(heap_size, target(), runtime_features);
+    (user_asm, runtime_asm, runtime_features)
 }
 
 // Creates an isolated temporary directory for CLI tests using a unique prefix,
@@ -61,6 +88,18 @@ pub(crate) fn elephc_cli_command(dir: &Path) -> Command {
     let mut cmd = Command::new(elephc_cli_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(dir);
+    // When the codegen suite is measured against a cross-compilation target
+    // (`ELEPHC_TEST_TARGET`), tell the CLI to compile for that same target so
+    // CLI-subprocess fixtures stay consistent with the in-process helpers, which
+    // read the target from `target()`. The CLI parses `--target` last-wins, so a
+    // later explicit `--target` in a test's own args still overrides this; that
+    // keeps target-selection fixtures (e.g. windows_pe, cli.rs) working. When the
+    // env var is unset there is no flag, so native behavior is byte-identical.
+    if let Ok(value) = std::env::var("ELEPHC_TEST_TARGET") {
+        if !value.is_empty() {
+            cmd.arg("--target").arg(value);
+        }
+    }
     cmd
 }
 
@@ -209,28 +248,16 @@ pub(crate) fn compile_and_run_files_expect_failure(
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
-    let (user_asm, runtime_asm) = elephc::codegen::generate(
+    let (user_asm, runtime_asm, runtime_features) = generate_project_asm(
         &optimized,
-        &check_result.global_env,
-        &check_result.functions,
-        &check_result.callable_param_sigs,
-        &check_result.callable_return_sigs,
-        &check_result.callable_array_return_sigs,
-        &check_result.interfaces,
-        &check_result.classes,
-        &check_result.enums,
-        &check_result.packed_classes,
-        &check_result.extern_functions,
-        &check_result.extern_classes,
-        &check_result.extern_globals,
+        &check_result,
         8_388_608,
         false,
         false,
-        target(),
         requires_elephc_tls,
-        default_null_repr(),
     );
-    let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
+    let required_libraries =
+        required_libraries_for_runtime_features(&check_result, runtime_features);
 
     let elephc_err = assemble_and_run_expect_failure(
         &user_asm,
@@ -281,8 +308,8 @@ pub(crate) fn compile_and_run_files_with_defines(
     let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let resolved = elephc::autoload::run(resolved, base_dir, &autoload_registry)
-        .expect("autoload failed");
+    let resolved =
+        elephc::autoload::run(resolved, base_dir, &autoload_registry).expect("autoload failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
@@ -294,28 +321,16 @@ pub(crate) fn compile_and_run_files_with_defines(
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
-    let (user_asm, runtime_asm) = elephc::codegen::generate(
+    let (user_asm, runtime_asm, runtime_features) = generate_project_asm(
         &optimized,
-        &check_result.global_env,
-        &check_result.functions,
-        &check_result.callable_param_sigs,
-        &check_result.callable_return_sigs,
-        &check_result.callable_array_return_sigs,
-        &check_result.interfaces,
-        &check_result.classes,
-        &check_result.enums,
-        &check_result.packed_classes,
-        &check_result.extern_functions,
-        &check_result.extern_classes,
-        &check_result.extern_globals,
+        &check_result,
         8_388_608,
         false,
         false,
-        target(),
         requires_elephc_tls,
-        default_null_repr(),
     );
-    let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
+    let required_libraries =
+        required_libraries_for_runtime_features(&check_result, runtime_features);
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let elephc_out = assemble_and_run(
@@ -389,6 +404,10 @@ pub(crate) fn compile_files_fails_with_defines(
 // Used for tests that verify runtime behavior with specific input (e.g., read(), fgets).
 /// Provides the Compile and run with stdin helper used by the projects module.
 pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
+    // Skip early on the windows target when the MinGW/Wine toolchain is missing,
+    // before touching the assembler or Wine (this helper assembles/runs inline
+    // rather than through `assemble_from_stdin`/`run_binary`).
+    ensure_windows_runnable_or_skip();
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -403,7 +422,8 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved = elephc::optimize::fold_constants(resolved);
-    let check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
+    let check_result =
+        elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized = elephc::optimize::propagate_constants(resolved);
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
@@ -412,35 +432,32 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
-    let (user_asm, runtime_asm) = elephc::codegen::generate(
+    let (user_asm, runtime_asm, runtime_features) = generate_project_asm(
         &optimized,
-        &check_result.global_env,
-        &check_result.functions,
-        &check_result.callable_param_sigs,
-        &check_result.callable_return_sigs,
-        &check_result.callable_array_return_sigs,
-        &check_result.interfaces,
-        &check_result.classes,
-        &check_result.enums,
-        &check_result.packed_classes,
-        &check_result.extern_functions,
-        &check_result.extern_classes,
-        &check_result.extern_globals,
+        &check_result,
         8_388_608,
         false,
         false,
-        target(),
         requires_elephc_tls,
-        default_null_repr(),
     );
-    let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
+    let required_libraries =
+        required_libraries_for_runtime_features(&check_result, runtime_features);
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let asm_path = dir.join("test.s");
     let obj_path = dir.join("test.o");
     let bin_path = dir.join("test");
 
-    fs::write(&asm_path, &user_asm).unwrap();
+    // Apply the windows syscall→shim rewrite before assembling; a no-op on native
+    // targets, so the assembled bytes are unchanged there.
+    let windows_asm;
+    let user_asm = if target().platform == Platform::Windows {
+        windows_asm = finalize_asm_for_target(&user_asm);
+        windows_asm.as_str()
+    } else {
+        user_asm.as_str()
+    };
+    fs::write(&asm_path, user_asm).unwrap();
 
     let mut as_cmd = Command::new(assembler_cmd());
     if target().platform == Platform::MacOS {
@@ -460,19 +477,14 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     );
 
     use std::io::Write;
-    let bin_cmd = if target().platform == Platform::Linux
+    let mut cmd = if target().platform == Platform::Windows {
+        // Run the cross-compiled `.exe` under Wine, still piping stdin below.
+        build_run_command(&bin_path)
+    } else if target().platform == Platform::Linux
         && target().arch == Arch::AArch64
         && cfg!(target_arch = "x86_64")
     {
-        "qemu-aarch64-static"
-    } else {
-        bin_path.to_str().unwrap()
-    };
-    let mut cmd = if target().platform == Platform::Linux
-        && target().arch == Arch::AArch64
-        && cfg!(target_arch = "x86_64")
-    {
-        let mut c = Command::new(bin_cmd);
+        let mut c = Command::new("qemu-aarch64-static");
         c.arg(&bin_path);
         c
     } else {
@@ -500,6 +512,9 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
 // Compiles a PHP source string, runs the binary, and returns stdout alongside the
 // temp directory path. The directory is preserved after the run so callers can
 // inspect written files (e.g., for file I/O fixture verification).
+//
+// Routes through `compile_source_to_asm_with_options` so it shares the production
+// EIR backend (and the full frontend, including the preludes) with `compile_and_run`.
 /// Provides the Compile and run in dir helper used by the projects module.
 pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
@@ -508,45 +523,8 @@ pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBu
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
-    let ast = elephc::parser::parse(&tokens).expect("parse failed");
-    let synthetic_main = dir.join("test.php");
-    let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
-    let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
-    let resolved = elephc::autoload::collect_aliases(resolved);
-    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let resolved = elephc::optimize::fold_constants(resolved);
-    let check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
-    let optimized = elephc::optimize::propagate_constants(resolved);
-    let optimized = elephc::optimize::prune_constant_control_flow(optimized);
-    let optimized = elephc::optimize::normalize_control_flow(optimized);
-    let optimized = elephc::optimize::eliminate_dead_code(optimized);
-    let requires_elephc_tls = check_result
-        .required_libraries
-        .iter()
-        .any(|lib| lib == "elephc_tls");
-    let (user_asm, runtime_asm) = elephc::codegen::generate(
-        &optimized,
-        &check_result.global_env,
-        &check_result.functions,
-        &check_result.callable_param_sigs,
-        &check_result.callable_return_sigs,
-        &check_result.callable_array_return_sigs,
-        &check_result.interfaces,
-        &check_result.classes,
-        &check_result.enums,
-        &check_result.packed_classes,
-        &check_result.extern_functions,
-        &check_result.extern_classes,
-        &check_result.extern_globals,
-        8_388_608,
-        false,
-        false,
-        target(),
-        requires_elephc_tls,
-        default_null_repr(),
-    );
-    let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let elephc_out = assemble_and_run(
