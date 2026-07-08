@@ -845,6 +845,12 @@ jobs:
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON
           cmake --build build --config Release -j"$(nproc)"
           cmake --install build --config Release
+          # CMake names the static archive libzlibstatic.a (and, despite
+          # -DBUILD_SHARED_LIBS=OFF on the current image, a shared import lib
+          # libzlib.dll.a); neither matches the -lz stem the elephc link arm and
+          # the sanity ls below expect. Alias the static archive to the canonical
+          # libz.a so -lz resolves to the static lib and the ls finds it.
+          ln -sf libzlibstatic.a "$SYSROOT/lib/libz.a"
           cd "$WORK"
 
           # -- bzip2 1.0.8 (plain Makefile; override CC/AR/RANLIB) --
