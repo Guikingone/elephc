@@ -796,7 +796,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/mingw-sysroot
-          key: mingw-sysroot-${{ runner.os }}-pcre2-10.42-zlib-1.3.1-bzip2-1.0.8-iconv-1.17-v1
+          key: mingw-sysroot-${{ runner.os }}-pcre2-10.42-zlib-1.3.1-bzip2-1.0.8-iconv-1.17-v2
 
       - name: Cross-build MinGW sysroot (PCRE2/bzip2/zlib/iconv)
         # The ubuntu runner's `libpcre2-dev`/`libbz2-dev`/`zlib1g-dev` are ELF
@@ -866,14 +866,21 @@ jobs:
           cd "$WORK"
 
           # -- PCRE2 10.42 (autotools; builds libpcre2-8 + libpcre2-posix) --
-          # libpcre2-posix is built automatically whenever libpcre2-8 is
-          # enabled (the default), so no separate posix enable flag is needed.
+          # PCRE2 has no configure flag to drop the POSIX wrapper, and its
+          # pcre2posix_test.exe test binary (a noinst_PROGRAMS entry) fails to
+          # link static-only on the current MinGW toolchain: the test expects
+          # __imp_pcre2_reg* dllimport stubs the static libpcre2-posix cannot
+          # provide (undefined reference, ld exit 1, make exit 2). The lib
+          # itself links fine; only the test binary breaks. Skip it (the only
+          # noinst program under our flags) by overriding noinst_PROGRAMS= on
+          # both make and make install. elephc links only -lpcre2-8, so the
+          # unused libpcre2-posix.a landing in the sysroot is harmless.
           curl -fsSL https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.42/pcre2-10.42.tar.gz -o pcre2.tgz
           tar xzf pcre2.tgz
           cd pcre2-10.42
           ./configure --host="$HOST" --prefix="$SYSROOT" --enable-static --disable-shared --with-pic --enable-unicode --enable-pcre2-8
-          make -j"$(nproc)"
-          make install
+          make -j"$(nproc)" noinst_PROGRAMS=
+          make install noinst_PROGRAMS=
           cd "$WORK"
 
           # Sanity: confirm the PE/COFF archives landed in the sysroot.
