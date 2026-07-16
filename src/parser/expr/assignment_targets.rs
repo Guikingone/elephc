@@ -10,6 +10,7 @@
 
 use std::collections::HashSet;
 
+use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::parser::stmt::can_replay_assignment_target;
 use crate::span::Span;
@@ -75,6 +76,100 @@ fn is_array_assignment_base(expr: &Expr) -> bool {
         ExprKind::ArrayAccess { array, .. } => is_array_assignment_base(array),
         _ => false,
     }
+}
+
+/// Builds the desugared expression for an append assignment (`$container[] = rhs`) parsed in
+/// expression position — e.g. `$c ? $a[] = 5 : 0` or `$x = ($a[] = 5)`. PHP has no read form of
+/// `[]` (the caller already rejected it before calling this), so the target is always the
+/// CONTAINER, never an `ArrayAccess`, and `ExprKind::ArrayAccess` has no representation for "no
+/// index" to reuse as the assignment target.
+///
+/// Reuses the existing statement-level push machinery instead of inventing a new `ExprKind`:
+/// the container's receiver is stabilized first (PHP evaluates the assignment's lvalue chain
+/// before its RHS, so `getBox()->items[] = rhs()` must call `getBox()` before `rhs()`), then
+/// the RHS is evaluated exactly once into a hidden temporary, and the temporary is pushed via
+/// the same `StmtKind::ArrayPush`/`StmtKind::PropertyArrayPush` statements the bare statement
+/// form (`$a[] = 5;`) already lowers to. All of these steps live in `prelude`, so when this
+/// expression sits inside a ternary branch, `lower_ternary`'s per-branch block placement
+/// (recursive `lower_expr` reaching this node only while positioned in that branch's block)
+/// already executes the push only when that branch is taken; no extra conditional-safety
+/// mechanism is needed here.
+///
+/// The expression's value is the RHS temporary — matching PHP, where an assignment expression
+/// yields the assigned value. The yield is a copy of the RHS temp into a SECOND fresh hidden
+/// local (`__elephc_append_yield_*`), never a `$t = $t` self-assignment: `store_local` releases
+/// a slot's current heap payload before acquiring the new one, so a same-slot self-assign hands
+/// back freed memory for a refcount-1 string, while the two-slot copy is the everyday `$b = $t`
+/// shape.
+///
+/// Only a plain variable or object-property container is supported; anything else (a nested
+/// array element, a static property, or a dynamic-named property) is rejected with a clear error
+/// rather than silently mis-lowering, since generalizing further would need the same nested
+/// read/push/write-back lowering the statement-level append uses for those shapes.
+pub(super) fn build_append_assignment_expression(
+    container: Expr,
+    rhs: Expr,
+    span: Span,
+) -> Result<Expr, CompileError> {
+    // PHP evaluates the lvalue chain before the RHS: bind any side-effecting receiver
+    // (e.g. `getBox()` in `getBox()->items[] = rhs()`) to a hidden temporary FIRST — the
+    // exact treatment indexed non-local targets get — so the receiver's side effects run
+    // before the RHS temporary assignment appended below.
+    let mut lowerer = AssignmentExpressionLowerer::new(span);
+    let container = lowerer.stabilize_non_local_target(container, &rhs);
+
+    let temp_name = format!("__elephc_append_expr_{}_{}", span.line, span.col);
+    let temp_var = Expr::new(ExprKind::Variable(temp_name.clone()), span);
+
+    let assign_temp = Stmt::new(
+        StmtKind::Assign {
+            name: temp_name,
+            value: rhs,
+        },
+        span,
+    );
+    let push = match container.kind {
+        ExprKind::Variable(array) => Stmt::new(
+            StmtKind::ArrayPush {
+                array,
+                value: temp_var.clone(),
+            },
+            span,
+        ),
+        ExprKind::PropertyAccess { object, property } => Stmt::new(
+            StmtKind::PropertyArrayPush {
+                object,
+                property,
+                value: temp_var.clone(),
+            },
+            span,
+        ),
+        _ => {
+            return Err(CompileError::new(
+                span,
+                "Array append `[] =` in expression position is only supported for a plain \
+                 variable or object-property target (e.g. `$a[] = v`, `$this->a[] = v`)",
+            ));
+        }
+    };
+    let mut prelude = lowerer.finish();
+    prelude.push(assign_temp);
+    prelude.push(push);
+
+    // Yield the assigned value by copying the RHS temp into a DISTINCT fresh local, so
+    // `store_local`'s release-then-acquire touches two different slots instead of freeing
+    // and handing back the same heap payload (`$t = $t` string use-after-free).
+    let yield_name = format!("__elephc_append_yield_{}_{}", span.line, span.col);
+    Ok(Expr::new(
+        ExprKind::Assignment {
+            target: Box::new(Expr::new(ExprKind::Variable(yield_name), span)),
+            value: Box::new(temp_var),
+            result_target: None,
+            prelude,
+            conditional_value_temp: None,
+        },
+        span,
+    ))
 }
 
 /// Stateful lowerer that classifies assignment-expression targets and generates prelude

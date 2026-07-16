@@ -277,4 +277,13 @@ fn test_include_path_with_function_call_errors() {
     );
 }
 
+/// Tests that an empty array index (`[]`) in READ position is a loud parse error rather
+/// than silently reading a nonexistent element. `[]` is exclusively PHP's array-append
+/// assignment TARGET marker; PHP itself rejects `echo $a[];` with "Cannot use [] for
+/// reading" (verified with `php -r`), and elephc's parser matches that message exactly.
+#[test]
+fn test_error_empty_array_index_in_read_position() {
+    expect_error("<?php $a = [1]; echo $a[];", "Cannot use [] for reading");
+}
+
 // --- Static closures ---

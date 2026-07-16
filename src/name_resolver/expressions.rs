@@ -374,8 +374,10 @@ pub(super) fn resolve_expr(
         // fully-qualified form. Without this, the fallthrough below cloned the
         // assignment verbatim and a class like `new ParserState()` inside a
         // namespace stayed unqualified and was reported as an undefined class.
-        // `prelude` is populated later during lowering and is empty here, so it is
-        // cloned as-is.
+        // `prelude` is populated at PARSE time (hidden-temp binds from target
+        // stabilization and the expression-position append desugar) and its
+        // statements can carry the same namespaced names, so it goes through the
+        // statement resolver like a closure body does.
         ExprKind::Assignment {
             target,
             value,
@@ -388,7 +390,8 @@ pub(super) fn resolve_expr(
             result_target: result_target
                 .as_ref()
                 .map(|t| Box::new(resolve_expr(t, current_namespace, imports, symbols))),
-            prelude: prelude.clone(),
+            prelude: resolve_stmt_list(prelude, current_namespace, imports, symbols)
+                .expect("name resolver bug: assignment prelude resolution failed"),
             conditional_value_temp: conditional_value_temp.clone(),
         },
         // `$obj::CONST` — resolve names inside the evaluated object sub-expression; the

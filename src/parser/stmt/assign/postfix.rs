@@ -564,6 +564,15 @@ fn parsed_lhs_is_assignable_target(expr: &Expr) -> bool {
 /// Scans tokens starting from `start` (skipping nested parentheses, brackets, and braces)
 /// and returns the position and operator of the first top-level assignment at nesting depth 0.
 /// Returns `None` if no assignment operator is found before a semicolon at depth 0.
+///
+/// Bails (`None`) as soon as a top-level ternary `?` is seen before any assignment operator:
+/// once the statement is fundamentally a conditional expression (`$c ? $a[0]=7 : $a[0]=8;`), any
+/// `=` reachable from here belongs to an assignment nested inside one of the ternary's branches,
+/// not to a single postfix-assignment lvalue chain that starts at `start`. Deferring to the general
+/// expression parser lets the Pratt loop build the ternary and let each branch's own assignment
+/// bind independently — scanning past the `?` would otherwise try to parse the dangling prefix
+/// before the first `=` (e.g. `$c ? $a[0]`) as a standalone expression and hard-error on the
+/// incomplete ternary instead of falling back gracefully.
 fn find_top_level_assignment(
     tokens: &[(Token, Span)],
     start: usize,
@@ -584,6 +593,9 @@ fn find_top_level_assignment(
             Token::Semicolon if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 return None;
             }
+            Token::Question if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                return None;
+            }
             _ if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 if let Some(op) = assignment_operator(&tokens[pos].0) {
                     return Some((pos, op));
@@ -601,6 +613,11 @@ fn find_top_level_assignment(
 ///
 /// Nested occurrences inside indexes or call arguments are ignored so expressions
 /// such as `$items[$i++] = 1` remain assignment statements with an effectful index.
+///
+/// Bails (`None`) on a top-level ternary `?` before any `++`/`--` is found, for the same reason
+/// `find_top_level_assignment` does: a `++`/`--` beyond the `?` belongs to one of the ternary's
+/// branches, and the whole statement must fall back to general expression parsing instead of being
+/// misread as a discarded postfix/prefix increment on a dangling prefix.
 fn find_top_level_postfix_incdec(tokens: &[(Token, Span)], start: usize) -> Option<(usize, bool)> {
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
@@ -616,6 +633,9 @@ fn find_top_level_postfix_incdec(tokens: &[(Token, Span)], start: usize) -> Opti
             Token::LBrace => brace_depth += 1,
             Token::RBrace => brace_depth = brace_depth.saturating_sub(1),
             Token::Semicolon if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                return None;
+            }
+            Token::Question if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 return None;
             }
             Token::PlusPlus if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {

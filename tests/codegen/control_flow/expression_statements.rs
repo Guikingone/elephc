@@ -108,3 +108,214 @@ fn test_variable_led_comparison_statement_compiles_and_runs() {
     let out = compile_and_run("<?php $s = 5; $s > 0; echo \"ok\";");
     assert_eq!(out, "ok");
 }
+
+// --- Expression-position array-element / append assignment in ternary branches ---
+//
+// PHP assignment is an expression: `$a[] = v` and `$a[k] = v` are legal inside a ternary
+// branch or any other expression position, not just as a bare statement. Previously
+// `$a[] = v` in expression position failed to parse at all ("Unexpected token: RBracket")
+// and `$c ? $a[k]=v1 : $a[k]=v2;` failed with "Expected ':' in ternary operator" because the
+// statement-level postfix-assignment scanner (`find_top_level_assignment` in
+// `src/parser/stmt/assign/postfix.rs`) did not track ternary `?`/`:` nesting and tried to
+// parse the dangling prefix before the first `=` as a standalone expression. Every fixture
+// here is cross-checked against `php -r` (see the padawan task's spec probes g1/g4/g5).
+
+/// g1: append-assign as a ternary branch, used as the RHS of a plain assignment. `$a` starts
+/// with one element; the true branch pushes a second, so `count($a)` is `2` — matching PHP.
+#[test]
+fn test_ternary_branch_append_assignment_expr_grows_array() {
+    let out = compile_and_run("<?php $a = [0]; $x = true ? $a[] = 5 : 0; echo count($a);");
+    assert_eq!(out, "2");
+}
+
+/// g4 (PhpDumper:1937 gate shape, true branch): `($c = f($v)) ? $ops[] = ... : ++$ops[0];`
+/// used as a bare STATEMENT. The condition is true, so the append branch runs and `$a`
+/// grows from one element to two.
+#[test]
+fn test_ternary_statement_append_vs_incdec_true_branch_appends() {
+    let out = compile_and_run(
+        "<?php $a = [0]; $c = true; $c ? $a[] = \"x\" : ++$a[0]; echo count($a);",
+    );
+    assert_eq!(out, "2");
+}
+
+/// Same gate shape, false branch: the append is skipped and `++$a[0]` runs instead,
+/// incrementing the existing element in place (`$a` stays length 1, `$a[0]` becomes `1`).
+#[test]
+fn test_ternary_statement_append_vs_incdec_false_branch_increments() {
+    let out = compile_and_run(
+        "<?php $a = [0]; $c = false; $c ? $a[] = \"x\" : ++$a[0]; echo $a[0];",
+    );
+    assert_eq!(out, "1");
+}
+
+/// g5: indexed-element assignment (not append) in BOTH ternary branches. Previously this
+/// was a hard parse error ("Expected ':' in ternary operator") because the statement-level
+/// scanner mis-detected the first `=` inside the ternary's own branch as the whole
+/// statement's assignment operator. True branch stores `7`.
+#[test]
+fn test_ternary_branch_indexed_element_assignment_true_branch() {
+    let out = compile_and_run("<?php $a = [0]; $c = true; $c ? $a[0] = 7 : $a[0] = 8; echo $a[0];");
+    assert_eq!(out, "7");
+}
+
+/// Same shape, false branch: stores `8` instead, proving the true branch's store does not
+/// also leak into (or get read from) the untaken branch.
+#[test]
+fn test_ternary_branch_indexed_element_assignment_false_branch() {
+    let out = compile_and_run("<?php $a = [0]; $c = false; $c ? $a[0] = 7 : $a[0] = 8; echo $a[0];");
+    assert_eq!(out, "8");
+}
+
+/// Value-yield: PHP's assignment expression evaluates to the assigned value, so
+/// `$a[] = 5` used as a parenthesized expression yields `5`, matching a plain `$x = 5`.
+#[test]
+fn test_append_assignment_expression_yields_assigned_value() {
+    let out = compile_and_run("<?php $a = [0]; $x = ($a[] = 5); echo $x;");
+    assert_eq!(out, "5");
+}
+
+/// Heterogeneous append: pushing a `Str` into an `array<int>` from the append branch must
+/// take the same Mixed-promotion path the bare statement form (`$a[] = v;`) already uses,
+/// so the push succeeds (rather than the checker rejecting a type mismatch) and `count($a)`
+/// grows to `2`.
+#[test]
+fn test_ternary_branch_append_heterogeneous_element_type() {
+    let out = compile_and_run(
+        "<?php $a = [0]; $c = true; $c ? $a[] = \"x\" : ++$a[0]; echo count($a);",
+    );
+    assert_eq!(out, "2");
+}
+
+/// Heap-string value-yield through parens: `$x = ($a[] = $s . "z")` must hand `$x` the
+/// live concatenated string, byte-for-byte. Regression guard for the correction-round-1
+/// UAF: the first desugar yielded the hidden RHS temp via a `$t = $t` SELF-assignment,
+/// and `store_local` releases a slot's current heap payload before re-acquiring the same
+/// pointer, so `$x` received freed memory and printed blanks. The yield is now a copy into
+/// a distinct hidden local. Cross-checked with `php -r` → `abababz abababz`.
+#[test]
+fn test_append_assignment_expression_yields_heap_string_via_parens() {
+    let out = compile_and_run(
+        "<?php $a = []; $s = str_repeat(\"ab\", 3); $x = ($a[] = $s . \"z\"); echo $x, \" \", $a[0];",
+    );
+    assert_eq!(out, "abababz abababz");
+}
+
+/// Heap-string value-yield through a TAKEN ternary branch: the same UAF shape as the parens
+/// variant but reached via `lower_ternary`'s per-branch block placement, proving the yielded
+/// string survives the branch merge. Cross-checked with `php -r` → `abababz abababz`.
+#[test]
+fn test_ternary_branch_append_yields_heap_string() {
+    let out = compile_and_run(
+        "<?php $a = []; $s = str_repeat(\"ab\", 3); $c = true; \
+         $x = $c ? $a[] = $s . \"z\" : \"n\"; echo $x, \" \", $a[0];",
+    );
+    assert_eq!(out, "abababz abababz");
+}
+
+/// Heap-string value-yield consumed by ANOTHER container push: `$b[] = ($a[] = $s . \"!\")`
+/// must store the same live bytes in both arrays (the outer statement-level push consumes
+/// the inner expression-position append's yielded value). Cross-checked with `php -r`
+/// → `cdcd! cdcd!`.
+#[test]
+fn test_append_yield_pushed_into_another_container() {
+    let out = compile_and_run(
+        "<?php $a = []; $b = []; $s = str_repeat(\"cd\", 2); \
+         $b[] = ($a[] = $s . \"!\"); echo $b[0], \" \", $a[0];",
+    );
+    assert_eq!(out, "cdcd! cdcd!");
+}
+
+/// PHP evaluates an assignment's lvalue chain BEFORE its RHS: in
+/// `getBox($box)->items[] = rhs()` used in expression position, `getBox()` must print "L"
+/// before `rhs()` prints "R". Regression guard for the correction-round-1 eval-order bug:
+/// the property-container prelude bound the RHS temp before the object expression, printing
+/// "RL". The receiver is now stabilized into its own hidden temp first (same treatment as
+/// indexed non-local targets). Cross-checked with `php -r` → `LR51` (yield `5`, one item).
+#[test]
+fn test_property_append_expression_evaluates_object_before_rhs() {
+    let out = compile_and_run(
+        "<?php
+        class Box { public $items = []; }
+        function getBox($b) { echo \"L\"; return $b; }
+        function rhs() { echo \"R\"; return 5; }
+        $box = new Box();
+        $x = (getBox($box)->items[] = rhs());
+        echo $x, count($box->items);",
+    );
+    assert_eq!(out, "LR51");
+}
+
+/// A namespaced function called in the append RHS inside a ternary branch must resolve to
+/// the CURRENT namespace's function, not the global one. Regression guard for the
+/// correction-round-1 name-resolver hole: the append desugar stores the RHS inside
+/// `Assignment.prelude` at parse time, and the name resolver cloned preludes verbatim, so
+/// `pick()` inside `namespace App` silently called the global `pick()` (printed 222).
+/// Cross-checked with the php CLI → `111`.
+#[test]
+fn test_ternary_append_rhs_resolves_namespaced_function() {
+    let out = compile_and_run(
+        "<?php
+        namespace App {
+            function pick() { return 111; }
+        }
+        namespace {
+            function pick() { return 222; }
+        }
+        namespace App {
+            $a = [0];
+            $c = true;
+            $c ? $a[] = pick() : 0;
+            echo $a[1];
+        }",
+    );
+    assert_eq!(out, "111");
+}
+
+/// A namespaced class constructed in the append RHS (`$a[] = new Box(7)` inside
+/// `namespace App`) must namespace-resolve to `App\Box`. Regression guard for the same
+/// name-resolver prelude hole as the function variant: the unresolved name previously
+/// surfaced as an "unknown class Box" EIR error. The constructor echoes to prove the
+/// resolved class actually ran with its argument. Cross-checked with the php CLI → `B7 1`.
+#[test]
+fn test_ternary_append_rhs_namespaced_class_new_compiles_and_runs() {
+    let out = compile_and_run(
+        "<?php
+        namespace App {
+            class Box {
+                public $v;
+                public function __construct($v) { $this->v = $v; echo \"B\", $v; }
+            }
+        }
+        namespace App {
+            $a = [];
+            $c = true;
+            $c ? $a[] = new Box(7) : 0;
+            echo \" \", count($a);
+        }",
+    );
+    assert_eq!(out, "B7 1");
+}
+
+/// Foreach-loop variant mirroring the exact `--web` gate shape at PhpDumper.php:1937:
+/// `($c = f($v)) ? $ops[] = "s$c" : ++$ops[0];` inside a loop body, where the ternary
+/// condition itself is an assignment expression. `$ops` starts as `[0]`; each iteration
+/// either appends a new "s{$c}" element (when `f($v)` is truthy) or increments `$ops[0]`
+/// (when it is falsy/zero). Cross-checked with `php -r`.
+#[test]
+fn test_ternary_append_in_foreach_mirrors_phpdumper_gate() {
+    let out = compile_and_run(
+        "<?php
+        function f($v) {
+            if ($v > 3) return $v;
+            return 0;
+        }
+        $ops = [0];
+        foreach ([1, 5, 2, 8] as $v) {
+            ($c = f($v)) ? $ops[] = \"s$c\" : ++$ops[0];
+        }
+        echo implode(\",\", $ops), \"\\n\";
+        echo count($ops);",
+    );
+    assert_eq!(out, "2,s5,s8\n3");
+}

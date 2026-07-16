@@ -16,7 +16,8 @@ use crate::parser::stmt::parse_name;
 use crate::span::Span;
 
 use super::assignment_targets::{
-    AssignmentExpressionLowerer, is_assignment_expression_target, is_non_local_assignment_target,
+    AssignmentExpressionLowerer, build_append_assignment_expression,
+    is_assignment_expression_target, is_non_local_assignment_target,
     simple_positional_list_vars,
 };
 use super::calls::parse_first_class_callable_parens;
@@ -62,6 +63,23 @@ pub(super) fn parse_expr_bp(
             Token::LBracket => {
                 let span = tokens[*pos].1;
                 *pos += 1;
+                // Empty index `$a[]` — PHP's array-append marker. It has no read form (`echo
+                // $a[];` is a hard error, matching PHP's "Cannot use [] for reading"), so it is
+                // only legal here when immediately followed by a plain `=`, making the whole
+                // `lhs[] = rhs` an assignment-expression target. Desugar it right away: there is
+                // no `index` expression to build an `ArrayAccess` node from.
+                if *pos < tokens.len() && tokens[*pos].0 == Token::RBracket {
+                    *pos += 1; // consume ']'
+                    if *pos >= tokens.len() || tokens[*pos].0 != Token::Assign {
+                        return Err(CompileError::new(span, "Cannot use [] for reading"));
+                    }
+                    *pos += 1; // consume '='
+                    // Right binding power 6 matches `assignment_bp`'s `(l_bp, r_bp) = (7, 6)` for
+                    // `=`, keeping append's RHS precedence identical to ordinary assignment.
+                    let rhs = parse_expr_bp(tokens, pos, 6)?;
+                    lhs = build_append_assignment_expression(lhs, rhs, span)?;
+                    continue;
+                }
                 let index = parse_expr(tokens, pos)?;
                 if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
                     return Err(CompileError::new(span, "Expected ']'"));
