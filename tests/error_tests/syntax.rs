@@ -701,3 +701,15 @@ fn test_error_reference_assign_into_property_array_element() {
         "Reference assignment into an array element is not supported",
     );
 }
+
+/// A class constant is not a valid `instanceof` RHS in PHP (the grammar only allows a class
+/// name, a `new_variable`, or a parenthesized expression), so `$v instanceof D::CONST` must
+/// stay a loud parse error: the static-property lookahead routes only `::$prop` forms to the
+/// expression parser, leaving `::CONST` to desync after the parsed Name exactly as before.
+#[test]
+fn test_error_instanceof_class_constant_target() {
+    expect_error(
+        "<?php class D { const PROTO = \"D\"; } $v = new D(); echo $v instanceof D::PROTO ? \"y\" : \"n\";",
+        "Expected ';'",
+    );
+}

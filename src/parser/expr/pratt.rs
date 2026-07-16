@@ -748,19 +748,30 @@ pub(super) fn build_incdec_value(target: Expr, increment: bool, prefix: bool, sp
 
 /// Parses the target of an `instanceof` operator.
 ///
-/// Handles the PHP 8.0 class-name forms and the dynamic expression form:
-/// - `self`, `parent`, `static` keyword → `InstanceOfTarget::Name`
-/// - Variable or parenthesized expression → parsed as `Expr`, wrapped in
-///   `InstanceOfTarget::Expr` with binding power 36 (above comparisons)
-/// - Class/interface name → resolved via `parse_name` into a qualified `Name`
+/// Handles the PHP 8.0 class-name forms and the dynamic expression forms:
+/// - bare `self`, `parent`, `static` keyword → `InstanceOfTarget::Name` (the checker's
+///   instanceof narrowing depends on the Name form, so these must stay Name)
+/// - static-property RHS (`D::$proto`, `self::$p`, `static::$p`, `parent::$p`,
+///   `\App\D::$p`, incl. dynamic `::${…}`), detected by the non-consuming lookahead
+///   [`instanceof_static_property_lookahead`] → parsed as `Expr`
+/// - `$this`, a variable, or a parenthesized expression → parsed as `Expr`
+/// - class/interface name → resolved via `parse_name` into a qualified `Name`
 ///
-/// The dynamic form is parsed with `min_bp = 36` to ensure it captures everything
-/// with tighter precedence than comparison operators.
+/// The dynamic forms are parsed with `min_bp = 36` (above comparisons) so the postfix
+/// loop still folds `->prop` / `[idx]` chains into the target, matching PHP's
+/// `new_variable` grammar for the instanceof RHS.
 fn parse_instanceof_target(
     tokens: &[(Token, Span)],
     pos: &mut usize,
     span: Span,
 ) -> Result<InstanceOfTarget, CompileError> {
+    // A static-property RHS starts like a class name (or `self`/`static`/`parent`), so
+    // it must be routed to the expression parser BEFORE the Name/keyword arms below.
+    // The lookahead never consumes tokens, so bare-name forms are left untouched.
+    if instanceof_static_property_lookahead(tokens, *pos) {
+        let target = parse_expr_bp(tokens, pos, 36)?;
+        return Ok(InstanceOfTarget::Expr(Box::new(target)));
+    }
     match tokens.get(*pos).map(|(token, _)| token) {
         Some(Token::Self_) => {
             *pos += 1;
@@ -774,7 +785,7 @@ fn parse_instanceof_target(
             *pos += 1;
             Ok(InstanceOfTarget::Name(Name::unqualified("static")))
         }
-        Some(Token::Variable(_)) | Some(Token::LParen) => {
+        Some(Token::This) | Some(Token::Variable(_)) | Some(Token::LParen) => {
             let target = parse_expr_bp(tokens, pos, 36)?;
             Ok(InstanceOfTarget::Expr(Box::new(target)))
         }
@@ -786,6 +797,53 @@ fn parse_instanceof_target(
         )
         .map(InstanceOfTarget::Name),
     }
+}
+
+/// Bounded, non-consuming lookahead deciding whether the `instanceof` RHS at `pos` is a
+/// static-property access (`D::$proto`, `\App\D::$p`, `self::$p`, `static::$p`,
+/// `parent::$p`, or the dynamic-name forms `D::${…}` / `D::$$v`).
+///
+/// Returns `true` only when a `self`/`static`/`parent` keyword or a (possibly
+/// backslash-qualified) identifier name is immediately followed by `::` and then a
+/// `$prop` variable or a bare `$` (the dynamic static-property marker). `Foo::CONST`
+/// (identifier member) stays `false` so it keeps producing a loud parse error, matching
+/// PHP where a class constant is not a valid `instanceof` RHS. Never mutates `pos`.
+fn instanceof_static_property_lookahead(tokens: &[(Token, Span)], pos: usize) -> bool {
+    let mut i = pos;
+    match tokens.get(i).map(|(token, _)| token) {
+        Some(Token::Self_) | Some(Token::Static) | Some(Token::Parent) => {
+            i += 1;
+        }
+        Some(Token::Identifier(_)) | Some(Token::Backslash) => {
+            // Skip a possibly qualified name: `\`? Identifier (`\` Identifier)*.
+            if matches!(tokens.get(i).map(|(token, _)| token), Some(Token::Backslash)) {
+                i += 1;
+            }
+            loop {
+                match tokens.get(i).map(|(token, _)| token) {
+                    Some(Token::Identifier(_)) => i += 1,
+                    _ => return false,
+                }
+                if matches!(tokens.get(i).map(|(token, _)| token), Some(Token::Backslash)) {
+                    i += 1;
+                    continue;
+                }
+                break;
+            }
+        }
+        _ => return false,
+    }
+    if !matches!(
+        tokens.get(i).map(|(token, _)| token),
+        Some(Token::DoubleColon)
+    ) {
+        return false;
+    }
+    i += 1;
+    matches!(
+        tokens.get(i).map(|(token, _)| token),
+        Some(Token::Variable(_)) | Some(Token::Dollar)
+    )
 }
 
 /// Looks up binary operator binding power for Pratt parsing.

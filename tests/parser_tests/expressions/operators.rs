@@ -330,3 +330,110 @@ fn test_new_dynamic_parenthesized_expr_class_name() {
 }
 
 // --- Null coalescing precedence ---
+
+// --- instanceof RHS target forms ---
+
+/// Verifies `$v instanceof $this->p` parses the RHS as an `InstanceOfTarget::Expr` holding a
+/// `PropertyAccess` on `$this` — the dynamic-arm form used by e.g. Symfony's AutowirePass
+/// (`$value instanceof $this->defaultArgument`).
+#[test]
+fn test_instanceof_this_property_target_is_expr() {
+    let stmts = parse_source("<?php echo $v instanceof $this->p;");
+    match echoed_expr(&stmts) {
+        ExprKind::InstanceOf {
+            target: InstanceOfTarget::Expr(target),
+            ..
+        } => assert!(matches!(
+            &target.kind,
+            ExprKind::PropertyAccess { object, property }
+                if property == "p" && matches!(object.kind, ExprKind::This)
+        )),
+        other => panic!("Expected InstanceOf with Expr target, got {:?}", other),
+    }
+}
+
+/// Verifies `$v instanceof D::$proto` parses the RHS as an `InstanceOfTarget::Expr` holding a
+/// `StaticPropertyAccess` on the named class — a static property is a runtime value, not a
+/// class name, so it must not go through the Name arm.
+#[test]
+fn test_instanceof_named_static_property_target_is_expr() {
+    let stmts = parse_source("<?php echo $v instanceof D::$proto;");
+    match echoed_expr(&stmts) {
+        ExprKind::InstanceOf {
+            target: InstanceOfTarget::Expr(target),
+            ..
+        } => assert!(matches!(
+            &target.kind,
+            ExprKind::StaticPropertyAccess { receiver: StaticReceiver::Named(name), property }
+                if property == "proto" && name.as_str() == "D"
+        )),
+        other => panic!("Expected InstanceOf with Expr target, got {:?}", other),
+    }
+}
+
+/// Verifies `$v instanceof self::$p` parses the RHS as an `InstanceOfTarget::Expr` holding a
+/// `StaticPropertyAccess` with the `self` receiver — the `::$` lookahead must win over the
+/// bare-`self` keyword arm.
+#[test]
+fn test_instanceof_self_static_property_target_is_expr() {
+    let stmts = parse_source("<?php echo $v instanceof self::$p;");
+    match echoed_expr(&stmts) {
+        ExprKind::InstanceOf {
+            target: InstanceOfTarget::Expr(target),
+            ..
+        } => assert!(matches!(
+            &target.kind,
+            ExprKind::StaticPropertyAccess { receiver: StaticReceiver::Self_, property }
+                if property == "p"
+        )),
+        other => panic!("Expected InstanceOf with Expr target, got {:?}", other),
+    }
+}
+
+/// Regression guard: bare `$v instanceof self` (and `static`/`parent`) must keep the
+/// `InstanceOfTarget::Name` form — the checker's instanceof narrowing to the concrete
+/// class depends on the Name shape, not an Expr.
+#[test]
+fn test_instanceof_bare_self_static_parent_remain_name_targets() {
+    for keyword in ["self", "static", "parent"] {
+        let stmts = parse_source(&format!("<?php echo $v instanceof {};", keyword));
+        match echoed_expr(&stmts) {
+            ExprKind::InstanceOf {
+                target: InstanceOfTarget::Name(name),
+                ..
+            } => assert_eq!(name.as_str(), keyword),
+            other => panic!("Expected InstanceOf with Name target, got {:?}", other),
+        }
+    }
+}
+
+/// Regression guard: a bare class name RHS (`$v instanceof Foo`) must keep the
+/// `InstanceOfTarget::Name` form — the static-property lookahead must not consume it.
+#[test]
+fn test_instanceof_bare_class_name_remains_name_target() {
+    let stmts = parse_source("<?php echo $v instanceof Foo;");
+    match echoed_expr(&stmts) {
+        ExprKind::InstanceOf {
+            target: InstanceOfTarget::Name(name),
+            ..
+        } => assert_eq!(name.as_str(), "Foo"),
+        other => panic!("Expected InstanceOf with Name target, got {:?}", other),
+    }
+}
+
+/// Verifies PHP precedence for `!$v instanceof RHS`: `instanceof` binds tighter than `!`,
+/// so the whole expression parses as `!($v instanceof $this->p)`.
+#[test]
+fn test_not_instanceof_dynamic_target_precedence() {
+    let stmts = parse_source("<?php echo !$v instanceof $this->p;");
+    match echoed_expr(&stmts) {
+        ExprKind::Not(inner) => assert!(matches!(
+            &inner.kind,
+            ExprKind::InstanceOf {
+                target: InstanceOfTarget::Expr(_),
+                ..
+            }
+        )),
+        other => panic!("Expected Not(InstanceOf), got {:?}", other),
+    }
+}
