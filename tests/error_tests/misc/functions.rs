@@ -190,6 +190,19 @@ fn test_error_call_user_func_array_unknown_string_callback() {
     );
 }
 
+/// Pins the LOUD diagnostic for the array internal-pointer iteration gate
+/// (symfony/filesystem Path.php:629, `for (next($paths); null !== key($paths); ...)`):
+/// the `for` clauses now parse arbitrary expressions, but `next()` (and `prev()`) are not
+/// implemented builtins, so the program fails at type-check instead of iterating silently
+/// wrong. Un-pin this when next()/key() internal-pointer semantics land.
+#[test]
+fn test_error_for_clause_next_internal_pointer_gate_stays_loud() {
+    expect_error(
+        "<?php $paths = [\"a\", \"b\"]; for (next($paths); null !== key($paths); next($paths)) { echo \"x\"; }",
+        "Undefined function: next",
+    );
+}
+
 /// Verifies that positional arguments cannot follow named arguments in a call.
 #[test]
 fn test_error_named_arguments_reject_positional_after_named() {

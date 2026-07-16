@@ -58,3 +58,14 @@ for ($row = 1; $row <= 5; $row++) {
     }
     echo "\n";
 }
+
+// Arbitrary expressions in for clauses: a by-ref call drives the counter,
+// so the update section is a function call instead of an increment
+function advance(&$i, $by) {
+    $i += $by;
+}
+echo "\nCountdown by 25:";
+for ($i = 100; $i > 0; advance($i, -25)) {
+    echo " " . $i;
+}
+echo "\n";

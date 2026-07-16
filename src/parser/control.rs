@@ -428,13 +428,14 @@ pub fn parse_try(
     ))
 }
 
-/// Parse a simple statement without trailing semicolon (for use inside for-loops).
-/// Parses a `for` init or update clause, which may be a comma-separated list of inline statements.
+/// Parses a `for` init or update clause, which may be a comma-separated list of arbitrary
+/// expressions and inline assignments (PHP's `expr_list` grammar for these clauses).
 ///
 /// Stops at `terminator` (a `;` for the init clause, a `)` for the update clause). An empty clause
-/// yields `None`; a single statement is returned directly; several comma-separated statements are
-/// wrapped in a `Synthetic` block so the `for` lowering runs them in order (the init list once, the
-/// update list after each iteration), matching PHP's `for ($i = 0, $j = 10; ...; $i++, $j--)`.
+/// yields `None`; a single item is returned directly; several comma-separated items are wrapped in
+/// a `Synthetic` block so the `for` lowering runs them in order (the init list once, the update
+/// list after each iteration), matching PHP's `for ($i = 0, $j = 10; ...; $i++, $j--)` and
+/// `for (next($paths); ...; next($paths))`.
 fn parse_for_clause_list(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -446,8 +447,7 @@ fn parse_for_clause_list(
     let list_span = tokens[*pos].1;
     let mut stmts = Vec::new();
     loop {
-        let stmt_span = tokens[*pos].1;
-        stmts.push(parse_assign_inline(tokens, pos, stmt_span)?);
+        stmts.push(parse_for_clause_item(tokens, pos)?);
         if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
             *pos += 1; // consume ','
             continue;
@@ -461,6 +461,75 @@ fn parse_for_clause_list(
     }
 }
 
+/// Parses one item of a `for` init/update clause list.
+///
+/// Historical inline-assignment shapes (`$v = expr`, compound assigns, `$v ??= expr`, and
+/// whole-item `++$v` / `--$v` / `$v++` / `$v--`) keep their dedicated statement AST via
+/// `parse_assign_inline` so existing programs parse byte-identically. Every other item is a
+/// full expression (a call like `next($paths)`, a method call, a complex-lvalue assignment,
+/// ...) parsed with `parse_expr` and wrapped in an effect-only `ExprStmt`, matching PHP's
+/// arbitrary-expression `for` clauses.
+fn parse_for_clause_item(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+) -> Result<Stmt, CompileError> {
+    let span = tokens[*pos].1;
+    if for_clause_fast_path_applies(tokens, *pos) {
+        return parse_assign_inline(tokens, pos, span);
+    }
+    let expr = parse_expr(tokens, pos)?;
+    Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
+}
+
+/// Reports whether the for-clause item starting at `pos` matches one of the shapes the
+/// historical inline-assignment parser accepted: a whole-item `++$v` / `--$v` / `$v++` /
+/// `$v--` (the inc/dec must end the item so longer expressions like `$i++ + 1` fall back
+/// to the full-expression path), or a `$v` head directly followed by `=`, a compound
+/// assignment, or `??=`. Only these shapes take `parse_assign_inline`, keeping their AST
+/// byte-identical to the pre-expression-list parser.
+fn for_clause_fast_path_applies(tokens: &[(Token, Span)], pos: usize) -> bool {
+    match tokens.get(pos).map(|(t, _)| t) {
+        Some(Token::PlusPlus | Token::MinusMinus) => {
+            matches!(tokens.get(pos + 1).map(|(t, _)| t), Some(Token::Variable(_)))
+                && for_clause_item_boundary(tokens.get(pos + 2).map(|(t, _)| t))
+        }
+        Some(Token::Variable(_)) => match tokens.get(pos + 1).map(|(t, _)| t) {
+            Some(Token::PlusPlus | Token::MinusMinus) => {
+                for_clause_item_boundary(tokens.get(pos + 2).map(|(t, _)| t))
+            }
+            Some(
+                Token::Assign
+                | Token::PlusAssign
+                | Token::MinusAssign
+                | Token::StarAssign
+                | Token::StarStarAssign
+                | Token::SlashAssign
+                | Token::PercentAssign
+                | Token::DotAssign
+                | Token::AmpAssign
+                | Token::PipeAssign
+                | Token::CaretAssign
+                | Token::LessLessAssign
+                | Token::GreaterGreaterAssign
+                | Token::QuestionQuestionAssign,
+            ) => true,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Reports whether `token` ends a for-clause item: a list `,`, the init-clause `;`, the
+/// update-clause `)`, or end of input (which the clause parsers report as a loud error).
+fn for_clause_item_boundary(token: Option<&Token>) -> bool {
+    matches!(token, Some(Token::Comma | Token::Semicolon | Token::RParen) | None)
+}
+
+/// Parses one inline assignment or increment/decrement statement without a trailing
+/// semicolon, for use inside `for` clauses: `++$v` / `--$v` / `$v++` / `$v--` become
+/// inc/dec `ExprStmt`s, and `$v = expr` / compound assigns / `$v ??= expr` become
+/// `StmtKind::Assign`. Callers gate entry through `for_clause_fast_path_applies`; other
+/// shapes error loudly here.
 pub fn parse_assign_inline(
     tokens: &[(Token, Span)],
     pos: &mut usize,

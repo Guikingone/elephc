@@ -86,6 +86,22 @@ for ($i = 0, $j = 10; $i < 5; $i++, $j--) {
 }
 ```
 
+Init and update items are arbitrary expressions, not just assignments and
+increments — a function call (including a by-ref call that moves the counter)
+is evaluated for its side effect and its value discarded, matching PHP:
+
+```php
+<?php
+function step(&$i): void { $i += 2; }
+for ($i = 0; $i < 6; step($i)) {
+    echo $i, ";";                    // 0;2;4;
+}
+```
+
+The condition section takes a single expression. A comma-separated condition
+list (`for (; $a = f(), $a < 3 ;)`, where PHP uses the last expression as the
+loop condition) is not supported and is rejected at parse time.
+
 ## foreach
 
 ```php

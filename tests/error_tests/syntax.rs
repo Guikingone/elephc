@@ -745,3 +745,27 @@ fn test_error_instanceof_class_constant_target() {
         "Expected ';'",
     );
 }
+
+/// A statement-only construct (`echo`) inside a `for` clause stays a loud parse error even
+/// now that the clauses accept arbitrary comma-separated expressions: PHP's grammar allows
+/// expressions there, never statements (`php -l` rejects this snippet the same way).
+#[test]
+fn test_error_for_clause_rejects_statement_construct() {
+    expect_error(
+        "<?php for (echo 1; ; ) { break; }",
+        "Unexpected token: Echo",
+    );
+}
+
+/// A comma-separated CONDITION clause (`for (; $a = 1, $a < 3 ;)`) is valid PHP (the last
+/// expression is the loop condition, earlier ones are effect-only) but remains intentionally
+/// unsupported: the condition parser takes a single full expression, so the comma stays a
+/// loud parse error rather than a silently-wrong condition. Un-pin this when comma-list
+/// conditions are implemented.
+#[test]
+fn test_error_for_condition_comma_list_stays_loud() {
+    expect_error(
+        "<?php for (; $a = 1, $a < 3 ;) { break; }",
+        "Expected ';'",
+    );
+}

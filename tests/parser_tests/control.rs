@@ -81,6 +81,93 @@ fn test_for_comma_clauses_parse_to_synthetic() {
     assert!(matches!(update.as_deref().map(|s| &s.kind), Some(StmtKind::Synthetic(stmts)) if stmts.len() == 2));
 }
 
+/// Regression guard for the historical for-clause fast paths: `$i = 0`-style items must
+/// stay dedicated `StmtKind::Assign` nodes (not expression-position `ExprKind::Assignment`)
+/// and `$i++` / `$j--` items must stay inc/dec `ExprStmt`s, exactly as before arbitrary
+/// expressions were allowed in for clauses.
+#[test]
+fn test_for_assignment_and_incdec_clause_ast_unchanged() {
+    let stmts = parse_source("<?php for ($i = 0, $j = 10; $i < 5; $i++, $j--) {}");
+    let StmtKind::For { init, update, .. } = &stmts[0].kind else {
+        panic!("expected For");
+    };
+    let Some(StmtKind::Synthetic(init_stmts)) = init.as_deref().map(|s| &s.kind) else {
+        panic!("expected Synthetic init");
+    };
+    assert!(matches!(&init_stmts[0].kind, StmtKind::Assign { name, .. } if name == "i"));
+    assert!(matches!(&init_stmts[1].kind, StmtKind::Assign { name, .. } if name == "j"));
+    let Some(StmtKind::Synthetic(update_stmts)) = update.as_deref().map(|s| &s.kind) else {
+        panic!("expected Synthetic update");
+    };
+    assert!(matches!(
+        &update_stmts[0].kind,
+        StmtKind::ExprStmt(Expr { kind: ExprKind::PostIncrement(name), .. }) if name == "i"
+    ));
+    assert!(matches!(
+        &update_stmts[1].kind,
+        StmtKind::ExprStmt(Expr { kind: ExprKind::PostDecrement(name), .. }) if name == "j"
+    ));
+}
+
+/// Verifies that arbitrary call expressions in `for` init/update clauses parse to
+/// effect-only `ExprStmt` items, matching PHP's arbitrary-expression clause grammar
+/// (`for (next($paths); null !== key($paths); next($paths))`, the Path.php:629 shape).
+#[test]
+fn test_for_call_expression_clauses_parse_to_expr_stmts() {
+    let stmts =
+        parse_source("<?php for (next($paths); null !== key($paths); next($paths)) {}");
+    let StmtKind::For {
+        init,
+        condition,
+        update,
+        ..
+    } = &stmts[0].kind
+    else {
+        panic!("expected For");
+    };
+    assert!(matches!(
+        init.as_deref().map(|s| &s.kind),
+        Some(StmtKind::ExprStmt(Expr { kind: ExprKind::FunctionCall { .. }, .. }))
+    ));
+    assert!(matches!(
+        condition.as_ref().map(|c| &c.kind),
+        Some(ExprKind::BinaryOp { .. })
+    ));
+    assert!(matches!(
+        update.as_deref().map(|s| &s.kind),
+        Some(StmtKind::ExprStmt(Expr { kind: ExprKind::FunctionCall { .. }, .. }))
+    ));
+}
+
+/// Verifies a mixed comma list in a `for` init clause: an assignment fast-path item and a
+/// call expression item share one `Synthetic` block in source order.
+#[test]
+fn test_for_mixed_assignment_and_call_clause_list_parses() {
+    let stmts = parse_source("<?php for ($i = 0, log_(); $i < 2; log_(), $i++) {}");
+    let StmtKind::For { init, update, .. } = &stmts[0].kind else {
+        panic!("expected For");
+    };
+    let Some(StmtKind::Synthetic(init_stmts)) = init.as_deref().map(|s| &s.kind) else {
+        panic!("expected Synthetic init");
+    };
+    assert!(matches!(&init_stmts[0].kind, StmtKind::Assign { name, .. } if name == "i"));
+    assert!(matches!(
+        &init_stmts[1].kind,
+        StmtKind::ExprStmt(Expr { kind: ExprKind::FunctionCall { .. }, .. })
+    ));
+    let Some(StmtKind::Synthetic(update_stmts)) = update.as_deref().map(|s| &s.kind) else {
+        panic!("expected Synthetic update");
+    };
+    assert!(matches!(
+        &update_stmts[0].kind,
+        StmtKind::ExprStmt(Expr { kind: ExprKind::FunctionCall { .. }, .. })
+    ));
+    assert!(matches!(
+        &update_stmts[1].kind,
+        StmtKind::ExprStmt(Expr { kind: ExprKind::PostIncrement(name), .. }) if name == "i"
+    ));
+}
+
 /// Verifies that `<?php while (1) { break; }` parses with the `Break(1)` statement nested
 /// inside `While`. The argument 1 means break one level.
 #[test]
