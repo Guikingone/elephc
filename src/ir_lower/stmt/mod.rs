@@ -1360,7 +1360,20 @@ fn promoted_assoc_array_type(current_ty: PhpType, value_ty: PhpType) -> PhpType 
 }
 
 /// Lowers a nested array assignment that already carries an expression target.
+///
+/// A NESTED write (2+ index levels) whose base is a reference-bound LOCAL (`$x = &$arr[0]` then
+/// `$x[1][0] = 9`) routes through `lower_nested_ref_bound_local_assign`, which materializes each
+/// intermediate as an owned hidden temp (COW-splitting it from the parent slot), writes the leaf
+/// value into the innermost temp via the matching in-place set op, then walks back up the chain
+/// writing each mutated temp into its parent so the mutation reaches the kind-6 ref cell. Every
+/// other shape (plain-local / static-property / instance-property base, or a non-`Heap` container
+/// the explicit descent does not handle) stays on the existing generic 2-operand `RuntimeCall`
+/// path, unchanged.
 fn lower_nested_array_assign(ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span) {
+    if let Some((name, chain)) = nested_ref_bound_local_chain(ctx, target) {
+        lower_nested_ref_bound_local_assign(ctx, name, &chain, value, span);
+        return;
+    }
     let target = lower_expr(ctx, target);
     let value = lower_expr(ctx, value);
     ctx.emit_void(
@@ -1370,6 +1383,372 @@ fn lower_nested_array_assign(ctx: &mut LoweringContext<'_, '_>, target: &Expr, v
         effects_lookup::runtime_effects(),
         Some(span),
     );
+}
+
+/// Walks an `ArrayAccess` chain (`$x[1][0]`, `$x["a"]["b"]`) to its root `ExprKind::Variable`,
+/// returning `(name, indices)` when the root local is currently reference-bound (a kind-6 adopted
+/// owner whose loads/stores route through `LoadRefCell`/`StoreRefCell`). The indices are collected
+/// outermost-first and the chain length is at least 2 (single-level `ArrayAccess{Variable}` routes
+/// to `StmtKind::ArrayAssign` before reaching here). Returns `None` for any non-variable root
+/// (property / static-property / dynamic-property base) so those stay on the generic path.
+fn nested_ref_bound_local_chain<'a>(ctx: &LoweringContext<'_, '_>, target: &'a Expr) -> Option<(&'a str, Vec<&'a Expr>)> {
+    let mut indices: Vec<&Expr> = Vec::new();
+    let mut node = target;
+    loop {
+        match &node.kind {
+            ExprKind::ArrayAccess { array, index } => {
+                indices.push(index);
+                node = array;
+            }
+            ExprKind::Variable(name) => {
+                if ctx.is_ref_bound_local(name) {
+                    // outermost-first: the indices were collected innermost-first while walking down.
+                    indices.reverse();
+                    return Some((name, indices));
+                }
+                return None;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Lowers a NESTED write (2+ index levels) through a reference-bound LOCAL `$name`, mirroring the
+/// SLICE-2 `lower_ref_assign_local_nested_append` explicit per-level write-back:
+///
+/// 1. **Head** — `load_local(name)` emits `LoadRefCell` yielding the alias inner (the aliased
+///    array/hash/Mixed box). When the inner is `Heap(Array)` and the first key is a string/Mixed
+///    key, `Op::ArrayToHash` de-packs it (recording a write-back obligation).
+/// 2. **Descend** — every intermediate level (all but the last index) is read into an owned hidden
+///    temp so the subsequent mutation COW-splits the inner away from the parent slot:
+///    `Heap(Hash)` → `HashIsset`+`HashGet`+retain (or `HashNew` vivify); `Heap(Array)` → `ArrayGet`;
+///    `Heap(Mixed)`/`Heap(Union)` → `__rt_mixed_array_get`.
+/// 3. **Leaf** — the value is written into the innermost temp via the matching 3-operand in-place
+///    path (`HashSet`/`ArraySet`/`__rt_mixed_array_set`), NOT the 2-operand `lower_mixed_cell_runtime_assign`
+///    that loses the fresh-box write.
+/// 4. **Per-level write-back** — each mutated temp is written back into its parent at the matching
+///    index, walking from the deepest level up to the head, so the mutation reaches the cell.
+/// 5. **Tail** — `store_mutated_local(name, head, …)` emits `StoreRefCell` ONLY when the head was
+///    relocated (ArrayToHash de-pack, or the first-level read vivified an absent key): in-place
+///    mutation leaves the cell pointer unchanged, and a redundant `__rt_ref_cell_store` would
+///    decref the still-aliased inner to zero and free it (a use-after-free). Each temp's redundant
+///    share is released with the temp's actual type after its write-back (SLICE-2 discipline).
+fn lower_nested_ref_bound_local_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    chain: &[&Expr],
+    value: &Expr,
+    span: Span,
+) {
+    let depth = chain.len();
+    debug_assert!(depth >= 2, "nested ref-bound assign requires 2+ index levels");
+
+    // Lower every index expression once and reuse the SSA value for both the descent read and the
+    // ascending write-back (the index is the same key on the way down and up).
+    let indices: Vec<LoweredValue> = chain.iter().map(|e| lower_expr(ctx, e)).collect();
+    let value_val = lower_expr(ctx, value);
+
+    // 1. Head: load the alias inner through the kind-6 ref cell.
+    let mut head = ctx.load_local(name, Some(span));
+    let mut head_ty = ctx.builder.value_php_type(head.value);
+    let mut needs_storeback = false;
+
+    // De-pack an indexed-array head to a hash when the first key is a string/Mixed key (Zend
+    // de-packs on reference-take; mirror `load_local_array_as_hash`). The relocated hash must be
+    // stored back to the cell at the tail.
+    if head.ir_type == IrType::Heap(IrHeapKind::Array)
+        && index_is_boxed_mixed_key(indices[0].ir_type)
+    {
+        let element_ty = reference_element_type(&head_ty);
+        let assoc_ty = promoted_assoc_array_type(head_ty, element_ty);
+        let hash = ctx.emit_value(
+            Op::ArrayToHash,
+            vec![head.value],
+            None,
+            assoc_ty.clone(),
+            Op::ArrayToHash.default_effects(),
+            Some(span),
+        );
+        head = hash;
+        head_ty = assoc_ty;
+        needs_storeback = true;
+    }
+
+    // 2. Descend the intermediate levels (indices 0..depth-2) into owned hidden temps.
+    let mut temp_names: Vec<String> = Vec::with_capacity(depth - 1);
+    let mut temp_types: Vec<PhpType> = Vec::with_capacity(depth - 1);
+    let mut container = head;
+    let mut container_ty = head_ty.clone();
+    for i in 0..(depth - 1) {
+        let key = indices[i];
+        let element_ty = reference_element_type(&container_ty);
+        let temp_name = ctx.declare_owned_hidden_temp(element_ty.clone());
+        let vivified = read_nested_element_into_owned_temp(
+            ctx, container, key, &temp_name, element_ty.clone(), span,
+        );
+        temp_names.push(temp_name);
+        temp_types.push(element_ty.clone());
+        // A vivified first-level read writes a new hash into the head at index 0, which may
+        // relocate the head → the cell must be updated at the tail.
+        if i == 0 && vivified {
+            needs_storeback = true;
+        }
+        // The temp becomes the container for the next level. Reload from the temp slot so the
+        // write-back up the chain reads the post-mutation pointer (the temp's SSA home is updated
+        // by the set op's `store_result_value` when it relocates).
+        container = ctx.load_local(temp_names.last().unwrap(), Some(span));
+        container_ty = element_ty;
+    }
+
+    // 3. Leaf write: write `value` into the innermost temp at the last index.
+    let leaf_temp = temp_names[depth - 2].as_str();
+    let leaf_container = ctx.load_local(leaf_temp, Some(span));
+    write_nested_element_in_place(
+        ctx,
+        leaf_container,
+        temp_types[depth - 2].clone(),
+        indices[depth - 1],
+        value_val,
+        span,
+    );
+
+    // 4. Per-level write-back: walk from the deepest temp up to the head, writing each mutated
+    //    temp into its parent at the matching index. After each write-back, release the temp's
+    //    redundant share (SLICE-2 `:787-803` discipline) ONLY when the parent's set op RETAINS
+    //    the value (`HashSet` incref's before storing). `ArraySet` and `__rt_mixed_array_set`
+    //    CONSUME the value (transfer ownership without incref), so the temp no longer holds a
+    //    live reference — releasing it would double-free the sole remaining share in the parent
+    //    slot. In the consumed case, only clear the slot.
+    for i in (1..(depth - 1)).rev() {
+        let child = ctx.load_local(&temp_names[i], Some(span));
+        let parent = ctx.load_local(&temp_names[i - 1], Some(span));
+        let parent_ir = parent.ir_type;
+        write_nested_element_in_place(
+            ctx,
+            parent,
+            temp_types[i - 1].clone(),
+            indices[i],
+            child,
+            span,
+        );
+        let consumed = !matches!(parent_ir, IrType::Heap(IrHeapKind::Hash));
+        release_owned_hidden_temp(ctx, &temp_names[i], temp_types[i].clone(), consumed, span);
+    }
+    // Final write-back: temp[0] → head at index[0].
+    let child0 = ctx.load_local(&temp_names[0], Some(span));
+    let head_ir = head.ir_type;
+    write_nested_element_in_place(ctx, head, head_ty.clone(), indices[0], child0, span);
+    let head_consumed = !matches!(head_ir, IrType::Heap(IrHeapKind::Hash));
+    release_owned_hidden_temp(ctx, &temp_names[0], temp_types[0].clone(), head_consumed, span);
+
+    // 5. Tail: store the (possibly relocated) head back into the ref cell ONLY when a relocation
+    //    happened. In-place mutation leaves the cell pointer unchanged; a redundant
+    //    `__rt_ref_cell_store` would decref the still-aliased inner to zero and free it.
+    if needs_storeback {
+        ctx.store_mutated_local(name, head, head_ty, Some(span));
+    }
+}
+
+/// Reads one nested element into the owned hidden temp `temp_name`, returning whether a vivify
+/// branch was taken (an absent hash key auto-vivified to a fresh empty hash).
+///
+/// - `Heap(Hash)` container → `HashIsset` test; present → `HashGet`+retain stored into the temp;
+///   absent → `HashNew` vivify stored into the temp. Both branches branch to a common merge block
+///   (SLICE-2 `:733-779` pattern); the temp slot holds the element after merge.
+/// - `Heap(Array)` container → `ArrayGet` (integer key coerced) stored into the temp. Assumes the
+///   index is in bounds; the (a)-slice test set only writes through existing intermediates.
+/// - `Heap(Mixed)`/`Heap(Union)` container → `__rt_mixed_array_get` runtime helper, which boxes
+///   typed slots into a fresh owned Mixed cell (the write-back stores it back through the parent).
+fn read_nested_element_into_owned_temp(
+    ctx: &mut LoweringContext<'_, '_>,
+    container: LoweredValue,
+    key: LoweredValue,
+    temp_name: &str,
+    element_ty: PhpType,
+    span: Span,
+) -> bool {
+    match container.ir_type {
+        IrType::Heap(IrHeapKind::Hash) => {
+            // Mirror SLICE-2 `:733-779`: HashIsset, then present→HashGet+retain / absent→HashNew.
+            let exists = ctx.emit_value(
+                Op::HashIsset,
+                vec![container.value, key.value],
+                None,
+                PhpType::Bool,
+                Op::HashIsset.default_effects(),
+                Some(span),
+            );
+            let split_initialized = ctx.initialized_slots_snapshot();
+            let present_block = ctx.builder.create_named_block("nref.present", Vec::new());
+            let vivify_block = ctx.builder.create_named_block("nref.vivify", Vec::new());
+            let merge = ctx.builder.create_named_block("nref.merge", Vec::new());
+            ctx.builder.terminate(Terminator::CondBr {
+                cond: exists.value,
+                then_target: present_block,
+                then_args: Vec::new(),
+                else_target: vivify_block,
+                else_args: Vec::new(),
+            });
+            ctx.builder.position_at_end(present_block);
+            ctx.restore_initialized_slots(split_initialized.clone());
+            let existing = ctx.emit_value(
+                Op::HashGet,
+                vec![container.value, key.value],
+                None,
+                element_ty.clone(),
+                Op::HashGet.default_effects(),
+                Some(span),
+            );
+            store_value_into_temp(ctx, temp_name, element_ty.clone(), existing, span);
+            branch_to(ctx, merge);
+
+            ctx.builder.position_at_end(vivify_block);
+            ctx.restore_initialized_slots(split_initialized);
+            let vivified = ctx.emit_value(
+                Op::HashNew,
+                Vec::new(),
+                Some(Immediate::Capacity(0)),
+                element_ty.clone(),
+                Op::HashNew.default_effects(),
+                Some(span),
+            );
+            store_value_into_temp(ctx, temp_name, element_ty, vivified, span);
+            branch_to(ctx, merge);
+
+            ctx.builder.position_at_end(merge);
+            true
+        }
+        IrType::Heap(IrHeapKind::Array) => {
+            let key_int = coerce_to_int_at_span(ctx, key, Some(span));
+            let element = ctx.emit_value(
+                Op::ArrayGet,
+                vec![container.value, key_int.value],
+                None,
+                element_ty.clone(),
+                Op::ArrayGet.default_effects(),
+                Some(span),
+            );
+            store_value_into_temp(ctx, temp_name, element_ty, element, span);
+            false
+        }
+        IrType::Heap(IrHeapKind::Mixed) | IrType::Heap(IrHeapKind::Union) => {
+            let element = ctx.emit_value(
+                Op::RuntimeCall,
+                vec![container.value, key.value],
+                None,
+                PhpType::Mixed,
+                effects_lookup::runtime_effects(),
+                Some(span),
+            );
+            store_value_into_temp(ctx, temp_name, PhpType::Mixed, element, span);
+            false
+        }
+        _ => {
+            // Scalar or unsupported container — the checker loud-errors "Cannot use a scalar value
+            // as an array" for reference-bound scalar bases before lowering, so this is a defensive
+            // fallback. Produce a Mixed-typed runtime read so the codegen reports a loud unsupported
+            // receiver type rather than emitting a Hash/Array op against a non-container operand.
+            let element = ctx.emit_value(
+                Op::RuntimeCall,
+                vec![container.value, key.value],
+                None,
+                PhpType::Mixed,
+                effects_lookup::runtime_effects(),
+                Some(span),
+            );
+            store_value_into_temp(ctx, temp_name, PhpType::Mixed, element, span);
+            false
+        }
+    }
+}
+
+/// Writes `value` into `container` at `key` in place via the matching 3-operand set op:
+/// `Heap(Hash)` → `HashSet` (or `HashAppend` for a `[]` append — currently unused since the parser
+/// lowers `$x[$k][]` to a read+push+writeback sequence); `Heap(Array)` → `ArraySet` (integer key
+/// coerced); `Heap(Mixed)`/`Heap(Union)` → `__rt_mixed_array_set` (3-operand `RuntimeCall`). The
+/// set op's codegen releases the displaced prior element and updates the container SSA value's
+/// home with the possibly-relocated pointer.
+fn write_nested_element_in_place(
+    ctx: &mut LoweringContext<'_, '_>,
+    container: LoweredValue,
+    container_ty: PhpType,
+    key: LoweredValue,
+    value: LoweredValue,
+    span: Span,
+) {
+    match container.ir_type {
+        IrType::Heap(IrHeapKind::Hash) => {
+            ctx.emit_void(
+                Op::HashSet,
+                vec![container.value, key.value, value.value],
+                None,
+                Op::HashSet.default_effects(),
+                Some(span),
+            );
+            release_persisted_string_operand(ctx, key, span);
+            release_persisted_string_operand(ctx, value, span);
+        }
+        IrType::Heap(IrHeapKind::Array) => {
+            let key_int = coerce_to_int_at_span(ctx, key, Some(span));
+            let value_coerced = coerce_indexed_array_set_value(ctx, &container_ty, value, Some(span));
+            ctx.emit_void(
+                Op::ArraySet,
+                vec![container.value, key_int.value, value_coerced.value],
+                None,
+                Op::ArraySet.default_effects(),
+                Some(span),
+            );
+            release_persisted_string_operand(ctx, value_coerced, span);
+        }
+        IrType::Heap(IrHeapKind::Mixed) | IrType::Heap(IrHeapKind::Union) => {
+            ctx.emit_void(
+                Op::RuntimeCall,
+                vec![container.value, key.value, value.value],
+                None,
+                effects_lookup::runtime_effects(),
+                Some(span),
+            );
+            release_persisted_string_operand(ctx, key, span);
+            release_persisted_string_operand(ctx, value, span);
+        }
+        _ => {
+            // Defensive: the checker gates scalar-as-array for reference-bound bases. Fall back to
+            // the 2-operand runtime cell assign, which loud-errors at codegen for a scalar receiver.
+            ctx.emit_void(
+                Op::RuntimeCall,
+                vec![container.value, value.value],
+                None,
+                effects_lookup::runtime_effects(),
+                Some(span),
+            );
+            release_persisted_string_operand(ctx, value, span);
+        }
+    }
+}
+
+/// Releases an owned hidden temp's redundant share with the temp's actual type and clears the
+/// backing slot without an additional release (SLICE-2 `:787-803` discipline). After a `HashSet`
+/// write-back, the parent slot retains the value (HashSet incref's before storing), so the temp's
+/// share is the redundant one and must be decref'd through the matching runtime helper (not via
+/// `unset`, which would widen the slot toward `Void`/`Mixed` and decref through the wrong helper,
+/// leaking the heap object).
+///
+/// After an `ArraySet` or 3-operand `__rt_mixed_array_set` write-back, the value is CONSUMED
+/// (ownership transferred to the slot without incref), so the temp no longer holds a live
+/// reference — releasing it would decref the sole remaining share (the parent slot's) to zero and
+/// free it, creating a dangling pointer in the parent. In that case, only clear the slot.
+fn release_owned_hidden_temp(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    ty: PhpType,
+    consumed: bool,
+    span: Span,
+) {
+    if !consumed {
+        let slot = ctx.declare_local(name, ty);
+        ctx.release_stored_local_value(name, slot, Some(span));
+    }
+    ctx.clear_owned_hidden_temp(name, Some(span));
 }
 
 /// Lowers `$array[] = value`.

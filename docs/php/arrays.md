@@ -136,6 +136,29 @@ object, or scalar). A source that is itself an array element (`&$b[$j]`), a prop
 string-valued variable is a compile-time error, as is appending a reference into a static-property or
 instance-property array (`self::$a[] = &$var`, `$o->p[] = &$var`) — those forms are follow-up features.
 
+### Nested write through a reference-bound variable
+
+A **nested** lvalue write (two or more index levels) whose base is a reference-bound local
+writes through the shared cell so the mutation is observable via both the alias and the source
+array:
+
+```php
+<?php
+$arr = [[1, [2, 3]]];
+$x = &$arr[0];        // $x aliases $arr[0]
+$x[1][0] = 9;        // nested write through the alias
+echo $arr[0][1][0];  // 9 — the source array sees the mutation
+```
+
+This works for any depth (`$x[1][0][1] = 9`), nested append (`$x[1][] = 9`), nested string-key
+write (`$x["a"]["b"] = 9`), and nested write through a ref-promoted source (`$a[] = &$p;
+$p[1][0] = 9`). Writing into a scalar alias (`$x = 5; $x[0] = 9`) is a compile-time error
+("Cannot use a scalar value as an array").
+
+A whole-value reassign of the alias (`$x = [5, 6]`) or `unset($x)` breaks the alias as in PHP:
+the source array element is updated on reassign, and the alias is detached on unset.
+
+
 ## Array union
 
 `+` between arrays follows PHP union semantics: keys from the left operand win, and only keys that are missing from the left are copied from the right.

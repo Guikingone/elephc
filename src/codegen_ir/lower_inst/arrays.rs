@@ -1439,6 +1439,15 @@ fn source_load_local_slot(
     let Some(inst_ref) = ctx.function.instruction(inst) else {
         return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
     };
+    // Trace back to a `LoadLocal` or `LoadRefCell` for the auto-store-back. For a ref-cell
+    // slot, `store_value_to_local` delegates to `store_value_to_ref_cell_local`, which writes
+    // the new pointer word raw into `[cell+0]` (not into the slot itself), preserving the
+    // cell pointer storage. No prior-inner release happens here: the mutation helpers
+    // (`__rt_array_grow`, `__rt_array_ensure_unique`) already freed or detached the old
+    // storage when they relocated it, so the raw overwrite is the balanced write-back.
+    // This mirrors the hash-set path (`hashes.rs`) which also matches
+    // only `LoadLocal`; the ref-cell arm is specific to the indexed-array path because
+    // `__rt_array_set_mixed` can relocate the array on COW and the cell must see the new pointer.
     if matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
         if let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate {
             return Ok(Some(slot));

@@ -50,6 +50,17 @@ pub(super) fn check_array_assign(
             "String offset assignment is not supported",
         ));
     }
+    // A reference-bound local whose alias inner is a scalar (int/float/bool) cannot be indexed
+    // as an array: PHP fatals "Cannot use a scalar value as an array". The checker types such a
+    // local to the referenced element type, so a scalar type here means the alias cell holds a
+    // scalar at runtime. Reject loudly instead of silently miscompiling through the runtime
+    // Mixed-box writer (which would mutate a non-array payload).
+    if checker.active_ref_params.contains(array) && type_is_scalar_for_array_index(&arr_ty) {
+        return Err(CompileError::new(
+            span,
+            "Cannot use a scalar value as an array",
+        ));
+    }
     if let PhpType::Array(elem_ty) = &arr_ty {
         let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
         // A foreach loop key is a boxed `Mixed` cell at runtime (`Op::IterCurrentKey`)
@@ -179,6 +190,15 @@ pub(super) fn check_nested_array_assign(
     let arr_ty = checker.infer_type_with_assignment_effects(array, env)?;
     checker.infer_type_with_assignment_effects(index, env)?;
     checker.infer_type_with_assignment_effects(value, env)?;
+    // A NESTED write whose base is a reference-bound LOCAL (`$x = &$arr[0]` then `$x[1][0] = 9`)
+    // routes through the explicit per-level write-back lowering (`lower_nested_ref_bound_local_assign`),
+    // which materializes each intermediate as the correct container and writes the mutated inner back
+    // through the kind-6 ref cell. The alias inner is runtime-tagged (Mixed box / hash / array), so
+    // accept any container-shaped target here and let the lowering handle the per-level dispatch.
+    // A scalar intermediate (the union-typed `Heap(Hash) got I64` scenario) is loud-errored below.
+    let root_is_ref_bound = nested_array_access_root_variable(target)
+        .map(|name| checker.active_ref_params.contains(name))
+        .unwrap_or(false);
     match arr_ty {
         PhpType::Mixed => Ok(()),
         PhpType::Str => Err(CompileError::new(
@@ -190,11 +210,38 @@ pub(super) fn check_nested_array_assign(
         {
             Ok(())
         }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Union(_) if root_is_ref_bound => {
+            Ok(())
+        }
         _ => Err(CompileError::new(
             span,
             "Nested array assignment requires a Mixed or ArrayAccess target",
         )),
     }
+}
+
+/// Walks an `ArrayAccess` chain (`$x[1][0]`, `$x["a"]["b"]`) to its root `ExprKind::Variable`,
+/// returning the variable name. Returns `None` if the chain bottoms out in a non-variable
+/// expression (property/static-property/dynamic-property base).
+fn nested_array_access_root_variable(target: &Expr) -> Option<&str> {
+    let mut node = target;
+    loop {
+        match &node.kind {
+            ExprKind::ArrayAccess { array, index: _ } => node = array,
+            ExprKind::Variable(name) => return Some(name),
+            _ => return None,
+        }
+    }
+}
+
+/// Returns true when `ty` is a scalar PHP value that cannot be indexed as an array (int, float,
+/// bool, null). Used to loud-error "Cannot use a scalar value as an array" for reference-bound
+/// locals whose alias inner is scalar, instead of silently miscompiling.
+fn type_is_scalar_for_array_index(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::Never
+    )
 }
 
 /// Validates and updates the type environment for `$array[] = $value` (push) assignments.
