@@ -1763,8 +1763,14 @@ fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr
         Op::RuntimeCall
     };
     if op == Op::ArrayPush {
+        // A ref-bound local's push must NOT re-store the pushed pointer through
+        // `Op::StoreRefCell`: the `ArrayPush` backend already writes the possibly-reallocated
+        // array pointer back through the kind-6 cell (`source_load_local_slot` matches the
+        // `LoadRefCell` source), so an extra `StoreRefCell` would release the cell's prior
+        // inner — the very pointer it is about to store — freeing the live array. Keep the
+        // type fact (`updated_ty`) but skip the runtime storeback (`needs_storeback = false`).
         let (array_value, updated_ty, needs_storeback) = if ref_bound_mixed_indexed_array_write(ctx, array, value) {
-            (array_value, Some(ctx.local_type(array)), true)
+            (array_value, Some(ctx.local_type(array)), false)
         } else {
             prepare_indexed_array_local_write(ctx, array_value, value, span)
         };

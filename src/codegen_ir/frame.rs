@@ -189,6 +189,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     store_argv_local_if_present(ctx);
     zero_initialize_main_cleanup_locals(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
+    zero_initialize_local_ref_ensure_main_slots(ctx);
 }
 
 /// Emits a callable function prologue using an already-resolved entry label.
@@ -241,6 +242,7 @@ pub(super) fn emit_function_prologue_with_label(
     }
     zero_initialize_function_cleanup_locals(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
+    zero_initialize_local_ref_ensure_main_slots(ctx);
     Ok(())
 }
 
@@ -302,6 +304,7 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     emit_callee_saved_saves(ctx);
     zero_initialize_main_cleanup_locals(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
+    zero_initialize_local_ref_ensure_main_slots(ctx);
 }
 
 /// Emits the `--web` top-level handler epilogue and returns to the bridge.
@@ -423,6 +426,38 @@ fn main_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, P
 /// Zero-initializes hidden ref-cell owner slots before any fallback promotion can run.
 fn zero_initialize_ref_cell_owner_locals(ctx: &mut FunctionContext<'_>) {
     for (_, _, _, offset) in ref_cell_owner_locals(ctx) {
+        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    }
+}
+
+/// Zero-initializes the main (visible) slots of locals that receive an `Op::LocalRefEnsure` before
+/// any explicit `StoreLocal`. `__rt_ref_cell_ensure` reads the main slot word and dispatches on its
+/// heap kind (`cbz` → alloc owning null; heap-range + kind 6 → reuse; kind 5 → Mixed-box probe;
+/// otherwise alloc owning the value). An uninitialized (garbage) slot word can fall inside the
+/// managed heap window and be dereferenced as a heap object → SIGSEGV. The hoist in
+/// `lower_body_into_function` emits `LocalRefEnsure` at scope entry for locals promoted via
+/// `=&$local` mid-body; without a prior store, their main slots hold garbage at runtime. Promoted
+/// ref-cell main slots are excluded from `zero_initialize_main_cleanup_locals` (they are released
+/// via the ref-cell owner cleanup), so this fills the gap: zero the `first` slot of every
+/// `LocalRefEnsure` at frame setup. For the original mid-body `=&$local` path the prior
+/// `StoreLocal` overwrites the zero, so this is observationally identical there.
+fn zero_initialize_local_ref_ensure_main_slots(ctx: &mut FunctionContext<'_>) {
+    let mut slots: Vec<(LocalSlotId, usize)> = Vec::new();
+    for inst in &ctx.function.instructions {
+        if inst.op != Op::LocalRefEnsure {
+            continue;
+        }
+        let Some(Immediate::LocalSlotPair { first, .. }) = inst.immediate else {
+            continue;
+        };
+        let Ok(offset) = ctx.local_offset(first) else {
+            continue;
+        };
+        slots.push((first, offset));
+    }
+    slots.sort_by_key(|(_, offset)| *offset);
+    slots.dedup_by_key(|(slot, _)| *slot);
+    for (_, offset) in slots {
         abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
     }
 }

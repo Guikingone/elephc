@@ -1782,3 +1782,90 @@ fn test_plain_local_nested_write_unchanged() {
         out
     );
 }
+
+// -- foreach loops over a hoisted ref-ensure local (ADDENDUM 2 regression tests) --
+//
+// These guard the heap-exhaustion regression chain: the stale GC reachable mark bit in the
+// kind word made `__rt_ref_cell_ensure` wrap a live cell in a second cell (fixed by masking
+// the kind byte), the redundant `StoreRefCell` after `ArrayPush` released the pointer it was
+// about to store (fixed in `lower_array_push`), and the hoisted-store type-fact/acquire gaps
+// corrupted Mixed-element reads (fixed in `store_local`). All outputs cross-checked with
+// `php -r`.
+
+/// Foreach append through the hoisted ref-ensure local: `$p = [$i]` (Mixed foreach value) plus
+/// `$p[] = $i + 1` each iteration, read back through `$p` after the loop. PHP prints `234`
+/// (count 2, elements 3 and 4 from the last iteration). Guards the hoisted-store type-fact
+/// propagation (`array<mixed>` cell inner read back with Mixed unboxing) and the
+/// acquire-before-adopt on the raw ref-cell store. Reading through `$loops['k'][0]` instead
+/// would hit the pre-existing nested-read gap (unsupported `count` on a chained ref element),
+/// so the probe reads through `$p` — the same shared cell.
+#[test]
+fn test_foreach_ref_local_array_append_loop() {
+    let out = compile_and_run(
+        "<?php
+        foreach (range(1, 3) as $i) { $p = [$i]; $loops = []; $loops['k'][] = &$p; $p[] = $i + 1; }
+        echo count($p) . $p[0] . $p[1];",
+    );
+    assert_eq!(out, "234");
+}
+
+/// The canonical PhpDumper-loop reduction in its ORIGINAL foreach form (the unrolled variant
+/// is `test_ref_bound_local_nested_write_loop_unrolled`): nested write before the `=&` in
+/// source order, hash-ref-append each iteration, final write through `$p` observed through
+/// both aliased elements. Cross-checked with `php -r` (prints `99`).
+#[test]
+fn test_foreach_ref_local_nested_write_loop() {
+    let out = compile_and_run(
+        "<?php
+        $loops = [];
+        $p = [0, []];
+        foreach (['a', 'b'] as $k) { $p[1][$k] = 1; $loops[$k][] = &$p; }
+        $p[1]['a'] = 9;
+        echo $loops['a'][0][1]['a'] . $loops['b'][0][1]['a'];",
+    );
+    assert_eq!(out, "99");
+}
+
+/// Variant B2 of the heap-exhaustion repro: append through the aliased cell then
+/// `unset($loops)` (keep `$p`) every iteration. The `gc_collect` after the unset left the GC
+/// reachable mark bit set on the surviving cell, so iteration 2's `__rt_ref_cell_ensure`
+/// double-wrapped it and `__rt_array_grow` read the cell as an array header — exhausting the
+/// heap at N=2 before the kind-byte mask fix. Runs on the DEFAULT heap; completing all 5
+/// iterations and printing `ok` is the regression guard.
+#[test]
+fn test_foreach_ref_local_append_then_unset_loops() {
+    let out = compile_and_run(
+        "<?php
+        foreach (range(0, 4) as $i) { $p = [$i]; $loops = []; $loops['k'][] = &$p; $p[] = $i + 1; unset($loops); }
+        echo 'ok';",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Variant B3 of the heap-exhaustion repro: append through the aliased cell then `unset($p)`
+/// (keep `$loops`) every iteration. `unset` re-establishes a fresh cell, and the `gc_collect`
+/// after it marked that cell; the next iteration's ensure then double-wrapped it exactly like
+/// B2. Runs on the DEFAULT heap; printing `ok` after 5 iterations is the regression guard.
+#[test]
+fn test_foreach_ref_local_append_then_unset_p() {
+    let out = compile_and_run(
+        "<?php
+        foreach (range(0, 4) as $i) { $p = [$i]; $loops = []; $loops['k'][] = &$p; $p[] = $i + 1; unset($p); }
+        echo 'ok';",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Variant E, the clean baseline: append through the aliased cell with NO unsets (so no
+/// `gc_collect` and no stale mark bit) for 50 iterations on the DEFAULT heap. Guards against
+/// a future per-iteration leak on the pure append path (`__rt_ref_cell_store` prior-inner
+/// release + the `ArrayPush` cell write-back staying balanced).
+#[test]
+fn test_foreach_ref_local_append_no_unset() {
+    let out = compile_and_run(
+        "<?php
+        foreach (range(0, 49) as $i) { $p = [$i]; $loops = []; $loops['k'][] = &$p; $p[] = $i + 1; }
+        echo 'ok';",
+    );
+    assert_eq!(out, "ok");
+}

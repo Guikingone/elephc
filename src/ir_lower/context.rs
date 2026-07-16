@@ -146,6 +146,14 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// parameter locals and promoted-non-adopted foreach fallback cells are NOT in this
     /// set, so they keep the existing SSA release + raw store semantics.
     adopted_ref_bound_locals: HashSet<String>,
+    /// Locals that received a hoisted entry-block `Op::LocalRefEnsure` from
+    /// `collect_ref_ensure_locals` (a local `=&`-promoted mid-body via `$a[]=&$local` etc.). The
+    /// hoist makes them ref-bound for the WHOLE function, so earlier-in-source-order stores
+    /// lower as `StoreRefCell` (deref the slot as a cell). `unset` on these must re-establish a
+    /// fresh empty cell (not `unmark`) to keep the back-edge `StoreRefCell` safe; non-hoisted
+    /// ref-bound locals (`AdoptRefCell`/`PromoteLocalRefCell`/by-ref params) keep the original
+    /// `unset` behavior (unmark + release).
+    hoisted_ref_ensure_locals: HashSet<String>,
     ref_cell_owner_locals: HashMap<String, LocalSlotId>,
     /// foreach loop-key locals whose source is a concretely-indexed array
     /// (`Array` of a non-Mixed element type), so the runtime key is always an
@@ -222,6 +230,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             fiber_start_sigs: HashMap::new(),
             ref_bound_locals: HashSet::new(),
             adopted_ref_bound_locals: HashSet::new(),
+            hoisted_ref_ensure_locals: HashSet::new(),
             ref_cell_owner_locals: HashMap::new(),
             foreach_int_key_locals: HashSet::new(),
             return_type,
@@ -524,6 +533,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Clears the by-reference alias marker for a local after `unset()`.
+    ///
+    /// Currently unused: the ref-bound `unset_local` path keeps the local ref-bound to preserve
+    /// the entry-hoist invariant. Retained for the `LoweringContext` API in case a future path
+    /// needs to drop the flag without re-establishing a cell.
+    #[allow(dead_code)]
     pub(crate) fn unmark_ref_bound_local(&mut self, name: &str) {
         self.ref_bound_locals.remove(name);
     }
@@ -539,6 +553,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// prior-inner release, tag-gated on the actual `[cell+8]`).
     pub(crate) fn is_adopted_ref_bound_local(&self, name: &str) -> bool {
         self.adopted_ref_bound_locals.contains(name)
+    }
+
+    /// Records that a local received a hoisted entry-block `Op::LocalRefEnsure` (see
+    /// `collect_ref_ensure_locals`). `unset_local` gates its re-establish behavior on this.
+    pub(crate) fn mark_hoisted_ref_ensure_local(&mut self, name: &str) {
+        self.hoisted_ref_ensure_locals.insert(name.to_string());
+    }
+
+    /// Returns true when `name` was hoisted to a ref-cell ensure at scope entry.
+    pub(crate) fn is_hoisted_ref_ensure_local(&self, name: &str) -> bool {
+        self.hoisted_ref_ensure_locals.contains(name)
     }
 
     /// Declares a fresh hidden temporary slot and returns its synthetic name.
@@ -805,7 +830,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // is the cell's acquire, and `release_if_owned` still drops the source's original ref.
         let previous_repr = previous_type.codegen_repr();
         let source_repr = php_type.codegen_repr();
+        // Hoisted `LocalRefEnsure` locals never take the boxing path: their cell alias type is
+        // the SOURCE type (`cell_ty = php_type` below), so `store_value_to_ref_cell_as` stores
+        // the raw pointer without a boxing retain. Skipping the acquire for them would leave
+        // the cell's adopted inner un-retained and the post-store `release_if_owned` would free
+        // it while the cell still points at it.
         let skip_acquire_for_mixed_boxing = adopted_owner
+            && !self.is_hoisted_ref_ensure_local(name)
             && source_repr.is_refcounted()
             && source_repr != previous_repr;
         let value = if (uses_global || previous_kind == LocalKind::PhpLocal)
@@ -832,11 +863,33 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         };
         if is_ref_bound {
             let value = self.box_typed_array_for_mixed_ref_cell(value, &previous_type, span);
-            self.store_ref_cell_slot(slot, value, previous_type.clone(), span);
+            // A hoisted `LocalRefEnsure` local (loop-ref-bound `$p` from `$a[]=&$p`) has its
+            // frame storage pre-widened to `Mixed` by `prewiden_loop_carried_locals`, but the
+            // cell's inner value is the ACTUAL source value (e.g. `array<int>`), not a Mixed box.
+            // Passing the pre-widen `previous_type` (Mixed) as the cell alias type makes
+            // `store_value_to_ref_cell_as` box the array as a Mixed cell (tag 7), and the
+            // subsequent in-place mutation storeback (`$p[] = ...`) then loads the Mixed box
+            // pointer from `[cell+0]` and treats it as an array → out-of-bounds write → heap
+            // corruption. For hoisted ref-ensure locals, pass the source `php_type` so the
+            // cell stores the raw value with its native tag (4 = Array), matching the storeback
+            // path in `store_value_to_ref_cell_local`.
+            let cell_ty = if self.is_hoisted_ref_ensure_local(name) {
+                php_type.clone()
+            } else {
+                previous_type.clone()
+            };
+            self.store_ref_cell_slot(slot, value, cell_ty, span);
         } else {
             self.store_slot_with_op(slot, value, op, span);
         }
-        if !is_ref_bound {
+        // A hoisted `LocalRefEnsure` local stores the RAW source value into its cell with the
+        // source's native tag (`cell_ty = php_type` above), so later loads must type the cell
+        // inner as the stored value. Without this fact update a `$p = [$mixed]` store leaves
+        // the read type at the stale entry type (e.g. `array<int>`), and `load_ref_cell` +
+        // `array_get` then reads boxed Mixed element pointers as raw integers. Non-hoisted
+        // ref-bound locals (by-ref params, aliases) keep the alias-typed view: their cell
+        // payload is boxed against `previous_type`, so the fact must NOT change.
+        if !is_ref_bound || self.is_hoisted_ref_ensure_local(name) {
             self.set_local_type(name, php_type);
         }
         if release_source_after_store && !transfer_callable_source_to_store {
@@ -960,14 +1013,57 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Emits `unset($local)`, breaking by-reference aliases without writing through them.
+    ///
+    /// For a ref-bound local the hoist invariant ("ref-bound for the whole function; the main
+    /// slot always holds a valid kind-6 cell when accessed") must be preserved: `unset` breaks
+    /// the alias (decrefs this owner's share of the current cell) and re-establishes a FRESH
+    /// empty cell owning the sentinel word with a SCALAR inner tag (Int = 0, < 4) so the next
+    /// `__rt_ref_cell_store` release-prior-inner is a no-op (scalar inner has no heap storage).
+    /// The local STAYS ref-bound + adopted; the single-pass lowering already emitted earlier
+    /// `$p = ...` stores as `StoreRefCell`, which dereferences the slot as a cell — a null or
+    /// sentinel slot word on a back-edge would crash without the fresh cell.
     pub(crate) fn unset_local(&mut self, name: &str, null: LoweredValue, span: Option<Span>) -> LoweredValue {
         if !self.is_ref_bound_local(name) {
             return self.store_local(name, null, PhpType::Void, span);
         }
+        // Non-hoisted ref-bound locals (`AdoptRefCell`/`PromoteLocalRefCell`/by-ref params) keep
+        // the original behavior: release the owner share, sentinel the main slot, unmark, drop
+        // adoption. The back-edge store before the `=&` site is a plain `StoreLocal` for these,
+        // so the sentinel is never dereferenced.
+        if !self.is_hoisted_ref_ensure_local(name) {
+            self.clear_static_callable_local(name);
+            self.clear_fiber_start_sig(name);
+            let slot = self.declare_local(name, PhpType::Void);
+            self.release_ref_cell_owner(name, span);
+            self.emit_void(
+                Op::UnsetLocal,
+                Vec::new(),
+                Some(Immediate::LocalSlot(slot)),
+                Op::UnsetLocal.default_effects(),
+                span,
+            );
+            self.unmark_ref_bound_local(name);
+            self.adopted_ref_bound_locals.remove(name);
+            self.set_local_type(name, PhpType::Void);
+            self.initialized_slots.insert(slot);
+            return null;
+        }
+        // Hoisted `LocalRefEnsure` local: preserve the hoist invariant ("ref-bound for the whole
+        // function; the main slot always holds a valid kind-6 cell when accessed"). `unset` breaks
+        // the alias and re-establishes a FRESH empty cell owning the sentinel word with a SCALAR
+        // inner tag (Int = 0, < 4) so the next `__rt_ref_cell_store` release-prior-inner is a
+        // no-op. The local STAYS ref-bound + adopted; the single-pass lowering already emitted
+        // earlier `$p = ...` stores as `StoreRefCell`, which derefs the slot as a cell — a
+        // sentinel slot word on a back-edge would crash without the fresh cell.
         self.clear_static_callable_local(name);
         self.clear_fiber_start_sig(name);
-        let slot = self.declare_local(name, PhpType::Void);
+        // 1. Decref this local's owning share of the current cell. Other aliases (e.g. an array
+        //    element bound `&$p`) keep the old cell alive at rc > 0; if none, it is freed.
         self.release_ref_cell_owner(name, span);
+        // 2. UnsetLocal writes the sentinel into the MAIN slot, which breaks `__rt_ref_cell_ensure`'s
+        //    reuse of the old cell (the sentinel is non-null and outside the managed heap, so the
+        //    heap-range guard promotes it instead of reusing the old kind-6 cell).
+        let slot = self.declare_local(name, PhpType::Void);
         self.emit_void(
             Op::UnsetLocal,
             Vec::new(),
@@ -975,10 +1071,25 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::UnsetLocal.default_effects(),
             span,
         );
-        self.unmark_ref_bound_local(name);
-        self.adopted_ref_bound_locals.remove(name);
-        self.set_local_type(name, PhpType::Void);
-        self.initialized_slots.insert(slot);
+        // 3. Set the local's LOGICAL type to a SCALAR (Int, tag 0 < 4) BEFORE the re-ensure, WITHOUT
+        //    widening the frame slot storage type. The fresh cell from step 4 owns the sentinel word
+        //    with this inner tag; a heap tag (>= 4) would make the next `__rt_ref_cell_store`
+        //    release-prior-inner decref the sentinel as a heap object → SIGSEGV. With a scalar tag
+        //    the release is a no-op and the sentinel is overwritten by the next store, never
+        //    observed. The slot storage type must stay as the pre-unset type (e.g. `array<int>`) so
+        //    in-place mutation storeback (`store_value_to_ref_cell_local`) does NOT box the value as
+        //    Mixed — `set_local_type` would widen `array<int>` + `Int` → `Mixed`, corrupting the
+        //    cell's inner representation. Only update `local_types` (the logical type used for the
+        //    `LocalRefEnsure` instruction's tag operand), not the EIR local metadata storage type.
+        self.local_types.insert(name.to_string(), PhpType::Int);
+        // 4. Re-emit `LocalRefEnsure`: `__rt_ref_cell_ensure` reads the sentinel → heap-range guard
+        //    → `__rt_ref_cell_alloc(sentinel, Int tag)` → a fresh kind-6 cell owning the sentinel
+        //    with the scalar tag, stored into BOTH the main and owner slots (overwriting the old
+        //    dangling owner ptr). Idempotent with the entry hoist.
+        self.ensure_local_ref_cell(name, span);
+        // 5/6. Do NOT `unmark_ref_bound_local` / `adopted_ref_bound_locals.remove`: the local
+        //    stays ref-bound + adopted for the rest of the function (consistent with the entry
+        //    hoist). `ensure_local_ref_cell` re-inserts/re-marks (no-ops).
         null
     }
 
@@ -1071,6 +1182,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// produces a kind-6 refcounted cell compatible with tag-11 array elements.
     pub(crate) fn ensure_local_ref_cell(&mut self, name: &str, span: Option<Span>) -> LoweredValue {
         let value_ty = self.local_type(name);
+        let was_ref_bound = self.is_ref_bound_local(name);
         self.clear_static_callable_local(name);
         self.clear_fiber_start_sig(name);
         let main_slot = self.declare_local(name, value_ty.clone());
@@ -1089,7 +1201,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             span,
         );
         self.mark_ref_bound_local(name);
-        self.set_local_type(name, value_ty);
+        // On the FIRST ensure (hoist), set the slot storage type (which may widen from the
+        // checker-inferred type to accommodate the cell). On RE-ensures (already ref-bound —
+        // the original `=&$local` site after the hoist, or the `unset_local` re-ensure), preserve
+        // the existing slot storage type: the re-ensure only re-establishes the cell and must NOT
+        // widen the frame slot (e.g. `array<int>` widened to `Mixed` via a scalar interim type
+        // from `unset_local` step 3), which would make in-place mutation storeback
+        // (`store_value_to_ref_cell_local`) box the value as Mixed and corrupt the cell's inner
+        // tag/value representation.
+        if !was_ref_bound {
+            self.set_local_type(name, value_ty);
+        }
         self.initialized_slots.insert(main_slot);
         self.initialized_slots.insert(owner_slot);
         self.adopted_ref_bound_locals.insert(name.to_string());

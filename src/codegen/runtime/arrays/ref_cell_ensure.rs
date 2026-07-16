@@ -14,8 +14,11 @@
 //!   iterations reuse the same cell. The compile-time ref-bound flag cannot express the loop back-edge,
 //!   so the reuse-vs-promote decision is made here by inspecting the slot word's heap kind.
 //! - Reuse check mirrors `__rt_incref`'s heap-range guard (`_heap_buf` .. `_heap_buf + _heap_off`) so a
-//!   scalar/static word is never dereferenced; then it reads the uniform kind word at `[ptr-8]` and
-//!   tests kind 6. A match returns the cell unchanged; otherwise it tail-calls `__rt_ref_cell_alloc`,
+//!   scalar/static word is never dereferenced; then it reads the uniform kind word at `[ptr-8]`,
+//!   masks it to the low byte (bit 16 is the cycle collector's transient reachable mark, left set on
+//!   surviving blocks after `__rt_gc_collect_cycles`; an unmasked compare would wrap a live cell in a
+//!   second cell and corrupt every later load/store through the slot), and tests kind 6. A match
+//!   returns the cell unchanged; otherwise it tail-calls `__rt_ref_cell_alloc`,
 //!   which MOVES the value word into a fresh cell (the caller then stores the cell back into the slot,
 //!   transferring ownership from the slot to the cell without an incref/decref).
 
@@ -56,6 +59,7 @@ pub fn emit_ref_cell_ensure(emitter: &mut Emitter) {
 
     // -- reuse an existing kind-6 cell in place --
     emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap kind word
+    emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte kind: bit 16 is the transient GC reachable mark
     emitter.instruction(&format!("cmp x9, #{}", REF_CELL_KIND));                // is the slot word already a kind-6 reference cell?
     emitter.instruction("b.ne __rt_ref_cell_ensure_probe");                     // a different heap kind → probe for Mixed-box tag override
     emitter.instruction("ret");                                                 // reuse: x0 already holds the shared reference cell
@@ -96,6 +100,7 @@ fn emit_ref_cell_ensure_linux_x86_64(emitter: &mut Emitter) {
 
     // -- reuse an existing kind-6 cell in place --
     emitter.instruction("mov r10d, DWORD PTR [rdi - 8]");                       // load the low 32 bits of the uniform kind word
+    emitter.instruction("and r10d, 0xff");                                      // isolate the low-byte kind: bit 16 is the transient GC reachable mark
     emitter.instruction(&format!("cmp r10d, {}", REF_CELL_KIND));               // is the slot word already a kind-6 reference cell?
     emitter.instruction("jne __rt_ref_cell_ensure_probe");                      // a different heap kind → probe for Mixed-box tag override
     emitter.instruction("mov rax, rdi");                                        // reuse: return the shared reference cell unchanged

@@ -170,6 +170,139 @@ fn collect_global_var_names_in_body(
     }
 }
 
+/// Collects the names of plain locals that are promoted to a kind-6 reference cell mid-body via a
+/// `=&$local` binding into a local array element (`$a[] =&$v`, `$a[$k][] =&$v`, `$a[$k] =&$v`).
+///
+/// `Op::LocalRefEnsure` is otherwise emitted lazily at the `=&$local` site
+/// (`ensure_local_ref_cell`), which marks the local ref-bound only for the REST of source order. In
+/// a loop body where statements earlier in source order (re-run on back-edges) read the slot as a
+/// plain value, the mid-function promotion leaves the slot holding a cell ptr that a plain
+/// `LoadLocal`+`ArrayGet` misinterprets → SEGFAULT. Hoisting the ensure to scope entry (see
+/// `lower_body_into_function`) makes the local ref-bound for its ENTIRE lifetime so every access,
+/// including across back-edges and before the original `=&` in source order, routes through
+/// `LoadRefCell`/`StoreRefCell`.
+///
+/// Only the two `LocalRefEnsure` target shapes are collected: the source is a plain `Variable`
+/// (the only shape that reaches `ensure_local_ref_cell`), and the target is a local-array-element
+/// lvalue — `$a[] =&$v` / `$a[$k][] =&$v` (`append == true`, container is `Variable` or
+/// `ArrayAccess { array: Variable, .. }`), or `$a[$k] =&$v` (`append == false`, target is
+/// `ArrayAccess { array: Variable, .. }`). Other ref forms (`BindRefCellPtr`/`AdoptRefCell`/
+/// `PromoteLocalRefCell`/`AliasLocalRefCell`, plain `$x =&$y`, foreach-by-ref, closures) are
+/// intentionally NOT collected.
+fn collect_ref_ensure_locals(body: &[Stmt]) -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    collect_ref_ensure_locals_in_body(body, &mut names);
+    names
+}
+
+/// Recursive body scan backing `collect_ref_ensure_locals`, mirroring the
+/// `collect_global_var_names_in_body` walk over compound statements.
+fn collect_ref_ensure_locals_in_body(
+    statements: &[Stmt],
+    names: &mut std::collections::HashSet<String>,
+) {
+    for stmt in statements {
+        match &stmt.kind {
+            crate::parser::ast::StmtKind::RefAssignToTarget {
+                target,
+                source,
+                append,
+            } => {
+                let source_name = match &source.kind {
+                    ExprKind::Variable(name) => name,
+                    _ => continue,
+                };
+                let target_is_local_array = match &target.kind {
+                    ExprKind::Variable(_) => *append,
+                    ExprKind::ArrayAccess { array, .. } => {
+                        matches!(&array.kind, ExprKind::Variable(_))
+                    }
+                    _ => false,
+                };
+                if target_is_local_array {
+                    names.insert(source_name.clone());
+                }
+            }
+            crate::parser::ast::StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                collect_ref_ensure_locals_in_body(then_body, names);
+                for (_, body) in elseif_clauses {
+                    collect_ref_ensure_locals_in_body(body, names);
+                }
+                if let Some(body) = else_body {
+                    collect_ref_ensure_locals_in_body(body, names);
+                }
+            }
+            crate::parser::ast::StmtKind::IfDef {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_ref_ensure_locals_in_body(then_body, names);
+                if let Some(body) = else_body {
+                    collect_ref_ensure_locals_in_body(body, names);
+                }
+            }
+            crate::parser::ast::StmtKind::While { body, .. }
+            | crate::parser::ast::StmtKind::DoWhile { body, .. }
+            | crate::parser::ast::StmtKind::Foreach { body, .. }
+            | crate::parser::ast::StmtKind::FunctionDecl { body, .. }
+            | crate::parser::ast::StmtKind::NamespaceBlock { body, .. }
+            | crate::parser::ast::StmtKind::IncludeOnceGuard { body, .. }
+            | crate::parser::ast::StmtKind::Synthetic(body) => {
+                collect_ref_ensure_locals_in_body(body, names);
+            }
+            crate::parser::ast::StmtKind::For {
+                init,
+                update,
+                body,
+                ..
+            } => {
+                if let Some(init) = init {
+                    collect_ref_ensure_locals_in_body(std::slice::from_ref(init.as_ref()), names);
+                }
+                if let Some(update) = update {
+                    collect_ref_ensure_locals_in_body(std::slice::from_ref(update.as_ref()), names);
+                }
+                collect_ref_ensure_locals_in_body(body, names);
+            }
+            crate::parser::ast::StmtKind::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    collect_ref_ensure_locals_in_body(body, names);
+                }
+                if let Some(body) = default {
+                    collect_ref_ensure_locals_in_body(body, names);
+                }
+            }
+            crate::parser::ast::StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                collect_ref_ensure_locals_in_body(try_body, names);
+                for catch in catches {
+                    collect_ref_ensure_locals_in_body(&catch.body, names);
+                }
+                if let Some(body) = finally_body {
+                    collect_ref_ensure_locals_in_body(body, names);
+                }
+            }
+            crate::parser::ast::StmtKind::ClassDecl { methods, .. }
+            | crate::parser::ast::StmtKind::InterfaceDecl { methods, .. }
+            | crate::parser::ast::StmtKind::TraitDecl { methods, .. } => {
+                for method in methods {
+                    collect_ref_ensure_locals_in_body(&method.body, names);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Lowers one user-defined function declaration into an EIR function.
 pub(crate) fn lower_user_function(
     name: &str,
@@ -610,6 +743,27 @@ fn lower_body_into_function(
         }
     }
     seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
+    // Hoist `Op::LocalRefEnsure` to scope entry for every plain local that is `=&`-promoted into a
+    // local array element ANYWHERE in this body. Without the hoist, the local's main slot is
+    // replaced with a cell ptr only at the `=&$local` site (mid-body), so statements earlier in
+    // source order — re-run on loop back-edges — treat the slot as a plain value and `array_get`
+    // on a cell ptr SEGFAULTs. Ensuring at entry makes the local ref-bound for its ENTIRE
+    // lifetime; every access (across back-edges, before the original `=&`) routes through
+    // `LoadRefCell`/`StoreRefCell`. `__rt_ref_cell_ensure` is idempotent on an existing kind-6
+    // cell, so the original `=&$local` sites remain correct (reuse). Skip by-ref params (already
+    // ref-bound at `:609`) and `global`-declared locals (separate storage path).
+    let ref_ensure_locals = collect_ref_ensure_locals(body);
+    let global_names = collect_global_var_names(body);
+    for name in &ref_ensure_locals {
+        if ctx.is_ref_bound_local(name) {
+            continue;
+        }
+        if global_names.contains(name) {
+            continue;
+        }
+        ctx.ensure_local_ref_cell(name, None);
+        ctx.mark_hoisted_ref_ensure_local(name);
+    }
     for stmt in body {
         crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
     }
