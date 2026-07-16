@@ -197,11 +197,20 @@ fn collect_ref_ensure_locals(body: &[Stmt]) -> std::collections::HashSet<String>
 
 /// Recursive body scan backing `collect_ref_ensure_locals`, mirroring the
 /// `collect_global_var_names_in_body` walk over compound statements.
+///
+/// Besides the statement-level `RefAssignToTarget` shapes, every statement's expressions
+/// are scanned too (`collect_ref_ensure_locals_in_stmt_exprs`): the by-reference
+/// array-literal desugar hides its `RefAssignToTarget` statements inside an
+/// `ExprKind::Assignment` prelude, and those binds need the same entry-block hoist —
+/// otherwise a bind inside an untaken ternary/`??` branch leaves later `LoadRefCell`
+/// reads pointing at a raw (non-cell) slot value → SIGSEGV, and a bind inside a loop
+/// body recreates the cell every iteration.
 fn collect_ref_ensure_locals_in_body(
     statements: &[Stmt],
     names: &mut std::collections::HashSet<String>,
 ) {
     for stmt in statements {
+        collect_ref_ensure_locals_in_stmt_exprs(stmt, names);
         match &stmt.kind {
             crate::parser::ast::StmtKind::RefAssignToTarget {
                 target,
@@ -300,6 +309,287 @@ fn collect_ref_ensure_locals_in_body(
             }
             _ => {}
         }
+    }
+}
+
+/// Scans one statement's expression positions for hidden `RefAssignToTarget` preludes.
+///
+/// Complements the statement-level walk in `collect_ref_ensure_locals_in_body`: the
+/// by-reference array-literal desugar carries its ref-bind statements inside
+/// `ExprKind::Assignment` preludes, which can sit in any expression position (an assign
+/// RHS, an echo/return operand, a condition, a call argument, ...). Compound-statement
+/// BODIES are not revisited here — the caller already recurses into them.
+fn collect_ref_ensure_locals_in_stmt_exprs(
+    stmt: &Stmt,
+    names: &mut std::collections::HashSet<String>,
+) {
+    use crate::parser::ast::StmtKind;
+    match &stmt.kind {
+        StmtKind::Echo(expr)
+        | StmtKind::Throw(expr)
+        | StmtKind::ExprStmt(expr)
+        | StmtKind::Return(Some(expr)) => collect_ref_ensure_locals_in_expr(expr, names),
+        StmtKind::Assign { value, .. }
+        | StmtKind::TypedAssign { value, .. }
+        | StmtKind::ConstDecl { value, .. }
+        | StmtKind::StaticVar { init: value, .. }
+        | StmtKind::ListUnpack { value, .. }
+        | StmtKind::ArrayPush { value, .. }
+        | StmtKind::StaticPropertyAssign { value, .. }
+        | StmtKind::StaticPropertyArrayPush { value, .. } => {
+            collect_ref_ensure_locals_in_expr(value, names);
+        }
+        StmtKind::RefAssign { source, .. } => collect_ref_ensure_locals_in_expr(source, names),
+        StmtKind::RefAssignToTarget { target, source, .. } => {
+            collect_ref_ensure_locals_in_expr(target, names);
+            collect_ref_ensure_locals_in_expr(source, names);
+        }
+        StmtKind::ArrayAssign { index, value, .. }
+        | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
+            collect_ref_ensure_locals_in_expr(index, names);
+            collect_ref_ensure_locals_in_expr(value, names);
+        }
+        StmtKind::NestedArrayAssign { target, value } => {
+            collect_ref_ensure_locals_in_expr(target, names);
+            collect_ref_ensure_locals_in_expr(value, names);
+        }
+        StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyArrayPush { object, value, .. } => {
+            collect_ref_ensure_locals_in_expr(object, names);
+            collect_ref_ensure_locals_in_expr(value, names);
+        }
+        StmtKind::PropertyArrayAssign {
+            object,
+            index,
+            value,
+            ..
+        } => {
+            collect_ref_ensure_locals_in_expr(object, names);
+            collect_ref_ensure_locals_in_expr(index, names);
+            collect_ref_ensure_locals_in_expr(value, names);
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            collect_ref_ensure_locals_in_expr(property, names);
+            if let Some(index) = index {
+                collect_ref_ensure_locals_in_expr(index, names);
+            }
+            collect_ref_ensure_locals_in_expr(value, names);
+        }
+        StmtKind::If {
+            condition,
+            elseif_clauses,
+            ..
+        } => {
+            collect_ref_ensure_locals_in_expr(condition, names);
+            for (condition, _) in elseif_clauses {
+                collect_ref_ensure_locals_in_expr(condition, names);
+            }
+        }
+        StmtKind::While { condition, .. } | StmtKind::DoWhile { condition, .. } => {
+            collect_ref_ensure_locals_in_expr(condition, names);
+        }
+        StmtKind::For { condition, .. } => {
+            if let Some(condition) = condition {
+                collect_ref_ensure_locals_in_expr(condition, names);
+            }
+        }
+        StmtKind::Switch { subject, cases, .. } => {
+            collect_ref_ensure_locals_in_expr(subject, names);
+            for (patterns, _) in cases {
+                for pattern in patterns {
+                    collect_ref_ensure_locals_in_expr(pattern, names);
+                }
+            }
+        }
+        StmtKind::Foreach { array, .. } => collect_ref_ensure_locals_in_expr(array, names),
+        StmtKind::Include { path, .. } => collect_ref_ensure_locals_in_expr(path, names),
+        _ => {}
+    }
+}
+
+/// Recursive expression scan finding `RefAssignToTarget` statements hidden in
+/// `ExprKind::Assignment` preludes (the by-reference array-literal desugar), so their
+/// plain-local sources join the entry-block `LocalRefEnsure` hoist set.
+///
+/// Closure bodies are intentionally NOT scanned: a closure lowers through its own
+/// `lower_body_into_function` call, which runs this collection for its own scope.
+fn collect_ref_ensure_locals_in_expr(
+    expr: &crate::parser::ast::Expr,
+    names: &mut std::collections::HashSet<String>,
+) {
+    match &expr.kind {
+        // The desugared prelude is a statement list: reuse the statement walk (which finds
+        // the `RefAssignToTarget` shapes AND recurses back here for nested expressions).
+        ExprKind::Assignment {
+            target,
+            value,
+            result_target,
+            prelude,
+            ..
+        } => {
+            collect_ref_ensure_locals_in_body(prelude, names);
+            collect_ref_ensure_locals_in_expr(target, names);
+            collect_ref_ensure_locals_in_expr(value, names);
+            if let Some(result_target) = result_target {
+                collect_ref_ensure_locals_in_expr(result_target, names);
+            }
+        }
+        ExprKind::IncludeValue { path, .. } => collect_ref_ensure_locals_in_expr(path, names),
+        ExprKind::BinaryOp { left, right, .. } => {
+            collect_ref_ensure_locals_in_expr(left, names);
+            collect_ref_ensure_locals_in_expr(right, names);
+        }
+        ExprKind::InstanceOf { value, target } => {
+            collect_ref_ensure_locals_in_expr(value, names);
+            if let crate::parser::ast::InstanceOfTarget::Expr(target) = target {
+                collect_ref_ensure_locals_in_expr(target, names);
+            }
+        }
+        ExprKind::Negate(inner)
+        | ExprKind::Not(inner)
+        | ExprKind::BitNot(inner)
+        | ExprKind::Throw(inner)
+        | ExprKind::ErrorSuppress(inner)
+        | ExprKind::Print(inner)
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::PtrCast { expr: inner, .. }
+        | ExprKind::NamedArg { value: inner, .. }
+        | ExprKind::Spread(inner)
+        | ExprKind::Clone(inner)
+        | ExprKind::YieldFrom(inner) => collect_ref_ensure_locals_in_expr(inner, names),
+        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
+            collect_ref_ensure_locals_in_expr(value, names);
+            collect_ref_ensure_locals_in_expr(default, names);
+        }
+        ExprKind::Pipe { value, callable } => {
+            collect_ref_ensure_locals_in_expr(value, names);
+            collect_ref_ensure_locals_in_expr(callable, names);
+        }
+        ExprKind::ListUnpack { value, .. } => collect_ref_ensure_locals_in_expr(value, names),
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            collect_ref_ensure_locals_in_expr(condition, names);
+            collect_ref_ensure_locals_in_expr(then_expr, names);
+            collect_ref_ensure_locals_in_expr(else_expr, names);
+        }
+        ExprKind::FunctionCall { args, .. }
+        | ExprKind::StaticMethodCall { args, .. }
+        | ExprKind::ClosureCall { args, .. }
+        | ExprKind::NewObject { args, .. }
+        | ExprKind::NewScopedObject { args, .. } => {
+            for arg in args {
+                collect_ref_ensure_locals_in_expr(arg, names);
+            }
+        }
+        ExprKind::NewDynamic { name_expr, args } => {
+            collect_ref_ensure_locals_in_expr(name_expr, names);
+            for arg in args {
+                collect_ref_ensure_locals_in_expr(arg, names);
+            }
+        }
+        ExprKind::NewDynamicObject {
+            class_name, args, ..
+        } => {
+            collect_ref_ensure_locals_in_expr(class_name, names);
+            for arg in args {
+                collect_ref_ensure_locals_in_expr(arg, names);
+            }
+        }
+        ExprKind::ExprCall { callee, args } => {
+            collect_ref_ensure_locals_in_expr(callee, names);
+            for arg in args {
+                collect_ref_ensure_locals_in_expr(arg, names);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. }
+        | ExprKind::NullsafeMethodCall { object, args, .. } => {
+            collect_ref_ensure_locals_in_expr(object, names);
+            for arg in args {
+                collect_ref_ensure_locals_in_expr(arg, names);
+            }
+        }
+        ExprKind::ArrayLiteral(items) => {
+            for item in items {
+                collect_ref_ensure_locals_in_expr(item, names);
+            }
+        }
+        ExprKind::ArrayLiteralAssoc(items) => {
+            for (key, value) in items {
+                collect_ref_ensure_locals_in_expr(key, names);
+                collect_ref_ensure_locals_in_expr(value, names);
+            }
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            collect_ref_ensure_locals_in_expr(array, names);
+            collect_ref_ensure_locals_in_expr(index, names);
+        }
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => {
+            collect_ref_ensure_locals_in_expr(subject, names);
+            for (patterns, arm_value) in arms {
+                for pattern in patterns {
+                    collect_ref_ensure_locals_in_expr(pattern, names);
+                }
+                collect_ref_ensure_locals_in_expr(arm_value, names);
+            }
+            if let Some(default) = default {
+                collect_ref_ensure_locals_in_expr(default, names);
+            }
+        }
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::NullsafePropertyAccess { object, .. } => {
+            collect_ref_ensure_locals_in_expr(object, names);
+        }
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            collect_ref_ensure_locals_in_expr(object, names);
+            collect_ref_ensure_locals_in_expr(property, names);
+        }
+        ExprKind::DynamicClassConstantAccess { object, .. } => {
+            collect_ref_ensure_locals_in_expr(object, names);
+        }
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            collect_ref_ensure_locals_in_expr(property, names);
+        }
+        ExprKind::BufferNew { len, .. } => collect_ref_ensure_locals_in_expr(len, names),
+        ExprKind::Yield { key, value } => {
+            if let Some(key) = key {
+                collect_ref_ensure_locals_in_expr(key, names);
+            }
+            if let Some(value) = value {
+                collect_ref_ensure_locals_in_expr(value, names);
+            }
+        }
+        // Leaves without sub-expressions, and closures (scanned by their own lowering).
+        ExprKind::Closure { .. }
+        | ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Variable(_)
+        | ExprKind::Null
+        | ExprKind::PreIncrement(_)
+        | ExprKind::PostIncrement(_)
+        | ExprKind::PreDecrement(_)
+        | ExprKind::PostDecrement(_)
+        | ExprKind::ConstRef(_)
+        | ExprKind::StaticPropertyAccess { .. }
+        | ExprKind::FirstClassCallable(_)
+        | ExprKind::This
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. }
+        | ExprKind::MagicConstant(_) => {}
     }
 }
 
@@ -760,6 +1050,22 @@ fn lower_body_into_function(
         }
         if global_names.contains(name) {
             continue;
+        }
+        // A Mixed-repr PARAMETER arrives as a CALLER-owned boxed cell: the caller
+        // materializes the box (e.g. `__rt_mixed_from_value` for a literal argument) and
+        // releases its own share after the call returns. `__rt_ref_cell_ensure` adopts the
+        // slot word by MOVE (no incref), so without a dedicated share the cell and the
+        // caller both consume the box's single refcount → bad-refcount fatal / UAF reads
+        // through the entry. Acquire the incoming box first so the cell's adoption is
+        // backed by its own +1. Non-Mixed params need no share: scalars are copied by
+        // value and array/hash arguments transfer their handle to the callee (verified
+        // heap-clean), so an extra acquire there would leak instead.
+        let is_mixed_repr_param = params
+            .iter()
+            .any(|(param, ty)| param == name && ty.codegen_repr() == PhpType::Mixed);
+        if is_mixed_repr_param {
+            let incoming = ctx.load_local(name, None);
+            crate::ir_lower::ownership::acquire_if_refcounted(&mut ctx, incoming, None);
         }
         ctx.ensure_local_ref_cell(name, None);
         ctx.mark_hoisted_ref_ensure_local(name);

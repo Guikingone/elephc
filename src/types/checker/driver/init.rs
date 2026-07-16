@@ -148,6 +148,7 @@ impl Checker {
             required_libraries: Vec::new(),
             top_level_env: HashMap::new(),
             active_ref_params: HashSet::new(),
+            declared_byref_param_locals: HashSet::new(),
             active_globals: HashSet::new(),
             active_statics: HashSet::new(),
             foreach_key_locals: HashSet::new(),

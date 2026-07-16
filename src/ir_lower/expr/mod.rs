@@ -600,6 +600,13 @@ fn should_use_mixed_numeric_binop(lhs: IrType, rhs: IrType) -> bool {
 }
 
 /// Emits a mixed-numeric EIR opcode with the operation immediate required by the backend.
+///
+/// The runtime helper always boxes a FRESH Mixed result (`__rt_mixed_from_value`), never
+/// aliasing an operand pointer, so owned operand temporaries (a `hash_get` Mixed element
+/// box, a chained binop's intermediate result) are released here after the operation
+/// consumed them — each such operand is otherwise leaked once per evaluation (e.g. every
+/// loop iteration of `$acc = $acc + $arr['s']`). Borrowed values (plain local loads) are
+/// left untouched by the owning-temporary classification.
 fn lower_mixed_numeric_binary(
     ctx: &mut LoweringContext<'_, '_>,
     lhs: LoweredValue,
@@ -607,14 +614,20 @@ fn lower_mixed_numeric_binary(
     op: MixedNumericOp,
     expr: &Expr,
 ) -> LoweredValue {
-    ctx.emit_value(
+    let result = ctx.emit_value(
         Op::MixedNumericBinop,
         vec![lhs.value, rhs.value],
         Some(Immediate::MixedNumericOp(op)),
         PhpType::Mixed,
         Op::MixedNumericBinop.default_effects(),
         Some(expr.span),
-    )
+    );
+    for operand in [lhs, rhs] {
+        if ctx.value_needs_release_after_retaining_store(operand) {
+            crate::ir_lower::ownership::release_if_owned(ctx, operand, Some(expr.span));
+        }
+    }
+    result
 }
 
 /// Maps AST arithmetic to the mixed-numeric runtime helper set currently available.
@@ -1408,7 +1421,14 @@ fn wider_type_for_merge(left: &PhpType, right: &PhpType) -> PhpType {
     }
     match (&left, &right) {
         (PhpType::Array(_), PhpType::Array(_)) => right.clone(),
-        (PhpType::AssocArray { .. }, PhpType::AssocArray { .. }) => right.clone(),
+        // Differing hash types merge to the fully Mixed-valued hash: hash entries carry
+        // per-bucket value tags at runtime, so a Mixed-typed read dispatches correctly for
+        // both branches, while picking one side's narrower value type would misread the
+        // other branch's buckets (e.g. a tag-11 reference bucket read as a raw int).
+        (PhpType::AssocArray { .. }, PhpType::AssocArray { .. }) => PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
         (
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
@@ -6797,6 +6817,16 @@ fn array_literal_element_type_for_ir(
             property,
         )
         .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
+        // An assignment expression yields its RHS (or compound result-target) value —
+        // e.g. `[($u = $t)]`, including the parse-time by-reference array-literal desugar
+        // whose value is a hidden hash temp — so type the element by the yielded
+        // expression instead of the syntactic Mixed default, keeping the element-type
+        // stamp aligned with the value actually stored.
+        ExprKind::Assignment {
+            value,
+            result_target,
+            ..
+        } => array_literal_element_type_for_ir(ctx, result_target.as_deref().unwrap_or(value)),
         _ => ir_array_storage_type(infer_expr_type_syntactic(item)),
     }
 }
@@ -6914,6 +6944,19 @@ fn assoc_array_literal_value_type_for_ir(
             property,
         )
         .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
+        // An assignment expression yields its RHS (or compound result-target) value —
+        // e.g. `['x' => ($u = $t)]`, including the parse-time by-reference array-literal
+        // desugar whose value is a hidden hash temp — so type the entry by the yielded
+        // expression instead of the syntactic Mixed default, keeping the hash value-type
+        // stamp aligned with the value actually stored.
+        ExprKind::Assignment {
+            value: assigned,
+            result_target,
+            ..
+        } => assoc_array_literal_value_type_for_ir(
+            ctx,
+            result_target.as_deref().unwrap_or(assigned),
+        ),
         _ => ir_array_storage_type(infer_expr_type_syntactic(value)),
     }
 }
@@ -7019,7 +7062,12 @@ fn lower_match(
     expr: &Expr,
 ) -> LoweredValue {
     let subject = lower_expr(ctx, subject);
-    let result_type = fallback_expr_type(expr);
+    // An arm whose VALUE type is the de-packed ref-hash (a by-reference array-literal
+    // desugar, or an inner ternary/`??`/`match` merge that resolved to it) must keep the
+    // merged materialized arm type: the syntactic fallback (`Mixed`) would box the hash
+    // and route later key reads away from the tag-11-aware hash-get path. All other
+    // match expressions keep the pre-existing syntactic fallback type unchanged.
+    let result_type = match_merge_result_type(ctx, arms, default, expr);
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let merge = ctx.builder.create_named_block("match.merge", Vec::new());
 
@@ -10342,6 +10390,14 @@ fn branch_merge_result_type(
     if php_type_allows_null(&branch_ty) {
         return branch_ty;
     }
+    // A branch that materializes the de-packed ref-hash VALUE type — directly from a
+    // by-reference array-literal desugar or through an inner ternary/`??`/`match` merge
+    // that already resolved to it — must keep the materialized branch merge type.
+    // Widening against the syntactic fallback (`Mixed` for those shapes) would erase the
+    // hash type and box the branch values, breaking tag-11-aware element reads.
+    if is_depacked_ref_hash_merge_type(&then_ty) || is_depacked_ref_hash_merge_type(&else_ty) {
+        return branch_ty;
+    }
     let fallback_ty = fallback_expr_type(expr).codegen_repr();
     wider_type_for_merge(&fallback_ty, &branch_ty.codegen_repr())
 }
@@ -10394,13 +10450,139 @@ fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, expr: &Expr) 
             let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
             wider_type_for_merge(&value_ty, &default_ty)
         }
+        // A nested `??` operand types COMPOSITIONALLY: consult the value types its own
+        // merge will produce (mirroring the coalesce lowering) instead of the syntactic
+        // fallback, so an inner merge that resolved to the de-packed ref-hash type keeps
+        // propagating through enclosing merges (`$a ?? $b ?? ['s' => &$v]`) rather than
+        // collapsing to `Mixed` and boxing the hash on one path.
+        ExprKind::NullCoalesce { value, default } => {
+            null_coalesce_merge_type_estimate(ctx, value, default)
+        }
+        // A nested `match` operand reuses the match merge typing for the same reason.
+        ExprKind::Match { arms, default, .. } => {
+            match_merge_result_type(ctx, arms, default.as_deref(), expr)
+        }
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
             .unwrap_or_else(|| fallback_expr_type(expr)),
         ExprKind::PropertyAccess { object, property } => {
             property_access_expr_type_for_ir(ctx, object, property)
                 .unwrap_or_else(|| fallback_expr_type(expr))
         }
+        // The parse-time by-reference array-literal desugar yields a de-packed hash temp;
+        // typing the branch `Mixed` (the syntactic fallback for assignments) would box the
+        // hash into a Mixed cell whose key reads bypass the tag-11-aware hash-get path.
+        ExprKind::Assignment { .. } => ref_literal_desugar_yield_type(expr)
+            .unwrap_or_else(|| fallback_expr_type(expr)),
         _ => fallback_expr_type(expr),
+    }
+}
+
+/// Returns the hash type yielded by the by-reference array-literal desugar, if `expr` is one.
+///
+/// The parser desugars `['k' => &$v, ...]` into `ExprKind::Assignment { value: $tmp, prelude }`
+/// where the prelude reference-binds elements INTO `$tmp` via `StmtKind::RefAssignToTarget`
+/// (`$tmp[k] = &$src` / `$tmp[] = &$src`). That binding de-packs the fresh `[]` into hash
+/// storage, so the assignment's yield is always `array<mixed, mixed>`. Any other assignment
+/// expression returns `None` and keeps its existing fallback typing.
+fn ref_literal_desugar_yield_type(expr: &Expr) -> Option<PhpType> {
+    let ExprKind::Assignment { value, prelude, .. } = &expr.kind else {
+        return None;
+    };
+    let ExprKind::Variable(_) = &value.kind else {
+        return None;
+    };
+    let ref_binds_into_local = prelude.iter().any(|stmt| {
+        let crate::parser::ast::StmtKind::RefAssignToTarget { target, .. } = &stmt.kind else {
+            return false;
+        };
+        match &target.kind {
+            ExprKind::Variable(_) => true,
+            ExprKind::ArrayAccess { array, .. } => {
+                matches!(&array.kind, ExprKind::Variable(_))
+            }
+            _ => false,
+        }
+    });
+    ref_binds_into_local.then(|| PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    })
+}
+
+/// Returns true when a merge operand's VALUE type is the fully Mixed-valued hash produced
+/// by the by-reference array-literal desugar (or by a previous merge of that shape).
+///
+/// This is the compositional marker for conditional-value merge typing: once any arm or
+/// operand carries this type — whether directly from `ref_literal_desugar_yield_type` or
+/// from an inner ternary/`??`/`match` merge that already resolved to it — every enclosing
+/// merge must keep propagating the materialized hash type instead of widening against a
+/// syntactic `Mixed` fallback, which would box the hash and route element reads away from
+/// the tag-11-aware hash-get path.
+fn is_depacked_ref_hash_merge_type(php_type: &PhpType) -> bool {
+    match php_type.codegen_repr() {
+        PhpType::AssocArray { key, value } => {
+            matches!(*key, PhpType::Mixed) && matches!(*value, PhpType::Mixed)
+        }
+        _ => false,
+    }
+}
+
+/// Estimates the merge type a `??` expression will materialize, mirroring the coalesce
+/// lowering's own result typing so enclosing merges can consume it compositionally.
+///
+/// The array-element form (`$a[$k] ?? $d`) mirrors `lower_array_access_null_coalesce`:
+/// the element type is kept only when it equals the default's type, `Mixed` otherwise.
+/// Every other form mirrors `null_coalesce_result_type`: the null-stripped value type
+/// widened against the default's materialized type via `wider_type_for_merge`.
+fn null_coalesce_merge_type_estimate(
+    ctx: &LoweringContext<'_, '_>,
+    value: &Expr,
+    default: &Expr,
+) -> PhpType {
+    let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
+    if let ExprKind::ArrayAccess { array, .. } = &value.kind {
+        let elem_ty = match materialized_expr_type_for_merge(ctx, array).codegen_repr() {
+            PhpType::Array(elem) => *elem,
+            PhpType::AssocArray { value, .. } => *value,
+            _ => PhpType::Mixed,
+        };
+        return if elem_ty.codegen_repr() == default_ty {
+            elem_ty.codegen_repr()
+        } else {
+            PhpType::Mixed
+        };
+    }
+    let value_ty =
+        strip_void_from_union(materialized_expr_type_for_merge(ctx, value)).codegen_repr();
+    wider_type_for_merge(&value_ty, &default_ty)
+}
+
+/// Chooses the merge temp type for a `match` expression from its arm VALUE types.
+///
+/// When any arm (or the default) materializes the de-packed ref-hash type — directly from
+/// a by-reference array-literal desugar or through an inner ternary/`??`/`match` merge —
+/// the arm types are merged with `wider_type_for_merge` so the hash survives unboxed (a
+/// `Mixed` temp would box it and break tag-11-aware element reads). All other match
+/// expressions keep the pre-existing syntactic fallback type unchanged.
+fn match_merge_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    arms: &[(Vec<Expr>, Expr)],
+    default: Option<&Expr>,
+    expr: &Expr,
+) -> PhpType {
+    let arm_types: Vec<PhpType> = arms
+        .iter()
+        .map(|(_, result)| result)
+        .chain(default)
+        .map(|result| materialized_expr_type_for_merge(ctx, result))
+        .collect();
+    if arm_types.iter().any(is_depacked_ref_hash_merge_type) {
+        arm_types
+            .into_iter()
+            .reduce(|left, right| wider_type_for_merge(&left, &right))
+            .unwrap_or_else(|| fallback_expr_type(expr))
+    } else {
+        fallback_expr_type(expr)
     }
 }
 

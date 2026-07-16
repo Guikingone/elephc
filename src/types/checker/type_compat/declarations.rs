@@ -284,6 +284,7 @@ impl Checker {
         F: FnOnce(&mut Self) -> Result<T, CompileError>,
     {
         let saved_ref_params = self.active_ref_params.clone();
+        let saved_declared_byref = self.declared_byref_param_locals.clone();
         let saved_globals = self.active_globals.clone();
         let saved_statics = self.active_statics.clone();
         let saved_foreach_keys = self.foreach_key_locals.clone();
@@ -293,6 +294,9 @@ impl Checker {
         let saved_in_callable_body = self.in_callable_body;
 
         self.active_ref_params = ref_param_names.into_iter().collect();
+        // The declared set mirrors the seed exactly; `=&`-bind sites extend only
+        // `active_ref_params`, so this stays the "raw reference-address slots" set.
+        self.declared_byref_param_locals = self.active_ref_params.clone();
         self.active_globals.clear();
         self.active_statics.clear();
         self.foreach_key_locals.clear();
@@ -304,6 +308,7 @@ impl Checker {
         let result = f(self);
 
         self.active_ref_params = saved_ref_params;
+        self.declared_byref_param_locals = saved_declared_byref;
         self.active_globals = saved_globals;
         self.active_statics = saved_statics;
         self.foreach_key_locals = saved_foreach_keys;

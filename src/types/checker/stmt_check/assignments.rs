@@ -56,6 +56,13 @@ impl Checker {
             StmtKind::Assign { name, value } => {
                 locals::check_assign(self, name, value, stmt.span, env)
             }
+            // The by-reference array-literal desugar emits `unset($tmp[key]);` duplicate-key
+            // guards into an `ExprKind::Assignment` prelude, which is checked through this
+            // dispatcher; route expression statements to ordinary expression inference.
+            StmtKind::ExprStmt(expr) => {
+                self.infer_type_with_assignment_effects(expr, env)?;
+                Ok(())
+            }
             StmtKind::RefAssign { target, source } => {
                 locals::check_ref_assign(self, target, source, stmt.span, env)
             }

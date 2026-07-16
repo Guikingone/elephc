@@ -69,6 +69,16 @@ pub(super) fn lower_release(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             abi::emit_decref_if_refcounted(ctx.emitter, &ty);
         }
         PhpType::Buffer(_) => {}
+        // A statically Array-typed slot can hold HASH storage at runtime: a later
+        // `$t[$k] = &$v` / string-keyed write de-packs the fresh `[]` in place, and loads
+        // keep the stale packed flow type (`local_load_types_share_storage` pairs the
+        // representations). `__rt_decref_array` would packed-free that hash — leaking its
+        // buckets and reference-cell shares — so releases dispatch on the runtime heap
+        // kind instead (`__rt_decref_any` routes kind 2 → array free, kind 3 → deep hash
+        // free).
+        PhpType::Array(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+        }
         other if other.is_refcounted() => {
             abi::emit_decref_if_refcounted(ctx.emitter, &other);
         }

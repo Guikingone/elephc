@@ -413,11 +413,21 @@ fn lower_ref_assign_array_element(
 }
 
 /// Returns the referenced element's PHP type for a hash/array container (defaulting to `Mixed`).
+///
+/// An EMPTY container (`Never`/`Void` element type, e.g. a fresh `$t = []` de-packed by the
+/// first `$t[$k] = &$v`) widens to `Mixed`: a reference-bound element is always read back
+/// through the Mixed tag-dispatch path, and stamping the promoted hash's value type `Void`
+/// would make every later element read an unsupported `hash_get` of `Void`.
 fn reference_element_type(container: &PhpType) -> PhpType {
-    match container.codegen_repr() {
+    let element_ty = match container.codegen_repr() {
         PhpType::AssocArray { value, .. } => (*value).clone(),
         PhpType::Array(element) => (*element).clone(),
         _ => PhpType::Mixed,
+    };
+    if is_empty_indexed_array_element(&element_ty) {
+        PhpType::Mixed
+    } else {
+        element_ty
     }
 }
 
@@ -2802,11 +2812,63 @@ fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option<&Expr>, sp
     } else {
         emit_null_value(ctx, Some(span))
     };
+    let value = reload_returned_assignment_local(ctx, value_expr, value, span);
     let value = coerce_to_return_type(ctx, value, Some(span));
     let value = acquire_borrowed_return_value(ctx, value, span);
     let value = acquire_returned_this(ctx, value_expr, value, span);
     let value = persist_scratch_return_string(ctx, value, span);
     terminate_return(ctx, Some(value.value));
+}
+
+/// Rebalances `return $x = <expr>;` (including the by-reference array-literal desugar,
+/// whose yield is `$hidden_yield = $hidden_temp`) by re-loading the just-stored local.
+///
+/// The plain-local store path acquires the stored value once and hands that same acquire
+/// back as the assignment's yield, so a direct `return` of the yield claims a reference
+/// the target's slot already owns: the epilogue cleanup of the slot then consumes the
+/// caller's share and the caller reads freed memory (silent use-after-free). Returning a
+/// fresh `LoadLocal` of the target instead routes the shape through the existing
+/// returned-slot ownership transfer (`direct_return_local_slots` excludes the slot from
+/// epilogue cleanup), so exactly one owner — the caller — remains. Applies only when the
+/// yield is the store's own `Acquire` on a refcounted plain-slot local; every other yield
+/// shape (owned temps, ref-bound or global targets, by-ref returns, `result_target`
+/// compound reads) keeps its current ownership behavior.
+fn reload_returned_assignment_local(
+    ctx: &mut LoweringContext<'_, '_>,
+    value_expr: Option<&Expr>,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if ctx.by_ref_return {
+        return value;
+    }
+    let Some(Expr {
+        kind:
+            ExprKind::Assignment {
+                target,
+                result_target: None,
+                ..
+            },
+        ..
+    }) = value_expr
+    else {
+        return value;
+    };
+    let ExprKind::Variable(name) = &target.kind else {
+        return value;
+    };
+    if !ctx.local_uses_plain_slot_storage(name) {
+        return value;
+    }
+    if !ctx.builder.value_php_type(value.value).codegen_repr().is_refcounted() {
+        return value;
+    }
+    // The double-claim only exists when the yield IS the store's acquire; any other
+    // defining op means the store transferred or skipped the retain and stays balanced.
+    if ctx.builder.value_defining_op(value.value) != Some(Op::Acquire) {
+        return value;
+    }
+    ctx.load_local(name, Some(span))
 }
 
 /// Acquires the receiver when a method does `return $this`.
@@ -4033,8 +4095,20 @@ fn coerce_to_return_type(
         return value;
     }
     match ctx.return_type {
-        IrType::I64 => coerce_to_int(ctx, value, span),
-        IrType::F64 => coerce_to_float(ctx, value, span),
+        // The numeric unboxes below produce detached scalars, so an owned refcounted
+        // source (e.g. a `hash_get` Mixed element box returned under a declared `: int`)
+        // must be released once the coercion consumed it — otherwise every call leaks
+        // the box (`coerce_to_string`'s Mixed arm already follows this convention).
+        IrType::I64 => {
+            let result = coerce_to_int(ctx, value, span);
+            release_coercion_source_if_owned(ctx, value, result, span);
+            result
+        }
+        IrType::F64 => {
+            let result = coerce_to_float(ctx, value, span);
+            release_coercion_source_if_owned(ctx, value, result, span);
+            result
+        }
         IrType::Str => coerce_to_string(ctx, value, span),
         IrType::TaggedScalar => coerce_to_tagged_scalar(ctx, value, span),
         IrType::Heap(_) if ctx.return_php_type.codegen_repr() == PhpType::Mixed => {
@@ -4136,6 +4210,18 @@ fn coerce_container_to_return_type(
             PhpType::AssocArray { value: return_value, .. },
         ) if source_value.codegen_repr() != PhpType::Mixed
             && return_value.codegen_repr() == PhpType::Mixed =>
+        {
+            Op::HashToMixed
+        }
+        // A hash returned under a declared `array` contract typed `Array(Mixed)` (e.g. a
+        // by-reference literal desugar on one return path joined with a differently-shaped
+        // return elsewhere) keeps its hash storage: `HashToMixed` widens the bucket values
+        // to boxed Mixed in place and the result is re-stamped with the return contract.
+        // Every Array-typed consumer is heap-kind-aware (kind-probing Mixed boxing,
+        // `__rt_decref_any` releases, `__rt_array_free_deep`'s kind-3 delegation), so the
+        // static Array view over runtime hash storage reads, counts, and frees correctly.
+        (PhpType::AssocArray { .. }, PhpType::Array(return_elem))
+            if return_elem.codegen_repr() == PhpType::Mixed =>
         {
             Op::HashToMixed
         }

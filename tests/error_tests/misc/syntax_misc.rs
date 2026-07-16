@@ -287,3 +287,93 @@ fn test_error_empty_array_index_in_read_position() {
 }
 
 // --- Static closures ---
+
+// --- By-reference array-literal entries ---
+
+/// Tests that a call result cannot be a by-reference array-literal entry source
+/// (`[&f()]`). PHP rejects this at the grammar level regardless of the callee's
+/// signature with "Can't use function return value in write context" (verified with
+/// `php -r`), and elephc's parser matches that message.
+#[test]
+fn test_error_ref_entry_call_source_rejected() {
+    expect_error(
+        "<?php function f(): int { return 1; } $a = [&f()];",
+        "Can't use function return value in write context",
+    );
+}
+
+/// Tests that a non-lvalue by-reference array-literal entry source (`[&1]`) is a loud
+/// parse error naming the accepted shapes rather than a silent value copy.
+#[test]
+fn test_error_ref_entry_non_lvalue_source_rejected() {
+    expect_error(
+        "<?php $a = [&1];",
+        "By-reference array entry source must be a variable, array element, or property",
+    );
+}
+
+/// Tests that a spread inside an array literal that also has a by-reference entry is a
+/// loud error: the ref-bearing literal desugars to per-entry statements, and no statement
+/// form preserves a spread's string keys, so silence would mis-lower.
+#[test]
+fn test_error_ref_entry_literal_with_spread_rejected() {
+    expect_error(
+        "<?php $xs = [1, 2]; $v = 3; $a = [...$xs, &$v];",
+        "Spread (...) inside an array literal with a by-reference entry is not supported",
+    );
+}
+
+/// Tests that a string-valued by-reference entry source keeps the committed SLICE-2 loud
+/// error (a kind-6 cell holds one value word, so a `{ptr,len}` string source would drop
+/// its length): the literal desugar must not turn it into a silent value copy.
+#[test]
+fn test_error_ref_entry_string_valued_source_stays_loud() {
+    expect_error(
+        "<?php $s = \"hi\"; $a = [\"k\" => &$s];",
+        "Reference to a string-valued source in a local array element is not yet supported",
+    );
+}
+
+/// Tests that a `global`-imported by-reference entry source is a loud error: a global
+/// lives in program-global storage, not a frame slot, and the kind-6 cell machinery only
+/// adopts frame locals today, so binding one would silently read stale data.
+#[test]
+fn test_error_ref_entry_global_imported_source_rejected() {
+    expect_error(
+        "<?php function go(): void { global $cfg; $t = [\"c\" => &$cfg]; }\n$cfg = [1];\ngo();",
+        "Reference to a superglobal or global-imported source in a local array element is not yet supported",
+    );
+}
+
+/// Tests that a parenthesized by-reference array-literal entry source (`[&($v)]`) is a
+/// loud parse error: PHP's grammar only accepts a variable-rooted token immediately after
+/// `&` in this position and parse-rejects the parenthesized form (verified with `php -l`).
+#[test]
+fn test_error_ref_entry_parenthesized_source_rejected() {
+    expect_error(
+        "<?php $v = 1; $a = [&($v)];",
+        "By-reference array entry source must be a variable, array element, or property",
+    );
+}
+
+/// Tests that a by-reference PARAMETER as a ref-entry source is a loud error: its slot holds
+/// the caller-provided raw reference address, not a kind-6 cell, so adopting it would alias
+/// pointer garbage through the entry instead of the caller's value.
+#[test]
+fn test_error_ref_entry_byref_param_source_rejected() {
+    expect_error(
+        "<?php function mk(int &$x): array { return ['s' => &$x]; }\n$v = 13;\n$q = mk($v);",
+        "Reference to a by-reference parameter or by-ref capture in a local array element is not yet supported",
+    );
+}
+
+/// Tests that a by-reference `use` CAPTURE as a ref-entry source is a loud error: like a
+/// by-ref parameter, the capture slot carries a raw reference address that the kind-6 cell
+/// machinery cannot adopt.
+#[test]
+fn test_error_ref_entry_byref_capture_source_rejected() {
+    expect_error(
+        "<?php $b = 5;\n$f = function () use (&$b): array { return ['s' => &$b]; };\n$q = $f();",
+        "Reference to a by-reference parameter or by-ref capture in a local array element is not yet supported",
+    );
+}

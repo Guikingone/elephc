@@ -6339,6 +6339,13 @@ fn coerce_loaded_local_to_result_type(
 }
 
 /// Returns true when two PHP types use the same local-frame representation.
+///
+/// The `(AssocArray, Array)` pairing covers a slot WIDENED to hash storage by a later
+/// de-packing store (e.g. `$t = []; $t[$k] = &$v;` in a function body): stores write the
+/// raw heap pointer without conversion, so a load whose flow type is still the packed
+/// array reads back exactly the packed pointer that was stored — both types are one
+/// heap-pointer word. The de-pack itself is an explicit `ArrayToHash` in the EIR stream,
+/// never part of the load.
 fn local_load_types_share_storage(source_ty: &PhpType, result_ty: &PhpType) -> bool {
     if source_ty == result_ty {
         return true;
@@ -6350,6 +6357,7 @@ fn local_load_types_share_storage(source_ty: &PhpType, result_ty: &PhpType) -> b
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never
         ) | (PhpType::Array(_), PhpType::Array(_))
             | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
+            | (PhpType::AssocArray { .. }, PhpType::Array(_))
     )
 }
 

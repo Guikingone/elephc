@@ -1243,6 +1243,12 @@ fn require_hash_get_result(value_ty: &PhpType, inst: &Instruction) -> Result<()>
 fn require_hash_to_mixed_result(result_ty: &PhpType, inst: &Instruction) -> Result<()> {
     match result_ty {
         PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed => Ok(()),
+        // A hash returned under a declared `array` contract is re-stamped `Array(Mixed)`
+        // by the return coercion (`coerce_container_to_return_type`): the runtime value
+        // keeps its hash storage, and every Array-typed consumer dispatches on the heap
+        // kind (kind-probing Mixed boxing, `__rt_decref_any`, `__rt_array_free_deep`'s
+        // kind-3 delegation), so the widened static view is safe.
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => Ok(()),
         other => Err(CodegenIrError::unsupported(format!(
             "{} result PHP type {:?}",
             inst.op.name(),

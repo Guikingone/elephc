@@ -158,6 +158,49 @@ $p[1][0] = 9`). Writing into a scalar alias (`$x = 5; $x[0] = 9`) is a compile-t
 A whole-value reassign of the alias (`$x = [5, 6]`) or `unset($x)` breaks the alias as in PHP:
 the source array element is updated on reassign, and the alias is detached on unset.
 
+### By-reference entries in array literals
+
+An array literal may bind entries **by reference** with `&`, both keyed (`['s' => &$v]`) and
+positional (`[&$v]`), in the short `[...]` and long `array(...)` forms alike. The entry aliases the
+source variable exactly like the statement forms above — a later write to the source is visible
+through the entry, copies of the array share the reference cell, and `unset($v)` keeps the entry
+alive:
+
+```php
+<?php
+$v = 5;
+$arr = ['a' => 1, 's' => &$v, 'b' => 2];
+$v = 9;
+echo $arr['s'], " ", $arr['a'], $arr['b']; // 9 12
+$b = $arr;                                  // the copy shares the reference cell
+$v = 42;
+echo $arr['s'], " ", $b['s'];              // 42 42
+```
+
+Entries are evaluated in source order, and positional entries follow PHP's next-integer-key rule
+even when mixed with explicit integer keys (`[&$a, 5 => &$b, &$c]` produces keys 0, 5, and 6).
+Nested literals (`['x' => ['y' => &$v]]`), return position (`return ['session' => &$v];`,
+including under a declared `: array` return type and through `??`/ternary chains),
+call-argument position (`takes(['s' => &$v])`), and conditional value positions
+(`$c ? ['s' => &$v] : ['s' => &$w]`, `$x ?? ['s' => &$v]`, `match` arms) work too.
+
+Duplicate keys follow PHP's replace semantics: a later entry with the same key **replaces** the
+bucket, so `['s' => &$v, 's' => 2]` discards the reference (leaving `$v` untouched) and stores
+`2`, while `['t' => 1, 't' => &$w]` leaves the reference binding in place.
+
+The reference source rules match the statement forms: the source must be a variable-rooted
+lvalue immediately after `&` (a parenthesized source like `[&($v)]` is a parse error, as in
+PHP), `&f()` is rejected with PHP's "Can't use function return value in write context", a
+string-valued source is a compile-time error, and a superglobal (`&$_GET`) or `global`-imported
+source is a loud "not yet supported" error. A spread (`...$xs`) inside a literal that also has a
+by-reference entry is not yet supported and reports a compile error.
+
+Function, method, and closure **parameters** work as reference sources (`function mk(int $x):
+array { return ['s' => &$x]; }` — the entry aliases the parameter with its incoming argument
+value), including `mixed`-typed, `array`-typed, and variadic (`...$rest`) parameters. A
+**by-reference parameter** (`int &$x`) or a by-reference closure capture (`use (&$b)`) as the
+reference source is a loud "not yet supported" compile error.
+
 
 ## Array union
 

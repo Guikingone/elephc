@@ -546,6 +546,29 @@ fn check_ref_assign_local_array_element(
             &format!("Undefined variable: ${src_name}"),
         ));
     }
+    // A superglobal (`&$_GET`) or `global`-imported source lives in GLOBAL storage, not a
+    // frame slot; the kind-6 cell machinery only adopts frame locals today, so binding one
+    // silently reads stale/empty data through the entry. Reject loudly (a follow-up slice)
+    // instead of miscompiling.
+    if crate::superglobals::is_superglobal(src_name) || checker.active_globals.contains(src_name)
+    {
+        return Err(CompileError::new(
+            span,
+            "Reference to a superglobal or global-imported source in a local array element is not yet supported",
+        ));
+    }
+    // A by-reference PARAMETER (or by-ref `use` capture) slot holds the caller-provided raw
+    // reference ADDRESS, not a kind-6 reference cell; `ensure_local_ref_cell` would wrap that
+    // address as the cell's inner VALUE, so every read through the entry yields pointer
+    // garbage. Reject loudly (a follow-up slice) instead of miscompiling. Locals that became
+    // ref-bound via an earlier `=&` bind are NOT in this set — re-binding them shares the
+    // one persistent cell and stays supported.
+    if checker.declared_byref_param_locals.contains(src_name) {
+        return Err(CompileError::new(
+            span,
+            "Reference to a by-reference parameter or by-ref capture in a local array element is not yet supported",
+        ));
+    }
     let element_ty = env.get(src_name).cloned().unwrap_or(PhpType::Mixed);
     // A kind-6 reference cell holds a single inner value word; a multi-word string source would drop
     // its length, so reject it loudly instead of miscompiling.

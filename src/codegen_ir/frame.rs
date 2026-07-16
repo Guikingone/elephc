@@ -441,7 +441,15 @@ fn zero_initialize_ref_cell_owner_locals(ctx: &mut FunctionContext<'_>) {
 /// via the ref-cell owner cleanup), so this fills the gap: zero the `first` slot of every
 /// `LocalRefEnsure` at frame setup. For the original mid-body `=&$local` path the prior
 /// `StoreLocal` overwrites the zero, so this is observationally identical there.
+///
+/// PARAMETER slots are excluded: they can never hold garbage here because the prologue's Pass-1
+/// spill (`emit_store_incoming_param`) has already written the incoming argument (or the incoming
+/// reference address for a by-ref param) before this pass runs. Zeroing them would DROP the
+/// incoming value, so a hoisted entry-block ensure for `&$param` would wrap a cell owning null
+/// (every read then yields 0) instead of adopting the spilled argument — the same
+/// value-adoption `__rt_ref_cell_ensure` performs for main-scope locals with a live value.
 fn zero_initialize_local_ref_ensure_main_slots(ctx: &mut FunctionContext<'_>) {
+    let param_count = ctx.function.params.len() as u32;
     let mut slots: Vec<(LocalSlotId, usize)> = Vec::new();
     for inst in &ctx.function.instructions {
         if inst.op != Op::LocalRefEnsure {
@@ -450,6 +458,11 @@ fn zero_initialize_local_ref_ensure_main_slots(ctx: &mut FunctionContext<'_>) {
         let Some(Immediate::LocalSlotPair { first, .. }) = inst.immediate else {
             continue;
         };
+        // Parameters occupy the first slots (`LocalSlotId::from_raw(0..params.len())`, see
+        // `compute_frame_layout`); their slots are always live post-spill — skip them.
+        if first.as_raw() < param_count {
+            continue;
+        }
         let Ok(offset) = ctx.local_offset(first) else {
             continue;
         };

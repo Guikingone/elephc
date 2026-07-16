@@ -1869,3 +1869,701 @@ fn test_foreach_ref_local_append_no_unset() {
     );
     assert_eq!(out, "ok");
 }
+
+// --- By-reference entries in array literals (['k' => &$v], [&$v]) ---
+
+/// The r1 gate shape: a keyed array literal with a by-reference entry aliases the source
+/// variable — a later write to `$v` is visible through `$arr['s']` while the plain entries
+/// keep their values (PHP prints `9 12`; cross-checked with `php -r`). Heap stays clean.
+#[test]
+fn test_ref_entry_array_literal_keyed_aliasing() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 5; $arr = ['a' => 1, 's' => &$v, 'b' => 2]; $v = 9; \
+         echo $arr['s'], ' ', $arr['a'], $arr['b'];",
+        "9 12",
+    );
+}
+
+/// A positional by-reference entry (`[&$v]`) lands at integer key 0 and aliases the
+/// source (php-cross-checked).
+#[test]
+fn test_ref_entry_array_literal_positional() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 5; $arr = [&$v]; $v = 9; echo $arr[0];",
+        "9",
+    );
+}
+
+/// PHP's next-integer-key rule for a mixed positional/keyed ref literal:
+/// `[&$a, 5 => &$b, &$c]` produces keys 0, 5, and 6, all aliasing their sources
+/// (php-cross-checked: PHP prints `10 20 30`).
+#[test]
+fn test_ref_entry_array_literal_mixed_positional_keyed_indexes() {
+    assert_ref_array_element_heap_clean(
+        "<?php $a = 1; $b = 2; $c = 3; $arr = [&$a, 5 => &$b, &$c]; \
+         $a = 10; $b = 20; $c = 30; echo $arr[0], ' ', $arr[5], ' ', $arr[6];",
+        "10 20 30",
+    );
+}
+
+/// A ref-bearing literal in RETURN position (the r3 gate shape with a local source)
+/// builds and returns the array through the hidden-temp prelude.
+#[test]
+fn test_ref_entry_array_literal_return_position() {
+    let out = compile_and_run(
+        "<?php
+        function req(): array {
+            $v = 3;
+            return ['q' => 1, 'session' => &$v];
+        }
+        $r = req();
+        echo isset($r['session']) ? 'y' : 'n', ' ', $r['q'], ' ', $r['session'];",
+    );
+    assert_eq!(out, "y 1 3");
+}
+
+/// A NESTED literal with a by-reference entry (`['x' => ['y' => &$v]]`): the inner
+/// literal desugars to its own hidden temp first, and the aliasing still reads through
+/// both levels after mutating the source (php-cross-checked: PHP prints `9`).
+#[test]
+fn test_ref_entry_array_literal_nested_literal() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 1; $arr = ['x' => ['y' => &$v]]; $v = 9; echo $arr['x']['y'];",
+        "9",
+    );
+}
+
+/// COW with a reference entry: copying the literal-built array (`$b = $arr`) shares the
+/// tag-11 reference cell (incref, not deep copy), so a later `$v = 42` reads back through
+/// BOTH views (php-cross-checked: PHP prints `42 42`).
+#[test]
+fn test_ref_entry_array_literal_cow_copy_shares_cell() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 5; $arr = ['a' => 1, 's' => &$v]; $b = $arr; $v = 42; \
+         echo $arr['s'], ' ', $b['s'];",
+        "42 42",
+    );
+}
+
+/// Unsetting the source variable keeps the entry alive: the kind-6 cell survives with the
+/// last written value (php-cross-checked: PHP prints `7`).
+#[test]
+fn test_ref_entry_array_literal_unset_source_keeps_entry() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 7; $arr = ['s' => &$v]; unset($v); echo $arr['s'];",
+        "7",
+    );
+}
+
+/// The desugar inside a FUNCTION body: the hidden temp starts as an empty packed array
+/// whose frame slot is later widened to hash storage by the reference bind — the packed
+/// flow-typed load before the de-pack and the Mixed element stamp both must hold
+/// (regression for the widened-slot load pairing and the empty-container Mixed widening).
+#[test]
+fn test_ref_entry_array_literal_in_function_scope() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        function go(): void {
+            $v = 5;
+            $arr = ['s' => &$v];
+            $v = 9;
+            echo $arr['s'];
+        }
+        go();",
+        "9",
+    );
+}
+
+/// The long-form `array('s' => &$v)` literal desugars identically to the short form
+/// (php-cross-checked: PHP prints `6`).
+#[test]
+fn test_ref_entry_long_array_form() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 4; $arr = array('s' => &$v); $v = 6; echo $arr['s'];",
+        "6",
+    );
+}
+
+/// An assignment expression as an assoc-literal VALUE where the assigned array carries a
+/// reference cell (`['x' => ($u = $t)]`): the literal's hash value-type stamp must follow
+/// the yielded expression (an array), not the syntactic Mixed default, so the element read
+/// dereferences the inner hash correctly (regression for the Assignment-arm typing in
+/// the assoc-literal value stamp; php-cross-checked: PHP prints `1`).
+#[test]
+fn test_assignment_expr_value_in_literal_with_ref_cell_array() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 1; $t = []; $t['y'] = &$v; $arr = ['x' => ($u = $t)]; \
+         echo $arr['x']['y'];",
+        "1",
+    );
+}
+
+// --- Conditional-value composition of ref-bearing literals (ternary / ?? / match / &&) ---
+
+/// A ref-bearing literal in BOTH branches of a ternary: the taken branch's array keeps its
+/// reference entry readable through the merge (regression: the merge temp used to widen to
+/// a boxed Mixed whose key read bypassed the tag-11-aware hash path and printed nothing;
+/// php-cross-checked: PHP prints `5`).
+#[test]
+fn test_ref_entry_literal_ternary_both_branches() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 5; $w = 6; $cond = $argc > 0; \
+         $arr = $cond ? ['s' => &$v] : ['s' => &$w]; echo $arr['s'];",
+        "5",
+    );
+}
+
+/// A ref-bearing literal in the UNTAKEN ternary branch: the source variable's hoisted
+/// entry-block reference cell keeps a later plain `echo $v` valid (regression: the
+/// mid-branch cell promotion used to leave `LoadRefCell` reading a raw int slot →
+/// SIGSEGV; php-cross-checked: PHP prints `1 5`).
+#[test]
+fn test_ref_entry_literal_in_untaken_ternary_branch() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 5; $cond = $argc > 0; \
+         $arr = $cond ? ['s' => 1] : ['s' => &$v]; echo $arr['s'], ' ', $v;",
+        "1 5",
+    );
+}
+
+/// Two ref-literal ternaries in one script, one taking each branch direction: entry
+/// aliasing tracks the RUNTIME-taken branch's source in both (php-cross-checked: PHP
+/// prints `10 200`).
+#[test]
+fn test_ref_entry_literal_two_ternaries_alias_taken_branch() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 5; $w = 6; $cond = $argc > 0; \
+         $arr = $cond ? ['s' => &$v] : ['s' => &$w]; \
+         $v = 10; $w = 20; echo $arr['s'], ' '; \
+         $cond2 = $argc > 99; \
+         $arr2 = $cond2 ? ['s' => &$v] : ['s' => &$w]; \
+         $v = 100; $w = 200; echo $arr2['s'];",
+        "10 200",
+    );
+}
+
+/// A ref-bearing literal as the `??` DEFAULT: the lazily-evaluated default branch builds
+/// the hash and its reference entry stays live through the coalesce merge
+/// (php-cross-checked: PHP prints `7`).
+#[test]
+fn test_ref_entry_literal_null_coalesce_default() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 5; $maybe = null; $arr = $maybe ?? ['s' => &$v]; \
+         $v = 7; echo $arr['s'];",
+        "7",
+    );
+}
+
+/// A ref-bearing literal as a MATCH arm value: the arm's hash flows through the match
+/// merge with its reference entry intact (php-cross-checked: PHP prints `9`).
+#[test]
+fn test_ref_entry_literal_match_arm() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 5; $sel = $argc; \
+         $arr = match (true) { $sel > 0 => ['s' => &$v], default => ['s' => 0] }; \
+         $v = 9; echo $arr['s'];",
+        "9",
+    );
+}
+
+/// A ref-bearing literal assigned inside a `&&` right-hand side: the branch-confined
+/// assignment still aliases the source when the RHS runs (php-cross-checked: PHP
+/// prints `9`).
+#[test]
+fn test_ref_entry_literal_in_logical_and_rhs() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 5; $ok = ($argc > 0) && ($arr = ['s' => &$v]); \
+         $v = 9; echo $ok ? $arr['s'] : 'no';",
+        "9",
+    );
+}
+
+// --- Compositional merge typing: the ref-hash type must flow THROUGH nested merges ---
+
+/// A CHAINED coalesce ending in a ref-bearing literal (`$a ?? $b ?? ['s' => &$v]`): the
+/// inner `??` merge temp is itself an operand of the outer merge, and its already-computed
+/// ref-hash value type must propagate through the outer merge (regression: the outer merge
+/// re-derived a syntactic `Mixed` fallback, boxed the hash, and the key read printed
+/// nothing; php-cross-checked: PHP prints `5`).
+#[test]
+fn test_ref_entry_literal_coalesce_chain() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 5; $a = null; $b = null; $r = $a ?? $b ?? ['s' => &$v]; echo $r['s'];",
+        "5",
+    );
+}
+
+/// A TRIPLE coalesce chain (`$a ?? $b ?? $c ?? ['s' => &$v]`): the ref-hash type survives
+/// two intermediate merge temps, and the entry still aliases the source afterwards
+/// (php-cross-checked: PHP prints `11`).
+#[test]
+fn test_ref_entry_literal_coalesce_triple_chain() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 5; $a = null; $b = null; $c = null; \
+         $r = $a ?? $b ?? $c ?? ['s' => &$v]; $v = 11; echo $r['s'];",
+        "11",
+    );
+}
+
+/// A chain whose MIDDLE operand is a plain hash hit (`$a ?? $b ?? ['s' => &$v]` with
+/// `$b = ['s' => 3]`): the runtime-taken plain branch wins, the untaken ref-literal arm
+/// still types the merges, and the read yields the plain value (php-cross-checked: PHP
+/// prints `3`).
+#[test]
+fn test_ref_entry_literal_coalesce_chain_mid_hit() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 5; $a = null; $b = ['s' => 3]; \
+         $r = $a ?? $b ?? ['s' => &$v]; $v = 9; echo $r['s'];",
+        "3",
+    );
+}
+
+/// A `??` nested inside the TAKEN ternary branch (`$c ? ($a ?? ['s' => &$v]) : [...]`):
+/// the coalesce merge's ref-hash value type is consulted by the enclosing ternary merge
+/// instead of the syntactic fallback, keeping the aliasing entry readable
+/// (php-cross-checked: PHP prints `7`).
+#[test]
+fn test_ref_entry_literal_coalesce_inside_ternary_then_branch() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 5; $a = null; $c = $argc > 0; \
+         $r = $c ? ($a ?? ['s' => &$v]) : ['s' => 0]; $v = 7; echo $r['s'];",
+        "7",
+    );
+}
+
+/// The reverse order — the `??` nested inside the ELSE ternary branch, with the else
+/// branch runtime-taken — propagates the ref-hash type the same way
+/// (php-cross-checked: PHP prints `7`).
+#[test]
+fn test_ref_entry_literal_coalesce_inside_ternary_else_branch() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 5; $a = null; $c = $argc > 99; \
+         $r = $c ? ['s' => 0] : ($a ?? ['s' => &$v]); $v = 7; echo $r['s'];",
+        "7",
+    );
+}
+
+/// A COPY-OUT read of a chain-produced ref hash (`$w = $r`): the shallow clone shares the
+/// reference cell, so a later source write is visible through BOTH copies
+/// (php-cross-checked: PHP prints `42 42`).
+#[test]
+fn test_ref_entry_literal_coalesce_chain_copy_out() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 5; $a = null; $b = null; $r = $a ?? $b ?? ['s' => &$v]; \
+         $w = $r; $v = 42; echo $w['s'], ' ', $r['s'];",
+        "42 42",
+    );
+}
+
+/// A ref-bearing literal as the FIRST `??` operand (`['s' => &$v] ?? $x`): a literal is
+/// never null, so the coalesce short-circuits to the ref hash and the entry keeps
+/// aliasing the source (php-cross-checked: PHP prints `9`).
+#[test]
+fn test_ref_entry_literal_coalesce_first_operand_short_circuits() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 5; $x = ['s' => 0]; $r = ['s' => &$v] ?? $x; $v = 9; echo $r['s'];",
+        "9",
+    );
+}
+
+/// Mixed ternary-of-coalesce-of-match composition: a `match` arm yields the ref literal,
+/// its merge feeds a `??`, and that feeds a ternary — the ref-hash value type must
+/// propagate through all three nested merges (php-cross-checked: PHP prints `9`).
+#[test]
+fn test_ref_entry_literal_ternary_coalesce_match_composition() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 5; $a = null; $k = 1; $c = $argc > 0; \
+         $r = $c ? ($a ?? match ($k) { 1 => ['s' => &$v], default => ['s' => 0] }) \
+                 : ['s' => 0]; \
+         $v = 9; echo $r['s'];",
+        "9",
+    );
+}
+
+// --- Duplicate keys inside a ref-bearing literal (PHP replace semantics) ---
+
+/// A duplicate static key AFTER a reference entry REPLACES the bucket (PHP literal
+/// construction is zend_hash_update): the reference is discarded, the plain value wins,
+/// and the source variable is NOT written through (php-cross-checked: PHP prints `2 9`).
+#[test]
+fn test_ref_entry_literal_duplicate_key_replaces_bucket() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 5; $a = ['s' => &$v, 's' => 2]; $v = 9; echo $a['s'], ' ', $v;",
+        "2 9",
+    );
+}
+
+/// The reverse duplicate order — plain entry first, reference entry second — leaves the
+/// LAST (reference) binding in place, so the element aliases the source
+/// (php-cross-checked: PHP prints `8 8`).
+#[test]
+fn test_ref_entry_literal_duplicate_key_reverse_order_keeps_ref() {
+    assert_ref_array_element_heap_clean(
+        "<?php $w = 5; $b = ['t' => 1, 't' => &$w]; $w = 8; echo $b['t'], ' ', $w;",
+        "8 8",
+    );
+}
+
+/// A DYNAMIC key colliding with an earlier reference entry's key replaces the bucket the
+/// same way a static duplicate does — the guard `unset` applies to runtime-computed keys
+/// too (php-cross-checked: PHP prints `2 9`).
+#[test]
+fn test_ref_entry_literal_duplicate_dynamic_key_replaces_bucket() {
+    assert_ref_array_element_heap_clean(
+        "<?php $v = 5; $k = 's'; $a = ['s' => &$v, $k => 2]; $v = 9; \
+         echo $a['s'], ' ', $v;",
+        "2 9",
+    );
+}
+
+// --- Heap behavior of ref-bearing literals in loops (leak regressions) ---
+
+/// A fresh ref-bearing literal built EVERY loop iteration keeps live heap blocks constant:
+/// the hoisted source cell is reused, the reassigned hidden temp's previous hash is
+/// released through the kind-dispatching release (a statically Array-typed slot can hold
+/// de-packed hash storage), and the Mixed element reads feeding the accumulator release
+/// their boxes (regression: 3 leaked blocks per iteration; php-cross-checked output).
+#[test]
+fn test_ref_entry_literal_loop_heap_constant() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        function build(int $n): int {
+            $acc = 0;
+            for ($i = 0; $i < $n; $i++) {
+                $v = $i;
+                $arr = ['s' => &$v, 'p' => $i * 2];
+                $acc = $acc + $arr['s'] + $arr['p'];
+            }
+            return $acc;
+        }
+        echo build(50);",
+        "3675",
+    );
+}
+
+/// The statement-form sibling (`$arr = []; $arr['s'] = &$v; ...` in a function loop)
+/// stays heap-constant too: releasing the reassigned local dispatches on the runtime heap
+/// kind so the de-packed hash frees its buckets and cell share (regression: ~5 leaked
+/// blocks per iteration; php-cross-checked output).
+#[test]
+fn test_ref_element_statement_form_loop_heap_constant() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        function build(int $n): int {
+            $acc = 0;
+            for ($i = 0; $i < $n; $i++) {
+                $v = $i;
+                $arr = [];
+                $arr['s'] = &$v;
+                $arr['p'] = $i * 2;
+                $acc = $acc + $arr['s'] + $arr['p'];
+            }
+            return $acc;
+        }
+        echo build(50);",
+        "3675",
+    );
+}
+
+/// A ref-bearing literal returned DIRECTLY under a declared `: array` return type hands
+/// the caller a live hash: the return re-loads the hidden yield temp so the epilogue's
+/// returned-slot exclusion transfers the slot's share instead of double-claiming the
+/// store's acquire (regression: the caller read freed memory — printed garbage/empty —
+/// with allocs == frees; php-cross-checked: PHP prints `41 1`).
+#[test]
+fn test_ref_entry_literal_direct_return_typed_array() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        function mk(): array {
+            $v = 41;
+            return ['s' => &$v];
+        }
+        $r = mk();
+        echo $r['s'], ' ', count($r);",
+        "41 1",
+    );
+}
+
+/// A ref-bearing literal returned through a `??` CHAIN under `: array` survives the
+/// Mixed merge + return unboxing: the Mixed→array coercion passes de-packed hash
+/// storage through unchanged (kind probe) and the boxed string-key read dereferences
+/// the tag-11 bucket (regression: empty element read + 2 leaked blocks per call;
+/// php-cross-checked: PHP prints `5 1`).
+#[test]
+fn test_ref_entry_literal_chain_return_typed_array() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        function mk(?array $a, int $x): array {
+            $v = $x;
+            $b = null;
+            return $a ?? $b ?? ['s' => &$v];
+        }
+        $r = mk(null, 5);
+        echo $r['s'], ' ', count($r);",
+        "5 1",
+    );
+}
+
+/// A ref-bearing literal returned from WITHIN a conditional joins a differently-shaped
+/// plain-literal return under one `: array` contract: the hash return path re-stamps to
+/// the Array(Mixed) contract via `HashToMixed` (reference buckets pass through untouched)
+/// and both paths stay ownership-balanced (php-cross-checked: PHP prints `41 1 | 7 1`).
+#[test]
+fn test_ref_entry_literal_conditional_return_typed_array() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        function mk(bool $c): array {
+            $v = 41;
+            if ($c) { return ['s' => &$v]; }
+            return ['t' => 7];
+        }
+        $r = mk(true);
+        $q = mk(false);
+        echo $r['s'], ' ', count($r), ' | ', $q['t'], ' ', count($q);",
+        "41 1 | 7 1",
+    );
+}
+
+/// A ref-bearing literal in call-ARGUMENT position leaves no live blocks: the callee's
+/// `: int` return coercion releases the owned Mixed element box it unboxes (regression:
+/// exactly 1 leaked block per call; php-cross-checked: PHP prints `5`).
+#[test]
+fn test_ref_entry_literal_call_argument_heap_clean() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        function takes(array $x): int { return $x['s']; }
+        $v = 5;
+        echo takes(['s' => &$v]);",
+        "5",
+    );
+}
+
+/// The call-argument shape looped 50 times (with the literal reached through a `??`
+/// chain) stays heap-clean: one leaked Mixed element box per call would report 50 live
+/// blocks at exit (php-cross-checked: PHP prints `1225`).
+#[test]
+fn test_ref_entry_literal_call_argument_loop_heap_clean() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        function takes(array $x): int { return $x['s']; }
+        function run(int $n): int {
+            $acc = 0;
+            for ($i = 0; $i < $n; $i++) {
+                $v = $i;
+                $a = null; $b = null;
+                $acc += takes($a ?? $b ?? ['s' => &$v]);
+            }
+            return $acc;
+        }
+        echo run(50);",
+        "1225",
+    );
+}
+
+/// A PARAMETER as the `&$x` ref-entry source keeps its incoming argument: the prologue's
+/// entry-block `LocalRefEnsure` hoist must adopt the spilled argument value instead of
+/// zero-initializing the parameter slot first (regression: `mk(13)` read `0` through the
+/// entry; php-cross-checked: PHP prints `13 1`).
+#[test]
+fn test_ref_entry_literal_int_param_source() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        function mk(int $x): array { return ['s' => &$x]; }
+        $r = mk(13);
+        echo $r['s'], ' ', count($r);",
+        "13 1",
+    );
+}
+
+/// A plain read of the parameter BEFORE the ref-bearing literal already routes through the
+/// hoisted entry-block cell, so it must see the incoming argument (sharpest regression shape:
+/// the argument was lost AT FUNCTION ENTRY, echoing `0` before the literal even ran;
+/// php-cross-checked: PHP prints `13 13`).
+#[test]
+fn test_ref_entry_literal_param_echo_before_literal() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        function mk(int $x): int { echo $x, ' '; $r = ['s' => &$x]; return $r['s']; }
+        echo mk(13);",
+        "13 13",
+    );
+}
+
+/// A METHOD parameter as the ref-entry source adopts its incoming argument the same way as a
+/// free-function parameter (php-cross-checked: PHP prints `13 1`).
+#[test]
+fn test_ref_entry_literal_method_param_source() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        class K { public function mk(int $x): array { return ['s' => &$x]; } }
+        $k = new K();
+        $q = $k->mk(13);
+        echo $q['s'], ' ', count($q);",
+        "13 1",
+    );
+}
+
+/// A CLOSURE parameter as the ref-entry source adopts its incoming argument (closure bodies
+/// lower through the same scope-entry hoist; php-cross-checked: PHP prints `13 1`).
+#[test]
+fn test_ref_entry_literal_closure_param_source() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        $f = function (int $x): array { return ['s' => &$x]; };
+        $q = $f(13);
+        echo $q['s'], ' ', count($q);",
+        "13 1",
+    );
+}
+
+/// A closure with a by-VALUE `use` capture alongside the ref-entry parameter source keeps
+/// both: the capture reads normally and the parameter's incoming value flows into the entry
+/// (php-cross-checked: PHP prints `13 100`).
+#[test]
+fn test_ref_entry_literal_closure_use_plus_param_source() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        $base = 100;
+        $f = function (int $x) use ($base): array { return ['s' => &$x, 'b' => $base]; };
+        $q = $f(13);
+        echo $q['s'], ' ', $q['b'];",
+        "13 100",
+    );
+}
+
+/// A `mixed` parameter arrives as a CALLER-owned boxed cell: the hoisted ensure must back its
+/// adoption with its own acquire, or the caller's post-call release frees the box under the
+/// cell (regression: bad-refcount fatal + empty string read; the kind-5 probe keeps the cell's
+/// inner tag Mixed for both an int and a string payload; php-cross-checked: PHP prints
+/// `42 1 zz`).
+#[test]
+fn test_ref_entry_literal_mixed_param_source_int_and_string() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        function mk(mixed $m): array { return ['s' => &$m]; }
+        $q = mk(42);
+        $w = mk('zz');
+        echo $q['s'], ' ', count($q), ' ', $w['s'];",
+        "42 1 zz",
+    );
+}
+
+/// An ARRAY parameter as the ref-entry source: a mutation of the source parameter after the
+/// literal is visible through the entry (one storage — the count matches on both views) and
+/// the adopted handle stays ownership-balanced (php-cross-checked: PHP prints `3 3`).
+#[test]
+fn test_ref_entry_literal_array_param_cow_alias_visibility() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        function mk(array $a): string {
+            $r = ['s' => &$a];
+            $a[] = 99;
+            return count($r['s']) . ' ' . count($a);
+        }
+        echo mk([1, 2]);",
+        "3 3",
+    );
+}
+
+/// An ELEMENT read through the array-parameter entry (`$r['s'][2]`) sees the value the source
+/// mutation appended. Output-only: the indexed read through a ref entry leaks 1-2 blocks in a
+/// PRE-EXISTING family that reproduces identically with a main-scope non-parameter source
+/// (`$a=[1,2]; $r=['s'=>&$a]; $a[]=99; echo $r['s'][2];` → 2 live blocks), so heap-cleanliness
+/// is not a parameter-seeding property here (php-cross-checked: PHP prints `3 99 3`).
+#[test]
+fn test_ref_entry_literal_array_param_element_read_through_entry() {
+    let out = compile_and_run(
+        "<?php
+        function mk(array $a): string {
+            $r = ['s' => &$a];
+            $a[] = 99;
+            return count($r['s']) . ' ' . $r['s'][2] . ' ' . count($a);
+        }
+        echo mk([1, 2]);",
+    );
+    assert_eq!(out, "3 99 3");
+}
+
+/// A reassign of the parameter AFTER the literal writes through the shared cell, so the entry
+/// observes the new value (php-cross-checked: PHP prints `99`).
+#[test]
+fn test_ref_entry_literal_param_writeback_through_alias() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        function mk(int $x): int { $r = ['s' => &$x]; $x = 99; return $r['s']; }
+        echo mk(13);",
+        "99",
+    );
+}
+
+/// A write THROUGH the ref entry updates the parameter (the reverse direction of the alias;
+/// php-cross-checked: PHP prints `55`).
+#[test]
+fn test_ref_entry_literal_param_write_through_entry() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        function mk(int $x): int { $r = ['s' => &$x]; $r['s'] = 55; return $x; }
+        echo mk(13);",
+        "55",
+    );
+}
+
+/// The statement form (`$r['s'] = &$x;` on an empty local) adopts a parameter source the same
+/// way as the literal desugar — both route through the same scope-entry hoist
+/// (php-cross-checked: PHP prints `13 1`).
+#[test]
+fn test_ref_entry_stmt_form_param_source() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        function mk(int $x): array { $r = []; $r['s'] = &$x; return $r; }
+        $q = mk(13);
+        echo $q['s'], ' ', count($q);",
+        "13 1",
+    );
+}
+
+/// A VARIADIC parameter (`int ...$rest`) as the ref-entry source keeps the collected argument
+/// array: the count read through the entry sees all collected arguments and the adopted
+/// handle stays ownership-balanced (php-cross-checked: PHP prints `3`).
+#[test]
+fn test_ref_entry_literal_variadic_param_source() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        function mk(int ...$rest): int { $r = ['s' => &$rest]; return count($r['s']); }
+        echo mk(1, 2, 3);",
+        "3",
+    );
+}
+
+/// An ELEMENT read through the variadic-parameter entry (`$r['s'][1]`) sees the collected
+/// argument. Output-only: the indexed read through a ref entry is the same PRE-EXISTING leak
+/// family as the array-parameter element read above (reproduces with a non-parameter source),
+/// so heap-cleanliness is not asserted (php-cross-checked: PHP prints `5` = count 3 + element 2).
+#[test]
+fn test_ref_entry_literal_variadic_param_element_read_through_entry() {
+    let out = compile_and_run(
+        "<?php
+        function mk(int ...$rest): int { $r = ['s' => &$rest]; return count($r['s']) + $r['s'][1]; }
+        echo mk(1, 2, 3);",
+    );
+    assert_eq!(out, "5");
+}
+
+/// Binding the SAME parameter-sourced local into two entries shares one persistent cell (the
+/// declared-by-ref-param guard must not misfire on locals that became ref-bound via an earlier
+/// `=&` bind; php-cross-checked: PHP prints `21 21`).
+#[test]
+fn test_ref_entry_literal_param_seeded_local_double_bind() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        function mk(int $seed): array {
+            $v = $seed;
+            $r = ['a' => &$v, 'b' => &$v];
+            $v = 21;
+            return $r;
+        }
+        $q = mk(5);
+        echo $q['a'], ' ', $q['b'];",
+        "21 21",
+    );
+}

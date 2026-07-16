@@ -147,6 +147,13 @@ pub(crate) struct Checker {
     pub top_level_env: TypeEnv,
     /// Names that are by-ref parameters in the current function/closure scope.
     pub active_ref_params: HashSet<String>,
+    /// Names DECLARED as by-ref parameters (or by-ref `use` captures) of the current
+    /// function/closure scope, seeded once by `with_local_storage_context` and never extended
+    /// by later `=&` bindings. Unlike `active_ref_params` (which `=&`-bind sites also insert
+    /// alias locals into), this set identifies slots whose runtime storage is the caller's raw
+    /// reference ADDRESS, not a kind-6 reference cell — the ref-into-array-element checks use
+    /// it to reject such sources loudly instead of wrapping the raw address as a cell value.
+    pub declared_byref_param_locals: HashSet<String>,
     /// Names introduced via `global` declarations in the current local scope.
     pub active_globals: HashSet<String>,
     /// Names introduced via `static` declarations in the current local scope.

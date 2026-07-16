@@ -9,6 +9,8 @@
 //! - The key tuple matches `emit_normalized_hash_key`: int keys use `key_hi = -1`.
 //! - Unsupported payloads and missing keys return boxed `Mixed(null)` for PHP-like quiet access.
 //! - Every successful return is an owned `Mixed*`; borrowed array/hash slots are retained first.
+//! - Associative entries holding a reference (value-tag 11, kind-6 cell) are normalized through
+//!   `__rt_deref_if_reference` before boxing so callers read through the reference like PHP.
 
 use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
@@ -140,6 +142,10 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = key_hi
     emitter.instruction("bl __rt_hash_get");                                    // x0=found, x1=value_lo, x2=value_hi, x3=value_tag
     emitter.instruction("cbz x0, __rt_mixed_array_get_null");                   // miss → null
+    // A referenced element (value-tag 11) holds a kind-6 cell pointer; normalize it to the
+    // current inner value + inner tag so the boxed result carries a readable value tag
+    // (PHP reads through references transparently — mirrors `hash_get`'s consumer path).
+    emitter.instruction("bl __rt_deref_if_reference");                          // deref a tag-11 reference bucket to its inner (value, tag) pair
     // For value_tag == 7 the entry already holds a boxed Mixed pointer
     // (json_decode and stdClass populate hashes this way). Anything else
     // (typed string/int/array entries from non-Mixed assoc arrays passing
@@ -358,6 +364,10 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_get");                                  // rax=found, rdi=value_lo, rsi=value_hi, rcx=value_tag
     emitter.instruction("test rax, rax");                                       // miss → null
     emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    // A referenced element (value-tag 11) holds a kind-6 cell pointer; normalize it to the
+    // current inner value + inner tag so the boxed result carries a readable value tag
+    // (PHP reads through references transparently — mirrors `hash_get`'s consumer path).
+    emitter.instruction("call __rt_deref_if_reference");                        // deref a tag-11 reference bucket to its inner (value, tag) pair
     // For value_tag == 7 the entry is already a boxed Mixed pointer; for
     // any other tag (typed string/int/array entries from non-Mixed assoc
     // arrays passing through a Mixed receiver) re-box (lo, hi, tag) so

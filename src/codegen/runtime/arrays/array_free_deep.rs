@@ -7,6 +7,9 @@
 //!
 //! Key details:
 //! - Deep free helpers recursively release owned child storage and must match the heap kind/tag layout exactly.
+//! - A block whose uniform heap kind is 3 (associative hash — e.g. a statically Array-typed
+//!   owner whose storage was de-packed at runtime) is delegated to `__rt_hash_free_deep`
+//!   instead of being walked as indexed slots (ARM64) or silently skipped (x86_64).
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
@@ -50,6 +53,14 @@ pub fn emit_array_free_deep(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, x10");                                         // beyond heap end?
     emitter.instruction("b.hs __rt_array_free_deep_done");                      // not on heap, skip
 
+    // -- kind dispatch: a statically Array-typed owner can hold de-packed hash storage --
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap kind word for this block
+    emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind tag
+    emitter.instruction("cmp x9, #3");                                          // is this block actually associative-hash storage (kind 3)?
+    emitter.instruction("b.ne __rt_array_free_deep_indexed");                   // true indexed arrays take the slot-walking free below
+    emitter.instruction("b __rt_hash_free_deep");                               // delegate runtime hashes to the bucket-aware deep free
+
+    emitter.label("__rt_array_free_deep_indexed");
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #32");                                     // allocate stack frame
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
@@ -173,6 +184,8 @@ fn emit_array_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp r11d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // ignore foreign pointers that do not carry the elephc x86_64 heap marker
     emitter.instruction("jne __rt_array_free_deep_done");                       // only elephc-owned indexed arrays participate in x86_64 deep-free bookkeeping
     emitter.instruction("and r10, 0xff");                                       // isolate the low-byte uniform heap kind tag for a final ownership sanity check
+    emitter.instruction("cmp r10, 3");                                          // is this block actually associative-hash storage (kind 3)?
+    emitter.instruction("je __rt_hash_free_deep");                              // delegate de-packed hashes to the bucket-aware deep free instead of skipping them
     emitter.instruction("cmp r10, 2");                                          // is this heap-backed payload really an indexed array?
     emitter.instruction("jne __rt_array_free_deep_done");                       // other heap kinds must not be released through the indexed-array deep-free helper
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving indexed-array deep-free spill slots
