@@ -14,6 +14,9 @@ mod attributes;
 /// Control flow statements: `if`, `while`, `for`, `foreach`, `switch`, `try`, `goto`, and `label` parsing.
 mod control;
 pub mod expr;
+/// Non-plain foreach binding targets (`foreach ($a as $this->k => $obj->v)`): parsing,
+/// lvalue-shape validation, and the hidden-variable + prepended-store desugar.
+mod foreach_target;
 /// Maps tokens that may legally appear as bareword names (identifiers and semi-reserved keywords).
 mod keyword_name;
 mod stmt;

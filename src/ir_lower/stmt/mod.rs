@@ -3269,7 +3269,34 @@ fn lower_static_property_assign(
     span: Span,
 ) {
     let value = lower_expr(ctx, value);
+    let value = coerce_mixed_static_property_store_value(ctx, receiver, property, value, span);
     store_static_property(ctx, receiver, property, value.value, span);
+}
+
+/// Unboxes a Mixed-typed value into a scalar static property's declared storage type
+/// (e.g. a boxed foreach key stored through `foreach ($a as R::$k => $v)`), reusing the
+/// standard scalar coercion helpers. Non-Mixed values and non-scalar declared types are
+/// returned unchanged so every combination the backend already supports (tagged scalars,
+/// Mixed/union slots, array init) keeps its existing lowering.
+fn coerce_mixed_static_property_store_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if ctx.builder.value_php_type(value.value).codegen_repr() != PhpType::Mixed {
+        return value;
+    }
+    let Some(property_ty) = static_property_type(ctx, receiver, property) else {
+        return value;
+    };
+    match property_ty.codegen_repr() {
+        PhpType::Int | PhpType::Bool => coerce_to_int(ctx, value, Some(span)),
+        PhpType::Float => coerce_to_float(ctx, value, Some(span)),
+        PhpType::Str => coerce_to_string(ctx, value, Some(span)),
+        _ => value,
+    }
 }
 
 /// Lowers `Class::$prop[] = value`.

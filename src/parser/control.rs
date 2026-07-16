@@ -12,6 +12,7 @@ use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::parser::ast::{BinOp, CatchClause, Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
+use crate::parser::foreach_target::{lower_foreach_binding, parse_foreach_binding, ForeachBinding};
 use crate::parser::stmt::{expect_semicolon, expect_token, name_starts_at, parse_block, parse_body, parse_name};
 use crate::span::Span;
 
@@ -116,6 +117,13 @@ pub fn parse_while(
 /// (via the standalone list-destructuring lowering) against a synthetic per-iteration
 /// element variable, and the resulting destructure statement is prepended to the body so
 /// the rest of the `Foreach` node — and every pass that reads its `value_var` — is unchanged.
+///
+/// Non-plain writable lvalue targets (`foreach ($defs as $this->id => $d)`,
+/// `foreach ($rows as $out["k"])`, `foreach ($m as R::$k => $v)`) desugar the same way:
+/// the `Foreach` node binds a hidden loop variable and a `<lvalue> = $hidden;` statement is
+/// prepended to the body (value store before key store, matching PHP's per-iteration
+/// assignment order). By-ref bindings stay plain-variable-only: `as &$this->v` remains a
+/// loud error until foreach by-ref write-through is implemented.
 pub fn parse_foreach(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -144,14 +152,23 @@ pub fn parse_foreach(
         false
     };
 
-    let first_var = match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Variable(n)) => n.clone(),
-        _ => return Err(CompileError::new(span, "Expected variable after 'as'")),
+    let first = if first_by_ref {
+        // A by-ref binding must be a plain variable: `as &$this->v` (by-ref write-through
+        // into a complex lvalue) is intentionally unsupported and stays a loud error.
+        match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Variable(n)) => {
+                let name = n.clone();
+                *pos += 1;
+                ForeachBinding::Plain(name)
+            }
+            _ => return Err(CompileError::new(span, "Expected variable after 'as'")),
+        }
+    } else {
+        parse_foreach_binding(tokens, pos, span, "Expected variable after 'as'")?
     };
-    *pos += 1;
 
     // Check for => (foreach $arr as $key => $value)
-    let (key_var, value_var, value_by_ref) =
+    let (key_binding, value_binding, value_by_ref) =
         if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
         if first_by_ref {
             return Err(CompileError::new(
@@ -165,7 +182,16 @@ pub fn parse_foreach(
             tokens.get(*pos).map(|(token, _)| token),
             Some(Token::LBracket)
         ) {
-            return finish_foreach_destructure(tokens, pos, span, array, Some(first_var));
+            let (key_name, key_store) = lower_foreach_binding(first, "key", span)?;
+            let mut stmt = finish_foreach_destructure(tokens, pos, span, array, Some(key_name))?;
+            // A desugared key store runs after the destructure statement (PHP assigns the
+            // value binding before the key binding each iteration).
+            if let Some(store) = key_store {
+                if let StmtKind::Foreach { body, .. } = &mut stmt.kind {
+                    body.insert(1, store);
+                }
+            }
+            return Ok(stmt);
         }
         let value_by_ref = if matches!(
             tokens.get(*pos).map(|(token, _)| token),
@@ -176,18 +202,44 @@ pub fn parse_foreach(
         } else {
             false
         };
-        let val_var = match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Variable(n)) => n.clone(),
-            _ => return Err(CompileError::new(span, "Expected variable after '=>'")),
+        let value = if value_by_ref {
+            // Same plain-variable-only rule for by-ref value bindings as after 'as'.
+            match tokens.get(*pos).map(|(t, _)| t) {
+                Some(Token::Variable(n)) => {
+                    let name = n.clone();
+                    *pos += 1;
+                    ForeachBinding::Plain(name)
+                }
+                _ => return Err(CompileError::new(span, "Expected variable after '=>'")),
+            }
+        } else {
+            parse_foreach_binding(tokens, pos, span, "Expected variable after '=>'")?
         };
-        *pos += 1;
-        (Some(first_var), val_var, value_by_ref)
+        (Some(first), value, value_by_ref)
     } else {
-        (None, first_var, first_by_ref)
+        (None, first, first_by_ref)
     };
 
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after foreach")?;
-    let body = parse_body(tokens, pos)?;
+    let mut body = parse_body(tokens, pos)?;
+
+    let (value_var, value_store) = lower_foreach_binding(value_binding, "val", span)?;
+    let (key_var, key_store) = match key_binding {
+        Some(binding) => {
+            let (name, store) = lower_foreach_binding(binding, "key", span)?;
+            (Some(name), store)
+        }
+        None => (None, None),
+    };
+    // PHP assigns the value binding first and the key binding second each iteration
+    // (`foreach ([7 => 9] as $x => $x)` leaves $x == 7), so the desugared stores are
+    // prepended in value-then-key order ahead of the user body.
+    let mut desugared_stores = Vec::new();
+    desugared_stores.extend(value_store);
+    desugared_stores.extend(key_store);
+    if !desugared_stores.is_empty() {
+        body.splice(0..0, desugared_stores);
+    }
 
     Ok(Stmt::new(
         StmtKind::Foreach {

@@ -293,6 +293,139 @@ fn test_parse_foreach_destructure_keyed_pattern() {
     ));
 }
 
+/// Verifies a property KEY target (`foreach ($a as $this->k => $v)`) desugars to a hidden
+/// `__elephc_fe_key_*` loop variable with a `PropertyAssign` store prepended as the first
+/// body statement, leaving `value_var` as the plain variable.
+#[test]
+fn test_parse_foreach_property_key_target_desugars() {
+    let stmts = parse_source("<?php foreach ($a as $this->k => $v) { echo 1; }");
+    assert_eq!(stmts.len(), 1);
+    let StmtKind::Foreach {
+        key_var,
+        value_var,
+        value_by_ref,
+        body,
+        ..
+    } = &stmts[0].kind
+    else {
+        panic!("expected Foreach");
+    };
+    let key = key_var.as_deref().expect("expected desugared key variable");
+    assert!(key.starts_with("__elephc_fe_key_"));
+    assert_eq!(value_var, "v");
+    assert!(!value_by_ref);
+    assert_eq!(body.len(), 2);
+    let StmtKind::PropertyAssign { object, property, value } = &body[0].kind else {
+        panic!("expected prepended PropertyAssign, got {:?}", body[0].kind);
+    };
+    assert!(matches!(object.kind, ExprKind::This));
+    assert_eq!(property, "k");
+    assert!(matches!(&value.kind, ExprKind::Variable(name) if name == key));
+    assert!(matches!(&body[1].kind, StmtKind::Echo(_)));
+}
+
+/// Verifies a property VALUE target (`foreach ($a as $q->v)`) desugars to a hidden
+/// `__elephc_fe_val_*` loop variable with the `PropertyAssign` store prepended.
+#[test]
+fn test_parse_foreach_property_value_target_desugars() {
+    let stmts = parse_source("<?php foreach ($a as $q->v) {}");
+    let StmtKind::Foreach {
+        key_var,
+        value_var,
+        body,
+        ..
+    } = &stmts[0].kind
+    else {
+        panic!("expected Foreach");
+    };
+    assert_eq!(key_var, &None);
+    assert!(value_var.starts_with("__elephc_fe_val_"));
+    assert_eq!(body.len(), 1);
+    let StmtKind::PropertyAssign { property, value, .. } = &body[0].kind else {
+        panic!("expected prepended PropertyAssign, got {:?}", body[0].kind);
+    };
+    assert_eq!(property, "v");
+    assert!(matches!(&value.kind, ExprKind::Variable(name) if name == value_var));
+}
+
+/// Verifies an array-element VALUE target (`foreach ($a as $out["k"])`) desugars to the
+/// same `ArrayAssign` statement shape the assignment parser produces for `$out["k"] = $v;`.
+#[test]
+fn test_parse_foreach_array_element_value_target_desugars() {
+    let stmts = parse_source("<?php foreach ($a as $out[\"k\"]) {}");
+    let StmtKind::Foreach { value_var, body, .. } = &stmts[0].kind else {
+        panic!("expected Foreach");
+    };
+    assert!(value_var.starts_with("__elephc_fe_val_"));
+    let StmtKind::ArrayAssign { array, index, value } = &body[0].kind else {
+        panic!("expected prepended ArrayAssign, got {:?}", body[0].kind);
+    };
+    assert_eq!(array, "out");
+    assert!(matches!(&index.kind, ExprKind::StringLiteral(s) if s == "k"));
+    assert!(matches!(&value.kind, ExprKind::Variable(name) if name == value_var));
+}
+
+/// Verifies a static-property KEY target (`foreach ($a as R::$k => $v)`) desugars to the
+/// same `StaticPropertyAssign` statement shape as `R::$k = $v;`.
+#[test]
+fn test_parse_foreach_static_property_key_target_desugars() {
+    let stmts = parse_source("<?php foreach ($a as R::$k => $v) {}");
+    let StmtKind::Foreach { key_var, body, .. } = &stmts[0].kind else {
+        panic!("expected Foreach");
+    };
+    let key = key_var.as_deref().expect("expected desugared key variable");
+    assert!(key.starts_with("__elephc_fe_key_"));
+    let StmtKind::StaticPropertyAssign { receiver, property, value } = &body[0].kind else {
+        panic!("expected prepended StaticPropertyAssign, got {:?}", body[0].kind);
+    };
+    assert!(matches!(receiver, StaticReceiver::Named(name) if name.as_str() == "R"));
+    assert_eq!(property, "k");
+    assert!(matches!(&value.kind, ExprKind::Variable(name) if name == key));
+}
+
+/// Verifies both positions desugared in the same loop prepend the VALUE store before the
+/// KEY store, matching PHP's per-iteration assignment order (value first, key second).
+#[test]
+fn test_parse_foreach_both_lvalue_positions_value_store_first() {
+    let stmts = parse_source("<?php foreach ($a as $t->k => $t->v) {}");
+    let StmtKind::Foreach {
+        key_var,
+        value_var,
+        body,
+        ..
+    } = &stmts[0].kind
+    else {
+        panic!("expected Foreach");
+    };
+    assert!(key_var.as_deref().is_some_and(|k| k.starts_with("__elephc_fe_key_")));
+    assert!(value_var.starts_with("__elephc_fe_val_"));
+    assert_eq!(body.len(), 2);
+    assert!(matches!(&body[0].kind, StmtKind::PropertyAssign { property, .. } if property == "v"));
+    assert!(matches!(&body[1].kind, StmtKind::PropertyAssign { property, .. } if property == "k"));
+}
+
+/// Regression guard: the plain `$k => $v` form keeps the exact historical AST — plain
+/// names on the node, no hidden variables, and no prepended statements in the body.
+#[test]
+fn test_parse_foreach_plain_key_value_body_untouched() {
+    let stmts = parse_source("<?php foreach ($a as $k => $v) { echo 1; }");
+    let StmtKind::Foreach {
+        key_var,
+        value_var,
+        value_by_ref,
+        body,
+        ..
+    } = &stmts[0].kind
+    else {
+        panic!("expected Foreach");
+    };
+    assert_eq!(key_var, &Some("k".to_string()));
+    assert_eq!(value_var, "v");
+    assert!(!value_by_ref);
+    assert_eq!(body.len(), 1);
+    assert!(matches!(&body[0].kind, StmtKind::Echo(_)));
+}
+
 /// Verifies `goto target;` parses to a `Goto` statement carrying the label name.
 #[test]
 fn test_goto_parses() {

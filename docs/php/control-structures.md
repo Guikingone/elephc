@@ -142,6 +142,33 @@ Destructuring `foreach` patterns bind by value; by-reference pattern targets
 are not supported. See [Array destructuring](arrays.md#array-destructuring) for
 the full pattern grammar (positional, keyed, nested, holes).
 
+The key and value positions also accept writable lvalues beyond plain
+variables: object properties, static properties, dynamic properties, and array
+elements. The lvalue is assigned each iteration before the body runs and keeps
+the last iteration's binding after the loop:
+
+```php
+<?php
+class Cursor { public string $currentId = ""; }
+$c = new Cursor();
+foreach (["a" => 1, "b" => 2] as $c->currentId => $value) {
+    echo $c->currentId; // ab
+}
+echo $c->currentId;     // b (last key survives the loop)
+
+$out = [];
+foreach ([1, 2, 3] as $out["slot"]) {
+    echo $out["slot"];  // 123
+}
+
+class Reg { public static string $key = ""; }
+foreach (["x" => 5] as Reg::$key => $v) {}
+```
+
+When both positions are lvalues, the value is assigned before the key, matching
+PHP. By-reference binding of a non-plain lvalue (`as &$obj->prop`) is not
+supported and is rejected at compile time.
+
 Untyped, `mixed`, and union-typed sources are dispatched at runtime. If the
 runtime value is an indexed or associative array, both by-value and by-reference
 value binding are supported. If the runtime value is an `Iterator` or

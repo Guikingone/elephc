@@ -27,6 +27,7 @@ pub(super) use locals::{
     parse_typed_assign,
 };
 pub(crate) use postfix::{
+    assignment_target_store_stmt,
     can_replay_assignment_target,
 };
 pub(super) use postfix::{

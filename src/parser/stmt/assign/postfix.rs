@@ -258,15 +258,34 @@ fn lower_nested_append_assignment(
 }
 
 /// Builds the statement that writes `value` back into an already-stabilized
-/// assignment target. Supports the same local, property, static property, and
-/// array target families as postfix assignment lowering.
-fn assignment_target_store_stmt(
+/// assignment target. Supports the same local, property, dynamic property,
+/// static property, and array target families as postfix assignment lowering.
+/// Also reused by the foreach lvalue-binding desugar
+/// (`crate::parser::foreach_target`) so per-iteration stores share the exact
+/// statement shapes the assignment parser produces.
+pub(crate) fn assignment_target_store_stmt(
     target: Expr,
     value: Expr,
     span: Span,
 ) -> Result<StmtKind, CompileError> {
     match target.kind {
         ExprKind::Variable(name) => Ok(StmtKind::Assign { name, value }),
+        // `$obj->{$name} = $v` / `$obj->$name = $v` — dynamic property writes have no
+        // dedicated StmtKind; they reuse the expression-position assignment node, the
+        // same shape `try_parse_postfix_assignment` emits for a dynamic-property LHS.
+        ExprKind::DynamicPropertyAccess { object, property } => Ok(StmtKind::ExprStmt(Expr::new(
+            ExprKind::Assignment {
+                target: Box::new(Expr::new(
+                    ExprKind::DynamicPropertyAccess { object, property },
+                    span,
+                )),
+                value: Box::new(value),
+                result_target: None,
+                prelude: Vec::new(),
+                conditional_value_temp: None,
+            },
+            span,
+        ))),
         ExprKind::PropertyAccess { object, property } => Ok(StmtKind::PropertyAssign {
             object,
             property,

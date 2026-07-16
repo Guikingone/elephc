@@ -205,6 +205,38 @@ fn test_error_foreach_destructure_invalid_target() {
     expect_error("<?php foreach ($a as [1 + 2]) {}", "Invalid list destructuring target");
 }
 
+// --- foreach lvalue binding target errors ---
+
+/// Verifies a by-ref non-plain foreach binding (`as &$this->v`) stays a loud error:
+/// foreach by-ref write-through into a complex lvalue is intentionally unsupported.
+#[test]
+fn test_error_foreach_by_ref_property_target() {
+    expect_error(
+        "<?php foreach ($a as &$this->v) {}",
+        "Expected variable after 'as'",
+    );
+}
+
+/// Verifies a by-ref non-plain foreach VALUE binding (`as $k => &$this->v`) is rejected
+/// with the value-position diagnostic.
+#[test]
+fn test_error_foreach_by_ref_property_value_target() {
+    expect_error(
+        "<?php foreach ($a as $k => &$this->v) {}",
+        "Expected variable after '=>'",
+    );
+}
+
+/// Verifies a function-call foreach binding target (`as f()`) is rejected: only writable
+/// lvalues (variables, properties, static properties, array elements) may bind.
+#[test]
+fn test_error_foreach_call_target() {
+    expect_error(
+        "<?php foreach ($a as f()) {}",
+        "Expected variable after 'as'",
+    );
+}
+
 // --- Attribute syntax errors ---
 
 /// Verifies the error diagnostic for unterminated attribute group.
