@@ -270,12 +270,49 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     if ctx.gc_stats {
         emit_gc_stats(ctx);
     }
+    emit_ini_table_teardown(ctx);
     if ctx.heap_debug {
         ctx.emitter.comment("heap-debug: print allocator summary and leak report to stderr");
         abi::emit_call_label(ctx.emitter, "__rt_heap_debug_report");
     }
     abi::emit_exit(ctx.emitter, 0);
     ctx.epilogue_emitted = true;
+}
+
+/// Emits a guarded deep-free of the persistent ini directive table on CLI exit.
+///
+/// `ini_get`/`ini_set` build a process-persistent hash (`_rt_ini_table`) whose keys and
+/// values are heap-owned; without teardown `--heap-debug` would report them as leaks. The
+/// free is guarded on the `_rt_ini_table_init` seed marker so programs that never touched
+/// the ini table pay nothing, and the marker is cleared afterwards so a re-executed epilogue
+/// copy cannot double-free. This is emitted inline at each top-level `return`, but only one
+/// copy runs at runtime because the process exits immediately after.
+fn emit_ini_table_teardown(ctx: &mut FunctionContext<'_>) {
+    // A unique skip label per emission: the top-level epilogue is emitted inline at every
+    // `return`, so a fixed label would be defined more than once in the same program.
+    let skip_label = ctx.next_label("ini_teardown_skip");
+    ctx.emitter.comment("teardown: deep-free the persistent ini directive table (guarded)");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_rt_ini_table_init", 0);
+            ctx.emitter.instruction(&format!("cbz x9, {}", skip_label));        // skip when the ini table was never seeded
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x0", "_rt_ini_table", 0);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_free_deep");
+            ctx.emitter.instruction("mov x9, #0");                              // clear the seed marker after freeing the table
+            abi::emit_store_reg_to_symbol(ctx.emitter, "x9", "_rt_ini_table_init", 0);
+            ctx.emitter.label(&skip_label);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r11", "_rt_ini_table_init", 0);
+            ctx.emitter.instruction("test r11, r11");                           // was the ini table ever seeded?
+            ctx.emitter.instruction(&format!("jz {}", skip_label));             // skip when the ini table was never seeded
+            abi::emit_load_symbol_to_reg(ctx.emitter, "rax", "_rt_ini_table", 0);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_free_deep");
+            ctx.emitter.instruction("xor r11d, r11d");                          // clear the seed marker after freeing the table
+            abi::emit_store_reg_to_symbol(ctx.emitter, "r11", "_rt_ini_table_init", 0);
+            ctx.emitter.label(&skip_label);
+        }
+    }
 }
 
 /// Emits the C-callable `--web` top-level handler prologue.

@@ -907,6 +907,36 @@ pub(super) fn check_builtin(
                 PhpType::Bool,
             ])))
         }
+        "ini_set" => {
+            // ini_set(string $option, mixed $value): string|false — set a runtime ini
+            // directive and return its PREVIOUS value as a string, or false if unset.
+            // The value argument accepts string|int|float|bool|null (coerced to string).
+            if args.len() != 2 {
+                return Err(CompileError::new(span, "ini_set() takes exactly 2 arguments"));
+            }
+            checker.infer_type(&args[0], env)?;
+            checker.infer_type(&args[1], env)?;
+            Ok(Some(checker.normalize_union_type(vec![
+                PhpType::Str,
+                PhpType::Bool,
+            ])))
+        }
+        "get_cfg_var" => {
+            // get_cfg_var(string $option): string|false — the compiled master value for a
+            // known core directive, or false for unknown/unset directives. Not affected by
+            // ini_set (reads immutable master defaults).
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "get_cfg_var() takes exactly 1 argument",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(checker.normalize_union_type(vec![
+                PhpType::Str,
+                PhpType::Bool,
+            ])))
+        }
         "get_defined_constants" => {
             // get_defined_constants(bool $categorize = false): array.
             if args.len() > 1 {

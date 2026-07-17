@@ -685,6 +685,10 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         }
         // ini_get(string $option): string|false.
         "ini_get" => Some(fixed(&["option"])),
+        // ini_set(string $option, string|int|float|bool|null $value): string|false.
+        "ini_set" => Some(fixed(&["option", "value"])),
+        // get_cfg_var(string $option): array|string|false (compiled master value).
+        "get_cfg_var" => Some(fixed(&["option"])),
         // get_defined_constants(bool $categorize = false): array.
         "get_defined_constants" => Some(optional(&["categorize"], 0, vec![bool_lit(false)])),
         // -- misc / error-handling / process builtins (recognition-only; runtime deferred) --

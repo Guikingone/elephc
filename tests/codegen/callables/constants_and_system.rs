@@ -2629,3 +2629,121 @@ fn test_error_log_writes_to_stderr_only() {
     let out = compile_and_run("<?php error_log(\"hi\"); echo \"ok\";");
     assert_eq!(out, "ok");
 }
+
+/// Verifies `ini_get` returns the seeded CLI default for a known directive
+/// (`memory_limit` → "128M"), matching `php`'s master default.
+#[test]
+fn test_ini_get_seeded_memory_limit() {
+    let out = compile_and_run("<?php echo ini_get(\"memory_limit\");");
+    assert_eq!(out, "128M");
+}
+
+/// Verifies `ini_get` returns PHP `false` (a distinct boxed bool, not "") for an
+/// unseeded directive, matching PHP for unloaded extension directives.
+#[test]
+fn test_ini_get_unset_is_false() {
+    let out = compile_and_run("<?php var_dump(ini_get(\"no_such_xyz\"));");
+    assert_eq!(out, "bool(false)\n");
+}
+
+/// Anti-stub: `ini_set` returns the REAL previous value ("1") and the new value is
+/// observed by a subsequent `ini_get` ("0"), proving a live mutable table.
+#[test]
+fn test_ini_set_returns_previous_and_persists() {
+    let out = compile_and_run(
+        "<?php $p = ini_set(\"display_errors\", \"0\"); echo $p . \"|\" . ini_get(\"display_errors\");",
+    );
+    assert_eq!(out, "1|0");
+}
+
+/// Verifies the PHP save/restore idiom round-trips: `$p = ini_set(...); ini_set(..., $p);`
+/// restores the original seeded value ("14" for `precision`).
+#[test]
+fn test_ini_set_save_restore_roundtrip() {
+    let out = compile_and_run(
+        "<?php $p = ini_set(\"precision\", \"5\"); ini_set(\"precision\", $p); echo ini_get(\"precision\");",
+    );
+    assert_eq!(out, "14");
+}
+
+/// PHP-faithful rejection: `ini_set`/`ini_get` on an UNREGISTERED (unseeded) directive
+/// both return `false`. Verified with `php` and `php -n`: PHP only accepts REGISTERED
+/// directives — `ini_set("my.custom","abc")` => bool(false) and stores nothing, and
+/// `ini_get("my.custom")` => bool(false). The seeded table doubles as the registered
+/// set, so `my.custom` (absent) is rejected exactly like real PHP.
+#[test]
+fn test_ini_set_unregistered_directive_is_false() {
+    let set = compile_and_run("<?php var_dump(ini_set(\"my.custom\", \"abc\"));");
+    assert_eq!(set, "bool(false)\n");
+    let get = compile_and_run("<?php var_dump(ini_get(\"my.custom\"));");
+    assert_eq!(get, "bool(false)\n");
+}
+
+/// Verifies `get_cfg_var` is independent of `ini_set`: it returns the immutable
+/// MASTER value ("128M") even after `ini_set("memory_limit", "999M")`, while
+/// `ini_get` reflects the mutated value ("999M").
+#[test]
+fn test_get_cfg_var_independent_of_ini_set() {
+    let out = compile_and_run(
+        "<?php ini_set(\"memory_limit\", \"999M\"); echo get_cfg_var(\"memory_limit\") . \"|\" . ini_get(\"memory_limit\");",
+    );
+    assert_eq!(out, "128M|999M");
+}
+
+/// Verifies `get_cfg_var` returns PHP `false` for an unknown directive and for a
+/// directive absent from the master map (`date.timezone`), matching `php`.
+#[test]
+fn test_get_cfg_var_unknown_is_false() {
+    let unknown = compile_and_run("<?php var_dump(get_cfg_var(\"no_such\"));");
+    assert_eq!(unknown, "bool(false)\n");
+    let tz = compile_and_run("<?php var_dump(get_cfg_var(\"date.timezone\"));");
+    assert_eq!(tz, "bool(false)\n");
+}
+
+/// Heap gate: an ini-heavy program (seeded reads, mutating overwrites of registered
+/// directives, an UNREGISTERED `ini_set` that must allocate nothing, and a `get_cfg_var`)
+/// whose results are consumed through owned array storage is `--heap-debug` clean. This
+/// proves the main-epilogue teardown deep-frees the persistent ini table AND that the
+/// persist-on-get / persist-before-overwrite ownership rules leave no dangling table
+/// copies (no UAF: `precision` is read after being overwritten twice). The unregistered
+/// `ini_set("my.unreg", ...)` returns false and — because the new value is persisted only
+/// after the registration check — allocates nothing to leak.
+///
+/// Results are stored into an array (deep-freed at epilogue) rather than bare locals,
+/// because a bare boxed-Mixed call-result local is not reliably released on the CLI exit
+/// path (a pre-existing EIR ownership gap shared with `realpath`/`strpos` and every other
+/// `string|false`-returning builtin — orthogonal to this ini table).
+#[test]
+fn test_ini_table_heap_clean_with_teardown() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php \
+         $a = []; \
+         $a['seed'] = ini_get(\"memory_limit\"); \
+         $a['prev'] = ini_set(\"display_errors\", \"0\"); \
+         $a['cur'] = ini_get(\"display_errors\"); \
+         $a['k0'] = ini_set(\"precision\", \"8\"); \
+         $a['k1'] = ini_set(\"precision\", \"10\"); \
+         $a['k2'] = ini_get(\"precision\"); \
+         $a['unreg'] = ini_set(\"my.unreg\", \"x\"); \
+         $a['master'] = get_cfg_var(\"precision\"); \
+         echo $a['seed']; echo \"|\"; echo $a['cur']; echo \"|\"; echo $a['k2']; echo \"|\"; echo $a['master'];",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "128M|0|10|14", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies the ini builtins resolve case-insensitively (`INI_GET`) and through a
+/// leading-namespace-separator call (`\ini_set`), and that `function_exists` sees
+/// `get_cfg_var` via the canonical catalog.
+#[test]
+fn test_ini_builtins_case_insensitive_and_namespaced() {
+    let out = compile_and_run(
+        "<?php echo INI_GET(\"memory_limit\"); echo \"|\"; echo \\ini_set(\"precision\", \"3\"); echo \"|\"; var_dump(function_exists(\"get_cfg_var\"));",
+    );
+    assert_eq!(out, "128M|14|bool(true)\n");
+}

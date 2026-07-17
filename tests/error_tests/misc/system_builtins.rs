@@ -511,6 +511,24 @@ fn test_error_preg_split_no_args() {
     );
 }
 
+expect_builtin_arity_error!(
+    test_error_ini_set_one_arg,
+    "<?php ini_set(\"x\");",
+    "ini_set() takes exactly 2 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_ini_get_no_args,
+    "<?php ini_get();",
+    "ini_get() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_get_cfg_var_two_args,
+    "<?php get_cfg_var(\"a\", \"b\");",
+    "get_cfg_var() takes exactly 1 argument"
+);
+
 // -- Hex literal errors --
 
 /// Verifies that concatenating an undefined constant with a string path inside `require` produces a

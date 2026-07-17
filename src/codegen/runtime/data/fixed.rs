@@ -47,6 +47,41 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // ignore_user_abort() global state. The zero-initialized `.comm` slot is also the
     // PHP default (0 = do not ignore), so no separate seed marker is needed.
     out.push_str(".comm _rt_ignore_user_abort, 8, 3\n");
+    // ini_get()/ini_set() persistent directive table. `_rt_ini_table` holds the directive
+    // hash pointer in its low word; `_rt_ini_table_init` is a one-shot seed marker (0 =
+    // unseeded → __rt_ini_table_ensure lazily builds and seeds the hash on first access).
+    // KNOWN LIMITATION: ini 'error_reporting' is a seeded TABLE value and is NOT live-synced
+    // with error_reporting()'s `_rt_error_reporting` global (follow-up). Symfony reads the
+    // level via error_reporting(), not ini_get('error_reporting'), so the target is unaffected.
+    out.push_str(".comm _rt_ini_table, 16, 3\n");
+    out.push_str(".comm _rt_ini_table_init, 8, 3\n");
+    // ini directive seed literals (mutable table) and master literals (immutable get_cfg_var
+    // map). Symbol names/lengths are shared with the runtime emitters via the INI_SEED /
+    // INI_MASTER tables so addresses stay in lockstep with the seed/compare-chain code.
+    for (index, (key, value)) in crate::codegen::runtime::system::INI_SEED.iter().enumerate() {
+        out.push_str(&format!(
+            ".globl {sym}\n{sym}:\n    .ascii {lit:?}\n",
+            sym = crate::codegen::runtime::system::ini_seed_key_symbol(index),
+            lit = key,
+        ));
+        out.push_str(&format!(
+            ".globl {sym}\n{sym}:\n    .ascii {lit:?}\n",
+            sym = crate::codegen::runtime::system::ini_seed_val_symbol(index),
+            lit = value,
+        ));
+    }
+    for (index, (key, value)) in crate::codegen::runtime::system::INI_MASTER.iter().enumerate() {
+        out.push_str(&format!(
+            ".globl {sym}\n{sym}:\n    .ascii {lit:?}\n",
+            sym = crate::codegen::runtime::system::ini_master_key_symbol(index),
+            lit = key,
+        ));
+        out.push_str(&format!(
+            ".globl {sym}\n{sym}:\n    .ascii {lit:?}\n",
+            sym = crate::codegen::runtime::system::ini_master_val_symbol(index),
+            lit = value,
+        ));
+    }
     // Trailing newline appended by __rt_error_log, matching PHP's error_log() which
     // emits `message\n` on stderr for the CLI/SAPI default (message_type 0).
     out.push_str(".globl _error_log_nl\n_error_log_nl:\n    .ascii \"\\n\"\n");

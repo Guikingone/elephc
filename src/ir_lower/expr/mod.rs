@@ -6622,6 +6622,11 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "stream_socket_client" | "stream_socket_pair" | "stream_copy_to_stream"
         | "stream_socket_get_name" | "stream_socket_recvfrom" | "stream_socket_sendto"
         | "stream_socket_server" | "tmpfile" | "gzinflate" | "gzuncompress" | "strpos" | "strrpos"
+        // ini_set / ini_get / get_cfg_var each return `string|false`; boxing the owned
+        // runtime string-or-false (like realpath) preserves a distinct PHP `false` that
+        // `var_dump`, `=== false`, and `echo`/concat all observe correctly. Grouping them
+        // with `getenv` in the Str group would collapse the false path to an empty string.
+        | "ini_set" | "ini_get" | "get_cfg_var"
         | "strpbrk" | "strrchr" | "parse_url" | "constant" => {
             Some(PhpType::Mixed)
         }

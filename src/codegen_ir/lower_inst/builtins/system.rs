@@ -699,6 +699,87 @@ pub(super) fn lower_putenv(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `ini_get(name)` through the persistent-ini-table reader `__rt_ini_get`.
+///
+/// Materializes the directive name into the string result registers, calls the reader,
+/// and boxes the owned string-or-false result so `var_dump`/`=== false`/`echo` observe a
+/// distinct PHP `false` for unset directives.
+pub(super) fn lower_ini_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "ini_get", 1)?;
+    let name = expect_operand(inst, 0)?;
+    super::io::load_string_to_result(ctx, name, "ini_get name")?;
+    abi::emit_call_label(ctx.emitter, "__rt_ini_get");
+    super::io::box_owned_string_or_false_result(ctx, "ini_get");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `get_cfg_var(name)` through the immutable master reader `__rt_get_cfg_var`.
+///
+/// Materializes the directive name into the string result registers, calls the reader
+/// (which never touches the mutable ini table), and boxes the owned string-or-false result.
+pub(super) fn lower_get_cfg_var(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "get_cfg_var", 1)?;
+    let name = expect_operand(inst, 0)?;
+    super::io::load_string_to_result(ctx, name, "get_cfg_var name")?;
+    abi::emit_call_label(ctx.emitter, "__rt_get_cfg_var");
+    super::io::box_owned_string_or_false_result(ctx, "get_cfg_var");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `ini_set(name, value)` through the persistent-ini-table writer `__rt_ini_set`.
+///
+/// PHP casts the ini value to a string, so the value operand is coerced to a string here
+/// (using the target-aware `load_string_to_result` string cast) but is passed BORROWED —
+/// `__rt_ini_set` persists it only after confirming the directive is registered, so an
+/// unregistered directive (which PHP rejects with `false`) allocates nothing to leak. The
+/// borrowed value pointer/length are parked on the stack while the directive name is
+/// materialized (the name may itself be a boxed Mixed whose string cast clobbers
+/// caller-saved registers), then restored into the value argument registers. The writer
+/// returns the previous value (or false), boxed for the caller.
+pub(super) fn lower_ini_set(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "ini_set", 2)?;
+    let name = expect_operand(inst, 0)?;
+    let value = expect_operand(inst, 1)?;
+
+    // 1. Coerce the value to a PHP string (in the string result registers), then park the
+    //    BORROWED pointer/length below the stack — the runtime writer persists it only if the
+    //    directive is registered, so the unregistered path never allocates an owned copy.
+    super::io::load_string_to_result(ctx, value, "ini_set value")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // park the borrowed coerced ini value pointer/length on the stack
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("push rdx");                                // park the borrowed coerced ini value length on the stack
+            ctx.emitter.instruction("push rax");                                // park the borrowed coerced ini value pointer (keeps the stack 16-byte aligned)
+        }
+    }
+    // 2. Materialize the directive name into the string result registers.
+    super::io::load_string_to_result(ctx, name, "ini_set name")?;
+    // 3. Restore the borrowed value into the value argument registers and call the writer.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldp x3, x4, [sp], #16");                   // restore the borrowed ini value pointer/length as the value args
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("pop rcx");                                 // restore the borrowed ini value pointer as value_lo
+            ctx.emitter.instruction("pop r8");                                  // restore the borrowed ini value length as value_hi
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_ini_set");
+    super::io::box_owned_string_or_false_result(ctx, "ini_set");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `error_reporting(?int $error_level = null)` through `__rt_error_reporting`.
 ///
 /// Materializes the level argument into the integer result register (its payload
