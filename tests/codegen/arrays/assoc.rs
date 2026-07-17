@@ -629,3 +629,77 @@ echo 3;
     );
     assert_eq!(out, "3");
 }
+
+/// Compiles a match arm with a trailing comma after its single pattern
+/// (`'c', => 3`) and verifies the trailing comma is treated as a separator,
+/// not a second pattern, so the arm still matches.
+#[test]
+fn test_match_trailing_comma_single_pattern_arm() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 'c';
+$result = match ($x) {
+    'a' => 1,
+    'c', => 3,
+    default => 0,
+};
+echo $result;
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+/// Compiles a match arm with multiple comma-separated patterns followed by a
+/// trailing comma before `=>` (`'a', 'b', => 1`) and verifies the arm matches
+/// on either pattern.
+#[test]
+fn test_match_trailing_comma_multi_pattern_arm() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 'b';
+$result = match ($x) {
+    'a', 'b', => 1,
+    default => 0,
+};
+echo $result;
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// Compiles a match with a trailing-comma arm that does NOT match followed by
+/// another trailing-comma arm that does, verifying the parser correctly
+/// resumes arm parsing after a trailing comma instead of getting stuck on the
+/// non-matching arm.
+#[test]
+fn test_match_trailing_comma_non_matching_arm_then_matching_arm() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 'c';
+$result = match ($x) {
+    'a', 'b', => 1,
+    'c', 'd', => 2,
+    default => 0,
+};
+echo $result;
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// Compiles a match where the only pattern arm has a trailing comma and does
+/// not match, verifying the `default` arm after it still parses and runs.
+#[test]
+fn test_match_trailing_comma_arm_falls_through_to_default() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 'z';
+$result = match ($x) {
+    'a', 'b', => 1,
+    default => 9,
+};
+echo $result;
+"#,
+    );
+    assert_eq!(out, "9");
+}

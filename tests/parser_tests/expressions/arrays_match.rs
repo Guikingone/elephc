@@ -71,6 +71,41 @@ fn test_parse_match() {
     }
 }
 
+/// Verifies that a trailing comma before `=>` in a match arm's pattern list
+/// (`'a', 'b', => 1`) is treated as a separator, not a second pattern: the
+/// resulting `Match` AST has the exact same arm pattern count/kinds, result
+/// kind, and default presence as the equivalent non-trailing-comma form.
+#[test]
+fn test_parse_match_trailing_comma_arm_same_ast_as_without() {
+    fn extract_match(stmts: &[Stmt]) -> (Vec<(Vec<Expr>, Expr)>, Option<Box<Expr>>) {
+        let StmtKind::Assign { value, .. } = &stmts[0].kind else {
+            panic!("expected Assign, got {:?}", stmts[0].kind);
+        };
+        let ExprKind::Match { arms, default, .. } = &value.kind else {
+            panic!("expected Match, got {:?}", value.kind);
+        };
+        (arms.clone(), default.clone())
+    }
+
+    let with_trailing =
+        parse_source("<?php $x = match($n) { 'a', 'b', => 1, default => 0 };");
+    let without_trailing =
+        parse_source("<?php $x = match($n) { 'a', 'b' => 1, default => 0 };");
+
+    let (arms_a, default_a) = extract_match(&with_trailing);
+    let (arms_b, default_b) = extract_match(&without_trailing);
+
+    assert_eq!(arms_a.len(), 1);
+    assert_eq!(arms_a.len(), arms_b.len());
+    assert_eq!(arms_a[0].0.len(), 2, "trailing comma must not add a pattern");
+    assert_eq!(arms_a[0].0.len(), arms_b[0].0.len());
+    for (pattern_a, pattern_b) in arms_a[0].0.iter().zip(arms_b[0].0.iter()) {
+        assert_eq!(pattern_a.kind, pattern_b.kind);
+    }
+    assert_eq!(arms_a[0].1.kind, arms_b[0].1.kind);
+    assert_eq!(default_a.is_some(), default_b.is_some());
+}
+
 /// Verifies that standalone `match` expressions parse as expression statements.
 #[test]
 fn test_parse_standalone_match_expression_statement() {

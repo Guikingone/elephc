@@ -626,6 +626,18 @@ fn test_error_match_missing_paren() {
     expect_error("<?php $x = match $x {};", "Expected '(' after 'match'");
 }
 
+/// Verifies the error diagnostic for a match arm with two patterns missing
+/// their separating comma. Only a trailing comma directly before `=>` is
+/// treated as a separator; two adjacent patterns with no comma between them
+/// (`1 2 => 1`, which `php -l` also rejects) must still fail loudly.
+#[test]
+fn test_error_match_arm_missing_comma_between_patterns() {
+    expect_error(
+        "<?php $x = match(1) { 1 2 => 1, };",
+        "Expected '=>' in match arm",
+    );
+}
+
 /// Verifies the error diagnostic for arrow function missing arrow.
 #[test]
 fn test_error_arrow_function_missing_arrow() {
