@@ -29,6 +29,13 @@ sidebar:
 | `system()` | `system($command): string` | Execute, output to stdout |
 | `passthru()` | `passthru($command): void` | Execute, pass raw output |
 | `trigger_deprecation()` | `trigger_deprecation($package, $version, $message, ...$args): void` | Symfony's `symfony/deprecation-contracts` global. Accepts the call and is a sound no-op: deprecation notices are advisory, so elephc evaluates the arguments and emits nothing |
+| `error_reporting()` | `error_reporting(?int $error_level = null): int` | Get or set the runtime error-reporting level. Seeds to `E_ALL` (30719). With no argument (or `null`) returns the current level unchanged; with an int sets the new level and returns the previous one |
+| `ignore_user_abort()` | `ignore_user_abort(?bool $enable = null): int` | Get or set the "ignore user abort" flag. Seeds to `0`. With no argument (or `null`) returns the current flag; with a bool sets it (`0`/`1`) and returns the previous flag |
+| `set_time_limit()` | `set_time_limit(int $seconds): bool` | Always returns `true`. A native AOT binary has no execution timeout, so the limit has no effect — an honest, documented AOT limitation |
+| `connection_aborted()` | `connection_aborted(): int` | Always returns `0`. A compiled program's connection is never aborted |
+| `error_log()` | `error_log(string $message, int $message_type = 0, ?string $destination = null, ?string $additional_headers = null): bool` | Writes `$message` plus a trailing newline to stderr (fd 2) and returns `true`. For `$message_type` `0` this matches PHP's CLI/SAPI default; other message types also go to stderr (documented AOT behavior — messages are never silently dropped), and the `$destination`/`$additional_headers` arguments are accepted but ignored |
+
+`error_reporting()` and `ignore_user_abort()` keep real global state for the running program: the first call seeds the level/flag to its PHP default, a value argument installs the new state and returns the previous value, and a null/omitted argument reads the current state without changing it. `set_time_limit()` and `connection_aborted()` are constant returns reflecting the AOT model (no execution timeout, no abortable connection). elephc does not model PHP's INI engine, so these functions carry no engine-level side effect beyond the state they explicitly maintain.
 
 `define()` returns `true` the first time a constant is defined at runtime. Duplicate attempts keep the first value, return `false`, and emit a suppressible runtime warning.
 

@@ -37,6 +37,19 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _concat_buf, 65536, 3\n");
     out.push_str(".comm _concat_off, 8, 3\n");
     out.push_str(".comm _strtotime_clock, 8, 3\n");
+    // error_reporting() global state (Pattern B). `_rt_error_reporting` holds the
+    // current PHP error-reporting level; `_rt_error_reporting_init` is a one-shot
+    // seed marker (0 = unseeded → __rt_error_reporting lazily seeds the level to
+    // E_ALL = 30719). The marker is required because 0 is itself a valid reporting
+    // level (error_reporting(0) silences), so a zero level cannot double as "unseeded".
+    out.push_str(".comm _rt_error_reporting, 8, 3\n");
+    out.push_str(".comm _rt_error_reporting_init, 8, 3\n");
+    // ignore_user_abort() global state. The zero-initialized `.comm` slot is also the
+    // PHP default (0 = do not ignore), so no separate seed marker is needed.
+    out.push_str(".comm _rt_ignore_user_abort, 8, 3\n");
+    // Trailing newline appended by __rt_error_log, matching PHP's error_log() which
+    // emits `message\n` on stderr for the CLI/SAPI default (message_type 0).
+    out.push_str(".globl _error_log_nl\n_error_log_nl:\n    .ascii \"\\n\"\n");
     // Default-timezone state: the "TZ=<id>" env buffer (kept alive for putenv), the stored
     // identifier length (0 = none set → date_default_timezone_get returns "UTC"), and the
     // "UTC" literal returned in that default case.

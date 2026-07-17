@@ -699,6 +699,102 @@ pub(super) fn lower_putenv(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `error_reporting(?int $error_level = null)` through `__rt_error_reporting`.
+///
+/// Materializes the level argument into the integer result register (its payload
+/// is the in-band `NULL_SENTINEL` for a null/omitted argument, so the runtime can
+/// distinguish "get" from "set"), then calls the helper which returns the previous
+/// level. When the argument is omitted entirely the `NULL_SENTINEL` is loaded
+/// directly so the helper still performs a plain "get".
+pub(super) fn lower_error_reporting(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "error_reporting", 0, 1)?;
+    if let Some(level) = inst.operands.first().copied() {
+        ctx.load_value_to_result(level)?;
+    } else {
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            crate::codegen::sentinels::NULL_SENTINEL,
+        );
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_error_reporting");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `ignore_user_abort(?bool $enable = null)` through `__rt_ignore_user_abort`.
+///
+/// Mirrors `error_reporting`: the enable argument is materialized into the integer
+/// result register (`NULL_SENTINEL` payload for null/omitted), and the runtime
+/// helper coerces a real argument to 0/1, stores it, and returns the previous flag.
+pub(super) fn lower_ignore_user_abort(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "ignore_user_abort", 0, 1)?;
+    if let Some(enable) = inst.operands.first().copied() {
+        ctx.load_value_to_result(enable)?;
+    } else {
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            crate::codegen::sentinels::NULL_SENTINEL,
+        );
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_ignore_user_abort");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `set_time_limit(int $seconds): bool` as the constant `true`.
+///
+/// A native AOT binary has no execution timeout, so PHP's `set_time_limit`
+/// return value (`true` on success in the CLI/SAPI default) is materialized
+/// directly; the seconds argument is an already-evaluated SSA value and is
+/// intentionally ignored at runtime (documented AOT limitation).
+pub(super) fn lower_set_time_limit(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "set_time_limit", 1)?;
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `connection_aborted(): int` as the constant `0`.
+///
+/// A compiled program's connection is never aborted, so PHP's
+/// `connection_aborted` result (`0`) is materialized directly.
+pub(super) fn lower_connection_aborted(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "connection_aborted", 0)?;
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `error_log(string $message, ...): bool` through `__rt_error_log`.
+///
+/// Materializes the message string (ptr/len in the string result registers) and
+/// calls the helper, which writes the message plus a trailing newline to stderr.
+/// The optional `message_type`/`destination`/`additional_headers` arguments are
+/// accepted (1..=4 args) and ignored at runtime — a documented AOT behavior:
+/// every message goes to stderr rather than being silently dropped. The boolean
+/// `true` return value is materialized after the call.
+pub(super) fn lower_error_log(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "error_log", 1, 4)?;
+    let message = expect_operand(inst, 0)?;
+    require_string(ctx.load_value_to_result(message)?.codegen_repr(), "error_log message")?;
+    abi::emit_call_label(ctx.emitter, "__rt_error_log");
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `php_uname(mode?)` through the target-aware uname runtime helper.
 pub(super) fn lower_php_uname(
     ctx: &mut FunctionContext<'_>,

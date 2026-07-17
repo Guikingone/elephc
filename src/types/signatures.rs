@@ -635,6 +635,24 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         )),
         "getenv" => Some(fixed(&["name"])),
         "putenv" => Some(fixed(&["assignment"])),
+        // -- env/runtime state builtins (real AOT runtime; slice 1A) --
+        // error_reporting(?int $error_level = null): int — null (or no arg) reads the
+        // current level; a passed int sets it and returns the previous value.
+        "error_reporting" => Some(optional(&["error_level"], 0, vec![null_lit()])),
+        // ignore_user_abort(?bool $enable = null): int — null reads the current flag; a
+        // passed bool sets it (0/1) and returns the previous value.
+        "ignore_user_abort" => Some(optional(&["enable"], 0, vec![null_lit()])),
+        // set_time_limit(int $seconds): bool — always true (a native binary has no timeout).
+        "set_time_limit" => Some(fixed(&["seconds"])),
+        // connection_aborted(): int — always 0 (a compiled program's connection is never aborted).
+        "connection_aborted" => Some(fixed(&[])),
+        // error_log(string $message, int $message_type = 0, ?string $destination = null,
+        // ?string $additional_headers = null): bool — writes $message to stderr, returns true.
+        "error_log" => Some(optional(
+            &["message", "message_type", "destination", "additional_headers"],
+            1,
+            vec![int_lit(0), null_lit(), null_lit()],
+        )),
         // -- process / system control builtins (recognition-only; runtime deferred) --
         // pcntl_signal(int $signal, callable|int $handler,
         // bool $restart_syscalls = true): bool.

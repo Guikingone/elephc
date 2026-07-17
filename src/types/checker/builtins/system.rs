@@ -712,6 +712,70 @@ pub(super) fn check_builtin(
             };
             Ok(Some(PhpType::Array(Box::new(elem_ty))))
         }
+        // -- env/runtime state builtins (real AOT runtime; slice 1A) --
+        "error_reporting" => {
+            // error_reporting(?int $error_level = null): int — no-arg/null reads the
+            // current level; a passed int sets it and returns the previous value.
+            if args.len() > 1 {
+                return Err(CompileError::new(
+                    span,
+                    "error_reporting() takes at most 1 argument",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Int))
+        }
+        "ignore_user_abort" => {
+            // ignore_user_abort(?bool $enable = null): int — no-arg/null reads the
+            // current flag; a passed bool sets it (0/1) and returns the previous value.
+            if args.len() > 1 {
+                return Err(CompileError::new(
+                    span,
+                    "ignore_user_abort() takes at most 1 argument",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Int))
+        }
+        "set_time_limit" => {
+            // set_time_limit(int $seconds): bool — always true (a native binary has no timeout).
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "set_time_limit() takes exactly 1 argument",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Bool))
+        }
+        "connection_aborted" => {
+            // connection_aborted(): int — always 0 (a compiled program's connection is never aborted).
+            if !args.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "connection_aborted() takes no arguments",
+                ));
+            }
+            Ok(Some(PhpType::Int))
+        }
+        "error_log" => {
+            // error_log(string $message, int $message_type = 0, ?string $destination = null,
+            // ?string $additional_headers = null): bool — writes $message to stderr, returns true.
+            if args.is_empty() || args.len() > 4 {
+                return Err(CompileError::new(
+                    span,
+                    "error_log() takes between 1 and 4 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Bool))
+        }
         // -- process / system control builtins (recognition-only; runtime deferred) --
         // These are runtime-dead for the console app: registered so calls type-check and stop
         // being "Undefined function", but they have no EIR/codegen lowering yet.

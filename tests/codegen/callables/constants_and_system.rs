@@ -2555,3 +2555,77 @@ echo $loaded . $mapped[0];
     );
     assert_eq!(out, "011");
 }
+
+/// Verifies `error_reporting()` seeds to E_ALL (30719) and round-trips a set:
+/// `error_reporting(0)` returns the previous level then leaves the level at 0,
+/// matching PHP's `30719|0`.
+#[test]
+fn test_error_reporting_round_trip() {
+    let out = compile_and_run(
+        "<?php $p = error_reporting(0); echo $p; echo \"|\"; echo error_reporting();",
+    );
+    assert_eq!(out, "30719|0");
+}
+
+/// Same round-trip under the legacy sentinel null representation, guarding that
+/// the get/set detection (an in-band NULL_SENTINEL payload marks a "get") holds
+/// regardless of the active null representation.
+#[test]
+fn test_error_reporting_round_trip_sentinel_repr() {
+    let out = compile_and_run_sentinel(
+        "<?php $p = error_reporting(0); echo $p; echo \"|\"; echo error_reporting();",
+    );
+    assert_eq!(out, "30719|0");
+}
+
+/// Verifies a no-argument `error_reporting()` returns the E_ALL seed initially.
+#[test]
+fn test_error_reporting_no_arg_seed() {
+    let out = compile_and_run("<?php echo error_reporting();");
+    assert_eq!(out, "30719");
+}
+
+/// Verifies the PHP save/restore idiom: `error_reporting(E_ALL & ~E_DEPRECATED)`
+/// returns the previous level (30719) and installs the masked level (22527).
+#[test]
+fn test_error_reporting_save_restore() {
+    let out = compile_and_run(
+        "<?php $prev = error_reporting(E_ALL & ~E_DEPRECATED); echo $prev; echo \"|\"; echo error_reporting();",
+    );
+    assert_eq!(out, "30719|22527");
+}
+
+/// Verifies `ignore_user_abort()` save/restore: seeds to 0, `ignore_user_abort(true)`
+/// returns the previous flag (0) and installs 1, matching PHP's `0|1`.
+#[test]
+fn test_ignore_user_abort_save_restore() {
+    let out = compile_and_run(
+        "<?php $p = ignore_user_abort(true); echo $p; echo \"|\"; echo ignore_user_abort();",
+    );
+    assert_eq!(out, "0|1");
+}
+
+/// Verifies `set_time_limit(30)` returns `true` — a native binary has no execution
+/// timeout, so PHP's CLI/SAPI success result is reproduced (documented AOT limitation).
+#[test]
+fn test_set_time_limit_returns_true() {
+    let out = compile_and_run("<?php var_dump(set_time_limit(30));");
+    assert_eq!(out, "bool(true)\n");
+}
+
+/// Verifies `connection_aborted()` returns `0` — a compiled program's connection
+/// is never aborted.
+#[test]
+fn test_connection_aborted_returns_zero() {
+    let out = compile_and_run("<?php echo connection_aborted();");
+    assert_eq!(out, "0");
+}
+
+/// Verifies `error_log()` writes its message to stderr (not stdout) and returns
+/// true: only `ok` reaches stdout. The message + trailing newline go to fd 2 and
+/// are not captured here.
+#[test]
+fn test_error_log_writes_to_stderr_only() {
+    let out = compile_and_run("<?php error_log(\"hi\"); echo \"ok\";");
+    assert_eq!(out, "ok");
+}

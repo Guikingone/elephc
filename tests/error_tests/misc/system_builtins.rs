@@ -45,6 +45,24 @@ expect_builtin_arity_error!(
     "unserialize() takes 1 or 2 arguments"
 );
 
+expect_builtin_arity_error!(
+    test_error_set_time_limit_no_args,
+    "<?php set_time_limit();",
+    "set_time_limit() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_connection_aborted_too_many_args,
+    "<?php connection_aborted(1);",
+    "connection_aborted() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_error_reporting_too_many_args,
+    "<?php error_reporting(1, 2);",
+    "error_reporting() takes at most 1 argument"
+);
+
 /// Verifies that referencing an undefined constant produces the expected "Undefined constant" error.
 #[test]
 fn test_error_undefined_constant() {

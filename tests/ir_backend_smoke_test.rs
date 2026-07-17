@@ -6680,6 +6680,28 @@ echo is_callable('optional_callable') ? 'yes' : 'no';
     );
 }
 
+/// Verifies the EIR backend compiles and runs the env/runtime state builtins
+/// (error_reporting/ignore_user_abort/set_time_limit/connection_aborted/error_log)
+/// with PHP-identical observable results. error_log's message goes to stderr, so
+/// only the trailing stdout marker is asserted here.
+#[test]
+fn ir_backend_env_runtime_state_builtins() {
+    let out = compile_and_run_ir_backend(
+        "env_runtime_state_builtins",
+        r#"<?php
+$p = error_reporting(0);
+echo $p, "|", error_reporting(), "\n";
+$q = ignore_user_abort(true);
+echo $q, "|", ignore_user_abort(), "\n";
+var_dump(set_time_limit(30));
+echo connection_aborted(), "\n";
+error_log("hi");
+echo "ok\n";
+"#,
+    );
+    assert_eq!(out, "30719|0\n0|1\nbool(true)\n0\nok\n");
+}
+
 /// Verifies function-variant dispatch fails until the include path activates the variant.
 #[test]
 fn ir_backend_requires_include_before_function_variant_dispatch() {

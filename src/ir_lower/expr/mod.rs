@@ -6570,7 +6570,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         "clearstatcache" | "closedir" | "exit" | "die" | "passthru" | "rewinddir"
         | "stream_bucket_append" | "stream_bucket_prepend" | "trigger_deprecation"
         | "unset" => Some(PhpType::Void),
-        "fclose" | "feof" | "rewind" => Some(PhpType::Bool),
+        "fclose" | "feof" | "rewind" | "set_time_limit" | "error_log" => Some(PhpType::Bool),
         "printf" | "array_rand" | "array_unshift" | "file_put_contents" | "filemtime"
         | "filesize" | "fprintf" | "fpassthru" | "fputcsv" | "fseek" | "ftell" | "fwrite"
         | "crc32" | "get_resource_id" | "isset" | "linkinfo" | "mktime" | "gmmktime" | "sleep"
@@ -6581,7 +6581,8 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "strcspn" | "strspn" | "hexdec" | "bindec"
         | "umask" | "vfprintf" | "vprintf" | "realpath_cache_size"
         | "strnatcmp" | "strnatcasecmp"
-        | "octdec" | "substr_count" | "preg_last_error" => {
+        | "octdec" | "substr_count" | "preg_last_error"
+        | "error_reporting" | "ignore_user_abort" | "connection_aborted" => {
             Some(PhpType::Int)
         }
         // strtotime() is `int|false`: a real timestamp (including a valid -1 pre-epoch) on success,
