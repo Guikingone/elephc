@@ -127,10 +127,12 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | Function | Signature | Description |
 |---|---|---|
 | `strlen()` | `strlen($str): int` | Returns string length |
+| `strval()` | `strval($value): string` | Coerce a value to its string representation using PHP's `(string)` cast rules (`42` → `"42"`, `true` → `"1"`, `1.5` → `"1.5"`, `null` → `""`) |
 | `substr()` | `substr($str, $start [, $len]): string` | Extract substring |
 | `strpos()` | `strpos($hay, $needle): int\|false` | Find first occurrence. Returns `false` if not found |
 | `strrpos()` | `strrpos($hay, $needle): int\|false` | Find last occurrence. Returns `false` if not found |
 | `strstr()` | `strstr($hay, $needle): string` | Find first occurrence and return rest |
+| `strrchr()` | `strrchr($hay, $needle): string\|false` | Returns the substring of `$hay` from the **last** occurrence of `$needle`'s first byte to the end, or `false` if that byte never appears. Only the first byte of `$needle` is used |
 | `str_replace()` | `str_replace($search, $replace, $subject): string` | Replace all occurrences. `$search`/`$replace` may be arrays: each search element is applied in order (a later element sees earlier replacements), and missing replacement elements become `""` |
 | `str_ireplace()` | `str_ireplace($search, $replace, $subject): string` | Case-insensitive replace. Supports the same array `$search`/`$replace` form as `str_replace()` |
 | `substr_replace()` | `substr_replace($str, $repl, $start [, $len]): string` | Replace substring |
@@ -150,6 +152,8 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `grapheme_strrev()` | `grapheme_strrev($str): string\|false` | Reverse a UTF-8 string by grapheme clusters, preserving embedded NUL bytes and keeping combining marks, emoji modifiers, and ZWJ sequences with their base cluster. Returns `false` on malformed UTF-8. |
 | `strcmp()` | `strcmp($a, $b): int` | Binary-safe string comparison |
 | `strcasecmp()` | `strcasecmp($a, $b): int` | Case-insensitive comparison |
+| `strnatcmp()` | `strnatcmp($a, $b): int` | Natural-order comparison (`-1`/`0`/`1`): embedded digit runs compare by numeric value, so `strnatcmp("img2","img10")` is `-1`. Leading zeros and leading/inner whitespace are handled like PHP's `php_strnatcmp_ex` |
+| `strnatcasecmp()` | `strnatcasecmp($a, $b): int` | Case-insensitive natural-order comparison; ASCII letters are upper-folded before comparing |
 | `strcspn()` | `strcspn($str, $chars): int` | Length of the initial segment of `$str` containing none of the bytes in `$chars` |
 | `strspn()` | `strspn($str, $chars): int` | Length of the initial segment of `$str` consisting entirely of bytes in `$chars` |
 | `strpbrk()` | `strpbrk($str, $chars): string\|false` | Returns the substring of `$str` starting at the first byte found in `$chars`, or `false` if none occur |
@@ -168,6 +172,8 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `sscanf()` | `sscanf($str, $fmt): array` | Parse string with format (%d, %f, %s, %%). Matched fields are returned as substrings (e.g. `%f` yields `"3.14"`), mirroring the existing `%d` behavior. |
 | `addslashes()` | `addslashes($str): string` | Escape quotes and backslashes |
 | `stripslashes()` | `stripslashes($str): string` | Remove escape backslashes |
+| `addcslashes()` | `addcslashes($str, $chars): string` | C-style escape every byte listed in `$chars` (which may use `a..z` ranges). Control bytes become `\n \r \t \a \v \b \f`, other non-printable bytes become `\ooo` octal, and printable members are backslash-prefixed |
+| `stripcslashes()` | `stripcslashes($str): string` | Inverse of `addcslashes()`: decode `\n \r \t \a \v \b \f`, `\\`, `\ooo` octal, and `\xHH` hex escapes. Unknown escapes yield the literal character; octal/hex values are truncated to one byte |
 | `nl2br()` | `nl2br($str): string` | Insert `<br />` before newlines |
 | `wordwrap()` | `wordwrap($str [, $width [, $break [, $cut]]]): string` | Wrap text at word boundaries; set `$cut` to break over-long words |
 | `bin2hex()` | `bin2hex($str): string` | Convert binary to hex |

@@ -66,6 +66,10 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_strcspn(emitter);
     strings::emit_strspn(emitter);
     strings::emit_strpbrk(emitter);
+    strings::emit_strrchr(emitter);
+    strings::emit_strnatcmp(emitter);
+    strings::emit_addcslashes(emitter);
+    strings::emit_stripcslashes(emitter);
     strings::emit_hexdec(emitter);
     strings::emit_str_starts_with(emitter);
     strings::emit_str_ends_with(emitter);
@@ -243,6 +247,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_hash_get(emitter);
     arrays::emit_hash_iter(emitter);
     arrays::emit_hash_union(emitter);
+    arrays::emit_hash_replace_into(emitter);
+    arrays::emit_array_is_list(emitter);
     arrays::emit_hash_to_mixed(emitter);
     arrays::emit_hash_count(emitter);
     arrays::emit_hash_free_deep(emitter);

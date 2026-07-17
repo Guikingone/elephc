@@ -354,6 +354,8 @@ By-reference destructuring targets (`foreach ($arr as [&$a, $b])` and `[&$a, $b]
 | `array_splice()` | `array_splice($arr, $offset [, $length]): array` | Remove a slice in place and return the removed elements |
 | `array_chunk()` | `array_chunk($arr, $size): array` | Split into chunks |
 | `array_merge()` | `array_merge(...$arrays): array` | Merge one or more arrays (variadic; `array_merge()` returns an empty array) |
+| `array_replace()` | `array_replace($arr, ...$replacements): array` | Overlay later arrays onto the first, last-wins by key (integer keys are preserved, not renumbered), keeping the first array's insertion order. Associative-array arguments that share one element type are supported |
+| `array_is_list()` | `array_is_list($arr): bool` | Returns `true` when the array's keys are exactly the integers `0..count-1` in order (an empty array is a list) |
 | `array_combine()` | `array_combine($keys, $values): array` | Create array from keys/values |
 | `array_fill()` | `array_fill($start, $num, $value): array` | Fill with values |
 | `array_fill_keys()` | `array_fill_keys($keys, $value): array` | Fill with values using keys |

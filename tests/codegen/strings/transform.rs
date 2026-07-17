@@ -386,3 +386,77 @@ echo $s, "|", strlen($s);
     );
     assert_eq!(out, "elephc|6");
 }
+
+/// Verifies strval coerces scalars to their PHP string representation.
+/// Fixture: int/float/string via strval; each matches the `(string)` cast (php-verified).
+#[test]
+fn test_strval_scalars() {
+    let out = compile_and_run(
+        r#"<?php echo strval(42), "|", strval(1.5), "|", strval("x");"#,
+    );
+    assert_eq!(out, "42|1.5|x");
+}
+
+/// Verifies strval of a boolean true yields "1" and null yields the empty string.
+/// Fixture: strval(true)="1", strval(null)="" (php-verified).
+#[test]
+fn test_strval_bool_and_null() {
+    let out = compile_and_run(r#"<?php echo "[", strval(true), "][", strval(null), "]";"#);
+    assert_eq!(out, "[1][]");
+}
+
+/// Verifies strval resolves through PHP's namespace fallback and case-insensitive lookup.
+/// Fixture: inside a namespace, upper-case STRVAL() resolves to the builtin.
+#[test]
+fn test_strval_namespaced_case_insensitive_fallback() {
+    let out = compile_and_run(r#"<?php namespace App; echo STRVAL(7);"#);
+    assert_eq!(out, "7");
+}
+
+/// Verifies addcslashes backslash-prefixes printable set members, including `a..z` ranges.
+/// Fixture: addcslashes("aBcDeF", "A..Z") escapes the upper-case letters (php-verified).
+#[test]
+fn test_addcslashes_range_and_printable() {
+    let out = compile_and_run(
+        r#"<?php echo addcslashes("aBcDeF", "A..Z"), "|", addcslashes("a.b", "."), "|", addcslashes('a"b', '"');"#,
+    );
+    assert_eq!(out, r#"a\Bc\De\F|a\.b|a\"b"#);
+}
+
+/// Verifies addcslashes emits C escapes for control bytes and octal for high bytes.
+/// Fixture: NUL/TAB/LF/BEL/ESC via a `\0..\37` range, and chr(200) -> `\310` (php-verified).
+#[test]
+fn test_addcslashes_control_and_octal() {
+    let out = compile_and_run(
+        r#"<?php echo bin2hex(addcslashes(chr(0).chr(9).chr(10).chr(7).chr(27), "\0..\37")), "|", bin2hex(addcslashes(chr(200), chr(200)));"#,
+    );
+    assert_eq!(out, "5c3030305c745c6e5c615c303333|5c333130");
+}
+
+/// Verifies stripcslashes decodes C-style escapes as the inverse of addcslashes.
+/// Fixture: `\t`/`\n` control escapes, `\101` octal -> 'A', `\x42` hex -> 'B' (php-verified).
+#[test]
+fn test_stripcslashes_decodes_escapes() {
+    let out = compile_and_run(
+        r#"<?php echo bin2hex(stripcslashes("a\\tb\\nc")), "|", stripcslashes("\\101\\x42");"#,
+    );
+    assert_eq!(out, "6109620a63|AB");
+}
+
+/// Verifies stripcslashes truncates octal to one byte and leaves unknown escapes literal.
+/// Fixture: `\777` -> 0xff, and `\A`/`\z`/`\8` keep their literal characters (php-verified).
+#[test]
+fn test_stripcslashes_octal_overflow_and_literals() {
+    let out = compile_and_run(
+        r#"<?php echo bin2hex(stripcslashes("\\777")), "|", stripcslashes("\\A\\z\\8");"#,
+    );
+    assert_eq!(out, "ff|Az8");
+}
+
+/// Verifies stripcslashes resolves through PHP's namespace fallback and case-insensitive lookup.
+/// Fixture: inside a namespace, upper-case StripCSlashes() resolves to the builtin.
+#[test]
+fn test_stripcslashes_namespaced_case_insensitive_fallback() {
+    let out = compile_and_run(r#"<?php namespace App; echo StripCSlashes("q\\tr");"#);
+    assert_eq!(out, "q\tr");
+}

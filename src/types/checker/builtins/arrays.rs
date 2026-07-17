@@ -380,6 +380,48 @@ pub(super) fn check_builtin(
             }
             Ok(Some(result.unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Void)))))
         }
+        "array_is_list" => {
+            // array_is_list(array $array): bool — true iff the keys are exactly the
+            // integers 0..count-1 in order. Accepts a concrete array or a gradual
+            // operand (Mixed/union containing an array), like `count`.
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "array_is_list() takes exactly 1 argument"));
+            }
+            let ty = checker.infer_type(&args[0], env)?;
+            if !array_arg_is_gradually_acceptable(&ty) {
+                return Err(CompileError::new(
+                    span,
+                    "array_is_list() argument must be array",
+                ));
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "array_replace" => {
+            // PHP 8: `array_replace(array $array, array ...$replacements): array` —
+            // later arrays overwrite earlier entries by key (int keys are preserved,
+            // not renumbered). Each argument is accepted under the gradual boundary.
+            if args.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "array_replace() requires at least 1 argument",
+                ));
+            }
+            let mut result: Option<PhpType> = None;
+            for (idx, arg) in args.iter().enumerate() {
+                let ty = checker.infer_type(arg, env)?;
+                if !array_arg_is_gradually_acceptable(&ty) {
+                    return Err(CompileError::new(
+                        span,
+                        &format!("array_replace() argument #{} must be array", idx + 1),
+                    ));
+                }
+                result = Some(match result {
+                    None => ty,
+                    Some(acc) => array_merge_return_type(acc, ty),
+                });
+            }
+            Ok(Some(result.unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Void)))))
+        }
         "array_diff" | "array_intersect" | "array_diff_key" | "array_intersect_key" => {
             if args.len() != 2 {
                 return Err(CompileError::new(

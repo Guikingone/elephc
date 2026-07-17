@@ -841,3 +841,15 @@ fn test_error_current_non_array() {
         "current() argument must be array",
     );
 }
+
+expect_builtin_arity_error!(
+    test_error_array_is_list_wrong_args,
+    "<?php array_is_list([1, 2], 3);",
+    "array_is_list() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_array_replace_no_args,
+    "<?php array_replace();",
+    "array_replace() requires at least 1 argument"
+);

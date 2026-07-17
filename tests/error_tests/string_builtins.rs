@@ -634,3 +634,39 @@ fn test_error_parse_str_result_must_be_variable() {
         "parse_str() parameter $result must be passed a variable",
     );
 }
+
+expect_builtin_arity_error!(
+    test_error_strval_wrong_args,
+    "<?php strval(1, 2);",
+    "strval() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_strrchr_wrong_args,
+    "<?php strrchr(\"abc\");",
+    "strrchr() takes exactly 2 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_addcslashes_wrong_args,
+    "<?php addcslashes(\"abc\");",
+    "addcslashes() takes exactly 2 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_stripcslashes_wrong_args,
+    "<?php stripcslashes(\"a\", \"b\");",
+    "stripcslashes() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_strnatcmp_wrong_args,
+    "<?php strnatcmp(\"a\");",
+    "strnatcmp() takes exactly 2 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_strnatcasecmp_wrong_args,
+    "<?php strnatcasecmp(\"a\", \"b\", \"c\");",
+    "strnatcasecmp() takes exactly 2 arguments"
+);

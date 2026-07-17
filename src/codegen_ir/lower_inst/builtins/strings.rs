@@ -334,7 +334,33 @@ fn lower_span_windowed_x86_64(
 pub(super) fn lower_strpbrk(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_binary_string_args(ctx, inst, "strpbrk")?;
     abi::emit_call_label(ctx.emitter, "__rt_strpbrk");
-    box_strpbrk_result(ctx);
+    box_search_suffix_or_false_result(ctx, "strpbrk");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `strrchr(haystack, needle)` and boxes its `string|false` result as Mixed.
+///
+/// `__rt_strrchr` returns the suffix of `haystack` beginning at the last occurrence
+/// of the first byte of `needle` (pointer/length in the string-result registers),
+/// or a null pointer when that byte never appears. The null sentinel is boxed as
+/// PHP `false`, mirroring `strstr`/`strpbrk`. Per PHP 8, a multi-byte `needle` uses
+/// only its first byte, which `__rt_strrchr` handles by ignoring `needle` length.
+pub(super) fn lower_strrchr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    load_binary_string_args(ctx, inst, "strrchr")?;
+    abi::emit_call_label(ctx.emitter, "__rt_strrchr");
+    box_search_suffix_or_false_result(ctx, "strrchr");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `addcslashes(string, characters)` through the runtime C-style escaper.
+///
+/// `__rt_addcslashes` scans `string` and, for every byte listed in `characters`
+/// (a set that may include `a..z` ranges), writes a C-style escape into the shared
+/// concat buffer, returning the escaped `(ptr, len)` string result. The two string
+/// operands map to the binary-string argument registers used by the runtime helper.
+pub(super) fn lower_addcslashes(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    load_binary_string_args(ctx, inst, "addcslashes")?;
+    abi::emit_call_label(ctx.emitter, "__rt_addcslashes");
     store_if_result(ctx, inst)
 }
 
@@ -3502,21 +3528,23 @@ fn box_grapheme_strrev_result(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// Boxes the raw `strpbrk()` runtime result as PHP `string|false`.
+/// Boxes a search builtin's raw suffix-or-null runtime result as PHP `string|false`.
 ///
-/// A null string pointer (no `characters` byte found in `string`) is boxed as a
-/// boolean `false`; otherwise the matched suffix is boxed as a Mixed string.
-fn box_strpbrk_result(ctx: &mut FunctionContext<'_>) {
-    let false_label = ctx.next_label("strpbrk_false");
-    let done_label = ctx.next_label("strpbrk_done");
+/// A null string pointer (search miss) is boxed as a boolean `false`; otherwise the
+/// matched suffix is boxed as a Mixed string. Shared by `strpbrk`/`strrchr`, whose
+/// runtime helpers return the matched suffix in the string-result registers (or a
+/// null pointer sentinel). `tag` names the emitted branch labels for readability.
+fn box_search_suffix_or_false_result(ctx: &mut FunctionContext<'_>, tag: &str) {
+    let false_label = ctx.next_label(&format!("{}_false", tag));
+    let done_label = ctx.next_label(&format!("{}_done", tag));
 
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz x1, {}", false_label));       // box false when no characters byte was found in the subject
+            ctx.emitter.instruction(&format!("cbz x1, {}", false_label));       // box false when the search found no match in the subject
             crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
-            ctx.emitter.instruction(&format!("b {}", done_label));              // skip false boxing after a successful strpbrk match
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip false boxing after a successful match
             ctx.emitter.label(&false_label);
-            ctx.emitter.instruction("mov x1, #0");                              // false payload = 0 for strpbrk() miss
+            ctx.emitter.instruction("mov x1, #0");                              // false payload = 0 for the search miss
             ctx.emitter.instruction("mov x2, #0");                              // bool mixed payloads do not use a high word
             ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = bool false
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
@@ -3524,11 +3552,11 @@ fn box_strpbrk_result(ctx: &mut FunctionContext<'_>) {
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("test rax, rax");                           // test the returned string pointer for the miss sentinel
-            ctx.emitter.instruction(&format!("jz {}", false_label));            // box false when no characters byte was found in the subject
+            ctx.emitter.instruction(&format!("jz {}", false_label));            // box false when the search found no match in the subject
             crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
-            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after a successful strpbrk match
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after a successful match
             ctx.emitter.label(&false_label);
-            ctx.emitter.instruction("xor edi, edi");                            // false payload = 0 for strpbrk() miss
+            ctx.emitter.instruction("xor edi, edi");                            // false payload = 0 for the search miss
             ctx.emitter.instruction("xor esi, esi");                            // bool mixed payloads do not use a high word
             ctx.emitter.instruction("mov eax, 3");                              // runtime tag 3 = bool false
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");

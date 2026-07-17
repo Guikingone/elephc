@@ -273,6 +273,92 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Int))
         }
+        "strval" => {
+            // strval(mixed $value): string — coerces its argument to a string with
+            // PHP's `(string)` cast rules. Any scalar/Mixed argument is accepted.
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "strval() takes exactly 1 argument"));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Str))
+        }
+        "strnatcmp" | "strnatcasecmp" => {
+            // Natural-order string comparison; returns a signed int (<0, 0, >0).
+            if args.len() != 2 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 2 arguments", name),
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Int))
+        }
+        "strrchr" => {
+            // strrchr(string $haystack, string $needle): string|false — returns the
+            // suffix from the last occurrence of the first byte of $needle, or false.
+            if args.len() != 2 {
+                return Err(CompileError::new(span, "strrchr() takes exactly 2 arguments"));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(checker.normalize_union_type(vec![PhpType::Str, PhpType::Bool])))
+        }
+        "addcslashes" => {
+            // addcslashes(string $string, string $characters): string.
+            if args.len() != 2 {
+                return Err(CompileError::new(span, "addcslashes() takes exactly 2 arguments"));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Str))
+        }
+        "stripcslashes" => {
+            // stripcslashes(string $string): string.
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "stripcslashes() takes exactly 1 argument"));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Str))
+        }
+        "str_getcsv" => {
+            // str_getcsv(string, sep, enclosure, escape): array — recognized so the
+            // call type-checks and namespace fallback resolves; codegen is deferred
+            // (loud unsupported error) until CSV field parsing is implemented.
+            if args.is_empty() || args.len() > 4 {
+                return Err(CompileError::new(span, "str_getcsv() takes 1 to 4 arguments"));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Array(Box::new(PhpType::Mixed))))
+        }
+        "pack" => {
+            // pack(string $format, mixed ...$values): string — recognized for
+            // namespace fallback; codegen is deferred (loud unsupported error).
+            if args.is_empty() {
+                return Err(CompileError::new(span, "pack() requires at least 1 argument"));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Str))
+        }
+        "parse_url" => {
+            // parse_url(string $url, int $component = -1): array|string|int|false|null.
+            // The heterogeneous result (assoc array without a component, or a single
+            // scheme/host/port/... value with one) is modeled as `Mixed`.
+            if args.is_empty() || args.len() > 2 {
+                return Err(CompileError::new(span, "parse_url() takes 1 or 2 arguments"));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Mixed))
+        }
         "strcspn" | "strspn" => {
             // PHP: strcspn/strspn(string $string, string $characters,
             // int $offset = 0, ?int $length = null): int.

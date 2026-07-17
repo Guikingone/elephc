@@ -406,3 +406,90 @@ fn test_strpos_with_zero_offset() {
     let out = compile_and_run(r#"<?php echo strpos("abcabc", "c", 0);"#);
     assert_eq!(out, "2");
 }
+
+/// Verifies strrchr returns the suffix from the last occurrence of the needle's first byte.
+/// Fixture: "a/b/c.php" with needle "." returns ".php" (php-verified).
+#[test]
+fn test_strrchr_basic() {
+    let out = compile_and_run(r#"<?php echo strrchr("a/b/c.php", ".");"#);
+    assert_eq!(out, ".php");
+}
+
+/// Verifies strrchr returns strict false when the needle byte is absent.
+/// Fixture: strrchr("x", "z") === false (php-verified).
+#[test]
+fn test_strrchr_not_found_is_false() {
+    let out = compile_and_run(r#"<?php echo strrchr("x", "z") === false ? "miss" : "hit";"#);
+    assert_eq!(out, "miss");
+}
+
+/// Verifies strrchr uses only the first byte of a multi-byte needle (PHP 8 behavior).
+/// Fixture: strrchr("hello world", "lo") searches for the last 'l' -> "ld" (php-verified).
+#[test]
+fn test_strrchr_multibyte_needle_uses_first_byte() {
+    let out = compile_and_run(r#"<?php echo strrchr("hello world", "lo");"#);
+    assert_eq!(out, "ld");
+}
+
+/// Verifies strrchr resolves through PHP's namespace fallback and case-insensitive lookup.
+/// Fixture: inside a namespace, an unqualified upper-case StrRChr() still resolves to the builtin.
+#[test]
+fn test_strrchr_namespaced_case_insensitive_fallback() {
+    let out = compile_and_run(
+        r#"<?php namespace App\Util; echo StrRChr("x/y/z.txt", "/");"#,
+    );
+    assert_eq!(out, "/z.txt");
+}
+
+/// Verifies strnatcmp orders numeric runs by value, not lexically.
+/// Fixture: strnatcmp("img10","img2")=1, strnatcmp("img2","img10")=-1, strnatcmp("a","a")=0
+/// (php-verified).
+#[test]
+fn test_strnatcmp_numeric_ordering() {
+    let out = compile_and_run(
+        r#"<?php echo strnatcmp("img10","img2"),",",strnatcmp("img2","img10"),",",strnatcmp("a","a");"#,
+    );
+    assert_eq!(out, "1,-1,0");
+}
+
+/// Verifies strnatcmp's PHP boundary cases: leading zeros and multi-digit magnitude.
+/// Fixture: strnatcmp("01","1")=0, strnatcmp("2","10")=-1, strnatcmp("100","20")=1
+/// (php-verified).
+#[test]
+fn test_strnatcmp_leading_zero_and_magnitude() {
+    let out = compile_and_run(
+        r#"<?php echo strnatcmp("01","1"),",",strnatcmp("2","10"),",",strnatcmp("100","20");"#,
+    );
+    assert_eq!(out, "0,-1,1");
+}
+
+/// Verifies strnatcmp skips leading whitespace like PHP's php_strnatcmp_ex.
+/// Fixture: strnatcmp(" 1","1")=0, strnatcmp("  12","12")=0 (php-verified).
+#[test]
+fn test_strnatcmp_leading_whitespace() {
+    let out = compile_and_run(
+        r#"<?php echo strnatcmp(" 1","1"),",",strnatcmp("  12","12");"#,
+    );
+    assert_eq!(out, "0,0");
+}
+
+/// Verifies strnatcasecmp lowercases before the natural comparison.
+/// Fixture: strnatcasecmp("IMG10","img2")=1, strnatcasecmp("A","a")=0 while strnatcmp("A","a")=-1
+/// (php-verified).
+#[test]
+fn test_strnatcasecmp_case_folding() {
+    let out = compile_and_run(
+        r#"<?php echo strnatcasecmp("IMG10","img2"),",",strnatcasecmp("A","a"),",",strnatcmp("A","a");"#,
+    );
+    assert_eq!(out, "1,0,-1");
+}
+
+/// Verifies strnatcmp resolves through PHP's namespace fallback and case-insensitive lookup.
+/// Fixture: inside a namespace, an unqualified StrNatCmp() still resolves to the builtin.
+#[test]
+fn test_strnatcmp_namespaced_case_insensitive_fallback() {
+    let out = compile_and_run(
+        r#"<?php namespace App\Util; echo StrNatCmp("v2","v10");"#,
+    );
+    assert_eq!(out, "-1");
+}

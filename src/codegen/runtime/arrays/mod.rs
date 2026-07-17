@@ -116,6 +116,8 @@ mod hash_set;
 mod hash_to_mixed;
 mod hash_union;
 mod hash_unset;
+mod hash_replace_into;
+mod array_is_list;
 mod heap_alloc;
 mod heap_debug_check_live;
 mod heap_debug_fail;
@@ -350,6 +352,10 @@ pub use hash_to_mixed::emit_hash_to_mixed;
 /// Emit hash-to-Mixed conversion helper.
 pub use hash_union::emit_hash_union;
 /// Emit hash union helper.
+pub use array_is_list::emit_array_is_list;
+/// Emit the `array_is_list()` hash/Mixed key-sequence scan helpers.
+pub use hash_replace_into::emit_hash_replace_into;
+/// Emit the `array_replace()` last-wins hash-overlay helper.
 pub use hash_unset::emit_hash_unset;
 /// Emit hash unset (single-key removal) helper.
 pub use heap_alloc::emit_heap_alloc;

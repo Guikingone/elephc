@@ -37,6 +37,10 @@ mod strcasecmp;
 mod strcspn;
 mod strspn;
 mod strpbrk;
+mod strrchr;
+mod strnatcmp;
+mod addcslashes;
+mod stripcslashes;
 mod hexdec;
 mod str_starts_with;
 mod str_ends_with;
@@ -151,6 +155,14 @@ pub use strspn::emit_strspn;
 /// Emit the strspn initial-segment-span helper (bytes in the set).
 pub use strpbrk::emit_strpbrk;
 /// Emit the strpbrk first-character-class search helper.
+pub use strrchr::emit_strrchr;
+/// Emit the strrchr last-occurrence suffix search helper.
+pub use strnatcmp::emit_strnatcmp;
+/// Emit the strnatcmp/strnatcasecmp natural-order comparison helpers.
+pub use addcslashes::emit_addcslashes;
+/// Emit the addcslashes C-style character-set escaping helper.
+pub use stripcslashes::emit_stripcslashes;
+/// Emit the stripcslashes C-style escape decoding helper.
 pub use hexdec::emit_hexdec;
 /// Emit the hexdec hexadecimal-string-to-integer parser.
 pub use str_starts_with::emit_str_starts_with;

@@ -133,6 +133,21 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Str))
         }
+        "mb_encode_numericentity" => {
+            // mb_encode_numericentity(string $string, array $map, ?string $encoding = null,
+            // bool $hex = false): string — recognized so the call type-checks and
+            // namespace fallback resolves; codegen is deferred (loud unsupported error).
+            if args.len() < 2 || args.len() > 4 {
+                return Err(CompileError::new(
+                    span,
+                    "mb_encode_numericentity() takes 2 to 4 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Str))
+        }
         "mb_convert_encoding" => {
             // mb_convert_encoding(array|string $string, string $to_encoding,
             // array|string|null $from_encoding = null): array|string|false. Symfony calls

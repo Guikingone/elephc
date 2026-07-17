@@ -105,6 +105,8 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "array_combine" => arrays::lower_array_combine(ctx, inst),
         "array_column" => arrays::lower_array_column(ctx, inst),
         "array_flip" => arrays::lower_array_flip(ctx, inst),
+        "array_is_list" => arrays::lower_array_is_list(ctx, inst),
+        "array_replace" => arrays::lower_array_replace(ctx, inst),
         "array_fill" => arrays::lower_array_fill(ctx, inst),
         "array_fill_keys" => arrays::lower_array_fill_keys(ctx, inst),
         "array_reverse" => arrays::lower_array_reverse(ctx, inst),
@@ -415,6 +417,21 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "strcasecmp" => {
             strings::lower_binary_string_runtime(ctx, inst, "strcasecmp", "__rt_strcasecmp")
         }
+        "strval" => super::conversions::lower_cast_to_string(ctx, inst),
+        "strnatcmp" => {
+            strings::lower_binary_string_runtime(ctx, inst, "strnatcmp", "__rt_strnatcmp")
+        }
+        "strnatcasecmp" => {
+            strings::lower_binary_string_runtime(ctx, inst, "strnatcasecmp", "__rt_strnatcasecmp")
+        }
+        "strrchr" => strings::lower_strrchr(ctx, inst),
+        "addcslashes" => strings::lower_addcslashes(ctx, inst),
+        "stripcslashes" => strings::lower_unary_string_runtime(
+            ctx,
+            inst,
+            "stripcslashes",
+            "__rt_stripcslashes",
+        ),
         "strcspn" => strings::lower_span(ctx, inst, "strcspn", "__rt_strcspn"),
         "strspn" => strings::lower_span(ctx, inst, "strspn", "__rt_strspn"),
         "strpbrk" => strings::lower_strpbrk(ctx, inst),

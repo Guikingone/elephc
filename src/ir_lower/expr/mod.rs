@@ -6331,6 +6331,7 @@ fn array_builtin_return_type(
         "array_fill" => array_fill_builtin_return_type(ctx, operands),
         "array_fill_keys" => array_fill_keys_builtin_return_type(ctx, operands),
         "array_merge" => array_merge_builtin_return_type(ctx, operands),
+        "array_replace" => array_replace_builtin_return_type(ctx, operands),
         "array_splice" | "array_filter" | "array_diff" | "array_intersect" | "array_diff_key"
         | "array_intersect_key" => array_preserve_first_builtin_return_type(ctx, operands),
         "in_array" => Some(PhpType::Bool),
@@ -6497,6 +6498,31 @@ fn array_merge_builtin_return_type(
     }
 }
 
+/// Returns precise return metadata for `array_replace(array, ...array)`.
+///
+/// The EIR backend lowers `array_replace` to a shallow clone of the first argument overlaid
+/// with `__rt_hash_replace_into`, which copies source entries verbatim. That is only sound
+/// when every argument shares one associative-hash element layout, so the result type is the
+/// first argument's associative type and this returns `None` (falling back to `Mixed`, which
+/// the backend then rejects with a loud error) whenever the operands are not all identically
+/// typed associative arrays.
+fn array_replace_builtin_return_type(
+    ctx: &LoweringContext<'_, '_>,
+    operands: &[crate::ir::ValueId],
+) -> Option<PhpType> {
+    let first = operands.first()?;
+    let first_ty = ctx.builder.value_php_type(*first).codegen_repr();
+    if !matches!(first_ty, PhpType::AssocArray { .. }) {
+        return None;
+    }
+    for operand in &operands[1..] {
+        if ctx.builder.value_php_type(*operand).codegen_repr() != first_ty {
+            return None;
+        }
+    }
+    Some(first_ty)
+}
+
 /// Returns true for the element sentinel used by statically empty indexed arrays.
 fn is_empty_array_element_type(ty: &PhpType) -> bool {
     matches!(ty.codegen_repr(), PhpType::Void)
@@ -6527,6 +6553,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "stream_wrapper_register" | "stream_wrapper_restore" | "stream_wrapper_unregister"
         | "stream_isatty" | "stream_is_local" | "stream_set_blocking" | "stream_set_timeout"
         | "stream_socket_enable_crypto" | "stream_socket_shutdown" | "stream_supports_lock" | "symlink" | "touch"
+        | "array_is_list"
         | "unlink" => {
             Some(PhpType::Bool)
         }
@@ -6534,6 +6561,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "get_parent_class"
         | "getcwd" | "getenv" | "gethostname" | "gethostbyname" | "php_uname"
         | "readline" | "shell_exec" | "sys_get_temp_dir"
+        | "strval" | "addcslashes" | "stripcslashes" | "pack" | "mb_encode_numericentity"
         | "fread" | "get_resource_type" | "gzcompress" | "gzdeflate" | "hash" | "hash_final" | "hash_hmac" | "long2ip"
         | "stream_get_line" | "system" | "spl_autoload_extensions" | "tempnam" | "vsprintf" => {
             Some(PhpType::Str)
@@ -6552,6 +6580,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "__elephc_strtotime_raw" | "time"
         | "strcspn" | "strspn" | "hexdec" | "bindec"
         | "umask" | "vfprintf" | "vprintf" | "realpath_cache_size"
+        | "strnatcmp" | "strnatcasecmp"
         | "octdec" | "substr_count" | "preg_last_error" => {
             Some(PhpType::Int)
         }
@@ -6592,7 +6621,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "stream_socket_client" | "stream_socket_pair" | "stream_copy_to_stream"
         | "stream_socket_get_name" | "stream_socket_recvfrom" | "stream_socket_sendto"
         | "stream_socket_server" | "tmpfile" | "gzinflate" | "gzuncompress" | "strpos" | "strrpos"
-        | "strpbrk" | "constant" => {
+        | "strpbrk" | "strrchr" | "parse_url" | "constant" => {
             Some(PhpType::Mixed)
         }
         "spl_autoload_functions" => Some(PhpType::Array(Box::new(PhpType::Int))),
@@ -6600,7 +6629,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "file" | "get_declared_classes" | "fscanf" | "get_declared_interfaces"
         | "get_declared_traits" | "glob" | "hash_algos" | "scandir" | "spl_classes"
         | "str_split" | "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers"
-        | "sscanf" => {
+        | "str_getcsv" | "sscanf" => {
             Some(PhpType::Array(Box::new(PhpType::Str)))
         }
         "class_attribute_args" => Some(PhpType::Array(Box::new(PhpType::Mixed))),

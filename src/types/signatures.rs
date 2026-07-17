@@ -245,6 +245,30 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         )),
         "str_repeat" => Some(fixed(&["string", "times"])),
         "strcmp" | "strcasecmp" => Some(fixed(&["string1", "string2"])),
+        // strval(mixed $value): string — coerces its single argument to a string.
+        "strval" => Some(fixed(&["value"])),
+        // strnatcmp/strnatcasecmp(string $string1, string $string2): int — the
+        // natural-order comparison siblings of strcmp/strcasecmp.
+        "strnatcmp" | "strnatcasecmp" => Some(fixed(&["string1", "string2"])),
+        // strrchr(string $haystack, string $needle): string|false — returns the
+        // suffix of $haystack from the last occurrence of $needle's first byte.
+        "strrchr" => Some(fixed(&["haystack", "needle"])),
+        // addcslashes(string $string, string $characters): string — C-style escaping
+        // of every byte listed in $characters (which may use `a..z` ranges).
+        "addcslashes" => Some(fixed(&["string", "characters"])),
+        // stripcslashes(string $string): string — the inverse of addcslashes.
+        "stripcslashes" => Some(fixed(&["string"])),
+        // str_getcsv(string $string, string $separator = ",", string $enclosure = "\"",
+        // string $escape = "\\"): array — recognized for namespace fallback; runtime
+        // lowering is deferred (loud unsupported error) until CSV parsing lands.
+        "str_getcsv" => Some(optional(
+            &["string", "separator", "enclosure", "escape"],
+            1,
+            vec![string_lit(","), string_lit("\""), string_lit("\\")],
+        )),
+        // pack(string $format, mixed ...$values): string — recognized for namespace
+        // fallback; runtime lowering is deferred (loud unsupported error).
+        "pack" => Some(variadic(&["format"], "values")),
         "strcspn" | "strspn" => Some(optional(
             &["string", "characters", "offset", "length"],
             2,
@@ -286,7 +310,17 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             sig.ref_params[1] = true;
             Some(sig)
         }
+        // parse_url(string $url, int $component = -1): array|string|int|false|null.
+        "parse_url" => Some(optional(&["url", "component"], 1, vec![int_lit(-1)])),
         // -- multibyte string (mbstring) builtins (recognition-only; runtime deferred) --
+        // mb_encode_numericentity(string $string, array $map, ?string $encoding = null,
+        // bool $hex = false): string — recognized for namespace fallback; runtime
+        // lowering is deferred (loud unsupported error).
+        "mb_encode_numericentity" => Some(optional(
+            &["string", "map", "encoding", "hex"],
+            2,
+            vec![null_lit(), bool_lit(false)],
+        )),
         // mb_substr(string $string, int $start, ?int $length = null,
         // ?string $encoding = null): string.
         "mb_substr" => Some(optional(
@@ -523,6 +557,11 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         }
         "array_push" | "array_unshift" => Some(first_param_ref(variadic(&["array"], "values"))),
         "array_merge" => Some(variadic(&[], "arrays")),
+        // array_is_list(array $array): bool.
+        "array_is_list" => Some(fixed(&["array"])),
+        // array_replace(array $array, array ...$replacements): array — later arrays
+        // overwrite earlier entries by key (int keys are preserved, not renumbered).
+        "array_replace" => Some(variadic(&["array"], "replacements")),
         // array_replace_recursive(array $array, array ...$replacements): array.
         "array_replace_recursive" => Some(variadic(&["array"], "replacements")),
         "array_diff" | "array_intersect" | "array_diff_key" | "array_intersect_key" => {
