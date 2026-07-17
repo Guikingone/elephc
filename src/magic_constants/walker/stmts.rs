@@ -11,7 +11,7 @@
 use crate::parser::ast::{CatchClause, EnumCaseDecl, Stmt, StmtKind};
 
 use super::exprs::walk_expr;
-use super::members::{walk_class_method, walk_class_property};
+use super::members::{walk_class_constant, walk_class_method, walk_class_property};
 use super::Pass;
 
 /// Applies a magic-constant pass to a sequence of top-level statements.
@@ -304,6 +304,10 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                 .into_iter()
                 .map(|m| walk_class_method(m, pass))
                 .collect();
+            let new_constants = constants
+                .into_iter()
+                .map(|c| walk_class_constant(c, pass))
+                .collect();
             pass.leave_class();
             StmtKind::ClassDecl {
                 name,
@@ -315,7 +319,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                 trait_uses,
                 properties: new_properties,
                 methods: new_methods,
-            constants,
+                constants: new_constants,
             }
         }
         StmtKind::TraitDecl {
@@ -334,13 +338,17 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                 .into_iter()
                 .map(|m| walk_class_method(m, pass))
                 .collect();
+            let new_constants = constants
+                .into_iter()
+                .map(|c| walk_class_constant(c, pass))
+                .collect();
             pass.leave_trait();
             StmtKind::TraitDecl {
                 name,
                 trait_uses,
                 properties: new_properties,
                 methods: new_methods,
-            constants,
+                constants: new_constants,
             }
         }
         StmtKind::InterfaceDecl {
@@ -349,19 +357,32 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             properties,
             methods,
         constants,
-        } => StmtKind::InterfaceDecl {
-            name,
-            extends,
-            properties: properties
+        } => {
+            // An interface is class-like for magic-constant purposes: `__CLASS__` in an
+            // interface constant is the interface's own FQN (php-verified). Enter the class
+            // scope so constant initializers lower with the interface as `__CLASS__`.
+            pass.enter_class(&name);
+            let new_properties = properties
                 .into_iter()
                 .map(|p| walk_class_property(p, pass))
-                .collect(),
-            methods: methods
+                .collect();
+            let new_methods = methods
                 .into_iter()
                 .map(|m| walk_class_method(m, pass))
-                .collect(),
-        constants,
-        },
+                .collect();
+            let new_constants = constants
+                .into_iter()
+                .map(|c| walk_class_constant(c, pass))
+                .collect();
+            pass.leave_class();
+            StmtKind::InterfaceDecl {
+                name,
+                extends,
+                properties: new_properties,
+                methods: new_methods,
+                constants: new_constants,
+            }
+        }
         StmtKind::EnumDecl {
             name,
             backing_type,
@@ -370,6 +391,10 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             methods,
             constants,
         } => {
+            // An enum is class-like: `__CLASS__` in a case value or constant initializer is
+            // the enum's own FQN (php-verified). Enter the class scope before walking cases,
+            // methods, and constants so their magic constants lower with the enum as `__CLASS__`.
+            pass.enter_class(&name);
             let cases = cases
                 .into_iter()
                 .map(|case| EnumCaseDecl {
@@ -379,10 +404,13 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                     attributes: case.attributes,
                 })
                 .collect();
-            pass.enter_class(&name);
             let methods = methods
                 .into_iter()
                 .map(|m| walk_class_method(m, pass))
+                .collect();
+            let constants = constants
+                .into_iter()
+                .map(|c| walk_class_constant(c, pass))
                 .collect();
             pass.leave_class();
             StmtKind::EnumDecl {
