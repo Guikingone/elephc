@@ -493,8 +493,15 @@ impl Checker {
                         elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
-                        **existing_elem_ty =
-                            wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                        // Never narrow a declared `mixed ...$args` variadic. `wider_type_syntactic`
+                        // lets `Str` swallow `Mixed`, so specializing a `mixed` variadic from the
+                        // first call arg would wrongly retype it to that arg's type and then reject
+                        // a later differently-typed arg. A `mixed` variadic accepts any element in
+                        // PHP, so it stays `Mixed`. Genuinely-typed variadics still specialize.
+                        if !matches!(existing_elem_ty.as_ref(), PhpType::Mixed) {
+                            **existing_elem_ty =
+                                wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                        }
                     }
                 }
                 resolved_return = Some(sig.return_type.clone());
@@ -975,8 +982,15 @@ impl Checker {
                         elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
-                        **existing_elem_ty =
-                            wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                        // Never narrow a declared `mixed ...$args` variadic. `wider_type_syntactic`
+                        // lets `Str` swallow `Mixed`, so specializing a `mixed` variadic from the
+                        // first call arg would wrongly retype it to that arg's type and then reject
+                        // a later differently-typed arg. A `mixed` variadic accepts any element in
+                        // PHP, so it stays `Mixed`. Genuinely-typed variadics still specialize.
+                        if !matches!(existing_elem_ty.as_ref(), PhpType::Mixed) {
+                            **existing_elem_ty =
+                                wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                        }
                     }
                 }
                 return Ok(sig.return_type.clone());
@@ -1030,8 +1044,15 @@ impl Checker {
                         elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
-                        **existing_elem_ty =
-                            wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                        // Never narrow a declared `mixed ...$args` variadic. `wider_type_syntactic`
+                        // lets `Str` swallow `Mixed`, so specializing a `mixed` variadic from the
+                        // first call arg would wrongly retype it to that arg's type and then reject
+                        // a later differently-typed arg. A `mixed` variadic accepts any element in
+                        // PHP, so it stays `Mixed`. Genuinely-typed variadics still specialize.
+                        if !matches!(existing_elem_ty.as_ref(), PhpType::Mixed) {
+                            **existing_elem_ty =
+                                wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                        }
                     }
                 }
                 resolved_return = Some(sig.return_type.clone());

@@ -140,10 +140,18 @@ impl Checker {
     }
 
     /// Returns true when a union source (`src_members`) may flow into the concrete target
-    /// `expected`: one member must match the target (equal, a sub/supertype in the class
-    /// hierarchy, or numeric-widening compatible) and every other member must be coercible
-    /// to the target's value family (scalar targets accept any scalar plus null; class and
-    /// array/iterable targets accept only null among the extra members).
+    /// `expected`: one member must match the target (equal, a subtype in the class hierarchy,
+    /// or — for non-object members only — a supertype/numeric-widening compatible type) and
+    /// every other member must be coercible to the target's value family (scalar targets accept
+    /// any scalar plus null; class and array/iterable targets accept only null among the extra
+    /// members).
+    ///
+    /// The supertype direction is deliberately excluded when both the target and the member are
+    /// object types: a union member that is a base class/interface of a concrete OBJECT target
+    /// is the unprovable base->derived direction (PHP TypeErrors, and elephc emits no runtime
+    /// instanceof guard), so it must fall through to the loud coercible check instead of
+    /// matching. Sound covariant object unions (union of subtypes into a common base) still
+    /// match via the subtype direction.
     fn gradual_union_flows_into(&self, expected: &PhpType, src_members: &[PhpType]) -> bool {
         // The gradual rule only loosens flows into a single concrete target. Union and Mixed
         // targets are already handled by the strict predicates that call this as a fallback.
@@ -152,7 +160,18 @@ impl Checker {
         }
         let mut has_match = false;
         for member in src_members {
-            if self.type_accepts(expected, member) || self.type_accepts(member, expected) {
+            // The supertype direction (`type_accepts(member, expected)`) is only sound for
+            // NON-object members: a union member that is a base class/interface of a concrete
+            // OBJECT target is the unprovable base->derived direction (PHP TypeErrors, and
+            // elephc emits no instanceof guard), so it must fall through to the coercible check
+            // (which is loud for objects) rather than matching.
+            let member_matches = self.type_accepts(expected, member)
+                || (self.type_accepts(member, expected)
+                    && !matches!(
+                        (expected, member),
+                        (PhpType::Object(_), PhpType::Object(_))
+                    ));
+            if member_matches {
                 has_match = true;
             } else if !self.gradual_other_member_coercible(expected, member) {
                 return false;
@@ -314,6 +333,30 @@ impl Checker {
             (PhpType::Object(left), PhpType::Object(right)) => self.common_object_type(left, right),
             _ => None,
         }
+    }
+
+    /// Returns true when `actual` may flow into `expected` under PHP's monolithic `array`
+    /// type hint: any array-family value (`Array`/`AssocArray`) satisfies any array-family
+    /// declared type, regardless of the inferred element key/value types.
+    ///
+    /// PHP's `array` hint carries no element type and is never element-checked at runtime
+    /// (verified on PHP 8.5 in both strict and coercive mode: `function f(array $x)` accepts
+    /// `[1,2,3]`, `["a"=>"b"]`, and `[]` identically, and rejects only non-arrays). elephc's
+    /// more specific `Array(T)`/`AssocArray{K,V}` element types are whole-program inference
+    /// artifacts (from property writes, empty-`[]` defaults, or `@param array` phpdoc), not
+    /// PHP constraints, so a differently-typed array actual must still be accepted here.
+    ///
+    /// Both sides must be array-family: a non-array actual (`Str`/`Int`/`Object`/null) into
+    /// an array-family expected keeps failing through the strict predicates, exactly matching
+    /// PHP's `array` hint (which TypeErrors on non-arrays, and — unlike `iterable` — even on
+    /// `Traversable` objects) in both strict and coercive mode. Codegen is sound because all
+    /// PHP arrays share one refcounted, per-slot-tagged runtime representation passed by
+    /// pointer, so the inferred element type never changes the ABI or storage layout.
+    pub(crate) fn array_family_gradual_accepts(expected: &PhpType, actual: &PhpType) -> bool {
+        matches!(
+            expected,
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        ) && matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. })
     }
 
     /// Returns true if `ty` is `PhpType::Array(Box::new(PhpType::Mixed))`, i.e., an

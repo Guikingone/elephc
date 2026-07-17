@@ -199,6 +199,7 @@ impl Checker {
     ) -> Result<(), CompileError> {
         if Self::types_compatible(expected, actual)
             || self.type_accepts(expected, actual)
+            || Self::array_family_gradual_accepts(expected, actual)
             || self.gradual_boundary_accepts(expected, actual)
         {
             Ok(())

@@ -1191,3 +1191,146 @@ fn test_error_list_unpack_scalar_stays_loud() {
         "List unpacking requires an array on the right-hand side",
     );
 }
+
+// --- Family A boundary: PHP's `array` hint rejects every NON-array value ---
+
+/// A `string` value into an `array` parameter stays loud: PHP's monolithic `array` hint accepts
+/// any array shape but TypeErrors on a non-array in both strict and coercive mode. Only the
+/// element type is unenforced; a scalar actual is a genuine error.
+#[test]
+fn test_error_string_into_array_param_stays_loud() {
+    expect_error(
+        "<?php function f(array $x): int { return count($x); } echo f(\"s\");",
+        "expects Array(Mixed), got Str",
+    );
+}
+
+/// An object value into an `array` parameter stays loud. Unlike `iterable`, PHP's `array` hint
+/// rejects even a `Traversable` object; a plain object is always a TypeError in both modes.
+#[test]
+fn test_error_object_into_array_param_stays_loud() {
+    expect_error(
+        "<?php class C {} function f(array $x): int { return count($x); } echo f(new C());",
+        "expects Array(Mixed), got Object",
+    );
+}
+
+// --- Family F boundary: two provably-disjoint concrete classes stay loud ---
+
+/// A value of an unrelated concrete class into a concrete-class parameter stays loud: PHP single
+/// inheritance makes the two classes disjoint, so PHP ALWAYS raises a TypeError. Only subtype
+/// relations (either direction) or an interface on either side are deferred to runtime.
+#[test]
+fn test_error_disjoint_concrete_object_param_stays_loud() {
+    expect_error(
+        "<?php class A { function a(): int { return 1; } } class B {} \
+         function needA(A $x): int { return $x->a(); } \
+         $b = new B(); echo needA($b);",
+        "expects Object(\"A\"), got Object(\"B\")",
+    );
+}
+
+/// A union with NO member assignable to the concrete object target stays loud: every possible
+/// runtime value would TypeError, so it is a guaranteed error, not a runtime-deferred one.
+#[test]
+fn test_error_union_no_assignable_object_member_stays_loud() {
+    expect_error(
+        "<?php class A { function a(): int { return 1; } } class B {} class C {} \
+         function needA(A $x): int { return $x->a(); } \
+         function pick(int $n): B|C { return new B(); } \
+         $x = pick($argc); echo needA($x);",
+        "expects Object(\"A\")",
+    );
+}
+
+/// A union whose extra member is a scalar (`Q|string`) into an object parameter stays loud even
+/// though one member matches: bit-casting a string payload to an object pointer at runtime is
+/// unsound, so this shape is kept loud rather than deferred (PHP would TypeError on the string
+/// value anyway).
+#[test]
+fn test_error_union_scalar_member_into_object_param_stays_loud() {
+    expect_error(
+        "<?php class Q { function q(): int { return 1; } } \
+         function need(Q $x): int { return $x->q(); } \
+         function pick(int $n): Q|string { return new Q(); } \
+         $x = pick($argc); echo need($x);",
+        "expects Object(\"Q\")",
+    );
+}
+
+// --- Family F boundary: object flows with no proven-subtype edge stay loud (R1-R4 revert) ---
+
+/// A base-typed value flowing into a derived-class parameter stays loud (`Base`-typed value into
+/// `Sub $x`). elephc emits no runtime instanceof guard at an object boundary, so accepting a
+/// non-proven-subtype flow would be a silent miscompile; PHP raises a TypeError here, matching
+/// this loud rejection. Guards the R1/R2 revert of the base→derived gradual-object acceptance.
+#[test]
+fn test_error_object_base_into_derived_param_stays_loud() {
+    expect_error(
+        "<?php class B{} class S extends B{} function need(S $x){} \
+         function mk(int $n):B{return new S();} echo need(mk(1));",
+        "expects Object(\"S\"), got Object(\"B\")",
+    );
+}
+
+/// An all-object union whose extra member is UNRELATED to the concrete object target stays loud
+/// (`RC|Route` into `RC $x`, where `Route` is not assignable to `RC`). The unrelated member could
+/// be the runtime value and would bit-read as the wrong object; PHP raises a TypeError, so it must
+/// stay loud. Guards the R3/R4 revert of the union-object gradual acceptance.
+#[test]
+fn test_error_object_union_unrelated_member_into_param_stays_loud() {
+    expect_error(
+        "<?php class Route{} class RC{} function add(RC $x){} \
+         function pick(int $n):RC|Route{return new RC();} echo add(pick(1));",
+        "expects Object(\"RC\"), got Union([Object(\"RC\"), Object(\"Route\")])",
+    );
+}
+
+/// A base-typed return expression flowing into a derived declared return type stays loud
+/// (`scalarNode(): ScalarNodeDef { return $this->node(); }` where `node(): NodeDef`). The returned
+/// value is not a proven `ScalarNodeDef` at the boundary and there is no runtime guard, so
+/// accepting it would be a silent miscompile; PHP raises a TypeError. Guards the R1/R2 revert on
+/// the return boundary.
+#[test]
+fn test_error_object_base_return_into_derived_return_stays_loud() {
+    expect_error(
+        "<?php \
+         class NodeDef { public function label(): string { return \"node\"; } } \
+         class ScalarNodeDef extends NodeDef { public function label(): string { return \"scalar\"; } } \
+         class Builder { \
+             public function scalarNode(): ScalarNodeDef { return $this->node(); } \
+             public function node(): NodeDef { return new ScalarNodeDef(); } \
+         } \
+         $b = new Builder(); echo $b->scalarNode()->label();",
+        "return type expects Object(\"ScalarNodeDef\"), got Object(\"NodeDef\")",
+    );
+}
+
+// --- Family F boundary: union supertype-object direction into a derived target stays loud ---
+
+/// A nullable base type (`?Base`) flowing into a derived-class parameter stays loud (`?B` into
+/// `S $x`). The `B` member of the union is a supertype of the concrete `S` target, which is the
+/// unprovable base→derived direction; elephc emits no runtime instanceof guard, so accepting it
+/// would SIGSEGV when the runtime value is a bare `B`. PHP raises a TypeError, matching this loud
+/// rejection. Guards the round-3 union supertype-object exclusion in `gradual_union_flows_into`.
+#[test]
+fn test_error_nullable_base_into_derived_param_stays_loud() {
+    expect_error(
+        "<?php class B{} class S extends B{} function need(S $x){} \
+         function mk(int $n): ?B { return new S(); } echo need(mk(1));",
+        "expects Object(\"S\"), got Union([Object(\"B\"), Void])",
+    );
+}
+
+/// A non-nullable base|sub union (`Base|Sub`) flowing into the derived-class parameter stays loud
+/// (`B|S` into `S $x`). The `B` member is a supertype of the concrete `S` target — the unprovable
+/// base→derived direction with no runtime guard — so PHP raises a TypeError and elephc must too.
+/// Guards the round-3 union supertype-object exclusion in `gradual_union_flows_into`.
+#[test]
+fn test_error_base_or_sub_union_into_derived_param_stays_loud() {
+    expect_error(
+        "<?php class B{} class S extends B{} function need(S $x){} \
+         function mk(int $n): B|S { return new S(); } echo need(mk(1));",
+        "expects Object(\"S\"), got Union([Object(\"B\"), Object(\"S\")])",
+    );
+}

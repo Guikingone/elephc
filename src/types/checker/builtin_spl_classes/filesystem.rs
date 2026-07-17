@@ -565,7 +565,15 @@ fn recursive_directory_iterator_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Void),
             directory_construct_body(var_expr("directory"), var_expr("flags"), true, false),
         ),
-        method_with_body("hasChildren", Vec::new(), Some(TypeExpr::Bool), recursive_directory_has_children_body()),
+        method_with_body(
+            "hasChildren",
+            // PHP's real signature is `hasChildren(bool $allowLinks = false): bool`; the optional
+            // parameter lets `parent::hasChildren($allowLinks)` type-check without relaxing
+            // internal-method arity. (RecursiveCachingIterator::hasChildren really takes 0.)
+            vec![param_default("allowLinks", TypeExpr::Bool, bool_expr(false))],
+            Some(TypeExpr::Bool),
+            recursive_directory_has_children_body(),
+        ),
         method_with_body(
             "getChildren",
             Vec::new(),

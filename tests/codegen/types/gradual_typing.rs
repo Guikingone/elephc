@@ -565,3 +565,104 @@ echo take([10, 20]);
     );
     assert_eq!(out, "30");
 }
+
+// --- Family A: PHP's monolithic `array` hint accepts any array-family value ---
+
+/// A differently-typed array flows into a parameter whose element type the checker specialized
+/// to `Array(Object(C))` from an earlier call: PHP's `array` hint carries no element type, so
+/// `sz([1, 2, 3])` after `sz([new C(), new C()])` is accepted and runs (`count` = 3), and the
+/// object-array call still counts 2. Pre-relaxation this reported "expects Array(Object(\"C\")),
+/// got Array(Int)". Codegen is sound because all PHP arrays share one pointer representation.
+#[test]
+fn test_array_family_differently_typed_array_into_specialized_param() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public int $v = 1; }
+function sz(array $items): int { return count($items); }
+$objs = [new C(), new C()];
+echo sz($objs);
+echo "|";
+$nums = [1, 2, 3];
+echo sz($nums);
+"#,
+    );
+    assert_eq!(out, "2|3");
+}
+
+/// An associative array flows into a parameter specialized to `Array(Object(Def))`: PHP accepts
+/// any array shape for an `array` hint, so `setArgs(["k" => "v", "m" => "n"])` runs (`count` = 2).
+#[test]
+fn test_array_family_assoc_array_into_object_array_param() {
+    let out = compile_and_run(
+        r#"<?php
+class Def {}
+function setArgs(array $a): int { return count($a); }
+function build(): array { $r = []; $r[] = new Def(); return $r; }
+$typed = build();
+echo setArgs($typed);
+echo "|";
+echo setArgs(["k" => "v", "m" => "n"]);
+"#,
+    );
+    assert_eq!(out, "1|2");
+}
+
+// --- Family C (foreach key): a genuine int key still supports arithmetic ---
+
+/// A genuine int key of a list supports arithmetic: `$sum += $i` over `[5, 6, 7]` keys (0, 1, 2)
+/// sums to 3, matching PHP. Foreach keys are typed `Int`; this guards integer-key arithmetic
+/// against regression.
+#[test]
+fn test_foreach_int_key_arithmetic() {
+    let out = compile_and_run(
+        r#"<?php
+function mk(): array { return [5, 6, 7]; }
+$sum = 0;
+foreach (mk() as $i => $v) { $sum += $i; }
+echo $sum;
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+// --- Family C (box variadic): a declared `mixed ...$args` is never narrowed ---
+
+/// A `mixed ...$args` variadic accepts heterogeneous arguments (string, int, float, array): the
+/// declared `Mixed` element type must not be re-specialized to the first argument's type. Pre-fix
+/// this reported "variadic parameter $args expects Str, got Int" for the second argument.
+#[test]
+fn test_mixed_variadic_accepts_heterogeneous_args() {
+    let out = compile_and_run(
+        r#"<?php
+class Fs {
+    public function box(string $func, mixed ...$args): string {
+        return $func . ":" . count($args);
+    }
+}
+$fs = new Fs();
+echo $fs->box("f", "s", 1, 2.5, [9]);
+"#,
+    );
+    assert_eq!(out, "f:4");
+}
+
+// --- Family G (sound covariance): a union of subtypes into their common base compiles + runs ---
+
+/// A union of two SUBTYPES (`A|C`, both extending `Base`) flowing into a `Base`-typed parameter
+/// compiles and runs php-identically: every union member is a proven subtype of the target, so the
+/// subtype direction of `gradual_union_flows_into` matches each member. This must stay green after
+/// the round-3 exclusion of the object supertype direction, which only affects base→derived flows.
+#[test]
+fn test_union_of_subtypes_into_common_base_param_runs() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { public function who(): string { return "b"; } }
+class A extends Base { public function who(): string { return "a"; } }
+class C extends Base { public function who(): string { return "c"; } }
+function take(Base $x): string { return $x->who(); }
+function pick(int $n): A|C { return new A(); }
+echo take(pick($argc));
+"#,
+    );
+    assert_eq!(out, "a");
+}
