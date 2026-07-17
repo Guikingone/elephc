@@ -404,3 +404,22 @@ impl Checker {
         }
     }
 }
+
+/// Returns whether `ty` is gradually acceptable where PHP requires an object value at
+/// runtime (e.g. `throw`, `spl_object_id`, a nullsafe receiver).
+///
+/// Accepts a concrete `Object`, the `Mixed` top type, and any `Union` that contains an
+/// `Object` or `Mixed` member (which covers `?Object`/`Object|null`, `Object|false`, and
+/// a boxed value inferred as `Mixed`). Bare scalars (`Int`/`Str`/`Bool`/`Float`), arrays,
+/// and other proven non-object types are rejected so genuine "not an object" bugs keep
+/// surfacing. This is the object-family analogue of `array_arg_is_gradually_acceptable`;
+/// gradual typing defers the real object/Throwable check to the runtime, matching PHP.
+pub(crate) fn type_is_gradual_object_family(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(_) | PhpType::Mixed => true,
+        PhpType::Union(members) => members
+            .iter()
+            .any(|member| matches!(member, PhpType::Object(_) | PhpType::Mixed)),
+        _ => false,
+    }
+}

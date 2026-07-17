@@ -18,6 +18,7 @@ mod by_ref_outputs;
 mod class_refs;
 mod effects;
 mod static_closure;
+use super::super::type_compat::type_is_gradual_object_family;
 use super::super::Checker;
 use super::syntactic::wider_type_syntactic;
 use static_closure::body_must_not_use_this;
@@ -403,6 +404,11 @@ impl Checker {
                         expr.span,
                         "Type error: throw requires an object implementing Throwable",
                     )),
+                    // Gradual operands (`Mixed`, `?Object`, object-plus-scalar or
+                    // object/`Mixed`-bearing unions) match the `throw` statement arm: the
+                    // Throwable contract is only checked at runtime, so accept gradually. A
+                    // proven non-object (bare `Int`/`Str`/array/…) stays loud.
+                    ref ty if type_is_gradual_object_family(ty) => Ok(PhpType::Void),
                     _ => Err(CompileError::new(
                         expr.span,
                         "Type error: throw requires an object value",
@@ -535,6 +541,27 @@ impl Checker {
                 match ty {
                     PhpType::Array(elem_ty) => Ok(*elem_ty),
                     PhpType::AssocArray { value, .. } => Ok(*value),
+                    // A union is only accepted here when EVERY member is an array family
+                    // type (no member can hold a non-array at runtime). This intentionally
+                    // does NOT reuse `array_arg_is_gradually_acceptable`'s "any member is an
+                    // array" rule, and does NOT accept the `Mixed`/`Iterable` top types: the
+                    // EIR spread lowering unpacks the operand as an array with no runtime
+                    // array/Traversable guard, so accepting a genuinely gradual operand
+                    // (bare `Mixed`, `array|false`, `Iterable`) trades a loud checker error
+                    // for a runtime SIGSEGV or silent garbage read (correction round 1 —
+                    // see spec addendum). Adding a runtime is_array/Traversable guard is a
+                    // separate follow-up.
+                    PhpType::Union(ref members)
+                        if !members.is_empty()
+                            && members.iter().all(|member| {
+                                matches!(
+                                    member,
+                                    PhpType::Array(_) | PhpType::AssocArray { .. }
+                                )
+                            }) =>
+                    {
+                        Ok(PhpType::Mixed)
+                    }
                     _ => Err(CompileError::new(
                         expr.span,
                         "Spread operator requires an array",

@@ -15,6 +15,7 @@ use crate::errors::CompileError;
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};
 
+use super::super::type_compat::type_is_gradual_object_family;
 use super::super::Checker;
 
 const FS_CURRENT_AS_SELF: i64 = 16;
@@ -337,6 +338,13 @@ impl Checker {
                         stmt.span,
                         "Type error: throw requires an object implementing Throwable",
                     )),
+                    // Gradual operands — `Mixed` (e.g. `throw new <class not in the closed
+                    // world>`, which degrades to `Mixed`), `?Object`/`Object|null`, an
+                    // object-plus-scalar union, or any union containing an object/`Mixed`
+                    // member — cannot have their Throwable contract proven statically. PHP
+                    // only enforces it at runtime, so accept here (the EIR backend still
+                    // faults a non-Throwable at throw time). A proven non-object stays loud.
+                    ref ty if type_is_gradual_object_family(ty) => Ok(()),
                     _ => Err(CompileError::new(
                         stmt.span,
                         "Type error: throw requires an object value",

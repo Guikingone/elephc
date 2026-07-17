@@ -161,16 +161,31 @@ impl Checker {
         if matches!(obj_ty, PhpType::Mixed) {
             return Ok(PhpType::Mixed);
         }
-        let Some((class_name, nullable)) =
-            self.nullsafe_object_receiver(&obj_ty, expr, "property access")?
-        else {
-            return Ok(PhpType::Void);
-        };
-        let property_ty = self.infer_property_on_class_type(&class_name, property, expr)?;
-        if nullable {
-            Ok(self.normalize_union_type(vec![property_ty, PhpType::Void]))
-        } else {
-            Ok(property_ty)
+        match self.nullsafe_object_receiver(&obj_ty, expr, "property access") {
+            Ok(Some((class_name, nullable))) => {
+                let property_ty = self.infer_property_on_class_type(&class_name, property, expr)?;
+                if nullable {
+                    Ok(self.normalize_union_type(vec![property_ty, PhpType::Void]))
+                } else {
+                    Ok(property_ty)
+                }
+            }
+            Ok(None) => Ok(PhpType::Void),
+            Err(strict_err) => {
+                // Gradual union receiver the strict single-class resolver rejects
+                // (`Foo|false`, or a union carrying a `Mixed` member). A `?->` receiver may
+                // be non-object at runtime, so the result always admits `Void`.
+                if let Some(class_name) = self.union_single_object_class(&obj_ty) {
+                    let property_ty = self.infer_property_on_class_type(&class_name, property, expr)?;
+                    return Ok(self.normalize_union_type(vec![property_ty, PhpType::Void]));
+                }
+                if matches!(&obj_ty, PhpType::Union(members)
+                    if members.iter().any(|member| matches!(member, PhpType::Mixed)))
+                {
+                    return Ok(PhpType::Mixed);
+                }
+                Err(strict_err)
+            }
         }
     }
 

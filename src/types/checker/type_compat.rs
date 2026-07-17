@@ -13,3 +13,5 @@ mod declarations;
 mod object_types;
 mod pointers;
 mod unions;
+
+pub(crate) use object_types::type_is_gradual_object_family;

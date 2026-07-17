@@ -1072,3 +1072,122 @@ fn test_error_dnf_nested_group_property_rejected() {
         "Nested parentheses are not allowed in a DNF type group",
     );
 }
+
+// --- Gradual-typing quick-wins batch (throw / arith+comparison / nullsafe+spread / list-unpack) ---
+
+/// R1 boundary: `throw 5;` on a proven non-object stays loud. PHP rejects throwing a
+/// scalar with a `TypeError` ("Can only throw objects"), so the checker keeps it loud.
+#[test]
+fn test_error_throw_scalar_stays_loud() {
+    expect_error("<?php throw 5;", "throw requires an object value");
+}
+
+/// R1 boundary: throwing a concrete non-Throwable object still reports the specific
+/// "implementing Throwable" diagnostic (the gradual relaxation only affects Mixed/union
+/// operands, never a proven non-Throwable class).
+#[test]
+fn test_error_throw_non_throwable_object_stays_loud() {
+    expect_error(
+        "<?php class Foo {} throw new Foo();",
+        "throw requires an object implementing Throwable",
+    );
+}
+
+/// R1 accept: `throw $mixed` type-checks (a `mixed` value may hold a Throwable at
+/// runtime; PHP defers the check to runtime).
+#[test]
+fn test_gradual_throw_mixed_operand_accepted() {
+    expect_ok("<?php function f(mixed $e): void { throw $e; }");
+}
+
+/// R2 accept: arithmetic on two `mixed` operands type-checks (gradual numeric dispatch).
+#[test]
+fn test_gradual_mixed_arithmetic_accepted() {
+    expect_ok("<?php function f(mixed $a, mixed $b) { return $a + $b; }");
+}
+
+/// R2 accept: arithmetic on a nullable-float union (`?float`) type-checks — every union
+/// member is a numeric operand, which the recursive operand check now accepts.
+#[test]
+fn test_gradual_nullable_float_arithmetic_accepted() {
+    expect_ok("<?php function f(?float $a): float { return $a - 1.0; }");
+}
+
+/// R2 accept: ordered comparison on two `mixed` operands type-checks.
+#[test]
+fn test_gradual_mixed_comparison_accepted() {
+    expect_ok("<?php function f(mixed $a, mixed $b): bool { return $a < $b; }");
+}
+
+/// R2 boundary: arithmetic on a proven array stays loud. PHP fatals on `array - int`
+/// ("Unsupported operand types"), so the checker keeps it loud.
+#[test]
+fn test_error_arithmetic_on_proven_array_stays_loud() {
+    expect_error(
+        "<?php function f(array $a) { return $a - 1; }",
+        "Arithmetic operators require numeric operands",
+    );
+}
+
+/// R3 accept: a nullsafe method call on a `mixed` receiver type-checks (unknown runtime
+/// class → gradual `Mixed` result, mirroring the plain `->` path).
+#[test]
+fn test_gradual_nullsafe_method_on_mixed_accepted() {
+    expect_ok("<?php function f(mixed $x): mixed { return $x?->doThing(); }");
+}
+
+/// R3 boundary (correction round 1): spreading a `mixed` value stays loud. The EIR spread
+/// lowering unpacks its operand as an array with no runtime array/Traversable guard, so
+/// accepting a `mixed` operand here would trade this loud checker error for a runtime
+/// SIGSEGV / silent garbage read (`function go(mixed $a){return total(...$a);} go(5)` and a
+/// `mixed`-holding-string both corrupted at runtime before this revert). php-check: PHP
+/// raises a catchable `TypeError: Only arrays and Traversables can be unpacked` at runtime,
+/// so elephc keeping this a compile-time error is conservative, not a regression.
+#[test]
+fn test_error_spread_mixed_stays_loud() {
+    expect_error(
+        "<?php function g(int ...$xs): int { return 0; } \
+         function f(mixed $args): int { return g(...$args); }",
+        "Spread operator requires an array",
+    );
+}
+
+/// R3 boundary: spreading a proven non-iterable (a bare callable) stays loud. A closure
+/// is not Traversable, so PHP fatals ("Only arrays and Traversables can be unpacked").
+#[test]
+fn test_error_spread_non_iterable_stays_loud() {
+    expect_error(
+        "<?php $c = fn() => 1; $a = [...$c];",
+        "Spread operator requires an array",
+    );
+}
+
+/// R3 boundary (correction round 1): spreading a union that CAN hold a non-array member
+/// (`array|false`) stays loud even though one member is an array — the operand is not
+/// PROVABLY an array at runtime, and the EIR spread lowering has no runtime guard to catch
+/// the `false` case. php-check: PHP raises `TypeError` unpacking a non-iterable.
+#[test]
+fn test_error_spread_array_or_false_union_stays_loud() {
+    expect_error(
+        "<?php function g(int ...$xs): int { return 0; } \
+         function f(array|false $x): int { return g(...$x); }",
+        "Spread operator requires an array",
+    );
+}
+
+/// R4 accept: list-unpacking a `mixed` right-hand side type-checks (each positional
+/// target binds as `Mixed`; PHP reads offsets at runtime).
+#[test]
+fn test_gradual_list_unpack_mixed_accepted() {
+    expect_ok("<?php function f(mixed $arr) { [$a, $b] = $arr; return $a; }");
+}
+
+/// R4 boundary: list-unpacking a proven bare scalar stays loud. PHP assigns nulls with a
+/// warning rather than fatalling; elephc keeps this conservative loud error for now.
+#[test]
+fn test_error_list_unpack_scalar_stays_loud() {
+    expect_error(
+        "<?php function f(int $n) { [$a, $b] = $n; return $a; }",
+        "List unpacking requires an array on the right-hand side",
+    );
+}

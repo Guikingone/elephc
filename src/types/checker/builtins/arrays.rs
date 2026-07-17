@@ -744,7 +744,7 @@ fn is_scalar_merge_element_type(ty: &PhpType) -> bool {
 /// boundary guard (converting the boxed value to a concrete hash) before the array operation.
 /// A concretely non-array argument (`int`, `string`, object, …) is rejected so genuine type
 /// errors such as `in_array(1, 5)` keep being reported.
-pub(super) fn array_arg_is_gradually_acceptable(ty: &PhpType) -> bool {
+pub(crate) fn array_arg_is_gradually_acceptable(ty: &PhpType) -> bool {
     match ty {
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => true,
         PhpType::Union(members) => members

@@ -1265,13 +1265,22 @@ fn type_may_be_array(ty: &PhpType) -> bool {
 
 /// Returns `true` if `ty` is a valid operand type for numeric binary operators
 /// (addition, subtraction, multiplication, division, modulo, comparison, spaceship).
-/// Numeric operands include `Int`, `Float`, `Bool`, `Void`, `Mixed`, or a union
-/// with mixed integer dispatch behavior.
+///
+/// Numeric operands include `Int`, `Float`, `Bool`, `Void` (null coerces to `0`), and the
+/// gradual `Mixed` top type. A `Union` is accepted when *every* member is itself a numeric
+/// operand or a `Str` (PHP coerces numeric strings, and the runtime dispatches boxed
+/// operands through `__rt_php_*`), so gradual unions such as `int|float`, `?float`
+/// (`float|null`), and `int|string` are all accepted. A union carrying a proven
+/// non-numeric member (array, object, callable) stays rejected, matching PHP's fatal on
+/// array/object arithmetic.
 fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
-    matches!(
-        ty,
-        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::Mixed
-    ) || checker.is_union_with_mixed_int_dispatch(ty)
+    match ty {
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::Mixed => true,
+        PhpType::Union(members) => members
+            .iter()
+            .all(|member| is_numeric_operand_type(checker, member) || *member == PhpType::Str),
+        _ => false,
+    }
 }
 
 /// Returns `true` if `ty` is a valid operand type for the relational/spaceship operators

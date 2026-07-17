@@ -475,3 +475,93 @@ echo counter(3);
     );
     assert_eq!(out, "10,11,12");
 }
+
+/// Verifies arithmetic on two `Mixed` operands computes at runtime like PHP:
+/// `mixed + mixed` boxes/unboxes through the numeric dispatch path. PHP: `2 + 3 == 5`.
+#[test]
+fn test_gradual_mixed_arithmetic_add() {
+    let out = compile_and_run(
+        r#"<?php
+function add(mixed $a, mixed $b) { return $a + $b; }
+echo add(2, 3);
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies ordered comparison (`<`) on two `Mixed` operands lowers through the runtime
+/// comparator and yields PHP-identical results: `2 < 3` is true, `5 < 3` is false.
+#[test]
+fn test_gradual_mixed_comparison_lt() {
+    let out = compile_and_run(
+        r#"<?php
+function cmp(mixed $a, mixed $b) { return $a < $b ? "lt" : "ge"; }
+echo cmp(2, 3), cmp(5, 3);
+"#,
+    );
+    assert_eq!(out, "ltge");
+}
+
+/// Verifies the spaceship operator on `Mixed` operands: `2 <=> 3 == -1`, matching PHP.
+#[test]
+fn test_gradual_mixed_spaceship() {
+    let out = compile_and_run(
+        r#"<?php
+function sp(mixed $a, mixed $b) { return $a <=> $b; }
+echo sp(2, 3);
+"#,
+    );
+    assert_eq!(out, "-1");
+}
+
+/// Verifies a nullsafe method call on a `Mixed` receiver: a non-null object dispatches the
+/// method (`42`), while a null-holding `Mixed` cell short-circuits to null so `?? "N"`
+/// yields `"N"`. This exercises the runtime null-guard for boxed `?->` receivers.
+#[test]
+fn test_gradual_nullsafe_method_on_mixed_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public function val(): int { return 42; } }
+function get(mixed $x): mixed { return $x?->val(); }
+$b = new Box();
+echo (get($b) ?? "N"), "|", (get(null) ?? "N");
+"#,
+    );
+    assert_eq!(out, "42|N");
+}
+
+/// Verifies a nullsafe property read on a `Mixed` receiver short-circuits to null when the
+/// receiver is null (`?? "N"` → `"N"`) and returns the property otherwise.
+#[test]
+fn test_gradual_nullsafe_property_on_mixed_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder { public int $n = 7; }
+function read(mixed $x): mixed { return $x?->n; }
+$h = new Holder();
+echo (read($h) ?? "N"), "|", (read(null) ?? "N");
+"#,
+    );
+    assert_eq!(out, "7|N");
+}
+
+// NOTE: a `test_gradual_spread_mixed_into_variadic` case previously lived here (spreading a
+// `mixed`-typed parameter that holds an array into a variadic callee). Correction round 1
+// reverted that acceptance: the EIR spread lowering unpacks its operand as an array with no
+// runtime array/Traversable guard, so a `mixed` (or otherwise non-provably-array) spread
+// operand is a loud checker error again — see `test_error_spread_mixed_stays_loud` in
+// `tests/error_tests/type_system.rs`. Plain array-spread-into-variadic (never gradual) is
+// already covered by `tests/codegen/types/named_arguments/spread.rs`.
+
+/// Verifies list-unpacking a `Mixed` right-hand side that holds an array binds each
+/// positional target. PHP: `[$a, $b] = [10, 20]` gives `$a + $b == 30`.
+#[test]
+fn test_gradual_list_unpack_mixed_rhs() {
+    let out = compile_and_run(
+        r#"<?php
+function take(mixed $arr): int { [$a, $b] = $arr; return $a + $b; }
+echo take([10, 20]);
+"#,
+    );
+    assert_eq!(out, "30");
+}

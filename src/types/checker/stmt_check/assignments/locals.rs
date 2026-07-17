@@ -14,6 +14,7 @@ use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver, TypeExp
 use crate::span::Span;
 use crate::types::{PhpType, TypeEnv};
 
+use super::super::super::builtins::array_arg_is_gradually_acceptable;
 use super::super::super::Checker;
 
 /// Extracts the default expression from a null-coalescing assignment to a specific variable.
@@ -1121,6 +1122,16 @@ pub(super) fn check_list_unpack(
                 let unpack_ty = *elem_ty.clone();
                 env.insert(var.clone(), unpack_ty.clone());
                 update_list_unpack_callable_metadata(checker, var, value, &unpack_ty);
+            }
+        }
+        // Gradual right-hand side (`AssocArray`, `Mixed`, `?array`, or a union containing an
+        // array): the positional element types are not statically homogeneous, so bind each
+        // target as `Mixed`. PHP reads each positional offset at runtime (a missing offset
+        // yields null with a warning). A proven non-array RHS stays loud below.
+        t if array_arg_is_gradually_acceptable(t) => {
+            for var in vars {
+                env.insert(var.clone(), PhpType::Mixed);
+                update_list_unpack_callable_metadata(checker, var, value, &PhpType::Mixed);
             }
         }
         _ => {

@@ -26,6 +26,7 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::Checker;
 
+pub(crate) use arrays::array_arg_is_gradually_acceptable;
 pub(crate) use catalog::{
     canonical_builtin_function_name, is_php_visible_builtin_function,
     is_supported_builtin_function, supported_builtin_function_names,
