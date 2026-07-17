@@ -40,3 +40,26 @@ foreach ($rows as $row) {
         echo 'row ' . $num . ' = ' . $label . "\n";
     }
 }
+
+// Every statement-form pattern works in expression position too: skipped slots, keyed
+// entries, nested patterns, and list(). With a nullable source (`?? null`), the branch is
+// taken only when the row exists — the expression's value is the whole right-hand side.
+$scopes = ['user' => ['App\\User', 'private', null, 'readonly']];
+$lookup = 'user';
+if ([, , , $access] = $scopes[$lookup] ?? null) {
+    echo $lookup . ' access = ' . $access . "\n";
+}
+if ([, , , $access] = $scopes['missing'] ?? null) {
+    echo 'unreachable' . "\n";
+} else {
+    echo 'missing scope skipped' . "\n";
+}
+
+// list() with a hole as a while condition: each iteration rebinds from the next row
+// until the `?? null` fallback ends the loop.
+$queue = [[1, 'alpha'], [2, 'beta']];
+$i = 0;
+while (list(, $tag) = $queue[$i] ?? null) {
+    echo 'tag ' . $tag . "\n";
+    $i++;
+}

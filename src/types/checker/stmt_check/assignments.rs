@@ -63,6 +63,15 @@ impl Checker {
                 self.infer_type_with_assignment_effects(expr, env)?;
                 Ok(())
             }
+            // Expression-position destructuring (`if ([, , , $x] = RHS)`) desugars the
+            // statement-form pattern into a `Synthetic` chain of ordinary assignments inside
+            // an `ExprKind::Assignment` prelude; check each child through this dispatcher.
+            StmtKind::Synthetic(stmts) => {
+                for stmt in stmts {
+                    self.check_assignment_like_stmt(stmt, env)?;
+                }
+                Ok(())
+            }
             StmtKind::RefAssign { target, source } => {
                 locals::check_ref_assign(self, target, source, stmt.span, env)
             }

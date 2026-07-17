@@ -377,3 +377,46 @@ fn test_error_ref_entry_byref_capture_source_rejected() {
         "Reference to a by-reference parameter or by-ref capture in a local array element is not yet supported",
     );
 }
+
+/// Tests that a by-reference element in an expression-position destructuring pattern
+/// (`if ([&$x] = $arr)`) stays a loud parse error — by-ref destructuring is unsupported
+/// (statement form included), and the expression desugar must inherit that loudly.
+#[test]
+fn test_error_expr_destructure_by_ref_element_rejected() {
+    expect_error(
+        "<?php $arr = [1, 2]; if ([&$x] = $arr) { echo $x; }",
+        "Unexpected token: Ampersand",
+    );
+}
+
+/// Tests that mixing keyed and unkeyed entries in an expression-position destructuring
+/// pattern is rejected with the same diagnostic as the statement form (PHP fatals on the
+/// mix as well).
+#[test]
+fn test_error_expr_destructure_mixed_keyed_unkeyed_rejected() {
+    expect_error(
+        "<?php $arr = [1, 2]; if ([$a, \"k\" => $b] = $arr) { echo 1; }",
+        "Cannot mix keyed and unkeyed list entries",
+    );
+}
+
+/// Tests that destructuring a statically-null right-hand side in expression position is
+/// loud at compile time (the checker rejects indexing a known-null value), mirroring the
+/// statement form; runtime-nullable sources (`?? null`) stay accepted and PHP-identical.
+#[test]
+fn test_error_expr_destructure_literal_null_rhs_rejected() {
+    expect_error(
+        "<?php if ([, $b] = null) { echo 1; } else { echo 0; }",
+        "Cannot index non-array",
+    );
+}
+
+/// Tests that an empty destructuring pattern in expression position (`[] = $x`) is
+/// rejected like PHP's "Cannot use empty list" fatal.
+#[test]
+fn test_error_expr_destructure_empty_pattern_rejected() {
+    expect_error(
+        "<?php $x = [1, 2]; if ([] = $x) { echo 1; }",
+        "Cannot use empty list",
+    );
+}

@@ -374,3 +374,110 @@ fn test_list_unpack_as_if_condition_parses() {
         other => panic!("expected If with ListUnpack condition, got {:?}", other),
     }
 }
+
+/// Verifies that a skipped-slot pattern in expression position (`[, , , $a] = $x`) desugars
+/// to the `ExprKind::Assignment` prelude form: prelude[0] assigns the RHS to a hidden
+/// `__elephc_destr_*` temporary, prelude[1] is the statement-form destructure (`Synthetic`),
+/// and the expression yields the temporary through a distinct `__elephc_destr_yield_*` local.
+#[test]
+fn test_expr_destructure_holes_desugars_to_prelude() {
+    let stmts = parse_source("<?php if ([, , , $a] = $x) { echo 1; }");
+    match &stmts[0].kind {
+        StmtKind::If { condition, .. } => match &condition.kind {
+            ExprKind::Assignment {
+                target,
+                value,
+                prelude,
+                result_target,
+                ..
+            } => {
+                assert_eq!(prelude.len(), 2, "expected temp-assign + destructure prelude");
+                match &prelude[0].kind {
+                    StmtKind::Assign { name, .. } => assert!(
+                        name.starts_with("__elephc_destr_"),
+                        "expected hidden destructure temp, got {name}"
+                    ),
+                    other => panic!("expected temp Assign, got {:?}", other),
+                }
+                assert!(matches!(prelude[1].kind, StmtKind::Synthetic(_)));
+                match &target.kind {
+                    ExprKind::Variable(name) => {
+                        assert!(name.starts_with("__elephc_destr_yield_"))
+                    }
+                    other => panic!("expected yield variable target, got {:?}", other),
+                }
+                match &value.kind {
+                    ExprKind::Variable(name) => assert!(name.starts_with("__elephc_destr_")),
+                    other => panic!("expected temp variable value, got {:?}", other),
+                }
+                assert!(result_target.is_none());
+            }
+            other => panic!("expected Assignment desugar, got {:?}", other),
+        },
+        other => panic!("expected If, got {:?}", other),
+    }
+}
+
+/// Verifies that a keyed pattern in expression position (`["b" => $x] = $arr`) also
+/// desugars to the prelude form rather than erroring as an invalid assignment target.
+#[test]
+fn test_expr_destructure_keyed_desugars_to_prelude() {
+    let stmts = parse_source("<?php $r = ([\"b\" => $x] = $arr);");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::Assignment { prelude, .. } => {
+                assert_eq!(prelude.len(), 2);
+                assert!(matches!(prelude[1].kind, StmtKind::Synthetic(_)));
+            }
+            other => panic!("expected Assignment desugar, got {:?}", other),
+        },
+        other => panic!("expected Assign, got {:?}", other),
+    }
+}
+
+/// Verifies the regression guard: the all-simple-positional expression form
+/// (`[$a, $b] = $pairs`) still parses to the EXACT pre-change `ExprKind::ListUnpack`
+/// node (vars + value), NOT the prelude desugar.
+#[test]
+fn test_expr_destructure_all_simple_keeps_list_unpack_node() {
+    let stmts = parse_source("<?php if ([$a, $b] = $pairs) { echo 1; }");
+    match &stmts[0].kind {
+        StmtKind::If { condition, .. } => match &condition.kind {
+            ExprKind::ListUnpack { vars, value } => {
+                assert_eq!(vars, &["a".to_string(), "b".to_string()]);
+                assert!(matches!(value.kind, ExprKind::Variable(_)));
+            }
+            other => panic!("expected pre-existing ListUnpack node, got {:?}", other),
+        },
+        other => panic!("expected If, got {:?}", other),
+    }
+}
+
+/// Verifies the all-simple `list($a, $b) = $x` construct in expression position parses to
+/// the same `ExprKind::ListUnpack` node as the bracket form, sharing one lowering path.
+#[test]
+fn test_expr_list_construct_all_simple_parses_to_list_unpack() {
+    let stmts = parse_source("<?php if (list($a, $b) = $pairs) { echo 1; }");
+    match &stmts[0].kind {
+        StmtKind::If { condition, .. } => match &condition.kind {
+            ExprKind::ListUnpack { vars, .. } => {
+                assert_eq!(vars, &["a".to_string(), "b".to_string()]);
+            }
+            other => panic!("expected ListUnpack node, got {:?}", other),
+        },
+        other => panic!("expected If, got {:?}", other),
+    }
+}
+
+/// Verifies the statement form with skipped slots (`[, , $a] = $x;`) still parses through
+/// the statement dispatcher to a `Synthetic` lowering chain — untouched by the
+/// expression-position desugar (statement `[` never reaches the expression parser).
+#[test]
+fn test_stmt_destructure_holes_still_parses_to_synthetic() {
+    let stmts = parse_source("<?php [, , $a] = $x;");
+    assert!(
+        matches!(stmts[0].kind, StmtKind::Synthetic(_)),
+        "expected statement-form Synthetic, got {:?}",
+        stmts[0].kind
+    );
+}

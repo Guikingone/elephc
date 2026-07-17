@@ -711,17 +711,6 @@ fn test_error_assignment_to_non_lvalue() {
     );
 }
 
-/// Verifies that a keyed list target used in expression position is rejected: only simple
-/// positional `[$a, $b]` list-destructuring is supported as an expression, so the keyed form
-/// `["k" => $v] = $x` (valid only as a statement) reports "Invalid assignment target".
-#[test]
-fn test_error_keyed_list_unpack_in_expression() {
-    expect_error(
-        "<?php $x = []; $r = ([\"k\" => $v] = $x);",
-        "Invalid assignment target",
-    );
-}
-
 /// Reference assignment into a PROPERTY-base array element (`$o->arr[$k] = &$v`) parses but is
 /// rejected by the checker: the local-array-element form (`$a[$k] = &$v`) is supported, but a
 /// property-base element target is a follow-up slice, so the diagnostic is explicit rather than a

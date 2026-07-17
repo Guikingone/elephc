@@ -286,7 +286,7 @@ $items = [0];
 
 PHP does not allow keyed and unkeyed entries in the same destructuring pattern, and elephc reports that as a compile-time error.
 
-A simple positional destructuring `[$a, $b] = EXPR` can also be used in **expression position** — for example as a condition. It binds the targets and evaluates to `EXPR` (the whole right-hand side), exactly as in PHP, so the classic assign-and-test idiom works:
+Destructuring can also be used in **expression position** — for example as a condition. It binds the targets and evaluates to `EXPR` (the whole right-hand side), exactly as in PHP, so the classic assign-and-test idiom works:
 
 ```php
 <?php
@@ -295,7 +295,26 @@ if ([$id, $name] = $row) {
 }
 ```
 
-In expression position only the simple positional form (`[$a, $b]`) is supported; keyed or nested destructuring there is a compile-time error (it remains available as a statement).
+Every pattern the statement form supports works in expression position too: skipped slots, keyed entries, nested patterns, non-variable targets, and the `list(...)` construct. A falsy right-hand side (such as a missing key falling back to `?? null`) makes the whole expression falsy, and destructuring a runtime `null` binds `null` to every target, as in PHP:
+
+```php
+<?php
+// Skipped slots + a nullable source: take the branch only when the row exists.
+if ([, , , $access] = $propertyScopes[$name] ?? null) {
+    echo $access;
+}
+
+// Keyed, nested, and list() patterns work the same way.
+if (["level" => $level] = $config) { echo $level; }
+if ([[$a, $b], [$c, $d]] = $pairs) { echo $a + $c; }
+while (list(, $tag) = $queue[$i] ?? null) { $i++; }
+
+// The expression's value is the full right-hand side.
+$row = [, $second] = [1, 2];
+echo count($row); // 2
+```
+
+Inside a ternary branch or the right operand of `&&`/`||`, the destructuring only runs when that branch is actually taken, matching PHP's evaluation order. A right-hand side the compiler can prove is `null` at compile time is rejected as a compile-time error (`Cannot index non-array`); runtime-nullable sources are fine.
 
 Destructuring can also appear directly in a `foreach` value pattern. The pattern is bound from each element (or each value, when a key is present), so you can unpack rows while iterating.
 

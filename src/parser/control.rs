@@ -269,7 +269,7 @@ fn finish_foreach_destructure(
     key_var: Option<String>,
 ) -> Result<Stmt, CompileError> {
     let temp = format!("__elephc_foreach_destructure_{}_{}", span.line, span.col);
-    let destructure_stmt = crate::parser::stmt::parse_and_lower_foreach_destructure(
+    let destructure_stmt = crate::parser::stmt::parse_and_lower_bracket_destructure(
         tokens,
         pos,
         span,

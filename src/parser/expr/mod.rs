@@ -11,6 +11,7 @@
 mod array_literal;
 mod assignment_targets;
 mod calls;
+mod list_destructure;
 mod prefix;
 mod prefix_complex;
 mod pratt;

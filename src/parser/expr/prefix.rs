@@ -16,6 +16,9 @@ use crate::span::Span;
 
 use super::array_literal::{parse_array_literal, parse_long_array_literal};
 use super::assignment_targets::is_non_local_assignment_target;
+use super::list_destructure::{
+    try_parse_bracket_destructure_expr, try_parse_list_construct_destructure_expr,
+};
 use super::calls::{parse_first_class_callable_parens, parse_scoped_static_call, peek_cast};
 use super::prefix_complex::{
     parse_arrow_closure, parse_attributed_closure, parse_closure, parse_match_expr,
@@ -203,7 +206,16 @@ pub(super) fn parse_prefix(
         }
         Token::Variable(name) => parse_variable(tokens, pos, span, name.clone()),
         Token::LParen => parse_group_or_cast(tokens, pos, span),
-        Token::LBracket => parse_array_literal(tokens, pos, span),
+        // `[pattern] = RHS` in expression position with a skipped/keyed/nested/non-variable
+        // pattern desugars onto the statement-form destructuring; the all-simple-positional
+        // shape (and every plain literal) falls through to the array-literal parser so the
+        // pre-existing Pratt `ExprKind::ListUnpack` path stays byte-identical.
+        Token::LBracket => {
+            match try_parse_bracket_destructure_expr(tokens, pos)? {
+                Some(expr) => Ok(expr),
+                None => parse_array_literal(tokens, pos, span),
+            }
+        }
         Token::Match => parse_match_expr(tokens, pos, span),
         Token::Function => parse_closure(tokens, pos, span, false),
         Token::Fn => parse_arrow_closure(tokens, pos, span, false),
@@ -217,6 +229,19 @@ pub(super) fn parse_prefix(
                 && matches!(tokens.get(*pos + 1).map(|(t, _)| t), Some(Token::LParen)) =>
         {
             parse_long_array_literal(tokens, pos, span)
+        }
+        // `list(pattern) = RHS` used in expression position (e.g. `if (list(, $b) = $arr)`),
+        // PHP's long-form destructuring construct. Only intercepted when the matching `)` is
+        // followed by a plain `=`; otherwise the identifier proceeds through the ordinary
+        // named-expression path for its usual diagnostics.
+        Token::Identifier(name)
+            if name.eq_ignore_ascii_case("list")
+                && matches!(tokens.get(*pos + 1).map(|(t, _)| t), Some(Token::LParen)) =>
+        {
+            match try_parse_list_construct_destructure_expr(tokens, pos)? {
+                Some(expr) => Ok(expr),
+                None => parse_named_expr(tokens, pos, span),
+            }
         }
         // A leading `\` before a global constant (`\PHP_INT_MAX`, `\INF`, `\DIRECTORY_SEPARATOR`,
         // `\PHP_EOL`, `\true`, …) only denotes the global namespace. Those constants are global and

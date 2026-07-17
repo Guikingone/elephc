@@ -29,7 +29,8 @@ pub use ffi::parse_extern_stmts;
 pub(crate) use oop::parse_anonymous_class;
 pub(crate) use params::{looks_like_typed_param, parse_type_expr};
 pub(crate) use assign::can_replay_assignment_target;
-pub(crate) use assign::parse_and_lower_foreach_destructure;
+pub(crate) use assign::parse_and_lower_bracket_destructure;
+pub(crate) use assign::parse_and_lower_list_construct_destructure;
 pub(crate) use assign::assignment_target_store_stmt;
 // Re-exported so `crate::parser::expr::prefix` (outside the private `simple` module) can parse
 // `include`/`require` as a general expression operand via the same value-include parser used for

@@ -43,21 +43,41 @@ pub(in crate::parser::stmt) fn parse_list_unpack(
     Ok(lower_list_unpack(pattern, value, span))
 }
 
-/// Parses a foreach destructuring value pattern (`foreach ($arr as [pattern])` or
-/// `foreach ($arr as $k => [pattern])`) and lowers it into a single statement that binds
-/// each pattern target from `source`, ready to be prepended to the foreach body.
+/// Parses a bracket destructuring pattern outside the standalone statement form — the
+/// foreach value position (`foreach ($arr as [pattern])`, `foreach ($arr as $k => [pattern])`)
+/// and the expression-position desugar (`if ([, , , $x] = RHS)`) — and lowers it into a
+/// single statement that binds each pattern target from `source`.
 ///
 /// Unlike `parse_list_unpack`, this consumes only the bracket-enclosed pattern (no `=` or
 /// trailing right-hand side) and takes `source` from the caller — the synthetic foreach
-/// element variable. Reuses `parse_bracket_list_pattern` and `lower_list_unpack` so foreach
-/// destructuring stays in lockstep with standalone list/bracket destructuring.
-pub(crate) fn parse_and_lower_foreach_destructure(
+/// element variable or the hidden expression-position temporary. Reuses
+/// `parse_bracket_list_pattern` and `lower_list_unpack` so every caller stays in lockstep
+/// with standalone list/bracket destructuring.
+pub(crate) fn parse_and_lower_bracket_destructure(
     tokens: &[(Token, Span)],
     pos: &mut usize,
     span: Span,
     source: Expr,
 ) -> Result<Stmt, CompileError> {
     let pattern = parse_bracket_list_pattern(tokens, pos, span)?;
+    Ok(lower_list_unpack(pattern, source, span))
+}
+
+/// Parses a `list(...)` construct destructuring pattern outside the standalone statement
+/// form — currently the expression-position desugar (`if (list(, $b) = RHS)`) — and lowers
+/// it into a single statement that binds each pattern target from `source`.
+///
+/// Consumes the `list` keyword through the matching `)` (no `=` or right-hand side); the
+/// caller supplies `source`, the hidden temporary holding the evaluated right-hand side.
+/// Reuses `parse_list_construct_pattern` and `lower_list_unpack` so the construct form stays
+/// in lockstep with standalone `list() = ...;` destructuring.
+pub(crate) fn parse_and_lower_list_construct_destructure(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+    source: Expr,
+) -> Result<Stmt, CompileError> {
+    let pattern = parse_list_construct_pattern(tokens, pos, span)?;
     Ok(lower_list_unpack(pattern, source, span))
 }
 
