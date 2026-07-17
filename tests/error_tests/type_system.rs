@@ -996,3 +996,79 @@ fn test_error_ref_local_array_append_into_instance_property() {
         "Appending a reference into a static or instance property array is not supported",
     );
 }
+
+/// Verifies a PHP 8.2 DNF group with a single type and no intersection (`(A)|B`) is rejected, as
+/// PHP requires at least one `&` inside the parentheses.
+#[test]
+fn test_error_dnf_single_type_group_rejected() {
+    expect_error(
+        "<?php interface A {} interface B {} function s((A)|B $x): void {}",
+        "A parenthesized DNF type group must contain an intersection",
+    );
+}
+
+/// Verifies an unclosed DNF group (`(A&B` with no `)`) is rejected loudly at the missing paren.
+#[test]
+fn test_error_dnf_unclosed_group_rejected() {
+    expect_error(
+        "<?php interface A {} interface B {} function u((A&B $x): void {}",
+        "Expected ')' to close DNF intersection type group",
+    );
+}
+
+/// Verifies the `?` nullable shorthand cannot be combined with a DNF group (`?(A&B)`), matching
+/// PHP where that is a parse error; nullability must be spelled as the `(A&B)|null` union arm.
+#[test]
+fn test_error_dnf_nullable_shorthand_rejected() {
+    expect_error(
+        "<?php interface A {} interface B {} class Z { public ?(A&B) $p = null; }",
+        "Nullable shorthand cannot be combined with a DNF type group",
+    );
+}
+
+/// Verifies a value implementing only one arm of a DNF intersection (`(A&B)|null`, value implements
+/// only `B`) is rejected: the intersection is typed as its first member `A`, which the argument
+/// does not satisfy.
+#[test]
+fn test_error_dnf_value_missing_intersection_member_rejected() {
+    expect_error(
+        "<?php interface A {} interface B {} class OnlyB implements B {} \
+         function g((A&B)|null $x): string { return $x === null ? \"null\" : \"obj\"; } \
+         echo g(new OnlyB());",
+        "parameter $x expects",
+    );
+}
+
+/// Verifies a nested DNF group with the inner parentheses on the left (`((A&B)&C)`) is rejected
+/// in parameter position, matching PHP's hard `syntax error, unexpected token "("` — DNF groups
+/// forbid nesting, only a flat `(A&B&C)` intersection is valid.
+#[test]
+fn test_error_dnf_nested_group_left_param_rejected() {
+    expect_error(
+        "<?php interface A {} interface B {} interface C {} \
+         function f(((A&B)&C) $x): void {}",
+        "Nested parentheses are not allowed in a DNF type group",
+    );
+}
+
+/// Verifies a nested DNF group with the inner parentheses on the right (`(A&(B&C))`) is rejected
+/// in parameter position, matching PHP's hard parse error for nested DNF parentheses.
+#[test]
+fn test_error_dnf_nested_group_right_param_rejected() {
+    expect_error(
+        "<?php interface A {} interface B {} interface C {} \
+         function g((A&(B&C)) $x): void {}",
+        "Nested parentheses are not allowed in a DNF type group",
+    );
+}
+
+/// Verifies a nested DNF group in property position (`((A&B)&C)|null`) is rejected the same way
+/// as in parameter position — both type positions share the same DNF-group parser.
+#[test]
+fn test_error_dnf_nested_group_property_rejected() {
+    expect_error(
+        "<?php interface A {} interface B {} interface C {} \
+         class Z { protected ((A&B)&C)|null $p = null; }",
+        "Nested parentheses are not allowed in a DNF type group",
+    );
+}

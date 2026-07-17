@@ -77,6 +77,13 @@ pub(super) fn parse_function_decl(
 /// Checks for nullable/union types, pointer/buffer generics, and that the token sequence
 /// ultimately resolves to a variable token (possibly after `&` or `...` markers).
 pub(crate) fn looks_like_typed_param(tokens: &[(Token, Span)], pos: usize) -> bool {
+    // A leading `(` in parameter position can only open a PHP 8.2 DNF type group (`(A&B)|null`):
+    // nothing else may begin a parameter there. Commit to type parsing so a malformed group
+    // surfaces the real type error (e.g. missing `&`, unclosed paren) instead of the generic
+    // "Expected parameter variable".
+    if matches!(tokens.get(pos).map(|(t, _)| t), Some(Token::LParen)) {
+        return true;
+    }
     let mut probe = pos;
     match parse_type_expr(tokens, &mut probe, tokens[pos].1) {
         Ok(_) => {
@@ -103,6 +110,14 @@ pub(crate) fn parse_type_expr(
 ) -> Result<TypeExpr, CompileError> {
     let ty = if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Question)) {
         *pos += 1;
+        // PHP forbids combining the `?` nullable shorthand with a DNF group: `?(A&B)` is a
+        // parse error. The DNF form must spell nullability as a union arm, `(A&B)|null`.
+        if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LParen)) {
+            return Err(CompileError::new(
+                span,
+                "Nullable shorthand cannot be combined with a DNF type group; write (A&B)|null",
+            ));
+        }
         TypeExpr::Nullable(Box::new(parse_atomic_type_expr(tokens, pos, span)?))
     } else {
         parse_atomic_type_expr(tokens, pos, span)?
@@ -202,13 +217,20 @@ fn normalize_union_members(members: Vec<TypeExpr>) -> TypeExpr {
 }
 
 /// Parses a single (non-union) type expression: builtin keyword, `ptr<T>`, `buffer<T>`,
-/// or a qualified/unqualified name. Does not handle `?T` (nullable) — that is handled by
-/// the caller `parse_type_expr`. Advances `*pos` past the consumed token(s).
+/// a PHP 8.2 DNF parenthesized intersection group `(A&B)`, or a qualified/unqualified name.
+/// Does not handle `?T` (nullable) — that is handled by the caller `parse_type_expr`.
+/// Advances `*pos` past the consumed token(s).
 fn parse_atomic_type_expr(
     tokens: &[(Token, Span)],
     pos: &mut usize,
     span: Span,
 ) -> Result<TypeExpr, CompileError> {
+    // PHP 8.2 DNF group: a parenthesized intersection used as a union member, e.g.
+    // `(A&B)|null`. Because this is a normal type atom, both property and parameter type
+    // positions (which share this parser) accept the group with no per-caller wiring.
+    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LParen)) {
+        return parse_dnf_group(tokens, pos, span);
+    }
     match tokens.get(*pos).map(|(t, _)| t) {
         Some(Token::Identifier(name)) if ident_matches(name, &["int", "integer"]) => {
             *pos += 1;
@@ -319,6 +341,58 @@ fn parse_atomic_type_expr(
         )?)),
         _ => Err(CompileError::new(span, "Expected type expression")),
     }
+}
+
+/// Parses a PHP 8.2 DNF parenthesized intersection group `( T & T (& T)* )` and returns a
+/// `TypeExpr::Intersection`. Assumes the current token is the opening `(`. The group must contain
+/// a real intersection: a single-type group like `(A)` is a parse error in PHP, so it is rejected
+/// here too. The resulting intersection is a normal type atom, so a following `| null` (handled by
+/// the caller) composes it into `(A&B)|null`. Advances `*pos` past the closing `)`.
+fn parse_dnf_group(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<TypeExpr, CompileError> {
+    *pos += 1; // consume '('
+    let first = parse_dnf_member(tokens, pos, span)?;
+    if !matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Ampersand)) {
+        return Err(CompileError::new(
+            span,
+            "A parenthesized DNF type group must contain an intersection, e.g. (A&B)",
+        ));
+    }
+    let mut members = vec![first];
+    while matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Ampersand)) {
+        *pos += 1; // consume '&'
+        members.push(parse_dnf_member(tokens, pos, span)?);
+    }
+    expect_token(
+        tokens,
+        pos,
+        &Token::RParen,
+        "Expected ')' to close DNF intersection type group",
+    )?;
+    Ok(TypeExpr::Intersection(members))
+}
+
+/// Parses a single intersection member inside a DNF group (`parse_dnf_group`). PHP hard-forbids
+/// nested parentheses inside a DNF group — `((A&B)&C)` and `(A&(B&C))` are both parse errors, only
+/// a flat `(A&B&C)` is valid — so a leading `(` here is rejected loudly instead of recursing into
+/// another DNF group the way a normal union member (`parse_atomic_type_expr`) would. Every other
+/// token is delegated to `parse_atomic_type_expr` so a member behaves like any other type atom.
+fn parse_dnf_member(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<TypeExpr, CompileError> {
+    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LParen)) {
+        return Err(CompileError::new(
+            span,
+            "Nested parentheses are not allowed in a DNF type group; write a flat intersection \
+             like (A&B&C)",
+        ));
+    }
+    parse_atomic_type_expr(tokens, pos, span)
 }
 
 /// Returns `true` if `name` matches any of the `keywords` case-insensitively.

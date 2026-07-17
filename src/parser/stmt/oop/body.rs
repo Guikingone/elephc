@@ -443,9 +443,13 @@ fn parse_optional_property_type(
     if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Variable(_))) {
         return Ok(None);
     }
+    // `(` opens a PHP 8.2 DNF type group used as a property type, e.g. `(A&B)|null $p`.
     if !matches!(
         tokens.get(*pos).map(|(t, _)| t),
-        Some(Token::Identifier(_)) | Some(Token::Question) | Some(Token::Backslash)
+        Some(Token::Identifier(_))
+            | Some(Token::Question)
+            | Some(Token::Backslash)
+            | Some(Token::LParen)
     ) {
         return Ok(None);
     }

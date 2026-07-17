@@ -80,6 +80,30 @@ syntax and cannot be written in source code. Codegen uses it only for the
 default tagged null representation of `int|null` values, storing an inline
 `{payload, tag}` pair instead of a heap-boxed `mixed` cell.
 
+### DNF (disjunctive normal form) types
+
+A DNF type (PHP 8.2) combines intersection and union by using a **parenthesized intersection group as a member of a union**. elephc accepts it in property, parameter, and return positions:
+
+```php
+<?php
+class NodeBuilder {
+    // property: either a value that is both NodeDefinition AND ParentNodeDefinitionInterface, or null
+    protected (NodeDefinition&ParentNodeDefinitionInterface)|null $parent = null;
+}
+
+function g((A&B)|null $x): string {   // parameter
+    return $x === null ? "null" : "obj";
+}
+
+function h(): (A&B)|null {             // return type
+    return null;
+}
+```
+
+Multiple groups may appear in one union (`(A&B)|(C&D)`). Each parenthesized group must contain a real intersection: a single-type group such as `(A)|B` is a parse error, matching PHP. The nullable shorthand may not be combined with a DNF group either — write `(A&B)|null`, not `?(A&B)`, which PHP also rejects.
+
+`(A&B)|null` is stored as the nullable intersection `?(A&B)`, sharing the same canonical `T|null` → `?T` folding used by every other union. As with a bare intersection, the value is typed as the intersection's **first** listed member for member access and argument compatibility; full structural intersection resolution is planned.
+
 ### Never
 
 `never` marks a function, method, closure, or interface method that **must not return normally**. The function body is expected to either `throw`, call `exit()`/`die()`, or loop forever.
