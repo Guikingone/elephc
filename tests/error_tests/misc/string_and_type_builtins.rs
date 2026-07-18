@@ -149,11 +149,12 @@ expect_builtin_arity_error!(
     "implode() takes exactly 2 arguments"
 );
 
-// Tests ucwords() arity error when called with no arguments.
+// Tests ucwords() arity error when called with no arguments (the optional
+// $separators argument still requires the mandatory $string argument).
 expect_builtin_arity_error!(
     test_error_ucwords_wrong_args,
     "<?php ucwords();",
-    "ucwords() takes exactly 1 argument"
+    "ucwords() takes 1 or 2 arguments"
 );
 
 // Tests str_ireplace() arity error when called with only two arguments (needs search, replace, subject).

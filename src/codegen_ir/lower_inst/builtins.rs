@@ -415,7 +415,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "sscanf" => strings::lower_sscanf(ctx, inst),
         "ucfirst" => strings::lower_ucfirst(ctx, inst),
         "lcfirst" => strings::lower_lcfirst(ctx, inst),
-        "ucwords" => strings::lower_unary_string_runtime(ctx, inst, "ucwords", "__rt_ucwords"),
+        "ucwords" => strings::lower_ucwords(ctx, inst),
         "trim" => strings::lower_trim_like(ctx, inst, "trim", "__rt_trim", "__rt_trim_mask"),
         "ltrim" => strings::lower_trim_like(ctx, inst, "ltrim", "__rt_ltrim", "__rt_ltrim_mask"),
         "rtrim" | "chop" => {
@@ -877,9 +877,23 @@ fn static_get_debug_type_name(ty: &PhpType) -> Option<&'static [u8]> {
     }
 }
 
-/// Lowers `phpversion()` as the compiler package version string.
+/// Lowers `phpversion()` (version string) and `phpversion($extension)` (always false).
+///
+/// With one operand PHP queries a loadable extension's version; elephc has no
+/// loadable extensions, so the concrete PHP `false` is emitted (matching PHP run
+/// without that extension). The extension-name operand is only evaluated for its
+/// side effects during argument lowering and is not otherwise consumed here.
 fn lower_phpversion(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "phpversion", 0)?;
+    if inst.operands.len() > 1 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "phpversion expected 0 or 1 args, got {}",
+            inst.operands.len()
+        )));
+    }
+    if inst.operands.len() == 1 {
+        emit_static_bool(ctx, false);
+        return store_if_result(ctx, inst);
+    }
     let (label, len) = ctx.data.add_string(env!("CARGO_PKG_VERSION").as_bytes());
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);

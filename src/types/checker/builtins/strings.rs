@@ -126,7 +126,9 @@ pub(super) fn check_builtin(
                 if args.len() != 1 {
                     return Err(CompileError::new(span, "chr() takes exactly 1 argument"));
                 }
-            } else if matches!(name, "trim" | "ltrim" | "rtrim" | "chop") {
+            } else if matches!(name, "trim" | "ltrim" | "rtrim" | "chop" | "ucwords") {
+                // ucwords(string $string, string $separators = " \t\r\n\f\v"): the
+                // optional separators argument customizes the word-boundary set.
                 if args.is_empty() || args.len() > 2 {
                     return Err(CompileError::new(
                         span,

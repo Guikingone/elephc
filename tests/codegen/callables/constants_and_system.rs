@@ -2409,6 +2409,23 @@ fn test_phpversion() {
     assert_eq!(out, env!("CARGO_PKG_VERSION"));
 }
 
+/// Verifies `phpversion($extension)` returns PHP `false` for an extension query.
+///
+/// elephc has no loadable extensions, so `phpversion("...")` is the concrete
+/// false, matching PHP invoked without that extension. `var_dump` therefore
+/// prints `bool(false)` for both a literal and a variable extension name.
+#[test]
+fn test_phpversion_extension_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(phpversion("no_such_ext"));
+$e = "curl";
+var_dump(phpversion($e));
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(false)\n");
+}
+
 // Tests `php_uname()` and `php_uname("a")` return identical strings (default "a" mode).
 /// Verifies that PHP uname.
 #[test]

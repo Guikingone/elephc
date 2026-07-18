@@ -154,10 +154,17 @@ fn test_error_putenv_wrong_args() {
     expect_error("<?php putenv();", "putenv() takes exactly 1 argument");
 }
 
-/// Verifies that `phpversion()` with any arguments yields a no-args diagnostic.
+/// Verifies that `phpversion()` with more than one argument yields an arity diagnostic.
+///
+/// The zero-argument (version string) and one-argument (`?string $extension`,
+/// always false in elephc) forms are both valid, so only two or more arguments
+/// stay loud.
 #[test]
 fn test_error_phpversion_wrong_args() {
-    expect_error("<?php phpversion(1);", "phpversion() takes no arguments");
+    expect_error(
+        "<?php phpversion(1, 2);",
+        "phpversion() takes at most 1 argument",
+    );
 }
 
 /// Verifies that `extension_loaded()` with no arguments yields a wrong-args diagnostic.

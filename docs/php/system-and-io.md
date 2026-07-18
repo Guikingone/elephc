@@ -22,7 +22,7 @@ sidebar:
 | `defined()` | `defined($name): bool` | Check whether a constant name is defined (literal or runtime name) |
 | `constant()` | `constant($name): mixed` | Return the value of a constant by name (literal or runtime name) |
 | `php_uname()` | `php_uname($mode = "a"): string` | Get system information from the target runtime |
-| `phpversion()` | `phpversion(): string` | Get the elephc package version from `Cargo.toml` |
+| `phpversion()` | `phpversion(?string $extension = null): string\|false` | With no argument, the elephc package version from `Cargo.toml`. With an extension name, `false` — elephc has no loadable extensions |
 | `extension_loaded()` | `extension_loaded($extension): bool` | Check whether a PHP extension is loaded (always `false`; see below) |
 | `exec()` | `exec($command): string` | Execute command, return output |
 | `shell_exec()` | `shell_exec($command): string` | Execute via shell, return output |

@@ -6056,7 +6056,22 @@ fn call_return_type_for_args(
         "array_map" => array_map_builtin_return_type(ctx, args, operands),
         "iterator_to_array" => iterator_to_array_builtin_return_type(ctx, args, operands),
         "microtime" => microtime_builtin_return_type_for_args(args),
+        "phpversion" => phpversion_builtin_return_type_for_args(args),
         _ => None,
+    }
+}
+
+/// Returns `phpversion()` metadata based on whether an extension argument is present.
+///
+/// `phpversion()` yields the version `string`; `phpversion($extension)` queries a
+/// (non-existent, in elephc) loadable extension and yields the concrete `false`
+/// (`Bool`). This must match the checker (`src/types/checker/builtins/system.rs`)
+/// and the EIR backend dispatch in `lower_phpversion`.
+fn phpversion_builtin_return_type_for_args(args: &[Expr]) -> Option<PhpType> {
+    if args.is_empty() {
+        Some(PhpType::Str)
+    } else {
+        Some(PhpType::Bool)
     }
 }
 

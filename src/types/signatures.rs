@@ -81,9 +81,14 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
 /// - optimizer effect modeling for builtins
 pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
     match name {
-        "time" | "phpversion" | "json_last_error" | "json_last_error_msg" | "pi"
+        "time" | "json_last_error" | "json_last_error_msg" | "pi"
         | "ptr_null" | "getcwd" | "sys_get_temp_dir" | "tmpfile" | "hash_algos"
         | "date_default_timezone_get" => Some(fixed(&[])),
+        // phpversion(?string $extension = null): string|false. With no argument PHP
+        // returns the runtime version string; with an extension name it returns that
+        // extension's version or false. elephc has no loadable extensions, so the
+        // one-argument form is always the concrete false.
+        "phpversion" => Some(optional(&["extension"], 0, vec![null_lit()])),
 
         "strlen" | "strtolower" | "strtoupper" | "ucfirst" | "lcfirst" | "strrev"
         | "grapheme_strrev" | "addslashes" | "stripslashes" | "nl2br" | "bin2hex"

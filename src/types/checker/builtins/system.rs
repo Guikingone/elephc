@@ -206,8 +206,18 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Str))
         }
         "phpversion" => {
-            if !args.is_empty() {
-                return Err(CompileError::new(span, "phpversion() takes no arguments"));
+            if args.len() > 1 {
+                return Err(CompileError::new(
+                    span,
+                    "phpversion() takes at most 1 argument",
+                ));
+            }
+            // phpversion(): the runtime version string. phpversion($extension): the
+            // extension's version or false. elephc has no loadable extensions, so any
+            // extension query is the concrete PHP false (bool).
+            if let Some(arg) = args.first() {
+                checker.infer_type(arg, env)?;
+                return Ok(Some(PhpType::Bool));
             }
             Ok(Some(PhpType::Str))
         }

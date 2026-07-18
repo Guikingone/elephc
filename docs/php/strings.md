@@ -140,7 +140,7 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `strtoupper()` | `strtoupper($str): string` | Convert to uppercase |
 | `ucfirst()` | `ucfirst($str): string` | Uppercase first character |
 | `lcfirst()` | `lcfirst($str): string` | Lowercase first character |
-| `ucwords()` | `ucwords($str): string` | Uppercase first letter of each word |
+| `ucwords()` | `ucwords($str [, $separators]): string` | Uppercase first letter of each word; `$separators` (default `" \t\r\n\f\v"`) customizes the word-boundary set |
 | `trim()` | `trim($str [, $chars]): string` | Strip the default mask (`" \n\r\t\v\f\0"`) or explicit characters from both ends |
 | `ltrim()` | `ltrim($str [, $chars]): string` | Strip the default mask (`" \n\r\t\v\f\0"`) or explicit characters from the left |
 | `rtrim()` | `rtrim($str [, $chars]): string` | Strip the default mask (`" \n\r\t\v\f\0"`) or explicit characters from the right |

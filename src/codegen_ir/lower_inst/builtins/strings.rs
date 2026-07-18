@@ -84,6 +84,57 @@ pub(super) fn lower_unary_string_runtime(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `ucwords(string $string, string $separators = " \t\r\n\f\v")`.
+///
+/// With one operand the default whitespace-separator helper `__rt_ucwords` runs.
+/// With an explicit separators operand the `__rt_ucwords_sep` helper runs instead:
+/// it treats each byte of the separators string as a word boundary, matching PHP's
+/// custom `$separators` semantics (the first character of the string is always
+/// capitalized regardless of the separator set).
+pub(super) fn lower_ucwords(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.is_empty() || inst.operands.len() > 2 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "ucwords expected 1 or 2 args, got {}",
+            inst.operands.len()
+        )));
+    }
+    load_single_string_arg(ctx, inst, "ucwords")?;
+    if inst.operands.len() == 1 {
+        abi::emit_call_label(ctx.emitter, "__rt_ucwords");
+        return store_if_result(ctx, inst);
+    }
+    load_ucwords_separators_arg(ctx, inst)?;
+    abi::emit_call_label(ctx.emitter, "__rt_ucwords_sep");
+    store_if_result(ctx, inst)
+}
+
+/// Materializes the `ucwords()` separators operand into the runtime helper's ABI registers.
+///
+/// The source string is already loaded in the primary string registers; this loads the
+/// separators string into the secondary string argument registers (`x3`/`x4` on AArch64,
+/// `rdi`/`rsi` on x86_64) while preserving the source across the load.
+fn load_ucwords_separators_arg(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x1, [sp, #-16]!");                     // preserve the source string pointer while loading the separators
+            ctx.emitter.instruction("str x2, [sp, #-16]!");                     // preserve the source string length while loading the separators
+            load_string_arg_to_regs(ctx, inst, 1, "ucwords", "x1", "x2")?;
+            ctx.emitter.instruction("mov x3, x1");                              // pass the separators pointer as the secondary string argument
+            ctx.emitter.instruction("mov x4, x2");                              // pass the separators length as the secondary string argument
+            ctx.emitter.instruction("ldr x2, [sp], #16");                       // restore the source string length after loading the separators
+            ctx.emitter.instruction("ldr x1, [sp], #16");                       // restore the source string pointer after loading the separators
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            load_string_arg_to_regs(ctx, inst, 1, "ucwords", "rax", "rdx")?;
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the separators pointer as the secondary string argument
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the separators length as the secondary string argument
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+        }
+    }
+    Ok(())
+}
+
 /// Lowers `base64_decode(string $string, bool $strict = false)`.
 ///
 /// PHP accepts an optional second `$strict` argument. elephc decodes the same

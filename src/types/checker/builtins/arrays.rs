@@ -442,6 +442,10 @@ pub(super) fn check_builtin(
             Ok(Some(ty1))
         }
         "array_unshift" => {
+            // array_unshift(array &$array, mixed ...$values): int. elephc currently
+            // only lowers a single prepended value: the runtime `__rt_array_unshift`
+            // shifts elements within the existing buffer without growing capacity, so
+            // multi-value prepend is kept loud until a capacity-aware helper exists.
             if args.len() != 2 {
                 return Err(CompileError::new(
                     span,

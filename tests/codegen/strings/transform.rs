@@ -247,6 +247,25 @@ fn test_ucwords() {
     assert_eq!(out, "Hello World Foo");
 }
 
+/// Verifies `ucwords($string, $separators)` honors a custom word-boundary set.
+///
+/// With separators `"-"` only the first character and the character after each
+/// `-` are capitalized (a following space is no longer a boundary), matching
+/// PHP's `ucwords("a-b c", "-") === "A-B c"`. A multi-character separators set
+/// (`"|-"`) treats every listed byte as a boundary. Verified against `php -n`.
+#[test]
+fn test_ucwords_custom_separators() {
+    let out = compile_and_run(
+        r#"<?php
+echo ucwords("a-b c", "-"), "\n";
+echo ucwords("foo|bar-baz", "|-"), "\n";
+$sep = "-";
+echo ucwords("x-y-z", $sep), "\n";
+"#,
+    );
+    assert_eq!(out, "A-B c\nFoo|Bar-Baz\nX-Y-Z\n");
+}
+
 /// Verifies str_ireplace performs case-insensitive find-and-replace.
 #[test]
 fn test_str_ireplace() {

@@ -25,6 +25,9 @@ echo "strtolower: " . strtolower($str) . "\n";
 echo "strtoupper: " . strtoupper($str) . "\n";
 echo "ucfirst: " . ucfirst("hello") . "\n";
 echo "lcfirst: " . lcfirst("HELLO") . "\n";
+echo "ucwords: " . ucwords("the quick brown fox") . "\n";
+// The optional second argument customizes which bytes count as word boundaries.
+echo "ucwords(sep): " . ucwords("first-name last-name", "-") . "\n";
 
 // Trimming
 echo "\n--- Trim ---\n";
