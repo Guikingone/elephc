@@ -34,6 +34,7 @@ use crate::types::{
 use std::collections::HashSet;
 
 mod constants;
+mod filter;
 mod nullsafe_chain;
 
 /// Lowers an expression and returns its EIR value.
@@ -1921,6 +1922,9 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
         return value;
     }
     if let Some(value) = lower_static_is_callable(ctx, canonical, args, expr) {
+        return value;
+    }
+    if let Some(value) = filter::lower_static_filter_var(ctx, canonical, args, expr) {
         return value;
     }
     let sig = call_signature(ctx, canonical, args);

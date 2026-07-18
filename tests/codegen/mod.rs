@@ -37,6 +37,7 @@ mod arrays;
 mod calendar;
 mod callables;
 mod system;
+mod filter_var;
 mod json;
 mod regressions;
 mod objects;

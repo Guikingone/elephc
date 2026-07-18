@@ -13,10 +13,12 @@ use std::collections::{HashMap, HashSet};
 use crate::codegen::platform::Platform;
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
-use crate::types::date_constants::DATE_INT_CONSTANTS;
+use crate::types::date_constants::{DATE_INT_CONSTANTS, DATE_STRING_CONSTANTS};
 use crate::types::error_constants::ERROR_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
-use crate::types::php_runtime_constants::{PHP_RUNTIME_INT_CONSTANTS, PHP_SAPI_STR, PHP_VERSION_STR};
+use crate::types::php_runtime_constants::{
+    PHP_RUNTIME_INT_CONSTANTS, PHP_RUNTIME_PLATFORM_CONSTANTS, PHP_SAPI_STR, PHP_VERSION_STR,
+};
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::locale_constants::LOCALE_INT_CONSTANTS;
 use crate::types::preg_constants::{PCRE_VERSION_STR, PREG_INT_CONSTANTS};
@@ -25,6 +27,10 @@ use crate::types::sort_constants::SORT_INT_CONSTANTS;
 use crate::types::mbstring_constants::MBSTRING_INT_CONSTANTS;
 use crate::types::filter_constants::FILTER_INT_CONSTANTS;
 use crate::types::pcntl_constants::{PCNTL_INT_CONSTANTS, PCNTL_PLATFORM_SIGNALS};
+use crate::types::upload_constants::UPLOAD_ERR_INT_CONSTANTS;
+use crate::types::url_constants::URL_INT_CONSTANTS;
+use crate::types::tokenizer_constants::TOKENIZER_INT_CONSTANTS;
+use crate::types::xml_constants::XML_INT_CONSTANTS;
 use crate::types::{PhpType, TypeEnv};
 
 use super::context::{Context, TRY_HANDLER_SLOT_SIZE};
@@ -194,11 +200,47 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    for (name, value) in UPLOAD_ERR_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in URL_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in TOKENIZER_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in XML_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
     // Platform-conditional user signals (SIGUSR1/SIGUSR2): select the value from
     // the COMPILE target (not `cfg(target_os)`, since elephc cross-compiles).
     // macOS: SIGUSR1=30, SIGUSR2=31. Linux (x86_64 and aarch64): SIGUSR1=10,
     // SIGUSR2=12. Mirrors the fnmatch `match target_platform` pattern above.
     for (name, macos_value, linux_value) in PCNTL_PLATFORM_SIGNALS {
+        let value = match target_platform {
+            Platform::MacOS => macos_value,
+            Platform::Linux => linux_value,
+        };
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    // Platform-conditional runtime constants (PHP_MAXPATHLEN): same
+    // compile-target selection as the pcntl user signals above.
+    for (name, macos_value, linux_value) in PHP_RUNTIME_PLATFORM_CONSTANTS {
         let value = match target_platform {
             Platform::MacOS => macos_value,
             Platform::Linux => linux_value,
@@ -227,6 +269,13 @@ pub(crate) fn collect_constants(
             PhpType::Str,
         ),
     );
+    // DATE_* format-string constants (DATE_ATOM, DATE_RFC3339, ...).
+    for (name, value) in DATE_STRING_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::StringLiteral((*value).to_string()), PhpType::Str),
+        );
+    }
     collect_constant_decls(program, &mut constants);
     constants
 }

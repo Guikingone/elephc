@@ -373,7 +373,8 @@ fn is_builtin_global_constant(name: &str) -> bool {
         return true;
     }
     // Shared source-of-truth slices for JSON, stream/socket, error-level, PHP runtime,
-    // preg/PCRE, string-function, sort, mbstring, filter, and pcntl signal constants.
+    // preg/PCRE, string-function, sort, mbstring, filter, upload-error, parse_url,
+    // tokenizer, XML, and pcntl signal constants.
     crate::types::json_constants::JSON_INT_CONSTANTS
         .iter()
         .chain(crate::types::stream_constants::STREAM_INT_CONSTANTS.iter())
@@ -385,10 +386,20 @@ fn is_builtin_global_constant(name: &str) -> bool {
         .chain(crate::types::mbstring_constants::MBSTRING_INT_CONSTANTS.iter())
         .chain(crate::types::filter_constants::FILTER_INT_CONSTANTS.iter())
         .chain(crate::types::pcntl_constants::PCNTL_INT_CONSTANTS.iter())
+        .chain(crate::types::upload_constants::UPLOAD_ERR_INT_CONSTANTS.iter())
+        .chain(crate::types::url_constants::URL_INT_CONSTANTS.iter())
+        .chain(crate::types::tokenizer_constants::TOKENIZER_INT_CONSTANTS.iter())
+        .chain(crate::types::xml_constants::XML_INT_CONSTANTS.iter())
         .any(|(constant_name, _)| *constant_name == name)
         || crate::types::pcntl_constants::PCNTL_PLATFORM_SIGNALS
             .iter()
             .any(|(constant_name, _, _)| *constant_name == name)
+        || crate::types::php_runtime_constants::PHP_RUNTIME_PLATFORM_CONSTANTS
+            .iter()
+            .any(|(constant_name, _, _)| *constant_name == name)
+        || crate::types::date_constants::DATE_STRING_CONSTANTS
+            .iter()
+            .any(|(constant_name, _)| *constant_name == name)
         || matches!(
             name,
             "PHP_SAPI" | "PHP_VERSION" | "PHP_OS_FAMILY" | "PCRE_VERSION"

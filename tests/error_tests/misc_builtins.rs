@@ -4,11 +4,17 @@
 //! `restore_error_handler`, `restore_exception_handler`, `set_exception_handler`, `preg_quote`,
 //! `preg_grep`, `version_compare`, `unpack`, `random_bytes`, `http_build_query`, `escapeshellarg`,
 //! `assert`, `sapi_windows_cp_conv`, `posix_kill`, and `filter_var` (plus the array builtin
-//! `array_key_last`). These are registered for type checking and first-class-callable resolution
-//! only; they have no EIR/codegen lowering yet, so these tests assert type-check recognition
-//! (never `compile_and_run`). `var_export` is intentionally NOT registered here: it already has a
-//! runtime via the `var_export_prelude` injection, and catalog registration would conflict with
-//! that prelude (see the deliverable report for the var_export conflict).
+//! `array_key_last`). Most of these are registered for type checking and first-class-callable
+//! resolution only, with no EIR/codegen lowering yet, so those tests assert type-check
+//! recognition (never `compile_and_run`).
+//! `filter_var` is the exception: its core filters (`FILTER_DEFAULT`/`FILTER_UNSAFE_RAW`,
+//! `FILTER_VALIDATE_INT`/`FLOAT`/`BOOL(EAN)`) DO have full EIR/runtime lowering when the filter id
+//! is a compile-time literal — see `tests/codegen/filter_var.rs` for the runtime parity matrix.
+//! The tests here cover the CHECKER-level loud diagnostics for filter_var's unsupported scope
+//! (non-literal filter id, unsupported filter/flags, array-form `$options`) and the still-
+//! recognition-only `array_key_last` builtin. `var_export` is intentionally NOT registered here:
+//! it already has a runtime via the `var_export_prelude` injection, and catalog registration would
+//! conflict with that prelude (see the deliverable report for the var_export conflict).
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -177,3 +183,77 @@ expect_builtin_arity_error!(
     "<?php array_key_last();",
     "array_key_last() takes exactly 1 argument"
 );
+
+// -- filter_var() scope-boundary loud diagnostics ---------------------------
+// Locked decisions (see the deliverable report): a non-literal $filter is kept
+// loud at the checker (simplest sound option); VALIDATE_IP/EMAIL/URL/MAC/DOMAIN/
+// REGEXP, array-form $options, and unsupported flags (REQUIRE_ARRAY/FORCE_ARRAY/
+// CALLBACK) are all kept loud rather than mis-validated. FILTER_REQUIRE_SCALAR is
+// accepted as a verified no-op (see `test_filter_var_require_scalar_flag_accepted`
+// in `tests/codegen/filter_var.rs`).
+
+expect_builtin_arity_error!(
+    test_error_filter_var_non_literal_filter_id,
+    "<?php function f(int $filter) { return filter_var(\"42\", $filter); }",
+    "filter_var(): a dynamic (non-compile-time-constant) $filter is not supported yet"
+);
+
+expect_builtin_arity_error!(
+    test_error_filter_var_unsupported_validate_email,
+    "<?php filter_var(\"a@b.com\", FILTER_VALIDATE_EMAIL);",
+    "filter_var(): filter 274 is not supported yet"
+);
+
+expect_builtin_arity_error!(
+    test_error_filter_var_unsupported_validate_ip,
+    "<?php filter_var(\"127.0.0.1\", FILTER_VALIDATE_IP);",
+    "filter_var(): filter 275 is not supported yet"
+);
+
+expect_builtin_arity_error!(
+    test_error_filter_var_unsupported_flag_force_array,
+    "<?php filter_var(\"42\", FILTER_VALIDATE_INT, FILTER_FORCE_ARRAY);",
+    "filter_var(): flag combination"
+);
+
+expect_builtin_arity_error!(
+    test_error_filter_var_unsupported_flag_callback,
+    "<?php filter_var(\"42\", FILTER_CALLBACK);",
+    "filter_var(): filter 1024 is not supported yet"
+);
+
+expect_builtin_arity_error!(
+    test_error_filter_var_array_form_options,
+    "<?php filter_var(\"42\", FILTER_VALIDATE_INT, ['flags' => FILTER_NULL_ON_FAILURE]);",
+    "filter_var(): array-form $options"
+);
+
+expect_builtin_arity_error!(
+    test_error_filter_var_non_literal_options,
+    "<?php function f(int $opts) { return filter_var(\"42\", FILTER_VALIDATE_INT, $opts); }",
+    "filter_var(): a dynamic (non-compile-time-constant) $options is not supported yet"
+);
+
+/// Verifies a `FILTER_NULL_ON_FAILURE | FILTER_REQUIRE_SCALAR` combined-flags
+/// expression resolves statically (bitwise-OR of two known filter constants),
+/// exercising `filter_static_int_value`'s `BinOp::BitOr` support.
+#[test]
+fn test_filter_var_combined_flags_resolve_statically() {
+    assert!(
+        check_source(
+            "<?php $r = filter_var(\"42\", FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE | FILTER_REQUIRE_SCALAR); echo $r;"
+        )
+        .is_ok(),
+        "a statically-resolvable combined flags expression should type-check",
+    );
+}
+
+/// Verifies `\FILTER_VALIDATE_INT` (fully-qualified) resolves identically to
+/// the bare form for the checker's static filter-id evaluation.
+#[test]
+fn test_filter_var_fully_qualified_constant_recognized() {
+    assert!(
+        check_source("<?php $r = filter_var(\"42\", \\FILTER_VALIDATE_INT); echo $r;").is_ok(),
+        "a fully-qualified FILTER_VALIDATE_INT should resolve statically",
+    );
+}

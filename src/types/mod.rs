@@ -38,6 +38,14 @@ pub(crate) mod mbstring_constants;
 pub(crate) mod filter_constants;
 /// `ext/pcntl` signal integer constants (SIGINT, SIGTERM, SIG_DFL, SIG_IGN, etc.).
 pub(crate) mod pcntl_constants;
+/// PHP file-upload error integer constants (UPLOAD_ERR_*).
+pub(crate) mod upload_constants;
+/// `parse_url()`/`http_build_query()` integer constants (PHP_URL_*, PHP_QUERY_*).
+pub(crate) mod url_constants;
+/// `ext/tokenizer` token-kind integer constants (T_START_HEREDOC, T_END_HEREDOC).
+pub(crate) mod tokenizer_constants;
+/// `ext/dom` node-kind integer constants (XML_DOCUMENT_TYPE_NODE).
+pub(crate) mod xml_constants;
 /// C FFI type mapping utilities.
 mod ffi;
 /// JSON literal constant type inference.

@@ -30,6 +30,7 @@ mod buffers;
 mod class_relations;
 mod ctype;
 mod debug;
+mod filter;
 mod io;
 mod isset;
 mod is_numeric;
@@ -392,6 +393,14 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "get_resource_type" => types::lower_get_resource_type(ctx, inst),
         "get_resource_id" => types::lower_get_resource_id(ctx, inst),
         "is_numeric" => is_numeric::lower_is_numeric(ctx, inst),
+        "filter_var$default" => filter::lower_filter_var_default(ctx, inst, false),
+        "filter_var$default_nof" => filter::lower_filter_var_default(ctx, inst, true),
+        "filter_var$int" => filter::lower_filter_var_int(ctx, inst, false),
+        "filter_var$int_nof" => filter::lower_filter_var_int(ctx, inst, true),
+        "filter_var$float" => filter::lower_filter_var_float(ctx, inst, false),
+        "filter_var$float_nof" => filter::lower_filter_var_float(ctx, inst, true),
+        "filter_var$bool" => filter::lower_filter_var_bool(ctx, inst, false),
+        "filter_var$bool_nof" => filter::lower_filter_var_bool(ctx, inst, true),
         "is_nan" => math::lower_is_nan(ctx, inst),
         "is_infinite" => math::lower_is_infinite(ctx, inst),
         "is_finite" => math::lower_is_finite(ctx, inst),

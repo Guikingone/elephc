@@ -874,6 +874,15 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _tmpfile_template\n_tmpfile_template:\n    .ascii \"/tmp/elephc-XXXXXX\\0\"\n    .byte 0,0,0,0,0\n");
     out.push_str(".globl _locale_utf8_name\n_locale_utf8_name:\n    .asciz \"C.UTF-8\"\n");
     out.push_str(".globl _locale_env_name\n_locale_env_name:\n    .asciz \"\"\n");
+    // filter_var(FILTER_VALIDATE_BOOL) token literals (matched case-insensitively
+    // by __rt_filter_validate_bool_str via __rt_strcasecmp); "1"/"0" are matched
+    // inline without a symbol since they are single bytes.
+    out.push_str(".globl _filter_bool_true\n_filter_bool_true:\n    .ascii \"true\"\n");
+    out.push_str(".globl _filter_bool_false\n_filter_bool_false:\n    .ascii \"false\"\n");
+    out.push_str(".globl _filter_bool_on\n_filter_bool_on:\n    .ascii \"on\"\n");
+    out.push_str(".globl _filter_bool_off\n_filter_bool_off:\n    .ascii \"off\"\n");
+    out.push_str(".globl _filter_bool_yes\n_filter_bool_yes:\n    .ascii \"yes\"\n");
+    out.push_str(".globl _filter_bool_no\n_filter_bool_no:\n    .ascii \"no\"\n");
     out.push_str(&system::emit_json_data());
     out.push_str(&system::emit_date_data());
     out.push_str(&system::emit_strtotime_data());

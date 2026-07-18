@@ -727,12 +727,14 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "restore_error_handler" => Some(fixed(&[])),
         // restore_exception_handler(): true — pops the previously installed exception handler.
         "restore_exception_handler" => Some(fixed(&[])),
-        // filter_var(mixed $value, int $filter = FILTER_DEFAULT (518),
+        // filter_var(mixed $value, int $filter = FILTER_DEFAULT (516),
         // array|int $options = 0): mixed — the filtered value, or false on failure.
+        // 516 php-verified with `php -n -r 'var_dump(FILTER_DEFAULT);'` (PHP 8.5.6
+        // local); the previous 518 here was the same bug fixed in filter_constants.rs.
         "filter_var" => Some(optional(
             &["value", "filter", "options"],
             1,
-            vec![int_lit(518), int_lit(0)],
+            vec![int_lit(516), int_lit(0)],
         )),
         // set_exception_handler(?callable $callback): ?callable.
         "set_exception_handler" => Some(fixed(&["callback"])),

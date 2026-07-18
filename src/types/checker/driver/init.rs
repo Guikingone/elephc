@@ -12,10 +12,12 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::Platform;
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
-use crate::types::date_constants::DATE_INT_CONSTANTS;
+use crate::types::date_constants::{DATE_INT_CONSTANTS, DATE_STRING_CONSTANTS};
 use crate::types::error_constants::ERROR_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
-use crate::types::php_runtime_constants::PHP_RUNTIME_INT_CONSTANTS;
+use crate::types::php_runtime_constants::{
+    PHP_RUNTIME_INT_CONSTANTS, PHP_RUNTIME_PLATFORM_CONSTANTS,
+};
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::locale_constants::LOCALE_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
@@ -24,6 +26,10 @@ use crate::types::sort_constants::SORT_INT_CONSTANTS;
 use crate::types::mbstring_constants::MBSTRING_INT_CONSTANTS;
 use crate::types::filter_constants::FILTER_INT_CONSTANTS;
 use crate::types::pcntl_constants::{PCNTL_INT_CONSTANTS, PCNTL_PLATFORM_SIGNALS};
+use crate::types::upload_constants::UPLOAD_ERR_INT_CONSTANTS;
+use crate::types::url_constants::URL_INT_CONSTANTS;
+use crate::types::tokenizer_constants::TOKENIZER_INT_CONSTANTS;
+use crate::types::xml_constants::XML_INT_CONSTANTS;
 use crate::types::PhpType;
 
 use super::super::Checker;
@@ -100,10 +106,28 @@ impl Checker {
         for (name, _value) in PCNTL_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
+        for (name, _value) in UPLOAD_ERR_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in URL_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in TOKENIZER_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in XML_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
         // Platform-conditional user signals (SIGUSR1/SIGUSR2): only the NAME is
         // needed for type-checking; the target-specific VALUE is materialized by
         // the codegen prescan. Register unconditionally (target-agnostic).
         for (name, _macos_value, _linux_value) in PCNTL_PLATFORM_SIGNALS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        // Platform-conditional runtime constants (PHP_MAXPATHLEN): same pattern —
+        // only the NAME is needed here, the target-specific VALUE is materialized
+        // by the codegen prescan.
+        for (name, _macos_value, _linux_value) in PHP_RUNTIME_PLATFORM_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         // PHP_SAPI, PHP_VERSION, PHP_OS_FAMILY, and PCRE_VERSION are string constants.
@@ -112,6 +136,11 @@ impl Checker {
         constants.insert("PHP_VERSION".to_string(), PhpType::Str);
         constants.insert("PHP_OS_FAMILY".to_string(), PhpType::Str);
         constants.insert("PCRE_VERSION".to_string(), PhpType::Str);
+        // DATE_* format-string constants (DATE_ATOM, DATE_RFC3339, ...): registered
+        // as Str here; their literal values are materialized in prescan.
+        for (name, _value) in DATE_STRING_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Str);
+        }
 
         Self {
             target_platform,

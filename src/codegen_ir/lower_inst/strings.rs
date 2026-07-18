@@ -335,7 +335,11 @@ fn lower_loaded_tagged_scalar_to_string(ctx: &mut FunctionContext<'_>) -> Result
 }
 
 /// Converts the loaded boolean result to PHP string ABI registers.
-fn lower_loaded_bool_to_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
+///
+/// `pub(super)` (rather than private) so `filter_var()`'s `FILTER_DEFAULT`
+/// lowering (`crate::codegen_ir::lower_inst::builtins::filter`) can reuse the
+/// exact same bool-to-string conversion instead of duplicating it.
+pub(super) fn lower_loaded_bool_to_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let false_label = ctx.next_label("bool_to_str_false");

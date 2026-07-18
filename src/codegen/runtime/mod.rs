@@ -17,6 +17,8 @@ mod diagnostics;
 mod emitters;
 mod exceptions;
 mod fibers;
+/// `ext/filter` (`filter_var()`) dedicated runtime parsers (int/float/bool).
+mod filter;
 /// Runtime helpers for generator state management (yield, resume, stack frames).
 pub(crate) mod generators;
 mod io;

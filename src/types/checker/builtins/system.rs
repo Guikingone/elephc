@@ -11,6 +11,7 @@
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{BinOp, Expr, ExprKind};
+use crate::types::filter_constants::FILTER_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::{PhpType, TypeEnv};
 
@@ -1134,16 +1135,97 @@ pub(super) fn check_builtin(
         }
         "filter_var" => {
             // filter_var(mixed $value, int $filter = FILTER_DEFAULT,
-            // array|int $options = 0): mixed — the filtered value, or false on
-            // failure. Recognition-only; no EIR/runtime lowering yet.
+            // array|int $options = 0): mixed — the filtered value, `false` on
+            // failure, or `null` on failure when FILTER_NULL_ON_FAILURE is set.
+            //
+            // Core semantics (VALIDATE_INT/FLOAT/BOOL + DEFAULT/UNSAFE_RAW
+            // passthrough) are implemented with dedicated runtime parsers — see
+            // `crate::ir_lower::expr::filter` and
+            // `crate::codegen_ir::lower_inst::builtins::filter`. Everything else
+            // (VALIDATE_IP/EMAIL/URL/MAC/DOMAIN/REGEXP, array-form `$options`,
+            // FILTER_CALLBACK, REQUIRE_ARRAY/FORCE_ARRAY) is kept LOUD here rather
+            // than silently mis-validated. FILTER_REQUIRE_SCALAR is accepted as a
+            // verified no-op: without REQUIRE_ARRAY/FORCE_ARRAY an array input
+            // already fails every supported filter by default (php-verified), so
+            // REQUIRE_SCALAR never changes observable behavior in this scope —
+            // this unblocks Symfony's `InputBag::filter()`, which always sets it.
             if !(1..=3).contains(&args.len()) {
                 return Err(CompileError::new(
                     span,
                     "filter_var() takes 1 to 3 arguments",
                 ));
             }
-            for arg in args {
-                checker.infer_type(arg, env)?;
+            let value_ty = checker.infer_type(&args[0], env)?;
+            if !is_filter_var_value_type(&value_ty) {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "filter_var(): unsupported value type {:?} is not supported yet",
+                        value_ty
+                    ),
+                ));
+            }
+            let filter_id = if args.len() >= 2 {
+                checker.infer_type(&args[1], env)?;
+                match filter_static_int_value(&args[1]) {
+                    Some(v) => v,
+                    None => {
+                        return Err(CompileError::new(
+                            span,
+                            "filter_var(): a dynamic (non-compile-time-constant) $filter is not supported yet",
+                        ))
+                    }
+                }
+            } else {
+                516 // FILTER_DEFAULT (== FILTER_UNSAFE_RAW)
+            };
+            if !matches!(filter_id, 516 | 257 | 258 | 259) {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "filter_var(): filter {} is not supported yet",
+                        filter_id
+                    ),
+                ));
+            }
+            let flags = if args.len() == 3 {
+                match &args[2].kind {
+                    ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) => {
+                        return Err(CompileError::new(
+                            span,
+                            "filter_var(): array-form $options (['flags' => ..., 'options' => ...]) is not supported yet",
+                        ));
+                    }
+                    _ => {}
+                }
+                let options_ty = checker.infer_type(&args[2], env)?;
+                if matches!(options_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                    return Err(CompileError::new(
+                        span,
+                        "filter_var(): array-form $options (['flags' => ..., 'options' => ...]) is not supported yet",
+                    ));
+                }
+                match filter_static_int_value(&args[2]) {
+                    Some(v) => v,
+                    None => {
+                        return Err(CompileError::new(
+                            span,
+                            "filter_var(): a dynamic (non-compile-time-constant) $options is not supported yet",
+                        ))
+                    }
+                }
+            } else {
+                0
+            };
+            const ALLOWED_FLAGS: i64 = 134_217_728 /* NULL_ON_FAILURE */ | 33_554_432 /* REQUIRE_SCALAR, verified no-op */;
+            if flags & !ALLOWED_FLAGS != 0 {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "filter_var(): flag combination {} is not supported yet",
+                        flags
+                    ),
+                ));
             }
             Ok(Some(PhpType::Mixed))
         }
@@ -1336,6 +1418,62 @@ fn is_json_associative_arg_type(ty: &PhpType) -> bool {
         | PhpType::Mixed => true,
         PhpType::Union(types) => types.iter().all(is_json_associative_arg_type),
         _ => false,
+    }
+}
+
+/// Returns `true` if `ty` is a value type `filter_var()` core lowering supports.
+///
+/// Scalars (Int/Float/Str/Bool/Void=null) and `Mixed` are dispatched at runtime
+/// by their boxed tag. `Array`/`AssocArray` are supported too: without
+/// `FILTER_REQUIRE_ARRAY`/`FILTER_FORCE_ARRAY` (both kept LOUD via the flags
+/// check), PHP's `filter_var()` always fails on array input regardless of the
+/// filter, so a statically-known array input trivially lowers to a constant
+/// failure result — real behavior, not a stub. `Union(_)` is supported too:
+/// `PhpType::codegen_repr()` collapses every non-tagged-scalar union (e.g.
+/// `string|bool`, common on real Symfony env/input variables) to `Mixed`, and
+/// elephc represents a union value at runtime as the SAME boxed-Mixed cell as
+/// a genuine `Mixed` value — so `filter_var()`'s Mixed-tag dispatch already
+/// handles it soundly with no separate code path. Everything else (objects,
+/// callables, resources, pointers, buffers, iterables) is unsupported.
+fn is_filter_var_value_type(ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Int
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::Bool
+            | PhpType::Void
+            | PhpType::Mixed
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Union(_)
+    )
+}
+
+/// Attempts to evaluate an expression as a static integer at compile time
+/// against the `ext/filter` constant table (`FILTER_INT_CONSTANTS`).
+/// Supports literals, known filter constants, negation, and bitwise ops (so a
+/// combined `FILTER_NULL_ON_FAILURE | FILTER_REQUIRE_SCALAR` flags expression
+/// resolves statically). Returns `Some(value)` if the expression is statically
+/// computable, `None` otherwise (a genuinely dynamic `$filter`/`$options`).
+fn filter_static_int_value(expr: &Expr) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::ConstRef(name) => FILTER_INT_CONSTANTS
+            .iter()
+            .find_map(|(constant, value)| (*constant == name.as_str()).then_some(*value)),
+        ExprKind::Negate(inner) => filter_static_int_value(inner).map(|value| -value),
+        ExprKind::BinaryOp { left, op, right } => {
+            let left = filter_static_int_value(left)?;
+            let right = filter_static_int_value(right)?;
+            match op {
+                BinOp::BitAnd => Some(left & right),
+                BinOp::BitOr => Some(left | right),
+                BinOp::BitXor => Some(left ^ right),
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 

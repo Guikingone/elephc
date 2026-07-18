@@ -14,6 +14,7 @@ use super::callables;
 use super::diagnostics;
 use super::exceptions;
 use super::fibers;
+use super::filter;
 use super::generators;
 use super::io;
 use super::objects;
@@ -556,6 +557,14 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_modify(emitter);
     io::emit_streams_ext(emitter);
     io::emit_symlink(emitter);
+
+    // ext/filter (filter_var()) dedicated runtime parsers: shared whitespace
+    // trimmer first, then the int/float/bool validators that call it plus
+    // __rt_cstr (io, above) and __rt_strcasecmp (strings, above).
+    filter::emit_filter_trim_ws(emitter);
+    filter::emit_filter_validate_int(emitter);
+    filter::emit_filter_validate_float(emitter);
+    filter::emit_filter_validate_bool_str(emitter);
 
     // Pointer runtime functions
     pointers::emit_ptoa(emitter);

@@ -11,6 +11,11 @@
 //! - Version constants (`PHP_VERSION_ID`, etc.) claim PHP 8.4 compatibility.
 //! - String constants (`PHP_SAPI`, `PHP_VERSION`, `PHP_OS_FAMILY`) are handled
 //!   directly in `crate::codegen::prescan` to allow target-aware values.
+//! - `PHP_MAXPATHLEN` DIFFERS across supported targets (macOS `PATH_MAX` = 1024,
+//!   Linux `PATH_MAX` = 4096), so it lives in `PHP_RUNTIME_PLATFORM_CONSTANTS`
+//!   rather than the target-agnostic `PHP_RUNTIME_INT_CONSTANTS`, mirroring the
+//!   `crate::types::pcntl_constants::PCNTL_PLATFORM_SIGNALS` pattern. The value
+//!   is selected by the codegen prescan from the compile target, not `cfg(target_os)`.
 
 /// Tuple of `(name, value)` pairs for PHP runtime integer constants.
 ///
@@ -22,6 +27,14 @@ pub(crate) const PHP_RUNTIME_INT_CONSTANTS: &[(&str, i64)] = &[
     ("PHP_VERSION_ID", 80400),
     ("PHP_INT_SIZE", 8),
 ];
+
+/// Tuple of `(name, macos_value, linux_value)` for PHP runtime integer constants
+/// whose value DIFFERS across supported targets (macOS vs Linux). `PHP_MAXPATHLEN`
+/// mirrors the platform's `PATH_MAX`: macOS = 1024, Linux (x86_64 and aarch64) = 4096
+/// (the standard Linux `PATH_MAX`, used here as elephc's chosen cross-compile value).
+/// Verified against macOS locally with `php -n -r 'var_dump(PHP_MAXPATHLEN);'`.
+pub(crate) const PHP_RUNTIME_PLATFORM_CONSTANTS: &[(&str, i64, i64)] =
+    &[("PHP_MAXPATHLEN", 1024, 4096)];
 
 /// The PHP version string reported by `PHP_VERSION`.
 pub(crate) const PHP_VERSION_STR: &str = "8.4.0";
@@ -77,5 +90,17 @@ mod tests {
         let len_before = names.len();
         names.dedup();
         assert_eq!(names.len(), len_before, "duplicate PHP runtime constant name");
+    }
+
+    /// Verifies `PHP_MAXPATHLEN` carries the macOS `PATH_MAX` locally
+    /// (php-verified) and the standard Linux `PATH_MAX` for cross-compiled Linux targets.
+    #[test]
+    fn php_maxpathlen_matches_platform_path_max() {
+        let entry = PHP_RUNTIME_PLATFORM_CONSTANTS
+            .iter()
+            .find(|(name, _, _)| *name == "PHP_MAXPATHLEN")
+            .expect("PHP_MAXPATHLEN defined");
+        assert_eq!(entry.1, 1024, "macOS PHP_MAXPATHLEN");
+        assert_eq!(entry.2, 4096, "Linux PHP_MAXPATHLEN");
     }
 }
