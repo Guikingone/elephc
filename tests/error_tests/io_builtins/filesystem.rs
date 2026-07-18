@@ -99,7 +99,10 @@ fn test_error_file_exists_wrong_args() {
 /// Verifies `mkdir()` rejects zero arguments with arity error.
 #[test]
 fn test_error_mkdir_wrong_args() {
-    expect_error("<?php mkdir();", "mkdir() takes exactly 1 argument");
+    // mkdir() gained optional $permissions/$recursive/$context params since
+    // 3a2bb667a; zero args is still invalid (directory is required), just
+    // with a "1 to 4" range message now.
+    expect_error("<?php mkdir();", "mkdir() takes 1 to 4 arguments");
 }
 
 /// Verifies `copy()` rejects one argument (requires 2) with arity error.
@@ -153,7 +156,10 @@ fn test_error_getcwd_wrong_args() {
 /// Verifies `scandir()` rejects zero arguments with arity error.
 #[test]
 fn test_error_scandir_wrong_args() {
-    expect_error("<?php scandir();", "scandir() takes exactly 1 argument");
+    // scandir() gained optional $sorting_order/$context params since
+    // 3a2bb667a; zero args is still invalid (directory is required), just
+    // with a "1 to 3" range message now.
+    expect_error("<?php scandir();", "scandir() takes 1 to 3 arguments");
 }
 
 /// Verifies `tempnam()` rejects one argument (requires 2) with arity error.
@@ -256,7 +262,9 @@ fn test_error_chdir_wrong_args() {
 /// Verifies `glob()` rejects zero arguments with arity error.
 #[test]
 fn test_error_glob_wrong_args() {
-    expect_error("<?php glob();", "glob() takes exactly 1 argument");
+    // glob() gained an optional $flags param since 3a2bb667a; zero args is
+    // still invalid (pattern is required), just with a "1 or 2" message now.
+    expect_error("<?php glob();", "glob() takes 1 or 2 arguments");
 }
 
 /// Verifies `sys_get_temp_dir()` rejects arguments with arity error.

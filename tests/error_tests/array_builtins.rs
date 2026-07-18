@@ -412,9 +412,11 @@ fn test_error_array_shift_wrong_args() {
 /// Verifies that error array unshift wrong args.
 #[test]
 fn test_error_array_unshift_wrong_args() {
+    // array_unshift() is variadic since 3a2bb667a (array + 1+ values); zero
+    // args is still an arity violation, just with a "at least" message now.
     expect_error(
         "<?php array_unshift();",
-        "array_unshift() takes exactly 2 arguments",
+        "array_unshift() takes at least 2 arguments",
     );
 }
 

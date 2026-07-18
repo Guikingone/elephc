@@ -18,7 +18,9 @@ fn test_error_var_dump_wrong_args() {
 /// Verifies print_r() produces correct error when called with no arguments.
 #[test]
 fn test_error_print_r_wrong_args() {
-    expect_error("<?php print_r();", "print_r() takes exactly 1 argument");
+    // print_r() gained an optional $return param since 3a2bb667a; zero args
+    // is still invalid (value is required), just with a "1 or 2" message now.
+    expect_error("<?php print_r();", "print_r() takes 1 or 2 arguments");
 }
 
 /// Verifies fopen() produces correct error when called with only one argument.
