@@ -489,3 +489,58 @@ fn test_example_asymmetric_visibility_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/asymmetric-visibility/main.php"));
     assert_eq!(out, "balance: 120\ninsufficient funds\nbalance: 120\n");
 }
+
+/// Campaign H1 PART C: an indexed write to an `array|false` property auto-vivifies `false` into
+/// a fresh array (PHP: `Deprecated: Automatic conversion of false to array`, php -n verified —
+/// elephc omits the deprecation text but matches the value). Round-trips the read back correctly.
+#[test]
+fn test_array_or_false_property_indexed_write_vivifies_false() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public array|false $v = false;
+}
+$b = new Box();
+$b->v["k"] = 1;
+var_dump($b->v);
+"#,
+    );
+    assert_eq!(out, "array(1) {\n  [\"k\"]=>\n  int(1)\n}\n");
+}
+
+/// Campaign H1 PART C: an indexed write to a `?array` (`array|null`) property auto-vivifies
+/// `null` into a fresh array (PHP: silent, no deprecation warning — php -n verified), matching
+/// the `false` case above.
+#[test]
+fn test_nullable_array_property_indexed_write_vivifies_null() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public ?array $v = null;
+}
+$b = new Box();
+$b->v[0] = "x";
+var_dump($b->v);
+"#,
+    );
+    assert_eq!(out, "array(1) {\n  [0]=>\n  string(1) \"x\"\n}\n");
+}
+
+/// Campaign H1 PART C: an indexed write to a `true`-valued `array|bool` property does NOT
+/// vivify (PHP fatals "Cannot use a scalar value as an array"; elephc DEFERS the fatal per the
+/// JURY ADDENDUM and keeps the pre-existing silent-drop behavior — documented divergence). The
+/// property must stay unchanged rather than corrupt/crash.
+#[test]
+fn test_array_or_bool_property_true_value_write_is_silently_dropped_not_corrupted() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public array|bool $v = true;
+}
+$b = new Box();
+$b->v["k"] = 1;
+var_dump($b->v);
+"#,
+    );
+    assert_eq!(out, "bool(true)\n");
+}

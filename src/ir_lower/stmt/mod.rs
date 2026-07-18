@@ -3837,6 +3837,38 @@ fn lower_property_array_assign(
         return;
     }
 
+    // Gradual typing: `array|false`/`?array` property (PHP auto-vivifies false/null into an
+    // array on first indexed write; checker-accepted in `stmt_check/assignments/properties.rs`).
+    // `object_property_type()` collapses `Union` to its `Mixed` codegen representation, so the
+    // raw declared type is checked here directly (before that collapse) to detect this case.
+    // Union storage is already a boxed-cell pointer at runtime (same representation as `Mixed`),
+    // so a plain `Op::PropGet` fetch (no re-store afterward — `__rt_mixed_array_set` mutates the
+    // fetched cell's tag/payload in place) plus the shared boxed-Mixed writer is sufficient; no
+    // new EIR op is needed.
+    if let Some(raw_property_ty) = raw_object_property_type(ctx, object.value, property).filter(
+        |ty| matches!(ty, PhpType::Union(members) if is_gradual_array_bool_void_union(members)),
+    ) {
+        let data = ctx.intern_string(property);
+        let property_value = ctx.emit_value(
+            Op::PropGet,
+            vec![object.value],
+            Some(Immediate::Data(data)),
+            raw_property_ty.codegen_repr(),
+            Op::PropGet.default_effects(),
+            Some(span),
+        );
+        let index = lower_expr(ctx, index);
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![property_value.value, index.value, value.value],
+            None,
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        return;
+    }
+
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property)
             .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty))
@@ -4458,6 +4490,27 @@ pub(crate) fn object_property_type(
         .map(|(_, property_ty)| normalize_value_php_type(property_ty.codegen_repr()))
 }
 
+/// Resolves the RAW declared PHP type of an object property, without the `Union` → `Mixed`
+/// codegen-representation collapse `object_property_type()` applies. Needed to distinguish a
+/// gradually-acceptable `array|false`/`?array` property (storage-wise `Mixed`-shaped, but only
+/// checker-accepted for specific non-array members) from a genuinely `Mixed`-typed property.
+fn raw_object_property_type(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> Option<PhpType> {
+    let object_ty = ctx.builder.value_php_type(object);
+    let PhpType::Object(class_name) = object_ty else {
+        return None;
+    };
+    ctx.classes
+        .get(class_name.trim_start_matches('\\'))?
+        .properties
+        .iter()
+        .find(|(name, _)| name == property)
+        .map(|(_, property_ty)| property_ty.clone())
+}
+
 /// Returns true when a property type uses concrete indexed-array storage.
 fn is_indexed_array_type(php_type: &PhpType) -> bool {
     matches!(php_type.codegen_repr(), PhpType::Array(_))
@@ -4466,6 +4519,25 @@ fn is_indexed_array_type(php_type: &PhpType) -> bool {
 /// Returns true when a property type uses concrete associative-array storage.
 fn is_assoc_array_type(php_type: &PhpType) -> bool {
     matches!(php_type.codegen_repr(), PhpType::AssocArray { .. })
+}
+
+/// Returns true when `members` is a union of array-family types (`Array`/`AssocArray`) plus
+/// only `Bool`/`Void` (null) non-array alternatives, with at least one array-family member.
+/// Mirrors `array_family_bool_void_union_accepts_write` in
+/// `types::checker::stmt_check::assignments::properties` — the exact PHP auto-vivify matrix
+/// `__rt_mixed_array_set` implements (false/null payloads vivify; other scalars keep the
+/// pre-existing silent drop). Kept in lockstep with the checker acceptance test so a
+/// checker-accepted write never reaches an unsupported EIR lowering path.
+fn is_gradual_array_bool_void_union(members: &[PhpType]) -> bool {
+    let mut saw_array = false;
+    for member in members {
+        match member {
+            PhpType::Array(_) | PhpType::AssocArray { .. } => saw_array = true,
+            PhpType::Bool | PhpType::Void => {}
+            _ => return false,
+        }
+    }
+    saw_array
 }
 
 /// Normalizes non-materializable statement metadata to the EIR null sentinel type.

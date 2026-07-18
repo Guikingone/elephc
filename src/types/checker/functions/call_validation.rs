@@ -279,6 +279,15 @@ impl Checker {
             .count();
         let has_spread = args.iter().any(|a| matches!(a.kind, ExprKind::Spread(_)));
         let required = sig.defaults.iter().filter(|d| d.is_none()).count();
+        // A callable-variable invocation (`$cb(...)`) is scoped precisely by the `callee_desc`
+        // format string `"callable ${name}"` (see `infer_closure_call_type`/`infer_expr_call_type`
+        // in `inference/ops.rs`). PHP never errors on extra positional args to a non-variadic
+        // function/closure invoked through a variable — only "too few" is a real PHP error
+        // (`ArgumentCountError`). The runtime invoker for this path forwards the full argument
+        // vector and the callee reads only its declared params, so surplus args are ABI-safe.
+        // Direct user-function/method calls are NOT covered by this prefix and keep the strict
+        // upper bound below (elephc's direct-call ABI materializes exact params).
+        let is_callable_var_invocation = callee_desc.starts_with("callable $");
 
         if sig.ref_params.iter().any(|is_ref| *is_ref) && has_spread && !allow_by_ref_spread {
             return Err(CompileError::new(
@@ -301,7 +310,9 @@ impl Checker {
                         ),
                     ));
                 }
-            } else if effective_arg_count < required || effective_arg_count > sig.params.len() {
+            } else if effective_arg_count < required
+                || (!is_callable_var_invocation && effective_arg_count > sig.params.len())
+            {
                 return Err(CompileError::new(
                     span,
                     &format!(

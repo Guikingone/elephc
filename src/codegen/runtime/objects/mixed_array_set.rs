@@ -66,7 +66,27 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_array_set_assoc");                     // route hash arrays to key-based mutation
     emitter.instruction("cmp x9, #6");                                          // is the Mixed payload an object?
     emitter.instruction("b.eq __rt_mixed_array_set_object");                    // route runtime-managed ArrayAccess objects to offsetSet
-    emitter.instruction("b __rt_mixed_array_set_drop");                         // non-array Mixed payloads cannot be mutated here
+    // PHP auto-vivifies a null or `false` payload into a fresh array on first indexed write
+    // (`Deprecated: Automatic conversion of false to array` in 8.x, silently for null; both
+    // probe-verified). Every other scalar (`true`, int, float, string) fatals
+    // ("Cannot use a scalar value as an array") in real PHP; this helper still silently drops
+    // those writes — a documented PRE-EXISTING bug this wave intentionally does not touch
+    // (see JURY ADDENDUM item 3: DEFERRED, filed as a follow-up).
+    emitter.instruction("cmp x9, #8");                                          // tag = 8 (null)?
+    emitter.instruction("b.eq __rt_mixed_array_set_vivify");                    // null payload auto-vivifies to a fresh empty array
+    emitter.instruction("cmp x9, #3");                                          // tag = 3 (bool)?
+    emitter.instruction("b.ne __rt_mixed_array_set_drop");                      // non-array/bool/null payloads keep the pre-existing silent drop
+    emitter.instruction("ldr x10, [x0, #8]");                                   // load the bool payload word (0 = false, nonzero = true)
+    emitter.instruction("cbnz x10, __rt_mixed_array_set_drop");                 // `true` cannot vivify (PHP fatals; pre-existing silent-drop path unchanged)
+    emitter.label("__rt_mixed_array_set_vivify");
+    emitter.instruction("mov x0, #4");                                          // initial capacity for the vivified array (matches the `[]` literal minimum)
+    emitter.instruction("mov x1, #8");                                          // 8-byte scalar element slots
+    emitter.instruction("bl __rt_array_new");                                   // allocate a fresh empty indexed array (PHP: false/null -> [])
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the target Mixed cell
+    emitter.instruction("str x0, [x9, #8]");                                    // install the vivified array as the cell payload (false/null had no heap child to release)
+    emitter.instruction("mov x10, #4");                                         // runtime tag 4 = indexed array
+    emitter.instruction("str x10, [x9]");                                       // retag the Mixed cell as an indexed array after vivify
+    emitter.instruction("mov x0, x9");                                          // restore x0 = target Mixed cell; falls through into the shared indexed-array write path
     emitter.label("__rt_mixed_array_set_indexed");
     emitter.instruction("ldr x10, [x0, #8]");                                   // load the indexed-array pointer from the Mixed payload
     emitter.instruction("cbz x10, __rt_mixed_array_set_drop");                  // null array payloads cannot be mutated
@@ -289,7 +309,27 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_array_set_assoc");                       // route hash arrays to key-based mutation
     emitter.instruction("cmp r10, 6");                                          // is the Mixed payload an object?
     emitter.instruction("je __rt_mixed_array_set_object");                      // route runtime-managed ArrayAccess objects to offsetSet
-    emitter.instruction("jmp __rt_mixed_array_set_drop");                       // non-array Mixed payloads cannot be mutated here
+    // PHP auto-vivifies a null or `false` payload into a fresh array on first indexed write
+    // (`Deprecated: Automatic conversion of false to array` in 8.x, silently for null; both
+    // probe-verified). Every other scalar (`true`, int, float, string) fatals
+    // ("Cannot use a scalar value as an array") in real PHP; this helper still silently drops
+    // those writes — a documented PRE-EXISTING bug this wave intentionally does not touch
+    // (see JURY ADDENDUM item 3: DEFERRED, filed as a follow-up).
+    emitter.instruction("cmp r10, 8");                                          // tag = 8 (null)?
+    emitter.instruction("je __rt_mixed_array_set_vivify");                      // null payload auto-vivifies to a fresh empty array
+    emitter.instruction("cmp r10, 3");                                          // tag = 3 (bool)?
+    emitter.instruction("jne __rt_mixed_array_set_drop");                       // non-array/bool/null payloads keep the pre-existing silent drop
+    emitter.instruction("mov r11, QWORD PTR [rdi + 8]");                        // load the bool payload word (0 = false, nonzero = true)
+    emitter.instruction("test r11, r11");                                       // is the bool payload `true`?
+    emitter.instruction("jnz __rt_mixed_array_set_drop");                       // `true` cannot vivify (PHP fatals; pre-existing silent-drop path unchanged)
+    emitter.label("__rt_mixed_array_set_vivify");
+    emitter.instruction("mov rdi, 4");                                          // initial capacity for the vivified array (matches the `[]` literal minimum)
+    emitter.instruction("mov rsi, 8");                                          // 8-byte scalar element slots
+    emitter.instruction("call __rt_array_new");                                 // allocate a fresh empty indexed array (PHP: false/null -> [])
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell
+    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // install the vivified array as the cell payload (false/null had no heap child to release)
+    emitter.instruction("mov QWORD PTR [r10], 4");                              // retag the Mixed cell as an indexed array after vivify
+    emitter.instruction("mov rdi, r10");                                        // restore rdi = target Mixed cell; falls through into the shared indexed-array write path
     emitter.label("__rt_mixed_array_set_indexed");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the indexed-array pointer from the Mixed payload
     emitter.instruction("test r10, r10");                                       // null array payloads cannot be mutated

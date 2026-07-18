@@ -624,6 +624,17 @@ fn updated_array_property_assign_type(
                 value: Box::new(merged_value),
             })
         }
+        PhpType::Union(members) if array_family_bool_void_union_accepts_write(members) => {
+            // e.g. `array|false` (PHP's deprecated-but-working auto-conversion of `false` to
+            // array) or `?array` (`array|null`): PHP auto-vivifies a false/null-valued array
+            // property to an array on first indexed write (probe-verified: `Deprecated:
+            // Automatic conversion of false to array` for `false`, silently for `null`).
+            // `__rt_mixed_array_set` implements exactly that vivify matrix (false/null →
+            // fresh array; other scalars keep the pre-existing silent drop, unchanged this
+            // wave). Mirrors the sibling `$prop[] = v` push acceptance above: keep the
+            // property's declared union shape rather than collapsing it.
+            Ok(prop_ty.clone())
+        }
         other => Err(CompileError::new(
             span,
             &format!(
@@ -632,6 +643,23 @@ fn updated_array_property_assign_type(
             ),
         )),
     }
+}
+
+/// Returns true when `members` is a union of array-family types (`Array`/`AssocArray`) plus
+/// only `Bool` and/or `Void` (null) as non-array alternatives, and includes at least one
+/// array-family member. This is the exact PHP auto-vivify matrix `__rt_mixed_array_set`
+/// implements: `false`/`null` payloads vivify into a fresh array, while `true`/int/float/string
+/// fatal in real PHP (kept loud here by rejecting unions with those non-array members).
+pub(super) fn array_family_bool_void_union_accepts_write(members: &[PhpType]) -> bool {
+    let mut saw_array = false;
+    for member in members {
+        match member {
+            PhpType::Array(_) | PhpType::AssocArray { .. } => saw_array = true,
+            PhpType::Bool | PhpType::Void => {}
+            _ => return false,
+        }
+    }
+    saw_array
 }
 
 /// Returns true if `ty` can act as a PHP array key at the gradual-typing boundary

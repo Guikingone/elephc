@@ -501,3 +501,19 @@ echo E::nonexistent();
         "Undefined method: E::nonexistent",
     );
 }
+
+/// Campaign H1 PART A: a callable-variable invocation with TOO FEW arguments stays a loud
+/// compile error ("Too few arguments" is a real PHP `ArgumentCountError`, php -n verified) even
+/// though the same path now tolerates EXTRA arguments (see
+/// `test_callable_variable_tolerates_extra_positional_args` in
+/// `tests/codegen/oop/callables/functions_and_builtins.rs`). Only the upper bound was relaxed.
+#[test]
+fn test_error_callable_variable_too_few_args_stays_loud() {
+    expect_error(
+        r#"<?php
+$cb = function ($i) { return $i; };
+echo $cb();
+"#,
+        "expects 1 arguments, got 0",
+    );
+}

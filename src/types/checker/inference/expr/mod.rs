@@ -242,6 +242,15 @@ impl Checker {
                         for member in members {
                             match member {
                                 PhpType::Void => result_members.push(PhpType::Void),
+                                // Scalar-only union members (e.g. `int|false`, `float|null`):
+                                // indexing them is a PHP miss (`Warning` + `null`), never a
+                                // fatal — same probe-verified matrix as the bare-scalar arm
+                                // above. Contributes a `Mixed` member so a union like
+                                // `int|false` isn't left with an empty result set.
+                                PhpType::Bool | PhpType::Int | PhpType::Float => {
+                                    saw_indexable_member = true;
+                                    result_members.push(PhpType::Mixed);
+                                }
                                 PhpType::Str => {
                                     saw_indexable_member = true;
                                     if !string_offset_index_is_gradually_acceptable(index, &idx_ty) {
@@ -330,6 +339,18 @@ impl Checker {
                     // "undefined index" warning behavior for this very
                     // common idiom (e.g. `json_decode($json, true)["k"]`).
                     PhpType::Mixed => Ok(PhpType::Mixed),
+                    // Bare scalar receivers (`false[0]`, `null["k"]`, `5[0]`, `5.5[0]`):
+                    // PHP treats indexing a scalar as a miss — a `Warning` plus `null`,
+                    // never a fatal (probe-verified: `php -n -r '$x=false; var_dump($x[0]);'`
+                    // → `Warning: Trying to access array offset on false` + `NULL`; same for
+                    // int/float/null receivers). `Void` also covers the null literal here (this
+                    // checker has no separate null type). The write path is unaffected — this
+                    // arm only widens reads. Ir_lower boxes the unboxed scalar into a transient
+                    // `Mixed` cell (`Op::MixedBox`) before routing through the shared boxed-Mixed
+                    // reader, which already yields `Mixed(null)` for any non-array/hash/object tag.
+                    PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Void => {
+                        Ok(PhpType::Mixed)
+                    }
                     _ => Err(CompileError::new(expr.span, "Cannot index non-array")),
                 }
             }

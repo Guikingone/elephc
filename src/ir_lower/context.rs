@@ -1666,9 +1666,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         LoweredValue { value, ir_type }
     }
 
-    /// Emits an `is_truthy` conversion when a value is not already I64.
+    /// Emits an `is_truthy` conversion when a value is not already a plain 0/1-encoded I64.
+    ///
+    /// The `IrType::I64` fast path assumes the raw value IS the PHP truthiness result (0/1),
+    /// which holds for `Int`/`Bool`. It does NOT hold for a bare `PhpType::Void` (PHP `null`)
+    /// carried as `IrType::I64`: under the default sentinel `NullRepr`, `Op::ConstNull`
+    /// materializes `null` as `NULL_SENTINEL` (a large nonzero constant), not `0`, so the fast
+    /// path would treat a live (non-constant-folded) `null` value as truthy — reachable via a
+    /// compiler-synthesized temp (e.g. list-unpack-as-expression desugaring: `if ([, $b] = null)`)
+    /// that the AST-level constant folder never sees, since it is introduced later in `ir_lower`.
+    /// `Op::IsTruthy` already lowers `Void`/`Never` correctly (always `false`), so route those
+    /// through it instead of the raw-value fast path.
     pub(crate) fn truthy(&mut self, input: LoweredValue, span: Option<Span>) -> LoweredValue {
-        if input.ir_type == IrType::I64 {
+        if input.ir_type == IrType::I64
+            && !matches!(self.builder.value_php_type(input.value), PhpType::Void | PhpType::Never)
+        {
             return input;
         }
         self.emit_value(

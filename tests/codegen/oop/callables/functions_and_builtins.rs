@@ -330,3 +330,37 @@ echo $h(21);
     );
     assert_eq!(out, "42");
 }
+
+/// Campaign H1 PART A: a 1-param closure invoked through a callable-typed variable with 2
+/// arguments compiles and runs php-identically. PHP never errors on extra positional args to a
+/// non-variadic user function/closure (php -n verified: `$cb=function($i){...}; $cb("A","B")`
+/// prints "A" with no error); the runtime invoker forwards the full arg vector and the callee
+/// reads only its declared params, so surplus args are ABI-safe. Scoped precisely to the
+/// callable-variable invocation path (`callee_desc` starts with `"callable $"`).
+#[test]
+fn test_callable_variable_tolerates_extra_positional_args() {
+    let out = compile_and_run(
+        r#"<?php
+$cb = function ($i) { return "got:" . $i; };
+echo $cb("A", "B");
+"#,
+    );
+    assert_eq!(out, "got:A");
+}
+
+/// Campaign H1 PART A: extra args also work when the callable variable itself is a `callable`
+/// typed parameter (invoked from inside the callee), exercising the by-ref-spread-allowing
+/// callable-var path.
+#[test]
+fn test_callable_param_tolerates_extra_positional_args() {
+    let out = compile_and_run(
+        r#"<?php
+function apply(callable $f) {
+    return $f(1, 2, 3);
+}
+$g = function ($x) { return $x * 2; };
+echo apply($g);
+"#,
+    );
+    assert_eq!(out, "2");
+}

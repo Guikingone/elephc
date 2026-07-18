@@ -400,17 +400,6 @@ fn test_error_expr_destructure_mixed_keyed_unkeyed_rejected() {
     );
 }
 
-/// Tests that destructuring a statically-null right-hand side in expression position is
-/// loud at compile time (the checker rejects indexing a known-null value), mirroring the
-/// statement form; runtime-nullable sources (`?? null`) stay accepted and PHP-identical.
-#[test]
-fn test_error_expr_destructure_literal_null_rhs_rejected() {
-    expect_error(
-        "<?php if ([, $b] = null) { echo 1; } else { echo 0; }",
-        "Cannot index non-array",
-    );
-}
-
 /// Tests that an empty destructuring pattern in expression position (`[] = $x`) is
 /// rejected like PHP's "Cannot use empty list" fatal.
 #[test]

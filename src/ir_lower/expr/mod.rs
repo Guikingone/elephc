@@ -4767,6 +4767,33 @@ fn by_ref_array_arg_needs_mixed_storage(
     local_elem.codegen_repr() != PhpType::Mixed
 }
 
+/// Drops already-lowered positional call operands beyond `keep_count`, releasing any owned
+/// temporary among the dropped tail so a discarded fresh allocation is not leaked.
+///
+/// Used by the callable-variable arity relaxation (campaign H1 PART A): the checker allows extra
+/// positional args to a callable-typed variable (PHP never errors on this for a non-variadic
+/// user function/closure), but the direct-call ABI this file materializes only has storage for
+/// the declared params. Every argument expression has already been lowered (and its side effects
+/// observed, matching PHP's left-to-right evaluation order) by the time this runs; only the
+/// operand value itself is discarded.
+fn release_surplus_positional_call_operands(
+    ctx: &mut LoweringContext<'_, '_>,
+    mut operands: Vec<crate::ir::ValueId>,
+    keep_count: usize,
+) -> Vec<crate::ir::ValueId> {
+    if operands.len() <= keep_count {
+        return operands;
+    }
+    for value in operands.split_off(keep_count) {
+        let ir_type = value_ir_type(&ctx.builder.value_php_type(value));
+        let lowered = LoweredValue { value, ir_type };
+        if ctx.value_is_owning_temporary(lowered) {
+            crate::ir_lower::ownership::release_if_owned(ctx, lowered, None);
+        }
+    }
+    operands
+}
+
 /// Lowers positional call arguments with omitted optional defaults and variadic tail packing.
 fn lower_args_with_signature(
     ctx: &mut LoweringContext<'_, '_>,
@@ -4802,11 +4829,19 @@ fn lower_args_with_signature(
         args.len()
     };
     if sig.variadic.is_none() && fixed_arg_count >= regular_param_count {
-        let operands = args
+        let operands: Vec<crate::ir::ValueId> = args
             .iter()
             .enumerate()
             .map(|(index, arg)| lower_arg_with_signature(ctx, sig, index, arg))
             .collect();
+        // A non-variadic callee reached here with MORE args than declared params only when the
+        // checker's callable-variable upper-bound relaxation (campaign H1 PART A,
+        // `call_validation.rs`) allowed it — every other call site keeps the strict upper bound,
+        // so this branch never over-runs otherwise. PHP evaluates every argument in source order
+        // (side effects preserved above) but the direct-call ABI only has storage for the
+        // declared params, so surplus operands are dropped here, releasing any owned temporary
+        // among them so a discarded fresh allocation is not leaked.
+        let operands = release_surplus_positional_call_operands(ctx, operands, regular_param_count);
         return coerce_operands_to_params(ctx, sig, operands);
     }
     let mut operands: Vec<crate::ir::ValueId> = args[..fixed_arg_count]
@@ -7226,6 +7261,15 @@ fn lower_array_access_from_value(
     {
         return lower_packed_array_associative_get(ctx, array_value, index_value, expr);
     }
+    // Gradual typing: a bare scalar receiver (`false[0]`, `null["k"]`, `5[0]`, `5.5[0]`) is a
+    // PHP miss read (`Warning` + `null`), never a fatal (checker-accepted at the `ArrayAccess`
+    // inference site above). Unlike `Mixed`/`Union` locals, a single-type `bool`/`int`/`float`/
+    // `Void` (null) local is stored unboxed (`IrType::I64`/`F64`), so it must be boxed into a
+    // transient `Mixed` cell before the shared boxed-Mixed reader can dispatch on its tag —
+    // mirroring the packed-array associative-get boxing step just above.
+    if scalar_receiver_needs_mixed_box(ctx, &array_value) {
+        return lower_scalar_receiver_associative_get(ctx, array_value, index_value, expr);
+    }
     let mut index_value = index_value;
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
@@ -7302,6 +7346,52 @@ fn lower_packed_array_associative_get(
         Some(expr.span),
     );
     crate::ir_lower::ownership::release_if_owned(ctx, mixed_array, Some(expr.span));
+    result
+}
+
+/// Returns true when an array-access receiver is a bare scalar (`bool`/`int`/`float`/`Void`
+/// null) that is stored unboxed and must be boxed into a `Mixed` cell before routing through
+/// the shared boxed-Mixed reader (`__rt_mixed_array_get`). `Mixed`/`Union` receivers are
+/// already boxed-cell storage at runtime and never need this step.
+fn scalar_receiver_needs_mixed_box(ctx: &LoweringContext<'_, '_>, array_value: &LoweredValue) -> bool {
+    matches!(
+        ctx.builder.value_php_type(array_value.value).codegen_repr(),
+        PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Void
+    )
+}
+
+/// Lowers an associative read on a bare scalar receiver (`false[0]`, `null["k"]`, `5[0]`, …).
+///
+/// PHP treats indexing a scalar as a miss: a `Warning` plus `null`, not a fatal. The scalar is
+/// boxed into a transient `Mixed` cell (`Op::MixedBox`, which already handles `Bool`/`Int`/
+/// `Float`/`Void` payloads via `__rt_mixed_from_value`) and read through the shared boxed-Mixed
+/// reader (`Op::RuntimeCall` → `__rt_mixed_array_get`), which yields a boxed `Mixed(null)` for
+/// any payload tag that is not an indexed array, hash, or object — exactly PHP's miss behavior.
+/// The transient box is released after the read; scalars carry no refcounted payload of their
+/// own, so only the transient box itself needs releasing.
+fn lower_scalar_receiver_associative_get(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    index_value: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let mixed_scalar = ctx.emit_value(
+        Op::MixedBox,
+        vec![array_value.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedBox.default_effects(),
+        Some(expr.span),
+    );
+    let result = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![mixed_scalar.value, index_value.value],
+        None,
+        PhpType::Mixed,
+        Op::RuntimeCall.default_effects(),
+        Some(expr.span),
+    );
+    crate::ir_lower::ownership::release_if_owned(ctx, mixed_scalar, Some(expr.span));
     result
 }
 

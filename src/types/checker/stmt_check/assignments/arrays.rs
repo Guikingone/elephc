@@ -213,6 +213,21 @@ pub(super) fn check_nested_array_assign(
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Union(_) if root_is_ref_bound => {
             Ok(())
         }
+        // KEPT LOUD (campaign H1, PART C): a `array|false`/`?array` nested target
+        // (`$arr[$k]["j"] = v` where `$arr[$k]` is `array|false`) was probed for the same
+        // false/null auto-vivify acceptance as the single-level `$this->v["k"] = v` case in
+        // `properties.rs`, but the nested-write lowering (`lower_nested_array_assign`'s general
+        // fallback) reads the leaf through `__rt_mixed_array_get` and mutates whatever cell that
+        // read returns in place. For a MISS/scalar leaf (exactly the false/null-vivify case this
+        // feature is about) that read allocates a fresh, disconnected `Mixed(null)` cell instead
+        // of a live pointer into the parent structure, so the write silently no-ops — proven with
+        // the PRE-EXISTING `PhpType::Mixed` arm too (`$x[0]["k"]=1` on a `false`-valued Mixed
+        // leaf from `json_decode` already silently no-ops on this branch, independent of this
+        // campaign). Accepting the nested Union case here would let a checker-legal program
+        // silently drop exactly the write PART C exists to support — the cardinal sin. Filed as
+        // a follow-up bug affecting the existing `Mixed` arm as well as the prospective `Union`
+        // relaxation; fixing it needs the nested-write lowering to vivify into the PARENT slot
+        // via a proper set, not the read-then-mutate-same-cell trick.
         _ => Err(CompileError::new(
             span,
             "Nested array assignment requires a Mixed or ArrayAccess target",

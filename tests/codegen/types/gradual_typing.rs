@@ -666,3 +666,105 @@ echo take(pick($argc));
     );
     assert_eq!(out, "a");
 }
+
+// --- Family H1-B (scalar-receiver index reads): campaign H1 PART B ---
+//
+// PHP treats indexing a bare scalar (`false[0]`, `null["k"]`, `5[0]`, `5.5[0]`) as a miss:
+// a `Warning` plus `null`, never a fatal (php -n verified). These were previously rejected
+// with "Cannot index non-array"; elephc now accepts them and returns `Mixed` (boxed null at
+// runtime), matching PHP's value output (the `stderr` warning text is intentionally omitted).
+
+/// A bare `bool` (`false`) receiver read at an integer offset misses to `null`, matching PHP.
+#[test]
+fn test_gradual_scalar_bool_receiver_index_read_misses_to_null() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $n): bool { return false; }
+$x = pick($argc);
+var_dump($x[0]);
+"#,
+    );
+    assert_eq!(out, "NULL\n");
+}
+
+/// A bare `null` (`Void`) receiver read at a string key misses to `null`, matching PHP.
+#[test]
+fn test_gradual_scalar_null_receiver_index_read_misses_to_null() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $n) { return null; }
+$x = pick($argc);
+var_dump($x["k"]);
+"#,
+    );
+    assert_eq!(out, "NULL\n");
+}
+
+/// Bare `int`/`float` receivers also miss to `null` on indexing (php -n verified), matching
+/// the bool/null cases above rather than fataling.
+#[test]
+fn test_gradual_scalar_int_float_receiver_index_read_misses_to_null() {
+    let out = compile_and_run(
+        r#"<?php
+function pick_int(int $n): int { return $n + 5; }
+function pick_float(int $n): float { return $n + 5.5; }
+$i = pick_int($argc);
+$f = pick_float($argc);
+var_dump($i[0]);
+var_dump($f[0]);
+"#,
+    );
+    assert_eq!(out, "NULL\nNULL\n");
+}
+
+/// A scalar-only union (`int|false`) miss both branches (int and false) to `null` on indexing.
+#[test]
+fn test_gradual_int_or_false_union_receiver_index_read_misses_to_null() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $n): int|false {
+    if ($n > 100) { return $n; }
+    return false;
+}
+$x = pick($argc);
+var_dump($x[0]);
+"#,
+    );
+    assert_eq!(out, "NULL\n");
+}
+
+/// A nested read through a scalar-vivified `Mixed(null)` miss (`$x[0]["k"]`) composes correctly:
+/// the outer miss already yields `Mixed(null)`, and indexing that (already-covered Mixed path)
+/// also misses to `null`, matching PHP.
+#[test]
+fn test_gradual_scalar_receiver_nested_index_read_misses_to_null() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $n): bool { return false; }
+$x = pick($argc);
+var_dump($x[0]["k"]);
+"#,
+    );
+    assert_eq!(out, "NULL\n");
+}
+
+/// Regression: an expression-position destructure of a NON-constant-foldable `null` source used
+/// directly as a condition (`if ([, $b] = $src) {...}`) must be falsy, matching PHP. This exercises
+/// `ctx.truthy()`'s `Void`-under-`IrType::I64` special case — the compiler-synthesized list-unpack
+/// temp is introduced after AST-level constant folding, so `Op::ConstNull`'s `NULL_SENTINEL`
+/// encoding (not literal 0) must route through `Op::IsTruthy` rather than being tested by raw
+/// nonzero-ness, or `null` reads as truthy. Only reachable once scalar-receiver index reads
+/// (this file's Family H1-B) let `[, $b] = null` type-check as a list-unpack read instead of
+/// erroring "Cannot index non-array".
+#[test]
+fn test_gradual_expr_destructure_null_source_condition_is_falsy() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $n) { return null; }
+$src = pick($argc);
+if ([, $b] = $src) { echo "t"; } else { echo "f"; }
+var_dump($b);
+"#,
+    );
+    assert_eq!(out, "fNULL\n");
+}

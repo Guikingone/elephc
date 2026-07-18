@@ -98,6 +98,37 @@ fn test_error_object_subscript_requires_array_access() {
     );
 }
 
+/// Campaign H1 PART B KEEP-LOUD: an object NOT implementing `ArrayAccess` still errors on
+/// indexed read — the scalar-receiver read relaxation (Bool/Int/Float/Void) does not touch
+/// this path.
+#[test]
+fn test_error_object_without_array_access_index_read_still_loud() {
+    expect_error(
+        "<?php class Box {} $b = new Box(); $y = $b[0];",
+        "Cannot index non-array",
+    );
+}
+
+/// Campaign H1 PART C KEEP-LOUD: a nested indexed write through an `array|false`/`?array`
+/// element (`$arr[$k][\"j\"] = v`, not the single-level `$this->v[\"k\"] = v` property case)
+/// stays loud. Investigation found the nested-write lowering (`lower_nested_array_assign`'s
+/// general fallback) reads the leaf via `__rt_mixed_array_get` and mutates whatever cell that
+/// read returns in place; for a MISS/scalar leaf (the false/null-vivify case) that read
+/// allocates a fresh disconnected cell, so the write would silently no-op — proven true even
+/// for the PRE-EXISTING `Mixed` arm (independent of this campaign). Accepting the nested Union
+/// case would let a checker-legal program silently drop the write, so it stays loud.
+#[test]
+fn test_error_nested_array_or_false_write_stays_loud() {
+    expect_error(
+        r#"<?php
+function pick(): array|false { return false; }
+$items = [pick(), pick()];
+$items[0]["k"] = 1;
+"#,
+        "Nested array assignment requires a Mixed or ArrayAccess target",
+    );
+}
+
 /// Verifies the error diagnostic for nullsafe property rejects scalar receiver.
 #[test]
 fn test_error_nullsafe_property_rejects_scalar_receiver() {
