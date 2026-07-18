@@ -6584,8 +6584,16 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         "disk_free_space" | "disk_total_space" => Some(PhpType::Float),
         "clearstatcache" | "closedir" | "exit" | "die" | "passthru" | "rewinddir"
         | "stream_bucket_append" | "stream_bucket_prepend" | "trigger_deprecation"
+        | "gc_enable" | "gc_disable" | "libxml_clear_errors"
         | "unset" => Some(PhpType::Void),
+        "gc_enabled" | "libxml_use_internal_errors" => Some(PhpType::Bool),
         "fclose" | "feof" | "rewind" | "set_time_limit" | "error_log" => Some(PhpType::Bool),
+        // libxml_get_errors() always returns a fresh empty array: elephc has no libxml/DOM
+        // subsystem, so no libxml parse error can ever be recorded.
+        "libxml_get_errors" => Some(PhpType::Array(Box::new(PhpType::Mixed))),
+        // error_get_last() is nullable array: today it is always null (no runtime error state
+        // is recorded), backed by a real zero-initialized global slot for future population.
+        "error_get_last" => Some(PhpType::Union(vec![PhpType::Void, PhpType::Array(Box::new(PhpType::Mixed))])),
         "printf" | "array_rand" | "array_unshift" | "file_put_contents" | "filemtime"
         | "filesize" | "fprintf" | "fpassthru" | "fputcsv" | "fseek" | "ftell" | "fwrite"
         | "crc32" | "get_resource_id" | "isset" | "linkinfo" | "mktime" | "gmmktime" | "sleep"
@@ -6597,7 +6605,8 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "umask" | "vfprintf" | "vprintf" | "realpath_cache_size"
         | "strnatcmp" | "strnatcasecmp"
         | "octdec" | "substr_count" | "preg_last_error"
-        | "error_reporting" | "ignore_user_abort" | "connection_aborted" => {
+        | "error_reporting" | "ignore_user_abort" | "connection_aborted"
+        | "gc_collect_cycles" | "gc_mem_caches" => {
             Some(PhpType::Int)
         }
         // strtotime() is `int|false`: a real timestamp (including a valid -1 pre-epoch) on success,

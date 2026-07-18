@@ -772,6 +772,58 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Int))
         }
+        "gc_collect_cycles" => {
+            // gc_collect_cycles(): int — runs the real cycle collector. The freed-cycle
+            // count is not tracked (honest AOT limitation), so 0 is returned.
+            if !args.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "gc_collect_cycles() takes no arguments",
+                ));
+            }
+            Ok(Some(PhpType::Int))
+        }
+        "gc_enabled" => {
+            // gc_enabled(): bool — returns the queryable garbage-collector enabled flag,
+            // which defaults to true (PHP's default) and round-trips through gc_enable/gc_disable.
+            if !args.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "gc_enabled() takes no arguments",
+                ));
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "gc_enable" => {
+            // gc_enable(): void — sets the queryable garbage-collector enabled flag to 1.
+            if !args.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "gc_enable() takes no arguments",
+                ));
+            }
+            Ok(Some(PhpType::Void))
+        }
+        "gc_disable" => {
+            // gc_disable(): void — sets the queryable garbage-collector enabled flag to 0.
+            if !args.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "gc_disable() takes no arguments",
+                ));
+            }
+            Ok(Some(PhpType::Void))
+        }
+        "gc_mem_caches" => {
+            // gc_mem_caches(): int — always 0 (elephc has no request-scoped memory cache to free).
+            if !args.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "gc_mem_caches() takes no arguments",
+                ));
+            }
+            Ok(Some(PhpType::Int))
+        }
         "error_log" => {
             // error_log(string $message, int $message_type = 0, ?string $destination = null,
             // ?string $additional_headers = null): bool — writes $message to stderr, returns true.
@@ -785,6 +837,63 @@ pub(super) fn check_builtin(
                 checker.infer_type(arg, env)?;
             }
             Ok(Some(PhpType::Bool))
+        }
+        "error_get_last" => {
+            // error_get_last(): ?array — null when no error has been recorded. elephc records
+            // no runtime error into any state today (trigger_error() is registered but not
+            // EIR-backend-implemented, so it fails loudly at compile time instead of silently
+            // succeeding), so this is faithful for every program that compiles and runs: null,
+            // always. A real global slot backs the value so future error-recording work can
+            // populate it without a checker/signature change.
+            if !args.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "error_get_last() takes no arguments",
+                ));
+            }
+            Ok(Some(PhpType::Union(vec![
+                PhpType::Void,
+                PhpType::Array(Box::new(PhpType::Mixed)),
+            ])))
+        }
+        "libxml_use_internal_errors" => {
+            // libxml_use_internal_errors(?bool $use_errors = null): bool — null/no-arg reads
+            // the current flag without changing it; a passed bool sets it and the call
+            // returns the *previous* value, matching PHP.
+            if args.len() > 1 {
+                return Err(CompileError::new(
+                    span,
+                    "libxml_use_internal_errors() takes at most 1 argument",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "libxml_clear_errors" => {
+            // libxml_clear_errors(): void — no-op. elephc has no libxml/DOM subsystem, so there
+            // is never a recorded parse error to clear; this is observably identical to PHP
+            // clearing an empty error buffer.
+            if !args.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "libxml_clear_errors() takes no arguments",
+                ));
+            }
+            Ok(Some(PhpType::Void))
+        }
+        "libxml_get_errors" => {
+            // libxml_get_errors(): array — always an empty array. elephc has no libxml/DOM
+            // subsystem, so no libxml parse error can ever be recorded; PHP's own behavior
+            // with no recorded errors is exactly an empty array, so this is byte-identical.
+            if !args.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "libxml_get_errors() takes no arguments",
+                ));
+            }
+            Ok(Some(PhpType::Array(Box::new(PhpType::Mixed))))
         }
         // -- process / system control builtins (recognition-only; runtime deferred) --
         // These are runtime-dead for the console app: registered so calls type-check and stop

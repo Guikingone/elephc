@@ -47,6 +47,27 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // ignore_user_abort() global state. The zero-initialized `.comm` slot is also the
     // PHP default (0 = do not ignore), so no separate seed marker is needed.
     out.push_str(".comm _rt_ignore_user_abort, 8, 3\n");
+    // gc_enabled()/gc_enable()/gc_disable() queryable garbage-collector flag. Unlike the
+    // reporting level, 0 is a meaningful value here (0 = disabled) and the PHP default is
+    // enabled, so the slot cannot use a zero-filled `.comm`. It is instead an explicit
+    // `.data` initializer seeded to 1 (enabled) at program load — no runtime seed marker
+    // is needed. gc_enable stores 1 and gc_disable stores 0, so the state round-trips.
+    // NOTE: the flag is honest queryable state, not a switch that suspends the safe-point
+    // cycle collector: elephc's cycle collection is semantically transparent (it only frees
+    // unreachable cycles and never changes program output), so gating it would only affect
+    // timing/perf, never observable behavior.
+    out.push_str(".globl _rt_gc_enabled\n_rt_gc_enabled:\n    .quad 1\n");
+    // libxml_use_internal_errors() global flag. The zero-initialized `.comm` slot is also the
+    // PHP default (false = do not use internal errors), so no separate seed marker is needed —
+    // same shape as `_rt_ignore_user_abort`.
+    out.push_str(".comm _rt_libxml_internal_errors, 8, 3\n");
+    // error_get_last() last-recorded-error slot. Zero means "no error recorded" (returns PHP
+    // null); elephc does not currently record any runtime error into this slot (trigger_error()
+    // is registered but not EIR-backend-implemented, so it fails loudly instead of silently
+    // recording), so every compiled program observes this as unseeded/zero today. A nonzero
+    // slot is read as an already-boxed, globally-owned `Mixed` array cell pointer describing the
+    // last error, so future error-recording work only needs to publish a pointer here.
+    out.push_str(".comm _rt_last_error_ptr, 8, 3\n");
     // ini_get()/ini_set() persistent directive table. `_rt_ini_table` holds the directive
     // hash pointer in its low word; `_rt_ini_table_init` is a one-shot seed marker (0 =
     // unseeded → __rt_ini_table_ensure lazily builds and seeds the hash on first access).

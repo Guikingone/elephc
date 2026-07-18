@@ -2764,3 +2764,128 @@ fn test_ini_builtins_case_insensitive_and_namespaced() {
     );
     assert_eq!(out, "128M|14|bool(true)\n");
 }
+
+/// Verifies `gc_enabled()`/`gc_disable()`/`gc_enable()` round-trip: seeds to
+/// `true` (PHP's default), `gc_disable()` flips it to `false`, and `gc_enable()`
+/// flips it back to `true`. php -n verified: `bool(true)/bool(false)/bool(true)`.
+#[test]
+fn test_gc_enabled_round_trip() {
+    let out = compile_and_run(
+        "<?php var_dump(gc_enabled()); gc_disable(); var_dump(gc_enabled()); gc_enable(); var_dump(gc_enabled());",
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\nbool(true)\n");
+}
+
+/// Anti-stub: `gc_collect_cycles()` and `gc_mem_caches()` must return typed
+/// `int(0)`, not PHP `NULL` (the bug this test guards against: the EIR backend
+/// return-type override previously omitted both names from the `Int` group, so
+/// the boxed result printed as `NULL` instead of `int(0)`).
+#[test]
+fn test_gc_collect_cycles_and_mem_caches_return_typed_int() {
+    let out = compile_and_run("<?php var_dump(gc_collect_cycles()); var_dump(gc_mem_caches());");
+    assert_eq!(out, "int(0)\nint(0)\n");
+}
+
+/// Heap gate: building and dropping a genuine reference cycle, then calling
+/// `gc_collect_cycles()`, must not crash and must leave the heap clean — proving
+/// the real `__rt_gc_collect_cycles` collector call added to the lowering runs
+/// safely from the builtin call site (not just from internal safe points).
+#[test]
+fn test_gc_collect_cycles_reclaims_ref_cycle_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php \
+         class GcNode { public $next; } \
+         function make_cycle() { $a = new GcNode(); $b = new GcNode(); $a->next = $b; $b->next = $a; } \
+         make_cycle(); \
+         gc_collect_cycles(); \
+         echo \"done\";",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies the `libxml_use_internal_errors()` save/restore idiom used by
+/// Symfony's `XmlUtils`: seeds to `false` (PHP's default), setting `true`
+/// returns the previous value (`false`), a no-arg read observes `true`, and
+/// restoring the saved previous value (`false`) round-trips. php -n verified:
+/// `bool(false)/bool(true)/bool(false)`.
+#[test]
+fn test_libxml_use_internal_errors_save_restore() {
+    let out = compile_and_run(
+        "<?php $p = libxml_use_internal_errors(true); var_dump($p); var_dump(libxml_use_internal_errors()); libxml_use_internal_errors($p); var_dump(libxml_use_internal_errors());",
+    );
+    assert_eq!(out, "bool(false)\nbool(true)\nbool(false)\n");
+}
+
+/// Verifies `libxml_get_errors()` always returns a fresh empty array (no
+/// libxml/DOM subsystem means no parse error can ever be recorded), matching
+/// `php -n`'s `array(0) { }` for a program with no libxml errors.
+#[test]
+fn test_libxml_get_errors_is_empty_array() {
+    let out = compile_and_run("<?php var_dump(libxml_get_errors());");
+    assert_eq!(out, "array(0) {\n}\n");
+}
+
+/// Verifies `libxml_clear_errors()` is accepted as a no-op that does not disturb
+/// surrounding output.
+#[test]
+fn test_libxml_clear_errors_is_noop() {
+    let out = compile_and_run("<?php libxml_clear_errors(); echo \"ok\";");
+    assert_eq!(out, "ok");
+}
+
+/// Verifies `error_get_last()` returns PHP `null` when no error has been
+/// recorded — the only state elephc can currently produce, since
+/// `trigger_error()` has no EIR backend lowering and fails loudly at compile
+/// time instead of silently recording an error. php -n verified: `NULL`.
+#[test]
+fn test_error_get_last_is_null() {
+    let out = compile_and_run("<?php var_dump(error_get_last());");
+    assert_eq!(out, "NULL\n");
+}
+
+/// Heap gate for the libxml trio + `error_get_last()`: results are stored into
+/// an array (deep-freed at epilogue) rather than bare locals, following the
+/// same idiom as `test_ini_table_heap_clean_with_teardown` — a bare boxed
+/// call-result local is not reliably released on the CLI exit path today (a
+/// pre-existing EIR ownership gap shared with `realpath`/`strpos`/`ini_get`
+/// and every other builtin whose result is a fresh heap-backed or boxed
+/// value, independently confirmed here to also affect zero-argument
+/// array-returning builtins such as `get_declared_classes()` — orthogonal to
+/// this change; see the residual notes in this task's report).
+#[test]
+fn test_libxml_and_error_get_last_heap_clean_with_teardown() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php \
+         $a = []; \
+         $a['prev'] = libxml_use_internal_errors(true); \
+         $a['errors'] = libxml_get_errors(); \
+         libxml_clear_errors(); \
+         libxml_use_internal_errors($a['prev']); \
+         $a['last'] = error_get_last(); \
+         echo count($a['errors']); echo \"|\"; echo $a['last'] === null ? \"null\" : \"non-null\";",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "0|null", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies the new builtins resolve case-insensitively (`GC_ENABLED`) and
+/// through a leading-namespace-separator call (`\libxml_get_errors`), and that
+/// `function_exists` sees `error_get_last` via the canonical catalog.
+#[test]
+fn test_gc_and_libxml_builtins_case_insensitive_and_namespaced() {
+    let out = compile_and_run(
+        "<?php var_dump(GC_ENABLED()); var_dump(\\libxml_get_errors()); var_dump(function_exists(\"error_get_last\"));",
+    );
+    assert_eq!(out, "bool(true)\narray(0) {\n}\nbool(true)\n");
+}

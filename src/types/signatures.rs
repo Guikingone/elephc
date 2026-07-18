@@ -651,6 +651,12 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "set_time_limit" => Some(fixed(&["seconds"])),
         // connection_aborted(): int — always 0 (a compiled program's connection is never aborted).
         "connection_aborted" => Some(fixed(&[])),
+        // gc_* cycle-collector builtins (all 0-arg). gc_collect_cycles(): int runs the real
+        // collector; gc_enabled(): bool queries the enabled flag; gc_enable()/gc_disable(): void
+        // set it; gc_mem_caches(): int is always 0 (elephc has no request-scoped memory cache).
+        "gc_collect_cycles" | "gc_disable" | "gc_enable" | "gc_enabled" | "gc_mem_caches" => {
+            Some(fixed(&[]))
+        }
         // error_log(string $message, int $message_type = 0, ?string $destination = null,
         // ?string $additional_headers = null): bool — writes $message to stderr, returns true.
         "error_log" => Some(optional(
@@ -658,6 +664,18 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             1,
             vec![int_lit(0), null_lit(), null_lit()],
         )),
+        // error_get_last(): ?array — null when no error has been recorded. elephc records no
+        // runtime errors today (trigger_error() is not backend-implemented), so this always
+        // returns null, which is PHP-identical for every program that triggers no error.
+        "error_get_last" => Some(fixed(&[])),
+        // libxml_use_internal_errors(?bool $use_errors = null): bool — null (or no arg) reads
+        // the current flag; a passed bool sets it and returns the previous value.
+        "libxml_use_internal_errors" => Some(optional(&["use_errors"], 0, vec![null_lit()])),
+        // libxml_clear_errors(): void — no-op (elephc never records a libxml parse error).
+        "libxml_clear_errors" => Some(fixed(&[])),
+        // libxml_get_errors(): array — always empty (elephc has no libxml/DOM subsystem, so no
+        // libxml parse error can ever be recorded).
+        "libxml_get_errors" => Some(fixed(&[])),
         // -- process / system control builtins (recognition-only; runtime deferred) --
         // pcntl_signal(int $signal, callable|int $handler,
         // bool $restart_syscalls = true): bool.

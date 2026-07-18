@@ -63,6 +63,60 @@ expect_builtin_arity_error!(
     "error_reporting() takes at most 1 argument"
 );
 
+expect_builtin_arity_error!(
+    test_error_gc_enabled_too_many_args,
+    "<?php gc_enabled(1);",
+    "gc_enabled() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_gc_enable_too_many_args,
+    "<?php gc_enable(1);",
+    "gc_enable() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_gc_disable_too_many_args,
+    "<?php gc_disable(1);",
+    "gc_disable() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_gc_collect_cycles_too_many_args,
+    "<?php gc_collect_cycles(1);",
+    "gc_collect_cycles() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_gc_mem_caches_too_many_args,
+    "<?php gc_mem_caches(1);",
+    "gc_mem_caches() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_error_get_last_too_many_args,
+    "<?php error_get_last(1);",
+    "error_get_last() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_libxml_use_internal_errors_too_many_args,
+    "<?php libxml_use_internal_errors(true, false);",
+    "libxml_use_internal_errors() takes at most 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_libxml_clear_errors_too_many_args,
+    "<?php libxml_clear_errors(1);",
+    "libxml_clear_errors() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_libxml_get_errors_too_many_args,
+    "<?php libxml_get_errors(1);",
+    "libxml_get_errors() takes no arguments"
+);
+
 /// Verifies that referencing an undefined constant produces the expected "Undefined constant" error.
 #[test]
 fn test_error_undefined_constant() {

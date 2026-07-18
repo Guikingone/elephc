@@ -856,6 +856,203 @@ pub(super) fn lower_connection_aborted(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `gc_collect_cycles(): int` by running the real cycle collector.
+///
+/// Emits a call to `__rt_gc_collect_cycles`, the concrete four-pass cycle
+/// collector already shared by the runtime safe points (both supported ABIs).
+/// The collection has a real effect (unreachable refcounted cycles are freed);
+/// the freed-cycle count is not tracked by the collector, so `0` is materialized
+/// as the return value afterwards. This is an honest AOT limitation — collection
+/// runs, but the count is not reported. Symfony's only caller
+/// (`FrankenPhpWorkerRunner`) ignores the return value.
+pub(super) fn lower_gc_collect_cycles(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "gc_collect_cycles", 0)?;
+    abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles");
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `gc_enabled(): bool` by loading the queryable garbage-collector flag.
+///
+/// Loads `_rt_gc_enabled` (0/1) into the integer result register. The flag is
+/// seeded to 1 (enabled, PHP's default) by an explicit `.data` initializer and
+/// round-trips through `gc_enable`/`gc_disable`.
+pub(super) fn lower_gc_enabled(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "gc_enabled", 0)?;
+    abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), "_rt_gc_enabled", 0);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `gc_enable(): void` by setting the queryable garbage-collector flag to 1.
+///
+/// Stores `1` into `_rt_gc_enabled` so a subsequent `gc_enabled()` observes the
+/// enabled state. elephc's cycle collection is semantically transparent (it only
+/// frees unreachable cycles and never changes program output), so the flag is
+/// honest queryable state rather than a switch that gates the safe-point collector.
+pub(super) fn lower_gc_enable(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "gc_enable", 0)?;
+    let reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, reg, 1);
+    abi::emit_store_reg_to_symbol(ctx.emitter, reg, "_rt_gc_enabled", 0);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `gc_disable(): void` by setting the queryable garbage-collector flag to 0.
+///
+/// Stores `0` into `_rt_gc_enabled` so a subsequent `gc_enabled()` observes the
+/// disabled state. As with `gc_enable`, this maintains honest queryable state;
+/// collection is transparent, so the flag only affects the observable
+/// `gc_enabled()` result, never program output.
+pub(super) fn lower_gc_disable(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "gc_disable", 0)?;
+    let reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, reg, 0);
+    abi::emit_store_reg_to_symbol(ctx.emitter, reg, "_rt_gc_enabled", 0);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `gc_mem_caches(): int` as the constant `0`.
+///
+/// PHP returns the number of bytes freed from the request-scoped memory cache;
+/// elephc has no such cache, so `0` freed is the honest concrete answer.
+pub(super) fn lower_gc_mem_caches(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "gc_mem_caches", 0)?;
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `error_get_last(): ?array` by reading the last-recorded-error slot.
+///
+/// `_rt_last_error_ptr` is a zero-initialized global reserved for a boxed `Mixed`
+/// array cell describing the most recently recorded runtime error/warning. elephc
+/// does not record any runtime error into this slot today (`trigger_error()` is
+/// registered by the checker but has no EIR backend lowering, so it fails loudly
+/// at compile time instead of silently succeeding), so every compiled program
+/// observes the slot as `0` and this always returns PHP `null` — which is
+/// PHP-identical for any program that records no error. A nonzero slot is read as
+/// an already-boxed, globally-owned `Mixed` cell pointer and is `__rt_incref`'d
+/// before being handed to the caller (incref is itself null-safe, but the null
+/// case still needs a real boxed-null `Mixed` cell, not a raw zero pointer), so
+/// future error-recording work only needs to publish a boxed cell pointer here.
+pub(super) fn lower_error_get_last(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "error_get_last", 0)?;
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, result, "_rt_last_error_ptr", 0);
+    let null_label = ctx.next_label("error_get_last_null");
+    let done_label = ctx.next_label("error_get_last_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {}", null_label));        // an unset slot means no error was ever recorded
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the null-boxing path once an existing error cell is owned
+            ctx.emitter.label(&null_label);
+            ctx.emitter.instruction("mov x0, #8");                              // runtime tag 8 = PHP null
+            ctx.emitter.instruction("mov x1, #0");                              // null has no low payload word
+            ctx.emitter.instruction("mov x2, #0");                              // null has no high payload word
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // an unset slot means no error was ever recorded
+            ctx.emitter.instruction(&format!("jz {}", null_label));
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the null-boxing path once an existing error cell is owned
+            ctx.emitter.label(&null_label);
+            ctx.emitter.instruction("mov rax, 8");                              // runtime tag 8 = PHP null
+            ctx.emitter.instruction("xor edi, edi");                            // null has no low payload word
+            ctx.emitter.instruction("xor esi, esi");                            // null has no high payload word
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `libxml_use_internal_errors(?bool $use_errors = null): bool` through
+/// `__rt_libxml_use_internal_errors`.
+///
+/// Marshals the optional null-sentinel/bool argument the same way
+/// `ignore_user_abort()` does, then calls the shared get/set runtime helper,
+/// which returns the *previous* flag value.
+pub(super) fn lower_libxml_use_internal_errors(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "libxml_use_internal_errors", 0, 1)?;
+    if let Some(use_errors) = inst.operands.first().copied() {
+        ctx.load_value_to_result(use_errors)?;
+    } else {
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            crate::codegen::sentinels::NULL_SENTINEL,
+        );
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_libxml_use_internal_errors");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `libxml_clear_errors(): void` as a no-op.
+///
+/// elephc has no libxml/DOM subsystem, so there is never a recorded parse error
+/// to clear; observably identical to PHP clearing an already-empty error buffer.
+pub(super) fn lower_libxml_clear_errors(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "libxml_clear_errors", 0)?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `libxml_get_errors(): array` as a freshly allocated, always-empty array.
+///
+/// elephc has no libxml/DOM subsystem, so no libxml parse error can ever be
+/// recorded; PHP's own behavior with no recorded errors is exactly an empty
+/// array, so a zero-capacity `Mixed`-element indexed array is byte-identical
+/// and remains a normal, independently owned, growable PHP array value if the
+/// caller appends to it afterward.
+pub(super) fn lower_libxml_get_errors(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "libxml_get_errors", 0)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #0");                              // no elements to preallocate — the array is always empty
+            ctx.emitter.instruction("mov x1, #8");                              // Mixed-element indexed array stride in bytes
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("xor edi, edi");                            // no elements to preallocate — the array is always empty
+            ctx.emitter.instruction("mov rsi, 8");                              // Mixed-element indexed array stride in bytes
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_new");
+    crate::codegen::emit_array_value_type_stamp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &PhpType::Mixed,
+    );
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `error_log(string $message, ...): bool` through `__rt_error_log`.
 ///
 /// Materializes the message string (ptr/len in the string result registers) and

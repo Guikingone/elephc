@@ -140,6 +140,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_getenv(emitter);
     system::emit_error_reporting(emitter);
     system::emit_ignore_user_abort(emitter);
+    system::emit_libxml_use_internal_errors(emitter);
     system::emit_ini_table_ensure(emitter);
     system::emit_ini_get(emitter);
     system::emit_ini_set(emitter);
