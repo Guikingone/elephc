@@ -247,6 +247,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EchoValue => lower_echo_value(ctx, &inst),
         Op::PrintValue => lower_print_value(ctx, &inst),
         Op::ThrowException => lower_throw_exception(ctx, &inst),
+        Op::ThrowCheckedReturnTypeError => objects::lower_throw_checked_return_type_error(ctx, &inst),
         Op::TryPushHandler => lower_try_push_handler(ctx, &inst),
         Op::TryPopHandler => lower_try_pop_handler(ctx, &inst),
         Op::CatchCurrent => lower_catch_current(ctx, &inst),

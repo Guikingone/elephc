@@ -12,6 +12,7 @@
 use std::collections::HashSet;
 
 mod loop_types;
+mod return_type_guard;
 
 use crate::ir::{
     BlockId, CmpPredicate, Immediate, IrHeapKind, IrType, LocalKind, LocalSlotId, Op, Ownership,
@@ -2813,6 +2814,7 @@ fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option<&Expr>, sp
         emit_null_value(ctx, Some(span))
     };
     let value = reload_returned_assignment_local(ctx, value_expr, value, span);
+    let value = return_type_guard::emit_checked_downcast_return_guard(ctx, value, span);
     let value = coerce_to_return_type(ctx, value, Some(span));
     let value = acquire_borrowed_return_value(ctx, value, span);
     let value = acquire_returned_this(ctx, value_expr, value, span);

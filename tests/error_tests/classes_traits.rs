@@ -792,6 +792,43 @@ class C implements I { public function f(): Animal { return new Animal(); } }
     );
 }
 
+/// Checked-downcast-on-return: unrelated classes (neither a subtype of the other) stay loud
+/// at compile time even though a runtime `instanceof` guard mechanism now exists for the
+/// legitimate base→derived relaxation — that guard covers `D` a subtype/subinterface of the
+/// actual returned type only. A hopeless cast (PHP would always throw `TypeError` at runtime,
+/// with no possible matching branch) is rejected up front instead of silently compiling a
+/// guard chain that could never pass.
+#[test]
+fn test_error_checked_downcast_return_unrelated_classes_rejected() {
+    expect_error(
+        r#"<?php
+class B {}
+class D extends B {}
+class E extends B {}
+function makeD(): D {
+    return new E();
+}
+"#,
+        "expects Object(\"D\"), got Object(\"E\")",
+    );
+}
+
+/// Checked-downcast-on-return: a return type completely unrelated to any built-in/user class
+/// hierarchy (no shared ancestor at all) still stays loud.
+#[test]
+fn test_error_checked_downcast_return_wholly_unrelated_classes_rejected() {
+    expect_error(
+        r#"<?php
+class Foo {}
+class Bar {}
+function makeFoo(): Foo {
+    return new Bar();
+}
+"#,
+        "expects Object(\"Foo\"), got Object(\"Bar\")",
+    );
+}
+
 /// Verifies that an explicit `abstract` modifier on an interface method is rejected. Every
 /// interface method is implicitly abstract, and PHP 8 fatals on the redundant keyword
 /// ("Interface method I::f() must not be abstract", `php -n` verified). Applies uniformly to

@@ -274,7 +274,7 @@ fn validate_instruction_immediate(inst_id: InstId, inst: &Instruction) -> Result
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
         ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
         | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell | LoadStaticPropRefCell
-        | BindPropRefCell => {
+        | BindPropRefCell | ThrowCheckedReturnTypeError => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
         }
         LoadLocal | StoreLocal | UnsetLocal | LoadRefCell | StoreRefCell | ReleaseLocalRefCell
@@ -407,7 +407,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal | StoreStaticProperty | ExternGlobalStore
         | StoreRefCell | BindRefCellPtr | AdoptRefCell | Acquire | Release | Move | Borrow | EnsureOwned
         | EchoValue | PrintValue | WriteStdout | WriteStrStdout | VarDump | PrintR
-        | ThrowException | GeneratorReturn | PtrCheckNonnull => {
+        | ThrowException | GeneratorReturn | PtrCheckNonnull | ThrowCheckedReturnTypeError => {
             check_count(inst_id, inst, 1, "1")
         }
         MixedTagOf | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat

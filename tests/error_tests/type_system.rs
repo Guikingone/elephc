@@ -157,6 +157,55 @@ fn test_error_undefined_variable() {
     expect_error("<?php echo $x;", "Undefined variable: $x");
 }
 
+/// Verifies that walking an `isset()` operand's always-evaluated index expression for
+/// assignment effects (so `isset($a[$h = f()])` defines `$h`) does not broaden definite
+/// assignment beyond that index: a genuinely undefined, unrelated variable read after the
+/// `isset()` call must still error loudly.
+#[test]
+fn test_error_isset_index_assignment_does_not_define_unrelated_variable() {
+    expect_error(
+        r#"<?php
+$a = [];
+if (isset($a[$k = 1])) {}
+echo $other;
+"#,
+        "Undefined variable: $other",
+    );
+}
+
+/// Verifies the same scoping restriction for `unset()`: an assignment inside the index defines
+/// only that variable, not an unrelated genuinely-undefined one read afterward.
+#[test]
+fn test_error_unset_index_assignment_does_not_define_unrelated_variable() {
+    expect_error(
+        r#"<?php
+$a = [1, 2, 3];
+unset($a[$k = 1]);
+echo $other;
+"#,
+        "Undefined variable: $other",
+    );
+}
+
+/// Regression for the JURY ADDENDUM #2 finding: `PDOStatement::bindParam()`'s second parameter
+/// is intentionally NOT declared by-reference (see `pdo_prelude.rs`), because `PDO::prepare()`
+/// returns `PDOStatement|bool` and the codegen by-reference argument materializer for a
+/// union/register-held receiver either loudly rejects the scalar-to-Mixed promotion or silently
+/// miscompiles an already-auto-vivified variable into a runtime crash. A previously-undefined
+/// variable passed to `bindParam()` must therefore still be reported loudly at compile time
+/// instead of auto-vivifying into an unsound codegen path.
+#[test]
+fn test_error_pdo_statement_bind_param_does_not_autovivify_undefined_variable() {
+    expect_error(
+        r#"<?php
+$pdo = new PDO('sqlite::memory:');
+$stmt = $pdo->prepare('SELECT :id');
+$stmt->bindParam(':id', $id);
+"#,
+        "Undefined variable: $id",
+    );
+}
+
 /// Verifies that a variable assigned in one `match` arm's body is not visible in a sibling
 /// arm's body: only one arm body ever runs, so the assignment is not definitely-assigned in
 /// the other arms. Reading it in a sibling arm must still error.
@@ -1258,7 +1307,10 @@ fn test_error_union_scalar_member_into_object_param_stays_loud() {
     );
 }
 
-// --- Family F boundary: object flows with no proven-subtype edge stay loud (R1-R4 revert) ---
+// --- Family F boundary: object flows with no proven-subtype edge stay loud (R1-R4 revert).
+//     The return-position member of this family (R1/R2 on the return boundary) was later
+//     SUPERSEDED by the checked-downcast-on-return runtime guard (SPEC I2) and moved below;
+//     parameter positions are unaffected and still stay loud, guarded here. ---
 
 /// A base-typed value flowing into a derived-class parameter stays loud (`Base`-typed value into
 /// `Sub $x`). elephc emits no runtime instanceof guard at an object boundary, so accepting a
@@ -1286,14 +1338,20 @@ fn test_error_object_union_unrelated_member_into_param_stays_loud() {
     );
 }
 
-/// A base-typed return expression flowing into a derived declared return type stays loud
-/// (`scalarNode(): ScalarNodeDef { return $this->node(); }` where `node(): NodeDef`). The returned
-/// value is not a proven `ScalarNodeDef` at the boundary and there is no runtime guard, so
-/// accepting it would be a silent miscompile; PHP raises a TypeError. Guards the R1/R2 revert on
-/// the return boundary.
+/// SUPERSEDED by the checked-downcast-on-return feature (SPEC I2): a base-typed return
+/// expression flowing into a derived declared RETURN type (unlike the sibling PARAMETER-
+/// position tests above, which are unaffected and still stay loud) is now accepted, but ONLY
+/// because `crate::ir_lower::stmt::return_type_guard` always emits a runtime `instanceof`
+/// guard at the return boundary that throws a catchable `TypeError` on an actual mismatch —
+/// this is no longer a silent miscompile. See `Checker::object_return_downcast_guardable`
+/// (`src/types/checker/type_compat/object_types.rs`) for the checker-side relaxation and
+/// `tests/codegen/oop/checked_downcast_return.rs` for full end-to-end/guard coverage
+/// (including the negative/mismatch case, which DOES still throw at runtime). This exact
+/// shape — `scalarNode(): ScalarNodeDef { return $this->node(); }` where `node(): NodeDef` —
+/// is the canonical Symfony `NodeBuilder::scalarNode()`/`node()` pattern the feature targets.
 #[test]
-fn test_error_object_base_return_into_derived_return_stays_loud() {
-    expect_error(
+fn test_object_base_return_into_derived_return_accepted_with_runtime_guard() {
+    expect_ok(
         "<?php \
          class NodeDef { public function label(): string { return \"node\"; } } \
          class ScalarNodeDef extends NodeDef { public function label(): string { return \"scalar\"; } } \
@@ -1302,7 +1360,6 @@ fn test_error_object_base_return_into_derived_return_stays_loud() {
              public function node(): NodeDef { return new ScalarNodeDef(); } \
          } \
          $b = new Builder(); echo $b->scalarNode()->label();",
-        "return type expects Object(\"ScalarNodeDef\"), got Object(\"NodeDef\")",
     );
 }
 

@@ -275,6 +275,33 @@ impl Checker {
         }
     }
 
+    /// Returns true if the declared return `expected` (possibly nullable/union) contains at
+    /// least one `Object(D)` arm where `actual` (a concrete `Object(B)`) is a proper ANCESTOR
+    /// of `D` — i.e. `D` is a subclass of `B`, or `D` implements `B` as an interface. This is
+    /// the "checked downcast on return" relaxation: PHP allows a function to declare a return
+    /// type narrower than a value it's statically only known to be a supertype of, deferring
+    /// the real check to a runtime `instanceof` guard. `crate::ir_lower::stmt::return_type_guard`
+    /// mirrors this exact predicate over its own class-hierarchy metadata to decide whether to
+    /// emit that guard, so the two MUST stay in lock-step: this only widens acceptance, it never
+    /// substitutes for the runtime check.
+    ///
+    /// Only meant to be tried as a fallback AFTER normal covariant acceptance
+    /// (`require_compatible_arg_type`) has already failed for this `(expected, actual)` pair —
+    /// it does not special-case an `actual` that already satisfies `expected` normally.
+    pub(crate) fn object_return_downcast_guardable(&self, expected: &PhpType, actual: &PhpType) -> bool {
+        let PhpType::Object(actual_name) = actual else {
+            return false;
+        };
+        flatten_type_arms(expected).into_iter().any(|arm| match arm {
+            PhpType::Object(declared_name) => {
+                declared_name != *actual_name
+                    && (self.is_subclass_of(&declared_name, actual_name)
+                        || self.object_type_implements_interface(&declared_name, actual_name))
+            }
+            _ => false,
+        })
+    }
+
     /// Finds the most specific common object type between `left` and `right` class names.
     /// Returns `Some(PhpType::Object(...))` with the common ancestor, or `None` if they share no
     /// common type. Checks interface relationships, class inheritance, and ancestor chains.
@@ -402,6 +429,15 @@ impl Checker {
                 }
             }
         }
+    }
+}
+
+/// Flattens a possibly-nested `Union` into its member arms; a non-union type is a single arm.
+/// Shared by `Checker::object_return_downcast_guardable` and its `ir_lower` mirror.
+pub(crate) fn flatten_type_arms(ty: &PhpType) -> Vec<PhpType> {
+    match ty {
+        PhpType::Union(members) => members.iter().flat_map(flatten_type_arms).collect(),
+        other => vec![other.clone()],
     }
 }
 

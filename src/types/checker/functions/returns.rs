@@ -333,7 +333,23 @@ impl Checker {
             ));
         }
 
-        self.require_compatible_arg_type(expected, actual, span, context)
+        match self.require_compatible_arg_type(expected, actual, span, context) {
+            Ok(()) => Ok(()),
+            // Base→derived object returns (the value is statically only known to be a
+            // SUPERTYPE of a declared return arm) are accepted here ONLY because
+            // `crate::ir_lower::stmt::return_type_guard` mirrors this same relaxation and
+            // always emits a runtime `instanceof` guard for it — see the checked-downcast-
+            // on-return design note on `object_return_downcast_guardable`. Genuinely unrelated
+            // classes still fail loudly below; this never widens acceptance beyond what the
+            // runtime guard can enforce.
+            Err(err) => {
+                if self.object_return_downcast_guardable(expected, actual) {
+                    Ok(())
+                } else {
+                    Err(err)
+                }
+            }
+        }
     }
 
     /// Returns true if `ty` can accept a null/void value — covers PhpType::Mixed,

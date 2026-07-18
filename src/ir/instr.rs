@@ -463,6 +463,14 @@ pub enum Op {
     ErrorSuppressEnd,
     Warn,
     ThrowException,
+    /// Constructs and throws a catchable `\TypeError` for a checked-downcast-on-return
+    /// guard mismatch. Operand: the mismatched object value (read-only, for its runtime
+    /// class name; released as part of this op since it is never returned to the caller).
+    /// Immediate: a `Data` id for the compile-time message prefix (`"F(): Return value
+    /// must be of type D, "`); the runtime-looked-up actual class name and a fixed
+    /// `" returned"` suffix complete the message, matching PHP's own return-type
+    /// `TypeError` wording. Never returns (see `crate::ir_lower::stmt::return_type_guard`).
+    ThrowCheckedReturnTypeError,
     TryPushHandler,
     TryPopHandler,
     CatchCurrent,
@@ -599,6 +607,12 @@ impl Op {
             PrintValue => E::OUTPUT,
             ErrorSuppressBegin | ErrorSuppressEnd => E::READS_GLOBAL | E::WRITES_GLOBAL,
             ThrowException => E::MAY_THROW | E::WRITES_GLOBAL,
+            // Reads the mismatched object's header for its runtime class name, allocates
+            // the message and the `TypeError` object, releases the mismatched object
+            // (never returned to the caller), then publishes and unwinds.
+            ThrowCheckedReturnTypeError => {
+                E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::WRITES_GLOBAL
+            }
             Acquire | Release | EnsureOwned => E::REFCOUNT_OP | E::WRITES_HEAP,
             GcCollect => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
             ClassConstant => E::MAY_DEOPT,
@@ -824,6 +838,7 @@ impl Op {
             ErrorSuppressEnd => "error_suppress_end",
             Warn => "warn",
             ThrowException => "throw_exception",
+            ThrowCheckedReturnTypeError => "throw_checked_return_type_error",
             TryPushHandler => "try_push_handler",
             TryPopHandler => "try_pop_handler",
             CatchCurrent => "catch_current",

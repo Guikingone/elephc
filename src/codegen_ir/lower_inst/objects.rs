@@ -49,6 +49,7 @@ use crate::codegen_ir::{CodegenIrError, Result};
 // `reflection::emit_reflection_class_dynamic_dispatch_if_needed` (see the matching note on
 // `lower_inst`'s `pub(crate) mod objects;`).
 pub(crate) mod reflection;
+mod return_type_guard;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 const RUNTIME_NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
@@ -3785,6 +3786,22 @@ pub(super) fn lower_instanceof(ctx: &mut FunctionContext<'_>, inst: &Instruction
         _ => emit_false(ctx),
     }
     store_if_result(ctx, inst)
+}
+
+/// Lowers a checked-downcast-on-return guard mismatch: builds and throws a catchable
+/// `\TypeError` naming the mismatched value's ACTUAL runtime class. Delegates the target-aware
+/// message/allocation/throw sequence to `return_type_guard`; see
+/// `crate::ir_lower::stmt::return_type_guard` for the `Op::InstanceOf` chain that falls through
+/// to this op only when every declared return-type arm mismatches.
+pub(super) fn lower_throw_checked_return_type_error(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let data = expect_data(inst)?;
+    let (prefix_label, prefix_len) = ctx.intern_string_data(data)?;
+    ctx.load_value_to_result(value)?;
+    return_type_guard::emit_throw_checked_return_type_error(ctx, &prefix_label, prefix_len)
 }
 
 /// Lowers dynamic `instanceof` where the target is resolved from a runtime string or object.

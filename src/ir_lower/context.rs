@@ -619,6 +619,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.ref_cell_owner_locals.get(variable).copied()
     }
 
+    /// Returns the PHP-visible diagnostic name of the function/method body being lowered
+    /// (`"functionName"`, or `"Class::method"` for a method), matching PHP's own runtime
+    /// diagnostic label (e.g. the `F` in a `TypeError`'s `"F(): ..."` message).
+    pub(crate) fn owner_name(&self) -> &str {
+        &self.owner_name
+    }
+
     /// Returns a deterministic EIR function name for the next closure literal in this body.
     pub(crate) fn next_closure_name(&mut self) -> String {
         let name = format!(
