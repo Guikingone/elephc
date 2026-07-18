@@ -74,14 +74,17 @@ fn test_error_undefined_method() {
     );
 }
 
-/// Verifies that a method call on an object union (`A|B`) is rejected when the
-/// method is absent from one of the member classes: every object member must
-/// provide the method for the runtime class-id dispatch to be sound.
+/// SPEC G1: verifies that a method call on an object union (`A|B`) type-checks when the method
+/// is declared on at least one member class, even though it is absent from another member. PHP
+/// dispatches `$u->m()` on the runtime class, so this is legal PHP (Symfony ships this pattern
+/// extensively) — codegen dispatches on the runtime class id and faults cleanly only if the
+/// actual runtime value's class lacks the method (see `codegen::oop::union_types` for the
+/// runtime match/no-match codegen coverage of this exact shape). Supersedes the previous
+/// "every object member must provide the method" rule this test used to enforce.
 #[test]
-fn test_error_object_union_method_missing_from_member() {
-    expect_error(
+fn test_object_union_method_present_on_only_one_member_type_checks() {
+    expect_ok(
         "<?php class A { function only_a() {} } class B {} function make(bool $b): A|B { return $b ? new A() : new B(); } make(true)->only_a();",
-        "Undefined method: B::only_a",
     );
 }
 

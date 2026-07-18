@@ -64,22 +64,14 @@ impl Checker {
                 }
                 return self.infer_method_call_on_class_type(&class_name, method, args, expr, env);
             }
-            // Union of two or more distinct object classes (`A|B`, `A|B|false`):
-            // the method must exist on every object member; codegen dispatches on
-            // the runtime class id and the result is the union of each member's
-            // return type. A non-object runtime value faults like PHP.
+            // Union of two or more distinct object classes (`A|B`, `A|B|false`): PHP dispatches
+            // on the runtime class, so the method only needs to exist on at least one member
+            // (see `infer_method_call_on_object_union`). Codegen already dispatches on the
+            // runtime class id (`lower_mixed_method_call`) and faults cleanly when the actual
+            // value's class has no matching candidate.
             let object_classes = self.union_object_classes(&obj_ty);
             if object_classes.len() >= 2 {
-                let mut return_types = Vec::with_capacity(object_classes.len());
-                for class_name in &object_classes {
-                    let return_ty = if self.interfaces.contains_key(class_name) {
-                        self.infer_method_call_on_interface_type(class_name, method, args, expr, env)?
-                    } else {
-                        self.infer_method_call_on_class_type(class_name, method, args, expr, env)?
-                    };
-                    return_types.push(return_ty);
-                }
-                return Ok(self.normalize_union_type(return_types));
+                return self.infer_method_call_on_object_union(&object_classes, method, args, expr, env);
             }
             // No object class at all: re-run the strict check to surface its
             // diagnostic.
@@ -143,6 +135,94 @@ impl Checker {
         }
     }
 
+    /// Resolves a method call against a multi-class object union (`A|B`, `A|B|false`) using
+    /// PHP-faithful lenient dispatch instead of requiring the method on every member: PHP
+    /// dispatches `$u->m()` on the runtime class, so a union type-checks as long as at least
+    /// one member declares `m`.
+    ///
+    /// - A member whose class/interface only reaches the call through `__call`/`__callStatic`
+    ///   magic forwarding does NOT count as "resolving" here (JURY ADDENDUM #3) — codegen's
+    ///   Mixed-receiver dispatch (`mixed_method_candidates` in `codegen_ir/lower_inst.rs`)
+    ///   still forwards to `__call` for such a class at runtime independently of this checker
+    ///   decision, which is a documented, sound divergence (the checker under-approximates;
+    ///   the runtime path is strictly more permissive, never less).
+    /// - Exactly one resolving member: the call is validated/typed against that member alone
+    ///   (JURY ADDENDUM #1's dominant case), with no cross-member argument requirement.
+    /// - Two or more resolving members: the call's arguments are validated against EVERY
+    ///   resolving member's signature and must be accepted by ALL of them (codegen materializes
+    ///   the call arguments once for whichever branch runs, so a per-branch ABI mismatch would
+    ///   silently pass garbage); if any resolving member rejects the arguments, the whole call
+    ///   stays loud with that member's diagnostic. When all accept, the result type is the
+    ///   union of each member's return type.
+    /// - No member resolves: reports "Undefined method" against the full union type, naming
+    ///   every object member (JURY ADDENDUM #5), matching today's diagnostic style.
+    fn infer_method_call_on_object_union(
+        &mut self,
+        object_classes: &[String],
+        method: &str,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let method_key = php_symbol_key(method);
+        let resolving: Vec<String> = object_classes
+            .iter()
+            .filter(|class_name| self.union_member_declares_method(class_name, &method_key))
+            .cloned()
+            .collect();
+        if resolving.is_empty() {
+            let union_ty = PhpType::Union(
+                object_classes
+                    .iter()
+                    .map(|class_name| PhpType::Object(class_name.clone()))
+                    .collect(),
+            );
+            return Err(CompileError::new(
+                expr.span,
+                &format!("Undefined method: {}::{}", union_ty, method),
+            ));
+        }
+        if resolving.len() == 1 {
+            return self.infer_method_return_on_class_or_interface(
+                &resolving[0],
+                method,
+                args,
+                expr,
+                env,
+            );
+        }
+        let mut return_types = Vec::with_capacity(resolving.len());
+        let mut first_err: Option<CompileError> = None;
+        for class_name in &resolving {
+            match self.infer_method_return_on_class_or_interface(class_name, method, args, expr, env) {
+                Ok(return_ty) => return_types.push(return_ty),
+                Err(err) => {
+                    if first_err.is_none() {
+                        first_err = Some(err);
+                    }
+                }
+            }
+        }
+        if let Some(err) = first_err {
+            return Err(err);
+        }
+        Ok(self.normalize_union_type(return_types))
+    }
+
+    /// Returns true when `class_name` (a class or interface) literally declares `method_key` —
+    /// i.e. the receiver's runtime class dispatches straight to it rather than only through
+    /// `__call` magic forwarding. Used by `infer_method_call_on_object_union` to decide whether
+    /// a union member "resolves" a call (JURY ADDENDUM #3 excludes `__call`-only members).
+    fn union_member_declares_method(&self, class_name: &str, method_key: &str) -> bool {
+        if let Some(interface_info) = self.interfaces.get(class_name) {
+            return interface_info.methods.contains_key(method_key);
+        }
+        self.classes
+            .get(class_name)
+            .map(|class_info| class_info.methods.contains_key(method_key))
+            .unwrap_or(false)
+    }
+
     /// Infers the type of a nullsafe method call expression (`$obj?->method(...)`).
     ///
     /// Mirrors the gradual receiver handling of the plain `->` path: a `Mixed` receiver
@@ -194,14 +274,9 @@ impl Checker {
                 }
                 let object_classes = self.union_object_classes(&obj_ty);
                 if object_classes.len() >= 2 {
-                    let mut return_types = Vec::with_capacity(object_classes.len() + 1);
-                    for class_name in &object_classes {
-                        return_types.push(self.infer_method_return_on_class_or_interface(
-                            class_name, method, args, expr, env,
-                        )?);
-                    }
-                    return_types.push(PhpType::Void);
-                    return Ok(self.normalize_union_type(return_types));
+                    let return_ty =
+                        self.infer_method_call_on_object_union(&object_classes, method, args, expr, env)?;
+                    return Ok(self.normalize_union_type(vec![return_ty, PhpType::Void]));
                 }
                 if matches!(&obj_ty, PhpType::Union(members)
                     if members.iter().any(|member| matches!(member, PhpType::Mixed)))

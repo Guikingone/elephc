@@ -800,3 +800,39 @@ echo $r->only();
         "Undefined method: Base::only",
     );
 }
+
+/// SPEC G1: verifies lenient union-receiver method dispatch still errors loudly when NO union
+/// member declares the called method. Reports against the FULL union type (JURY ADDENDUM #5),
+/// not a single arbitrarily-picked member.
+#[test]
+fn test_error_union_method_no_member_resolves() {
+    expect_error(
+        r#"<?php
+class A { function foo(): string { return "A"; } }
+class B { function bar(): string { return "B"; } }
+function make(bool $b): A|B { return $b ? new A() : new B(); }
+$u = make(true);
+echo $u->frobnicate();
+"#,
+        "Undefined method: A|B::frobnicate",
+    );
+}
+
+/// SPEC G1 / JURY ADDENDUM #1: when TWO OR MORE union members resolve the called method but
+/// their signatures disagree on whether the call's arguments are acceptable (`A::m(int)` vs
+/// `B::m(array)`, called with an `int` argument), the call must stay loud. Codegen materializes
+/// the call's arguments once for whichever runtime branch executes; a per-branch ABI mismatch
+/// would silently pass garbage, so this is a conservative under-accept, not a checker gap.
+#[test]
+fn test_error_union_method_multi_resolving_disagreeing_signatures() {
+    expect_error(
+        r#"<?php
+class A { function m(int $x): string { return "A"; } }
+class B { function m(array $x): string { return "B"; } }
+function make(bool $b): A|B { return $b ? new A() : new B(); }
+$u = make(true);
+echo $u->m(5);
+"#,
+        "Method B::m parameter $x expects",
+    );
+}

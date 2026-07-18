@@ -40,40 +40,50 @@ fn test_switch_true_case_body_narrows_single_and_compound_guards() {
 
 /// Fall-through soundness (the gate): the `A` case has no `break` and falls into the `B` case, so
 /// the `B` case is reachable at runtime with `$x` being an `A` (its guard false). The `B` case body
-/// is therefore NOT narrowed, and `$x->bOnly()` (a `B`-only method) still errors on the `A` member
-/// of the `A|B` union. If the gate were broken and the case were narrowed to `B`, this would wrongly
-/// type-check.
+/// is therefore NOT narrowed and still sees `$x` at its `A|B` union type.
+///
+/// SPEC G1 updated this gate's discriminator: PHP-faithful union method dispatch now type-checks
+/// `$x->bOnly(...)` as long as AT LEAST ONE union member declares `bOnly` (previously the checker
+/// required every member to declare it, so an un-narrowed `A|B` receiver calling a `B`-only method
+/// always errored — that blunt signal no longer exists). To keep a compile-time discriminator, both
+/// `A` and `B` now declare `bOnly` but with INCOMPATIBLE parameter types (`int` vs `string`): under
+/// the new rule, two-or-more resolving members must ALL accept the call's arguments (JURY ADDENDUM
+/// #1), so an un-narrowed `A|B` receiver calling `bOnly("s")` still errors (loud, on `A`'s
+/// mismatched parameter) — but a receiver correctly narrowed to `B` alone (single resolving member,
+/// see the positive control below) accepts it cleanly. If the gate were broken and this case were
+/// wrongly narrowed to `B`, the call would exercise the single-member path and wrongly type-check.
 #[test]
 fn test_switch_true_fall_through_case_is_not_narrowed() {
     expect_error(
         "<?php \
-         class A {} \
-         class B { public function bOnly(): int { return 1; } } \
+         class A { public function bOnly(int $v): int { return 1; } } \
+         class B { public function bOnly(string $v): int { return 2; } } \
          function g(A|B $x): int { \
              switch (true) { \
                  case $x instanceof A: \
-                 case $x instanceof B: return $x->bOnly(); \
+                 case $x instanceof B: return $x->bOnly(\"s\"); \
              } \
              return 0; \
          }",
-        "Undefined method: A::bOnly",
+        "Method A::bOnly parameter $v expects Int, got Str",
     );
 }
 
 /// Positive control for the gate: when the `A` case terminates (`return 0`), the `B` case can no
-/// longer be reached by fall-through, so it IS fall-in-safe and its body is narrowed to `B`. The
-/// `$x->bOnly()` call then type-checks. This proves the gate narrows the safe case rather than
-/// refusing all narrowing.
+/// longer be reached by fall-through, so it IS fall-in-safe and its body is narrowed to plain `B`
+/// (not the `A|B` union). `$x->bOnly("s")` then resolves against `B::bOnly(string)` alone and
+/// type-checks, even though `A::bOnly` (int-typed) would have rejected the same call — proving the
+/// gate narrows the safe case (single-member dispatch) rather than refusing all narrowing.
 #[test]
 fn test_switch_true_terminating_predecessor_allows_narrowing() {
     expect_ok(
         "<?php \
-         class A {} \
-         class B { public function bOnly(): int { return 1; } } \
+         class A { public function bOnly(int $v): int { return 1; } } \
+         class B { public function bOnly(string $v): int { return 2; } } \
          function g(A|B $x): int { \
              switch (true) { \
                  case $x instanceof A: return 0; \
-                 case $x instanceof B: return $x->bOnly(); \
+                 case $x instanceof B: return $x->bOnly(\"s\"); \
              } \
              return 0; \
          }",
