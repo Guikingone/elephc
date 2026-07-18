@@ -1744,6 +1744,24 @@ fn builtin_call_result_owns_storage_as_temporary(name: &str) -> bool {
             | "ltrim"
             | "rtrim"
             | "chop"
+            // `box_owned_string_or_false_result` allocates a fresh OWNED Mixed cell (or a
+            // boxed `false`) holding an owned persisted string; its result owns independent
+            // storage, so its discarded temporary must be released like end/array_pop.
+            // Each name below funnels its lowering through box_owned_string_or_false_result.
+            | "realpath"
+            | "readlink"
+            | "readdir"
+            | "ini_get"
+            | "ini_set"
+            | "get_cfg_var"
+            | "hash_file"
+            | "file_get_contents"
+            | "stream_resolve_include_path"
+            | "stream_socket_get_name"
+            | "stream_socket_recvfrom"
+            | "gethostbyaddr"
+            | "getprotobynumber"
+            | "getservbyport"
     )
 }
 

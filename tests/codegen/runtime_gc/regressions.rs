@@ -1619,3 +1619,52 @@ echo $s;
         out.stderr
     );
 }
+
+/// Regression: a discarded `realpath()` result must not leak. `realpath` boxes its
+/// result through `box_owned_string_or_false_result`, which allocates a fresh owned
+/// Mixed cell (refcount 1) holding an owned persisted string. As a discarded
+/// expression statement its temporary must be released like `end`/`array_pop`;
+/// before adding `realpath` to `builtin_call_result_owns_storage_as_temporary` it
+/// leaked two blocks per call (the Mixed cell + its inner string). Loops 100 times
+/// so any per-call leak is unmistakable; the heap must be clean at exit.
+#[test]
+fn test_regression_discarded_realpath_result_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$i = 0;
+while ($i < 100) { realpath("/tmp"); $i++; }
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression: a discarded `file_get_contents()` result must not leak. Like
+/// `realpath`, its EIR lowering boxes the read bytes through
+/// `box_owned_string_or_false_result` into a fresh owned Mixed cell, so a discarded
+/// statement result must be released as an owning temporary. Reads a portable file
+/// (`/etc/hosts` exists on macOS and Linux) 100 times and discards each result; the
+/// heap must be clean at exit (was two blocks per call before the fix).
+#[test]
+fn test_regression_discarded_file_get_contents_result_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$i = 0;
+while ($i < 100) { file_get_contents("/etc/hosts"); $i++; }
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
