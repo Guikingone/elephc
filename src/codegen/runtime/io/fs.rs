@@ -65,7 +65,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
 
     // -- null-terminate path and call mkdir --
     emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
-    emitter.instruction("mov x1, #0x1ED");                                      // mode 0755 (octal)
+    emitter.instruction("mov x1, #0x1FF");                                      // mode 0777 (PHP's real default; the kernel applies umask)
     emitter.syscall(136);
 
     // -- return success/failure --
@@ -219,7 +219,7 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mkdir ---");
     emitter.label_global("__rt_mkdir");
-    emit_single_path_libc_bool_helper(emitter, "mkdir", Some("mov rsi, 0x1ED"));
+    emit_single_path_libc_bool_helper(emitter, "mkdir", Some("mov rsi, 0x1FF"));
 
     emitter.blank();
     emitter.comment("--- runtime: rmdir ---");

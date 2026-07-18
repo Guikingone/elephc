@@ -138,7 +138,7 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Bool))
         }
-        "unlink" | "mkdir" | "rmdir" | "chdir" => {
+        "unlink" | "rmdir" | "chdir" => {
             if args.len() != 1 {
                 return Err(CompileError::new(
                     span,
@@ -159,14 +159,76 @@ pub(super) fn check_builtin(
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Bool))
         }
-        "scandir" | "glob" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes exactly 1 argument", name),
-                ));
+        "mkdir" => {
+            if args.is_empty() || args.len() > 4 {
+                return Err(CompileError::new(span, "mkdir() takes 1 to 4 arguments"));
             }
             checker.infer_type(&args[0], env)?;
+            if let Some(permissions) = args.get(1) {
+                let ty = checker.infer_type(permissions, env)?;
+                if ty != PhpType::Int {
+                    return Err(CompileError::new(
+                        permissions.span,
+                        "mkdir() permissions must be int",
+                    ));
+                }
+            }
+            if let Some(recursive) = args.get(2) {
+                let ty = checker.infer_type(recursive, env)?;
+                if ty != PhpType::Bool {
+                    return Err(CompileError::new(
+                        recursive.span,
+                        "mkdir() recursive must be bool",
+                    ));
+                }
+            }
+            if let Some(context) = args.get(3) {
+                let ty = checker.infer_type(context, env)?;
+                if ty != PhpType::Void {
+                    return Err(CompileError::new(
+                        context.span,
+                        "mkdir() context is unsupported (resource contexts not implemented; pass null)",
+                    ));
+                }
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "scandir" => {
+            if args.is_empty() || args.len() > 3 {
+                return Err(CompileError::new(span, "scandir() takes 1 to 3 arguments"));
+            }
+            checker.infer_type(&args[0], env)?;
+            if let Some(sorting_order) = args.get(1) {
+                let ty = checker.infer_type(sorting_order, env)?;
+                if ty != PhpType::Int {
+                    return Err(CompileError::new(
+                        sorting_order.span,
+                        "scandir() sorting_order must be int",
+                    ));
+                }
+            }
+            if let Some(context) = args.get(2) {
+                let ty = checker.infer_type(context, env)?;
+                if ty != PhpType::Void {
+                    return Err(CompileError::new(
+                        context.span,
+                        "scandir() context is unsupported (resource contexts not implemented; pass null)",
+                    ));
+                }
+            }
+            Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
+        }
+        "glob" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(CompileError::new(span, "glob() takes 1 or 2 arguments"));
+            }
+            checker.infer_type(&args[0], env)?;
+            if let Some(flags) = args.get(1) {
+                let ty = checker.infer_type(flags, env)?;
+                if ty != PhpType::Int {
+                    return Err(CompileError::new(flags.span, "glob() flags must be int"));
+                }
+            }
             Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
         }
         "getcwd" => {

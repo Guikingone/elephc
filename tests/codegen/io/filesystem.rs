@@ -159,11 +159,117 @@ rmdir("sd");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// H5: php-verified `scandir()` sort-order matrix. Default (ascending, byte
+/// order not locale) fixes a pre-existing divergence (the runtime previously
+/// returned raw unsorted `readdir()` order); `SCANDIR_SORT_DESCENDING` reverses
+/// it; `SCANDIR_SORT_NONE` keeps raw order. `"."`/`".."` are always included
+/// and participate in the sort exactly like PHP (php-verified with mixed-case
+/// names: `Banana`/`Cherry`/`apple` sort byte-ascending as `Banana,Cherry,apple`).
+#[test]
+fn test_scandir_sort_order_matrix() {
+    let (out, dir) = compile_and_run_in_dir_ir(
+        r#"<?php
+mkdir("sdsort");
+file_put_contents("sdsort/Banana", "1");
+file_put_contents("sdsort/apple", "1");
+file_put_contents("sdsort/Cherry", "1");
+$asc = scandir("sdsort");
+$desc = scandir("sdsort", SCANDIR_SORT_DESCENDING);
+$none = scandir("sdsort", SCANDIR_SORT_NONE);
+echo implode(",", $asc), "|";
+echo implode(",", $desc), "|";
+$none_sorted = $none;
+sort($none_sorted);
+// Avoid array === (unsupported for Array(Str) on this branch) by comparing
+// the imploded string forms instead.
+echo (implode(",", $none_sorted) === implode(",", $asc)) ? "ok" : "mismatch";
+unlink("sdsort/Banana");
+unlink("sdsort/apple");
+unlink("sdsort/Cherry");
+rmdir("sdsort");
+"#,
+    );
+    assert_eq!(
+        out,
+        ".,..,Banana,Cherry,apple|apple,Cherry,Banana,..,.|ok"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// H5: `mkdir($dir, 0777, true)` creates nested parent directories that do not
+/// yet exist (php-verified real recursive semantics, not accept-and-ignore).
+#[test]
+fn test_mkdir_recursive_creates_nested_dirs() {
+    let (out, dir) = compile_and_run_in_dir_ir(
+        r#"<?php
+$r = mkdir("a/b/c", 0777, true);
+if ($r && is_dir("a/b/c")) { echo "ok"; }
+rmdir("a/b/c");
+rmdir("a/b");
+rmdir("a");
+"#,
+    );
+    assert_eq!(out, "ok");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// H5 JURY ADDENDUM item 1: `mkdir()` on an existing directory returns `false`
+/// (php-verified: PHP emits a warning and returns `false`, matching an
+/// EEXIST-mapped mkdir()/mkdirat() failure) — both non-recursive and recursive.
+#[test]
+fn test_mkdir_existing_dir_returns_false() {
+    let (out, dir) = compile_and_run_in_dir_ir(
+        r#"<?php
+mkdir("existing");
+$r1 = mkdir("existing");
+$r2 = mkdir("existing", 0777, true);
+echo ($r1 === false) ? "false1" : "true1";
+echo "|";
+echo ($r2 === false) ? "false2" : "true2";
+rmdir("existing");
+"#,
+    );
+    assert_eq!(out, "false1|false2");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// H5 JURY ADDENDUM item 1: `mkdir()` without `$recursive` on a path with
+/// missing parents returns `false` (php-verified).
+#[test]
+fn test_mkdir_missing_parent_non_recursive_returns_false() {
+    let (out, dir) = compile_and_run_in_dir_ir(
+        r#"<?php
+$r = mkdir("missing_parent/child");
+echo ($r === false) ? "ok" : "unexpected";
+"#,
+    );
+    assert_eq!(out, "ok");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// H5: `mkdir($dir, $mode)` passes the real requested permission bits to the
+/// syscall (masked by the process umask, matching PHP), instead of the
+/// previously-hardcoded 0755.
+#[test]
+fn test_mkdir_permissions_applied() {
+    let (out, dir) = compile_and_run_in_dir_ir(
+        r#"<?php
+umask(0);
+mkdir("permdir", 0700);
+$perms = fileperms("permdir") & 0777;
+echo $perms === 0700 ? "ok" : (string) $perms;
+rmdir("permdir");
+"#,
+    );
+    assert_eq!(out, "ok");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies glob by creating two files matching a pattern, confirming both
 /// are returned with their full paths, and cleaning up.
 #[test]
 fn test_glob_fn() {
-    let (out, dir) = compile_and_run_in_dir(
+    let (out, dir) = compile_and_run_in_dir_ir(
         r#"<?php
 mkdir("gd");
 file_put_contents("gd/g1.txt", "a");
@@ -179,6 +285,83 @@ if (
 unlink("gd/g1.txt");
 unlink("gd/g2.txt");
 rmdir("gd");
+"#,
+    );
+    assert_eq!(out, "ok");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// H5: php-verified `glob($pattern, GLOB_ONLYDIR)` returns only directory
+/// matches (post-filtered via `__rt_is_dir()`, never forwarded to libc as a
+/// bit — see the runtime helper's module doc).
+#[test]
+fn test_glob_onlydir_filters_to_directories() {
+    let (out, dir) = compile_and_run_in_dir_ir(
+        r#"<?php
+mkdir("gd2");
+mkdir("gd2/subdir");
+file_put_contents("gd2/file.txt", "x");
+$matches = glob("gd2/*", GLOB_ONLYDIR);
+if (count($matches) == 1 && $matches[0] == "gd2/subdir") { echo "ok"; }
+unlink("gd2/file.txt");
+rmdir("gd2/subdir");
+rmdir("gd2");
+"#,
+    );
+    assert_eq!(out, "ok");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// H5: php-verified `glob($pattern, GLOB_MARK)` appends `/` to directory
+/// matches only (files matched by the same pattern keep no trailing slash).
+#[test]
+fn test_glob_mark_appends_slash_to_directories_only() {
+    let (out, dir) = compile_and_run_in_dir_ir(
+        r#"<?php
+mkdir("gd3");
+mkdir("gd3/subdir");
+file_put_contents("gd3/file.txt", "x");
+$matches = glob("gd3/*", GLOB_MARK);
+sort($matches);
+echo implode(",", $matches);
+unlink("gd3/file.txt");
+rmdir("gd3/subdir");
+rmdir("gd3");
+"#,
+    );
+    assert_eq!(out, "gd3/file.txt,gd3/subdir/");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// H5: php-verified `glob($pattern, GLOB_NOSORT | GLOB_ONLYDIR)` combines two
+/// flags via bitwise OR (constant-folded to a single literal by the time EIR
+/// codegen validates it) and still only returns directory matches.
+#[test]
+fn test_glob_combined_flags() {
+    let (out, dir) = compile_and_run_in_dir_ir(
+        r#"<?php
+mkdir("gd4");
+mkdir("gd4/subdir");
+file_put_contents("gd4/file.txt", "x");
+$matches = glob("gd4/*", GLOB_NOSORT | GLOB_ONLYDIR);
+if (count($matches) == 1 && $matches[0] == "gd4/subdir") { echo "ok"; }
+unlink("gd4/file.txt");
+rmdir("gd4/subdir");
+rmdir("gd4");
+"#,
+    );
+    assert_eq!(out, "ok");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// H5: `glob()` with no matches returns an empty array, not `false`
+/// (php-verified: `var_dump(glob("nomatch*"))` → `array(0) {}`).
+#[test]
+fn test_glob_no_match_returns_empty_array() {
+    let (out, dir) = compile_and_run_in_dir_ir(
+        r#"<?php
+$r = glob("definitely_does_not_exist_xyz*");
+if (is_array($r) && count($r) === 0) { echo "ok"; }
 "#,
     );
     assert_eq!(out, "ok");

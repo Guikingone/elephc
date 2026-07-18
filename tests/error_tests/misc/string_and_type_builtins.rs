@@ -20,7 +20,21 @@ expect_builtin_arity_error!(
 expect_builtin_arity_error!(
     test_error_intval_wrong_args,
     "<?php intval();",
-    "intval() takes exactly 1 argument"
+    "intval() takes 1 or 2 arguments"
+);
+
+// Tests intval() arity error when called with too many arguments (H5: value + base is the max).
+expect_builtin_arity_error!(
+    test_error_intval_too_many_args,
+    "<?php intval(\"5\", 10, 1);",
+    "intval() takes 1 or 2 arguments"
+);
+
+// Tests intval() type error when $base is not an int (H5).
+expect_builtin_arity_error!(
+    test_error_intval_base_not_int,
+    "<?php intval(\"5\", \"abc\");",
+    "intval() base argument must be int"
 );
 
 // Tests strrpos() arity error when called with only one argument (PHP allows 2–3).

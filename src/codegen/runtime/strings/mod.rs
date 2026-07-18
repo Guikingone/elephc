@@ -16,6 +16,7 @@ mod str_eq;
 mod str_loose_eq;
 mod str_to_number;
 mod str_to_int;
+mod intval_base;
 mod number_format;
 mod atoi;
 mod grapheme_strrev;
@@ -113,6 +114,8 @@ pub use str_to_number::emit_str_to_number;
 /// Emit string-to-number conversion helper.
 pub use str_to_int::emit_str_to_int;
 /// Emit PHP string-to-integer cast helper.
+pub use intval_base::emit_intval_base;
+/// Emit base-aware `intval($value, $base)` string parser helper.
 pub use number_format::emit_number_format;
 /// Emit number formatting helper.
 pub use atoi::emit_atoi;

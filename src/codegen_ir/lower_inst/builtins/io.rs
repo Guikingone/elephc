@@ -3781,9 +3781,88 @@ pub(super) fn lower_unlink(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     store_if_result(ctx, inst)
 }
 
-/// Lowers `mkdir(path)` through the target-aware runtime helper.
+/// Lowers `mkdir($directory, $permissions = 0777, $recursive = false, $context = null)`.
+///
+/// The 1-arg form keeps the existing wrapper-aware dispatch (`__rt_mkdir`,
+/// which now passes the real PHP default mode 0777 instead of a hardcoded
+/// 0755 — see `crate::codegen::runtime::io::fs`). Once `$permissions` is
+/// explicitly passed, this bypasses stream-wrapper dispatch and calls the
+/// mode-aware native helpers directly (`__rt_mkdir_mode` / `__rt_mkdir_recursive`
+/// per the runtime-evaluated `$recursive` flag) — a scoped, documented
+/// residual: `mkdir($wrapperUrl, $mode, ...)` against a registered userspace
+/// stream wrapper is not implemented (native filesystem paths only for the
+/// mode/recursive-aware form). `$context` (checker-validated to be a
+/// compile-time `null`) is never materialized as an operand here.
 pub(super) fn lower_mkdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_single_path_wrapper_op(ctx, inst, "mkdir", "__rt_mkdir", STREAM_WRAPPER_MKDIR_SLOT)
+    super::ensure_arg_count_between(inst, "mkdir", 1, 4)?;
+    if inst.operands.len() == 1 {
+        return lower_single_path_wrapper_op(ctx, inst, "mkdir", "__rt_mkdir", STREAM_WRAPPER_MKDIR_SLOT);
+    }
+    let path = expect_operand(inst, 0)?;
+    let permissions = expect_operand(inst, 1)?;
+    let recursive = if inst.operands.len() >= 3 {
+        Some(expect_operand(inst, 2)?)
+    } else {
+        None
+    };
+
+    load_string_to_result(ctx, path, "mkdir path")?;
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);                  // preserve the path across the mode/recursive loads
+    ctx.load_value_to_result(permissions)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));      // preserve the requested mode
+
+    match recursive {
+        Some(recursive) => {
+            ctx.load_value_to_result(recursive)?;
+        }
+        None => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0); // default recursive = false
+        }
+    }
+    // Preserve the recursive flag in a scratch register before the pops below
+    // restore the path/mode into registers that may alias it.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x9, x0");                              // recursive flag → scratch
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r9, rax");                             // recursive flag → scratch
+        }
+    }
+    let mode_scratch = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x10",
+        Arch::X86_64 => "r10",
+    };
+    abi::emit_pop_reg(ctx.emitter, mode_scratch);                           // pop the requested mode into scratch
+    abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);                  // restore the path pointer/length
+
+    let recursive_label = ctx.next_label("mkdir_recursive");
+    let done_label = ctx.next_label("mkdir_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x9, {}", recursive_label));  // non-zero recursive flag → recursive walk
+            ctx.emitter.instruction("mov x3, x10");                             // mode → the mkdir_mode argument register
+            abi::emit_call_label(ctx.emitter, "__rt_mkdir_mode");
+            ctx.emitter.instruction(&format!("b {}", done_label));
+            ctx.emitter.label(&recursive_label);
+            ctx.emitter.instruction("mov x3, x10");                             // mode → the mkdir_recursive argument register
+            abi::emit_call_label(ctx.emitter, "__rt_mkdir_recursive");
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test r9, r9");                             // is the recursive flag non-zero?
+            ctx.emitter.instruction(&format!("jnz {}", recursive_label));
+            ctx.emitter.instruction("mov rdi, r10");                            // mode → the mkdir_mode argument register
+            abi::emit_call_label(ctx.emitter, "__rt_mkdir_mode");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));
+            ctx.emitter.label(&recursive_label);
+            ctx.emitter.instruction("mov rdi, r10");                            // mode → the mkdir_recursive argument register
+            abi::emit_call_label(ctx.emitter, "__rt_mkdir_recursive");
+            ctx.emitter.label(&done_label);
+        }
+    }
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `rmdir(path)` through the target-aware runtime helper.
@@ -3813,12 +3892,72 @@ pub(super) fn lower_tempnam(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 
 /// Lowers `scandir(path)` through the target-aware runtime directory listing helper.
 pub(super) fn lower_scandir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_unary_path_array(ctx, inst, "scandir", "__rt_scandir")
+    lower_scandir_with_sort(ctx, inst)
 }
 
-/// Lowers `glob(pattern)` through the target-aware runtime glob expansion helper.
+/// Portable `GLOB_ONLYDIR` sentinel (matches real PHP: `1 << 30`, identical on
+/// every target — NEVER forwarded to libc `glob()`; see `crate::codegen::runtime::io::glob`).
+const GLOB_ONLYDIR_BIT: i64 = 1 << 30;
+
+/// Lowers `glob($pattern, $flags = 0)` through the target-aware runtime glob
+/// expansion helper. `$flags` must be a compile-time integer literal (after EIR
+/// constant folding — `GLOB_NOSORT`, `GLOB_MARK`, `GLOB_BRACE`, `GLOB_ONLYDIR`,
+/// and OR-combinations of them all fold to `Op::ConstI64`): only literal flags
+/// can be validated against the supported bit set, so a non-literal `$flags`
+/// stays loud instead of silently passing an unvalidated runtime value to libc.
+/// `GLOB_ONLYDIR` is split out and never reaches libc `glob()` — see the
+/// runtime helper's module doc for why.
 pub(super) fn lower_glob(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_unary_path_array(ctx, inst, "glob", "__rt_glob")
+    super::ensure_arg_count_between(inst, "glob", 1, 2)?;
+    let path = expect_operand(inst, 0)?;
+    let (libc_flags, onlydir) = if inst.operands.len() == 2 {
+        let flags_operand = expect_operand(inst, 1)?;
+        let Some(flags) = optional_const_i64_operand(ctx, flags_operand)? else {
+            return Err(CodegenIrError::unsupported(
+                "glob() flags must be a compile-time integer literal (non-literal glob() flags are unsupported)"
+                    .to_string(),
+            ));
+        };
+        let (nosort_bit, mark_bit, brace_bit) = glob_platform_flag_bits(ctx.emitter.platform);
+        let supported = nosort_bit | mark_bit | brace_bit | GLOB_ONLYDIR_BIT;
+        let unsupported_bits = flags & !supported;
+        if unsupported_bits != 0 {
+            return Err(CodegenIrError::unsupported(format!(
+                "glob() flags contain unsupported bits: 0x{:X} (only GLOB_NOSORT, GLOB_MARK, GLOB_BRACE, and GLOB_ONLYDIR are implemented)",
+                unsupported_bits
+            )));
+        }
+        let onlydir = flags & GLOB_ONLYDIR_BIT != 0;
+        let libc_flags = flags & !GLOB_ONLYDIR_BIT;
+        (libc_flags, onlydir)
+    } else {
+        (0, false)
+    };
+    load_string_to_result(ctx, path, "glob")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x3", libc_flags);         // libc_flags → the glob() argument register
+            abi::emit_load_int_immediate(ctx.emitter, "x4", onlydir as i64);     // onlydir post-filter flag → the glob() argument register
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", libc_flags);        // libc_flags → the glob() argument register
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", onlydir as i64);    // onlydir post-filter flag → the glob() argument register
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_glob");
+    store_if_result(ctx, inst)
+}
+
+/// Returns the target-native `(GLOB_NOSORT, GLOB_MARK, GLOB_BRACE)` bit values
+/// for the compile platform. BSD/Darwin (macOS) and glibc (Linux) assign
+/// different bit positions to these flags — see
+/// `crate::types::stream_constants::GLOB_PLATFORM_CONSTANTS` (the single
+/// source of truth these values are kept in lockstep with).
+fn glob_platform_flag_bits(platform: crate::codegen::platform::Platform) -> (i64, i64, i64) {
+    match platform {
+        crate::codegen::platform::Platform::MacOS => (32, 8, 128),
+        crate::codegen::platform::Platform::Linux => (4, 2, 1024),
+    }
 }
 
 /// Lowers `chmod(path, mode)` through the target-aware runtime helper.
@@ -5480,6 +5619,43 @@ fn lower_unary_path_int(
     let path = expect_operand(inst, 0)?;
     load_string_to_result(ctx, path, name)?;
     abi::emit_call_label(ctx.emitter, runtime_label);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `scandir($directory, $sorting_order = 0, $context = null)`. The
+/// `$context` operand (index 2, checker-validated to be a compile-time `null`)
+/// is never materialized here — only `$directory` and the optional
+/// `$sorting_order` reach the runtime call, matching `__rt_scandir`'s
+/// AArch64 x1/x2/x3 or x86_64 rax/rdx/rdi convention.
+fn lower_scandir_with_sort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count_between(inst, "scandir", 1, 3)?;
+    let path = expect_operand(inst, 0)?;
+    load_string_to_result(ctx, path, "scandir")?;
+    if inst.operands.len() >= 2 {
+        let sorting_order = expect_operand(inst, 1)?;
+        let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+        abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);              // preserve the path across the sorting_order load
+        ctx.load_value_to_result(sorting_order)?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x3, x0");                          // sorting_order → the scandir argument register
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, rax");                        // sorting_order → the scandir argument register
+            }
+        }
+        abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);               // restore the path
+    } else {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x3, #0");                          // default sorting_order = SCANDIR_SORT_ASCENDING
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov edi, 0");                          // default sorting_order = SCANDIR_SORT_ASCENDING
+            }
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_scandir");
     store_if_result(ctx, inst)
 }
 

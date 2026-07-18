@@ -6061,7 +6061,29 @@ fn call_return_type_for_args(
         "iterator_to_array" => iterator_to_array_builtin_return_type(ctx, args, operands),
         "microtime" => microtime_builtin_return_type_for_args(args),
         "phpversion" => phpversion_builtin_return_type_for_args(args),
+        "print_r" => print_r_builtin_return_type_for_args(args),
         _ => None,
+    }
+}
+
+/// Returns `print_r()` metadata based on the literal `$return` argument.
+///
+/// php-verified: `print_r($v)` (or `print_r($v, false)`) always returns the
+/// concrete `true` (`Bool`), never void; `print_r($v, true)` returns the
+/// rendered `string`. A non-literal `$return` falls back to `None` (boxed
+/// `Mixed`/`string|bool` union) — the EIR backend (`lower_print_r`) rejects
+/// that case as unsupported before ever reaching a store, so the imprecise
+/// fallback type is never actually observed. This must match the checker
+/// (`src/types/checker/builtins/io/debug.rs`) and the EIR backend dispatch in
+/// `crate::codegen_ir::lower_inst::builtins::debug::lower_print_r`.
+fn print_r_builtin_return_type_for_args(args: &[Expr]) -> Option<PhpType> {
+    match args.get(1) {
+        None => Some(PhpType::Bool),
+        Some(arg) => match &arg.kind {
+            ExprKind::BoolLiteral(true) => Some(PhpType::Str),
+            ExprKind::BoolLiteral(false) => Some(PhpType::Bool),
+            _ => None,
+        },
     }
 }
 

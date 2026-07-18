@@ -50,10 +50,19 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Int))
         }
         "intval" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "intval() takes exactly 1 argument"));
+            if args.is_empty() || args.len() > 2 {
+                return Err(CompileError::new(span, "intval() takes 1 or 2 arguments"));
             }
             checker.infer_type(&args[0], env)?;
+            if let Some(base_arg) = args.get(1) {
+                let base_ty = checker.infer_type(base_arg, env)?;
+                if !matches!(base_ty, PhpType::Int) {
+                    return Err(CompileError::new(
+                        base_arg.span,
+                        "intval() base argument must be int",
+                    ));
+                }
+            }
             Ok(Some(PhpType::Int))
         }
         "substr" => {

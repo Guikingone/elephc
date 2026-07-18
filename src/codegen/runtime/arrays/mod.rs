@@ -77,6 +77,7 @@ mod array_union;
 mod array_unique;
 mod array_unique_refcounted;
 mod array_unshift;
+mod array_unshift_grow;
 mod array_walk;
 mod asort;
 mod decref_any;
@@ -295,6 +296,7 @@ pub use array_unique::emit_array_unique;
 pub use array_unique_refcounted::emit_array_unique_refcounted;
 /// Emit refcounted array unique helper.
 pub use array_unshift::emit_array_unshift;
+pub use array_unshift_grow::emit_array_unshift_grow;
 /// Emit array unshift (prepend) helper.
 pub use array_walk::emit_array_walk;
 /// Emit array walk helper.

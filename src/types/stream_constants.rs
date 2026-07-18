@@ -13,6 +13,18 @@
 //!   registered elsewhere (and `FNM_*` is target-sensitive). `STREAM_PF_INET6`
 //!   is target-divergent (AF_INET6: 30 on macOS, 10 on Linux) and is registered
 //!   target-sensitively when the socket layer lands.
+//! - `GLOB_ERR`/`GLOB_MARK`/`GLOB_NOCHECK`/`GLOB_NOSORT`/`GLOB_BRACE`/
+//!   `GLOB_NOESCAPE` are native libc `glob()` bit flags forwarded straight into
+//!   the `glob()` syscall wrapper — NOT POSIX-portable (contrary to a prior
+//!   comment here): BSD/Darwin (macOS) and glibc (Linux) assign different bit
+//!   positions to the same flag name. They live in `GLOB_PLATFORM_CONSTANTS`
+//!   below, mirroring `crate::types::pcntl_constants::PCNTL_PLATFORM_SIGNALS`.
+//!   `GLOB_ONLYDIR` is the one exception: PHP defines it as its OWN portable
+//!   sentinel (`1 << 30`) on every platform — libc's native `GLOB_ONLYDIR` hint
+//!   (where one exists) is documented as unreliable, so PHP (and elephc) always
+//!   strip the bit before calling `glob()` and post-filter matches with `stat()`
+//!   instead. That is why `GLOB_ONLYDIR` stays in the flat, target-invariant
+//!   `STREAM_INT_CONSTANTS` table below.
 
 pub(crate) const STREAM_INT_CONSTANTS: &[(&str, i64)] = &[
     // Client / server connection flags.
@@ -123,14 +135,37 @@ pub(crate) const STREAM_INT_CONSTANTS: &[(&str, i64)] = &[
     ("FILE_SKIP_EMPTY_LINES", 4),
     ("FILE_APPEND", 8),
     ("FILE_NO_DEFAULT_CONTEXT", 16),
-    // glob() flags (POSIX-portable values).
-    ("GLOB_ERR", 4),
-    ("GLOB_MARK", 8),
-    ("GLOB_NOCHECK", 16),
-    ("GLOB_NOSORT", 32),
-    ("GLOB_BRACE", 128),
-    ("GLOB_NOESCAPE", 4096),
+    // glob() ONLYDIR is PHP's own portable sentinel (elephc post-filters with
+    // stat() instead of relying on libc's unreliable native ONLYDIR hint) — see
+    // the module doc for why this one glob() flag is NOT in `GLOB_PLATFORM_CONSTANTS`.
     ("GLOB_ONLYDIR", 1073741824),
+    // scandir() sort orders (php-verified, target-invariant — these are PHP's
+    // own enum values, not forwarded to any libc call).
+    ("SCANDIR_SORT_ASCENDING", 0),
+    ("SCANDIR_SORT_DESCENDING", 1),
+    ("SCANDIR_SORT_NONE", 2),
+];
+
+/// `(name, macos_value, linux_value)` for `glob()` bit flags forwarded directly
+/// into libc `glob()`. BSD/Darwin (macOS) and glibc (Linux) `<glob.h>` assign
+/// different bit positions to the same flag names, so these values differ by
+/// compile target (selected from the `Platform` the same way as
+/// `PHP_RUNTIME_PLATFORM_CONSTANTS`, not `cfg(target_os)`, since elephc
+/// cross-compiles).
+///
+/// macOS values php-verified locally (`php -n -r 'echo GLOB_MARK,",",GLOB_NOSORT,",",GLOB_BRACE;'`
+/// → `8,32,128`) and cross-checked against Darwin's `<glob.h>`. Linux values are
+/// glibc's well-established, decades-stable `<glob.h>` bit positions
+/// (`GLOB_ERR=1<<0`, `GLOB_MARK=1<<1`, `GLOB_NOSORT=1<<2`, `GLOB_NOCHECK=1<<4`,
+/// `GLOB_NOESCAPE=1<<6`, `GLOB_BRACE=1<<10`, a GNU extension supported by both
+/// glibc targets elephc ships — `linux-x86_64` and `linux-aarch64`).
+pub(crate) const GLOB_PLATFORM_CONSTANTS: &[(&str, i64, i64)] = &[
+    ("GLOB_ERR", 4, 1),
+    ("GLOB_MARK", 8, 2),
+    ("GLOB_NOSORT", 32, 4),
+    ("GLOB_NOCHECK", 16, 16),
+    ("GLOB_NOESCAPE", 4096, 64),
+    ("GLOB_BRACE", 128, 1024),
 ];
 
 #[cfg(test)]
@@ -165,6 +200,60 @@ mod tests {
         let len_before = names.len();
         names.dedup();
         assert_eq!(names.len(), len_before, "duplicate stream constant name");
+    }
+
+    /// Verifies `GLOB_PLATFORM_CONSTANTS` has no duplicate names, and no overlap
+    /// with the flat `STREAM_INT_CONSTANTS` table (in particular `GLOB_ONLYDIR`
+    /// must stay a single portable value, not be duplicated here).
+    #[test]
+    fn glob_platform_constants_no_duplicates_and_no_overlap() {
+        let mut names: Vec<&str> = GLOB_PLATFORM_CONSTANTS.iter().map(|(n, _, _)| *n).collect();
+        names.sort_unstable();
+        let len_before = names.len();
+        names.dedup();
+        assert_eq!(len_before, names.len(), "duplicate GLOB_PLATFORM_CONSTANTS name");
+        for (name, _, _) in GLOB_PLATFORM_CONSTANTS {
+            assert!(
+                !STREAM_INT_CONSTANTS.iter().any(|(n, _)| n == name),
+                "{name} must not be registered in both tables",
+            );
+        }
+    }
+
+    /// php-verified (macOS 8.5.6 local): `GLOB_MARK,GLOB_NOSORT,GLOB_BRACE` = `8,32,128`.
+    #[test]
+    fn glob_platform_constants_macos_values_match_php_verify() {
+        let get = |name: &str| {
+            GLOB_PLATFORM_CONSTANTS
+                .iter()
+                .find(|(n, _, _)| *n == name)
+                .unwrap_or_else(|| panic!("{name} defined"))
+                .1
+        };
+        assert_eq!(get("GLOB_MARK"), 8);
+        assert_eq!(get("GLOB_NOSORT"), 32);
+        assert_eq!(get("GLOB_BRACE"), 128);
+        assert_eq!(get("GLOB_ERR"), 4);
+        assert_eq!(get("GLOB_NOCHECK"), 16);
+        assert_eq!(get("GLOB_NOESCAPE"), 4096);
+    }
+
+    /// Linux (glibc) `<glob.h>` bit positions differ from Darwin/BSD for these flags.
+    #[test]
+    fn glob_platform_constants_linux_values_are_glibc_bits() {
+        let get = |name: &str| {
+            GLOB_PLATFORM_CONSTANTS
+                .iter()
+                .find(|(n, _, _)| *n == name)
+                .unwrap_or_else(|| panic!("{name} defined"))
+                .2
+        };
+        assert_eq!(get("GLOB_MARK"), 2);
+        assert_eq!(get("GLOB_NOSORT"), 4);
+        assert_eq!(get("GLOB_BRACE"), 1024);
+        assert_eq!(get("GLOB_ERR"), 1);
+        assert_eq!(get("GLOB_NOCHECK"), 16);
+        assert_eq!(get("GLOB_NOESCAPE"), 64);
     }
 
     /// Verifies the stream constant invariant for does not redeclare lock or fnmatch constants.

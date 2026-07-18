@@ -7,6 +7,16 @@
 //!
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
+//! - `$sorting_order` (php-verified with `php -n`, PHP 8.5.6 local): `2`
+//!   (`SCANDIR_SORT_NONE`) keeps raw `readdir()` order; `0`
+//!   (`SCANDIR_SORT_ASCENDING`, the default) sorts byte-ascending; any other
+//!   value (including `SCANDIR_SORT_DESCENDING == 1`, and out-of-range values
+//!   like `99`/`-1`, which PHP also treats as descending) sorts
+//!   byte-descending. Sorting reuses the exact `__rt_sort_str`/`__rt_rsort_str`
+//!   in-place string-array insertion sort that backs `sort()`/`rsort()` — the
+//!   16-byte `[ptr:8][len:8]` element layout is identical.
+//! - PHP's default output includes `"."`/`".."` (php-verified); `readdir()`
+//!   already yields both, so no filtering is needed here.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
@@ -15,8 +25,10 @@ use crate::codegen::{emit::Emitter, platform::Arch};
 /// Dispatches to `emit_scandir_linux_x86_64` for x86_64; generates inline ARM64
 /// assembly for all other targets.
 ///
-/// Input: path string in x1/x2 (ptr/len) following the runtime string convention.
-/// Output: x0 holds an `Array` of `String` filenames, or an empty array on error.
+/// Input: AArch64 x1/x2 = path (ptr/len), x3 = `$sorting_order`.
+///        x86_64 rax/rdx = path (ptr/len), rdi = `$sorting_order`.
+/// Output: x0/rax holds an `Array` of `String` filenames (sorted per
+/// `$sorting_order`), or an empty array when `opendir()` fails.
 /// Side effects: calls `opendir`, `readdir`, `closedir` from libc; allocates
 /// runtime memory for filename persistence and result array growth.
 pub fn emit_scandir(emitter: &mut Emitter) {
@@ -35,6 +47,7 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish new frame pointer
+    emitter.instruction("str x3, [sp, #24]");                                   // preserve the sorting_order argument across libc calls
 
     // -- null-terminate path --
     emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
@@ -48,6 +61,10 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #16");                                         // element size = 16 bytes (ptr + len)
     emitter.instruction("bl __rt_array_new");                                   // create array, x0=array pointer
     emitter.instruction("str x0, [sp, #8]");                                    // save array pointer on stack
+
+    // -- bail out (return the empty array) if opendir() failed --
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload DIR pointer
+    emitter.instruction("cbz x0, __rt_scandir_close");                          // NULL DIR*: skip straight to the (no-op) close/sort/return path
 
     // -- read directory entries in a loop --
     emitter.label("__rt_scandir_loop");
@@ -75,12 +92,27 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #8]");                                    // update array pointer after possible realloc
     emitter.instruction("b __rt_scandir_loop");                                 // continue reading entries
 
-    // -- close directory and return --
+    // -- close directory --
     emitter.label("__rt_scandir_close");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload DIR pointer
+    emitter.instruction("cbz x0, __rt_scandir_sort");                           // no directory stream was opened: nothing to close
     emitter.bl_c("closedir");                                        // closedir(DIR*)
 
+    // -- sort per $sorting_order: 2=none, 0=ascending, else=descending --
+    emitter.label("__rt_scandir_sort");
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the requested sorting_order
+    emitter.instruction("cmp x9, #2");                                          // SCANDIR_SORT_NONE
+    emitter.instruction("b.eq __rt_scandir_return");                            // leave raw readdir() order untouched
+    emitter.instruction("cbnz x9, __rt_scandir_desc");                          // any non-zero, non-2 value sorts descending
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload array pointer
+    emitter.instruction("bl __rt_sort_str");                                    // ascending in-place sort
+    emitter.instruction("b __rt_scandir_return");
+    emitter.label("__rt_scandir_desc");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload array pointer
+    emitter.instruction("bl __rt_rsort_str");                                   // descending in-place sort
+
     // -- return array pointer --
+    emitter.label("__rt_scandir_return");
     emitter.instruction("ldr x0, [sp, #8]");                                    // return array pointer
 
     // -- restore frame and return --
@@ -104,7 +136,8 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while scandir() uses directory and result-array spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the C path, result array, and DIR* locals
-    emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the C path pointer, result array pointer, DIR* handle, and loop scratch
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned spill slots for the C path pointer, result array pointer, DIR* handle, sorting_order, and loop scratch
+    emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // preserve the requested sorting_order across libc calls
     emitter.instruction("call __rt_cstr");                                      // convert the elephc directory string in rax/rdx into a null-terminated C path in rax
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the C directory path pointer across the result-array allocation and opendir() call
     emitter.instruction("mov rdi, 128");                                        // request an initial result-array capacity of 128 directory entry names
@@ -141,9 +174,22 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the DIR* handle before closing the directory stream
     emitter.instruction("call closedir");                                       // close the directory stream through libc closedir()
 
+    // -- sort per $sorting_order: 2=none, 0=ascending, else=descending --
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the requested sorting_order
+    emitter.instruction("cmp rax, 2");                                          // SCANDIR_SORT_NONE
+    emitter.instruction("je __rt_scandir_ret");                                 // leave raw readdir() order untouched
+    emitter.instruction("test rax, rax");                                       // any non-zero, non-2 value sorts descending
+    emitter.instruction("jnz __rt_scandir_desc_x86_64");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload array pointer
+    emitter.instruction("call __rt_sort_str");                                  // ascending in-place sort
+    emitter.instruction("jmp __rt_scandir_ret");
+    emitter.label("__rt_scandir_desc_x86_64");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload array pointer
+    emitter.instruction("call __rt_rsort_str");                                 // descending in-place sort
+
     emitter.label("__rt_scandir_ret");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the destination string array pointer in the canonical x86_64 integer result register
-    emitter.instruction("add rsp, 32");                                         // release the temporary scandir() spill slots before returning
+    emitter.instruction("add rsp, 48");                                         // release the temporary scandir() spill slots before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the directory entry array
     emitter.instruction("ret");                                                 // return the array of directory entry names to the caller
 }

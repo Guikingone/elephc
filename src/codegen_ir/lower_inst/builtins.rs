@@ -1359,10 +1359,24 @@ fn lower_strlen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()>
     store_if_result(ctx, inst)
 }
 
-/// Lowers `intval()` for concrete scalar operands.
+/// Lowers `intval($value, $base = 10)` for concrete scalar operands.
+///
+/// PHP ignores `$base` for every non-string `$value` (php-verified:
+/// `intval(42, 16) === 42`, `intval(true, 16) === 1`), so the base operand only
+/// changes the `Str` case's runtime path, and only when it was actually passed
+/// (the arg planner keeps optional-argument arity variable — see
+/// `ensure_arg_count_between` — so an omitted `$base` never materializes an
+/// operand here; the default-base(10) `Str` case keeps using the existing
+/// float-aware `__rt_str_to_int`, and `__rt_intval_base` itself special-cases
+/// `base == 10` back into `__rt_str_to_int` for the explicit-base(10) case).
 fn lower_intval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "intval", 1)?;
+    ensure_arg_count_between(inst, "intval", 1, 2)?;
     let value = expect_operand(inst, 0)?;
+    let base = if inst.operands.len() == 2 {
+        Some(expect_operand(inst, 1)?)
+    } else {
+        None
+    };
     match ctx.value_php_type(value)? {
         PhpType::Int | PhpType::Bool => {
             ctx.load_value_to_result(value)?;
@@ -1375,8 +1389,12 @@ fn lower_intval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()>
             abi::emit_float_result_to_int_result(ctx.emitter);
         }
         PhpType::Str => {
-            ctx.load_value_to_result(value)?;
-            abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
+            if let Some(base) = base {
+                lower_intval_str_with_base(ctx, value, base)?;
+            } else {
+                ctx.load_value_to_result(value)?;
+                abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
+            }
         }
         PhpType::Mixed | PhpType::Union(_) => {
             load_value_to_first_int_arg(ctx, value)?;
@@ -1390,6 +1408,33 @@ fn lower_intval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()>
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Lowers the `intval($stringValue, $base)` case: loads the string into the
+/// string-result registers, loads `$base` into the integer result register,
+/// moves it into the base argument register (AArch64 x3 / x86_64 rdi, matching
+/// the `chmod(path, mode)`-style path+scalar convention used elsewhere in this
+/// backend), then calls the dedicated base-aware parser.
+fn lower_intval_str_with_base(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    base: ValueId,
+) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);                     // preserve the string operand across the base load
+    ctx.load_value_to_result(base)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, x0");                              // base → the intval_base argument register
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // base → the intval_base argument register
+        }
+    }
+    abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);                      // restore the string operand
+    abi::emit_call_label(ctx.emitter, "__rt_intval_base");
+    Ok(())
 }
 
 /// Lowers `floatval()` for concrete scalar operands.

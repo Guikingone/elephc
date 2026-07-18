@@ -59,6 +59,113 @@ echo $n . " " . $a[0];
     assert_eq!(out, "3 1");
 }
 
+/// H5: php-verified multi-value `array_unshift($a, 1, 2)` order — the first-listed
+/// value ends up first: `[1, 2, ...old]`, not reversed.
+#[test]
+fn test_array_unshift_multi_value_order() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [3, 4];
+$n = array_unshift($a, 1, 2);
+echo $n, "|", implode(",", $a);
+"#,
+    );
+    assert_eq!(out, "4|1,2,3,4");
+}
+
+/// H5: `array_unshift()` grows capacity correctly beyond the initial 8-slot
+/// default (each call is capacity-checked, matching `__rt_array_push_int`'s
+/// grow-then-append idiom mirrored for prepend) — regression for the prior
+/// memory-unsafe fixed-buffer shift.
+///
+/// Starts from a 1-element (not empty-literal) array: `$a = []` followed only
+/// by `array_unshift()` writes hits a PRE-EXISTING, separate ir_lower gap
+/// (there is no `lower_static_array_unshift` empty-placeholder-widening path
+/// mirroring `lower_static_array_push`'s, so a local that starts as `Array(Void)`
+/// and is populated only via `array_unshift()` keeps that stale placeholder
+/// type for later `$a[i]`-style direct-index reads even though the runtime
+/// array itself holds the correct ints — `print_r()`/`count()`/`implode()` are
+/// unaffected since they read the array dynamically rather than through the
+/// stale static element type). Fixing that is out of scope for H5 (real new
+/// plumbing, not a capacity/COW/alias concern); this test instead exercises
+/// growth from a realistic non-empty starting array, which is unaffected.
+#[test]
+fn test_array_unshift_growth_beyond_initial_capacity() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [-1];
+for ($i = 0; $i < 30; $i++) {
+    array_unshift($a, $i);
+}
+echo count($a), "|", $a[0], "|", $a[29], "|", $a[30];
+"#,
+    );
+    assert_eq!(out, "31|29|0|-1");
+}
+
+/// H5 JURY ADDENDUM item 5: a reference alias (`$b =& $a`) must observe
+/// `array_unshift($a, $oneValue)`'s mutation across separate statements —
+/// php-verified working (each statement is its own EIR lowering with exactly
+/// one by-ref write-back).
+///
+/// TWO SEPARATE, narrower cases are PRE-EXISTING, latent bugs in the shared
+/// codegen_ir by-ref array write-back path
+/// (`FunctionContext::store_value_to_local()`'s ref-cell branch,
+/// `src/codegen_ir/context.rs`) that this task's real capacity-growth support
+/// was the first thing to exercise against an aliased array — NOT a defect in
+/// `array_unshift()`'s own shift/insert/capacity logic (php-verified: both
+/// cases are byte-for-byte correct without an alias present):
+/// 1. A SINGLE `array_unshift($a, $v1, $v2, ...)` call with 2+ values against
+///    an ALIASED array — internally this repeats
+///    `store_result_value()`/`store_value_to_local()` more than once within
+///    ONE lowering (once per value). A second same-call write-back through
+///    the SAME ref-cell corrupts the aliased array down to a zeroed/empty
+///    state, even when no `__rt_array_grow()` reallocation occurs.
+/// 2. Any `array_unshift($a, ...)` call against an ALIASED array that forces
+///    `__rt_array_grow()` to reallocate.
+///
+/// The exact SAME `source_load_local_slot()` + `store_result_value()` +
+/// `store_value_to_local()` sequence is ALSO used verbatim by `array_push()`'s
+/// own codegen_ir fallback (`crate::codegen_ir::lower_inst::arrays::lower_array_push`,
+/// `src/codegen_ir/lower_inst/arrays.rs:346-363`) — but that fallback is
+/// normally unreachable for a simple local variable, since
+/// `array_push($simpleLocal, ...)` is intercepted earlier by
+/// `lower_static_array_push` in `src/ir_lower/expr/mod.rs` (a completely
+/// different, `Op::ArrayPush`-based mechanism that never calls
+/// `store_value_to_local`). So this looks like a bug in a shared primitive
+/// that was very likely NEVER exercised by a real alias+multi-write-back
+/// combination on any by-ref array builtin before this task. Flagged as a
+/// residual for a follow-up fix rather than silently accepted; not covered by
+/// a test here since a test would need to assert the currently-broken behavior.
+#[test]
+fn test_array_unshift_reference_alias_sees_mutation() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [3, 4];
+$b = &$a;
+array_unshift($a, 1);
+array_unshift($a, 0);
+echo count($b), "|", implode(",", $b);
+"#,
+    );
+    assert_eq!(out, "4|0,1,3,4");
+}
+
+/// H5 JURY ADDENDUM item 5: COW — a shared (non-aliased, plain-assigned) array
+/// must NOT observe `array_unshift()` on the other copy.
+#[test]
+fn test_array_unshift_cow_shared_array_unaffected() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2, 3];
+$b = $a;
+array_unshift($a, 0);
+echo implode(",", $a), "|", implode(",", $b);
+"#,
+    );
+    assert_eq!(out, "0,1,2,3|1,2,3");
+}
+
 /// Tests `range($start, $end)` with ascending values (1 to 5).
 /// Verifies correct count (5) and iteration order (12345).
 #[test]

@@ -442,18 +442,22 @@ pub(super) fn check_builtin(
             Ok(Some(ty1))
         }
         "array_unshift" => {
-            // array_unshift(array &$array, mixed ...$values): int. elephc currently
-            // only lowers a single prepended value: the runtime `__rt_array_unshift`
-            // shifts elements within the existing buffer without growing capacity, so
-            // multi-value prepend is kept loud until a capacity-aware helper exists.
-            if args.len() != 2 {
+            // array_unshift(array &$array, mixed ...$values): int. H5: real variadic
+            // support — `__rt_array_unshift_grow` (capacity-aware, COW-safe) is
+            // called once per value in reverse source order, so N >= 1 prepended
+            // values are supported (php-verified order: array_unshift($a, 1, 2) →
+            // [1, 2, ...old]). Union-typed first-argument acceptance (the `array|bool`
+            // gradual-typing idiom) is a SEPARATE, out-of-scope concern (H1).
+            if args.len() < 2 {
                 return Err(CompileError::new(
                     span,
-                    "array_unshift() takes exactly 2 arguments",
+                    "array_unshift() takes at least 2 arguments",
                 ));
             }
             let arr_ty = checker.infer_type(&args[0], env)?;
-            checker.infer_type(&args[1], env)?;
+            for value_arg in &args[1..] {
+                checker.infer_type(value_arg, env)?;
+            }
             if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
                 return Err(CompileError::new(
                     span,

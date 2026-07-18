@@ -119,7 +119,10 @@ mod user_wrapper_path_op;
 mod user_wrapper_set_option;
 mod user_wrapper_url_stat;
 mod print_r_walk;
+mod print_r_capture;
 mod var_dump_walk;
+mod mkdir_mode;
+mod mkdir_recursive;
 
 pub(crate) use basename::emit_basename;
 pub(crate) use cstr::emit_cstr;
@@ -252,6 +255,13 @@ pub(crate) use print_r_walk::{
     emit_print_r_close, emit_print_r_hash, emit_print_r_indexed, emit_print_r_int_key,
     emit_print_r_open, emit_print_r_spaces, emit_print_r_str_key, emit_print_r_value,
 };
+pub(crate) use print_r_capture::{
+    emit_pr_cap_append, emit_pr_cap_close, emit_pr_cap_hash, emit_pr_cap_indexed,
+    emit_pr_cap_int_key, emit_pr_cap_open, emit_pr_cap_recursion_fatal, emit_pr_cap_spaces,
+    emit_pr_cap_str_key, emit_pr_cap_value,
+};
+pub(crate) use mkdir_mode::emit_mkdir_mode;
+pub(crate) use mkdir_recursive::emit_mkdir_recursive;
 pub(crate) use var_dump_walk::{
     emit_var_dump_array_bool, emit_var_dump_array_float, emit_var_dump_array_int,
     emit_var_dump_array_mixed, emit_var_dump_array_str, emit_var_dump_emit_bool_line,

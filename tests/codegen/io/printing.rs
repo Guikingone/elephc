@@ -253,6 +253,98 @@ fn test_print_r_mixed_scalar_element() {
     assert_eq!(out, "two|1");
 }
 
+/// H5: php-verified — `print_r($v)` (no `$return`, or `$return = false`)
+/// writes to stdout AND returns the concrete `true` (never void/nothing).
+#[test]
+fn test_print_r_no_return_arg_still_returns_true() {
+    let out = compile_and_run(r#"<?php $r = print_r("x"); var_dump($r);"#);
+    assert_eq!(out, "xbool(true)\n");
+}
+
+/// H5: `print_r($v, true)` captures the exact same scalar rendering as the
+/// stdout form into a returned string instead of writing it — php-verified
+/// scalar formats: int/float/string raw, bool `true`→`"1"`, bool
+/// `false`/`null`→`""`.
+#[test]
+fn test_print_r_return_true_scalars() {
+    let out = compile_and_run(
+        r#"<?php
+echo print_r(42, true), "|";
+echo print_r("hello", true), "|";
+echo print_r(true, true), "|";
+echo print_r(false, true), "|";
+echo print_r(null, true), "|";
+echo print_r(1.5, true);
+"#,
+    );
+    assert_eq!(out, "42|hello|1|||1.5");
+}
+
+/// H5: `print_r($array, true)` renders the exact same recursive
+/// `Array\n(\n    [k] => v\n)\n` body as the stdout form, captured into a string.
+#[test]
+fn test_print_r_return_true_nested_array() {
+    let out = compile_and_run(
+        r#"<?php
+$s = print_r(["a" => 1, "b" => ["c" => 2, "d" => 3]], true);
+echo $s;
+"#,
+    );
+    assert_eq!(
+        out,
+        "Array\n(\n    [a] => 1\n    [b] => Array\n        (\n            [c] => 2\n            [d] => 3\n        )\n\n)\n"
+    );
+}
+
+/// H5: `print_r($v, true)`'s returned string is independently usable (not an
+/// alias into reused scratch state) — two consecutive calls must not corrupt
+/// each other's captured output.
+#[test]
+fn test_print_r_return_true_two_calls_independent() {
+    let out = compile_and_run(
+        r#"<?php
+$a = print_r([1, 2], true);
+$b = print_r(["x", "y", "z"], true);
+echo $a;
+echo $b;
+"#,
+    );
+    assert_eq!(
+        out,
+        "Array\n(\n    [0] => 1\n    [1] => 2\n)\nArray\n(\n    [0] => x\n    [1] => y\n    [2] => z\n)\n"
+    );
+}
+
+/// H5: `print_r($v, true)` on a plain (non-nested) value still returns `string`,
+/// usable directly with string functions.
+#[test]
+fn test_print_r_return_true_usable_as_string() {
+    let out = compile_and_run(r#"<?php echo strlen(print_r("hello", true));"#);
+    assert_eq!(out, "5");
+}
+
+/// H5: `print_r($object, true)` stays loud (object dumps need class metadata
+/// the capture-buffer walker lacks, matching the pre-existing stdout-form limitation).
+#[test]
+#[should_panic(expected = "print_r($v, true) for PHP type Object")]
+fn test_print_r_return_true_object_stays_loud() {
+    compile_and_run(
+        r#"<?php
+class Foo {}
+$f = new Foo();
+print_r($f, true);
+"#,
+    );
+}
+
+/// H5: `print_r($v, $return)` with a non-literal `$return` stays loud instead
+/// of guessing a runtime path (only compile-time bool literals are supported).
+#[test]
+#[should_panic(expected = "print_r() $return must be a compile-time bool literal")]
+fn test_print_r_non_literal_return_stays_loud() {
+    compile_and_run(r#"<?php $flag = ($argc > 100); print_r("x", $flag);"#);
+}
+
 /// Verifies `var_dump` formats each argument independently with correct type tags and a trailing newline per call, in source order.
 #[test]
 fn test_var_dump_multiple() {

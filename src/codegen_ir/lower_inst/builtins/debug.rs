@@ -14,20 +14,84 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen_ir::{CodegenIrError, Result};
-use crate::ir::Instruction;
+use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
 use super::{expect_operand, store_if_result};
 
-/// Lowers `print_r(value)` for concrete scalar/resource values and array/hash shells.
+/// Returns a literal bool operand when the value was produced by `ConstBool`
+/// (PHP's `true`/`false` literals lower to `Op::ConstBool`/`Immediate::Bool`,
+/// NOT `Op::ConstI64` — distinct from `super::io::optional_const_i64_operand`,
+/// which only recognizes integer literals).
+fn optional_const_bool_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<bool>> {
+    let value_ref = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if inst_ref.op != Op::ConstBool {
+        return Ok(None);
+    }
+    match inst_ref.immediate {
+        Some(Immediate::Bool(value)) => Ok(Some(value)),
+        _ => Err(CodegenIrError::invalid_module(
+            "bool literal operand has no bool immediate",
+        )),
+    }
+}
+
+/// Lowers `print_r($value, $return = false)` for concrete scalar/resource
+/// values and array/hash shells.
+///
+/// `$return` must be a compile-time bool literal (lowered to `Op::ConstBool`
+/// by the time EIR codegen runs — the overwhelming majority of real call
+/// sites write `print_r($x)` or `print_r($x, true)` directly): a
+/// non-literal `$return` stays loud rather than silently choosing one runtime
+/// path over the other. `$return = false`/omitted keeps the original
+/// stdout-writing walker and returns PHP's real `true` (php-verified:
+/// `print_r()` never returns void — it returns `true` unless `$return` is
+/// truthy). `$return = true` builds the same rendering into the SEPARATE
+/// `__rt_pr_cap_*` capture-buffer walker family (see
+/// `crate::codegen::runtime::io::print_r_capture`) and returns the persisted
+/// (heap-owned) string.
 pub(super) fn lower_print_r(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "print_r", 1)?;
+    super::ensure_arg_count_between(inst, "print_r", 1, 2)?;
+    let value = expect_operand(inst, 0)?;
+    let return_flag = if inst.operands.len() == 2 {
+        let return_operand = expect_operand(inst, 1)?;
+        let Some(flag) = optional_const_bool_operand(ctx, return_operand)? else {
+            return Err(CodegenIrError::unsupported(
+                "print_r() $return must be a compile-time bool literal (non-literal $return is unsupported)"
+                    .to_string(),
+            ));
+        };
+        flag
+    } else {
+        false
+    };
     ctx.emitter.blank();
     ctx.emitter.comment("print_r()");
-    let value = expect_operand(inst, 0)?;
     let ty = loaded_php_semantic_type(ctx, value)?;
-    emit_print_r_loaded_value(ctx, &ty)?;
+    if return_flag {
+        emit_print_r_captured_value(ctx, &ty)?;
+    } else {
+        emit_print_r_loaded_value(ctx, &ty)?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x0, #1");                          // print_r() always returns true when $return is falsy
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov eax, 1");                          // print_r() always returns true when $return is falsy
+            }
+        }
+    }
     store_if_result(ctx, inst)
 }
 
@@ -116,6 +180,177 @@ fn emit_print_r_loaded_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Res
             other
         ))),
     }
+}
+
+/// Emits `print_r($value, true)` output for the value currently loaded in
+/// result register(s), building the rendering into the SEPARATE `__rt_pr_cap_*`
+/// capture-buffer walker family instead of writing to stdout, then persisting
+/// the accumulated bytes into a heap-owned string result. Resets the shared
+/// `_pr_cap_off`/`_pr_cap_depth` scratch state at the start of every top-level
+/// call (nested nested recursion within one call is handled by the `_cap`
+/// walkers themselves, which do not reset — only this top-level entry does).
+fn emit_print_r_captured_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()> {
+    emit_pr_cap_reset(ctx);
+    match ty {
+        PhpType::Void | PhpType::Never => {}
+        PhpType::Bool => {
+            let skip_label = ctx.next_label("print_r_cap_skip_false");
+            abi::emit_branch_if_int_result_zero(ctx.emitter, &skip_label);
+            emit_append_literal_captured(ctx, b"1");
+            ctx.emitter.label(&skip_label);
+        }
+        PhpType::Array(_) => emit_print_r_captured_array(ctx, "__rt_pr_cap_indexed")?,
+        PhpType::AssocArray { .. } => emit_print_r_captured_array(ctx, "__rt_pr_cap_hash")?,
+        PhpType::Iterable => {
+            // Mirrors the stdout walker's documented limitation: Iterable's
+            // runtime representation is ambiguous, so only the `Array\n`
+            // header is captured rather than risking the wrong layout.
+            emit_append_literal_captured(ctx, b"Array\n");
+        }
+        PhpType::Mixed | PhpType::Union(_) => emit_print_r_mixed_captured(ctx),
+        PhpType::TaggedScalar => {
+            let skip_label = ctx.next_label("print_r_cap_skip_tagged_null");
+            crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(ctx.emitter, &skip_label);
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");
+            append_current_string_captured(ctx);
+            ctx.emitter.label(&skip_label);
+        }
+        PhpType::Int => {
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");
+            append_current_string_captured(ctx);
+        }
+        PhpType::Float => {
+            abi::emit_call_label(ctx.emitter, "__rt_ftoa");
+            append_current_string_captured(ctx);
+        }
+        PhpType::Str => {
+            append_current_string_captured(ctx);
+        }
+        PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_ptoa");
+            append_current_string_captured(ctx);
+        }
+        PhpType::Resource(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_resource_to_string");
+            append_current_string_captured(ctx);
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "print_r($v, true) for PHP type {:?}",
+                other
+            )))
+        }
+    }
+    emit_pr_cap_finalize(ctx);
+    Ok(())
+}
+
+/// Emits `print_r($v, true)` output for an array/hash into the capture buffer:
+/// the `Array\n` header followed by the recursive `(\n ... )\n` body from the
+/// matching `_cap` walker. Mirrors `emit_print_r_array`'s register-preservation
+/// pattern (the array pointer must survive the literal-header append call).
+fn emit_print_r_captured_array(ctx: &mut FunctionContext<'_>, walker: &str) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    emit_append_literal_captured(ctx, b"Array\n");
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, #0");                              // base indent = 0 for the top-level array
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // array pointer → SysV first argument register
+            ctx.emitter.instruction("mov esi, 0");                              // base indent = 0 for the top-level array
+        }
+    }
+    abi::emit_call_label(ctx.emitter, walker);
+    Ok(())
+}
+
+/// Emits `print_r($v, true)` output for a boxed Mixed payload by delegating to
+/// `__rt_pr_cap_value` with tag 7 (Mixed cell) and a base indent of 0 — the
+/// capture-buffer sibling of `emit_print_r_mixed`.
+fn emit_print_r_mixed_captured(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                              // boxed Mixed cell pointer → value low argument
+            ctx.emitter.instruction("mov x0, #7");                              // tag 7 = boxed Mixed cell
+            ctx.emitter.instruction("mov x2, #0");                              // high word unused for the cell pointer
+            ctx.emitter.instruction("mov x3, #0");                              // nested base indent = 0
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rsi, rax");                            // boxed Mixed cell pointer → value low argument
+            ctx.emitter.instruction("mov edi, 7");                              // tag 7 = boxed Mixed cell
+            ctx.emitter.instruction("mov edx, 0");                              // high word unused for the cell pointer
+            ctx.emitter.instruction("mov ecx, 0");                              // nested base indent = 0
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_pr_cap_value");
+}
+
+/// Resets the shared print_r capture-buffer cursor and nesting-depth guard to
+/// zero at the start of a top-level `print_r($v, true)` call.
+fn emit_pr_cap_reset(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", "_pr_cap_off");
+            ctx.emitter.instruction("str xzr, [x9]");                           // reset the capture-buffer write cursor
+            abi::emit_symbol_address(ctx.emitter, "x9", "_pr_cap_depth");
+            ctx.emitter.instruction("str xzr, [x9]");                           // reset the nesting-depth guard
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r9", "_pr_cap_off");
+            ctx.emitter.instruction("mov QWORD PTR [r9], 0");                   // reset the capture-buffer write cursor
+            abi::emit_symbol_address(ctx.emitter, "r9", "_pr_cap_depth");
+            ctx.emitter.instruction("mov QWORD PTR [r9], 0");                   // reset the nesting-depth guard
+        }
+    }
+}
+
+/// Appends the current string result register pair to the capture buffer.
+/// AArch64's `(x1, x2)` string-result convention already matches
+/// `__rt_pr_cap_append`'s `(x1, x2)` input; x86_64's `(rax, rdx)` string-result
+/// convention needs the pointer moved into `rsi` first (length stays in `rdx`).
+fn append_current_string_captured(ctx: &mut FunctionContext<'_>) {
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rsi, rax");                                // string pointer → the pr_cap_append argument register
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_pr_cap_append");
+}
+
+/// Appends a compile-time literal byte string to the capture buffer.
+fn emit_append_literal_captured(ctx: &mut FunctionContext<'_>, bytes: &[u8]) {
+    let (label, len) = ctx.data.add_string(bytes);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_pr_cap_append");
+}
+
+/// Persists the accumulated `(_pr_cap_buf, _pr_cap_off)` byte range into a
+/// heap-owned PHP string result via `__rt_str_persist` — the returned string
+/// is never an alias into the reused, fixed-capacity scratch buffer.
+fn emit_pr_cap_finalize(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", "_pr_cap_buf");
+            abi::emit_symbol_address(ctx.emitter, "x9", "_pr_cap_off");
+            ctx.emitter.instruction("ldr x2, [x9]");                            // captured byte count
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rax", "_pr_cap_buf");
+            abi::emit_symbol_address(ctx.emitter, "r9", "_pr_cap_off");
+            ctx.emitter.instruction("mov rdx, QWORD PTR [r9]");                 // captured byte count
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
 }
 
 /// Emits `print_r` output for a tagged scalar, matching PHP's empty output for null.

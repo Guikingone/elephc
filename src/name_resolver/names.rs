@@ -397,6 +397,9 @@ fn is_builtin_global_constant(name: &str) -> bool {
         || crate::types::php_runtime_constants::PHP_RUNTIME_PLATFORM_CONSTANTS
             .iter()
             .any(|(constant_name, _, _)| *constant_name == name)
+        || crate::types::stream_constants::GLOB_PLATFORM_CONSTANTS
+            .iter()
+            .any(|(constant_name, _, _)| *constant_name == name)
         || crate::types::date_constants::DATE_STRING_CONSTANTS
             .iter()
             .any(|(constant_name, _)| *constant_name == name)

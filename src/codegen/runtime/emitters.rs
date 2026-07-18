@@ -46,6 +46,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_str_eq(emitter);
     strings::emit_str_to_number(emitter);
     strings::emit_str_to_int(emitter);
+    strings::emit_intval_base(emitter);
     strings::emit_str_loose_eq(emitter);
     strings::emit_number_format(emitter);
     strings::emit_strcopy(emitter);
@@ -279,6 +280,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_product(emitter);
     arrays::emit_array_shift(emitter);
     arrays::emit_array_unshift(emitter);
+    arrays::emit_array_unshift_grow(emitter);
     arrays::emit_array_merge(emitter);
     arrays::emit_array_merge_refcounted(emitter);
     arrays::emit_array_merge_str(emitter);
@@ -529,6 +531,16 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_print_r_value(emitter);
     io::emit_print_r_indexed(emitter);
     io::emit_print_r_hash(emitter);
+    io::emit_pr_cap_append(emitter);
+    io::emit_pr_cap_spaces(emitter);
+    io::emit_pr_cap_open(emitter);
+    io::emit_pr_cap_close(emitter);
+    io::emit_pr_cap_int_key(emitter);
+    io::emit_pr_cap_str_key(emitter);
+    io::emit_pr_cap_value(emitter);
+    io::emit_pr_cap_indexed(emitter);
+    io::emit_pr_cap_hash(emitter);
+    io::emit_pr_cap_recursion_fatal(emitter);
     io::emit_file_get_contents(emitter);
     io::emit_file_put_contents(emitter);
     io::emit_file(emitter);
@@ -536,6 +548,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_stat_ext(emitter);
     io::emit_stat_array(emitter);
     io::emit_fs(emitter);
+    io::emit_mkdir_mode(emitter);
+    io::emit_mkdir_recursive(emitter);
     io::emit_getcwd(emitter);
     io::emit_scandir(emitter);
     io::emit_glob(emitter);

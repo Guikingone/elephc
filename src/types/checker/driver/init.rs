@@ -18,7 +18,7 @@ use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::php_runtime_constants::{
     PHP_RUNTIME_INT_CONSTANTS, PHP_RUNTIME_PLATFORM_CONSTANTS,
 };
-use crate::types::stream_constants::STREAM_INT_CONSTANTS;
+use crate::types::stream_constants::{GLOB_PLATFORM_CONSTANTS, STREAM_INT_CONSTANTS};
 use crate::types::locale_constants::LOCALE_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::string_constants::STRING_INT_CONSTANTS;
@@ -128,6 +128,12 @@ impl Checker {
         // only the NAME is needed here, the target-specific VALUE is materialized
         // by the codegen prescan.
         for (name, _macos_value, _linux_value) in PHP_RUNTIME_PLATFORM_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        // Platform-conditional glob() bit flags (GLOB_MARK/NOSORT/BRACE/...): same
+        // pattern — only the NAME is needed here, the target-specific VALUE is
+        // materialized by the codegen prescan.
+        for (name, _macos_value, _linux_value) in GLOB_PLATFORM_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         // PHP_SAPI, PHP_VERSION, PHP_OS_FAMILY, and PCRE_VERSION are string constants.

@@ -144,12 +144,14 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             Some(fixed(&["text"]))
         }
 
-        "intval" | "floatval" | "boolval" | "gettype" | "get_debug_type" | "is_bool"
+        "floatval" | "boolval" | "gettype" | "get_debug_type" | "is_bool"
         | "is_null" | "is_float" | "is_int" | "is_iterable" | "is_string" | "is_numeric"
         | "is_array" | "is_object" | "is_scalar"
-        | "empty" | "var_dump" | "print_r" => {
+        | "empty" | "var_dump" => {
             Some(fixed(&["value"]))
         }
+        "intval" => Some(optional(&["value", "base"], 1, vec![int_lit(10)])),
+        "print_r" => Some(optional(&["value", "return"], 1, vec![bool_lit(false)])),
         "isset" => Some(variadic(&["var"], "vars")),
         "unset" => Some(variadic(&["var"], "vars")),
         "settype" => {
@@ -885,8 +887,18 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "__elephc_phar_set_compression" => Some(fixed(&["filename", "compression"])),
         "copy" | "rename" => Some(fixed(&["from", "to"])),
         "unlink" => Some(fixed(&["filename"])),
-        "mkdir" | "rmdir" | "chdir" | "scandir" => Some(fixed(&["directory"])),
-        "glob" => Some(fixed(&["pattern"])),
+        "rmdir" | "chdir" => Some(fixed(&["directory"])),
+        "mkdir" => Some(optional(
+            &["directory", "permissions", "recursive", "context"],
+            1,
+            vec![int_lit(0o777), bool_lit(false), null_lit()],
+        )),
+        "scandir" => Some(optional(
+            &["directory", "sorting_order", "context"],
+            1,
+            vec![int_lit(0), null_lit()],
+        )),
+        "glob" => Some(optional(&["pattern", "flags"], 1, vec![int_lit(0)])),
         "tempnam" => Some(fixed(&["directory", "prefix"])),
         "chmod" => Some(fixed(&["filename", "permissions"])),
         "chown" => Some(fixed(&["filename", "user"])),

@@ -43,3 +43,11 @@ pub(crate) const HASH_INIT_UNKNOWN_ALGO_MSG: &str =
 /// name or a non-cryptographic checksum (PHP rejects HMAC over crc32/adler/fnv/joaat).
 pub(crate) const HASH_HMAC_UNKNOWN_ALGO_MSG: &str =
     "hash_hmac(): Argument #1 ($algo) must be a valid cryptographic hashing algorithm";
+/// Fatal error message when `print_r($v, true)`'s captured output would exceed the
+/// fixed 1 MiB `_pr_cap_buf` capture buffer.
+pub(crate) const PRINT_R_CAPTURE_OVERFLOW_MSG: &str =
+    "Fatal error: print_r(): return-string capture exceeds the 1 MiB limit\n";
+/// Fatal error message when `print_r($v, true)`'s nesting depth guard trips,
+/// which bounds self-referential/cyclic array structures instead of looping forever.
+pub(crate) const PRINT_R_CAPTURE_RECURSION_MSG: &str =
+    "Fatal error: print_r(): possible infinite recursion (nesting too deep)\n";

@@ -12,6 +12,7 @@ use super::{
     DIRNAME_LEVELS_MSG, HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
     HASH_UNKNOWN_ALGO_MSG,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, STR_REPEAT_TIMES_MSG,
+    PRINT_R_CAPTURE_OVERFLOW_MSG, PRINT_R_CAPTURE_RECURSION_MSG,
 };
 use super::super::system;
 use crate::codegen::platform::Target;
@@ -36,6 +37,12 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".data\n");
     out.push_str(".comm _concat_buf, 65536, 3\n");
     out.push_str(".comm _concat_off, 8, 3\n");
+    // print_r($v, true) return-string capture: a fixed 1 MiB scratch buffer plus a
+    // write-cursor offset and a nesting-depth guard (never infinite-loops on a
+    // self-referential/cyclic array — trips PRINT_R_CAPTURE_RECURSION_MSG instead).
+    out.push_str(".comm _pr_cap_buf, 1048576, 3\n");
+    out.push_str(".comm _pr_cap_off, 8, 3\n");
+    out.push_str(".comm _pr_cap_depth, 8, 3\n");
     out.push_str(".comm _strtotime_clock, 8, 3\n");
     // error_reporting() global state (Pattern B). `_rt_error_reporting` holds the
     // current PHP error-reporting level; `_rt_error_reporting_init` is a one-shot
@@ -216,6 +223,14 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&format!(
         ".globl _hash_hmac_unknown_algo_msg\n_hash_hmac_unknown_algo_msg:\n    .ascii {:?}\n",
         HASH_HMAC_UNKNOWN_ALGO_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _pr_cap_overflow_msg\n_pr_cap_overflow_msg:\n    .ascii {:?}\n",
+        PRINT_R_CAPTURE_OVERFLOW_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _pr_cap_recursion_msg\n_pr_cap_recursion_msg:\n    .ascii {:?}\n",
+        PRINT_R_CAPTURE_RECURSION_MSG
     ));
     out.push_str(&format!(
         ".globl _hash_init_unknown_algo_msg\n_hash_init_unknown_algo_msg:\n    .ascii {:?}\n",

@@ -19,7 +19,7 @@ use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::php_runtime_constants::{
     PHP_RUNTIME_INT_CONSTANTS, PHP_RUNTIME_PLATFORM_CONSTANTS, PHP_SAPI_STR, PHP_VERSION_STR,
 };
-use crate::types::stream_constants::STREAM_INT_CONSTANTS;
+use crate::types::stream_constants::{GLOB_PLATFORM_CONSTANTS, STREAM_INT_CONSTANTS};
 use crate::types::locale_constants::LOCALE_INT_CONSTANTS;
 use crate::types::preg_constants::{PCRE_VERSION_STR, PREG_INT_CONSTANTS};
 use crate::types::string_constants::STRING_INT_CONSTANTS;
@@ -241,6 +241,19 @@ pub(crate) fn collect_constants(
     // Platform-conditional runtime constants (PHP_MAXPATHLEN): same
     // compile-target selection as the pcntl user signals above.
     for (name, macos_value, linux_value) in PHP_RUNTIME_PLATFORM_CONSTANTS {
+        let value = match target_platform {
+            Platform::MacOS => macos_value,
+            Platform::Linux => linux_value,
+        };
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    // Platform-conditional glob() bit flags (GLOB_MARK/NOSORT/BRACE/...): BSD
+    // (macOS) and glibc (Linux) assign different bit positions to the same flag
+    // names — same compile-target selection as the constants above.
+    for (name, macos_value, linux_value) in GLOB_PLATFORM_CONSTANTS {
         let value = match target_platform {
             Platform::MacOS => macos_value,
             Platform::Linux => linux_value,

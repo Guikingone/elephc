@@ -606,3 +606,41 @@ pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBu
     );
     (elephc_out, dir)
 }
+
+/// EIR-backed sibling of `compile_and_run_in_dir()`.
+///
+/// `compile_and_run_in_dir()` above calls `elephc::codegen::generate()` directly —
+/// the `#[allow(dead_code)]`-marked FROZEN legacy direct AST→ASM backend entry
+/// point — instead of the shared `compile_source_to_asm_with_defines_repr()`
+/// pipeline that `compile_and_run()` uses (which dispatches on
+/// `selected_test_codegen_backend()`, defaulting to the active EIR backend).
+/// New H5 filesystem features (real `mkdir()`/`scandir()`/`glob()` optional-arg
+/// semantics) are EIR-only per the backend-freeze policy, so a test asserting
+/// their behavior must exercise EIR, not the frozen legacy path. This helper
+/// preserves `compile_and_run_in_dir()`'s directory-preserving contract (the
+/// caller inspects/cleans up `dir`) while routing through the EIR-aware
+/// pipeline. NOT a replacement for `compile_and_run_in_dir()` — the ~139
+/// pre-existing call sites across `tests/codegen/io/` are left untouched to
+/// avoid an unrelated, wide-blast-radius backend swap; use this helper only
+/// for new tests that need both a working directory and guaranteed EIR codegen.
+pub(crate) fn compile_and_run_in_dir_ir(source: &str) -> (String, std::path::PathBuf) {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_ir_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+
+    let elephc_out = assemble_and_run(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    (elephc_out, dir)
+}
