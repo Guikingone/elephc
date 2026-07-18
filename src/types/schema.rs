@@ -100,6 +100,11 @@ pub struct InterfaceInfo {
     pub method_declaring_interfaces: HashMap<String, String>,
     pub method_order: Vec<String>,
     pub method_slots: HashMap<String, usize>,
+    /// Symbol keys (`php_symbol_key`) of interface methods declared `static` (PHP 8:
+    /// interfaces may declare abstract static methods). Every key here also appears in
+    /// `methods`/`method_order`; membership here is what distinguishes a static contract
+    /// from an instance one during implementor compliance validation.
+    pub static_methods: HashSet<String>,
     /// Interface constants (PHP 5.0+). Inherited from parent interfaces.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
 }

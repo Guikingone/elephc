@@ -3952,6 +3952,16 @@ fn interface_requires_missing_method_symbol(
     emitted_methods: &HashSet<(String, String)>,
 ) -> bool {
     for method_name in &interface_info.method_order {
+        // Static interface methods (PHP 8 `public static function x(): T;`) never occupy a
+        // per-object instance vtable slot — `emitted_instance_method_keys` only tracks
+        // non-static `class_methods` bodies, and a class implementing a static interface
+        // method registers it in `static_method_impl_classes`/`static_sigs`, never in the
+        // instance `method_impl_classes`/`method_sigs` this loop otherwise checks against.
+        // Without this skip every object allocation of an implementor would be rejected here
+        // as "missing" a symbol that was never supposed to exist for a static contract.
+        if interface_info.static_methods.contains(method_name) {
+            continue;
+        }
         if super::is_throwable_standard_method_key(method_name)
             && (super::is_throwable_like_class(ctx, fallback_class)
                 || super::is_throwable_like_class(ctx, interface_name))

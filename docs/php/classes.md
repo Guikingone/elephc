@@ -47,6 +47,31 @@ class Product implements Named {
 - signature-only methods and PHP 8.4 property hook contracts; method and hook bodies are not allowed in interfaces
 - interface inheritance flattened transitively with cycle detection
 
+### Static interface methods
+
+Interfaces may declare `public static` method signatures (PHP 8):
+
+```php
+<?php
+interface Factory {
+    public static function make(): static;
+}
+
+class Widget implements Factory {
+    public static function make(): static {
+        return new static();
+    }
+}
+
+$w = Widget::make();
+```
+
+- interface methods must be `public`; any other visibility is rejected, matching PHP
+- an explicit `abstract` modifier on an interface method is rejected — every interface method is implicitly abstract, and PHP fatals on the redundant keyword
+- an implementing class must satisfy a static contract with a static method, and an instance contract with an instance method — mismatching the static-ness in either direction is rejected at compile time (`Cannot make static method I::f() non static in class C` / `Cannot make non static method I::f() static in class C`), matching PHP's exact fatal wording
+- covariant return (including `self`/`static` forms) and parameter widening apply the same way as instance-method overrides; late static binding (`static::`, `new static()`) inside a static interface method's implementation resolves to the calling subclass as usual
+- calling a static (or instance) interface method directly on the interface itself (`InterfaceName::method()`) is rejected at compile time — an interface never has a runtime object to dispatch on, so PHP defers this to a runtime `Error` ("Cannot call abstract method I::f()"); elephc's closed world detects the literal interface receiver ahead of time instead
+
 Interface properties must be hooked contracts. A concrete class can satisfy a `{ get; }` contract with a public readable property, a `{ set; }` contract with a public writable property, or both with an invariant public property. Get-only contracts allow covariant concrete types; set-only contracts allow contravariant concrete types.
 
 ```php

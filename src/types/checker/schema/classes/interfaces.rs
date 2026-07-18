@@ -106,8 +106,10 @@ fn class_can_implement_throwable_contract(
 /// Validates that `class` satisfies all method and property contracts for each interface it
 /// implements (including transitive parents).
 ///
-/// For each interface method, calls `validate_interface_method`. For each interface property,
-/// calls `validate_interface_property`. Abstract classes are permitted to defer contracts.
+/// For each interface method, dispatches to `validate_interface_method` (instance contract) or
+/// `validate_interface_static_method` (static contract, PHP 8 `public static function x(): T;`
+/// in interfaces) based on `interface_info.static_methods`. For each interface property, calls
+/// `validate_interface_property`. Abstract classes are permitted to defer contracts.
 pub(super) fn validate_interface_contracts(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
@@ -124,16 +126,29 @@ pub(super) fn validate_interface_contracts(
             )
         })?;
         for method_name in &interface_info.method_order {
-            validate_interface_method(
-                state,
-                class,
-                &interface_name,
-                method_name,
-                class_map,
-                checker,
-                next_class_id,
-                building,
-            )?;
+            if interface_info.static_methods.contains(method_name) {
+                validate_interface_static_method(
+                    state,
+                    class,
+                    &interface_name,
+                    method_name,
+                    class_map,
+                    checker,
+                    next_class_id,
+                    building,
+                )?;
+            } else {
+                validate_interface_method(
+                    state,
+                    class,
+                    &interface_name,
+                    method_name,
+                    class_map,
+                    checker,
+                    next_class_id,
+                    building,
+                )?;
+            }
         }
         for property_name in &interface_info.property_order {
             let contract = interface_info
@@ -216,11 +231,14 @@ pub(super) fn ensure_concrete_class_implements_abstracts(
     Ok(())
 }
 
-/// Validates that `class` implements the interface method `method_name` from `interface_name`.
+/// Validates that `class` implements the *instance* interface method `method_name` from
+/// `interface_name`.
 ///
-/// Checks signature compatibility, return type declarations, visibility (must be public), and
-/// that non-public static methods cannot satisfy interface contracts. For abstract classes,
-/// missing methods are inserted into the class state as deferred contracts.
+/// Checks signature compatibility, return type declarations, and visibility (must be public).
+/// Rejects a static method satisfying this instance contract (PHP fatal: "Cannot make non
+/// static method I::f() static in class C") — see `validate_interface_static_method` for the
+/// symmetric static-contract check. For abstract classes, missing methods are inserted into the
+/// class state as deferred contracts.
 #[allow(clippy::too_many_arguments)]
 fn validate_interface_method(
     state: &mut ClassBuildState,
@@ -233,11 +251,14 @@ fn validate_interface_method(
     building: &mut HashSet<String>,
 ) -> Result<(), CompileError> {
     if state.static_sigs.contains_key(method_name) {
+        // PHP 8 fatal, `php -n` verified: `Cannot make non static method I::f() static in
+        // class C` — the interface declares an instance method but the implementor made it
+        // static.
         return Err(CompileError::new(
             crate::span::Span::dummy(),
             &format!(
-                "Cannot use static method to satisfy interface contract: {}::{}",
-                class.name, method_name
+                "Cannot make non static method {}::{}() static in class {}",
+                interface_name, method_name, class.name
             ),
         ));
     }
@@ -337,6 +358,153 @@ fn validate_interface_method(
         ));
     }
     if state.method_visibilities.get(method_name) != Some(&Visibility::Public) {
+        return Err(CompileError::new(
+            crate::span::Span::dummy(),
+            &format!(
+                "Interface method implementation must be public: {}::{}",
+                class.name, method_name
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Validates that `class` implements the static interface method `method_name` from
+/// `interface_name` (PHP 8 `public static function x(): T;` in interfaces).
+///
+/// Mirrors `validate_interface_method`'s instance-method contract but against
+/// `state.static_sigs`/`state.static_method_visibilities`/the static vtable, and rejects an
+/// implementor that satisfies the contract with an instance method. Signature compatibility
+/// (including covariant `self`/`static` returns) reuses the same helpers as instance methods —
+/// LSP has no `$this` dependency, so the same rules apply verbatim to statics. For abstract
+/// classes, a missing static method is deferred into the class state rather than rejected.
+#[allow(clippy::too_many_arguments)]
+fn validate_interface_static_method(
+    state: &mut ClassBuildState,
+    class: &FlattenedClass,
+    interface_name: &str,
+    method_name: &str,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &mut Checker,
+    next_class_id: &mut u64,
+    building: &mut HashSet<String>,
+) -> Result<(), CompileError> {
+    if state.method_sigs.contains_key(method_name) {
+        // PHP 8 fatal, `php -n` verified: `Cannot make static method I::f() non static in
+        // class C` — the interface declares a static method but the implementor made it an
+        // instance method.
+        return Err(CompileError::new(
+            crate::span::Span::dummy(),
+            &format!(
+                "Cannot make static method {}::{}() non static in class {}",
+                interface_name, method_name, class.name
+            ),
+        ));
+    }
+    let interface_info = checker
+        .interfaces
+        .get(interface_name)
+        .expect("type checker bug: interface exists")
+        .clone();
+    let required_sig = interface_info
+        .methods
+        .get(method_name)
+        .expect("type checker bug: missing interface method signature");
+    let actual_sig = match state.static_sigs.get(method_name) {
+        Some(sig) => sig,
+        None if class.is_abstract => {
+            state
+                .static_sigs
+                .insert(method_name.to_string(), required_sig.clone());
+            state
+                .static_method_visibilities
+                .insert(method_name.to_string(), Visibility::Public);
+            state
+                .static_method_declaring_classes
+                .insert(method_name.to_string(), class.name.clone());
+            state.static_method_impl_classes.remove(method_name);
+            if !state.static_vtable_slots.contains_key(method_name) {
+                let slot = state.static_vtable_methods.len();
+                state
+                    .static_vtable_slots
+                    .insert(method_name.to_string(), slot);
+                state.static_vtable_methods.push(method_name.to_string());
+            }
+            return Ok(());
+        }
+        None => {
+            return Err(CompileError::new(
+                crate::span::Span::dummy(),
+                &format!(
+                    "Class {} must implement interface method {}::{}",
+                    class.name, interface_name, method_name
+                ),
+            ))
+        }
+    };
+    validate_signature_compatibility(
+        crate::span::Span::dummy(),
+        &class.name,
+        method_name,
+        actual_sig,
+        required_sig,
+        "static method",
+        "implementing interface",
+    )?;
+    let actual_method = class
+        .methods
+        .iter()
+        .find(|m| php_symbol_key(&m.name) == method_name);
+    if required_sig.declared_return && !actual_sig.declared_return {
+        return Err(CompileError::new(
+            actual_method
+                .map(|m| m.span)
+                .unwrap_or_else(crate::span::Span::dummy),
+            &format!(
+                "Cannot implement interface method {}::{} without declaring a compatible return type (interface returns {})",
+                class.name, method_name, required_sig.return_type
+            ),
+        ));
+    }
+    if let PhpType::Object(actual_name) = &actual_sig.return_type {
+        if actual_name != &class.name
+            && class_map.contains_key(actual_name)
+            && !checker.classes.contains_key(actual_name)
+        {
+            super::build_class_info_recursive(
+                actual_name,
+                class_map,
+                checker,
+                next_class_id,
+                building,
+            )?;
+        }
+    }
+    // Covariant return, including `self`/`static` return forms: `substitute_relative_class_types`
+    // has already rewritten `self`/`static` to the declaring interface/class name before this
+    // pass runs (see `crate::types::checker::driver`), so `covariant_return_compatible`'s
+    // ordinary `PhpType::Object` subtype check handles `static` → concrete-implementor
+    // covariance the same way it already does for instance methods; there is no `$this` in this
+    // path to reason about.
+    if required_sig.declared_return
+        && !covariant_return_compatible(
+            checker,
+            class_map,
+            &required_sig.return_type,
+            &actual_sig.return_type,
+        )
+    {
+        return Err(CompileError::new(
+            actual_method
+                .map(|m| m.span)
+                .unwrap_or_else(crate::span::Span::dummy),
+            &format!(
+                "Cannot implement interface method {}::{} with incompatible return type {} (interface returns {})",
+                class.name, method_name, actual_sig.return_type, required_sig.return_type
+            ),
+        ));
+    }
+    if state.static_method_visibilities.get(method_name) != Some(&Visibility::Public) {
         return Err(CompileError::new(
             crate::span::Span::dummy(),
             &format!(

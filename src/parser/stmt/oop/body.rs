@@ -795,6 +795,19 @@ fn parse_interface_body(
                 "Interfaces may only contain method, property, or constant declarations",
             ));
         }
+        // Every interface method is implicitly abstract, so PHP 8 fatals on an explicit
+        // `abstract` modifier ("Interface method I::f() must not be abstract", `php -n`
+        // verified) regardless of static-ness. `parse_class_like_method` below always
+        // synthesizes `is_abstract: true` on the resulting `ClassMethod` for interface
+        // bodies (interface methods have no body by construction), so this check must run
+        // here against `modifiers.is_abstract` — the only place the user's explicit
+        // `abstract` keyword is still observable before it is discarded.
+        if modifiers.is_abstract {
+            return Err(CompileError::new(
+                member_span,
+                "Interface methods must not be declared abstract",
+            ));
+        }
         let (mut method, promoted_properties) = parse_class_like_method(
             tokens,
             pos,

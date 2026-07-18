@@ -974,6 +974,21 @@ impl Checker {
                     &format!("Undefined method: {}::{}", class_name, method),
                 ));
             }
+        } else if self.interfaces.contains_key(class_name) {
+            // Every interface method (static or instance) is abstract — an interface never
+            // has a runtime object to dispatch on, so `I::method()` is unconditionally invalid.
+            // PHP defers this to a runtime `Error` ("Cannot call abstract method I::f()",
+            // `php -n` verified), but the receiver is a literal class-like name here, so
+            // elephc's closed world can detect it at compile time instead of leaving it to
+            // fail at runtime — reported for both static and instance interface methods, since
+            // PHP's fatal wording does not distinguish between the two. Dynamic
+            // `$class::method()` dispatch through an interface-typed class-string is a
+            // different code path (`StaticReceiver::Named` never triggers this branch for it)
+            // and is intentionally left untouched here.
+            return Err(CompileError::new(
+                expr.span,
+                &format!("Cannot call abstract method {}::{}()", class_name, method),
+            ));
         } else {
             // A static call on a class that is unknown everywhere in the closed world is an
             // absent optional dependency (e.g. `Process::fromShellCommandline(...)`): the call

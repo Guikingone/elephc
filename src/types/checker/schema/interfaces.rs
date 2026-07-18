@@ -101,6 +101,7 @@ fn build_interface_info_body(
     let mut method_declaring_interfaces = HashMap::new();
     let mut method_order = Vec::new();
     let mut method_slots = HashMap::new();
+    let mut static_methods: HashSet<String> = HashSet::new();
     let mut properties = HashMap::new();
     let mut property_order = Vec::new();
 
@@ -137,7 +138,21 @@ fn build_interface_info_body(
                 .methods
                 .get(method_name)
                 .expect("type checker bug: missing interface parent method signature");
+            let parent_is_static = parent_info.static_methods.contains(method_name);
             if let Some(existing_sig) = methods.get(method_name) {
+                let existing_is_static = static_methods.contains(method_name);
+                if existing_is_static != parent_is_static {
+                    return Err(static_kind_mismatch_error(
+                        interface.span,
+                        &parent_info.method_declaring_interfaces
+                            .get(method_name)
+                            .cloned()
+                            .unwrap_or_else(|| parent_name.clone()),
+                        method_name,
+                        &interface.name,
+                        existing_is_static,
+                    ));
+                }
                 validate_signature_compatibility(
                     interface.span,
                     &interface.name,
@@ -150,6 +165,9 @@ fn build_interface_info_body(
                 continue;
             }
             methods.insert(method_name.clone(), parent_sig.clone());
+            if parent_is_static {
+                static_methods.insert(method_name.clone());
+            }
             let declaring = parent_info
                 .method_declaring_interfaces
                 .get(method_name)
@@ -241,15 +259,13 @@ fn build_interface_info_body(
                 ),
             ));
         }
-        if method.is_static {
-            return Err(CompileError::new(
-                method.span,
-                &format!(
-                    "Static interface methods are not supported yet: {}::{}",
-                    interface.name, method.name
-                ),
-            ));
-        }
+        // NOTE: `method.is_abstract` is unconditionally `true` for every interface method by
+        // the time it reaches this pass (`parse_class_like_method` hardcodes it for interface
+        // bodies), so it cannot be used here to detect an explicit `abstract` keyword in the
+        // source. That check happens earlier, in `parse_interface_body`
+        // (`src/parser/stmt/oop/body.rs`), against the pre-discard `modifiers.is_abstract` —
+        // matching PHP 8's fatal ("Interface method I::f() must not be abstract", `php -n`
+        // verified) before the parser folds every interface method into the abstract shape.
         if method.has_body {
             return Err(CompileError::new(
                 method.span,
@@ -262,6 +278,20 @@ fn build_interface_info_body(
 
         let sig = build_method_sig(checker, method)?;
         if let Some(parent_sig) = methods.get(&method_key) {
+            let existing_is_static = static_methods.contains(&method_key);
+            if existing_is_static != method.is_static {
+                return Err(static_kind_mismatch_error(
+                    method.span,
+                    method_declaring_interfaces
+                        .get(&method_key)
+                        .cloned()
+                        .unwrap_or_else(|| interface.name.clone())
+                        .as_str(),
+                    &method_key,
+                    &interface.name,
+                    existing_is_static,
+                ));
+            }
             validate_signature_compatibility(
                 method.span,
                 &interface.name,
@@ -273,6 +303,11 @@ fn build_interface_info_body(
             )?;
         }
         methods.insert(method_key.clone(), sig);
+        if method.is_static {
+            static_methods.insert(method_key.clone());
+        } else {
+            static_methods.remove(&method_key);
+        }
         method_declaring_interfaces.insert(method_key.clone(), interface.name.clone());
         if !method_slots.contains_key(&method_key) {
             let slot = method_order.len();
@@ -305,11 +340,41 @@ fn build_interface_info_body(
             method_declaring_interfaces,
             method_order,
             method_slots,
+            static_methods,
             constants: iface_constants,
         },
     );
     *next_interface_id += 1;
     Ok(())
+}
+
+/// Constructs the `CompileError` for redeclaring/combining an interface method with a
+/// conflicting static-ness against an existing method of the same name, mirroring PHP 8's
+/// exact fatal wording (`php -n` verified): `Cannot make static method A::f() non static in
+/// class B` and its symmetric reverse `Cannot make non static method A::f() static in class
+/// B`. `existing_declaring` names the interface that owns the already-recorded method,
+/// `method_key` is its symbol key, `owner_name` is the interface currently being built, and
+/// `existing_is_static` is the static-ness already on record (the incoming declaration has
+/// the opposite kind by construction).
+fn static_kind_mismatch_error(
+    span: crate::span::Span,
+    existing_declaring: &str,
+    method_key: &str,
+    owner_name: &str,
+    existing_is_static: bool,
+) -> CompileError {
+    let message = if existing_is_static {
+        format!(
+            "Cannot make static method {}::{}() non static in class {}",
+            existing_declaring, method_key, owner_name
+        )
+    } else {
+        format!(
+            "Cannot make non static method {}::{}() static in class {}",
+            existing_declaring, method_key, owner_name
+        )
+    };
+    CompileError::new(span, &message)
 }
 
 /// Validates a single interface property declaration for syntactic correctness.

@@ -793,6 +793,127 @@ class C implements I { public function f(): Animal { return new Animal(); } }
     );
 }
 
+/// Verifies that an explicit `abstract` modifier on an interface method is rejected. Every
+/// interface method is implicitly abstract, and PHP 8 fatals on the redundant keyword
+/// ("Interface method I::f() must not be abstract", `php -n` verified). Applies uniformly to
+/// static and instance interface methods (see the sibling static-method test below).
+#[test]
+fn test_error_interface_method_explicit_abstract_rejected() {
+    expect_error(
+        "<?php interface I { abstract public function f(): int; }",
+        "must not be declared abstract",
+    );
+}
+
+/// Verifies the explicit-`abstract` rejection above also fires for a static interface method
+/// declaration, confirming the parser-level check does not special-case static-ness
+/// (`php -n` verified: PHP's fatal wording is identical for static and instance methods).
+#[test]
+fn test_error_interface_static_method_explicit_abstract_rejected() {
+    expect_error(
+        "<?php interface I { abstract public static function f(): int; }",
+        "must not be declared abstract",
+    );
+}
+
+/// Verifies a non-public static interface method is rejected the same way a non-public
+/// instance interface method already is (`php -n` verified: "Access type for interface
+/// method I::f() must be public").
+#[test]
+fn test_error_interface_static_method_must_be_public() {
+    expect_error(
+        "<?php interface I { protected static function f(): int; }",
+        "Interface methods must be public",
+    );
+}
+
+/// Verifies a class that implements an interface declaring `public static function f(): int;`
+/// but never defines `f` at all is rejected (PHP: "Class C contains 1 abstract method...",
+/// `php -n` verified; elephc reports the interface-contract-not-satisfied message).
+#[test]
+fn test_error_implementor_missing_static_interface_method() {
+    expect_error(
+        r#"<?php
+interface I { public static function f(): int; }
+class C implements I {}
+"#,
+        "must implement interface method I::f",
+    );
+}
+
+/// Verifies that satisfying a *static* interface contract with a non-static (instance) method
+/// is rejected loudly, matching PHP 8's exact fatal wording (`php -n` verified): "Cannot make
+/// static method I::f() non static in class C".
+#[test]
+fn test_error_implementor_makes_static_interface_method_non_static() {
+    expect_error(
+        r#"<?php
+interface I { public static function f(): int; }
+class C implements I { public function f(): int { return 1; } }
+"#,
+        "Cannot make static method I::f() non static in class C",
+    );
+}
+
+/// Verifies the reverse direction: satisfying a *non-static* interface contract with a static
+/// method is rejected loudly, matching PHP 8's exact fatal wording (`php -n` verified):
+/// "Cannot make non static method I::f() static in class C".
+#[test]
+fn test_error_implementor_makes_instance_interface_method_static() {
+    expect_error(
+        r#"<?php
+interface I { public function f(): int; }
+class C implements I { public static function f(): int { return 1; } }
+"#,
+        "Cannot make non static method I::f() static in class C",
+    );
+}
+
+/// Verifies that an interface redeclaring a parent interface's static method as an instance
+/// method (or vice versa) is rejected during interface flattening itself — before any
+/// implementor even exists — matching PHP 8's fatal wording (`php -n` verified): "Cannot make
+/// static method A::f() non static in class B".
+#[test]
+fn test_error_interface_extends_conflicting_static_kind() {
+    expect_error(
+        r#"<?php
+interface A { public static function f(): int; }
+interface B extends A { public function f(): int; }
+"#,
+        "Cannot make static method A::f() non static in class B",
+    );
+}
+
+/// Verifies that calling a static interface method directly on the interface (`I::f()`, never
+/// on a concrete implementor) is rejected at compile time. PHP defers this to a runtime `Error`
+/// ("Cannot call abstract method I::f()", `php -n` verified: interfaces have no runtime object
+/// to dispatch a call on), but elephc's closed world can detect the literal `InterfaceName::`
+/// receiver statically instead of leaving it to fail at runtime.
+#[test]
+fn test_error_direct_static_call_on_interface_rejected() {
+    expect_error(
+        r#"<?php
+interface I { public static function f(): int; }
+I::f();
+"#,
+        "Cannot call abstract method I::f()",
+    );
+}
+
+/// Verifies the direct-interface-call rejection above also fires for a non-static interface
+/// method invoked via `I::method()` — PHP's fatal wording does not distinguish between static
+/// and instance interface methods here (`php -n` verified).
+#[test]
+fn test_error_direct_static_call_on_interface_instance_method_rejected() {
+    expect_error(
+        r#"<?php
+interface I { public function f(): int; }
+I::f();
+"#,
+        "Cannot call abstract method I::f()",
+    );
+}
+
 /// Verifies that a genuine `: DeclaringClass` return (NOT `: static`) is early-bound to the
 /// declaring class and is NOT late-bound to the receiver. `Base::make(): Base` called on a `Sub`
 /// still yields `Base`, so a `Sub`-only method on the result is undefined. Guards that the

@@ -209,3 +209,135 @@ echo $product->name;
     );
     assert_eq!(out, "widget");
 }
+
+/// Verifies a static interface method (PHP 8 `public static function x(): T;`) is satisfied by a
+/// concrete class and callable through `C::method()`. Mirrors the shape of Symfony's
+/// `EnvVarProcessorInterface::getProvidedTypes(): array` pattern that motivated this feature.
+#[test]
+fn test_static_interface_method_satisfied_by_concrete_class() {
+    let out = compile_and_run(
+        r#"<?php
+interface EnvVarProcessorInterface {
+    public static function getProvidedTypes(): array;
+}
+
+class EnvVarProcessor implements EnvVarProcessorInterface {
+    public static function getProvidedTypes(): array {
+        return ["string" => 1, "bool" => 2];
+    }
+}
+
+$types = EnvVarProcessor::getProvidedTypes();
+echo count($types) . ":" . $types["string"] . ":" . $types["bool"];
+"#,
+    );
+    assert_eq!(out, "2:1:2");
+}
+
+/// Verifies an abstract class can defer a static interface method implementation to a concrete
+/// child class, mirroring `test_abstract_base_can_defer_method_to_concrete_child` but for the
+/// static contract.
+#[test]
+fn test_abstract_base_can_defer_static_method_to_concrete_child() {
+    let out = compile_and_run(
+        r#"<?php
+interface Factory {
+    public static function make(): int;
+}
+
+abstract class BaseFactory implements Factory {
+}
+
+class ConcreteFactory extends BaseFactory {
+    public static function make(): int {
+        return 7;
+    }
+}
+
+echo ConcreteFactory::make();
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies covariant `self`/`static` return forms on a static interface method: the interface
+/// declares `: static` and the implementor returns `new self()`, matching PHP's LSP rule that
+/// `static` covariantly narrows to the receiver (`php -n` verified against the interpreter).
+#[test]
+fn test_static_interface_method_covariant_static_return() {
+    let out = compile_and_run(
+        r#"<?php
+interface Buildable {
+    public static function make(): static;
+}
+
+class Widget implements Buildable {
+    public int $val = 0;
+
+    public static function make(): static {
+        $w = new self();
+        $w->val = 9;
+        return $w;
+    }
+}
+
+$w = Widget::make();
+echo $w->val;
+"#,
+    );
+    assert_eq!(out, "9");
+}
+
+/// Verifies late static binding (`static::`/`new static()`) works inside a static interface
+/// method's implementation, and resolves to the calling subclass rather than the declaring
+/// class — the same LSB rule as any other static method, unaffected by the interface contract.
+#[test]
+fn test_static_interface_method_late_static_binding() {
+    let out = compile_and_run(
+        r#"<?php
+interface Buildable {
+    public static function make(): static;
+}
+
+class Base implements Buildable {
+    public static function make(): static {
+        return new static();
+    }
+
+    public function name(): string {
+        return static::class;
+    }
+}
+
+class Derived extends Base {
+}
+
+$b = Base::make();
+$d = Derived::make();
+echo $b->name() . ":" . $d->name();
+"#,
+    );
+    assert_eq!(out, "Base:Derived");
+}
+
+/// Verifies static interface method calls are case-insensitive on both the class name and the
+/// method name, matching PHP's case-insensitive symbol lookup rules for classes and methods.
+#[test]
+fn test_static_interface_method_call_is_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+interface I {
+    public static function F(): int;
+}
+
+class C implements I {
+    public static function f(): int {
+        return 5;
+    }
+}
+
+echo C::F() . ":" . c::f();
+"#,
+    );
+    assert_eq!(out, "5:5");
+}
