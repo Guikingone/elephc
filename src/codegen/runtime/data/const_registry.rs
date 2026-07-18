@@ -1,10 +1,14 @@
 //! Purpose:
-//! Emits the closed-world constant and enum registry data tables consumed by the
-//! `__rt_defined`/`__rt_constant`/`__rt_enum_exists` runtime helpers.
+//! Emits the closed-world constant, enum, class, interface, and trait registry
+//! data tables consumed by the `__rt_defined`/`__rt_constant`/`__rt_enum_exists`/
+//! `__rt_class_exists`/`__rt_interface_exists`/`__rt_trait_exists` runtime
+//! helpers.
 //!
 //! Called from:
 //! - `crate::codegen_ir::emit_program()` when the module's
-//!   `const_introspection` runtime feature is set.
+//!   `const_introspection` runtime feature is set (constant/enum tables) and
+//!   when its `class_introspection` runtime feature is set (class/interface/
+//!   trait tables).
 //!
 //! Key details:
 //! - Table layouts are link-time ABI shared with `__rt_sorted_name_search` and
@@ -16,6 +20,11 @@
 //! - Class constants, enum-case singletons, array/composite constant values, and
 //!   runtime `define()` overlays are intentionally absent (Stage 0 deferral): a
 //!   miss is correct PHP behavior (`false` / thrown `\Error`).
+//! - The class/interface/trait tables store names pre-lowercased (ASCII) by the
+//!   caller so a binary search with `__rt_strcmp` ordering matches PHP's
+//!   case-insensitive class/interface/trait names; `__rt_class_exists` and its
+//!   siblings lowercase the runtime query with `__rt_strtolower` before
+//!   searching so the sort key and the search key are identical bytes.
 
 use crate::ir::ConstScalar;
 
@@ -113,5 +122,55 @@ fn entry_tag_lo_hi(index: usize, value: &ConstScalar) -> (i64, String, i64) {
             (MIXED_TAG_STRING, format!("_constreg_str_{}", index), bytes.len() as i64)
         }
         ConstScalar::Null => (MIXED_TAG_NULL, "0".to_string(), 0),
+    }
+}
+
+/// Emits the closed-world class/interface/trait registry `.data` tables backing
+/// non-literal `class_exists()`/`interface_exists()`/`trait_exists()`.
+///
+/// Each of `class_names`/`interface_names`/`trait_names` must already be
+/// caller-normalized: ASCII-lowercased (so the stored sort key matches the
+/// lowercased runtime query key byte-for-byte) and sorted by name bytes (so
+/// `__rt_sorted_name_search` can binary search with `__rt_strcmp` ordering,
+/// mirroring the enum table emitted by `emit_const_registry_data`). Internal
+/// synthetic helper classes must already be filtered out by the caller before
+/// this call, matching the literal-path fold's `is_internal_synthetic_class_name`
+/// filter — real PHP builtin classes/interfaces (`stdClass`, `Exception`,
+/// `Traversable`, ...) are kept since they are genuinely `class_exists()`-visible
+/// in PHP.
+pub(crate) fn emit_class_registry_data(
+    class_names: &[String],
+    interface_names: &[String],
+    trait_names: &[String],
+) -> String {
+    let mut out = String::new();
+    out.push_str(".data\n");
+    out.push_str(".p2align 3\n");
+
+    emit_name_table(&mut out, "_class_table", "_classreg_name", class_names);
+    out.push_str(".p2align 3\n");
+    emit_name_table(&mut out, "_interface_table", "_ifacereg_name", interface_names);
+    out.push_str(".p2align 3\n");
+    emit_name_table(&mut out, "_trait_table", "_traitreg_name", trait_names);
+
+    out
+}
+
+/// Appends one 16-byte `{name_ptr, name_len}` name-sorted table to `out`.
+///
+/// `table_symbol` names the emitted `_<table_symbol>`/`_<table_symbol>_count`
+/// pair; `name_label_prefix` seeds the per-entry interned byte labels so tables
+/// emitted side by side never collide on symbol names.
+fn emit_name_table(out: &mut String, table_symbol: &str, name_label_prefix: &str, names: &[String]) {
+    out.push_str(&format!(".globl {0}_count\n{0}_count:\n", table_symbol));
+    out.push_str(&format!("    .quad {}\n", names.len()));
+    out.push_str(&format!(".globl {0}\n{0}:\n", table_symbol));
+    for (index, name) in names.iter().enumerate() {
+        out.push_str(&format!("    .quad {}_{}\n", name_label_prefix, index));
+        out.push_str(&format!("    .quad {}\n", name.len()));
+    }
+    for (index, name) in names.iter().enumerate() {
+        out.push_str(&format!("{}_{}:\n", name_label_prefix, index));
+        out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii(name)));
     }
 }

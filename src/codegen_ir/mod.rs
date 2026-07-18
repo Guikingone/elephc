@@ -215,6 +215,22 @@ fn finalize_user_asm(
             error_class_id,
         ));
     }
+    if module.required_runtime_features.class_introspection {
+        let class_names = sorted_lowercased_registry_names(
+            module
+                .class_infos
+                .keys()
+                .filter(|name| !is_internal_synthetic_class_name(name)),
+        );
+        let interface_names = sorted_lowercased_registry_names(module.interface_infos.keys());
+        let trait_names = sorted_lowercased_registry_names(module.trait_table.names.iter());
+        user_asm.push('\n');
+        user_asm.push_str(&runtime::emit_class_registry_data(
+            &class_names,
+            &interface_names,
+            &trait_names,
+        ));
+    }
     if matches!(emit, Emit::Cdylib) && module.target.platform == Platform::Linux {
         let mut exported: HashSet<String> = exported_functions
             .values()
@@ -231,6 +247,31 @@ fn finalize_user_asm(
         return crate::codegen::visibility::append_hidden_directives(&user_asm, &exported);
     }
     user_asm
+}
+
+/// Normalizes a set of declared symbol names into the `_class_table`/
+/// `_interface_table`/`_trait_table` registry key form: a leading `\` stripped,
+/// ASCII-lowercased so the stored sort key matches the lowercased runtime query
+/// key produced by `__rt_strtolower` (PHP class/interface/trait names are
+/// case-insensitive), and sorted by name bytes for `__rt_sorted_name_search`'s
+/// binary search.
+fn sorted_lowercased_registry_names<'a>(names: impl Iterator<Item = &'a String>) -> Vec<String> {
+    let mut normalized: Vec<String> = names
+        .map(|name| php_symbol_key(name.trim_start_matches('\\')))
+        .collect();
+    normalized.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+    normalized
+}
+
+/// Returns true for internal helper classes hidden from PHP `class_exists()`.
+///
+/// Mirrors the literal-path fold's filter in
+/// `crate::codegen_ir::lower_inst::builtins::is_internal_synthetic_class_name`
+/// and `crate::optimize::class_existence::is_internal_synthetic_class_name` so
+/// the non-literal registry lookup and the literal compile-time fold agree on
+/// which classes are compiler-synthetic rather than genuinely PHP-visible.
+fn is_internal_synthetic_class_name(name: &str) -> bool {
+    php_symbol_key(name).starts_with("__elephc")
 }
 
 /// Returns user functions visible to runtime callable-name metadata.

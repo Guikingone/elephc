@@ -1512,38 +1512,17 @@ pub(super) fn check_builtin(
             for arg in args {
                 checker.infer_type(arg, env)?;
             }
-            // Accept a string literal or a `Name::class` constant (a compile-time class-name
-            // string). The AST optimizer folds both forms to a boolean using the closed world
-            // before codegen (see `crate::optimize::class_existence`); `self`/`static`/`parent`
-            // `::class` are left out because they are not statically foldable here and codegen
-            // has no runtime path for them.
-            let first_arg_is_literal_class_name = matches!(
-                &args[0].kind,
-                ExprKind::StringLiteral(_)
-                    | ExprKind::ClassConstant {
-                        receiver: StaticReceiver::Named(_)
-                    }
-            );
-            if !first_arg_is_literal_class_name {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() first argument must be a string literal in AOT mode", name),
-                ));
-            }
-            if let Some(autoload_arg) = args.get(1) {
-                if !matches!(
-                    autoload_arg.kind,
-                    ExprKind::BoolLiteral(_) | ExprKind::IntLiteral(_)
-                ) {
-                    return Err(CompileError::new(
-                        span,
-                        &format!(
-                            "{}() autoload argument must be a literal bool or int in AOT mode",
-                            name
-                        ),
-                    ));
-                }
-            }
+            // A string literal or a `Name::class` constant (a compile-time class-name
+            // string) folds to a compile-time boolean using the closed world before
+            // codegen (see `crate::optimize::class_existence` for the AST-level fold
+            // and `lower_class_like_exists` for the EIR-level fold). A non-literal
+            // name is accepted here too and lowered to the closed-world
+            // `__rt_class_exists`/`__rt_interface_exists`/`__rt_trait_exists`
+            // registry lookup, cloning the `enum_exists` non-literal path below.
+            // elephc's autoload is a compile-time pass (`src/autoload/walk.rs`):
+            // every class is already in `module.class_infos` by the time this runs,
+            // so the closed-world `$autoload` argument has no runtime effect and
+            // accepts any value, matching `enum_exists`.
             Ok(Some(PhpType::Bool))
         }
         "enum_exists" => {

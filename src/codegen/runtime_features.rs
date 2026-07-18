@@ -45,6 +45,16 @@ pub struct RuntimeFeatures {
     /// `__rt_enum_exists` and their `_const_table`/`_enum_table` data). Detected
     /// from the lowered EIR instruction stream, not the AST.
     pub const_introspection: bool,
+    /// True when the program performs a non-literal `class_exists()`/
+    /// `interface_exists()`/`trait_exists()` lookup that must search the emitted
+    /// closed-world class/interface/trait registries at runtime
+    /// (`__rt_class_exists`/`__rt_interface_exists`/`__rt_trait_exists` and their
+    /// `_class_table`/`_interface_table`/`_trait_table` data). Detected from the
+    /// lowered EIR instruction stream, not the AST. Kept as a sibling of
+    /// `const_introspection` rather than folded into it, since the two feature
+    /// families gate distinct data tables and helpers that a program may need
+    /// independently.
+    pub class_introspection: bool,
 }
 
 impl RuntimeFeatures {
@@ -56,6 +66,7 @@ impl RuntimeFeatures {
             descriptor_invoker: false,
             web: false,
             const_introspection: false,
+            class_introspection: false,
         }
     }
 
@@ -68,6 +79,7 @@ impl RuntimeFeatures {
             descriptor_invoker: true,
             web: true,
             const_introspection: true,
+            class_introspection: true,
         }
     }
 }
@@ -1061,6 +1073,7 @@ mod tests {
             descriptor_invoker: true,
             web: false,
             const_introspection: false,
+            class_introspection: false,
         })
         .iter()
         .any(|lib| lib == "elephc_crypto"));

@@ -379,6 +379,187 @@ echo enum_exists('Suit') ? 'yes' : 'no';
     assert_eq!(out, "yes");
 }
 
+// --- Non-literal class_exists()/interface_exists()/trait_exists() registry lookups ---
+
+/// Verifies a non-literal `class_exists($name)` finds a declared class through
+/// the `__rt_class_exists` runtime registry lookup. The name is derived from
+/// `$argc` so it stays non-literal and is not folded at compile time.
+#[test]
+fn test_class_exists_nonliteral_known_class_is_true() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcRegistryProbe {}
+$name = $argc > 0 ? "ElephcRegistryProbe" : "NOPE";
+echo class_exists($name) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
+/// Verifies a non-literal `class_exists($name)` reports an undeclared class as
+/// absent via the runtime registry lookup.
+#[test]
+fn test_class_exists_nonliteral_unknown_class_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+$name = $argc > 0 ? "ElephcNoSuchClassXYZ" : "NOPE";
+echo class_exists($name) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "no");
+}
+
+/// Verifies a non-literal `interface_exists($name)` finds a declared interface
+/// through the `__rt_interface_exists` runtime registry lookup.
+#[test]
+fn test_interface_exists_nonliteral_known_interface_is_true() {
+    let out = compile_and_run(
+        r#"<?php
+interface ElephcRegistryProbeIface {}
+$name = $argc > 0 ? "ElephcRegistryProbeIface" : "NOPE";
+echo interface_exists($name) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
+/// Verifies a non-literal `trait_exists($name)` finds a declared trait through
+/// the `__rt_trait_exists` runtime registry lookup.
+#[test]
+fn test_trait_exists_nonliteral_known_trait_is_true() {
+    let out = compile_and_run(
+        r#"<?php
+trait ElephcRegistryProbeTrait {}
+$name = $argc > 0 ? "ElephcRegistryProbeTrait" : "NOPE";
+echo trait_exists($name) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
+/// Verifies a non-literal `class_exists($name)` strips exactly one leading `\`
+/// before searching the registry, matching `php -n`: `class_exists("\Foo")` is
+/// true for a top-level `class Foo {}`.
+#[test]
+fn test_class_exists_nonliteral_single_leading_backslash_strips_and_hits() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcBackslashProbe {}
+$name = $argc > 0 ? "\\ElephcBackslashProbe" : "NOPE";
+echo class_exists($name) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
+/// Verifies a non-literal `class_exists($name)` with two leading backslashes is
+/// false, matching `php -n`: only one leading `\` is stripped, so the doubled
+/// form never matches a bare class name.
+#[test]
+fn test_class_exists_nonliteral_double_leading_backslash_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcBackslashProbe {}
+$name = $argc > 0 ? "\\\\ElephcBackslashProbe" : "NOPE";
+echo class_exists($name) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "no");
+}
+
+/// Verifies a non-literal `class_exists($name)` is case-insensitive, matching
+/// `php -n`: `class_exists("foo")` is true for a top-level `class Foo {}`.
+#[test]
+fn test_class_exists_nonliteral_is_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcCaseProbe {}
+$name = $argc > 0 ? "elephccaseprobe" : "NOPE";
+echo class_exists($name) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
+/// Verifies a non-literal `class_exists("stdClass")` is true: real PHP builtin
+/// classes are genuinely `class_exists()`-visible, not filtered out as
+/// compiler-synthetic helpers.
+#[test]
+fn test_class_exists_nonliteral_builtin_stdclass_is_true() {
+    let out = compile_and_run(
+        r#"<?php
+$name = $argc > 0 ? "stdClass" : "NOPE";
+echo class_exists($name) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
+/// Verifies a non-literal `interface_exists("Traversable")` is true: real PHP
+/// builtin interfaces are genuinely `interface_exists()`-visible.
+#[test]
+fn test_interface_exists_nonliteral_builtin_traversable_is_true() {
+    let out = compile_and_run(
+        r#"<?php
+$name = $argc > 0 ? "Traversable" : "NOPE";
+echo interface_exists($name) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
+/// Verifies a `Mixed`-typed name (read from an associative array value) routes
+/// through the shared `emit_registry_string_lookup` materializer's `__rt_mixed_cast_string`
+/// cast before the registry lookup.
+#[test]
+fn test_class_exists_nonliteral_mixed_needle_from_assoc_array() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcMixedNeedleProbe {}
+$map = ["i" => 42, "s" => "ElephcMixedNeedleProbe"];
+echo class_exists($map["s"]) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
+/// Verifies the string-literal `class_exists('Foo')` fast path still folds to a
+/// compile-time boolean (true) with no behavior change (regression: the literal
+/// fold path — AST-level `crate::optimize::class_existence` and the EIR-level
+/// `contains_folded` fallback — must stay byte-identical after accepting
+/// non-literal names).
+#[test]
+fn test_class_exists_literal_still_folds_true() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcLiteralFoldProbe {}
+echo class_exists('ElephcLiteralFoldProbe') ? 'yes' : 'no';
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
+/// Verifies the string-literal `interface_exists('Missing')` fast path still
+/// folds to a compile-time boolean (false) with no behavior change.
+#[test]
+fn test_interface_exists_literal_still_folds_false() {
+    let out = compile_and_run("<?php echo interface_exists('ElephcNoSuchInterfaceXYZ') ? 'yes' : 'no';");
+    assert_eq!(out, "no");
+}
+
+/// Verifies the string-literal `trait_exists('Foo')` fast path still folds to a
+/// compile-time boolean (true) with no behavior change.
+#[test]
+fn test_trait_exists_literal_still_folds_true() {
+    let out = compile_and_run(
+        r#"<?php
+trait ElephcLiteralFoldTrait {}
+echo trait_exists('ElephcLiteralFoldTrait') ? 'yes' : 'no';
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
 /// Verifies a string-literal `constant('NAME')` for a user-declared scalar folds
 /// to its value during lowering without a runtime registry lookup.
 #[test]

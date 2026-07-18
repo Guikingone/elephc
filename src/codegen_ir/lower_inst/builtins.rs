@@ -1048,12 +1048,13 @@ fn lower_extension_loaded(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     store_if_result(ctx, inst)
 }
 
-/// Lowers AOT class/interface/enum existence checks.
+/// Lowers AOT class/interface/trait/enum existence checks.
 ///
-/// `class_exists`/`interface_exists`/`trait_exists` fold a literal name to a
-/// static boolean (the checker requires a literal name for those). `enum_exists`
-/// additionally accepts a non-literal name, which is lowered to the
-/// `__rt_enum_exists` closed-world enum-registry lookup.
+/// A literal name folds to a static boolean using the closed-world class
+/// tables collected during checking (`contains_folded` below). A non-literal
+/// name is lowered to the matching closed-world registry lookup helper
+/// (`__rt_class_exists`/`__rt_interface_exists`/`__rt_trait_exists`/
+/// `__rt_enum_exists`), cloning the shipped `enum_exists` non-literal path.
 fn lower_class_like_exists(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -1061,8 +1062,20 @@ fn lower_class_like_exists(
 ) -> Result<()> {
     ensure_arg_count_between(inst, name, 1, 2)?;
     let value = expect_operand(inst, 0)?;
-    if name == "enum_exists" && const_string_operand(ctx, value).is_err() {
-        emit_registry_string_lookup(ctx, value, "enum_exists", "__rt_enum_exists")?;
+    if const_string_operand(ctx, value).is_err() {
+        let helper = match name {
+            "class_exists" => "__rt_class_exists",
+            "interface_exists" => "__rt_interface_exists",
+            "trait_exists" => "__rt_trait_exists",
+            "enum_exists" => "__rt_enum_exists",
+            _ => {
+                return Err(CodegenIrError::unsupported(format!(
+                    "{}() non-literal class-like existence check",
+                    name
+                )))
+            }
+        };
+        emit_registry_string_lookup(ctx, value, name, helper)?;
         return store_if_result(ctx, inst);
     }
     let symbol_name = const_string_operand(ctx, value)?;

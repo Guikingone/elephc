@@ -913,27 +913,34 @@ fn test_class_exists_with_int_nonzero_triggers_autoload() {
 /// Verifies class exists dynamic autoload arg does not trigger aot autoload.
 #[test]
 fn test_class_exists_dynamic_autoload_arg_does_not_trigger_aot_autoload() {
-    // class_exists with a variable (non-literal) second arg must not trigger AOT autoload; panics.
-    let result = std::panic::catch_unwind(|| {
-        compile_and_run_files(
-            &[
-                (
-                    "composer.json",
-                    r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
-                ),
-                (
-                    "src/DynamicFlag.php",
-                    "<?php\nnamespace App;\nclass DynamicFlag {}\n",
-                ),
-                (
-                    "main.php",
-                    "<?php\n$autoload = true;\nclass_exists(\"App\\\\DynamicFlag\", $autoload);\n$d = new App\\DynamicFlag();\necho \"loaded\";\n",
-                ),
-            ],
-            "main.php",
-        )
-    });
-    assert!(result.is_err());
+    // class_exists with a variable (non-literal) second arg must not be guessed as
+    // an autoload demand at compile time (see `src/autoload/walk.rs`'s
+    // `triggers_autoload` match, which only fires for an omitted arg or a literal
+    // truthy value). `App\DynamicFlag` is referenced only through this call — no
+    // `new`/`instanceof` forces it in through the generic class-reference walk —
+    // so it is never PSR-4-included, and the closed-world class registry
+    // correctly reports it absent instead of optimistically resolving the
+    // dynamic flag as true. This no longer panics: `class_exists()` with a
+    // non-literal autoload argument is accepted (mirrors `enum_exists()`), it
+    // simply cannot autoload a class it was never told, at compile time, to load.
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/DynamicFlag.php",
+                "<?php\nnamespace App;\nclass DynamicFlag {}\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$autoload = true;\necho class_exists(\"App\\\\DynamicFlag\", $autoload) ? \"loaded\" : \"absent\";\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "absent");
 }
 
 /// Verifies interface exists literal triggers autoload.

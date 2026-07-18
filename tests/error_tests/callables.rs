@@ -31,27 +31,11 @@ fn test_error_function_exists_wrong_args() {
     );
 }
 
-/// Verifies that error class exists requires literal name.
-#[test]
-fn test_error_class_exists_requires_literal_name() {
-    // Verifies `class_exists()` with a runtime variable as the first argument
-    // produces a diagnostic because AOT mode requires a string literal.
-    expect_error(
-        r#"<?php $name = "DateTime"; class_exists($name);"#,
-        "class_exists() first argument must be a string literal in AOT mode",
-    );
-}
-
-/// Verifies that error class exists requires literal autoload flag.
-#[test]
-fn test_error_class_exists_requires_literal_autoload_flag() {
-    // Verifies `class_exists()` with a runtime variable as the autoload flag
-    // produces a diagnostic because AOT mode requires a literal bool or int.
-    expect_error(
-        r#"<?php $autoload = false; class_exists("DateTime", $autoload);"#,
-        "class_exists() autoload argument must be a literal bool or int in AOT mode",
-    );
-}
+// `class_exists()`/`interface_exists()`/`trait_exists()` with a non-literal name
+// or a non-literal autoload flag are no longer AOT-mode errors: they compile to
+// a closed-world `__rt_class_exists`/`__rt_interface_exists`/`__rt_trait_exists`
+// registry lookup, cloning the `enum_exists` non-literal path. See the positive
+// codegen coverage in `tests/codegen/casts_and_constants/introspection.rs`.
 
 /// Verifies that error interface exists wrong args.
 #[test]

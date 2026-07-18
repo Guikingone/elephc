@@ -187,14 +187,23 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_match_unhandled(emitter);
     system::emit_serialize_unsupported(emitter);
 
-    // Closed-world constant/enum registry lookups backing non-literal
-    // defined()/constant()/enum_exists(). The shared binary search and the three
-    // entry points are emitted together; their data tables live in user data.
-    if features.const_introspection {
+    // Closed-world constant/enum/class/interface/trait registry lookups backing
+    // non-literal defined()/constant()/enum_exists()/class_exists()/
+    // interface_exists()/trait_exists(). The shared binary search is emitted once
+    // when either feature needs it; each feature's own entry points are emitted
+    // under its own gate. Their data tables live in user data.
+    if features.const_introspection || features.class_introspection {
         system::emit_rt_sorted_name_search(emitter);
+    }
+    if features.const_introspection {
         system::emit_rt_defined(emitter);
         system::emit_rt_enum_exists(emitter);
         system::emit_rt_constant(emitter);
+    }
+    if features.class_introspection {
+        system::emit_rt_class_exists(emitter);
+        system::emit_rt_interface_exists(emitter);
+        system::emit_rt_trait_exists(emitter);
     }
 
     // Exception runtime functions

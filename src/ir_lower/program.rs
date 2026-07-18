@@ -138,6 +138,7 @@ fn include_lowered_runtime_features(module: &mut Module) {
     module.required_runtime_features.phar_archive |= features.phar_archive;
     module.required_runtime_features.descriptor_invoker |= features.descriptor_invoker;
     module.required_runtime_features.const_introspection |= features.const_introspection;
+    module.required_runtime_features.class_introspection |= features.class_introspection;
 }
 
 /// Derives optional runtime features from the actual EIR instruction stream.
@@ -158,6 +159,9 @@ fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                     }
                     if builtin_call_requires_const_introspection(module, function, inst) {
                         features.const_introspection = true;
+                    }
+                    if builtin_call_requires_class_introspection(module, function, inst) {
+                        features.class_introspection = true;
                     }
                 }
                 Op::ExprCall | Op::CallableDescriptorInvoke => {
@@ -258,6 +262,34 @@ fn builtin_call_requires_const_introspection(
             .is_some_and(|operand| !value_is_const_string(function, operand)),
         _ => false,
     }
+}
+
+/// Returns true when a lowered builtin call needs the runtime class/interface/trait registry.
+///
+/// `class_exists`/`interface_exists`/`trait_exists` reach EIR for both literal and
+/// non-literal names (most literal calls are already folded to a boolean earlier
+/// by `crate::optimize::class_existence`, with `lower_class_like_exists` folding
+/// any literal call that still reaches EIR as a fallback) — the literal case
+/// folds to a static boolean in the backend without touching the runtime
+/// registry, so only a non-constant name argument requires the class/interface/
+/// trait registry lookup helper, mirroring `enum_exists`'s `const_introspection`
+/// detection above.
+fn builtin_call_requires_class_introspection(
+    module: &Module,
+    function: &Function,
+    inst: &crate::ir::Instruction,
+) -> bool {
+    let Some(name) = builtin_call_name(module, inst) else {
+        return false;
+    };
+    matches!(
+        php_symbol_key(name.trim_start_matches('\\')).as_str(),
+        "class_exists" | "interface_exists" | "trait_exists"
+    ) && inst
+        .operands
+        .first()
+        .copied()
+        .is_some_and(|operand| !value_is_const_string(function, operand))
 }
 
 /// Returns true when an EIR value is defined by a constant-string opcode.
