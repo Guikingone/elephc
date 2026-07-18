@@ -864,6 +864,77 @@ fn test_isset_null_variable_is_false() {
     assert_eq!(out, "1");
 }
 
+/// An assignment inside an `isset()` array-index operand defines the assigned variable for code
+/// that runs after the `isset()` call, mirroring PHP's always-evaluated index-expression
+/// semantics (php-verified: `isset($a[$h = f()])` defines `$h` even when the outer index does
+/// not exist in `$a`). Matches the RedisTrait `!isset($connections[$h = $redis->_target($id)])`
+/// shape.
+#[test]
+fn test_isset_array_index_assignment_defines_variable_after_call() {
+    let out = compile_and_run(
+        r#"<?php
+function target($id) { return "h_" . $id; }
+$connections = [];
+if (!isset($connections[$h = target(5)])) {
+    $connections[$h] = "conn";
+}
+echo $h, "\n";
+echo $connections[$h], "\n";
+"#,
+    );
+    assert_eq!(out, "h_5\nconn\n");
+}
+
+/// The same always-evaluated-index rule applies to `unset()`'s operand: an assignment inside the
+/// index expression defines the variable for code after the `unset()` call.
+#[test]
+fn test_unset_array_index_assignment_defines_variable_after_call() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [10, 20, 30];
+unset($a[$k = 1]);
+echo $k, "\n";
+echo count($a), "\n";
+"#,
+    );
+    assert_eq!(out, "1\n2\n");
+}
+
+/// A by-reference out-parameter call nested inside an `isset()` index expression still defines
+/// its output variable after the call, exactly like the same call outside `isset()` (JURY
+/// ADDENDUM #3's "nested by-reference in isset" regression probe).
+#[test]
+fn test_isset_array_index_nested_by_ref_output_defines_variable() {
+    let out = compile_and_run(
+        r#"<?php
+$arr = [1, 2, 3];
+if (isset($arr[preg_match('/\d/', 'x', $matches) ? 0 : 1])) {
+    echo "matched\n";
+}
+echo count($matches), "\n";
+"#,
+    );
+    assert_eq!(out, "matched\n0\n");
+}
+
+/// Regression: `isset()` on an undeclared property still routes through `__isset` instead of
+/// being rejected as a bare property access — the property-magic skip the isset/unset lazy-
+/// construct path exists for must survive walking always-evaluated index sub-expressions.
+#[test]
+fn test_isset_undeclared_property_still_routes_through_magic_isset() {
+    let out = compile_and_run(
+        r#"<?php
+class Bar {
+    private array $data = [];
+    public function __isset($name) { return isset($this->data[$name]); }
+}
+$b = new Bar();
+echo isset($b->undeclaredProp) ? "y" : "n", "\n";
+"#,
+    );
+    assert_eq!(out, "n\n");
+}
+
 /// Verifies array values.
 #[test]
 fn test_array_values() {

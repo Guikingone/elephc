@@ -510,6 +510,67 @@ fn test_user_function_by_ref_output_defines_previously_undefined_variable() {
     assert_eq!(out, "42");
 }
 
+/// A previously-undefined plain variable passed to an interface-typed method call's by-reference
+/// out-parameter becomes defined after the call, matching the plain-class-receiver case: an
+/// interface-typed receiver (e.g. a constructor-promoted `private MarshallerInterface
+/// $marshaller` property) previously skipped `self.interfaces` entirely and never defined the
+/// argument. Mirrors symfony/cache's `$this->marshaller->marshall($values, $failed)` shape
+/// (`MarshallerInterface::marshall(array $values, ?array &$failed): array`).
+#[test]
+fn test_interface_method_by_ref_output_defines_previously_undefined_variable() {
+    let out = compile_and_run(
+        "<?php
+        interface MarshallerInterface {
+            function marshall(array $values, ?array &$failed): array;
+        }
+        class JsonMarshaller implements MarshallerInterface {
+            function marshall(array $values, ?array &$failed): array {
+                $failed = ['bad'];
+                return ['ok'];
+            }
+        }
+        class Cache {
+            private MarshallerInterface $marshaller;
+            function __construct(MarshallerInterface $marshaller) {
+                $this->marshaller = $marshaller;
+            }
+            function run(array $values): void {
+                $this->marshaller->marshall($values, $failed);
+                echo count($failed), ',', $failed[0], \"\\n\";
+            }
+        }
+        $c = new Cache(new JsonMarshaller());
+        $c->run(['a' => 1]);",
+    );
+    assert_eq!(out, "1,bad\n");
+}
+
+/// The same interface by-reference out-param definition applies through a nullable-union
+/// receiver (`?MarshallerInterface`), not just a plain interface-typed receiver: the union
+/// resolution must still find the interface method's `ref_params` (JURY ADDENDUM #1).
+#[test]
+fn test_interface_method_by_ref_output_defines_variable_through_nullable_union_receiver() {
+    let out = compile_and_run(
+        "<?php
+        interface MarshallerInterface {
+            function marshall(array $values, ?array &$failed): array;
+        }
+        class JsonMarshaller implements MarshallerInterface {
+            function marshall(array $values, ?array &$failed): array {
+                $failed = ['bad'];
+                return ['ok'];
+            }
+        }
+        function pick(): ?MarshallerInterface {
+            return new JsonMarshaller();
+        }
+        $m = pick();
+        $m->marshall(['a' => 1], $failed);
+        echo count($failed), ',', $failed[0], \"\\n\";",
+    );
+    assert_eq!(out, "1,bad\n");
+}
+
 /// Passing a non-nullsafe instance array property (`$this->refs`) into a by-reference parameter
 /// lowers as copy-in/copy-out: the callee's append is visible in the property after the call
 /// (the structural shape of symfony/yaml's `Inline::parse(..., $this->refs, ...)` call sites).

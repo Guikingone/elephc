@@ -350,7 +350,21 @@ impl Checker {
                 // inference handles the operands (with magic routing).
                 let is_lazy_construct = builtin_name.eq_ignore_ascii_case("isset")
                     || builtin_name.eq_ignore_ascii_case("unset");
-                if !is_lazy_construct {
+                if is_lazy_construct {
+                    // The operand chain itself is still lazy (an undeclared property must
+                    // route through `__isset`/`__unset` magic, handled by the call's own
+                    // inference below), but PHP always evaluates the INDEX expression of
+                    // every `ArrayAccess` link in the chain regardless of whether the base
+                    // exists — `isset($connections[$h = $redis->_target($id)])` defines `$h`
+                    // even when `$connections` has no such key yet (php-verified: PHP still
+                    // evaluates a nested index when an outer index does not exist, and an
+                    // undefined base array triggers no error). Walk just those
+                    // always-evaluated index sub-expressions for assignment effects and
+                    // nested by-reference outputs so later reads see the definition.
+                    for arg in &expanded_args {
+                        self.walk_isset_unset_operand_assignment_effects(arg, env)?;
+                    }
+                } else {
                     for (idx, arg) in expanded_args.iter().enumerate() {
                         if is_builtin_by_ref(idx) {
                             continue;
@@ -503,6 +517,42 @@ impl Checker {
             }
             _ => self.infer_type(expr, env),
         }
+    }
+
+    /// Walks the always-evaluated index sub-expressions of an `isset`/`unset` operand for
+    /// assignment effects and nested by-reference outputs, without inferring the lazy base
+    /// chain itself.
+    ///
+    /// PHP always evaluates the offset expression of every `ArrayAccess` link in the operand —
+    /// `isset($a[$i][$j = f()])` evaluates `$j = f()` even when `$a[$i]` does not exist
+    /// (php-verified: PHP does not short-circuit a nested index on a missing outer key) — so an
+    /// assignment or by-reference call inside an index must still define its target for code
+    /// that runs after the `isset`/`unset`. `PropertyAccess`/`NullsafePropertyAccess` links are
+    /// only recursed into (to reach further nested indices under them, e.g.
+    /// `isset($this->arr[$k = f()])`); the property access itself is never passed to
+    /// `infer_type_with_assignment_effects`, preserving the `__isset`/`__unset` property-magic
+    /// skip this whole path exists for (regression: `isset($obj->undeclaredProp)` must stay
+    /// clean, and an undefined base array/object must not be reported as undefined here either
+    /// — both are php-verified as producing no error/warning).
+    fn walk_isset_unset_operand_assignment_effects(
+        &mut self,
+        arg: &Expr,
+        env: &mut TypeEnv,
+    ) -> Result<(), CompileError> {
+        match &arg.kind {
+            ExprKind::ArrayAccess { array, index } => {
+                self.infer_type_with_assignment_effects(index, env)?;
+                self.walk_isset_unset_operand_assignment_effects(array, env)?;
+            }
+            ExprKind::PropertyAccess { object, .. }
+            | ExprKind::NullsafePropertyAccess { object, .. }
+            | ExprKind::DynamicPropertyAccess { object, .. }
+            | ExprKind::NullsafeDynamicPropertyAccess { object, .. } => {
+                self.walk_isset_unset_operand_assignment_effects(object, env)?;
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     /// Returns true when an expression call target is first-class `preg_replace_callback`.

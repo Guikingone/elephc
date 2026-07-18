@@ -343,6 +343,26 @@ class PDOStatement implements Iterator {
     public function bindParam($parameter, $variable, int $type = 2): bool {
         // Unlike PHP, the value is recorded now (not read by reference at execute
         // time): bind right before execute(), or use bindValue().
+        //
+        // `$variable` is intentionally NOT declared `&$variable` here (which would
+        // otherwise match real PDOStatement::bindParam and let the checker
+        // auto-vivify an as-yet-undefined caller variable, closing a definite-
+        // assignment gap). `PDO::prepare()`/`PDO::query()` return `PDOStatement|bool`
+        // (see above), so a `$stmt = $conn->prepare(...); $stmt->bindParam(...)`
+        // call site (the common real-world shape, e.g. Symfony's PdoAdapter) is a
+        // union-typed receiver at the call site. Codegen's by-reference argument
+        // materializer for a union/register-held receiver
+        // (`materialize_method_call_args_with_receiver_reg_and_refs` in
+        // `codegen_ir/lower_inst.rs`) either loudly rejects scalar-to-Mixed
+        // ref-argument promotion, or — for an already-Mixed freshly auto-vivified
+        // variable — silently miscompiles into a SIGSEGV at runtime (verified with
+        // `$stmt = $pdo->prepare(...); $stmt->bindParam(':id', $id);`). That is a
+        // pre-existing codegen gap in the shared by-ref instance-method-call
+        // materializer, not specific to PDO; fixing it is out of scope here.
+        // Declaring `$variable` by-ref would trade a loud "Undefined variable"
+        // compile error for a silent-wrong runtime crash, which campaign law
+        // forbids — so this parameter stays by-value until that codegen path is
+        // fixed.
         return $this->bindValue($parameter, $variable, $type);
     }
 

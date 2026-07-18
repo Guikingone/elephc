@@ -139,7 +139,9 @@ impl Checker {
 
     /// Returns `(name, type)` pairs for currently-undefined plain `$variable` arguments bound to
     /// by-reference parameters of an instance method call (`$obj->method(...)`), using the
-    /// already-inferred receiver type. Returns an empty vector for non-object or unknown receivers.
+    /// already-inferred receiver type. Resolves the receiver through classes, interfaces, and
+    /// union receivers (see `resolve_method_sig_for_by_ref`). Returns an empty vector for
+    /// non-object, unresolved, or unknown receivers.
     pub(crate) fn method_call_by_ref_outputs(
         &self,
         object_type: &PhpType,
@@ -147,14 +149,8 @@ impl Checker {
         args: &[Expr],
         env: &TypeEnv,
     ) -> Vec<(String, PhpType)> {
-        let PhpType::Object(class_name) = object_type else {
-            return Vec::new();
-        };
-        let Some(class_info) = self.classes.get(class_name) else {
-            return Vec::new();
-        };
         let method_key = php_symbol_key(method);
-        let Some(sig) = class_info.methods.get(&method_key) else {
+        let Some(sig) = self.resolve_method_sig_for_by_ref(object_type, &method_key) else {
             return Vec::new();
         };
         Self::sig_undefined_by_ref_variable_outputs(sig, args, env)
@@ -246,7 +242,8 @@ impl Checker {
 
     /// Returns by-reference storage promotions for already-defined `$variable` arguments of an
     /// instance method call (`$obj->method(...)`), using the already-inferred receiver type.
-    /// Empty for non-object or unknown receivers.
+    /// Resolves the receiver through classes, interfaces, and union receivers (see
+    /// `resolve_method_sig_for_by_ref`). Empty for non-object, unresolved, or unknown receivers.
     pub(crate) fn method_call_by_ref_boxed_promotions(
         &self,
         object_type: &PhpType,
@@ -254,17 +251,61 @@ impl Checker {
         args: &[Expr],
         env: &TypeEnv,
     ) -> Vec<(String, PhpType)> {
-        let PhpType::Object(class_name) = object_type else {
-            return Vec::new();
-        };
-        let Some(class_info) = self.classes.get(class_name) else {
-            return Vec::new();
-        };
         let method_key = php_symbol_key(method);
-        let Some(sig) = class_info.methods.get(&method_key) else {
+        let Some(sig) = self.resolve_method_sig_for_by_ref(object_type, &method_key) else {
             return Vec::new();
         };
         self.sig_defined_by_ref_boxed_promotions(sig, args, env)
+    }
+
+    /// Resolves the method signature relevant to by-reference output/promotion analysis for a
+    /// method-call receiver type, covering plain class objects, interface objects (a class or
+    /// interface method call resolves identically here — both store `ref_params` through the
+    /// shared `build_method_sig`), and union receivers.
+    ///
+    /// A `PhpType::Object` receiver is looked up in `self.classes` first, then `self.interfaces`
+    /// (an interface-typed variable, e.g. a constructor-promoted `private MarshallerInterface
+    /// $marshaller`, infers to `PhpType::Object("MarshallerInterface")` — the same representation
+    /// as a concrete class — so the class-only lookup previously missed every interface-typed
+    /// receiver's by-reference out-params). A `PhpType::Union` receiver (`Interface|null`,
+    /// `A|B`, …) first tries the single-object-class resolution (nullable receiver), then falls
+    /// back to the first union member that resolves the method, mirroring
+    /// `infer_method_call_on_object_union`'s "the method only needs to exist on at least one
+    /// member" convention. Returns `None` for non-object, unresolved, or unknown receivers.
+    fn resolve_method_sig_for_by_ref(
+        &self,
+        object_type: &PhpType,
+        method_key: &str,
+    ) -> Option<&FunctionSig> {
+        match object_type {
+            PhpType::Object(class_name) => self.class_or_interface_method_sig(class_name, method_key),
+            PhpType::Union(_) => {
+                if let Some(class_name) = self.union_single_object_class(object_type) {
+                    return self.class_or_interface_method_sig(&class_name, method_key);
+                }
+                self.union_object_classes(object_type)
+                    .iter()
+                    .find_map(|class_name| self.class_or_interface_method_sig(class_name, method_key))
+            }
+            _ => None,
+        }
+    }
+
+    /// Looks up a method's `FunctionSig` on a resolved class name, checking `self.classes` then
+    /// falling back to `self.interfaces` — a class name and an interface name never collide (PHP
+    /// class-like declarations share one global symbol table), so this is an unambiguous,
+    /// order-independent lookup across both metadata tables.
+    fn class_or_interface_method_sig(&self, class_name: &str, method_key: &str) -> Option<&FunctionSig> {
+        if let Some(sig) = self
+            .classes
+            .get(class_name)
+            .and_then(|class_info| class_info.methods.get(method_key))
+        {
+            return Some(sig);
+        }
+        self.interfaces
+            .get(class_name)
+            .and_then(|interface_info| interface_info.methods.get(method_key))
     }
 
     /// Collects `(name, join-type)` promotions for already-defined plain `$variable` arguments
