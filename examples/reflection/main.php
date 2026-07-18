@@ -38,3 +38,21 @@ foreach ($fn->getParameters() as $param) {
 
     echo "\n";
 }
+
+// Reflecting a class chosen at RUNTIME (not a compile-time literal).
+//
+// `new ReflectionClass($className)` also accepts a name that is only known
+// while the program is running — here, the first CLI argument, defaulting to
+// "Mailer" when none is given. elephc resolves it through a shared,
+// case-insensitive dispatcher built from the program's closed world of
+// declared classes; an unknown name throws a real, catchable
+// \ReflectionException instead of crashing.
+$className = $argv[1] ?? 'Mailer';
+
+try {
+    $rc = new ReflectionClass($className);
+    echo "Reflecting class \"", $rc->getName(), "\" (short name: ", $rc->getShortName(), ")\n";
+    echo "  instantiable: ", $rc->isInstantiable() ? "yes" : "no", "\n";
+} catch (\ReflectionException $e) {
+    echo "No such class: ", $e->getMessage(), "\n";
+}

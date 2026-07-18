@@ -332,3 +332,109 @@ try {
     );
     assert_eq!(out, "caught");
 }
+
+// --- Dynamic-name `new ReflectionClass($runtimeName)` construction (PART C) ---
+//
+// The reflected-name argument must be derived from `$argc` (or similar runtime-unknown state)
+// rather than a plain `$x = "Literal"; new ReflectionClass($x);` — the AST-level constant folder
+// runs before the checker and would otherwise fold such an assignment back into a literal
+// argument, silently exercising the pre-existing literal path instead of the new dynamic
+// dispatcher this section tests. Mirrors the established idiom in
+// `tests/codegen/casts_and_constants/introspection.rs`'s non-literal `class_exists()` tests.
+
+/// Verifies dynamic `new ReflectionClass($runtimeName)` construction end to end: the reflected
+/// class is resolved at runtime, and every A1 metadata method (`getName`, `getShortName`,
+/// `isAbstract`, `isSubclassOf`, `hasMethod`) returns the SAME per-class values the literal path
+/// would — proving the dynamic dispatcher's construction branch populates the exact same
+/// closed-world metadata slots as `lower_reflection_owner_new`'s literal-argument path (php -n
+/// verified expected values).
+#[test]
+fn test_reflection_class_dynamic_construction_valid_name() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class ElephcDynAnimal { public int $legs = 4; }
+class ElephcDynDog extends ElephcDynAnimal {
+    public function bark(): string { return "woof"; }
+}
+$name = $argc > 0 ? "ElephcDynDog" : "NOPE";
+$r = new ReflectionClass($name);
+echo $r->getName();
+echo "|";
+echo $r->getShortName();
+echo "|";
+echo $r->isAbstract() ? "1" : "0";
+echo "|";
+echo $r->isSubclassOf("ElephcDynAnimal") ? "1" : "0";
+echo "|";
+echo $r->hasMethod("bark") ? "1" : "0";
+echo $r->hasMethod("meow") ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "ElephcDynDog|ElephcDynDog|0|1|10");
+}
+
+/// Verifies a dynamic `new ReflectionClass($runtimeName)` construction with an unknown class name
+/// throws a REAL, CATCHABLE `\ReflectionException` (not a fatal) — php -n verified message format
+/// `Class "NAME" does not exist`, echoing the original queried name unmodified. This is the
+/// behavior Symfony's DI container and autoloading fallbacks depend on (`try { new
+/// ReflectionClass(...) } catch (\ReflectionException $e) { ... }`).
+#[test]
+fn test_reflection_class_dynamic_construction_unknown_name_throws_reflection_exception() {
+    let out = compile_and_run(
+        r#"<?php
+$name = $argc > 0 ? "ElephcDynNoSuchClass" : "NOPE";
+try {
+    $r = new ReflectionClass($name);
+    echo "no throw";
+} catch (\ReflectionException $e) {
+    echo "caught:";
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "caught:Class \"ElephcDynNoSuchClass\" does not exist");
+}
+
+/// Verifies the dynamic dispatcher's class-name comparison is case-INSENSITIVE, matching PHP
+/// class-name semantics (php -n verified: `new ReflectionClass("elephcdyndog")` resolves the
+/// declared `ElephcDynDog` class and `getName()` returns its canonical declared-case spelling).
+#[test]
+fn test_reflection_class_dynamic_construction_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcDynDog {
+    public function bark(): string { return "woof"; }
+}
+$name = $argc > 0 ? "elephcdyndog" : "NOPE";
+$r = new ReflectionClass($name);
+echo $r->getName();
+"#,
+    );
+    assert_eq!(out, "ElephcDynDog");
+}
+
+/// Regression: the pre-existing literal-argument `new ReflectionClass("Name")` construction path
+/// stays byte-for-byte unchanged when a dynamic-name call site is ALSO present in the same
+/// program (both routes are compiled: the dynamic dispatcher is emitted once, and every literal
+/// call site still takes the direct compile-time metadata bake — see the `is_const_string_or_
+/// class_value` gate at the top of `lower_reflection_owner_new`).
+#[test]
+fn test_reflection_class_literal_construction_unaffected_by_dynamic_dispatcher_presence() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class ElephcDynAnimal { public int $legs = 4; }
+class ElephcDynDog extends ElephcDynAnimal {
+    public function bark(): string { return "woof"; }
+}
+$name = $argc > 0 ? "ElephcDynDog" : "NOPE";
+$dynamic = new ReflectionClass($name);
+$literal = new ReflectionClass("ElephcDynAnimal");
+echo $dynamic->getName();
+echo "|";
+echo $literal->getName();
+echo "|";
+echo $literal->isAbstract() ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "ElephcDynDog|ElephcDynAnimal|1");
+}

@@ -185,9 +185,13 @@ impl Checker {
     /// Validates constructor arguments for reflection owner classes
     /// (`ReflectionClass`, `ReflectionMethod`, `ReflectionProperty`).
     ///
-    /// Extracts the reflected class/method/property from string literal args,
-    /// then delegates to `validate_reflection_class_attrs`,
-    /// `validate_reflection_method_attrs`, or `validate_reflection_property_attrs`.
+    /// Extracts the reflected class/method/property from string literal args, then delegates to
+    /// `validate_reflection_class_attrs`, `validate_reflection_method_attrs`, or
+    /// `validate_reflection_property_attrs`. For `ReflectionClass` specifically, a non-literal
+    /// `string`-typed first argument is also accepted (routed to the EIR dynamic-name dispatcher,
+    /// see `crate::codegen_ir::lower_inst::objects::reflection`), in which case the
+    /// attribute-argument-support validation is skipped since the reflected class is not known
+    /// until runtime.
     fn validate_reflection_owner_constructor(
         &mut self,
         class_name: &str,
@@ -229,8 +233,21 @@ impl Checker {
         let reflected_class =
             self.reflection_class_literal_arg(class_name, &normalized_args[0], env)?;
         match class_name {
-            "ReflectionClass" => self.validate_reflection_class_attrs(&reflected_class, expr),
+            // `reflected_class` is `None` exactly when `reflection_class_literal_arg` accepted a
+            // non-literal `string`-typed argument for `ReflectionClass` (dynamic-name
+            // construction, routed to the codegen dynamic dispatcher, see
+            // `crate::codegen_ir::lower_inst::objects::reflection`). The reflected class is not
+            // known at compile time, so the attribute-argument-support validation that only
+            // matters for `getAttributes()` is skipped here; codegen resolves the runtime class
+            // name and throws a catchable `\ReflectionException` for an unknown name, matching
+            // PHP.
+            "ReflectionClass" => match reflected_class {
+                Some(name) => self.validate_reflection_class_attrs(&name, expr),
+                None => Ok(()),
+            },
             "ReflectionMethod" => {
+                let reflected_class = reflected_class
+                    .expect("ReflectionMethod always resolves a literal reflected class or errors");
                 let method_name = self.reflection_string_literal_arg(
                     class_name,
                     "method name",
@@ -240,6 +257,8 @@ impl Checker {
                 self.validate_reflection_method_attrs(&reflected_class, &method_name, expr)
             }
             "ReflectionProperty" => {
+                let reflected_class = reflected_class
+                    .expect("ReflectionProperty always resolves a literal reflected class or errors");
                 let property_name = self.reflection_string_literal_arg(
                     class_name,
                     "property name",
@@ -254,15 +273,19 @@ impl Checker {
 
     /// Extracts the class name argument from a reflection constructor call.
     ///
-    /// Accepts a string literal or `ClassName::class` constant; returns the
-    /// resolved class name. Errors if the argument is not a string or if the
-    /// class is undefined.
+    /// Accepts a string literal or `ClassName::class` constant; returns the resolved class name.
+    /// For `ReflectionClass` specifically, ALSO accepts a non-literal `string`-typed expression
+    /// (a runtime value): returns `Ok(None)` to route construction to the EIR dynamic-name
+    /// dispatcher (`crate::codegen_ir::lower_inst::objects::reflection`) instead of a
+    /// compile-time metadata bake. `ReflectionMethod`/`ReflectionProperty`/`ReflectionFunction`
+    /// keep requiring a literal for their (name) argument. Errors if the argument is not a
+    /// string or (for a literal) if the class is undefined.
     fn reflection_class_literal_arg(
         &mut self,
         reflection_type: &str,
         arg: &Expr,
         env: &TypeEnv,
-    ) -> Result<String, CompileError> {
+    ) -> Result<Option<String>, CompileError> {
         let arg_ty = self.infer_type(arg, env)?;
         if !matches!(arg_ty, PhpType::Str) {
             return Err(CompileError::new(
@@ -278,6 +301,7 @@ impl Checker {
             ExprKind::ClassConstant { receiver } => {
                 self.resolve_reflection_class_constant(receiver, arg.span)?
             }
+            _ if reflection_type == "ReflectionClass" => return Ok(None),
             _ => {
                 return Err(CompileError::new(
                     arg.span,
@@ -289,7 +313,7 @@ impl Checker {
             }
         };
         self.resolve_reflection_class_name(&raw_class_name)
-            .map(str::to_string)
+            .map(|name| Some(name.to_string()))
             .ok_or_else(|| {
                 CompileError::new(
                     arg.span,

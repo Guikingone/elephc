@@ -32,6 +32,11 @@ const SPL_EXCEPTION_HIERARCHY: &[(&str, &str)] = &[
     ("RangeException", "RuntimeException"),
     ("UnderflowException", "RuntimeException"),
     ("UnexpectedValueException", "RuntimeException"),
+    // Not an SPL exception (it lives in ext/reflection), but it is a real-PHP
+    // marker subclass of `Exception` with no extra members (php -n verified:
+    // `class ReflectionException extends Exception {}`), so it fits the same
+    // minimal injection mechanism used here instead of a dedicated pass.
+    ("ReflectionException", "Exception"),
 ];
 
 /// Injects SPL exception class declarations into the checker metadata.

@@ -386,6 +386,7 @@ Supported subset:
 - built-in `Error` and `Exception` classes and the `Throwable` interface are available without declaring them
 - `Error` and `Exception` provide `$message`, `$code`, `__construct($message = "", $code = 0)`, and the standard `Throwable` methods: `getMessage()`, `getCode()`, `getFile()`, `getLine()`, `getTrace()`, `getTraceAsString()`, `getPrevious()`, and `__toString()`
 - the SPL exception hierarchy is built-in: `LogicException`, `BadFunctionCallException`, `BadMethodCallException`, `DomainException`, `InvalidArgumentException`, `LengthException`, `OutOfRangeException`, `RuntimeException`, `OutOfBoundsException`, `OverflowException`, `RangeException`, `UnderflowException`, `UnexpectedValueException`. Each is a marker subclass that inherits the constructor, `$message`, and the standard `Throwable` methods from `Exception`. Catch a specific type (`InvalidArgumentException`), an intermediate parent (`LogicException`), or the root (`Exception`/`Throwable`)
+- `ReflectionException` (`extends Exception`) is also built-in: it is thrown by a dynamic-name `new ReflectionClass($name)` construction when the runtime `$name` does not match any closed-world class (see `docs/php/classes.md`'s Reflection section)
 - `throw <expr>;` where `<expr>` has an object type implementing `Throwable`
 - `throw <expr>` can also be used inside expressions such as `??` and ternaries
 - `catch (ClassName $e)` and `catch (TypeA | TypeB $e)` for multi-catch

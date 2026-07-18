@@ -141,6 +141,15 @@ pub fn generate_user_asm_from_ir_with_options(
         regalloc_linear,
         web,
     )?;
+    // Emits the shared, program-wide dynamic `ReflectionClass(name)` construction dispatcher
+    // (see `lower_inst::objects::reflection`) once every per-function body has been lowered —
+    // it is a no-op unless the program actually contains a `new ReflectionClass($runtimeName)`
+    // site with a non-literal reflected-name argument.
+    lower_inst::objects::reflection::emit_reflection_class_dynamic_dispatch_if_needed(
+        module,
+        &mut emitter,
+        &mut data,
+    )?;
     Ok(finalize_user_asm(module, emitter, data, emit, exported_functions))
 }
 

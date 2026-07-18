@@ -621,12 +621,40 @@ fn test_error_reflection_class_undefined_class() {
     );
 }
 
-/// Verifies that `new ReflectionClass($name)` with a dynamic variable reports
-/// "requires a string literal class name".
+/// Verifies that `new ReflectionClass($name)` with a non-string dynamic argument still reports a
+/// loud type error (rejected by ordinary constructor-signature checking before the
+/// dynamic-dispatch relaxation ever runs) — the PART C relaxation (see
+/// `crate::codegen_ir::lower_inst::objects::reflection`) only accepts a `string`-typed non-literal
+/// argument; a statically non-`string` argument stays rejected. The `string`-typed dynamic-name
+/// case itself is now accepted and covered end to end by the codegen tests in
+/// `tests/codegen/oop/reflection.rs` (dynamic construction, unknown-name `\ReflectionException`,
+/// case-insensitive matching).
 #[test]
-fn test_error_reflection_class_dynamic_argument() {
+fn test_error_reflection_class_non_string_argument() {
     expect_error(
-        "<?php $name = 'C'; class C {} $r = new ReflectionClass($name);",
+        "<?php $name = 42; $r = new ReflectionClass($name);",
+        "expects Str, got Int",
+    );
+}
+
+/// Verifies that `new ReflectionMethod($name, 'foo')` with a dynamic (non-literal) class-name
+/// argument STAYS loud — the PART C dynamic-dispatch relaxation is `ReflectionClass`-only; a
+/// two-level class×method dispatch was judged not to extend naturally (code-size explosion) and
+/// is explicitly out of scope.
+#[test]
+fn test_error_reflection_method_dynamic_class_argument_stays_loud() {
+    expect_error(
+        "<?php $name = 'C'; class C { public function foo(): void {} } $r = new ReflectionMethod($name, 'foo');",
+        "requires a string literal class name",
+    );
+}
+
+/// Verifies that `new ReflectionProperty($name, 'prop')` with a dynamic (non-literal) class-name
+/// argument STAYS loud, for the same reason as `ReflectionMethod` above.
+#[test]
+fn test_error_reflection_property_dynamic_class_argument_stays_loud() {
+    expect_error(
+        "<?php $name = 'C'; class C { public int $prop = 1; } $r = new ReflectionProperty($name, 'prop');",
         "requires a string literal class name",
     );
 }

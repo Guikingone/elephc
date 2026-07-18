@@ -26,14 +26,17 @@
 use std::collections::HashSet;
 
 use crate::codegen::abi;
+use crate::codegen::data_section::DataSection;
+use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen_ir::{CodegenIrError, Result};
-use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
+use crate::ir::{Function, Immediate, Instruction, IrType, Module, Op, ValueDef, ValueId};
 use crate::names::php_symbol_key;
 use crate::parser::ast::Visibility;
-use crate::types::{AttrArgEntry, AttrArgValue, AttrKey};
+use crate::types::{AttrArgEntry, AttrArgValue, AttrKey, PhpType};
 
 use super::super::super::context::FunctionContext;
+use super::super::super::frame;
 
 /// Compile-time metadata used to populate one Reflection owner object.
 struct ReflectionOwnerMetadata {
@@ -60,11 +63,22 @@ pub(super) fn is_reflection_owner_class(class_name: &str) -> bool {
 }
 
 /// Lowers builtin Reflection owner allocation by populating compile-time metadata slots.
+///
+/// `ReflectionClass` with a non-literal (runtime) reflected-name operand is routed to the shared
+/// dynamic-name dispatcher instead (see `lower_reflection_class_new_dynamic`); every other case
+/// keeps the compile-time metadata bake below unchanged.
 pub(super) fn lower_reflection_owner_new(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     class_name: &str,
 ) -> Result<()> {
+    if class_name == "ReflectionClass" {
+        if let Some(&name_operand) = inst.operands.first() {
+            if !is_const_string_or_class_value(ctx.function, name_operand) {
+                return lower_reflection_class_new_dynamic(ctx, inst, name_operand);
+            }
+        }
+    }
     let metadata = reflection_owner_metadata(ctx, class_name, inst)?;
     let (class_id, property_count, uninitialized_marker_offsets) = {
         let class_info = ctx
@@ -808,6 +822,7 @@ const REAL_PHP_BUILTIN_CLASS_NAMES: &[&str] = &[
     "ReflectionNamedType",
     "ReflectionType",
     "ReflectionUnionType",
+    "ReflectionException",
     "LogicException",
     "BadFunctionCallException",
     "BadMethodCallException",
@@ -1343,5 +1358,395 @@ fn emit_reflection_property_modifiers(
     };
     emit_reflection_int_property(ctx, bits, modifiers_off, modifiers_off + 8);
     emit_reflection_int_property(ctx, has_declared_type as i64, has_type_off, has_type_off + 8);
+    Ok(())
+}
+
+// ============================================================================================
+// Dynamic-name `new ReflectionClass($runtimeName)` construction.
+//
+// The compile-time metadata bake above requires a literal/`Foo::class` reflected name. The
+// checker (`crate::types::checker::inference::objects::constructors::reflection_class_literal_arg`)
+// now also accepts a non-literal `string`-typed argument for `ReflectionClass` specifically; this
+// section routes that case through ONE shared, program-wide dispatch function emitted once (not
+// per call site, see `emit_reflection_class_dynamic_dispatch_if_needed`). It PHP-case-folds the
+// runtime name (`php_symbol_key`-style) and strips one leading namespace-root backslash, then
+// compares it against every closed-world class name; on a match it performs EXACTLY the same
+// allocation/metadata bake as the literal path above (`emit_object_allocation` +
+// `emit_reflection_string_property` + `emit_reflection_attrs_property` +
+// `emit_reflection_class_extra_metadata`); on no match it throws a real, catchable
+// `\ReflectionException` — mirroring how `__rt_constant` throws `\Error` on a registry miss
+// (`crate::codegen::runtime::system::rt_constant`).
+// ============================================================================================
+
+/// Assembly label of the shared, program-wide dynamic `ReflectionClass(name)` dispatcher.
+const DYNAMIC_CLASS_DISPATCH_LABEL: &str = "_elephc_reflect_class_new_dynamic";
+
+/// Returns true when an EIR value is a compile-time-constant string or class-name literal
+/// (an `Op::ConstStr` or `Op::ConstClassName` instruction) — the shape the literal metadata bake
+/// above requires. Shared by the per-call-site dispatch decision and the module-wide scan that
+/// decides whether the dynamic dispatcher needs to be emitted at all.
+fn is_const_string_or_class_value(function: &Function, value: ValueId) -> bool {
+    let Some(value_ref) = function.value(value) else {
+        return false;
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return false;
+    };
+    let Some(inst_ref) = function.instruction(inst) else {
+        return false;
+    };
+    matches!(inst_ref.op, Op::ConstStr | Op::ConstClassName)
+}
+
+/// Lowers `new ReflectionClass($runtimeName)` for a non-literal reflected-name operand.
+///
+/// Materializes the runtime string into the shared dispatcher's call convention (name
+/// pointer/length in the first two integer argument registers, matching
+/// `crate::codegen::runtime::system::rt_constant`'s `x0/rdi`+`x1/rsi` convention), then branches
+/// to `DYNAMIC_CLASS_DISPATCH_LABEL`. That label never returns on a miss (it throws); on a match
+/// it leaves the constructed object pointer in the ABI integer result register, exactly like the
+/// literal-argument path's `ctx.store_result_value(result)` expects.
+fn lower_reflection_class_new_dynamic(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name_operand: ValueId,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.load_string_value_to_regs(name_operand, "x0", "x1")?,
+        Arch::X86_64 => ctx.load_string_value_to_regs(name_operand, "rdi", "rsi")?,
+    };
+    abi::emit_call_label(ctx.emitter, DYNAMIC_CLASS_DISPATCH_LABEL);
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
+    ctx.store_result_value(result)
+}
+
+/// Iterates every function-like body lowered into the EIR module.
+///
+/// Mirrors `crate::ir_lower::program::all_lowered_functions`; duplicated here (rather than
+/// exported from there) because that helper is private to the lowering crate and this scan runs
+/// once from the codegen backend after lowering has fully completed, not during it.
+fn reflection_dispatch_scan_functions(module: &Module) -> impl Iterator<Item = &Function> {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+}
+
+/// Returns the class name an `Op::ObjectNew` instruction constructs, or `None` for a malformed
+/// instruction (never happens for a module that passed EIR validation).
+fn object_new_class_name<'a>(module: &'a Module, inst: &Instruction) -> Option<&'a str> {
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return None;
+    };
+    module
+        .data
+        .class_names
+        .get(data.as_raw() as usize)
+        .map(String::as_str)
+}
+
+/// Returns true when the module contains at least one `new ReflectionClass($runtimeName)` site
+/// with a non-literal reflected-name operand — i.e. whether the shared dynamic dispatcher needs
+/// to be emitted at all. Emitting it unconditionally would add roughly one construction branch
+/// per closed-world class to every compiled program, regardless of whether it uses this feature.
+fn module_needs_reflection_class_dynamic_dispatch(module: &Module) -> bool {
+    reflection_dispatch_scan_functions(module).any(|function| {
+        function.instructions.iter().any(|inst| {
+            inst.op == Op::ObjectNew
+                && object_new_class_name(module, inst) == Some("ReflectionClass")
+                && inst
+                    .operands
+                    .first()
+                    .is_some_and(|&value| !is_const_string_or_class_value(function, value))
+        })
+    })
+}
+
+/// Emits the shared, program-wide dynamic `ReflectionClass(name)` construction dispatcher, once,
+/// if and only if the module actually contains a dynamic-name call site (see
+/// `module_needs_reflection_class_dynamic_dispatch`). No-op otherwise.
+///
+/// Called once, after all per-function EIR lowering has completed, from
+/// `crate::codegen_ir::generate_user_asm_from_ir_with_options`.
+pub(crate) fn emit_reflection_class_dynamic_dispatch_if_needed(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) -> Result<()> {
+    if !module_needs_reflection_class_dynamic_dispatch(module) {
+        return Ok(());
+    }
+    emit_reflection_class_dynamic_dispatch(module, emitter, data)
+}
+
+/// Builds and emits the dispatcher body.
+///
+/// Constructs a throwaway, valid-but-empty synthetic `ir::Function` purely so the existing
+/// metadata bakers above (`emit_object_allocation`, `emit_reflection_string_property`,
+/// `emit_reflection_attrs_property`, `emit_reflection_class_extra_metadata`, …) can be reused
+/// unchanged: none of them read any per-real-function frame/value-placement state, only
+/// `ctx.emitter`/`ctx.data`/`ctx.module`, so a trivial empty `Function` and its (equally trivial)
+/// `FrameLayout` are a fully valid `FunctionContext` for this purpose. Every dispatch branch below
+/// performs EXACTLY what `lower_reflection_owner_new`'s `"ReflectionClass"` literal-argument path
+/// does for the same class.
+fn emit_reflection_class_dynamic_dispatch(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) -> Result<()> {
+    let mut class_names: Vec<&String> = module.class_infos.keys().collect();
+    class_names.sort();
+
+    let target = emitter.target;
+    let synthetic = Function::new(
+        format!("{}_impl", DYNAMIC_CLASS_DISPATCH_LABEL),
+        IrType::Void,
+        PhpType::Void,
+    );
+    let layout = frame::layout_for_function(&synthetic, target, false);
+    let mut ctx = FunctionContext::new(module, &synthetic, emitter, data, layout, false, false, false, None);
+
+    ctx.emitter.blank();
+    ctx.emitter
+        .comment("--- reflection: dynamic ReflectionClass(name) construction dispatch ---");
+    ctx.emitter.label_global(DYNAMIC_CLASS_DISPATCH_LABEL);
+    emit_dynamic_dispatch_prologue(&mut ctx);
+    emit_dynamic_dispatch_query_normalization(&mut ctx);
+
+    let not_found_label = format!("{}_not_found", DYNAMIC_CLASS_DISPATCH_LABEL);
+    let done_label = format!("{}_done", DYNAMIC_CLASS_DISPATCH_LABEL);
+    let case_labels: Vec<String> = (0..class_names.len())
+        .map(|index| format!("{}_case_{}", DYNAMIC_CLASS_DISPATCH_LABEL, index))
+        .collect();
+
+    for (name, label) in class_names.iter().zip(case_labels.iter()) {
+        let lowered = php_symbol_key(name.trim_start_matches('\\'));
+        super::emit_branch_if_dynamic_name_matches(&mut ctx, &lowered, label);
+    }
+    abi::emit_jump(ctx.emitter, &not_found_label);
+
+    for (name, label) in class_names.iter().zip(case_labels.iter()) {
+        ctx.emitter.label(label);
+        // Drop the two parked query pairs (normalized + original, 16 bytes each) — a match no
+        // longer needs them, and construction below assumes the same clean stack the literal
+        // path starts from right after the prologue.
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        emit_reflection_class_dynamic_construct(&mut ctx, name)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&not_found_label);
+    emit_reflection_class_not_found_throw(&mut ctx)?;
+
+    ctx.emitter.label(&done_label);
+    emit_dynamic_dispatch_epilogue(&mut ctx);
+    Ok(())
+}
+
+/// Emits the leaf-function prologue for the shared dynamic dispatcher: a plain frame-pointer
+/// save/establish, matching the hand-written runtime helpers this dispatcher is modeled after
+/// (e.g. `crate::codegen::runtime::system::rt_class_exists`).
+fn emit_dynamic_dispatch_prologue(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("stp x29, x30, [sp, #-16]!");               // save frame pointer and return address
+            ctx.emitter.instruction("mov x29, sp");                             // establish the new frame pointer
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("push rbp");                                // preserve the caller frame pointer
+            ctx.emitter.instruction("mov rbp, rsp");                            // establish an aligned helper frame
+        }
+    }
+}
+
+/// Emits the matching epilogue. The constructed object pointer is already parked in the ABI
+/// integer result register by the matched dispatch branch (`emit_reflection_class_dynamic_construct`
+/// leaves it there, mirroring every `emit_reflection_*` baker's calling convention).
+fn emit_dynamic_dispatch_epilogue(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldp x29, x30, [sp], #16");                 // restore frame pointer and return address
+            ctx.emitter.instruction("ret");                                     // return the constructed object pointer in x0
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("pop rbp");                                 // restore the caller frame pointer
+            ctx.emitter.instruction("ret");                                     // return the constructed object pointer in rax
+        }
+    }
+}
+
+/// Parks the caller's ORIGINAL `(name_ptr, name_len)` pair on the temporary stack (ends up at
+/// offset 16/24 once the normalized copy below is parked on top of it) — kept byte-for-byte, in
+/// case the query matches nothing and the exception message needs to echo it back exactly as PHP
+/// does (php -n verified: `Class "NAME" does not exist`, where NAME is the UNMODIFIED argument the
+/// caller passed, backslash and case included) — then computes a leading-backslash-stripped,
+/// PHP-case-folded WORKING copy for the compare chain, parked at offset 0/8 (PHP class names are
+/// case-insensitive; `super::emit_branch_if_dynamic_name_matches` reads its query from exactly
+/// these two offsets).
+fn emit_dynamic_dispatch_query_normalization(ctx: &mut FunctionContext<'_>) {
+    let skip_label = ctx.next_label("reflect_dyn_skip_bs");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "x0", "x1");                       // park the ORIGINAL query for the not-found exception message
+            ctx.emitter
+                .instruction(&format!("cbz x1, {}", skip_label));                   // an empty query cannot start with a leading backslash
+            ctx.emitter.instruction("ldrb w9, [x0]");                           // peek at the query's first byte
+            ctx.emitter.instruction("cmp w9, #0x5c");                           // is it a leading namespace-root backslash?
+            ctx.emitter
+                .instruction(&format!("b.ne {}", skip_label));                      // no backslash to strip
+            ctx.emitter.instruction("add x0, x0, #1");                          // strip the leading backslash from the working pointer
+            ctx.emitter.instruction("sub x1, x1, #1");                          // and from the working length
+            ctx.emitter.label(&skip_label);
+            ctx.emitter.instruction("mov x2, x1");                              // __rt_strtolower expects the length in x2
+            ctx.emitter.instruction("mov x1, x0");                              // __rt_strtolower expects the pointer in x1
+            abi::emit_call_label(ctx.emitter, "__rt_strtolower");
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                       // park the case-folded working query for the compare chain
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "rdi", "rsi");                     // park the ORIGINAL query for the not-found exception message
+            ctx.emitter.instruction("test rsi, rsi");                           // an empty query cannot start with a leading backslash
+            ctx.emitter
+                .instruction(&format!("jz {}", skip_label));
+            ctx.emitter.instruction("movzx r9d, BYTE PTR [rdi]");               // peek at the query's first byte
+            ctx.emitter.instruction("cmp r9b, 0x5c");                           // is it a leading namespace-root backslash?
+            ctx.emitter
+                .instruction(&format!("jne {}", skip_label));                       // no backslash to strip
+            ctx.emitter.instruction("add rdi, 1");                              // strip the leading backslash from the working pointer
+            ctx.emitter.instruction("sub rsi, 1");                              // and from the working length
+            ctx.emitter.label(&skip_label);
+            ctx.emitter.instruction("mov rax, rdi");                            // __rt_strtolower expects the pointer in rax
+            ctx.emitter.instruction("mov rdx, rsi");                            // and the length in rdx
+            abi::emit_call_label(ctx.emitter, "__rt_strtolower");
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                     // park the case-folded working query for the compare chain
+        }
+    }
+}
+
+/// Bakes one class's `ReflectionClass` construction (allocation + `__name` + `__attrs` + the A1
+/// closed-world metadata slots) into the object left in the ABI integer result register — the
+/// exact same sequence `lower_reflection_owner_new`'s literal-argument `"ReflectionClass"` path
+/// runs, just driven by a Rust-loop-known `reflected_class_name` instead of a resolved EIR
+/// operand.
+///
+/// `reflected_class_name` is the CLASS BEING REFLECTED (e.g. `"ElephcDynDog"`), never the
+/// allocated object's own class. The allocated object is always a `ReflectionClass` SHELL
+/// instance — its class id/property count/marker offsets come from the `"ReflectionClass"` shell
+/// itself, exactly like the literal path (`lower_reflection_owner_new`'s `class_name` parameter is
+/// always `"ReflectionClass"` there too); `reflected_class_name` is only used to look up the
+/// VALUES baked into that shell's slots (`__name`, `__attrs`, the A1 metadata fields).
+fn emit_reflection_class_dynamic_construct(
+    ctx: &mut FunctionContext<'_>,
+    reflected_class_name: &str,
+) -> Result<()> {
+    let (class_id, property_count, uninitialized_marker_offsets) = {
+        let class_info = ctx
+            .module
+            .class_infos
+            .get("ReflectionClass")
+            .ok_or_else(|| CodegenIrError::unsupported("unknown class ReflectionClass"))?;
+        (
+            class_info.class_id,
+            class_info.properties.len(),
+            super::uninitialized_property_marker_offsets(class_info),
+        )
+    };
+    let (attr_names, attr_args) = {
+        let reflected_info = ctx.module.class_infos.get(reflected_class_name).ok_or_else(|| {
+            CodegenIrError::unsupported(format!("unknown class {}", reflected_class_name))
+        })?;
+        (
+            reflected_info.attribute_names.clone(),
+            reflected_info.attribute_args.clone(),
+        )
+    };
+    super::emit_object_allocation(
+        ctx,
+        class_id,
+        property_count,
+        false,
+        &uninitialized_marker_offsets,
+        &[],
+    )?;
+    emit_reflection_string_property(ctx, reflected_class_name, 8, 16);
+    emit_reflection_attrs_property(ctx, "ReflectionClass", &attr_names, &attr_args)?;
+    emit_reflection_class_extra_metadata(ctx, reflected_class_name)?;
+    Ok(())
+}
+
+/// Throws a catchable `\ReflectionException` for a dynamic `ReflectionClass(name)` construction
+/// whose case-folded query matched no closed-world class.
+///
+/// Builds PHP's exact message (php -n verified: `Class "NAME" does not exist`, NAME = the
+/// ORIGINAL, unmodified query the caller passed — reloaded from the temporary stack slot
+/// `emit_dynamic_dispatch_query_normalization` parked it at) via `__rt_concat`/`__rt_str_persist`,
+/// then throws through the same mechanism `crate::codegen::runtime::system::rt_constant` uses for
+/// a `constant()` registry miss: allocate the compact Throwable payload, stamp
+/// `_reflection_exception_class_id`, publish it to `_exc_value`, and enter `__rt_throw_current`.
+/// Never returns.
+fn emit_reflection_class_not_found_throw(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let (prefix_label, prefix_len) = ctx.data.add_string(b"Class \"");
+    let (suffix_label, suffix_len) = ctx.data.add_string(b"\" does not exist");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &prefix_label);             // message prefix pointer
+            ctx.emitter
+                .instruction(&format!("mov x2, #{}", prefix_len));                  // message prefix byte length
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x3", 16);             // original query pointer (parked before normalization)
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x4", 24);             // original query byte length
+            abi::emit_call_label(ctx.emitter, "__rt_concat");                       // prefix concatenated with the original query
+            abi::emit_symbol_address(ctx.emitter, "x3", &suffix_label);             // message suffix pointer
+            ctx.emitter
+                .instruction(&format!("mov x4, #{}", suffix_len));                  // message suffix byte length
+            abi::emit_call_label(ctx.emitter, "__rt_concat");                       // append the closing quote and suffix
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");                  // own a heap copy of the message bytes
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                       // park the owned message across the allocation call
+            ctx.emitter.instruction("mov x0, #32");                             // request Throwable payload storage
+            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");                   // allocate the ReflectionException object payload
+            ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = object instance
+            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation as a runtime object
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_reflection_exception_class_id", 0); // load ReflectionException's runtime class id
+            ctx.emitter.instruction("str x9, [x0]");                            // store the class id at the object header
+            abi::emit_pop_reg_pair(ctx.emitter, "x9", "x10");                       // reload the owned message pointer/length
+            ctx.emitter.instruction("str x9, [x0, #8]");                        // store the exception message pointer
+            ctx.emitter.instruction("str x10, [x0, #16]");                      // store the exception message length
+            ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
+            abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);      // publish the active exception object
+            abi::emit_jump(ctx.emitter, "__rt_throw_current");                      // enter the standard exception unwinder
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rax", &prefix_label);            // message prefix pointer
+            ctx.emitter
+                .instruction(&format!("mov rdx, {}", prefix_len));                  // message prefix byte length
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 16);            // original query pointer (parked before normalization)
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 24);            // original query byte length
+            abi::emit_call_label(ctx.emitter, "__rt_concat");                       // prefix concatenated with the original query
+            abi::emit_symbol_address(ctx.emitter, "rdi", &suffix_label);            // message suffix pointer
+            ctx.emitter
+                .instruction(&format!("mov rsi, {}", suffix_len));                  // message suffix byte length
+            abi::emit_call_label(ctx.emitter, "__rt_concat");                       // append the closing quote and suffix
+            ctx.emitter.instruction("mov rdi, rax");                            // move the message pointer into the persist argument
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");                  // own a heap copy of the message (ptr in rax, len carried in rdx)
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                     // park the owned message across the allocation call
+            ctx.emitter.instruction("mov rax, 32");                             // request Throwable payload storage
+            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");                   // allocate the ReflectionException object payload
+            ctx.emitter.instruction("mov r10, 0x4548504c00000006");             // x86_64 heap-kind word: object magic + kind 6
+            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation as a runtime object
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_reflection_exception_class_id", 0); // load ReflectionException's runtime class id
+            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at the object header
+            abi::emit_pop_reg_pair(ctx.emitter, "r10", "r11");                      // reload the owned message pointer/length
+            ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store the exception message pointer
+            ctx.emitter.instruction("mov QWORD PTR [rax + 16], r11");           // store the exception message length
+            ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
+            abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);     // publish the active exception object
+            abi::emit_jump(ctx.emitter, "__rt_throw_current");                      // enter the standard exception unwinder
+        }
+    }
     Ok(())
 }

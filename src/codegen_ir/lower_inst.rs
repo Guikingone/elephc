@@ -49,7 +49,13 @@ mod externs;
 mod floats;
 mod hashes;
 mod iterators;
-mod objects;
+// `pub(crate)`, not the usual `pub(super)`-chained default: `codegen_ir/mod.rs`'s
+// `generate_user_asm_from_ir_with_options` calls
+// `objects::reflection::emit_reflection_class_dynamic_dispatch_if_needed` once, after all
+// per-function lowering, to emit the shared dynamic `ReflectionClass(name)` dispatcher — an
+// ancestor-module reach that plain `pub(super)` chaining (each hop only reaching its immediate
+// parent) cannot express.
+pub(crate) mod objects;
 mod ownership;
 mod pointers;
 mod predicates;

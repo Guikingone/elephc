@@ -45,7 +45,10 @@ use crate::codegen_ir::literal_defaults::{
 };
 use crate::codegen_ir::{CodegenIrError, Result};
 
-mod reflection;
+// `pub(crate)` so `codegen_ir/mod.rs` can reach
+// `reflection::emit_reflection_class_dynamic_dispatch_if_needed` (see the matching note on
+// `lower_inst`'s `pub(crate) mod objects;`).
+pub(crate) mod reflection;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 const RUNTIME_NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
