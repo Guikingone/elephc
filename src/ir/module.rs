@@ -88,6 +88,16 @@ pub struct Module {
     /// name bytes) materialized for runtime `defined()`/`constant()` lookups when
     /// `required_runtime_features.const_introspection` is set.
     pub const_registry: Vec<(String, ConstScalar)>,
+    /// Case-folded class/enum name -> declaring source file, snapshotted from the entry file's
+    /// own top-level declarations before include/autoload merging (see
+    /// `crate::pipeline::scan_reflection_source_files`). Backs `ReflectionClass::getFileName()`
+    /// (`crate::codegen_ir::lower_inst::objects::reflection`); a class not covered by this
+    /// snapshot (declared in an included/autoloaded file, or an ambiguous duplicate name) is
+    /// simply absent, and `getFileName()` reports PHP's `false` for it.
+    pub class_source_files: HashMap<String, String>,
+    /// Same as `class_source_files`, for free-function declarations. Backs
+    /// `ReflectionFunction::getFileName()`.
+    pub function_source_files: HashMap<String, String>,
 }
 
 impl Module {
@@ -121,6 +131,8 @@ impl Module {
             packed_layouts: PackedLayoutTable::default(),
             required_runtime_features: RuntimeFeatures::none(),
             const_registry: Vec::new(),
+            class_source_files: HashMap::new(),
+            function_source_files: HashMap::new(),
         }
     }
 

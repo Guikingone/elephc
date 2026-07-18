@@ -106,6 +106,21 @@ pub(crate) fn compile(config: CliConfig) {
     let parsed = magic_constants::substitute_file_and_scope_constants(parsed, &main_file_path);
     timings.record_since("magic-constants", phase_started);
 
+    // Snapshot which top-level classes/enums/functions are declared directly IN THIS FILE,
+    // before `include`/`require` merging (resolver) or autoloaded-library splicing (autoload)
+    // can add declarations from OTHER files into `parsed`. Backs `ReflectionClass::getFileName()`
+    // / `ReflectionFunction::getFileName()` (see `scan_reflection_source_files`): declarations
+    // that only exist in an included/autoloaded file are simply absent from these maps, so
+    // `getFileName()` reports PHP's `false` for them rather than guessing. Canonicalized (symlinks
+    // resolved) to match PHP's own `getFileName()`/`__FILE__` behavior (see
+    // `crate::magic_constants::file_pass::substitute_file_constants`, which canonicalizes the
+    // same way).
+    let canonical_main_file_path = main_file_path
+        .canonicalize()
+        .unwrap_or_else(|_| main_file_path.clone());
+    let (class_source_files, function_source_files) =
+        resolver::scan_reflection_source_files(&parsed, &canonical_main_file_path);
+
     let parsed = conditional::apply(parsed, &defines);
 
     let phase_started = Instant::now();
@@ -333,7 +348,7 @@ pub(crate) fn compile(config: CliConfig) {
 
     if emit_ir {
         let phase_started = Instant::now();
-        let mut module = match ir_lower::lower_program(&ast, &check_result, target) {
+        let mut module = match ir_lower::lower_program(&ast, &check_result, target, &class_source_files, &function_source_files) {
             Ok(module) => module,
             Err(err) => {
                 eprintln!("EIR lowering error: {}", err);
@@ -358,7 +373,7 @@ pub(crate) fn compile(config: CliConfig) {
 
     let ir_module = if matches!(backend, CodegenBackend::Eir) {
         let phase_started = Instant::now();
-        let mut module = match ir_lower::lower_program(&ast, &check_result, target) {
+        let mut module = match ir_lower::lower_program(&ast, &check_result, target, &class_source_files, &function_source_files) {
             Ok(module) => module,
             Err(err) => {
                 eprintln!("EIR lowering error: {}", err);

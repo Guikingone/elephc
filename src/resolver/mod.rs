@@ -23,6 +23,7 @@ mod hoist_conditional_functions;
 mod hoist_includes;
 mod include_once;
 mod include_path;
+mod reflection_source_files;
 pub(crate) mod path_eval;
 mod state;
 mod stmt_exprs;
@@ -37,6 +38,7 @@ use engine::resolve_stmts;
 use state::ResolveState;
 
 pub use hoist_conditional_functions::hoist_conditional_function_declarations;
+pub use reflection_source_files::scan_reflection_source_files;
 
 /// Resolves all include/require statements by inlining the referenced files.
 ///

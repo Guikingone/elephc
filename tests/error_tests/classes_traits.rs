@@ -621,20 +621,19 @@ fn test_error_reflection_class_undefined_class() {
     );
 }
 
-/// Verifies that `new ReflectionClass($name)` with a non-string dynamic argument still reports a
-/// loud type error (rejected by ordinary constructor-signature checking before the
-/// dynamic-dispatch relaxation ever runs) — the PART C relaxation (see
-/// `crate::codegen_ir::lower_inst::objects::reflection`) only accepts a `string`-typed non-literal
-/// argument; a statically non-`string` argument stays rejected. The `string`-typed dynamic-name
-/// case itself is now accepted and covered end to end by the codegen tests in
-/// `tests/codegen/oop/reflection.rs` (dynamic construction, unknown-name `\ReflectionException`,
-/// case-insensitive matching).
+/// SUPERSEDES the old `test_error_reflection_class_non_string_argument`: `new
+/// ReflectionClass($name)` with a non-`string`-typed dynamic argument is NO LONGER a compile
+/// error — PHP's real `__construct(object|string $objectOrClass)` signature accepts ANY runtime
+/// value and only rejects the wrong shape at RUNTIME (php -n verified: `new ReflectionClass(42)`
+/// compiles and throws a real `\ReflectionException`/`\TypeError` at runtime, never a parse/type
+/// error), so elephc now compiles this too (see `crate::types::checker::inference::objects::
+/// constructors::reflection_class_literal_arg` and `crate::codegen_ir::lower_inst::objects::
+/// reflection::lower_reflection_class_new_dynamic`). Full runtime-behavior coverage (weak
+/// scalar coercion, object resolution, `\TypeError` on array/resource) lives in the codegen
+/// tests in `tests/codegen/oop/reflection.rs`.
 #[test]
-fn test_error_reflection_class_non_string_argument() {
-    expect_error(
-        "<?php $name = 42; $r = new ReflectionClass($name);",
-        "expects Str, got Int",
-    );
+fn test_reflection_class_non_string_argument_compiles() {
+    expect_ok("<?php $name = 42; $r = new ReflectionClass($name); echo get_class($r);");
 }
 
 /// Verifies that `new ReflectionMethod($name, 'foo')` with a dynamic (non-literal) class-name
@@ -964,6 +963,23 @@ $u = make(true);
 echo $u->frobnicate();
 "#,
         "Undefined method: A|B::frobnicate",
+    );
+}
+
+/// Verifies real PHP does NOT declare `ReflectionProperty::getFileName()` (php -n verified: a
+/// hard "Call to undefined method ReflectionProperty::getFileName()" fatal — only
+/// `ReflectionClass` and `ReflectionFunctionAbstract`, i.e. `ReflectionFunction`/
+/// `ReflectionMethod`, have it), and elephc matches by rejecting the call at compile time rather
+/// than fabricating an answer PHP itself does not provide.
+#[test]
+fn test_error_reflection_property_has_no_get_file_name_method() {
+    expect_error(
+        r#"<?php
+class ElephcNoFileProp { public string $name = ""; }
+$rp = new ReflectionProperty("ElephcNoFileProp", "name");
+echo $rp->getFileName();
+"#,
+        "Undefined method: ReflectionProperty::getFileName",
     );
 }
 

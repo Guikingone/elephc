@@ -115,6 +115,11 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let synthetic_main = dir.join("test.php");
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
+    // Mirror `pipeline::compile`'s placement: snapshot declaration source files for
+    // `ReflectionClass`/`ReflectionFunction::getFileName()` right after magic-constant
+    // substitution, before autoload/resolver can merge in other files.
+    let (class_source_files, function_source_files) =
+        elephc::resolver::scan_reflection_source_files(&ast, &synthetic_main);
     let ast = elephc::conditional::apply(ast, defines);
     let (autoload_registry, ast) = elephc::autoload::Registry::build(dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
@@ -157,7 +162,12 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
-    let ir_module = lower_and_validate_ir_for_codegen_fixture(&optimized, &check_result);
+    let ir_module = lower_and_validate_ir_for_codegen_fixture(
+        &optimized,
+        &check_result,
+        &class_source_files,
+        &function_source_files,
+    );
     let (user_asm, runtime_asm, runtime_features) = match selected_test_codegen_backend() {
         TestCodegenBackend::Legacy => {
             let (user_asm, runtime_asm) = elephc::codegen::generate(
@@ -227,9 +237,17 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
 fn lower_and_validate_ir_for_codegen_fixture(
     program: &elephc::parser::ast::Program,
     check_result: &elephc::types::CheckResult,
+    class_source_files: &std::collections::HashMap<String, String>,
+    function_source_files: &std::collections::HashMap<String, String>,
 ) -> elephc::ir::Module {
-    let mut module = elephc::ir_lower::lower_program(program, check_result, target())
-        .expect("AST-to-EIR lowering failed for codegen fixture");
+    let mut module = elephc::ir_lower::lower_program(
+        program,
+        check_result,
+        target(),
+        class_source_files,
+        function_source_files,
+    )
+    .expect("AST-to-EIR lowering failed for codegen fixture");
     if ir_opt_enabled_for_codegen_fixture() {
         elephc::ir_passes::optimize_module(&mut module);
     }

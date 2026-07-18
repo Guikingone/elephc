@@ -274,12 +274,23 @@ impl Checker {
     /// Extracts the class name argument from a reflection constructor call.
     ///
     /// Accepts a string literal or `ClassName::class` constant; returns the resolved class name.
-    /// For `ReflectionClass` specifically, ALSO accepts a non-literal `string`-typed expression
-    /// (a runtime value): returns `Ok(None)` to route construction to the EIR dynamic-name
-    /// dispatcher (`crate::codegen_ir::lower_inst::objects::reflection`) instead of a
-    /// compile-time metadata bake. `ReflectionMethod`/`ReflectionProperty`/`ReflectionFunction`
-    /// keep requiring a literal for their (name) argument. Errors if the argument is not a
-    /// string or (for a literal) if the class is undefined.
+    ///
+    /// For `ReflectionClass` specifically — matching PHP's real `__construct(object|string
+    /// $objectOrClass)` signature (php -n verified: `new ReflectionClass($obj)` is legal PHP) —
+    /// ANY non-literal expression is accepted regardless of its static type (`Str`, `Mixed`,
+    /// `Union`, `Object`, or anything else a caller might pass) and routes to the EIR dynamic
+    /// dispatcher (`crate::codegen_ir::lower_inst::objects::reflection::
+    /// lower_reflection_class_new_dynamic`), which performs the ACTUAL runtime type
+    /// determination this static checker cannot: unbox a `Mixed`/`Union` operand's runtime tag,
+    /// resolve an object operand's concrete runtime class, and throw a real `\TypeError` for any
+    /// other runtime tag (php -n verified: `new ReflectionClass(42)` throws `TypeError:
+    /// ReflectionClass::__construct(): Argument #1 ($objectOrClass) must be of type
+    /// object|string, int given`) — exactly mirroring how PHP itself only rejects the wrong
+    /// argument shape at RUNTIME, not at parse/compile time, for this constructor.
+    ///
+    /// `ReflectionMethod`/`ReflectionProperty`/`ReflectionFunction` keep requiring a literal
+    /// `Str`-typed expression for their (name) argument — errors if the argument is not
+    /// statically `Str`, or (for a literal) if the class is undefined.
     fn reflection_class_literal_arg(
         &mut self,
         reflection_type: &str,
@@ -287,21 +298,23 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<Option<String>, CompileError> {
         let arg_ty = self.infer_type(arg, env)?;
-        if !matches!(arg_ty, PhpType::Str) {
-            return Err(CompileError::new(
-                arg.span,
-                &format!(
-                    "{}::__construct() first argument must be a string class name",
-                    reflection_type
-                ),
-            ));
-        }
         let raw_class_name = match &arg.kind {
-            ExprKind::StringLiteral(class_name) => class_name.clone(),
-            ExprKind::ClassConstant { receiver } => {
+            ExprKind::StringLiteral(class_name) if matches!(arg_ty, PhpType::Str) => {
+                class_name.clone()
+            }
+            ExprKind::ClassConstant { receiver } if matches!(arg_ty, PhpType::Str) => {
                 self.resolve_reflection_class_constant(receiver, arg.span)?
             }
             _ if reflection_type == "ReflectionClass" => return Ok(None),
+            _ if !matches!(arg_ty, PhpType::Str) => {
+                return Err(CompileError::new(
+                    arg.span,
+                    &format!(
+                        "{}::__construct() first argument must be a string class name",
+                        reflection_type
+                    ),
+                ));
+            }
             _ => {
                 return Err(CompileError::new(
                     arg.span,

@@ -41,7 +41,7 @@ mod regex;
 mod spl;
 mod system;
 mod strings;
-mod types;
+pub(in crate::codegen_ir::lower_inst) mod types;
 
 const DEFINE_ALREADY_DEFINED_WARNING: &str =
     "Warning: define(): Constant already defined\n";

@@ -23,6 +23,7 @@ mod stmt;
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashMap;
 use std::fmt;
 
 use crate::codegen::platform::Target;
@@ -31,12 +32,20 @@ use crate::parser::ast::Program;
 use crate::types::CheckResult;
 
 /// Lowers `program` into an EIR module for `target`.
+///
+/// `class_source_files`/`function_source_files` are the case-folded-name -> declaring-file maps
+/// produced by `crate::pipeline::scan_reflection_source_files` for the entry file; they back
+/// `ReflectionClass`/`ReflectionFunction::getFileName()` (see
+/// `crate::codegen_ir::lower_inst::objects::reflection`). Pass empty maps when this feature is
+/// not needed (e.g. most tests).
 pub fn lower_program(
     program: &Program,
     check_result: &CheckResult,
     target: Target,
+    class_source_files: &HashMap<String, String>,
+    function_source_files: &HashMap<String, String>,
 ) -> Result<Module, LoweringError> {
-    program::lower(program, check_result, target)
+    program::lower(program, check_result, target, class_source_files, function_source_files)
 }
 
 /// Error produced while building or validating EIR.

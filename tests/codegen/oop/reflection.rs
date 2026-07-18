@@ -438,3 +438,279 @@ echo $literal->isAbstract() ? "1" : "0";
     );
     assert_eq!(out, "ElephcDynDog|ElephcDynAnimal|1");
 }
+
+// -- getFileName() (Part D: declaring-file plumbing) + getParentClass() (Part C) --
+//
+// `getFileName()` is baked from `crate::pipeline::scan_reflection_source_files`'s snapshot of
+// the entry file's OWN top-level declarations (see
+// `crate::codegen_ir::lower_inst::objects::reflection::reflection_class_extra_metadata`); the
+// codegen test harness (`tests/codegen/support/compiler.rs`) mirrors that exact placement using
+// its synthetic `<temp>/test.php` main file, so — like the existing `__FILE__` tests in
+// `tests/codegen/magic_constants.rs` — these assertions check the path SHAPE (absolute, ends
+// with `test.php`) rather than an exact string.
+
+/// Verifies `ReflectionClass::getFileName()` returns the SAME absolute path for a literal- and a
+/// dynamically-constructed receiver of classes declared in the same (synthetic) file, and that
+/// `ReflectionFunction::getFileName()` agrees too — all three point at one physical file.
+#[test]
+fn test_reflection_get_file_name_literal_dynamic_and_function_agree() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcFileA {}
+class ElephcFileB {}
+function elephcFileFn(): string { return "x"; }
+
+$literal = new ReflectionClass("ElephcFileA");
+$name = $argc > 0 ? "ElephcFileB" : "NOPE";
+$dynamic = new ReflectionClass($name);
+$rf = new ReflectionFunction("elephcFileFn");
+
+$file1 = $literal->getFileName();
+$file2 = $dynamic->getFileName();
+$file3 = $rf->getFileName();
+echo ($file1 === $file2 && $file2 === $file3) ? "same" : "different";
+echo "|";
+echo (str_starts_with($file1, "/") && str_ends_with($file1, "test.php")) ? "shaped" : "unshaped";
+"#,
+    );
+    assert_eq!(out, "same|shaped");
+}
+
+/// Verifies `ReflectionClass::getFileName()` on a builtin/internal class returns PHP's `false`
+/// sentinel (php -n verified: `(new ReflectionClass('stdClass'))->getFileName() === false`) —
+/// the `__file` slot's empty-string sentinel correctly surfaces as `false`, not an empty string.
+#[test]
+fn test_reflection_class_get_file_name_builtin_class_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+$r = new ReflectionClass("stdClass");
+var_dump($r->getFileName());
+"#,
+    );
+    assert_eq!(out, "bool(false)\n");
+}
+
+/// Verifies `ReflectionMethod::getFileName()` resolves to the file of the class that ACTUALLY
+/// DECLARES the method, not the constructor's `class_name` argument (php -n verified:
+/// `(new ReflectionMethod('Dog', 'speak'))->getFileName()` for a `speak()` inherited from
+/// `Animal` reports `Animal`'s file) — both classes are declared in the same synthetic file
+/// here, so this specifically exercises the `method_declaring_classes` resolution rather than
+/// the (separately covered) cross-file case.
+#[test]
+fn test_reflection_method_get_file_name_matches_declaring_class() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcFileAnimal {
+    public function speak(): string { return "..."; }
+}
+class ElephcFileDog extends ElephcFileAnimal {
+    public function bark(): string { return "woof"; }
+}
+$rcAnimal = new ReflectionClass("ElephcFileAnimal");
+$rmInherited = new ReflectionMethod("ElephcFileDog", "speak");
+$rmOwn = new ReflectionMethod("ElephcFileDog", "bark");
+echo $rmInherited->getFileName() === $rcAnimal->getFileName() ? "inherited-matches" : "inherited-mismatch";
+echo "|";
+echo $rmOwn->getFileName() === $rcAnimal->getFileName() ? "own-matches" : "own-mismatch";
+"#,
+    );
+    assert_eq!(out, "inherited-matches|own-matches");
+}
+
+/// Verifies `ReflectionClass::getParentClass()` on a class WITH a parent returns a real,
+/// usable `ReflectionClass` for that parent (php -n verified: same class name, same
+/// `getFileName()` since both classes here share one file) — for BOTH a literal- and a
+/// dynamically-constructed receiver, proving the single PHP-level shell body
+/// (`$this->__parent_name === '' ? false : new ReflectionClass($this->__parent_name)`) serves
+/// both construction paths identically.
+#[test]
+fn test_reflection_class_get_parent_class_returns_parent_reflection_class() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcParentAnimal {}
+class ElephcParentDog extends ElephcParentAnimal {}
+
+$literal = new ReflectionClass("ElephcParentDog");
+$literalParent = $literal->getParentClass();
+echo ($literalParent !== false) ? $literalParent->getName() : "false";
+
+$name = $argc > 0 ? "ElephcParentDog" : "NOPE";
+$dynamic = new ReflectionClass($name);
+$dynamicParent = $dynamic->getParentClass();
+echo "|";
+echo ($dynamicParent !== false) ? $dynamicParent->getName() : "false";
+echo "|";
+echo ($literalParent !== false && $dynamicParent !== false && $literalParent->getFileName() === $dynamicParent->getFileName()) ? "same-file" : "different-file";
+"#,
+    );
+    assert_eq!(out, "ElephcParentAnimal|ElephcParentAnimal|same-file");
+}
+
+/// Verifies `ReflectionClass::getParentClass()` on a class with NO parent returns PHP's `false`
+/// sentinel (php -n verified: `(new ReflectionClass('ElephcNoParent'))->getParentClass() ===
+/// false`), for both a literal- and a dynamically-constructed receiver.
+#[test]
+fn test_reflection_class_get_parent_class_no_parent_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcNoParent {}
+$literal = new ReflectionClass("ElephcNoParent");
+var_dump($literal->getParentClass());
+
+$name = $argc > 0 ? "ElephcNoParent" : "NOPE";
+$dynamic = new ReflectionClass($name);
+var_dump($dynamic->getParentClass());
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(false)\n");
+}
+
+// -- Mixed-typed dynamic ReflectionClass argument (Part A): PHP's real
+// `__construct(object|string $objectOrClass)` signature — `new ReflectionClass($obj)` is legal
+// PHP (php -n verified) and reflects the OBJECT'S OWN runtime class, not necessarily the
+// receiving variable's static type. See
+// `crate::codegen_ir::lower_inst::objects::reflection::lower_reflection_class_new_dynamic` for
+// the runtime tag dispatch this backs.
+
+/// Verifies `new ReflectionClass($obj)` reflects the object's own concrete runtime class (php -n
+/// verified, using a subclass instance to prove it is NOT just trusting a static type name).
+#[test]
+fn test_reflection_class_dynamic_construction_from_object_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcMixedAnimal {}
+class ElephcMixedDog extends ElephcMixedAnimal {}
+$obj = $argc > 0 ? new ElephcMixedDog() : new ElephcMixedAnimal();
+$r = new ReflectionClass($obj);
+echo $r->getName();
+"#,
+    );
+    assert_eq!(out, "ElephcMixedDog");
+}
+
+/// Verifies `new ReflectionClass($mixed)` where the runtime value is a boxed STRING (Mixed tag 1)
+/// resolves exactly like a plain `Str`-typed dynamic argument (php -n verified).
+#[test]
+fn test_reflection_class_dynamic_construction_from_mixed_string_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcMixedStr {}
+function pick(bool $b): mixed { return $b ? "ElephcMixedStr" : 42; }
+$name = pick($argc > 0);
+$r = new ReflectionClass($name);
+echo $r->getName();
+"#,
+    );
+    assert_eq!(out, "ElephcMixedStr");
+}
+
+/// Verifies `new ReflectionClass($mixed)` where the runtime value is a boxed OBJECT (Mixed tag 6)
+/// resolves the object's own class (php -n verified) — the Mixed-boxed counterpart of
+/// `test_reflection_class_dynamic_construction_from_object_argument`.
+#[test]
+fn test_reflection_class_dynamic_construction_from_mixed_object_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcMixedObj {}
+function pick(bool $b): mixed { return $b ? new ElephcMixedObj() : "nope"; }
+$obj = pick($argc > 0);
+$r = new ReflectionClass($obj);
+echo $r->getName();
+"#,
+    );
+    assert_eq!(out, "ElephcMixedObj");
+}
+
+/// Verifies PHP's real WEAK-TYPING scalar coercion for `new ReflectionClass($scalar)` (php -n
+/// verified — NOT a `TypeError`, contrary to a naive reading of the `object|string` signature):
+/// int/float/bool/null are all coerced to their `(string)` cast and routed through the SAME
+/// closed-world class lookup as a literal string, producing PHP's exact
+/// `ReflectionException: Class "X" does not exist` message and remaining fully catchable.
+#[test]
+fn test_reflection_class_dynamic_construction_scalar_weak_coercion_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+function results(bool $b): array {
+    $out = [];
+    foreach ([42, 4.2, true, false, null] as $v) {
+        $x = $b ? $v : "unused";
+        try {
+            new ReflectionClass($x);
+            $out[] = "no-throw";
+        } catch (\ReflectionException $e) {
+            $out[] = $e->getMessage();
+        }
+    }
+    return $out;
+}
+foreach (results($argc > 0) as $line) {
+    echo $line, "|";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Class \"42\" does not exist|Class \"4.2\" does not exist|Class \"1\" does not exist|Class \"\" does not exist|Class \"\" does not exist|"
+    );
+}
+
+/// Verifies PHP's real behavior for a genuinely non-coercible `new ReflectionClass($x)` argument
+/// (php -n verified: an `array` argument throws a real, CATCHABLE `\TypeError` — never a
+/// `ReflectionException`, and the construction never proceeds with garbage).
+#[test]
+fn test_reflection_class_dynamic_construction_array_argument_throws_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+$value = $argc > 0 ? [1, 2] : "unused";
+try {
+    new ReflectionClass($value);
+    echo "no-throw";
+} catch (\TypeError $e) {
+    echo "caught:", get_class($e);
+}
+"#,
+    );
+    assert_eq!(out, "caught:TypeError");
+}
+
+/// Regression: `new ReflectionClass($x)` where `$x` is a STATICALLY int/float/bool-typed local
+/// (not boxed as `Mixed` — the checker knows the concrete scalar type at compile time) must get
+/// the SAME PHP weak-coercion treatment as a `Mixed`-boxed scalar (php -n verified — this is
+/// PART A's uniform runtime-tag design, but a plain, non-`Mixed` scalar operand takes a
+/// DIFFERENT, unboxed codegen path in `lower_reflection_class_new_dynamic`; this caught a real
+/// gap where that path fell through to an "unsupported EIR backend feature" internal compiler
+/// error instead of PHP's `ReflectionException`).
+#[test]
+fn test_reflection_class_dynamic_construction_plain_scalar_locals_weak_coerce() {
+    let out = compile_and_run(
+        r#"<?php
+$intLocal = 42;
+try {
+    new ReflectionClass($intLocal);
+    echo "no-throw";
+} catch (\ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+$floatLocal = 4.2;
+try {
+    new ReflectionClass($floatLocal);
+    echo "no-throw";
+} catch (\ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+$boolLocal = true;
+try {
+    new ReflectionClass($boolLocal);
+    echo "no-throw";
+} catch (\ReflectionException $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Class \"42\" does not exist|Class \"4.2\" does not exist|Class \"1\" does not exist"
+    );
+}

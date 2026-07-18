@@ -196,6 +196,15 @@ pub(crate) fn inject_builtin_reflection(
         reflection_method
             .methods
             .push(builtin_reflection_unsupported_tostring_method("ReflectionMethod"));
+        // Declaring source file (empty-string sentinel for "unknown"), baked at construction
+        // from the OWNER class's `__file` (a method's `getFileName()` equals its class's, per
+        // PHP). Backs `getFileName()`.
+        reflection_method
+            .properties
+            .push(builtin_property("__file", Visibility::Private, Some(TypeExpr::Str), empty_string()));
+        reflection_method
+            .methods
+            .push(builtin_reflection_get_file_name_method());
         // PHP: `getClosure(?object $object = null): ?Closure` — un-backed stub
         // returning `null` typed `mixed`. The optional `object` param (modelled
         // `mixed`) lets `$method->getClosure($obj)` type-check; closure/object
@@ -469,6 +478,83 @@ fn exact_membership_expr(param_name: &str, haystack_property: &str) -> Expr {
         "in_array",
         vec![var_expr(param_name), this_prop_expr(haystack_property), Expr::new(ExprKind::BoolLiteral(true), crate::span::Span::dummy())],
     )
+}
+
+/// Returns a `TypeExpr` for `string|false` (PHP's `getFileName()`/`getParentClass()`-shaped
+/// "string result, or `false` when unavailable" return contract).
+fn str_or_false_type() -> TypeExpr {
+    TypeExpr::Union(vec![TypeExpr::Str, TypeExpr::Bool])
+}
+
+/// Returns `$this->slot === '' ? false : $this->slot`: the shared "empty-string sentinel means
+/// PHP `false`" pattern baked slots use for optional string metadata (`__file`'s declaring path,
+/// `__parent_name`'s resolved parent). The slot is populated at codegen time (empty string when
+/// the real value is unknown/absent); this body never needs to know WHY it is empty.
+fn empty_string_sentinel_expr(slot: &str) -> Expr {
+    let dummy_span = crate::span::Span::dummy();
+    Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(Expr::new(
+                ExprKind::BinaryOp {
+                    left: Box::new(this_prop_expr(slot)),
+                    op: BinOp::StrictEq,
+                    right: Box::new(Expr::new(ExprKind::StringLiteral(String::new()), dummy_span)),
+                },
+                dummy_span,
+            )),
+            then_expr: Box::new(Expr::new(ExprKind::BoolLiteral(false), dummy_span)),
+            else_expr: Box::new(this_prop_expr(slot)),
+        },
+        dummy_span,
+    )
+}
+
+/// Returns a public no-arg `getFileName(): string|false` method reading the private `__file`
+/// slot baked at construction time (see `crate::codegen_ir::lower_inst::objects::reflection`):
+/// the declaring source file's path when known, PHP's `false` sentinel otherwise (an internal/
+/// builtin reflected symbol, or one this snapshot could not attribute — see
+/// `crate::pipeline::scan_reflection_source_files`).
+fn builtin_reflection_get_file_name_method() -> ClassMethod {
+    builtin_reflection_computed_method("getFileName", str_or_false_type(), empty_string_sentinel_expr("__file"))
+}
+
+/// Returns a public `getParentClass(): ReflectionClass|false` method: PHP's `false` when the
+/// reflected class has no parent (the baked `__parent_name` slot is the empty-string sentinel),
+/// otherwise a freshly constructed `ReflectionClass` for the parent. Reuses the SAME dynamic-name
+/// construction path a `new ReflectionClass($runtimeString)` call already takes for a non-literal
+/// `Str`-typed argument (see
+/// `crate::codegen_ir::lower_inst::objects::reflection::lower_reflection_class_new_dynamic`), so
+/// this single PHP-level body correctly serves both a literal-constructed and a
+/// dynamically-constructed receiver: `__parent_name` is always read from a slot at runtime either
+/// way, never known at THIS method's own compile time.
+fn builtin_reflection_get_parent_class_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let return_type = TypeExpr::Union(vec![
+        TypeExpr::Named(Name::unqualified("ReflectionClass")),
+        TypeExpr::Bool,
+    ]);
+    let body_expr = Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(Expr::new(
+                ExprKind::BinaryOp {
+                    left: Box::new(this_prop_expr("__parent_name")),
+                    op: BinOp::StrictEq,
+                    right: Box::new(Expr::new(ExprKind::StringLiteral(String::new()), dummy_span)),
+                },
+                dummy_span,
+            )),
+            then_expr: Box::new(Expr::new(ExprKind::BoolLiteral(false), dummy_span)),
+            else_expr: Box::new(Expr::new(
+                ExprKind::NewObject {
+                    class_name: Name::unqualified("ReflectionClass"),
+                    args: vec![this_prop_expr("__parent_name")],
+                },
+                dummy_span,
+            )),
+        },
+        dummy_span,
+    );
+    builtin_reflection_computed_method("getParentClass", return_type, body_expr)
 }
 
 /// Returns a public `__toString(): string` method that unconditionally
@@ -880,9 +966,13 @@ fn builtin_reflection_function() -> FlattenedClass {
             // (un-backed, default `''`) so `$rf->name` type-checks; runtime
             // population is a separate follow-up.
             builtin_property("name", Visibility::Public, Some(TypeExpr::Str), empty_string()),
+            // Declaring source file (empty-string sentinel for "unknown"), baked from
+            // `crate::pipeline::scan_reflection_source_files`'s snapshot. Backs `getFileName()`.
+            builtin_property("__file", Visibility::Private, Some(TypeExpr::Str), empty_string()),
         ],
         methods: vec![
             builtin_reflection_function_constructor_method(),
+            builtin_reflection_get_file_name_method(),
             builtin_reflection_slot_getter("getName", "__name", TypeExpr::Str),
             builtin_reflection_slot_getter("getShortName", "__short", TypeExpr::Str),
             builtin_reflection_slot_getter("getNumberOfParameters", "__num_params", TypeExpr::Int),
@@ -1122,6 +1212,13 @@ fn builtin_reflection_class() -> FlattenedClass {
             //    `crate::codegen_ir::lower_inst::objects::reflection` for the
             //    EIR bakers) --
             builtin_property("__is_abstract", Visibility::Private, Some(TypeExpr::Bool), bool_lit(false)),
+            // Declaring source file (empty-string sentinel for "unknown" — see
+            // `builtin_reflection_get_file_name_method`), baked from
+            // `crate::pipeline::scan_reflection_source_files`'s snapshot. Backs `getFileName()`.
+            builtin_property("__file", Visibility::Private, Some(TypeExpr::Str), empty_string()),
+            // Immediate parent class name (empty-string sentinel for "no parent"), baked at
+            // construction time from `ClassInfo::parent`. Backs `getParentClass()`.
+            builtin_property("__parent_name", Visibility::Private, Some(TypeExpr::Str), empty_string()),
             builtin_property("__is_final", Visibility::Private, Some(TypeExpr::Bool), bool_lit(false)),
             builtin_property("__is_interface", Visibility::Private, Some(TypeExpr::Bool), bool_lit(false)),
             builtin_property("__is_internal", Visibility::Private, Some(TypeExpr::Bool), bool_lit(false)),
@@ -1148,9 +1245,17 @@ fn builtin_reflection_class() -> FlattenedClass {
             builtin_property("__const_values", Visibility::Private, Some(mixed_array_type()), empty_array()),
         ],
         methods: vec![
+            // PHP: `__construct(object|string $objectOrClass)`. Modeled as `mixed` under
+            // gradual typing so a literal `Str`, a variable of ANY type, or a real object all
+            // type-check — the actual `object|string` boundary is enforced by the EIR dynamic
+            // dispatcher at runtime (see `reflection_class_literal_arg` in
+            // `crate::types::checker::inference::objects::constructors` and
+            // `lower_reflection_class_new_dynamic` in
+            // `crate::codegen_ir::lower_inst::objects::reflection`), matching PHP's own
+            // runtime-only rejection of the wrong argument shape for this constructor.
             builtin_reflection_owner_constructor_method(vec![(
                 "class_name",
-                Some(TypeExpr::Str),
+                Some(mixed_type()),
                 None,
                 false,
             )]),
@@ -1267,6 +1372,8 @@ fn builtin_reflection_class() -> FlattenedClass {
                 }
             },
             builtin_reflection_unsupported_tostring_method("ReflectionClass"),
+            builtin_reflection_get_file_name_method(),
+            builtin_reflection_get_parent_class_method(),
         ],
         attributes: Vec::new(),
         constants: Vec::new(),
@@ -1455,6 +1562,12 @@ fn builtin_reflection_property() -> FlattenedClass {
     class
         .methods
         .push(builtin_reflection_unsupported_tostring_method("ReflectionProperty"));
+    // NOTE: `ReflectionProperty` deliberately has NO `getFileName()`/`__file` slot — php -n
+    // verified real PHP does not declare that method on `ReflectionProperty` (only
+    // `ReflectionClass` and `ReflectionFunctionAbstract`, i.e. `ReflectionFunction`/
+    // `ReflectionMethod`, do): `(new ReflectionProperty(...))->getFileName()` is a hard
+    // "Call to undefined method" fatal in real PHP. Adding it here would over-accept a method
+    // PHP itself rejects.
     // PHP class constants — php -n verified (PHP 8.4+ added `IS_ABSTRACT`/
     // `IS_FINAL` for property hooks/final properties):
     // `ReflectionProperty::IS_STATIC=16, IS_PUBLIC=1, IS_PROTECTED=2,

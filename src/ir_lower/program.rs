@@ -24,12 +24,19 @@ use crate::parser::ast::{ClassMethod, ExprKind, Program, Stmt, StmtKind};
 use crate::types::{CheckResult, ClassInfo, InterfaceInfo, PhpType};
 
 /// Lowers an optimized typed AST program into a validated EIR module.
+///
+/// `class_source_files`/`function_source_files` back `ReflectionClass`/
+/// `ReflectionFunction::getFileName()` — see `crate::ir_lower::lower_program`.
 pub(crate) fn lower(
     program: &Program,
     check_result: &CheckResult,
     target: Target,
+    class_source_files: &HashMap<String, String>,
+    function_source_files: &HashMap<String, String>,
 ) -> Result<Module, LoweringError> {
     let mut module = Module::new(target);
+    module.class_source_files = class_source_files.clone();
+    module.function_source_files = function_source_files.clone();
     let constants = crate::codegen::collect_constants(program, target.platform);
     module.const_registry = build_const_registry(&constants);
     let fiber_return_sigs = crate::ir_lower::fibers::collect_fiber_return_sigs(program);

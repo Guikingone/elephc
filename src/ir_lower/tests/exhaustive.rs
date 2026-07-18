@@ -213,8 +213,14 @@ fn class_info(_class_name: &str) -> ClassInfo {
 fn lower_program(program: Program) -> String {
     let target = Target::detect_host();
     let check_result = dummy_check_result();
-    let module = crate::ir_lower::lower_program(&program, &check_result, target)
-        .expect("synthetic AST should lower to valid EIR");
+    let module = crate::ir_lower::lower_program(
+        &program,
+        &check_result,
+        target,
+        &HashMap::new(),
+        &HashMap::new(),
+    )
+    .expect("synthetic AST should lower to valid EIR");
     let text = print_module(&module);
     assert!(text.contains("function main"), "expected main function in {text}");
     text

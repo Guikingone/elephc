@@ -442,7 +442,12 @@ fn emit_no_arg_class_name_lookup(ctx: &mut FunctionContext<'_>, name: &str) {
 }
 
 /// Emits dynamic class-name lookup for an object pointer already loaded in the result register.
-pub(super) fn emit_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
+///
+/// `pub(in crate::codegen_ir::lower_inst)` rather than `pub(super)`: reused by
+/// `crate::codegen_ir::lower_inst::objects::reflection` to resolve the runtime class of an
+/// `object`-typed `new ReflectionClass($obj)` argument (PHP's `object|string` constructor
+/// signature), mirroring the SAME dynamic-object-class-name lookup `get_class()` uses.
+pub(in crate::codegen_ir::lower_inst) fn emit_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
     let empty_label = ctx.next_label("get_class_empty");
     let done_label = ctx.next_label("get_class_done");
     match ctx.emitter.target.arch {
