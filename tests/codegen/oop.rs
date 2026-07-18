@@ -37,6 +37,8 @@ mod dynamic_dispatch;
 mod misc;
 #[path = "oop/attributes.rs"]
 mod attributes;
+#[path = "oop/reflection.rs"]
+mod reflection;
 #[path = "oop/constants.rs"]
 mod constants;
 #[path = "oop/abstract_properties.rs"]

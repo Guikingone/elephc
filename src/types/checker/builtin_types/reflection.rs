@@ -1,21 +1,33 @@
 //! Purpose:
 //! Synthesises the built-in reflection class checker metadata so user code can
-//! receive `ReflectionAttribute` instances and query class/member attributes
-//! through a small PHP-compatible Reflection surface.
+//! receive `ReflectionAttribute` instances and query class/member attributes,
+//! class-shape facts (`isAbstract`/`isSubclassOf`/`hasMethod`/`getConstants`/…),
+//! and modifier bitmasks through a small PHP-compatible Reflection surface.
 //!
 //! Called from:
 //! - `crate::types::checker::driver::init` (alongside `inject_builtin_throwables`).
 //!
 //! Key details:
-//! - Property and method bodies are dummies or simple private-slot accessors;
-//!   runtime population is handled by codegen-only reflection constructors.
+//! - Property and method bodies are dummies, simple private-slot accessors, or
+//!   generic bodies (`in_array`/`strtolower`/`foreach`) reading a private slot;
+//!   runtime population of those slots is handled by codegen-only reflection
+//!   constructors (see `crate::codegen_ir::lower_inst::objects::reflection`).
+//! - Every core Reflection* shell implements `Reflector` (which extends
+//!   `Stringable`); their `__toString()` throws rather than fabricating PHP's
+//!   object-dump text (`builtin_reflection_unsupported_tostring_method`).
+//! - A new `array`-typed metadata slot MUST use `str_array_type()`/
+//!   `mixed_array_type()`, not the bare `array_type()` — the bare `array`
+//!   shape defaults its element type to `mixed` under gradual typing, which
+//!   mismatches the plain-string/plain-Mixed runtime layout the EIR bakers
+//!   produce and crashes element reads (`in_array()`, etc.).
 
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
-use crate::names::php_symbol_key;
+use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{
-    ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind, TypeExpr, Visibility,
+    BinOp, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind, TypeExpr,
+    Visibility,
 };
 use crate::types::traits::FlattenedClass;
 use crate::types::PhpType;
@@ -125,15 +137,65 @@ pub(crate) fn inject_builtin_reflection(
         reflection_method
             .properties
             .push(builtin_property("class", Visibility::Public, Some(TypeExpr::Str), empty_string()));
+        // Real PHP modifier bitmask (IS_STATIC|IS_PUBLIC|IS_PROTECTED|IS_PRIVATE|
+        // IS_ABSTRACT|IS_FINAL), baked at construction from the reflected
+        // method's actual visibility/staticness/abstractness — see
+        // `emit_reflection_method_modifiers` in the EIR codegen.
+        reflection_method
+            .properties
+            .push(builtin_property("__modifiers", Visibility::Private, Some(TypeExpr::Int), int_lit(0)));
+        reflection_method.implements.push("Reflector".to_string());
         // PHP: `getName(): string` — slot getter on `__name`.
         reflection_method
             .methods
             .push(builtin_reflection_slot_getter("getName", "__name", TypeExpr::Str));
-        // PHP: `isPublic(): bool` — un-backed stub returning `true`; scalar
-        // returns lower safely on the EIR backend.
+        // PHP: `getShortName(): string` — methods are never namespaced, so
+        // PHP's short name for a method is always identical to its full name
+        // (verified: `(new ReflectionMethod($c, $m))->getShortName() ===
+        // (new ReflectionMethod($c, $m))->getName()`); delegate rather than
+        // duplicating the `__name` slot.
+        reflection_method.methods.push(builtin_reflection_computed_method(
+            "getShortName",
+            TypeExpr::Str,
+            Expr::new(
+                ExprKind::MethodCall {
+                    object: Box::new(Expr::new(ExprKind::This, crate::span::Span::dummy())),
+                    method: "getName".to_string(),
+                    args: Vec::new(),
+                },
+                crate::span::Span::dummy(),
+            ),
+        ));
+        // PHP: `getModifiers(): int` — slot getter on the baked bitmask.
         reflection_method
             .methods
-            .push(builtin_reflection_literal_method("isPublic", TypeExpr::Bool, bool_lit(true)));
+            .push(builtin_reflection_slot_getter("getModifiers", "__modifiers", TypeExpr::Int));
+        // Real visibility/staticness/abstractness checks — single-bit tests
+        // against `__modifiers` (php -n verified bit values: IS_PUBLIC=1,
+        // IS_PROTECTED=2, IS_STATIC=16, IS_ABSTRACT=64).
+        reflection_method.methods.push(builtin_reflection_computed_method(
+            "isPublic",
+            TypeExpr::Bool,
+            modifier_bit_test_expr("__modifiers", 1),
+        ));
+        reflection_method.methods.push(builtin_reflection_computed_method(
+            "isProtected",
+            TypeExpr::Bool,
+            modifier_bit_test_expr("__modifiers", 2),
+        ));
+        reflection_method.methods.push(builtin_reflection_computed_method(
+            "isStatic",
+            TypeExpr::Bool,
+            modifier_bit_test_expr("__modifiers", 16),
+        ));
+        reflection_method.methods.push(builtin_reflection_computed_method(
+            "isAbstract",
+            TypeExpr::Bool,
+            modifier_bit_test_expr("__modifiers", 64),
+        ));
+        reflection_method
+            .methods
+            .push(builtin_reflection_unsupported_tostring_method("ReflectionMethod"));
         // PHP: `getClosure(?object $object = null): ?Closure` — un-backed stub
         // returning `null` typed `mixed`. The optional `object` param (modelled
         // `mixed`) lets `$method->getClosure($obj)` type-check; closure/object
@@ -153,11 +215,26 @@ pub(crate) fn inject_builtin_reflection(
         reflection_method
             .methods
             .push(builtin_reflection_literal_method("getDeclaringClass", mixed_type(), null_lit()));
-        // PHP: `isStatic(): bool` — un-backed stub returning `false`; scalar
-        // returns lower safely on the EIR backend.
-        reflection_method
-            .methods
-            .push(builtin_reflection_literal_method("isStatic", TypeExpr::Bool, bool_lit(false)));
+        // PHP class constants — php -n verified:
+        // `ReflectionMethod::IS_STATIC=16, IS_PUBLIC=1, IS_PROTECTED=2,
+        // IS_PRIVATE=4, IS_ABSTRACT=64, IS_FINAL=32`.
+        for (name, value) in [
+            ("IS_STATIC", 16),
+            ("IS_PUBLIC", 1),
+            ("IS_PROTECTED", 2),
+            ("IS_PRIVATE", 4),
+            ("IS_ABSTRACT", 64),
+            ("IS_FINAL", 32),
+        ] {
+            reflection_method.constants.push(ClassConst {
+                name: name.to_string(),
+                visibility: Visibility::Public,
+                is_final: false,
+                value: Expr::new(ExprKind::IntLiteral(value), crate::span::Span::dummy()),
+                span: crate::span::Span::dummy(),
+                attributes: Vec::new(),
+            });
+        }
     }
     class_map.insert("ReflectionProperty".to_string(), builtin_reflection_property());
     class_map.insert("ReflectionFunction".to_string(), builtin_reflection_function());
@@ -243,6 +320,301 @@ fn bool_lit(value: bool) -> Option<Expr> {
 /// Returns a `TypeExpr` for the unqualified name `array`.
 fn array_type() -> TypeExpr {
     TypeExpr::Named(crate::names::Name::unqualified("array"))
+}
+
+/// Returns a `TypeExpr` for `array<string>` (an indexed array of strings).
+/// Used for the construction-baked metadata slots this feature adds
+/// (`__ancestors_lower`, `__interfaces`, …): the bare `array` shape (see
+/// `array_type()`) defaults its element type to `mixed` under gradual
+/// typing, which does not match the plain-string-element runtime layout
+/// `emit_string_array` bakes — `in_array()`/element reads on a
+/// `mixed`-declared-but-string-shaped array crash by treating each element
+/// as a boxed Mixed cell it never was. Declaring the real element type keeps
+/// the static type and runtime representation in sync.
+fn str_array_type() -> TypeExpr {
+    TypeExpr::Array(Box::new(TypeExpr::Str))
+}
+
+/// Returns a `TypeExpr` for `array<mixed>`. Used for `__const_values`, which
+/// `emit_mixed_array` bakes as boxed Mixed cells — see `str_array_type()`
+/// for why the element type must match the actual runtime representation.
+fn mixed_array_type() -> TypeExpr {
+    TypeExpr::Array(Box::new(mixed_type()))
+}
+
+/// Returns a bare `$name` variable-reference expression.
+fn var_expr(name: &str) -> Expr {
+    Expr::new(ExprKind::Variable(name.to_string()), crate::span::Span::dummy())
+}
+
+/// Returns a `$this->property` access expression.
+fn this_prop_expr(property: &str) -> Expr {
+    Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(Expr::new(ExprKind::This, crate::span::Span::dummy())),
+            property: property.to_string(),
+        },
+        crate::span::Span::dummy(),
+    )
+}
+
+/// Returns a call to the free function `name` with the given positional
+/// argument expressions.
+fn free_call_expr(name: &str, args: Vec<Expr>) -> Expr {
+    Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified(name),
+            args,
+        },
+        crate::span::Span::dummy(),
+    )
+}
+
+/// Returns a public no-arg method whose body is a single `return EXPR;`
+/// where `EXPR` is computed by `body_expr` (a general-purpose alternative to
+/// `builtin_reflection_slot_getter`/`builtin_reflection_literal_method` for
+/// bodies that combine multiple slots or call builtin functions instead of
+/// surfacing one property verbatim).
+fn builtin_reflection_computed_method(
+    method_name: &str,
+    return_type: TypeExpr,
+    body_expr: Expr,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(return_type),
+        by_ref_return: false,
+        body: vec![Stmt::new(StmtKind::Return(Some(body_expr)), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public single-`string`-parameter method whose body is a single
+/// `return EXPR;`, where `EXPR` is built by `body_expr` from the parameter
+/// name. Used for `hasMethod`/`hasProperty`/`isSubclassOf`/
+/// `implementsInterface`: each does a case-appropriate membership test
+/// against a private array slot baked at construction time (see
+/// `emit_reflection_*` in the EIR codegen), so the SAME generic method body
+/// works correctly for any runtime argument value, not just compile-time
+/// literals.
+fn builtin_reflection_string_arg_method(
+    method_name: &str,
+    param_name: &str,
+    return_type: TypeExpr,
+    body_expr: Expr,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![(param_name.to_string(), Some(TypeExpr::Str), None, false)],
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(return_type),
+        by_ref_return: false,
+        body: vec![Stmt::new(StmtKind::Return(Some(body_expr)), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `in_array(strtolower(ltrim($param, '\\')), $this->haystack_property, true)`:
+/// a case-insensitive, leading-backslash-tolerant membership test against a
+/// private array property. Used for `isSubclassOf`/`implementsInterface`,
+/// which PHP resolves case-insensitively (class/interface names are
+/// case-insensitive identifiers).
+fn case_insensitive_membership_expr(param_name: &str, haystack_property: &str) -> Expr {
+    let trimmed = free_call_expr(
+        "ltrim",
+        vec![var_expr(param_name), Expr::new(ExprKind::StringLiteral("\\".to_string()), crate::span::Span::dummy())],
+    );
+    let folded = free_call_expr("strtolower", vec![trimmed]);
+    free_call_expr(
+        "in_array",
+        vec![folded, this_prop_expr(haystack_property), Expr::new(ExprKind::BoolLiteral(true), crate::span::Span::dummy())],
+    )
+}
+
+/// Returns `in_array(strtolower($param), $this->haystack_property, true)`: a
+/// case-insensitive membership test against a private array property. Used
+/// for `hasMethod`, which PHP resolves case-insensitively but never strips a
+/// leading backslash (method names are never namespaced).
+fn case_insensitive_method_membership_expr(param_name: &str, haystack_property: &str) -> Expr {
+    let folded = free_call_expr("strtolower", vec![var_expr(param_name)]);
+    free_call_expr(
+        "in_array",
+        vec![folded, this_prop_expr(haystack_property), Expr::new(ExprKind::BoolLiteral(true), crate::span::Span::dummy())],
+    )
+}
+
+/// Returns `in_array($param, $this->haystack_property, true)`: an exact-case
+/// membership test against a private array property. Used for `hasProperty`,
+/// since PHP property names are case-SENSITIVE (unlike class/method names).
+fn exact_membership_expr(param_name: &str, haystack_property: &str) -> Expr {
+    free_call_expr(
+        "in_array",
+        vec![var_expr(param_name), this_prop_expr(haystack_property), Expr::new(ExprKind::BoolLiteral(true), crate::span::Span::dummy())],
+    )
+}
+
+/// Returns a public `__toString(): string` method that unconditionally
+/// throws. `Reflector` (which every core Reflection* shell implements)
+/// extends `Stringable`, so a concrete, non-abstract class implementing it
+/// must supply a `__toString()` body to satisfy the interface contract.
+/// elephc does not model PHP's real `Reflection*::__toString()` object-dump
+/// text, so — per the "no stub" policy — the body throws a real `\Error`
+/// instead of fabricating output; echoing a Reflection object stays a loud,
+/// observable failure rather than silently returning an empty string.
+fn builtin_reflection_unsupported_tostring_method(class_name: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let message = format!(
+        "{}::__toString() is not supported: elephc's reflection shim does not implement PHP's object-dump text",
+        class_name
+    );
+    ClassMethod {
+        name: "__toString".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Str),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Throw(Expr::new(
+                ExprKind::NewObject {
+                    class_name: Name::unqualified("Error"),
+                    args: vec![Expr::new(ExprKind::StringLiteral(message), dummy_span)],
+                },
+                dummy_span,
+            )),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `($this->modifiers_property & mask) !== 0`: a single-bit test
+/// against a private `int` modifiers slot baked at construction time. Used
+/// for `isPublic`/`isStatic`/`isProtected`/`isAbstract` on `ReflectionMethod`.
+fn modifier_bit_test_expr(modifiers_property: &str, mask: i64) -> Expr {
+    let dummy_span = crate::span::Span::dummy();
+    Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(Expr::new(
+                ExprKind::BinaryOp {
+                    left: Box::new(this_prop_expr(modifiers_property)),
+                    op: BinOp::BitAnd,
+                    right: Box::new(Expr::new(ExprKind::IntLiteral(mask), dummy_span)),
+                },
+                dummy_span,
+            )),
+            op: BinOp::NotEq,
+            right: Box::new(Expr::new(ExprKind::IntLiteral(0), dummy_span)),
+        },
+        dummy_span,
+    )
+}
+
+/// Builds the `getConstants(): array` body: iterates the parallel
+/// `$this->names_property`/`$this->values_property` slots baked at
+/// construction time (own + inherited class constants that fold to a
+/// compile-time literal — see `fold_reflection_class_const_value` in the EIR
+/// codegen) and assembles them into a fresh name-keyed associative array.
+fn get_constants_body(names_property: &str, values_property: &str) -> Vec<Stmt> {
+    let dummy_span = crate::span::Span::dummy();
+    vec![
+        Stmt::assign("__result", Expr::new(ExprKind::ArrayLiteral(Vec::new()), dummy_span)),
+        Stmt::new(
+            StmtKind::Foreach {
+                array: this_prop_expr(names_property),
+                key_var: Some("__i".to_string()),
+                value_var: "__n".to_string(),
+                value_by_ref: false,
+                body: vec![Stmt::new(
+                    StmtKind::ArrayAssign {
+                        array: "__result".to_string(),
+                        index: var_expr("__n"),
+                        value: Expr::new(
+                            ExprKind::ArrayAccess {
+                                array: Box::new(this_prop_expr(values_property)),
+                                index: Box::new(var_expr("__i")),
+                            },
+                            dummy_span,
+                        ),
+                    },
+                    dummy_span,
+                )],
+            },
+            dummy_span,
+        ),
+        Stmt::new(StmtKind::Return(Some(var_expr("__result"))), dummy_span),
+    ]
+}
+
+/// Builds the `getConstant(string $name): mixed` body: linearly searches
+/// `$this->names_property` for `$name` and returns the corresponding
+/// `$this->values_property` entry, or PHP's documented `false` sentinel when
+/// no constant with that name was baked (either genuinely undefined, or a
+/// constant whose value expression wasn't a compile-time literal this
+/// reflection helper can materialize — see `get_constants_body`).
+fn get_constant_body(names_property: &str, values_property: &str) -> Vec<Stmt> {
+    let dummy_span = crate::span::Span::dummy();
+    vec![
+        Stmt::new(
+            StmtKind::Foreach {
+                array: this_prop_expr(names_property),
+                key_var: Some("__i".to_string()),
+                value_var: "__n".to_string(),
+                value_by_ref: false,
+                body: vec![Stmt::new(
+                    StmtKind::If {
+                        condition: Expr::new(
+                            ExprKind::BinaryOp {
+                                left: Box::new(var_expr("__n")),
+                                op: BinOp::StrictEq,
+                                right: Box::new(var_expr("name")),
+                            },
+                            dummy_span,
+                        ),
+                        then_body: vec![Stmt::new(
+                            StmtKind::Return(Some(Expr::new(
+                                ExprKind::ArrayAccess {
+                                    array: Box::new(this_prop_expr(values_property)),
+                                    index: Box::new(var_expr("__i")),
+                                },
+                                dummy_span,
+                            ))),
+                            dummy_span,
+                        )],
+                        elseif_clauses: Vec::new(),
+                        else_body: None,
+                    },
+                    dummy_span,
+                )],
+            },
+            dummy_span,
+        ),
+        Stmt::new(StmtKind::Return(Some(bool_lit(false).unwrap())), dummy_span),
+    ]
 }
 
 /// Returns a `TypeExpr` for the unqualified name `mixed`.
@@ -489,7 +861,7 @@ fn builtin_reflection_function() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionFunction".to_string(),
         extends: None,
-        implements: Vec::new(),
+        implements: vec!["Reflector".to_string()],
         is_abstract: false,
         is_final: true,
         is_readonly_class: false,
@@ -544,6 +916,7 @@ fn builtin_reflection_function() -> FlattenedClass {
                 mixed_type(),
                 null_lit(),
             ),
+            builtin_reflection_unsupported_tostring_method("ReflectionFunction"),
         ],
         attributes: Vec::new(),
         constants: Vec::new(),
@@ -558,7 +931,7 @@ fn builtin_reflection_parameter() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionParameter".to_string(),
         extends: None,
-        implements: Vec::new(),
+        implements: vec!["Reflector".to_string()],
         is_abstract: false,
         is_final: true,
         is_readonly_class: false,
@@ -613,6 +986,7 @@ fn builtin_reflection_parameter() -> FlattenedClass {
             // PHP: `getDeclaringClass(): ?ReflectionClass`. Un-backed stub
             // returning `null` typed `mixed` (object return → mixed).
             builtin_reflection_literal_method("getDeclaringClass", mixed_type(), null_lit()),
+            builtin_reflection_unsupported_tostring_method("ReflectionParameter"),
         ],
         attributes: Vec::new(),
         constants: Vec::new(),
@@ -725,7 +1099,10 @@ fn builtin_reflection_class() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionClass".to_string(),
         extends: None,
-        implements: Vec::new(),
+        // `Reflector` (which extends `Stringable`) — see
+        // `builtin_reflection_unsupported_tostring_method` for why the
+        // `__toString()` contract it pulls in throws rather than stubbing.
+        implements: vec!["Reflector".to_string()],
         is_abstract: false,
         is_final: true,
         is_readonly_class: false,
@@ -741,6 +1118,34 @@ fn builtin_reflection_class() -> FlattenedClass {
             // (un-backed, default `''`) so `$rc->name` type-checks; runtime
             // population is a separate follow-up.
             builtin_property("name", Visibility::Public, Some(TypeExpr::Str), empty_string()),
+            // -- construction-baked closed-world metadata slots (see
+            //    `crate::codegen_ir::lower_inst::objects::reflection` for the
+            //    EIR bakers) --
+            builtin_property("__is_abstract", Visibility::Private, Some(TypeExpr::Bool), bool_lit(false)),
+            builtin_property("__is_final", Visibility::Private, Some(TypeExpr::Bool), bool_lit(false)),
+            builtin_property("__is_interface", Visibility::Private, Some(TypeExpr::Bool), bool_lit(false)),
+            builtin_property("__is_internal", Visibility::Private, Some(TypeExpr::Bool), bool_lit(false)),
+            builtin_property("__short", Visibility::Private, Some(TypeExpr::Str), empty_string()),
+            // Parent classes + all transitively implemented interfaces
+            // (lowercased), excluding the reflected class itself. Backs
+            // `isSubclassOf()`.
+            builtin_property("__ancestors_lower", Visibility::Private, Some(str_array_type()), empty_array()),
+            // All transitively implemented interfaces, exact case. Backs
+            // `getInterfaceNames()`.
+            builtin_property("__interfaces", Visibility::Private, Some(str_array_type()), empty_array()),
+            // Same set, lowercased. Backs `implementsInterface()`.
+            builtin_property("__interfaces_lower", Visibility::Private, Some(str_array_type()), empty_array()),
+            // Own + inherited (non-private) method names, lowercased. Backs
+            // `hasMethod()`.
+            builtin_property("__methods_lower", Visibility::Private, Some(str_array_type()), empty_array()),
+            // Own + inherited property names, exact case. Backs
+            // `hasProperty()`.
+            builtin_property("__properties", Visibility::Private, Some(str_array_type()), empty_array()),
+            // Own + inherited class-constant names/values that fold to a
+            // compile-time literal, in parallel index order. Back
+            // `getConstants()`/`getConstant()`.
+            builtin_property("__const_names", Visibility::Private, Some(str_array_type()), empty_array()),
+            builtin_property("__const_values", Visibility::Private, Some(mixed_array_type()), empty_array()),
         ],
         methods: vec![
             builtin_reflection_owner_constructor_method(vec![(
@@ -769,6 +1174,99 @@ fn builtin_reflection_class() -> FlattenedClass {
                 null_lit(),
                 vec![("name", Some(TypeExpr::Str), None, false)],
             ),
+            // -- real, construction-baked closed-world metadata accessors --
+            builtin_reflection_slot_getter("isAbstract", "__is_abstract", TypeExpr::Bool),
+            builtin_reflection_slot_getter("isFinal", "__is_final", TypeExpr::Bool),
+            builtin_reflection_slot_getter("isInterface", "__is_interface", TypeExpr::Bool),
+            builtin_reflection_slot_getter("isInternal", "__is_internal", TypeExpr::Bool),
+            // elephc's `ReflectionClass` constructor only ever resolves to a
+            // real class (never a trait — traits are flattened into their
+            // users and are not independently reflectable), so this is
+            // soundly `false` in every reachable case, not a fabricated guess.
+            builtin_reflection_literal_method("isTrait", TypeExpr::Bool, bool_lit(false)),
+            builtin_reflection_computed_method(
+                "isInstantiable",
+                TypeExpr::Bool,
+                Expr::new(
+                    ExprKind::BinaryOp {
+                        left: Box::new(Expr::new(
+                            ExprKind::Not(Box::new(this_prop_expr("__is_abstract"))),
+                            crate::span::Span::dummy(),
+                        )),
+                        op: BinOp::And,
+                        right: Box::new(Expr::new(
+                            ExprKind::Not(Box::new(this_prop_expr("__is_interface"))),
+                            crate::span::Span::dummy(),
+                        )),
+                    },
+                    crate::span::Span::dummy(),
+                ),
+            ),
+            builtin_reflection_slot_getter("getShortName", "__short", TypeExpr::Str),
+            builtin_reflection_slot_getter("getInterfaceNames", "__interfaces", str_array_type()),
+            builtin_reflection_string_arg_method(
+                "hasMethod",
+                "name",
+                TypeExpr::Bool,
+                case_insensitive_method_membership_expr("name", "__methods_lower"),
+            ),
+            builtin_reflection_string_arg_method(
+                "hasProperty",
+                "name",
+                TypeExpr::Bool,
+                exact_membership_expr("name", "__properties"),
+            ),
+            builtin_reflection_string_arg_method(
+                "isSubclassOf",
+                "class",
+                TypeExpr::Bool,
+                case_insensitive_membership_expr("class", "__ancestors_lower"),
+            ),
+            builtin_reflection_string_arg_method(
+                "implementsInterface",
+                "interface",
+                TypeExpr::Bool,
+                case_insensitive_membership_expr("interface", "__interfaces_lower"),
+            ),
+            {
+                let dummy_span = crate::span::Span::dummy();
+                ClassMethod {
+                    name: "getConstants".to_string(),
+                    visibility: Visibility::Public,
+                    is_static: false,
+                    is_abstract: false,
+                    is_final: false,
+                    has_body: true,
+                    params: Vec::new(),
+                    variadic: None,
+                    variadic_type: None,
+                    return_type: Some(mixed_array_type()),
+                    by_ref_return: false,
+                    body: get_constants_body("__const_names", "__const_values"),
+                    span: dummy_span,
+                    attributes: Vec::new(),
+                }
+            },
+            {
+                let dummy_span = crate::span::Span::dummy();
+                ClassMethod {
+                    name: "getConstant".to_string(),
+                    visibility: Visibility::Public,
+                    is_static: false,
+                    is_abstract: false,
+                    is_final: false,
+                    has_body: true,
+                    params: vec![("name".to_string(), Some(TypeExpr::Str), None, false)],
+                    variadic: None,
+                    variadic_type: None,
+                    return_type: Some(mixed_type()),
+                    by_ref_return: false,
+                    body: get_constant_body("__const_names", "__const_values"),
+                    span: dummy_span,
+                    attributes: Vec::new(),
+                }
+            },
+            builtin_reflection_unsupported_tostring_method("ReflectionClass"),
         ],
         attributes: Vec::new(),
         constants: Vec::new(),
@@ -931,6 +1429,54 @@ fn builtin_reflection_property() -> FlattenedClass {
     class
         .methods
         .push(builtin_reflection_literal_method("getDeclaringClass", mixed_type(), null_lit()));
+    // Real PHP modifier bitmask (IS_STATIC|IS_PUBLIC|IS_PROTECTED|IS_PRIVATE),
+    // baked at construction from the reflected property's actual visibility/
+    // staticness — see `emit_reflection_property_modifiers` in the EIR codegen.
+    class
+        .properties
+        .push(builtin_property("__modifiers", Visibility::Private, Some(TypeExpr::Int), int_lit(0)));
+    // Whether the reflected property carries an explicit source type
+    // declaration, baked at construction from `ClassInfo.declared_properties`/
+    // `declared_static_properties` (the checker's own "has an explicit type
+    // hint" bit — NOT the resolved `PhpType`, which an untyped property
+    // still gets inferred, e.g. from its default value or `PhpType::Int` as
+    // the no-default fallback; see `property_modifiers_and_type` in the EIR
+    // codegen).
+    class
+        .properties
+        .push(builtin_property("__has_declared_type", Visibility::Private, Some(TypeExpr::Bool), bool_lit(false)));
+    class.implements.push("Reflector".to_string());
+    class
+        .methods
+        .push(builtin_reflection_slot_getter("getModifiers", "__modifiers", TypeExpr::Int));
+    class
+        .methods
+        .push(builtin_reflection_slot_getter("hasType", "__has_declared_type", TypeExpr::Bool));
+    class
+        .methods
+        .push(builtin_reflection_unsupported_tostring_method("ReflectionProperty"));
+    // PHP class constants — php -n verified (PHP 8.4+ added `IS_ABSTRACT`/
+    // `IS_FINAL` for property hooks/final properties):
+    // `ReflectionProperty::IS_STATIC=16, IS_PUBLIC=1, IS_PROTECTED=2,
+    // IS_PRIVATE=4, IS_READONLY=128, IS_ABSTRACT=64, IS_FINAL=32`.
+    for (name, value) in [
+        ("IS_STATIC", 16),
+        ("IS_PUBLIC", 1),
+        ("IS_PROTECTED", 2),
+        ("IS_PRIVATE", 4),
+        ("IS_READONLY", 128),
+        ("IS_ABSTRACT", 64),
+        ("IS_FINAL", 32),
+    ] {
+        class.constants.push(ClassConst {
+            name: name.to_string(),
+            visibility: Visibility::Public,
+            is_final: false,
+            value: Expr::new(ExprKind::IntLiteral(value), crate::span::Span::dummy()),
+            span: crate::span::Span::dummy(),
+            attributes: Vec::new(),
+        });
+    }
     class
 }
 

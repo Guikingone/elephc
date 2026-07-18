@@ -1124,10 +1124,39 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | Reflection method | Supported constructor | Description |
 |---|---|---|
 | `ReflectionClass::getName()` | `new ReflectionClass($class_name)` | Return the resolved class name |
+| `ReflectionClass::getShortName()` | `new ReflectionClass($class_name)` | Return the class name without its namespace prefix |
 | `ReflectionClass::getAttributes()` | `new ReflectionClass($class_name)` | Return `ReflectionAttribute` objects for class attributes |
+| `ReflectionClass::isAbstract()` / `isFinal()` / `isInterface()` / `isTrait()` / `isInternal()` / `isInstantiable()` | `new ReflectionClass($class_name)` | Closed-world class-shape checks, baked from the reflected class's metadata at construction time |
+| `ReflectionClass::isSubclassOf($class)` | `new ReflectionClass($class_name)` | True when the reflected class descends from `$class` (a parent class or any transitively implemented interface), excluding itself |
+| `ReflectionClass::implementsInterface($interface)` | `new ReflectionClass($class_name)` | True when the reflected class transitively implements `$interface` |
+| `ReflectionClass::getInterfaceNames()` | `new ReflectionClass($class_name)` | All transitively implemented interface names, including those inherited through the parent class chain |
+| `ReflectionClass::hasMethod($name)` / `hasProperty($name)` | `new ReflectionClass($class_name)` | Membership checks against own + inherited methods/properties. Method names match case-insensitively (PHP's rule); property names match case-sensitively |
+| `ReflectionClass::getConstants()` / `getConstant($name)` | `new ReflectionClass($class_name)` | Own + inherited (parent class and implemented interface) class constants whose value is a compile-time literal. `getConstant()` returns `false` for an undefined name, matching PHP |
 | `ReflectionMethod::getAttributes()` | `new ReflectionMethod($class_name, $method_name)` | Return `ReflectionAttribute` objects for method attributes |
+| `ReflectionMethod::getName()` / `getShortName()` | `new ReflectionMethod($class_name, $method_name)` | The method's declared name (methods are never namespaced, so both are identical) |
+| `ReflectionMethod::getModifiers()` | `new ReflectionMethod($class_name, $method_name)` | The `IS_*` bitmask for the method's real visibility/staticness/abstractness/finality |
+| `ReflectionMethod::isPublic()` / `isProtected()` / `isStatic()` / `isAbstract()` | `new ReflectionMethod($class_name, $method_name)` | Single-bit checks against `getModifiers()` |
 | `ReflectionProperty::getAttributes()` | `new ReflectionProperty($class_name, $property_name)` | Return `ReflectionAttribute` objects for property attributes |
+| `ReflectionProperty::getModifiers()` | `new ReflectionProperty($class_name, $property_name)` | The `IS_*` bitmask for the property's real visibility/staticness/readonly-ness |
+| `ReflectionProperty::hasType()` | `new ReflectionProperty($class_name, $property_name)` | True when the property carries an explicit source type declaration |
 | `ReflectionAttribute::newInstance()` | Internal only | Instantiate the attribute class from captured literal args |
+
+`ReflectionMethod`/`ReflectionProperty` also expose the PHP modifier-bitmask
+class constants: `IS_STATIC` (16), `IS_PUBLIC` (1), `IS_PROTECTED` (2),
+`IS_PRIVATE` (4), `IS_ABSTRACT` (64), `IS_FINAL` (32) on `ReflectionMethod`,
+and the same six on `ReflectionProperty` (`IS_STATIC`, `IS_PUBLIC`,
+`IS_PROTECTED`, `IS_PRIVATE`, `IS_READONLY` (128), plus PHP 8.4's
+`IS_ABSTRACT`/`IS_FINAL` for abstract property hooks and `final` properties).
+
+`ReflectionClass`, `ReflectionMethod`, `ReflectionProperty`,
+`ReflectionFunction`, and `ReflectionParameter` all implement the marker
+interface `Reflector` (which extends `Stringable`), matching real PHP's
+Reflection hierarchy — a value typed `Reflector` narrows through
+`instanceof` to any of them. Since elephc does not implement PHP's
+`Reflection*::__toString()` object-dump text, their inherited
+`__toString()` throws a real `\Error` instead of returning empty or
+fabricated output — echoing or casting a Reflection object stays an
+observable, catchable failure rather than a silent wrong value.
 
 Functions and their parameters can also be reflected. `ReflectionFunction` reads
 a named function's signature, and `getParameters()` returns one
@@ -1185,7 +1214,8 @@ Limitations today:
 - A symbolic reference that elephc cannot resolve — for example a built-in class constant such as `Attribute::TARGET_CLASS`, which is not registered — is treated as unsupported metadata: the attribute still parses and compiles and `class_attribute_names()` still lists it, but its arguments are not reflectable through `getAttributes()`/`class_get_attributes()`/`class_attribute_args()`.
 - The flat `class_attribute_args()` helper returns a positional array of scalars only; it rejects attributes whose arguments are keyed (named arguments or associative arrays, at any depth) or contain a symbolic reference. Use `ReflectionClass::getAttributes()->getArguments()` for those.
 - When several attributes share a name on the same class, `class_attribute_args()` returns the args of the first match; `class_get_attributes()` does expose every occurrence as a separate `ReflectionAttribute` in source order.
-- `ReflectionClass` supports `getName()` and `getAttributes()`. `ReflectionMethod` and `ReflectionProperty` currently support `getAttributes()` only; broader APIs such as `getProperties()`, `getMethods()`, and object construction through `ReflectionClass::newInstance()` are not yet available.
+- `ReflectionClass`, `ReflectionMethod`, and `ReflectionProperty` support the scalar/array/constant metadata methods listed above. Methods that would need to return ANOTHER Reflection object built from arbitrary runtime data — `getParentClass()`, `getMethod()`/`getMethods()`, `getProperty()`/`getProperties()`, `getConstructor()`, `getInterfaces()` (the object-array form; use `getInterfaceNames()` instead) — are not yet available: the EIR backend cannot yet safely lower an un-backed object-returning reflection stub, and shipping one that always returns `null` would be an observable, silently-wrong divergence from PHP. `ReflectionClass::newInstance()`/`newInstanceArgs()` (construction through reflection) are likewise not yet available. `getFileName()` is not available on any Reflection* class — elephc does not currently track which source file declared a class or function.
+- `ReflectionMethod`/`ReflectionProperty` construction requires a compile-time-literal method/property name (see the limitation above); `hasMethod()`/`hasProperty()`/`isSubclassOf()`/`implementsInterface()` do NOT have this restriction — their string argument can be any runtime value, since the membership check runs against metadata baked into the object at construction time.
 - `ReflectionFunction`/`ReflectionParameter` reflect named functions only (the constructor argument must be a compile-time function-name string). `ReflectionParameter::getType()` resolves a single named type (including a nullable `?T`); union and intersection parameter types, default-value reflection (`getDefaultValue()`), and per-parameter attribute reflection are not yet available. An explicit `mixed` hint is reported as untyped.
 
 ### Class constants

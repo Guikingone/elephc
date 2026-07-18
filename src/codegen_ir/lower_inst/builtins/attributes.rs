@@ -292,8 +292,14 @@ fn emit_append_reflection_attribute_object(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// Allocates and fills an indexed array of attribute-name strings.
-fn emit_string_array(ctx: &mut FunctionContext<'_>, names: &[String]) -> Result<()> {
+/// Allocates and fills an indexed array of attribute-name strings. Also
+/// reused by `crate::codegen_ir::lower_inst::objects::reflection` to bake
+/// plain `array<string>` reflection metadata slots (e.g. `getInterfaceNames()`,
+/// `hasMethod()`'s lowercased method-name set).
+pub(in crate::codegen_ir::lower_inst) fn emit_string_array(
+    ctx: &mut FunctionContext<'_>,
+    names: &[String],
+) -> Result<()> {
     allocate_indexed_array(ctx, names.len().max(1), 16);
     match ctx.emitter.target.arch {
         Arch::AArch64 => emit_string_array_fill_aarch64(ctx, names),
@@ -332,8 +338,15 @@ fn emit_string_array_fill_x86_64(ctx: &mut FunctionContext<'_>, names: &[String]
     ctx.emitter.instruction("pop rax");                                         // restore the final attribute-name array as the result
 }
 
-/// Allocates and fills an indexed array of boxed Mixed attribute arguments.
-fn emit_mixed_array(ctx: &mut FunctionContext<'_>, attr_args: &[AttrArgEntry]) -> Result<()> {
+/// Allocates and fills an indexed array of boxed Mixed values from
+/// `AttrArgEntry` literals. Shared with
+/// `crate::codegen_ir::lower_inst::objects::reflection`, which reuses the
+/// same literal-value boxing to bake `ReflectionClass::getConstants()`'s
+/// parallel value array from folded class-constant expressions.
+pub(in crate::codegen_ir::lower_inst) fn emit_mixed_array(
+    ctx: &mut FunctionContext<'_>,
+    attr_args: &[AttrArgEntry],
+) -> Result<()> {
     allocate_indexed_array(ctx, attr_args.len().max(1), 8);
     crate::codegen::emit_array_value_type_stamp(
         ctx.emitter,
