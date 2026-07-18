@@ -62,6 +62,12 @@ impl Checker {
                             .and_then(|c| c.methods.get(&method_key))
                             .map(|s| s.params.clone())
                     };
+                    // Params whose resolved type is `callable` — mirrors the free-function
+                    // `callable_param_names`/`declared_callable_param_names` split in
+                    // `functions::resolution::signature::resolve_function_signature`, scoped
+                    // per method by the class-qualified cross-call cache key below.
+                    let mut callable_param_names: Vec<String> = Vec::new();
+                    let mut declared_callable_param_names: Vec<String> = Vec::new();
                     for (i, (pname, type_ann, _, _)) in method.params.iter().enumerate() {
                         let ty = if let Some(type_ann) = type_ann {
                             let declared = self.resolve_declared_param_type_hint(
@@ -97,6 +103,12 @@ impl Checker {
                                 .map(|(_, t)| t.clone())
                                 .unwrap_or(PhpType::Int)
                         };
+                        if ty == PhpType::Callable {
+                            callable_param_names.push(pname.clone());
+                            if type_ann.is_some() {
+                                declared_callable_param_names.push(pname.clone());
+                            }
+                        }
                         method_env.insert(pname.clone(), ty);
                     }
                     if let Some(variadic_name) = &method.variadic {
@@ -121,21 +133,85 @@ impl Checker {
                         .filter(|(_, _, _, is_ref)| *is_ref)
                         .map(|(name, _, _, _)| name.clone())
                         .collect();
+                    // Cross-call cache key for this method's OWN callable-typed params:
+                    // the DECLARING/flattened-owner class (`class.name` here, since
+                    // `flattened_classes` only lists a method under the class that
+                    // physically owns its body — inherited-without-override methods are
+                    // checked once, under their original declaring class) qualified with
+                    // the method name, matching what call-site checking
+                    // (`inference::objects::methods`) writes and what the active EIR
+                    // lowering (`ir_lower::context::Context::callable_param_signature`)
+                    // already reads via `owner_name = "{class}::{method}"`.
+                    let method_callable_scope_key = format!("{}::{}", class.name, method_key);
+                    // Start this method's body check with an EMPTY slate for every
+                    // variable-name-keyed callable side table — see
+                    // `Checker::enter_callable_var_scope` for why this is required (methods
+                    // previously had NO such scoping at all, unlike free functions, so a
+                    // closure assigned to a same-named local in one method leaked into every
+                    // other method/function checked afterward).
+                    let saved_callable_var_scope = self.enter_callable_var_scope();
+                    for pname in &declared_callable_param_names {
+                        self.callable_param_names.insert(pname.clone());
+                    }
+                    for pname in &callable_param_names {
+                        if let Some(sig) = self
+                            .callable_param_sigs
+                            .get(&(method_callable_scope_key.clone(), pname.clone()))
+                            .cloned()
+                        {
+                            self.closure_return_types
+                                .insert(pname.clone(), sig.return_type.clone());
+                            self.callable_sigs.insert(pname.clone(), sig);
+                        }
+                        // No cached signature yet: pre-specialization fallback (validated
+                        // only by count/by-ref when this method's body invokes it).
+                    }
                     let mut method_errors = Vec::new();
-                    self.with_local_storage_context(method_ref_params, |checker| {
-                        for s in &method.body {
-                            if let Err(error) = checker.check_stmt(s, &mut method_env) {
-                                method_errors.extend(error.flatten());
+                    let body_check_result =
+                        self.with_local_storage_context(method_ref_params, |checker| {
+                            for s in &method.body {
+                                if let Err(error) = checker.check_stmt(s, &mut method_env) {
+                                    method_errors.extend(error.flatten());
+                                }
+                            }
+                            Ok(())
+                        });
+                    if let Err(error) = &body_check_result {
+                        // A structural error from `with_local_storage_context` itself (not a
+                        // per-statement error collected into `method_errors`) still needs the
+                        // callable side tables restored before propagating, same as any other
+                        // early-return path.
+                        let error = error.clone();
+                        for pname in &callable_param_names {
+                            if let Some(sig) = self.callable_sigs.get(pname).cloned() {
+                                self.callable_param_sigs
+                                    .insert((method_callable_scope_key.clone(), pname.clone()), sig);
                             }
                         }
-                        Ok(())
-                    })?;
+                        self.exit_callable_var_scope(saved_callable_var_scope);
+                        return Err(error);
+                    }
                     let method_has_errors = !method_errors.is_empty();
                     pass_errors.extend(method_errors);
 
+                    // `update_method_return_type` re-infers `return` expression types (e.g. a
+                    // pipe/callable-variable invocation) via `collect_return_infos`, which reads
+                    // `self.callable_sigs`/`self.closure_return_types` the SAME way the body
+                    // check did — so the callable var scope must stay open through this call,
+                    // not just through the body-statement loop above.
                     if !method_has_errors {
                         self.update_method_return_type(class, method, &method_env, &mut pass_errors);
                     }
+                    // Persist any specialization this method's body produced for its OWN
+                    // declared callable params into the cross-call cache BEFORE restoring the
+                    // caller's snapshot.
+                    for pname in &callable_param_names {
+                        if let Some(sig) = self.callable_sigs.get(pname).cloned() {
+                            self.callable_param_sigs
+                                .insert((method_callable_scope_key.clone(), pname.clone()), sig);
+                        }
+                    }
+                    self.exit_callable_var_scope(saved_callable_var_scope);
                     self.current_class = None;
                     self.current_method = None;
                     self.current_method_is_static = false;

@@ -508,6 +508,21 @@ impl Checker {
         for arg in &normalized_args {
             arg_types.push(self.infer_type(arg, env)?);
         }
+        // Resolve the closure's own signature for each Callable-typed argument BEFORE
+        // taking a mutable borrow of `self.classes` below (`resolve_expr_callable_sig`
+        // needs `&mut self`). Feeds the class-qualified `callable_param_sigs` write so a
+        // method's OWN callable-typed parameter gets the same cross-call specialization
+        // free functions already get (see `functions::resolution::mod::check_function_call`'s
+        // analogous write at the free-function call site).
+        let mut normalized_arg_callable_sigs: Vec<Option<FunctionSig>> =
+            Vec::with_capacity(normalized_args.len());
+        for (i, arg) in normalized_args.iter().enumerate() {
+            if arg_types.get(i) == Some(&PhpType::Callable) {
+                normalized_arg_callable_sigs.push(self.resolve_expr_callable_sig(arg, env)?);
+            } else {
+                normalized_arg_callable_sigs.push(None);
+            }
+        }
 
         let impl_class_name = self
             .classes
@@ -550,6 +565,22 @@ impl Checker {
                             sig.params[i].1 = arg_ty.clone();
                         } else {
                             sig.params[i].1 = Self::union_param_type(&sig.params[i].1, arg_ty);
+                        }
+                    }
+                    if i < regular_param_count && *arg_ty == PhpType::Callable {
+                        if let Some(closure_sig) = normalized_arg_callable_sigs[i].clone() {
+                            // Keyed by the DECLARING/flattened-owner class (`impl_class_name`,
+                            // the same class whose `methods` table is mutated above) so
+                            // unrelated classes' same-named methods/params never share an
+                            // entry — matches the key scheme `ir_lower::context::Context::
+                            // callable_param_signature` already reads (`owner_name =
+                            // "{class}::{method}"`, `owner_name` built from
+                            // `format!("{}::{}", class_name, method_name)` in
+                            // `ir_lower::function::lower_class_method`).
+                            self.callable_param_sigs.insert(
+                                (format!("{}::{}", impl_class_name, method_key), sig.params[i].0.clone()),
+                                closure_sig,
+                            );
                         }
                     }
                 }
@@ -1010,6 +1041,18 @@ impl Checker {
         for arg in &normalized_args {
             arg_types.push(self.infer_type(arg, env)?);
         }
+        // Resolve the closure's own signature for each Callable-typed argument BEFORE
+        // taking a mutable borrow of `self.classes` below — mirrors the instance-method
+        // call path above.
+        let mut normalized_arg_callable_sigs: Vec<Option<FunctionSig>> =
+            Vec::with_capacity(normalized_args.len());
+        for (i, arg) in normalized_args.iter().enumerate() {
+            if arg_types.get(i) == Some(&PhpType::Callable) {
+                normalized_arg_callable_sigs.push(self.resolve_expr_callable_sig(arg, env)?);
+            } else {
+                normalized_arg_callable_sigs.push(None);
+            }
+        }
 
         let direct_impl_class_name = if parent_call || self_call {
             self.classes
@@ -1054,6 +1097,21 @@ impl Checker {
                             sig.params[i].1 = arg_ty.clone();
                         } else {
                             sig.params[i].1 = Self::union_param_type(&sig.params[i].1, arg_ty);
+                        }
+                    }
+                    if i < regular_param_count && *arg_ty == PhpType::Callable {
+                        if let Some(closure_sig) = normalized_arg_callable_sigs[i].clone() {
+                            // NOT "static:"-prefixed (unlike `param_specialization_seen` above):
+                            // this key must match the UNPREFIXED `"{class}::{method}"` scheme the
+                            // active EIR lowering already reads for both static and instance
+                            // methods (`ir_lower::function::lower_class_method`'s `owner_name`),
+                            // and PHP forbids a class from declaring both a static and an
+                            // instance method with the same name, so the plain key stays
+                            // unambiguous.
+                            self.callable_param_sigs.insert(
+                                (format!("{}::{}", class_name, method), sig.params[i].0.clone()),
+                                closure_sig,
+                            );
                         }
                     }
                 }

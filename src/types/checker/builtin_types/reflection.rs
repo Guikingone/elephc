@@ -509,13 +509,91 @@ fn empty_string_sentinel_expr(slot: &str) -> Expr {
     )
 }
 
+/// Returns a public no-arg method whose body is `if ($this->guard_property) { throw new
+/// ReflectionException(message); } return body_expr;`.
+///
+/// Used to gate `ReflectionFunction::getName()`/`getShortName()`/`getFileName()` on
+/// closure-backed instances constructed from a closure LITERAL (`new
+/// ReflectionFunction(function ($x) {...})`): PHP's real closure name embeds the
+/// declaring file (or enclosing function/method) and line
+/// (`"{closure:FILE:LINE}"`/`"{closure:Class::method():LINE}"`, php -n VERIFIED on
+/// PHP 8.5 — NOT the bare `"{closure}"` used by older PHP versions), which elephc has
+/// no per-closure source-location tracking to reproduce soundly. Rather than bake a
+/// value that would silently mismatch real PHP, these methods THROW at runtime for a
+/// closure-literal-backed instance (see `crate::codegen_ir::lower_inst::objects::reflection`
+/// for where `__unbacked_name` is set to `true` only for that construction path — string-
+/// literal and first-class-callable constructions leave it `false` and stay fully backed).
+fn builtin_reflection_guarded_method(
+    method_name: &str,
+    return_type: TypeExpr,
+    guard_property: &str,
+    message: &str,
+    body_expr: Expr,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(return_type),
+        by_ref_return: false,
+        body: vec![
+            Stmt::new(
+                StmtKind::If {
+                    condition: this_prop_expr(guard_property),
+                    then_body: vec![Stmt::new(
+                        StmtKind::Throw(Expr::new(
+                            ExprKind::NewObject {
+                                class_name: Name::unqualified("ReflectionException"),
+                                args: vec![Expr::new(
+                                    ExprKind::StringLiteral(message.to_string()),
+                                    dummy_span,
+                                )],
+                            },
+                            dummy_span,
+                        )),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(StmtKind::Return(Some(body_expr)), dummy_span),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a public no-arg `getFileName(): string|false` method reading the private `__file`
 /// slot baked at construction time (see `crate::codegen_ir::lower_inst::objects::reflection`):
 /// the declaring source file's path when known, PHP's `false` sentinel otherwise (an internal/
 /// builtin reflected symbol, or one this snapshot could not attribute — see
-/// `crate::pipeline::scan_reflection_source_files`).
+/// `crate::pipeline::scan_reflection_source_files`). Shared by every reflection owner EXCEPT
+/// `ReflectionFunction`, which uses the guarded `builtin_reflection_function_get_file_name_method`
+/// instead (only `ReflectionFunction` instances can be closure-backed).
 fn builtin_reflection_get_file_name_method() -> ClassMethod {
     builtin_reflection_computed_method("getFileName", str_or_false_type(), empty_string_sentinel_expr("__file"))
+}
+
+/// `ReflectionFunction`-only `getFileName()`: same `__file` slot as
+/// `builtin_reflection_get_file_name_method`, but gated on `__unbacked_name` for a
+/// closure-literal-backed instance — see `builtin_reflection_guarded_method`.
+fn builtin_reflection_function_get_file_name_method() -> ClassMethod {
+    builtin_reflection_guarded_method(
+        "getFileName",
+        str_or_false_type(),
+        "__unbacked_name",
+        "ReflectionFunction::getFileName() is not supported for a closure-literal-backed instance: elephc cannot reproduce PHP's per-closure declaring-file tracking",
+        empty_string_sentinel_expr("__file"),
+    )
 }
 
 /// Returns a public `getParentClass(): ReflectionClass|false` method: PHP's `false` when the
@@ -917,9 +995,16 @@ fn builtin_reflection_literal_method_with_params(
     }
 }
 
-/// Returns the public `__construct(string $name)` for `ReflectionFunction`. The
-/// body is empty; codegen populates the metadata slots from the reflected
-/// function's signature.
+/// Returns the public `__construct(Closure|string $function)` for `ReflectionFunction`. The
+/// body is empty; codegen populates the metadata slots from the reflected function/closure's
+/// signature. Modeled `mixed` under gradual typing — matching the `ReflectionClass
+/// __construct(object|string $objectOrClass)` precedent (see `reflection_class_literal_arg` in
+/// `crate::types::checker::inference::objects::constructors`) — since elephc types closures as
+/// `PhpType::Callable` (not a dedicated `Closure` object type), so a plain `Str|Callable`
+/// parameter hint would already reject nothing extra; `mixed` keeps the ACTUAL string-vs-closure
+/// boundary enforcement in `validate_reflection_owner_constructor`, which also rejects a
+/// dynamically-typed Closure value (a `Closure`-typed variable/parameter with no statically
+/// resolvable identity) that this shell cannot soundly back at all.
 fn builtin_reflection_function_constructor_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
@@ -929,7 +1014,7 @@ fn builtin_reflection_function_constructor_method() -> ClassMethod {
         is_abstract: false,
         is_final: false,
         has_body: true,
-        params: vec![("name".to_string(), Some(TypeExpr::Str), None, false)],
+        params: vec![("function".to_string(), Some(mixed_type()), None, false)],
         variadic: None,
         variadic_type: None,
         return_type: None,
@@ -969,12 +1054,35 @@ fn builtin_reflection_function() -> FlattenedClass {
             // Declaring source file (empty-string sentinel for "unknown"), baked from
             // `crate::pipeline::scan_reflection_source_files`'s snapshot. Backs `getFileName()`.
             builtin_property("__file", Visibility::Private, Some(TypeExpr::Str), empty_string()),
+            // `true` only when this instance was constructed from a closure LITERAL (`new
+            // ReflectionFunction(function ($x) {...})`/`fn (...) => ...`): num-params-related
+            // slots (`__num_params`/`__num_required`/`__params`) are still soundly derived from
+            // the closure's own AST and stay backed, but `__name`/`__short`/`__file` are NOT —
+            // PHP's real closure name embeds the declaring file/line (php -n verified 8.5 format:
+            // `"{closure:FILE:LINE}"`/`"{closure:Class::method():LINE}"`), which elephc has no
+            // per-closure source-location tracking to reproduce. `getName`/`getShortName`/
+            // `getFileName` throw instead of faking a value when this is `true` (see
+            // `builtin_reflection_guarded_method`). String-literal and first-class-callable
+            // constructions leave this `false` (fully backed, same as any named function).
+            builtin_property("__unbacked_name", Visibility::Private, Some(TypeExpr::Bool), bool_lit(false)),
         ],
         methods: vec![
             builtin_reflection_function_constructor_method(),
-            builtin_reflection_get_file_name_method(),
-            builtin_reflection_slot_getter("getName", "__name", TypeExpr::Str),
-            builtin_reflection_slot_getter("getShortName", "__short", TypeExpr::Str),
+            builtin_reflection_function_get_file_name_method(),
+            builtin_reflection_guarded_method(
+                "getName",
+                TypeExpr::Str,
+                "__unbacked_name",
+                "ReflectionFunction::getName() is not supported for a closure-literal-backed instance: elephc cannot reproduce PHP's per-closure name format (which embeds the declaring file/function and line)",
+                this_prop_expr("__name"),
+            ),
+            builtin_reflection_guarded_method(
+                "getShortName",
+                TypeExpr::Str,
+                "__unbacked_name",
+                "ReflectionFunction::getShortName() is not supported for a closure-literal-backed instance: elephc cannot reproduce PHP's per-closure name format (which embeds the declaring file/function and line)",
+                this_prop_expr("__short"),
+            ),
             builtin_reflection_slot_getter("getNumberOfParameters", "__num_params", TypeExpr::Int),
             builtin_reflection_slot_getter(
                 "getNumberOfRequiredParameters",

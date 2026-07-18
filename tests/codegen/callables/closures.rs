@@ -1399,3 +1399,107 @@ echo $r[0], $r[1], $r[2];
     );
     assert_eq!(out, "246");
 }
+
+// -- callable-sig registry cross-contamination fix (cycle-4 I3 / PART B2) --
+//
+// Regression coverage for the confirmed collision: `Checker::callable_sigs`/
+// `closure_return_types`/`callable_param_names` (keyed only by LOCAL VARIABLE NAME, e.g.
+// `$callback`) previously leaked across every function/method body check — methods had NO
+// scoping at all (unlike free functions, which only scoped their OWN declared callable params),
+// so a closure assigned to a same-named local in one method/function silently contaminated the
+// next one checked. See `Checker::enter_callable_var_scope`/`exit_callable_var_scope` in
+// `src/types/checker/mod.rs`.
+
+/// Verifies the exact reproduced collision shape: two UNRELATED classes each declare a
+/// `run(callable $callback)` method (same method name, same parameter name), invoked with
+/// DIFFERENTLY-shaped closures. Before the fix, checking `Beta::run` (or a later, unrelated
+/// function/method reusing the name `$callback`) could silently validate its closure invocation
+/// against `Alpha::run`'s closure signature instead of its own, either rejecting a valid call or
+/// accepting/miscompiling an invalid one.
+#[test]
+fn test_callable_param_sig_no_cross_class_same_method_name_collision() {
+    let out = compile_and_run(
+        r#"<?php
+class Alpha {
+    public function run(callable $callback): string {
+        return $callback("hello");
+    }
+}
+class Beta {
+    public function run(callable $callback): int {
+        return $callback(5);
+    }
+}
+$a = new Alpha();
+echo $a->run(function (string $s): string { return strtoupper($s); });
+echo "|";
+$b = new Beta();
+echo $b->run(function (int $n): int { return $n * 2; });
+"#,
+    );
+    assert_eq!(out, "HELLO|10");
+}
+
+/// Same collision shape as `test_callable_param_sig_no_cross_class_same_method_name_collision`,
+/// but through a TRAIT method flattened into two unrelated classes (`class.name` — the
+/// declaring/flattened-owner class — is the cross-call cache key qualifier for a trait-flattened
+/// method, per the JURY ADDENDUM). Each class's flattened copy of `run` must specialize its OWN
+/// `$callback` parameter independently.
+#[test]
+fn test_callable_param_sig_no_cross_trait_flattened_method_collision() {
+    let out = compile_and_run(
+        r#"<?php
+trait RunnerTrait {
+    public function run(callable $callback): int {
+        return $callback(3);
+    }
+}
+class First {
+    use RunnerTrait;
+}
+class Second {
+    use RunnerTrait;
+}
+$f = new First();
+echo $f->run(function (int $n): int { return $n + 100; });
+echo "|";
+$s = new Second();
+echo $s->run(function (int $n): int { return $n * 10; });
+"#,
+    );
+    assert_eq!(out, "103|30");
+}
+
+/// Verifies a closure assigned to an ORDINARY (non-parameter) local variable inside one method
+/// does not leak into a different method that happens to declare a local of the same name —
+/// the actual mechanism behind the confirmed `--web` collision (a `Symfony\Component\Yaml\
+/// Unescaper`-shaped closure-in-a-local leaking into an unrelated `PhpFileLoader`-shaped
+/// `callable $callback` parameter). `Gamma::pick` assigns `$callback` to a `string`-returning
+/// closure with an untyped param; `Delta::pick` independently assigns `$callback` to an
+/// `int`-returning closure. Checking them in sequence must not let either specialization bleed
+/// into the other.
+#[test]
+fn test_callable_local_variable_sig_no_cross_method_collision() {
+    let out = compile_and_run(
+        r#"<?php
+class Gamma {
+    public function pick(): string {
+        $callback = function ($match) { return strtoupper($match); };
+        return $callback("hi");
+    }
+}
+class Delta {
+    public function pick(): int {
+        $callback = function ($match) { return $match + 1; };
+        return $callback(41);
+    }
+}
+$g = new Gamma();
+echo $g->pick();
+echo "|";
+$d = new Delta();
+echo $d->pick();
+"#,
+    );
+    assert_eq!(out, "HI|42");
+}

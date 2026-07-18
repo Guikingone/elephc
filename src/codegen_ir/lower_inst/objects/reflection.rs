@@ -141,22 +141,28 @@ pub(super) fn lower_reflection_owner_new(
     ctx.store_result_value(result)
 }
 
-/// Lowers `new ReflectionFunction("name")` by populating its name and
-/// parameter-count slots from the reflected function's signature. The slot
+/// Lowers `new ReflectionFunction(...)` by populating its name and
+/// parameter-count slots from the reflected function/closure's signature. The slot
 /// layout is `__name` (8/16), `__short` (24/32), `__num_params` (40/48),
-/// `__num_required` (56/64).
+/// `__num_required` (56/64), `__unbacked_name` (see `reflection_function_construction_metadata`
+/// offset lookup below).
 pub(super) fn lower_reflection_function_new(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    let (full_name, short_name, num_params, num_required) = reflection_function_metadata(ctx, inst)?;
-    let source_file = ctx
-        .module
-        .function_source_files
-        .get(&php_symbol_key(full_name.trim_start_matches('\\')))
-        .cloned()
-        .unwrap_or_default();
-    let (class_id, property_count, uninitialized_marker_offsets, name_off, short_off, np_off, nr_off, file_off) = {
+    let (full_name, short_name, num_params, num_required, param_infos, source_file, unbacked_name) =
+        reflection_function_construction_metadata(ctx, inst)?;
+    let (
+        class_id,
+        property_count,
+        uninitialized_marker_offsets,
+        name_off,
+        short_off,
+        np_off,
+        nr_off,
+        file_off,
+        unbacked_off,
+    ) = {
         let class_info = ctx
             .module
             .class_infos
@@ -178,6 +184,7 @@ pub(super) fn lower_reflection_function_new(
             slot("__num_params")?,
             slot("__num_required")?,
             slot("__file")?,
+            slot("__unbacked_name")?,
         )
     };
     super::emit_object_allocation(
@@ -193,6 +200,7 @@ pub(super) fn lower_reflection_function_new(
     emit_reflection_int_property(ctx, num_params, np_off, np_off + 8);
     emit_reflection_int_property(ctx, num_required, nr_off, nr_off + 8);
     emit_reflection_string_property(ctx, &source_file, file_off, file_off + 8);
+    emit_reflection_int_property(ctx, unbacked_name as i64, unbacked_off, unbacked_off + 8);
 
     // Build the `ReflectionParameter[]` array and store it into `__params`.
     let params_off = ctx
@@ -201,7 +209,6 @@ pub(super) fn lower_reflection_function_new(
         .get("ReflectionFunction")
         .and_then(|ci| ci.property_offsets.get("__params").copied())
         .ok_or_else(|| CodegenIrError::missing_entry("property offset", 0))?;
-    let param_infos = reflection_function_param_infos(ctx, &full_name);
     let (rp_class_id, rp_prop_count, rp_markers, rp_name, rp_pos, rp_opt, rp_var, rp_type, rp_has_type) = {
         let ci = ctx
             .module
@@ -263,16 +270,56 @@ pub(super) fn lower_reflection_function_new(
     ctx.store_result_value(result)
 }
 
-/// Resolves `ReflectionFunction(name)` to its full name, short name, and
-/// parameter counts from the reflected function's lowered signature.
-fn reflection_function_metadata(
+/// Resolves ALL metadata needed to construct a `ReflectionFunction` instance from its single
+/// constructor operand. Three operand shapes reach here (checker-validated —
+/// `crate::types::checker::inference::objects::constructors::
+/// validate_reflection_function_constructor_arg` rejects anything else at compile time):
+///
+/// - A literal string constant, OR a first-class callable targeting a plain free function
+///   (`target(...)`, resolved by `reflection_function_name_operand` — php -n VERIFIED PHP
+///   treats an FCC-created closure's `ReflectionFunction` identically to the target's name:
+///   `getName()` returns the real function name, not `"{closure}"`). Fully backed, exactly as
+///   before this function existed: `full_name`/`short_name`/`source_file` are the reflected
+///   function's real name/short-name/declaring-file, `unbacked_name=false`.
+/// - A closure LITERAL (`closure_new_operand_name` detects the `Op::ClosureNew` operand and
+///   resolves ITS OWN signature by synthetic name from `ctx.module.closures`, instead of
+///   `ctx.module.functions`). The closure's identity is statically known (it's the exact value
+///   this constructor call creates), so `num_params`/`num_required`/param metadata are just as
+///   soundly derivable as for a named function — but `full_name`/`short_name`/`source_file`
+///   stay EMPTY and `unbacked_name=true`, gating `getName`/`getShortName`/`getFileName` to
+///   throw at runtime (see `crate::types::checker::builtin_types::reflection::
+///   builtin_reflection_guarded_method`): PHP's real closure name embeds the declaring
+///   file/function and line (php -n VERIFIED PHP 8.5 format: `"{closure:FILE:LINE}"` /
+///   `"{closure:Class::method():LINE}"`), which elephc has no per-closure source-location
+///   tracking to reproduce soundly — faking a value here would be silently wrong, not merely
+///   incomplete.
+fn reflection_function_construction_metadata(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
-) -> Result<(String, String, i64, i64)> {
+) -> Result<(String, String, i64, i64, Vec<ReflectionParamInfo>, String, bool)> {
     let Some(name_operand) = inst.operands.first().copied() else {
-        return Ok((String::new(), String::new(), 0, 0));
+        return Ok((String::new(), String::new(), 0, 0, Vec::new(), String::new(), false));
     };
-    let function_name = const_required_string_operand(ctx, name_operand, "ReflectionFunction")?;
+    if let Some(closure_name) = closure_new_operand_name(ctx, name_operand) {
+        let signature = ctx
+            .module
+            .closures
+            .iter()
+            .find(|function| function.name == closure_name)
+            .and_then(|function| function.signature.as_ref());
+        let (num_params, num_required) = reflection_param_counts(signature);
+        let param_infos = reflection_param_infos_from_signature(signature);
+        return Ok((
+            String::new(),
+            String::new(),
+            num_params,
+            num_required,
+            param_infos,
+            String::new(),
+            true,
+        ));
+    }
+    let function_name = reflection_function_name_operand(ctx, name_operand)?;
     let key = php_symbol_key(function_name.trim_start_matches('\\'));
     let signature = ctx
         .module
@@ -280,7 +327,75 @@ fn reflection_function_metadata(
         .iter()
         .find(|function| php_symbol_key(function.name.trim_start_matches('\\')) == key)
         .and_then(|function| function.signature.as_ref());
-    let (num_params, num_required) = signature
+    let (num_params, num_required) = reflection_param_counts(signature);
+    let param_infos = reflection_param_infos_from_signature(signature);
+    let short_name = function_name
+        .trim_start_matches('\\')
+        .rsplit('\\')
+        .next()
+        .unwrap_or(&function_name)
+        .to_string();
+    let source_file = ctx.module.function_source_files.get(&key).cloned().unwrap_or_default();
+    Ok((
+        function_name.clone(),
+        short_name,
+        num_params,
+        num_required,
+        param_infos,
+        source_file,
+        false,
+    ))
+}
+
+/// Resolves the `new ReflectionFunction(...)` name operand to a function name string, accepting
+/// either a literal string constant (the common case, `const_required_string_operand`) or a
+/// first-class-callable operand targeting a free function. Closure-LITERAL operands are handled
+/// by the caller (`reflection_function_construction_metadata`) before this is reached.
+fn reflection_function_name_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<String> {
+    if let Some(name) = first_class_callable_operand_name(ctx, value) {
+        return Ok(name);
+    }
+    const_required_string_operand(ctx, value, "ReflectionFunction")
+}
+
+/// Returns the target function's name when `value` is a `Op::FirstClassCallableNew` operand
+/// (`target(...)`), or `None` for any other operand shape.
+fn first_class_callable_operand_name(ctx: &FunctionContext<'_>, value: ValueId) -> Option<String> {
+    reflection_data_string_for_op(ctx, value, Op::FirstClassCallableNew)
+}
+
+/// Returns the closure's own synthetic name (`ctx.module.closures`' key) when `value` is a
+/// `Op::ClosureNew` operand (a closure LITERAL passed directly, e.g. `new
+/// ReflectionFunction(function ($x) {...})`), or `None` for any other operand shape (including a
+/// `Closure`-typed variable — that value's DEFINING instruction is whatever produced the
+/// variable's value, not `Op::ClosureNew` itself, so this deliberately does not chase loads).
+fn closure_new_operand_name(ctx: &FunctionContext<'_>, value: ValueId) -> Option<String> {
+    reflection_data_string_for_op(ctx, value, Op::ClosureNew)
+}
+
+/// Shared lookup for `first_class_callable_operand_name`/`closure_new_operand_name`: resolves
+/// `value`'s defining instruction, requires it to be exactly `expected_op`, and reads its
+/// `Immediate::Data` string out of the module's data pool.
+fn reflection_data_string_for_op(ctx: &FunctionContext<'_>, value: ValueId, expected_op: Op) -> Option<String> {
+    let value_ref = ctx.function.value(value)?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return None;
+    };
+    let inst_ref = ctx.function.instruction(inst)?;
+    if inst_ref.op != expected_op {
+        return None;
+    }
+    let Some(Immediate::Data(data)) = inst_ref.immediate else {
+        return None;
+    };
+    ctx.module.data.strings.get(data.as_raw() as usize).cloned()
+}
+
+/// Computes `(num_params, num_required)` from an already-resolved function/closure signature.
+/// Shared core for the named-function and closure-literal `ReflectionFunction` construction
+/// paths (`reflection_function_construction_metadata`).
+fn reflection_param_counts(signature: Option<&crate::types::FunctionSig>) -> (i64, i64) {
+    signature
         .map(|sig| {
             let total = sig.params.len() as i64;
             let required = sig
@@ -293,14 +408,7 @@ fn reflection_function_metadata(
                 .count() as i64;
             (total, required)
         })
-        .unwrap_or((0, 0));
-    let short_name = function_name
-        .trim_start_matches('\\')
-        .rsplit('\\')
-        .next()
-        .unwrap_or(&function_name)
-        .to_string();
-    Ok((function_name.clone(), short_name, num_params, num_required))
+        .unwrap_or((0, 0))
 }
 
 /// Stores an integer immediate into a Reflection object's property slot.
@@ -361,21 +469,15 @@ fn reflection_named_type_info(ty: &crate::types::PhpType) -> Option<(String, boo
     }
 }
 
-/// Extracts per-parameter reflection metadata from a function's lowered
-/// signature. A parameter is optional once a default or the variadic is seen
-/// (matching PHP's `isOptional`).
-fn reflection_function_param_infos(
-    ctx: &FunctionContext<'_>,
-    function_name: &str,
+/// Extracts per-parameter reflection metadata from an already-resolved function/closure
+/// signature (`None` when the reflected name/closure could not be found — yields an empty
+/// param list rather than erroring). A parameter is optional once a default or the variadic is
+/// seen (matching PHP's `isOptional`). Shared core for the named-function and closure-literal
+/// `ReflectionFunction` construction paths (`reflection_function_construction_metadata`).
+fn reflection_param_infos_from_signature(
+    signature: Option<&crate::types::FunctionSig>,
 ) -> Vec<ReflectionParamInfo> {
-    let key = php_symbol_key(function_name.trim_start_matches('\\'));
-    let Some(signature) = ctx
-        .module
-        .functions
-        .iter()
-        .find(|function| php_symbol_key(function.name.trim_start_matches('\\')) == key)
-        .and_then(|function| function.signature.as_ref())
-    else {
+    let Some(signature) = signature else {
         return Vec::new();
     };
     let mut seen_optional = false;

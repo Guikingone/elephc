@@ -714,3 +714,97 @@ try {
         "Class \"42\" does not exist|Class \"4.2\" does not exist|Class \"1\" does not exist"
     );
 }
+
+// -- ReflectionFunction(Closure|string) (cycle-4 I3 / PART B4) --
+
+/// Verifies `new ReflectionFunction(<closure literal>)` backs `getNumberOfParameters()`,
+/// `getNumberOfRequiredParameters()`, and `getParameters()` from the closure's OWN declared
+/// params (statically known — it's the exact closure this call creates), matching PHP exactly.
+/// php -n verified: `(new ReflectionFunction(function ($x, $y = 1) { return $x; }))
+/// ->getNumberOfParameters() === 2`, `->getNumberOfRequiredParameters() === 1`,
+/// `->getParameters()[0]->getName() === "x"`. An arrow function literal is covered too.
+#[test]
+fn test_reflection_function_closure_literal_backs_param_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+$rf = new ReflectionFunction(function ($x, $y = 1) { return $x; });
+echo $rf->getNumberOfParameters();
+echo "|";
+echo $rf->getNumberOfRequiredParameters();
+echo "|";
+$params = $rf->getParameters();
+echo count($params);
+echo "|";
+echo $params[0]->getName();
+echo "|";
+$rfArrow = new ReflectionFunction(fn($a) => $a + 1);
+echo $rfArrow->getNumberOfParameters();
+"#,
+    );
+    assert_eq!(out, "2|1|2|x|1");
+}
+
+/// Verifies `getName()`/`getShortName()`/`getFileName()` THROW a catchable `\ReflectionException`
+/// for a closure-LITERAL-backed `ReflectionFunction` instance instead of fabricating a value —
+/// PHP's real closure name embeds the declaring file/function and line (php -n VERIFIED PHP 8.5
+/// format: `(new ReflectionFunction(function ($x) { return $x; }))->getName() ===
+/// "{closure:FILE:LINE}"`, NOT the bare `"{closure}"` some older PHP versions used, and the exact
+/// scope prefix differs between top-level/function/method contexts), which elephc has no
+/// per-closure source-location tracking to reproduce soundly — gating with a real throw is the
+/// honest outcome, not a stub. `getNumberOfParameters()` on the SAME instance still works,
+/// confirming the gate is per-method, not "the whole object is broken".
+#[test]
+fn test_reflection_function_closure_literal_gates_name_methods() {
+    let out = compile_and_run(
+        r#"<?php
+$rf = new ReflectionFunction(function ($x) { return $x; });
+try {
+    $rf->getName();
+    echo "no-throw";
+} catch (\ReflectionException $e) {
+    echo "throw";
+}
+echo "|";
+try {
+    $rf->getShortName();
+    echo "no-throw";
+} catch (\ReflectionException $e) {
+    echo "throw";
+}
+echo "|";
+try {
+    $rf->getFileName();
+    echo "no-throw";
+} catch (\ReflectionException $e) {
+    echo "throw";
+}
+echo "|";
+echo $rf->getNumberOfParameters();
+"#,
+    );
+    assert_eq!(out, "throw|throw|throw|1");
+}
+
+/// Verifies `new ReflectionFunction($namedFn(...))` (a first-class callable targeting a plain
+/// free function) is treated EXACTLY like passing that function's name as a string literal —
+/// php -n VERIFIED: PHP's FCC-created closures for a named function keep the function's real
+/// name (`getName()`/`getShortName()` return `"target"`, not `"{closure}"`), so this path stays
+/// FULLY backed (no gating), reusing the same metadata the string-literal constructor path
+/// already provides.
+#[test]
+fn test_reflection_function_first_class_callable_fully_backed() {
+    let out = compile_and_run(
+        r#"<?php
+function target(string $s, int $y = 1): string { return $s; }
+$rf = new ReflectionFunction(target(...));
+echo $rf->getName();
+echo "|";
+echo $rf->getShortName();
+echo "|";
+echo $rf->getNumberOfParameters();
+echo "|";
+echo $rf->getNumberOfRequiredParameters();
+"#,
+    );
+    assert_eq!(out, "target|target|2|1");
+}

@@ -1038,3 +1038,34 @@ echo $u->m(5);
         "Method B::m parameter $x expects",
     );
 }
+
+/// `ReflectionFunction::__construct(Closure|string $function)`: a `Closure`-typed value whose
+/// identity is not statically resolvable at the `new ReflectionFunction(...)` call site (here, a
+/// declared `Closure $c` parameter) is rejected at COMPILE TIME rather than accepted and left to
+/// throw on every subsequent method call — elephc has no way to derive even the parameter count
+/// for such a value, so loud under-accept beats constructing an object that can answer nothing.
+#[test]
+fn test_error_reflection_function_dynamic_closure_argument_rejected() {
+    expect_error(
+        r#"<?php
+function reflect(Closure $c) {
+    return new ReflectionFunction($c);
+}
+reflect(function ($x) { return $x; });
+"#,
+        "a dynamically-typed Closure value is not yet supported",
+    );
+}
+
+/// `ReflectionFunction::__construct(Closure|string $function)` rejects an argument that is
+/// neither `Closure`-shaped nor a `string`, mirroring PHP's real `TypeError` for this argument
+/// (php -n verified: `new ReflectionFunction([1, 2])` throws `TypeError:
+/// ReflectionFunction::__construct(): Argument #1 ($function) must be of type Closure|string,
+/// array given`).
+#[test]
+fn test_error_reflection_function_wrong_type_argument_rejected() {
+    expect_error(
+        "<?php new ReflectionFunction([1, 2]);",
+        "must be of type Closure|string",
+    );
+}

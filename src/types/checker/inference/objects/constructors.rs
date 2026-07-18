@@ -221,13 +221,10 @@ impl Checker {
         )?;
 
         if class_name == "ReflectionFunction" {
-            let function_name = self.reflection_string_literal_arg(
-                class_name,
-                "function name",
-                normalized_args.first(),
-                env,
-            )?;
-            return self.validate_reflection_function_target(&function_name, expr);
+            let arg = normalized_args
+                .first()
+                .expect("ReflectionFunction constructor arity was validated");
+            return self.validate_reflection_function_constructor_arg(arg, expr, env);
         }
 
         let reflected_class =
@@ -371,6 +368,90 @@ impl Checker {
                 ),
             )),
         }
+    }
+
+    /// Validates the single constructor argument of `new ReflectionFunction($function)`
+    /// against PHP's real `Closure|string $function` signature.
+    ///
+    /// - A `Str`-typed argument keeps the EXISTING literal-only behavior (dynamic string
+    ///   lookup is not yet supported): `reflection_string_literal_arg` +
+    ///   `validate_reflection_function_target`.
+    /// - A first-class callable targeting a plain FREE FUNCTION (`target(...)`) is treated
+    ///   EXACTLY like passing that function's name as a string literal (php -n VERIFIED:
+    ///   `(new ReflectionFunction($fn(...)))->getName()` returns the real function name, not
+    ///   `"{closure}"` — PHP's FCC-created closures ARE fully named, unlike anonymous ones) —
+    ///   reuses the same existence validation. The EIR lowering
+    ///   (`crate::codegen_ir::lower_inst::objects::reflection::lower_reflection_function_new`)
+    ///   mirrors this by resolving the FCC operand's target name the same way a string literal
+    ///   operand is resolved.
+    /// - A closure LITERAL (`function (...) {...}`/`fn (...) => ...`) passed directly is
+    ///   accepted with no name validation (a literal always "exists"); num-params-related slots
+    ///   are backed from the closure's own declared params, but `getName`/`getShortName`/
+    ///   `getFileName` are gated to throw at runtime (see `builtin_reflection_guarded_method`
+    ///   in `crate::types::checker::builtin_types::reflection`) since PHP's real closure-name
+    ///   format cannot be soundly reproduced here (php -n VERIFIED PHP 8.5 format:
+    ///   `"{closure:FILE:LINE}"` / `"{closure:Class::method():LINE}"` — NOT the bare
+    ///   `"{closure}"` some older PHP versions used; the exact scope prefix even differs
+    ///   between top-level, free-function, and method contexts).
+    /// - Any OTHER Closure-shaped value (a `Closure`-typed variable/parameter/expression whose
+    ///   identity is not statically resolvable at this call site, e.g. `function f(Closure $c) {
+    ///   new ReflectionFunction($c); }`) is REJECTED at compile time: elephc has no way to
+    ///   derive even the parameter count for such a value, so a `ReflectionFunction` instance
+    ///   backed by it could never answer any query soundly — loud under-accept beats
+    ///   constructing an object that throws on every method call.
+    /// - Anything else (not `Str`, not Closure-shaped) is a compile-time type error, mirroring
+    ///   PHP's real `TypeError` for this argument (php -n verified: `new
+    ///   ReflectionFunction([1,2])` throws `TypeError: ReflectionFunction::__construct():
+    ///   Argument #1 ($function) must be of type Closure|string, array given`).
+    fn validate_reflection_function_constructor_arg(
+        &mut self,
+        arg: &Expr,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        let arg_ty = self.infer_type(arg, env)?;
+        if matches!(arg_ty, PhpType::Str) {
+            let function_name = self.reflection_string_literal_arg(
+                "ReflectionFunction",
+                "function name",
+                Some(arg),
+                env,
+            )?;
+            return self.validate_reflection_function_target(&function_name, expr);
+        }
+        if Self::type_is_closure_shaped(&arg_ty) {
+            if let ExprKind::FirstClassCallable(CallableTarget::Function(name)) = &arg.kind {
+                let resolved_name = self
+                    .canonical_function_name_folded(name.as_str())
+                    .unwrap_or_else(|| name.as_str().to_string());
+                return self.validate_reflection_function_target(&resolved_name, expr);
+            }
+            if matches!(arg.kind, ExprKind::Closure { .. }) {
+                return Ok(());
+            }
+            return Err(CompileError::new(
+                expr.span,
+                "ReflectionFunction::__construct(): a dynamically-typed Closure value is not yet supported (pass a closure literal, a first-class callable, or a function name string)",
+            ));
+        }
+        Err(CompileError::new(
+            arg.span,
+            &format!(
+                "ReflectionFunction::__construct(): Argument #1 ($function) must be of type Closure|string, got {:?}",
+                arg_ty
+            ),
+        ))
+    }
+
+    /// Returns true when `ty` statically guarantees a Closure-shaped value: either
+    /// `PhpType::Callable` (elephc's uniform static type for closure literals, first-class
+    /// callables, and any `Closure`/`callable`-hinted parameter — see
+    /// `crate::types::checker::type_compat::pointers::resolve_type_expr`, which collapses both
+    /// hint spellings to the same variant) or `PhpType::Object("Closure")` (produced by a few
+    /// other inference paths, e.g. some declared return/property type resolutions).
+    fn type_is_closure_shaped(ty: &PhpType) -> bool {
+        matches!(ty, PhpType::Callable)
+            || matches!(ty, PhpType::Object(name) if name.trim_start_matches('\\').eq_ignore_ascii_case("Closure"))
     }
 
     /// Validates that `new ReflectionFunction($name)` targets a known

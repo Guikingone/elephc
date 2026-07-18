@@ -198,6 +198,72 @@ pub(crate) struct Checker {
     pub reference_property_rebind_targets: HashSet<(String, String)>,
 }
 
+/// A saved snapshot of every per-body, variable-name-keyed callable side table
+/// (`callable_sigs`, `closure_return_types`, `callable_param_names`,
+/// `callable_array_targets`, `first_class_callable_targets`, `callable_captures`).
+///
+/// These tables are keyed only by local variable name, never by the enclosing
+/// function/method, so two unrelated bodies that happen to reuse the same
+/// variable name (e.g. `$callback`) can read each other's stale entries unless
+/// each body starts from an empty slate. See `Checker::enter_callable_var_scope`.
+struct CallableVarScope {
+    callable_sigs: HashMap<String, FunctionSig>,
+    closure_return_types: HashMap<String, PhpType>,
+    callable_param_names: HashSet<String>,
+    callable_array_targets: HashMap<String, CallableTarget>,
+    first_class_callable_targets: HashMap<String, CallableTarget>,
+    callable_captures: HashMap<String, Vec<(String, PhpType, bool)>>,
+}
+
+impl Checker {
+    /// Snapshots and CLEARS every variable-name-keyed callable side table, so the
+    /// upcoming function/method body check starts from an empty slate — mirroring
+    /// the fresh, per-body `TypeEnv` every function/method already gets.
+    ///
+    /// Without this, a closure assigned to a local variable in one function/method
+    /// body (e.g. `$callback = function ($match) { ... };`) leaves its `FunctionSig`
+    /// in `self.callable_sigs["callback"]` forever; the NEXT unrelated function or
+    /// method checked that also has a local/parameter named `$callback` silently
+    /// inherits (and, via specialization, can even further mutate) that stale
+    /// signature. This is the confirmed root cause of the cross-body callable-sig
+    /// collision fixed for issue tracked as "callable-sig registry cross-contamination"
+    /// (repro: `Symfony\Component\Yaml\Unescaper::unescapeDoubleQuotedString`'s local
+    /// `$callback` closure — param `$match: Mixed` — leaking into and then being
+    /// specialized by `Symfony\Component\Routing\Loader\PhpFileLoader::callConfigurator`'s
+    /// `callable $callback` parameter — specialized to `$match: RoutingConfigurator` —
+    /// which then leaked into every unrelated `Cache\Adapter\*::*` method whose own local
+    /// `$callback` closure takes a `CacheItem`, producing bogus
+    /// "parameter $match expects Object(RoutingConfigurator), got Object(CacheItem)" errors).
+    ///
+    /// Pair with `exit_callable_var_scope` to restore the caller's own state
+    /// afterward — nested closures checked INLINE as statements within the same
+    /// body (not through a fresh `resolve_function_signature`/method-body call)
+    /// intentionally keep sharing these tables, since PHP closures capture
+    /// enclosing-scope variables by name.
+    fn enter_callable_var_scope(&mut self) -> CallableVarScope {
+        CallableVarScope {
+            callable_sigs: std::mem::take(&mut self.callable_sigs),
+            closure_return_types: std::mem::take(&mut self.closure_return_types),
+            callable_param_names: std::mem::take(&mut self.callable_param_names),
+            callable_array_targets: std::mem::take(&mut self.callable_array_targets),
+            first_class_callable_targets: std::mem::take(&mut self.first_class_callable_targets),
+            callable_captures: std::mem::take(&mut self.callable_captures),
+        }
+    }
+
+    /// Restores the callable side tables saved by `enter_callable_var_scope`,
+    /// discarding whatever the just-finished body check populated so it cannot
+    /// leak into the next function/method body.
+    fn exit_callable_var_scope(&mut self, saved: CallableVarScope) {
+        self.callable_sigs = saved.callable_sigs;
+        self.closure_return_types = saved.closure_return_types;
+        self.callable_param_names = saved.callable_param_names;
+        self.callable_array_targets = saved.callable_array_targets;
+        self.first_class_callable_targets = saved.first_class_callable_targets;
+        self.callable_captures = saved.callable_captures;
+    }
+}
+
 #[derive(Clone)]
 /// FnDecl stores a user-defined function's declaration metadata: parameter names,
 /// types, defaults, variadic marker, return type, span, body statements, and

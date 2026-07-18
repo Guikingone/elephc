@@ -61,20 +61,18 @@ impl Checker {
             })
             .map(|(_, (pname, _))| pname.clone())
             .collect();
-        let saved_callable_param_names = self.callable_param_names.clone();
+        // Start this function's body check with an EMPTY slate for every
+        // variable-name-keyed callable side table (`callable_sigs`,
+        // `closure_return_types`, `callable_param_names`, and friends) — mirroring
+        // the fresh, per-function `local_env`. Without this, a closure assigned to
+        // an unrelated local variable elsewhere (e.g. another function's own
+        // `$callback`) would still be visible here purely because it shares a
+        // variable name; see `Checker::enter_callable_var_scope` for the confirmed
+        // cross-body collision this prevents.
+        let saved_callable_var_scope = self.enter_callable_var_scope();
         for pname in &declared_callable_param_names {
             self.callable_param_names.insert(pname.clone());
         }
-        let saved_callable_metadata: Vec<_> = callable_param_names
-            .iter()
-            .map(|pname| {
-                (
-                    pname.clone(),
-                    self.callable_sigs.get(pname).cloned(),
-                    self.closure_return_types.get(pname).cloned(),
-                )
-            })
-            .collect();
         for pname in &callable_param_names {
             if let Some(sig) = self
                 .callable_param_sigs
@@ -84,10 +82,9 @@ impl Checker {
                 self.closure_return_types
                     .insert(pname.clone(), sig.return_type.clone());
                 self.callable_sigs.insert(pname.clone(), sig);
-            } else {
-                self.closure_return_types.remove(pname);
-                self.callable_sigs.remove(pname);
             }
+            // No cached signature yet: leave the param absent from `callable_sigs`
+            // (pre-specialization fallback — validated only by count/by-ref).
         }
 
         let provisional_sig = FunctionSig {
@@ -138,26 +135,19 @@ impl Checker {
             Ok(())
         });
         self.current_by_ref_return = prev_by_ref_return;
-        self.callable_param_names = saved_callable_param_names;
-        body_check_result?;
+        // Persist any specialization the body produced for its OWN declared callable
+        // params into the cross-call cache BEFORE restoring the caller's snapshot —
+        // done unconditionally (even if `body_check_result`/`errors` below is an
+        // error) so a partially-checked body cannot leave the caller's own callable
+        // side tables corrupted.
         for pname in &callable_param_names {
             if let Some(sig) = self.callable_sigs.get(pname).cloned() {
                 self.callable_param_sigs
                     .insert((function_key.clone(), pname.clone()), sig);
             }
         }
-        for (pname, saved_sig, saved_return) in saved_callable_metadata {
-            if let Some(sig) = saved_sig {
-                self.callable_sigs.insert(pname.clone(), sig);
-            } else {
-                self.callable_sigs.remove(&pname);
-            }
-            if let Some(return_ty) = saved_return {
-                self.closure_return_types.insert(pname, return_ty);
-            } else {
-                self.closure_return_types.remove(&pname);
-            }
-        }
+        self.exit_callable_var_scope(saved_callable_var_scope);
+        body_check_result?;
         if !errors.is_empty() {
             return Err(CompileError::from_many(errors));
         }
