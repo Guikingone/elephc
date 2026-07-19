@@ -475,10 +475,11 @@ pub fn emit_load_symbol_to_result(emitter: &mut Emitter, symbol: &str, ty: &PhpT
 
 /// Stores the current result registers into a static/global symbol.
 /// If `release_previous` is true, first loads the old symbol value and
-/// releases it: strings call `__rt_heap_free_safe`, refcounted types call
-/// `emit_decref_if_refcounted`.  Incoming results are preserved on the stack
-/// during the release call. Handles Float, Str (pointer + length pair),
-/// TaggedScalar (payload + tag pair), Void (null sentinel), and scalar/pointer types.
+/// releases it: strings call `__rt_heap_free_safe`, refcounted types AND callable
+/// descriptors call `emit_decref_if_refcounted` (which already dispatches `PhpType::Callable`
+/// to the dedicated `callable_descriptor::emit_release_current_descriptor` helper). Incoming
+/// results are preserved on the stack during the release call. Handles Float, Str (pointer +
+/// length pair), TaggedScalar (payload + tag pair), Void (null sentinel), and scalar/pointer types.
 pub fn emit_store_result_to_symbol(
     emitter: &mut Emitter,
     symbol: &str,
@@ -509,7 +510,7 @@ pub fn emit_store_result_to_symbol(
                     emitter.instruction(&format!("pop {}", ptr_reg));           // restore the incoming string pointer result after the release helper call
                 }
             }
-        } else if ty.is_refcounted() {
+        } else if ty.is_refcounted() || matches!(ty, PhpType::Callable) {
             match emitter.target.arch {
                 Arch::AArch64 => {
                     emitter.instruction("str x0, [sp, #-16]!");                 // preserve the incoming heap pointer while decreffing the previous symbol payload

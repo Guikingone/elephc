@@ -42,7 +42,7 @@ pub(super) fn lower_store_static_local(ctx: &mut FunctionContext<'_>, inst: &Ins
     ensure_static_local_type_supported(&slot, inst)?;
     ensure_static_local_value_supported(ctx, &slot, value, inst)?;
     let loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
-    if loaded_ty.is_refcounted() {
+    if loaded_ty.is_refcounted() || matches!(loaded_ty, PhpType::Callable) {
         abi::emit_incref_if_refcounted(ctx.emitter, &loaded_ty);
     }
     abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &slot.php_type, true);
@@ -112,10 +112,22 @@ fn local_slot<'a>(
 }
 
 /// Verifies that this backend slice knows how to represent the static-local type.
+///
+/// `PhpType::Callable` (a one-word closure/first-class-callable descriptor) is accepted
+/// alongside the refcounted types even though `PhpType::is_refcounted()` does not cover it:
+/// `Ownership::php_type_needs_lifetime_tracking` already groups it with `Str`/`Buffer` as
+/// needing retain/release, and `emit_incref_if_refcounted`/`emit_decref_if_refcounted`
+/// (`crate::codegen::abi::values`) already dispatch it to the dedicated
+/// `callable_descriptor::{emit_retain_current_descriptor, emit_release_current_descriptor}`
+/// helpers — the call sites here just need to route through them (see
+/// `lower_store_static_local`'s incref gate and `abi::emit_store_result_to_symbol`'s
+/// release-previous gate, both widened alongside this check).
 fn ensure_static_local_type_supported(slot: &StaticLocalSlot, inst: &Instruction) -> Result<()> {
     let ty = slot.php_type.codegen_repr();
-    if matches!(ty, PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Void)
-        || ty.is_refcounted()
+    if matches!(
+        ty,
+        PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Void | PhpType::Callable
+    ) || ty.is_refcounted()
     {
         return Ok(());
     }

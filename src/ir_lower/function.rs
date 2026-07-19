@@ -1070,9 +1070,11 @@ fn lower_body_into_function(
         ctx.ensure_local_ref_cell(name, None);
         ctx.mark_hoisted_ref_ensure_local(name);
     }
-    for stmt in body {
-        crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
-    }
+    // Route the top-level body through `lower_block` (not a raw `lower_stmt` loop) so it shares
+    // the same adjacent `static $x; $x ??= <default>;` fold nested control-flow bodies get; the
+    // idiom (e.g. `ContractsTrait::doGet`'s `static $setMetadata; $setMetadata ??= Closure::bind(...)`)
+    // commonly sits directly at method-body top level, not just inside `if`/loop bodies.
+    crate::ir_lower::stmt::lower_block(&mut ctx, body);
     terminate_open_block(&mut ctx);
     ctx.into_closures()
 }
