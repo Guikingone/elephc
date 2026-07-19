@@ -642,6 +642,30 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         )),
         "getenv" => Some(fixed(&["name"])),
         "putenv" => Some(fixed(&["assignment"])),
+        // -- output buffering + header/env small builtins (K2) --
+        // ob_start(): bool — deliberately ZERO parameters (not PHP's
+        // `ob_start(?callable $callback = null, int $chunk_size = 0, int $flags = ...)`):
+        // elephc supports only the plain, callback-free form, so passing a
+        // callback/chunk_size is a PHP-faithful arity error, never accept-and-ignore.
+        "ob_start" => Some(fixed(&[])),
+        "ob_get_contents" | "ob_get_clean" | "ob_end_clean" | "ob_end_flush" | "ob_get_level" => {
+            Some(fixed(&[]))
+        }
+        // ob_get_status(bool $full_status = false): array.
+        "ob_get_status" => Some(optional(&["full_status"], 0, vec![bool_lit(false)])),
+        // headers_sent(?string &$file = null, ?int &$line = null): bool.
+        "headers_sent" => {
+            let mut sig = optional(&["file", "line"], 0, vec![null_lit(), null_lit()]);
+            sig.ref_params[0] = true;
+            sig.ref_params[1] = true;
+            Some(sig)
+        }
+        // flush(): void.
+        "flush" => Some(fixed(&[])),
+        // header_remove(?string $name = null): void.
+        "header_remove" => Some(optional(&["name"], 0, vec![null_lit()])),
+        // get_class_methods(object|string $object_or_class): array.
+        "get_class_methods" => Some(fixed(&["object_or_class"])),
         // -- env/runtime state builtins (real AOT runtime; slice 1A) --
         // error_reporting(?int $error_level = null): int — null (or no arg) reads the
         // current level; a passed int sets it and returns the previous value.

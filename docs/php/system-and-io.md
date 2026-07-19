@@ -90,6 +90,45 @@ Only closures, first-class callables, and other values already typed `callable` 
 | `"v"` | Version |
 | `"m"` | Machine hardware name |
 
+## Output buffering
+
+| Function | Signature | Description |
+|---|---|---|
+| `ob_start()` | `ob_start(): bool` | Pushes a new output-buffering level. Always returns `true`. Only the plain, callback-free form is supported — `ob_start($callback)`/`ob_start(..., $chunk_size)` are a compile-time arity error, never silently accepted and ignored |
+| `ob_get_contents()` | `ob_get_contents(): string\|false` | Returns the current top level's captured bytes without popping it, or `false` when no buffer is active |
+| `ob_get_clean()` | `ob_get_clean(): string\|false` | Returns the current top level's captured bytes AND pops it (discarding the level without flushing it through), or `false` when no buffer is active |
+| `ob_end_clean()` | `ob_end_clean(): bool` | Discards the current top level's bytes without flushing them, and pops it. Returns `false` on an empty stack |
+| `ob_end_flush()` | `ob_end_flush(): bool` | Writes the current top level's bytes THROUGH to whatever is below it (an enclosing buffer if one is still active after the pop, otherwise the real output/`--web` response body), then pops it. Returns `false` on an empty stack |
+| `ob_get_level()` | `ob_get_level(): int` | The current output-buffering nesting depth (`0` when no buffer is active) |
+| `ob_get_status()` | `ob_get_status(bool $full_status = false): array` | Current-level status array (`name`, `type`, `flags`, `level`, `chunk_size`, `buffer_size`, `buffer_used`), or an empty array when no buffer is active. `ob_get_status(true)` (the full stack, one row per level) is a documented residual — a compile-time-unsupported call, not a silent partial result |
+| `headers_sent(?string &$file, ?int &$line)` | `headers_sent(?string &$file = null, ?int &$line = null): bool` | Whether real (non-buffered) output has left the buffer stack. `$file`/`$line` are always overwritten (`""`/`0`) — elephc does not track the exact source location where output first occurred, a documented approximation on the `true` branch |
+| `flush()` | `flush(): void` | A sound no-op. elephc's real output paths (the plain `write(1, …)` syscall, or `--web`'s per-request response-body append) are already unbuffered at the syscall layer, so there is nothing to flush — matching PHP's own observable CLI behavior |
+| `header_remove()` | `header_remove(?string $name = null): void` | Removes a previously-set response header by name (case-insensitively), or every header when `$name` is omitted. Only meaningful under `--web` (mirrors `header()`'s own web-gating: a genuine no-op in a non-`--web` build, since there is no response-header state to remove) |
+
+A capture-buffer stack (16 levels max, 1 MiB per level, a loud runtime fatal
+on overflow rather than silent truncation) shares the SAME choke point every
+`echo`/`print`/scalar-to-string write already travels through
+(`__rt_stdout_write`): `ob_start()` intercepts calls there before they reach
+the real `write()` syscall or the `--web` response-body capture, so no
+per-call-site changes were needed for `echo`/`print` to become
+buffer-aware.
+
+**Known limitation**: `var_dump()`/`print_r()`/`printf()`/`vprintf()` output
+for array/hash/object CONTENTS does not route through this same choke point
+(their container-walking runtime helpers perform their own direct `write()`
+syscalls) and therefore bypasses an active `ob_start()` buffer — a disclosed
+scope boundary, not a silent gap. Scalar `var_dump()`/`print_r()` values, and
+`var_dump()`/`print_r()`'s own literal wrapper text (`"array(N) {"`,
+`"object(Class)"`, …), DO route through the buffer, since those already share
+the `echo`/`print` choke point.
+
+```php
+ob_start();
+echo "captured";
+$out = ob_get_clean();
+var_dump($out); // string(8) "captured"
+```
+
 ## Date and time
 
 | Function | Signature | Description |

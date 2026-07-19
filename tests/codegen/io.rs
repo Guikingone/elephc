@@ -29,3 +29,5 @@ mod modify;
 mod streams_ext;
 #[path = "io/symlinks.rs"]
 mod symlinks;
+#[path = "io/output_buffering.rs"]
+mod output_buffering;

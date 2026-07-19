@@ -6649,6 +6649,9 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "unset" => Some(PhpType::Void),
         "gc_enabled" | "libxml_use_internal_errors" => Some(PhpType::Bool),
         "fclose" | "feof" | "rewind" | "set_time_limit" | "error_log" => Some(PhpType::Bool),
+        "ob_start" | "ob_end_clean" | "ob_end_flush" | "headers_sent" => Some(PhpType::Bool),
+        "flush" | "header_remove" => Some(PhpType::Void),
+        "ob_get_level" => Some(PhpType::Int),
         // libxml_get_errors() always returns a fresh empty array: elephc has no libxml/DOM
         // subsystem, so no libxml parse error can ever be recorded.
         "libxml_get_errors" => Some(PhpType::Array(Box::new(PhpType::Mixed))),
@@ -6692,7 +6695,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
             Some(PhpType::stream_resource())
         }
         "realpath_cache_get" | "stream_context_get_options" | "stream_context_get_params"
-        | "stream_get_meta_data" => Some(PhpType::AssocArray {
+        | "stream_get_meta_data" | "ob_get_status" => Some(PhpType::AssocArray {
             key: Box::new(PhpType::Str),
             value: Box::new(PhpType::Mixed),
         }),
@@ -6712,7 +6715,8 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         // `var_dump`, `=== false`, and `echo`/concat all observe correctly. Grouping them
         // with `getenv` in the Str group would collapse the false path to an empty string.
         | "ini_set" | "ini_get" | "get_cfg_var"
-        | "strpbrk" | "strrchr" | "parse_url" | "constant" => {
+        | "strpbrk" | "strrchr" | "parse_url" | "constant"
+        | "ob_get_contents" | "ob_get_clean" => {
             Some(PhpType::Mixed)
         }
         "spl_autoload_functions" => Some(PhpType::Array(Box::new(PhpType::Int))),
@@ -6720,7 +6724,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "file" | "get_declared_classes" | "fscanf" | "get_declared_interfaces"
         | "get_declared_traits" | "glob" | "hash_algos" | "scandir" | "spl_classes"
         | "str_split" | "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers"
-        | "str_getcsv" | "sscanf" => {
+        | "str_getcsv" | "sscanf" | "get_class_methods" => {
             Some(PhpType::Array(Box::new(PhpType::Str)))
         }
         "class_attribute_args" => Some(PhpType::Array(Box::new(PhpType::Mixed))),

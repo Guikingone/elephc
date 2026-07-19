@@ -31,11 +31,13 @@ mod class_relations;
 mod ctype;
 mod debug;
 mod filter;
+mod get_class_methods;
 mod io;
 mod isset;
 mod is_numeric;
 mod json;
 mod math;
+mod output_buffering;
 mod pointers;
 mod regex;
 mod spl;
@@ -316,6 +318,17 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "hrtime" => system::lower_hrtime(ctx, inst),
         "http_response_code" => system::lower_http_response_code(ctx, inst),
         "header" => system::lower_header(ctx, inst),
+        "header_remove" => output_buffering::lower_header_remove(ctx, inst),
+        "headers_sent" => output_buffering::lower_headers_sent(ctx, inst),
+        "flush" => output_buffering::lower_flush(ctx, inst),
+        "ob_start" => output_buffering::lower_ob_start(ctx, inst),
+        "ob_get_contents" => output_buffering::lower_ob_get_contents(ctx, inst),
+        "ob_get_clean" => output_buffering::lower_ob_get_clean(ctx, inst),
+        "ob_end_clean" => output_buffering::lower_ob_end_clean(ctx, inst),
+        "ob_end_flush" => output_buffering::lower_ob_end_flush(ctx, inst),
+        "ob_get_level" => output_buffering::lower_ob_get_level(ctx, inst),
+        "ob_get_status" => output_buffering::lower_ob_get_status(ctx, inst),
+        "get_class_methods" => get_class_methods::lower_get_class_methods(ctx, inst),
         "trigger_deprecation" => system::lower_trigger_deprecation(ctx, inst),
         "sleep" => system::lower_sleep(ctx, inst),
         "strtotime" => system::lower_strtotime(ctx, inst),

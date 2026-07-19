@@ -1,7 +1,8 @@
 //! Purpose:
 //! Emits the `__rt_stdout_write` runtime helper: the single indirection every
-//! terminal stdout write travels through. Keeps the plain `write(1, …)` syscall
-//! and the optional `--web` output-capture branch in one focused emitter.
+//! terminal stdout write travels through. Keeps the plain `write(1, …)` syscall,
+//! the `ob_start()` output-buffer interception, and the optional `--web`
+//! output-capture branch in one focused emitter.
 //!
 //! Called from:
 //! - `crate::codegen::runtime::emitters::emit_runtime()` via `crate::codegen::runtime::io`.
@@ -9,6 +10,15 @@
 //! Key details:
 //! - Calling convention (matches the C ABI of `elephc_web_write`): byte pointer
 //!   in `x0`/`rdi`, length in `x1`/`rsi`. No return value.
+//! - `ob_start()` interception is checked FIRST, unconditionally (every target,
+//!   web or not): while `_ob_level` is nonzero, every write routes to
+//!   `crate::codegen::runtime::io::ob_buffer`'s `__rt_ob_append` instead of the
+//!   syscall/`--web` capture path — this is the SAME choke point every echo/
+//!   print/scalar-to-string write already travels through (see
+//!   `crate::codegen::abi::values::emit_write_stdout`), so a plain `ob_start()`
+//!   captures it without touching any of those call sites. `_headers_sent` is
+//!   stamped `1` right before the real (non-buffered) output path, so an active
+//!   `ob_start()` buffer correctly delays `headers_sent()` (php -n verified).
 //! - The `--web` capture branch (flag load + `elephc_web_write` call) is emitted
 //!   ONLY when `web == true`. Non-web binaries never reference `_elephc_web_capture`
 //!   or `elephc_web_write`, so they link without the (web-only) bridge symbol.
@@ -44,6 +54,21 @@ pub fn emit_stdout_write(emitter: &mut Emitter, web: bool) {
     // -- set up a minimal frame so the capture branch can call a C function --
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // save frame pointer and return address (the capture branch clobbers x30)
     emitter.instruction("mov x29, sp");                                         // establish a frame pointer for the call
+
+    // -- ob_start() interception: route through the output-buffer stack when active --
+    // Checked FIRST (ahead of the `--web` capture flag) so an active ob_start()
+    // buffer intercepts output destined for the response body too, matching PHP.
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_ob_level");
+    emitter.instruction("ldr x10, [x9]");                                       // current output-buffering nesting depth
+    emitter.instruction("cbz x10, __rt_stdout_write_real");                     // no buffer active: fall through to the real output path
+    emitter.instruction("bl __rt_ob_append");                                   // buffer active: append (ptr=x0, len=x1 — same regs this helper received)
+    emitter.instruction("b __rt_stdout_write_done");                            // buffered bytes never reach the syscall/`--web` capture path
+
+    // -- real output: stamp headers_sent() true before the syscall/`--web` capture path --
+    emitter.label("__rt_stdout_write_real");
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_headers_sent");
+    emitter.instruction("mov x10, #1");                                         // headers_sent() observes real output has now left the buffer stack
+    emitter.instruction("str x10, [x9]");
 
     if web {
         // -- web build: route through elephc_web_write when capture is enabled --
@@ -81,6 +106,21 @@ fn emit_stdout_write_x86_64(emitter: &mut Emitter, web: bool) {
     // -- set up a minimal frame; after `push rbp` rsp is 16-byte aligned for the call --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer and align rsp for the capture-branch call
     emitter.instruction("mov rbp, rsp");                                        // establish a frame base
+
+    // -- ob_start() interception: route through the output-buffer stack when active --
+    // Checked FIRST (ahead of the `--web` capture flag) so an active ob_start()
+    // buffer intercepts output destined for the response body too, matching PHP.
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_level");
+    emitter.instruction("mov r11, QWORD PTR [r11]");                            // current output-buffering nesting depth
+    emitter.instruction("test r11, r11");
+    emitter.instruction("jz __rt_stdout_write_real");                           // no buffer active: fall through to the real output path
+    emitter.instruction("call __rt_ob_append");                                 // buffer active: append (ptr=rdi, len=rsi — same regs this helper received)
+    emitter.instruction("jmp __rt_stdout_write_done");                          // buffered bytes never reach the syscall/`--web` capture path
+
+    // -- real output: stamp headers_sent() true before the syscall/`--web` capture path --
+    emitter.label("__rt_stdout_write_real");
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_headers_sent");
+    emitter.instruction("mov QWORD PTR [r11], 1");                              // headers_sent() observes real output has now left the buffer stack
 
     if web {
         // -- web build: route through elephc_web_write when capture is enabled --

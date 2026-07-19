@@ -1629,6 +1629,28 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Bool))
         }
+        "get_class_methods" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "get_class_methods() takes exactly 1 argument",
+                ));
+            }
+            let ty = checker.infer_type(&args[0], env)?;
+            // Only a literal class-name string, or an object of statically-known
+            // type, are supported (compile-time bake — see the K1 decl_order-riding
+            // EIR lowering, `crate::codegen_ir::lower_inst::builtins::get_class_methods`).
+            // A non-literal string or a Mixed/Union object type would need a
+            // runtime-resolved calling scope this AOT model does not track.
+            let is_literal_string = matches!(args[0].kind, ExprKind::StringLiteral(_));
+            if !matches!(ty, PhpType::Object(_)) && !is_literal_string {
+                return Err(CompileError::new(
+                    span,
+                    "get_class_methods() requires a literal class-name string or an object of statically-known type in AOT mode",
+                ));
+            }
+            Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
+        }
         "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => {
             if !args.is_empty() {
                 return Err(CompileError::new(

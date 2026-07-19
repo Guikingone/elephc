@@ -46,6 +46,17 @@ pub(crate) use data::{method_decl_order_and_names, property_decl_order_and_names
 pub(crate) use data::emit_runtime_data_user;
 /// Emit user-program-specific runtime data section.
 pub(crate) use emitters::emit_runtime;
+/// Fatal-message constants for `printf()`/`vprintf()` inside an active output
+/// buffer, and the shared entry guard every raw-syscall output path that
+/// bypasses `__rt_stdout_write` (`ob_start()`'s choke point) opens with.
+/// Re-exported here (rather than reaching into `runtime::data`/`runtime::io`
+/// directly) so `codegen_ir::lower_inst::builtins::strings`'s inlined
+/// per-call-site `printf`/`vprintf` write path can use them — those two are
+/// NOT shared runtime routines emitted once (unlike the var_dump/print_r
+/// walkers, which stay within the `runtime` module tree and reference
+/// `runtime::data`/`runtime::io` directly).
+pub(crate) use data::{OB_PRINTF_UNSUPPORTED_MSG, OB_VPRINTF_UNSUPPORTED_MSG};
+pub(crate) use io::emit_ob_incompat_check;
 /// Emit full runtime helpers (orchestrates all runtime sections).
 pub(crate) use fibers::{
     FIBER_CALLABLE_OFFSET, FIBER_PENDING_THROW_OFFSET, FIBER_STACK_BASE_OFFSET,

@@ -181,6 +181,29 @@ pub unsafe extern "C" fn elephc_web_header(
     headers.push((name, value));
 }
 
+/// Implements PHP `header_remove(?string $name)`: with a name, removes every
+/// previously-set response header matching it case-insensitively (mirrors
+/// `elephc_web_header`'s own case-insensitive `replace` matching); with no
+/// name (`name_len < 0`, elephc's in-band "omitted" sentinel — a real PHP
+/// argument can never have a negative byte length), clears every response
+/// header set so far. Never touches the response status.
+///
+/// # Safety
+/// `ptr` must point to `len` valid bytes when `len >= 0`. Single-threaded per worker.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_web_header_remove(ptr: *const u8, len: i64) {
+    let headers = &mut *core::ptr::addr_of_mut!(RESPONSE_HEADERS);
+    if len < 0 {
+        headers.clear();
+        return;
+    }
+    if ptr.is_null() {
+        return;
+    }
+    let name = String::from_utf8_lossy(core::slice::from_raw_parts(ptr, len as usize)).into_owned();
+    headers.retain(|(n, _)| !n.eq_ignore_ascii_case(&name));
+}
+
 /// Resets the response status (200) and clears the response headers. Called by
 /// the worker before each request's handler runs.
 pub fn reset_response() {
@@ -634,6 +657,44 @@ mod tests {
             let r2 = b"Location: /x";
             elephc_web_header(r2.as_ptr(), r2.len(), 1, 0);
             assert_eq!(take_status(), 303);
+        }
+    }
+
+    /// Verifies `header_remove()` matches PHP: removing by name is
+    /// case-insensitive and leaves unrelated headers untouched; removing with
+    /// no name (`len < 0`, elephc's in-band "omitted" sentinel) clears
+    /// everything; the status is never touched either way.
+    #[test]
+    fn header_remove_matches_php() {
+        unsafe {
+            // Remove by name, case-insensitively; unrelated headers survive.
+            reset_response();
+            let a = b"X-Foo: a";
+            elephc_web_header(a.as_ptr(), a.len(), 1, 0);
+            let b = b"X-Bar: b";
+            elephc_web_header(b.as_ptr(), b.len(), 1, 0);
+            let name = b"x-foo";
+            elephc_web_header_remove(name.as_ptr(), name.len() as i64);
+            assert_eq!(take_headers(), vec![("X-Bar".to_string(), "b".to_string())]);
+
+            // Removing a name with no match is a no-op.
+            reset_response();
+            let c = b"X-Foo: a";
+            elephc_web_header(c.as_ptr(), c.len(), 1, 0);
+            let missing = b"X-Nope";
+            elephc_web_header_remove(missing.as_ptr(), missing.len() as i64);
+            assert_eq!(take_headers(), vec![("X-Foo".to_string(), "a".to_string())]);
+
+            // No name (len < 0) clears every header; status is untouched.
+            reset_response();
+            elephc_web_set_status(404);
+            let d = b"X-Foo: a";
+            elephc_web_header(d.as_ptr(), d.len(), 1, 0);
+            let e = b"X-Bar: b";
+            elephc_web_header(e.as_ptr(), e.len(), 1, 0);
+            elephc_web_header_remove(core::ptr::null(), -1);
+            assert!(take_headers().is_empty());
+            assert_eq!(take_status(), 404);
         }
     }
 }

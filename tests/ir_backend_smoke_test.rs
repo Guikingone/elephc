@@ -6702,6 +6702,38 @@ echo "ok\n";
     assert_eq!(out, "30719|0\n0|1\nbool(true)\n0\nok\n");
 }
 
+/// Verifies the EIR backend compiles and runs output buffering
+/// (ob_start/ob_get_clean/ob_end_flush nesting), headers_sent(), flush(), and
+/// get_class_methods() with PHP-identical observable results.
+#[test]
+fn ir_backend_output_buffering_and_get_class_methods() {
+    let out = compile_and_run_ir_backend(
+        "output_buffering_and_get_class_methods",
+        r#"<?php
+ob_start();
+echo "outer-";
+ob_start();
+echo "inner";
+ob_end_flush();
+echo "-tail";
+$outer = ob_get_clean();
+var_dump($outer);
+var_dump(flush());
+var_dump(headers_sent());
+echo "real";
+var_dump(headers_sent());
+class Base { public function pubBase() {} protected function protBase() {} }
+class Child extends Base { public function pubChild() {} }
+$methods = get_class_methods(new Child());
+foreach ($methods as $m) { echo $m, "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(16) \"outer-inner-tail\"\nNULL\nbool(true)\nrealbool(true)\npubChild\npubBase\n"
+    );
+}
+
 /// Verifies function-variant dispatch fails until the include path activates the variant.
 #[test]
 fn ir_backend_requires_include_before_function_variant_dispatch() {

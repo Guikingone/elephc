@@ -636,6 +636,40 @@ fn test_error_igbinary_serialize_unguarded_call_still_loud() {
     );
 }
 
+// -- output buffering / get_class_methods (K2): kept-loud forms --
+
+// `ob_start()` has a deliberately ZERO-parameter signature (elephc supports only the
+// plain, callback-free form): passing a callback is a PHP-faithful arity error, never
+// accept-and-ignore the callback.
+expect_builtin_arity_error!(
+    test_error_ob_start_callback_rejected,
+    "<?php ob_start(function () {});",
+    "ob_start() takes no arguments in AOT mode (callback/chunk_size forms are unsupported)"
+);
+
+// `ob_start(..., $chunk_size)` is likewise rejected — the whole callback/chunk_size
+// surface is out of scope, not just the callback slot.
+expect_builtin_arity_error!(
+    test_error_ob_start_chunk_size_rejected,
+    "<?php ob_start(null, 4096);",
+    "ob_start() takes no arguments in AOT mode (callback/chunk_size forms are unsupported)"
+);
+
+// `get_class_methods()` requires a literal class-name string or an object of
+// statically-known type; a non-literal string is unsupported (never a silent guess).
+expect_builtin_arity_error!(
+    test_error_get_class_methods_non_literal_string,
+    "<?php class C {} function f(string $name) { return get_class_methods($name); } f('C');",
+    "get_class_methods() requires a literal class-name string or an object of statically-known type in AOT mode"
+);
+
+// `get_class_methods()` on a genuinely dynamic (Mixed) receiver is unsupported.
+expect_builtin_arity_error!(
+    test_error_get_class_methods_mixed_receiver,
+    "<?php function f($x) { return get_class_methods($x); }",
+    "get_class_methods() requires a literal class-name string or an object of statically-known type in AOT mode"
+);
+
 /// Verifies the pre-checker fold does not over-reach beyond its curated allowlist: a plausible but
 /// unknown/absent function name is left unfolded (neither true- nor false-folded) pre-checker, so
 /// a call to it inside a NON-provably-false guard is still checked and still errors — the guard's

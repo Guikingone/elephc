@@ -174,6 +174,79 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ".comm {}, 8, 3\n",
         target.extern_symbol("elephc_web_capture")
     ));
+    // Output buffering (`ob_start()`/`ob_get_clean()`/…): a fixed LIFO stack of
+    // OB_MAX_LEVELS (16) scratch buffers, each capped at OB_LEVEL_CAP (1 MiB) —
+    // same fixed-capacity/loud-overflow shape as `_pr_cap_buf`. `_ob_level` is the
+    // current nesting depth (0 = no buffer active, so `__rt_stdout_write` takes its
+    // normal syscall/`--web` capture path). `_ob_bufs` holds all 16 level buffers
+    // back-to-back; `_ob_offs` holds each level's write cursor (level N's buffer
+    // starts at `_ob_bufs + (N-1)*OB_LEVEL_CAP`, cursor at `_ob_offs + (N-1)*8`).
+    out.push_str(".comm _ob_level, 8, 3\n");
+    out.push_str(&format!(
+        ".comm _ob_bufs, {}, 3\n",
+        crate::codegen::runtime::io::OB_MAX_LEVELS * crate::codegen::runtime::io::OB_LEVEL_CAP
+    ));
+    out.push_str(&format!(
+        ".comm _ob_offs, {}, 3\n",
+        crate::codegen::runtime::io::OB_MAX_LEVELS * 8
+    ));
+    out.push_str(&format!(
+        ".globl _ob_max_levels_msg\n_ob_max_levels_msg:\n    .ascii {:?}\n",
+        super::OB_MAX_LEVELS_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _ob_overflow_msg\n_ob_overflow_msg:\n    .ascii {:?}\n",
+        super::OB_OVERFLOW_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _ob_end_clean_empty_msg\n_ob_end_clean_empty_msg:\n    .ascii {:?}\n",
+        super::OB_END_CLEAN_EMPTY_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _ob_end_flush_empty_msg\n_ob_end_flush_empty_msg:\n    .ascii {:?}\n",
+        super::OB_END_FLUSH_EMPTY_MSG
+    ));
+    // headers_sent(): 1 once real output (not held inside an active ob_start()
+    // buffer) has actually left `__rt_stdout_write` via the syscall/`--web`
+    // capture path — set right before that emission, so an active `ob_start()`
+    // correctly delays it (php -n verified: buffered-but-unflushed output keeps
+    // headers_sent() false; discarding the buffer never flips it either).
+    out.push_str(".comm _headers_sent, 8, 3\n");
+    out.push_str(&format!(
+        ".globl _ob_status_name\n_ob_status_name:\n    .ascii {:?}\n",
+        super::OB_STATUS_NAME
+    ));
+    // ob_get_status() associative-array key strings (read by __rt_ob_get_status).
+    for (sym, key) in [
+        ("_ob_status_k_name", "name"),
+        ("_ob_status_k_type", "type"),
+        ("_ob_status_k_flags", "flags"),
+        ("_ob_status_k_level", "level"),
+        ("_ob_status_k_chunk_size", "chunk_size"),
+        ("_ob_status_k_buffer_size", "buffer_size"),
+        ("_ob_status_k_buffer_used", "buffer_used"),
+    ] {
+        out.push_str(&format!(".globl {sym}\n{sym}:\n    .ascii \"{key}\"\n"));
+    }
+    // Fatal diagnostics for the raw-syscall output paths that bypass the
+    // ob_start() buffer choke point (printf/vprintf, var_dump/print_r array
+    // walkers) — loud rather than silently written outside an active buffer.
+    out.push_str(&format!(
+        ".globl _ob_printf_unsupported_msg\n_ob_printf_unsupported_msg:\n    .ascii {:?}\n",
+        super::OB_PRINTF_UNSUPPORTED_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _ob_vprintf_unsupported_msg\n_ob_vprintf_unsupported_msg:\n    .ascii {:?}\n",
+        super::OB_VPRINTF_UNSUPPORTED_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _ob_var_dump_unsupported_msg\n_ob_var_dump_unsupported_msg:\n    .ascii {:?}\n",
+        super::OB_VAR_DUMP_UNSUPPORTED_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _ob_print_r_unsupported_msg\n_ob_print_r_unsupported_msg:\n    .ascii {:?}\n",
+        super::OB_PRINT_R_UNSUPPORTED_MSG
+    ));
     out.push_str(&format!(".comm _heap_buf, {}, 3\n", heap_size));
     out.push_str(".comm _heap_off, 8, 3\n");
     out.push_str(".comm _heap_free_list, 8, 3\n");

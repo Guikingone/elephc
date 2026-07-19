@@ -27,6 +27,7 @@ mod fputcsv;
 mod fread;
 mod fwrite;
 mod http_response;
+mod ob_buffer;
 mod php_input;
 mod stdout_write;
 mod phar_read;
@@ -142,7 +143,14 @@ pub(crate) use fopen::emit_fopen;
 pub(crate) use fputcsv::emit_fputcsv;
 pub(crate) use fread::emit_fread;
 pub(crate) use fwrite::emit_fwrite;
-pub(crate) use http_response::{emit_header, emit_http_response_code};
+pub(crate) use http_response::{emit_header, emit_header_remove, emit_http_response_code};
+/// Emit the `ob_start()`/`ob_get_clean()`/`ob_end_flush()`/`ob_end_clean()`/
+/// `ob_get_contents()`/`ob_get_level()`/`headers_sent()` runtime helpers.
+pub(crate) use ob_buffer::{
+    emit_headers_sent, emit_ob_append, emit_ob_end_clean, emit_ob_end_flush, emit_ob_get_level,
+    emit_ob_get_status, emit_ob_incompat_check, emit_ob_incompat_fatal, emit_ob_peek_contents,
+    emit_ob_pop, emit_ob_start, OB_LEVEL_CAP, OB_MAX_LEVELS,
+};
 pub(crate) use php_input::emit_php_input;
 pub(crate) use stdout_write::emit_stdout_write;
 pub(crate) use phar_read::emit_phar_read;

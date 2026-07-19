@@ -22,9 +22,28 @@
 //!   iterates entries via `__rt_hash_iter_next` and formats string/integer keys
 //!   plus scalar (and boxed-Mixed scalar) values. Nested arrays/objects inside a
 //!   hash fall back to `NULL`, matching the indexed Mixed walker's limitation.
+//! - Every walker entry (`__rt_var_dump_array_*`/`__rt_var_dump_hash`) opens
+//!   with `emit_ob_incompat_check`: these walkers write via raw `write(1, …)`
+//!   syscalls that bypass `__rt_stdout_write` (`ob_start()`'s choke point), so
+//!   they go loud instead of silently writing outside an active buffer (see
+//!   `crate::codegen::runtime::data::OB_VAR_DUMP_UNSUPPORTED_MSG`).
 
+use crate::codegen::runtime::data::OB_VAR_DUMP_UNSUPPORTED_MSG;
+use crate::codegen::runtime::io::emit_ob_incompat_check;
 use crate::codegen::{emit::Emitter, platform::Arch};
 use crate::codegen::abi;
+
+/// Emits this file's shared `ob_start()`-incompatibility guard, naming the
+/// caller's label prefix (must be unique per walker entry — see
+/// `emit_ob_incompat_check`'s own doc comment).
+fn emit_var_dump_ob_guard(emitter: &mut Emitter, label_prefix: &str) {
+    emit_ob_incompat_check(
+        emitter,
+        label_prefix,
+        "_ob_var_dump_unsupported_msg",
+        OB_VAR_DUMP_UNSUPPORTED_MSG.len(),
+    );
+}
 
 /// `__rt_var_dump_array_int`: emit one `[N]=>\n  int(VAL)\n` block per
 /// element of an indexed `int[]` array. Input: AArch64 x0 / x86_64 rdi =
@@ -38,6 +57,7 @@ pub fn emit_var_dump_array_int(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_array_int ---");
     emitter.label_global("__rt_var_dump_array_int");
+    emit_var_dump_ob_guard(emitter, "vd_arr_int");
 
     // Frame (32 bytes): [0..8] array ptr, [8..16] element index,
     //   [16..24] saved x29, [24..32] saved x30.
@@ -80,6 +100,7 @@ fn emit_var_dump_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_array_int ---");
     emitter.label_global("__rt_var_dump_array_int");
+    emit_var_dump_ob_guard(emitter, "vd_arr_int");
 
     // rbp-relative scratch:
     //   [rbp - 8]  array pointer
@@ -132,6 +153,7 @@ pub fn emit_var_dump_array_str(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_array_str ---");
     emitter.label_global("__rt_var_dump_array_str");
+    emit_var_dump_ob_guard(emitter, "vd_arr_str");
 
     // Frame: same layout as the int walker.
     emitter.instruction("sub sp, sp, #32");                                     // allocate runtime stack frame
@@ -177,6 +199,7 @@ fn emit_var_dump_array_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_array_str ---");
     emitter.label_global("__rt_var_dump_array_str");
+    emit_var_dump_ob_guard(emitter, "vd_arr_str");
 
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish runtime frame pointer
@@ -530,6 +553,7 @@ pub fn emit_var_dump_array_bool(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_array_bool ---");
     emitter.label_global("__rt_var_dump_array_bool");
+    emit_var_dump_ob_guard(emitter, "vd_arr_bool");
 
     emitter.instruction("sub sp, sp, #32");                                     // allocate runtime stack frame
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
@@ -647,6 +671,7 @@ pub fn emit_var_dump_array_float(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_array_float ---");
     emitter.label_global("__rt_var_dump_array_float");
+    emit_var_dump_ob_guard(emitter, "vd_arr_float");
 
     emitter.instruction("sub sp, sp, #32");                                     // allocate runtime stack frame
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
@@ -685,6 +710,7 @@ fn emit_var_dump_array_float_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_array_float ---");
     emitter.label_global("__rt_var_dump_array_float");
+    emit_var_dump_ob_guard(emitter, "vd_arr_float");
 
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish runtime frame pointer
@@ -758,6 +784,7 @@ pub fn emit_var_dump_array_mixed(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_array_mixed ---");
     emitter.label_global("__rt_var_dump_array_mixed");
+    emit_var_dump_ob_guard(emitter, "vd_arr_mixed");
 
     // -- Verify the array's value_type stamp says Mixed (=7). Static type
     //    Array<Mixed> can reach here for arrays that were boxed-into-Mixed
@@ -840,6 +867,7 @@ fn emit_var_dump_array_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_array_mixed ---");
     emitter.label_global("__rt_var_dump_array_mixed");
+    emit_var_dump_ob_guard(emitter, "vd_arr_mixed");
 
     // Defensive stamp check (see ARM64 prologue): only walk arrays
     // whose value_type stamp says Mixed (=7).
@@ -921,6 +949,7 @@ fn emit_var_dump_array_bool_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_array_bool ---");
     emitter.label_global("__rt_var_dump_array_bool");
+    emit_var_dump_ob_guard(emitter, "vd_arr_bool");
 
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish runtime frame pointer
@@ -1047,6 +1076,7 @@ pub fn emit_var_dump_hash(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_hash ---");
     emitter.label_global("__rt_var_dump_hash");
+    emit_var_dump_ob_guard(emitter, "vd_hash");
 
     // Frame (96 bytes): [0]=hash ptr, [8]=cursor, [16]=count, [24]=items,
     //   [32]=key_ptr, [40]=key_len, [48]=val_lo, [56]=val_hi, [64]=val_tag,
@@ -1149,6 +1179,7 @@ fn emit_var_dump_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_hash ---");
     emitter.label_global("__rt_var_dump_hash");
+    emit_var_dump_ob_guard(emitter, "vd_hash");
 
     // rbp-relative frame: [-8]=hash ptr, [-16]=cursor, [-24]=count, [-32]=items,
     //   [-40]=key_ptr, [-48]=key_len, [-56]=val_lo, [-64]=val_hi, [-72]=val_tag.

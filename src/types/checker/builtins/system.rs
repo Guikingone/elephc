@@ -175,6 +175,85 @@ pub(super) fn check_builtin(
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Bool))
         }
+        // -- output buffering (K2): a capture-buffer stack sharing __rt_stdout_write's --
+        // choke point (echo/print/scalar-to-string writes). elephc supports only the
+        // plain, callback-free ob_start() form (see the signature's zero-parameter arity).
+        "ob_start" => {
+            if !args.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "ob_start() takes no arguments in AOT mode (callback/chunk_size forms are unsupported)",
+                ));
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "ob_get_contents" | "ob_end_flush" | "ob_get_clean" => {
+            if !args.is_empty() {
+                return Err(CompileError::new(span, &format!("{}() takes no arguments", name)));
+            }
+            Ok(Some(if name == "ob_end_flush" {
+                PhpType::Bool
+            } else {
+                checker.normalize_union_type(vec![PhpType::Str, PhpType::Bool])
+            }))
+        }
+        "ob_end_clean" => {
+            if !args.is_empty() {
+                return Err(CompileError::new(span, "ob_end_clean() takes no arguments"));
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "ob_get_level" => {
+            if !args.is_empty() {
+                return Err(CompileError::new(span, "ob_get_level() takes no arguments"));
+            }
+            Ok(Some(PhpType::Int))
+        }
+        "ob_get_status" => {
+            if args.len() > 1 {
+                return Err(CompileError::new(
+                    span,
+                    "ob_get_status() takes at most 1 argument",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            }))
+        }
+        "headers_sent" => {
+            if args.len() > 2 {
+                return Err(CompileError::new(
+                    span,
+                    "headers_sent() takes at most 2 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "flush" => {
+            if !args.is_empty() {
+                return Err(CompileError::new(span, "flush() takes no arguments"));
+            }
+            Ok(Some(PhpType::Void))
+        }
+        "header_remove" => {
+            if args.len() > 1 {
+                return Err(CompileError::new(
+                    span,
+                    "header_remove() takes at most 1 argument",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Void))
+        }
         "date_default_timezone_set" => {
             if args.len() != 1 {
                 return Err(CompileError::new(

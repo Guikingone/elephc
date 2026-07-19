@@ -29,9 +29,31 @@
 //!   `ClassName Object` dumps need class metadata the runtime walker lacks.
 //! - The AArch64 path is shared by macOS and Linux ARM64 (`emitter.syscall(4)`
 //!   maps to the platform write number); the `_linux_x86_64` paths are SysV.
+//! - The three entry points reachable from `codegen_ir` (`__rt_print_r_indexed`,
+//!   `__rt_print_r_hash`, and `__rt_print_r_value` — the last one is ALSO a
+//!   direct entry for `print_r()` of a Mixed-typed value, not merely reached
+//!   via recursion) each open with `emit_ob_incompat_check`: these walkers
+//!   write via raw `write(1, …)` syscalls that bypass `__rt_stdout_write`
+//!   (`ob_start()`'s choke point), so they go loud instead of silently writing
+//!   outside an active buffer (see
+//!   `crate::codegen::runtime::data::OB_PRINT_R_UNSUPPORTED_MSG`).
 
+use crate::codegen::runtime::data::OB_PRINT_R_UNSUPPORTED_MSG;
+use crate::codegen::runtime::io::emit_ob_incompat_check;
 use crate::codegen::abi;
 use crate::codegen::{emit::Emitter, platform::Arch};
+
+/// Emits this file's shared `ob_start()`-incompatibility guard, naming the
+/// caller's label prefix (must be unique per walker entry — see
+/// `emit_ob_incompat_check`'s own doc comment).
+fn emit_print_r_ob_guard(emitter: &mut Emitter, label_prefix: &str) {
+    emit_ob_incompat_check(
+        emitter,
+        label_prefix,
+        "_ob_print_r_unsupported_msg",
+        OB_PRINT_R_UNSUPPORTED_MSG.len(),
+    );
+}
 
 /// `__rt_print_r_spaces`: write `n` ASCII spaces to stdout in <=64-byte chunks.
 /// Input: AArch64 x0 / x86_64 rdi = space count.
@@ -310,6 +332,7 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_value ---");
     emitter.label_global("__rt_print_r_value");
+    emit_print_r_ob_guard(emitter, "pr_value");
 
     emitter.instruction("sub sp, sp, #48");                                     // allocate the value frame
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
@@ -401,6 +424,7 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_value ---");
     emitter.label_global("__rt_print_r_value");
+    emit_print_r_ob_guard(emitter, "pr_value");
 
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the value frame pointer
@@ -511,6 +535,7 @@ pub fn emit_print_r_indexed(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_indexed ---");
     emitter.label_global("__rt_print_r_indexed");
+    emit_print_r_ob_guard(emitter, "pr_indexed");
 
     // Frame (64 bytes): [0]arr [8]base [16]entry_indent [24]count [32]index
     //   [40]stamp [48]x29 [56]x30.
@@ -605,6 +630,7 @@ fn emit_print_r_indexed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_indexed ---");
     emitter.label_global("__rt_print_r_indexed");
+    emit_print_r_ob_guard(emitter, "pr_indexed");
 
     // rbp-relative frame: [-8]arr [-16]base [-24]entry_indent [-32]count
     //   [-40]index [-48]stamp.
@@ -711,6 +737,7 @@ pub fn emit_print_r_hash(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_hash ---");
     emitter.label_global("__rt_print_r_hash");
+    emit_print_r_ob_guard(emitter, "pr_hash");
 
     // Frame (112 bytes): [0]hash [8]base [16]entry_indent [24]count [32]cursor
     //   [40]items [48]key_ptr [56]key_len [64]val_lo [72]val_hi [80]val_tag
@@ -790,6 +817,7 @@ fn emit_print_r_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_hash ---");
     emitter.label_global("__rt_print_r_hash");
+    emit_print_r_ob_guard(emitter, "pr_hash");
 
     // rbp-relative frame: [-8]hash [-16]base [-24]entry_indent [-32]count
     //   [-40]cursor [-48]items [-56]key_ptr [-64]key_len [-72]val_lo

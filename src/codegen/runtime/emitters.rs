@@ -420,6 +420,22 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // no-ops otherwise. Always emitted so the EIR calls resolve.
     io::emit_http_response_code(emitter, features.web);
     io::emit_header(emitter, features.web);
+    io::emit_header_remove(emitter, features.web);
+    // Output buffering (ob_start()/…) and headers_sent(): always emitted (every
+    // program can call them); `__rt_ob_append` is only ever reached through
+    // `__rt_stdout_write`'s own `_ob_level` check, not called directly by EIR.
+    io::emit_ob_start(emitter);
+    io::emit_ob_append(emitter);
+    io::emit_ob_peek_contents(emitter);
+    io::emit_ob_pop(emitter);
+    io::emit_ob_end_clean(emitter);
+    io::emit_ob_end_flush(emitter);
+    io::emit_ob_get_level(emitter);
+    io::emit_ob_get_status(emitter);
+    io::emit_headers_sent(emitter);
+    // Shared "loud when buffered" fatal for printf/vprintf/var_dump/print_r's
+    // raw-syscall output paths that bypass the ob_start() choke point.
+    io::emit_ob_incompat_fatal(emitter);
     io::emit_cstr(emitter);
     io::emit_disk_space(emitter);
     io::emit_fopen(emitter);

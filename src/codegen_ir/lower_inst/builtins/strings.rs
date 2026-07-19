@@ -835,7 +835,7 @@ pub(super) fn lower_sprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 /// Lowers `printf(format, values...)` as `sprintf()` followed by stdout emission.
 pub(super) fn lower_printf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     emit_sprintf_runtime_call(ctx, inst, "printf")?;
-    emit_printf_write_result(ctx);
+    emit_printf_write_result(ctx, "printf");
     store_if_result(ctx, inst)
 }
 
@@ -848,7 +848,7 @@ pub(super) fn lower_vsprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 /// Lowers `vprintf(format, values)` as `vsprintf()` followed by stdout emission.
 pub(super) fn lower_vprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     emit_vsprintf_runtime_call(ctx, inst, "vprintf")?;
-    emit_printf_write_result(ctx);
+    emit_printf_write_result(ctx, "vprintf");
     store_if_result(ctx, inst)
 }
 
@@ -3490,7 +3490,25 @@ fn pack_sprintf_arg_x86_64(
 }
 
 /// Writes the formatted string result to stdout and leaves printf's byte count in the int result register.
-fn emit_printf_write_result(ctx: &mut FunctionContext<'_>) {
+///
+/// Opens with `ob_start()`'s incompatibility guard (see
+/// `crate::codegen::runtime::emit_ob_incompat_check`): this writes via a
+/// raw `write(1, …)` syscall that bypasses `__rt_stdout_write` (the choke
+/// point `ob_start()` intercepts), so it goes loud instead of silently
+/// writing outside an active buffer. `name` (`"printf"`/`"vprintf"`) selects
+/// the fatal message; the skip label uses `ctx.next_label` for per-call-site
+/// uniqueness, since (unlike the var_dump/print_r walkers) this is inlined
+/// fresh into the caller's own function body at every `printf()`/`vprintf()`
+/// call site, not a single shared runtime routine.
+fn emit_printf_write_result(ctx: &mut FunctionContext<'_>, name: &str) {
+    let (msg_symbol, msg_len) = if name == "vprintf" {
+        ("_ob_vprintf_unsupported_msg", crate::codegen::runtime::OB_VPRINTF_UNSUPPORTED_MSG.len())
+    } else {
+        ("_ob_printf_unsupported_msg", crate::codegen::runtime::OB_PRINTF_UNSUPPORTED_MSG.len())
+    };
+    let label_prefix = ctx.next_label(&format!("{}_ob", name));
+    crate::codegen::runtime::emit_ob_incompat_check(ctx.emitter, &label_prefix, msg_symbol, msg_len);
+
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, #1");                              // pass stdout as the destination file descriptor
