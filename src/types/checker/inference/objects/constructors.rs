@@ -285,22 +285,33 @@ impl Checker {
     ///
     /// Accepts a string literal or `ClassName::class` constant; returns the resolved class name.
     ///
-    /// For `ReflectionClass` specifically — matching PHP's real `__construct(object|string
-    /// $objectOrClass)` signature (php -n verified: `new ReflectionClass($obj)` is legal PHP) —
-    /// ANY non-literal expression is accepted regardless of its static type (`Str`, `Mixed`,
-    /// `Union`, `Object`, or anything else a caller might pass) and routes to the EIR dynamic
-    /// dispatcher (`crate::codegen_ir::lower_inst::objects::reflection::
-    /// lower_reflection_class_new_dynamic`), which performs the ACTUAL runtime type
-    /// determination this static checker cannot: unbox a `Mixed`/`Union` operand's runtime tag,
-    /// resolve an object operand's concrete runtime class, and throw a real `\TypeError` for any
-    /// other runtime tag (php -n verified: `new ReflectionClass(42)` throws `TypeError:
-    /// ReflectionClass::__construct(): Argument #1 ($objectOrClass) must be of type
-    /// object|string, int given`) — exactly mirroring how PHP itself only rejects the wrong
-    /// argument shape at RUNTIME, not at parse/compile time, for this constructor.
+    /// For `ReflectionClass`/`ReflectionMethod`/`ReflectionProperty` — all three share PHP's real
+    /// `object|string` first-argument signature (php -n verified: `new ReflectionClass($obj)` /
+    /// `new ReflectionMethod($obj, 'm')` / `new ReflectionProperty($obj, 'p')` are all legal PHP,
+    /// and all THREE constructors weak-coerce a non-`object|string` SCALAR the SAME way: `new
+    /// ReflectionMethod(42, 'm')` throws `ReflectionException: Class "42" does not exist`, NOT a
+    /// `TypeError` — php -n verified there is no PHP-visible behavioral difference between the
+    /// three constructors for this argument) — ANY non-literal expression is accepted regardless
+    /// of its static type (`Str`, `Mixed`, `Union`, `Object`, or anything else a caller might
+    /// pass) and routes to the matching EIR dynamic dispatcher
+    /// (`crate::codegen_ir::lower_inst::objects::reflection::lower_reflection_class_new_dynamic`
+    /// for `ReflectionClass`, `crate::codegen_ir::lower_inst::objects::reflection_members::
+    /// lower_reflection_member_new_dynamic` for `ReflectionMethod`/`ReflectionProperty`), which
+    /// performs the ACTUAL runtime type determination this static checker cannot: unbox a
+    /// `Mixed`/`Union` operand's runtime tag, resolve an object operand's concrete runtime class,
+    /// weak-coerce a scalar/null tag to its `(string)` cast, and throw a real, catchable
+    /// `\TypeError` for a genuinely non-coercible runtime tag (php -n verified: `new
+    /// ReflectionMethod([1,2], 'm')` throws `TypeError: ReflectionMethod::__construct(): Argument
+    /// #1 ($objectOrMethod) must be of type object|string, array given`) — exactly mirroring how
+    /// PHP itself only rejects the wrong argument shape at RUNTIME, not at parse/compile time,
+    /// for these three constructors.
     ///
-    /// `ReflectionMethod`/`ReflectionProperty`/`ReflectionFunction` keep requiring a literal
-    /// `Str`-typed expression for their (name) argument — errors if the argument is not
-    /// statically `Str`, or (for a literal) if the class is undefined.
+    /// `ReflectionFunction` is handled by a separate validator entirely (see
+    /// `validate_reflection_function_constructor_arg`) and never reaches this function. The
+    /// SEPARATE (member NAME) second argument to `ReflectionMethod`/`ReflectionProperty` is
+    /// validated by `reflection_member_name_arg`, not this function, and keeps requiring a
+    /// literal-or-non-literal `Str`-typed expression only (no `Mixed`/`Object`/weak-coercion
+    /// acceptance — php -n verified PHP does NOT weak-coerce the member-name argument).
     fn reflection_class_literal_arg(
         &mut self,
         reflection_type: &str,
@@ -315,15 +326,19 @@ impl Checker {
             ExprKind::ClassConstant { receiver } if matches!(arg_ty, PhpType::Str) => {
                 self.resolve_reflection_class_constant(receiver, arg.span)?
             }
-            _ if reflection_type == "ReflectionClass" => return Ok(None),
-            // `ReflectionMethod`/`ReflectionProperty`: a non-literal `Str`-typed first argument
-            // routes to the EIR dynamic two-string dispatcher (see `crate::codegen_ir::
-            // lower_inst::objects::reflection_members`) instead of erroring — mirrors
-            // `ReflectionClass`'s dynamic-name acceptance above, but scoped to `Str` only (NOT
-            // `object|string` weak coercion like `ReflectionClass` — a documented, narrower scope
-            // for this construction path; a non-`Str` argument still hits the type-error arm
-            // below).
-            _ if matches!(arg_ty, PhpType::Str) => return Ok(None),
+            // php -n verified: `ReflectionMethod`/`ReflectionProperty`'s first argument has the
+            // EXACT SAME `object|string` weak-coercion semantics as `ReflectionClass`'s (int
+            // 42 → `ReflectionException: Class "42" does not exist`, `null` → `Class "" does not
+            // exist`, an `array` → a real `\TypeError`, …) — there is no PHP-visible behavioral
+            // difference between the three constructors for this argument, so ALL non-literal
+            // expressions route to the EIR dynamic dispatcher here regardless of static type
+            // (`crate::codegen_ir::lower_inst::objects::reflection_members::
+            // lower_reflection_member_new_dynamic`, which performs the actual runtime type
+            // determination exactly like `crate::codegen_ir::lower_inst::objects::reflection::
+            // lower_reflection_class_new_dynamic` does for `ReflectionClass`).
+            _ if matches!(reflection_type, "ReflectionClass" | "ReflectionMethod" | "ReflectionProperty") => {
+                return Ok(None)
+            }
             _ => {
                 return Err(CompileError::new(
                     arg.span,

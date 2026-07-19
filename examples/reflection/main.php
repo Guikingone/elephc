@@ -85,3 +85,51 @@ if ($uses !== false) {
     }
 }
 echo "\n";
+
+// Enumerating a class's members with getMethods()/getProperties().
+//
+// Both return the members in PHP's real declaration order — the reflected
+// class's own declared members first (in source order), then each ancestor's
+// own declared members appended — and both exclude an inherited-but-not-
+// overridden PRIVATE parent member, exactly like PHP. The optional $filter is
+// an IS_* bitmask with PHP's OR semantics: a member is kept when
+// (modifiers & $filter) != 0.
+abstract class Vehicle {
+    public string $name = "vehicle";
+    private int $serial = 0;
+    public function describe(): string { return $this->name; }
+    abstract public function wheels(): int;
+    public static function category(): string { return "transport"; }
+}
+
+class Bicycle extends Vehicle {
+    public bool $hasBell = true;
+    public function wheels(): int { return 2; }
+    public function ringBell(): string { return "ring ring"; }
+}
+
+$bike = new ReflectionClass('Bicycle');
+
+echo "Bicycle methods (declaration order, parent-private excluded):\n";
+foreach ($bike->getMethods() as $method) {
+    echo "  ", $method->getName(),
+        $method->isStatic() ? " [static]" : "",
+        $method->isAbstract() ? " [abstract]" : "", "\n";
+}
+
+echo "Bicycle static methods only (IS_STATIC filter):\n";
+foreach ($bike->getMethods(ReflectionMethod::IS_STATIC) as $method) {
+    echo "  ", $method->getName(), "\n";
+}
+
+echo "Bicycle properties:\n";
+foreach ($bike->getProperties() as $property) {
+    echo "  \$", $property->getName(), "\n";
+}
+
+// The member constructors themselves also accept an OBJECT first argument
+// (PHP's real `object|string` signature): reflecting through an instance
+// resolves that instance's own runtime class.
+$bicycle = new Bicycle();
+$rm = new ReflectionMethod($bicycle, 'ringBell');
+echo "Reflected through an instance: ", $rm->getName(), "\n";

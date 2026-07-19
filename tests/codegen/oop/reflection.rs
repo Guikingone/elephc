@@ -1035,6 +1035,335 @@ echo $dynamicMethod->getName();
     assert_eq!(out, "bark|name|bark");
 }
 
+// ============================================================================================
+// K1 Part A: `getMethods()`/`getProperties()` enumeration (declaration order, parent-private
+// exclusion, $filter bitmask) — every asserted order/exclusion was cross-checked against real
+// PHP (`php -n`) before being hardcoded here.
+// ============================================================================================
+
+/// php -n verified declaration order: `getMethods()` returns the receiver's OWN declared methods
+/// first (in their own source order), then each ancestor's own declared methods appended (nearest
+/// ancestor first), skipping a name already claimed by a more-derived level. An override
+/// therefore keeps the OVERRIDING class's declaration position, not the original ancestor's.
+#[test]
+fn test_reflection_get_methods_declaration_order_with_inheritance_and_override() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcK1OrderA { public function m1(){} private function priv(){} public function m2(){} }
+class ElephcK1OrderB extends ElephcK1OrderA { public function m3(){} public function m1(){} }
+$names = [];
+foreach ((new ReflectionClass('ElephcK1OrderB'))->getMethods() as $m) { $names[] = $m->getName(); }
+echo implode(",", $names);
+"#,
+    );
+    assert_eq!(out, "m3,m1,m2");
+}
+
+/// php -n verified: a leaf class with NO own method declarations still inherits its ancestors'
+/// full declaration order unchanged (own order first is simply empty, then each ancestor's own
+/// order appended).
+#[test]
+fn test_reflection_get_methods_no_own_declarations_inherits_ancestor_order() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcK1OrderLeafA { public function m1(){} private function priv(){} public function m2(){} }
+class ElephcK1OrderLeafB extends ElephcK1OrderLeafA { public function m3(){} public function m1(){} }
+class ElephcK1OrderLeafC extends ElephcK1OrderLeafB {}
+$names = [];
+foreach ((new ReflectionClass('ElephcK1OrderLeafC'))->getMethods() as $m) { $names[] = $m->getName(); }
+echo implode(",", $names);
+"#,
+    );
+    assert_eq!(out, "m3,m1,m2");
+}
+
+/// php -n verified: instance and static properties interleave in real source declaration order
+/// (NOT grouped instance-then-static), and an override is promoted to the overriding class's own
+/// declaration position — same rule as methods.
+#[test]
+fn test_reflection_get_properties_declaration_order_static_and_instance_interleaved() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcK1PropOrderP { public $p1; public static $sp1; private $priv; public $p2; }
+class ElephcK1PropOrderQ extends ElephcK1PropOrderP { public $q1; public $p1; public static $sq1; }
+$names = [];
+foreach ((new ReflectionClass('ElephcK1PropOrderQ'))->getProperties() as $p) {
+    $names[] = ($p->isStatic() ? "S:" : "") . $p->getName();
+}
+echo implode(",", $names);
+"#,
+    );
+    assert_eq!(out, "q1,p1,S:sq1,S:sp1,p2");
+}
+
+/// php -n verified (Jury Addendum #3): `getMethods()`/`getProperties()` omit an
+/// inherited-but-NOT-overridden PRIVATE member, independently of ANY `$filter` — the receiver's
+/// OWN class still reports its own private members (see `ElephcK1PrivA` reflecting itself below).
+#[test]
+fn test_reflection_get_methods_excludes_unoverridden_parent_private() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcK1PrivA { public function m1(){} private function priv(){} public function m2(){} }
+class ElephcK1PrivB extends ElephcK1PrivA { public function m3(){} }
+$child = [];
+foreach ((new ReflectionClass('ElephcK1PrivB'))->getMethods() as $m) { $child[] = $m->getName(); }
+$own = [];
+foreach ((new ReflectionClass('ElephcK1PrivA'))->getMethods() as $m) { $own[] = $m->getName(); }
+echo implode(",", $child) . "|" . implode(",", $own);
+"#,
+    );
+    assert_eq!(out, "m3,m1,m2|m1,priv,m2");
+}
+
+/// Property counterpart of the parent-private-exclusion test above.
+#[test]
+fn test_reflection_get_properties_excludes_unoverridden_parent_private() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcK1PropPrivA { public $p1; private $priv; public $p2; }
+class ElephcK1PropPrivB extends ElephcK1PropPrivA { public $q1; }
+$names = [];
+foreach ((new ReflectionClass('ElephcK1PropPrivB'))->getProperties() as $p) { $names[] = $p->getName(); }
+echo implode(",", $names);
+"#,
+    );
+    assert_eq!(out, "q1,p1,p2");
+}
+
+/// php -n verified exact bitmask values and OR filter semantics: `getMethods($filter)` keeps a
+/// method iff `(modifiers & $filter) != 0`. `IS_PUBLIC|IS_STATIC` keeps a public-instance method
+/// (matches IS_PUBLIC) AND a public-static method (matches both bits), excludes private/protected.
+#[test]
+fn test_reflection_get_methods_filter_bitmask_or_semantics() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcK1FilterF {
+    public function a(){}
+    public static function b(){}
+    private function c(){}
+    protected function d(){}
+}
+$filter = ReflectionMethod::IS_PUBLIC | ReflectionMethod::IS_STATIC;
+$names = [];
+foreach ((new ReflectionClass('ElephcK1FilterF'))->getMethods($filter) as $m) { $names[] = $m->getName(); }
+echo implode(",", $names);
+"#,
+    );
+    assert_eq!(out, "a,b");
+}
+
+/// php -n verified: `getMethods()`/`getProperties()` called with NO argument (default `$filter =
+/// 0`) return every visible member, unfiltered.
+#[test]
+fn test_reflection_get_methods_no_filter_returns_all() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcK1NoFilter {
+    public function a(){}
+    public static function b(){}
+    protected function d(){}
+}
+$names = [];
+foreach ((new ReflectionClass('ElephcK1NoFilter'))->getMethods() as $m) { $names[] = $m->getName(); }
+echo implode(",", $names);
+"#,
+    );
+    assert_eq!(out, "a,b,d");
+}
+
+/// A `ReflectionMethod::IS_PRIVATE` filter on the receiver's OWN class finds its own private
+/// method (the parent-private EXCLUSION only applies to inherited-but-not-overridden members —
+/// this is the receiver reflecting itself, so nothing is excluded).
+#[test]
+fn test_reflection_get_methods_is_private_filter_finds_own_private() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcK1OwnPrivate {
+    public function a(){}
+    private function b(){}
+}
+$names = [];
+foreach ((new ReflectionClass('ElephcK1OwnPrivate'))->getMethods(ReflectionMethod::IS_PRIVATE) as $m) {
+    $names[] = $m->getName();
+}
+echo implode(",", $names);
+"#,
+    );
+    assert_eq!(out, "b");
+}
+
+/// `getMethods()`/`getProperties()` on a DYNAMICALLY-constructed `ReflectionClass` (a runtime
+/// string operand, not a literal) must resolve the SAME baked, ordered/filtered metadata as the
+/// literal-construction path — both routes converge on `emit_reflection_class_extra_metadata`
+/// via the closed-world dynamic-dispatch switch (see
+/// `crate::codegen_ir::lower_inst::objects::reflection`'s module doc comment).
+#[test]
+fn test_reflection_get_methods_dynamic_reflection_class_construction() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcK1DynA { private function priv(){} public function m1(){} }
+class ElephcK1DynB extends ElephcK1DynA { public function m2(){} }
+$className = $argc > 0 ? "ElephcK1DynB" : "NOPE";
+$names = [];
+foreach ((new ReflectionClass($className))->getMethods() as $m) { $names[] = $m->getName(); }
+echo implode(",", $names);
+"#,
+    );
+    assert_eq!(out, "m2,m1");
+}
+
+/// Heap-cleanliness regression: `getMethods()`/`getProperties()` allocate an owned PHP array of
+/// owned `ReflectionMethod`/`ReflectionProperty` shells — every allocation (the array, each
+/// shell, each shell's persisted name string) must be balanced on the success path.
+#[test]
+fn test_reflection_get_methods_and_properties_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ElephcK1HeapA { public function m1(){} private function priv(){} public function m2(){} }
+class ElephcK1HeapB extends ElephcK1HeapA { public $p1; public static $sp1; public function m3(){} }
+$rc = new ReflectionClass('ElephcK1HeapB');
+foreach ($rc->getMethods() as $m) { $m->getName(); }
+foreach ($rc->getProperties() as $p) { $p->getName(); }
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+// ============================================================================================
+// K1 Part B: Mixed/object first-argument acceptance for `ReflectionMethod`/`ReflectionProperty`
+// constructors (PHP's real `object|string` signature) — every asserted message/exception was
+// cross-checked against real PHP (`php -n`) before being hardcoded here.
+// ============================================================================================
+
+/// php -n verified: `new ReflectionMethod($obj, 'method')` is legal PHP and reflects
+/// `get_class($obj)`, not the receiver's static declared type.
+#[test]
+fn test_reflection_method_construct_object_first_arg_reflects_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcK1ObjArgDog { public function bark(): string { return "woof"; } }
+$dog = new ElephcK1ObjArgDog();
+$rm = new ReflectionMethod($dog, 'bark');
+echo $rm->getName();
+"#,
+    );
+    assert_eq!(out, "bark");
+}
+
+/// Property counterpart: `new ReflectionProperty($obj, 'prop')` reflects `$obj`'s runtime class.
+#[test]
+fn test_reflection_property_construct_object_first_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcK1ObjArgCat { public $name = "Tom"; }
+$cat = new ElephcK1ObjArgCat();
+$rp = new ReflectionProperty($cat, 'name');
+echo $rp->getName();
+"#,
+    );
+    assert_eq!(out, "name");
+}
+
+/// php -n verified: `ReflectionMethod`/`ReflectionProperty` weak-coerce a scalar first argument
+/// the SAME way `ReflectionClass` does — `new ReflectionMethod(42, 'm')` throws a catchable
+/// `\ReflectionException` ("Class \"42\" does not exist"), NOT a `\TypeError`.
+#[test]
+fn test_reflection_method_construct_int_first_arg_weak_coerces_to_reflection_exception() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    new ReflectionMethod(42, 'm');
+    echo "no throw";
+} catch (\ReflectionException $e) {
+    echo "caught:" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "caught:Class \"42\" does not exist");
+}
+
+/// php -n verified: an `array` first argument is NOT coercible to `object|string` — throws a
+/// catchable `\TypeError`, distinct from the `\ReflectionException` scalar-weak-coercion case
+/// above.
+#[test]
+fn test_reflection_property_construct_array_first_arg_throws_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    new ReflectionProperty([1, 2], 'p');
+    echo "no throw";
+} catch (\TypeError $e) {
+    echo "caught:" . get_class($e);
+}
+"#,
+    );
+    assert_eq!(out, "caught:TypeError");
+}
+
+/// A `Mixed`-typed local (not statically `Object`/`Str`) still resolves correctly through the
+/// runtime tag-check-then-unbox dispatch — covers the `PhpType::Mixed`/`Union` arm distinctly
+/// from the statically-`Object`-typed arm already covered above.
+#[test]
+fn test_reflection_method_construct_mixed_typed_object_first_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcK1MixedArgFrog { public function croak(): string { return "ribbit"; } }
+function elephcK1MixedArgPick(int $argc): mixed {
+    return $argc > 0 ? new ElephcK1MixedArgFrog() : "NOPE";
+}
+$x = elephcK1MixedArgPick($argc);
+$rm = new ReflectionMethod($x, 'croak');
+echo $rm->getName();
+"#,
+    );
+    assert_eq!(out, "croak");
+}
+
+/// A missing method still throws the SAME catchable `\ReflectionException` for an object-argument
+/// construction as it does for the literal/string-argument path (unaffected by the widened first
+/// argument acceptance).
+#[test]
+fn test_reflection_method_construct_object_first_arg_missing_method_throws() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcK1ObjArgMissing { public function real(){} }
+$o = new ElephcK1ObjArgMissing();
+try {
+    new ReflectionMethod($o, 'nope');
+    echo "no throw";
+} catch (\ReflectionException $e) {
+    echo "caught:" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "caught:Method ElephcK1ObjArgMissing::nope() does not exist");
+}
+
+/// Heap-cleanliness regression for the widened Mixed/object-argument construction path.
+#[test]
+fn test_reflection_method_property_object_first_arg_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ElephcK1ObjHeapDog { public $name = "Rex"; public function bark(): string { return "woof"; } }
+$dog = new ElephcK1ObjHeapDog();
+$rm = new ReflectionMethod($dog, 'bark');
+$rp = new ReflectionProperty($dog, 'name');
+echo $rm->getName() . $rp->getName();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
 /// Heap-cleanliness regression for the SUCCESS path: dynamic `ReflectionMethod`/
 /// `ReflectionProperty` construction and `getMethod`/`getProperty` delegation must not leak —
 /// every allocation performed while resolving/constructing the shell must be balanced. (The
@@ -1062,4 +1391,250 @@ echo $rm->getName() . $rp->getName() . $rm2->getName() . $rp2->getName();
 "#,
     );
     assert_eq!(out, "barknamebarkname");
+}
+
+/// K1 Part A: `getMethods()`/`getProperties()` PHP declaration order, php -n verified against a
+/// 3-level hierarchy (`ElephcK1A` -> `ElephcK1B` -> `ElephcK1C`) with an override (`ElephcK1B`
+/// redeclares `m1`) and a non-overriding leaf (`ElephcK1C` declares nothing new): own class's own
+/// declared order first, then each ancestor's own declared order appended (skipping any name
+/// already claimed by a nearer level) — an override therefore keeps the OVERRIDING level's
+/// position, not the original ancestor's. `ElephcK1C` (which adds nothing) reports the SAME order
+/// as its parent `ElephcK1B`.
+#[test]
+fn test_reflection_k1_get_methods_and_get_properties_declaration_order() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcK1OrdA {
+    public function m1(): void {}
+    public static function sm1(): void {}
+    public int $p1 = 1;
+    public static int $sp1 = 3;
+}
+class ElephcK1OrdB extends ElephcK1OrdA {
+    public function m3(): void {}
+    public function m1(): void {}
+    public int $p3 = 4;
+}
+class ElephcK1OrdC extends ElephcK1OrdB {
+}
+function names(array $items): string {
+    $out = [];
+    foreach ($items as $item) {
+        $out[] = $item->getName();
+    }
+    return implode(",", $out);
+}
+$rb = new ReflectionClass('ElephcK1OrdB');
+echo names($rb->getMethods()), "|";
+echo names($rb->getProperties()), "|";
+$rc = new ReflectionClass('ElephcK1OrdC');
+echo names($rc->getMethods()), "|";
+echo count($rb->getMethods());
+"#,
+    );
+    assert_eq!(out, "m3,m1,sm1|p3,p1,sp1|m3,m1,sm1|3");
+}
+
+/// K1 Part A + Jury Addendum #3: an inherited-but-not-overridden PARENT-PRIVATE method/property
+/// is excluded from `getMethods()`/`getProperties()` ENUMERATION regardless of `$filter`
+/// (verified with the default no-filter call AND `IS_PRIVATE`, which real PHP still excludes an
+/// ancestor's private member from — php -n verified: private members are never "inherited" in
+/// the reflection sense), while the reflected class's OWN private members remain visible when
+/// `ReflectionClass` targets that class directly.
+#[test]
+fn test_reflection_k1_get_methods_and_get_properties_exclude_inherited_private() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcK1PrivOrdA {
+    public function pub1(): void {}
+    private function priv1(): void {}
+    public int $ppub1 = 1;
+    private int $ppriv1 = 2;
+}
+class ElephcK1PrivOrdB extends ElephcK1PrivOrdA {
+}
+function names(array $items): string {
+    $out = [];
+    foreach ($items as $item) {
+        $out[] = $item->getName();
+    }
+    return implode(",", $out);
+}
+$ra = new ReflectionClass('ElephcK1PrivOrdA');
+$rb = new ReflectionClass('ElephcK1PrivOrdB');
+echo names($ra->getMethods()), "|";
+echo names($rb->getMethods()), "|";
+echo names($ra->getProperties()), "|";
+echo names($rb->getProperties()), "|";
+echo names($rb->getMethods(ReflectionMethod::IS_PRIVATE));
+"#,
+    );
+    assert_eq!(out, "pub1,priv1|pub1|ppub1,ppriv1|ppub1|");
+}
+
+/// K1 Part A: `$filter` bitmask honored with real PHP OR-semantics (`(modifiers & $filter) !=
+/// 0`), php -n verified — `IS_STATIC` isolates only the static method, `IS_PUBLIC` matches every
+/// method in this fixture (none are protected/private-and-own), and a combined
+/// `IS_PUBLIC|IS_STATIC` filter is the union. A no-arg call returns every visible method,
+/// matching PHP's real no-filter default.
+#[test]
+fn test_reflection_k1_get_methods_filter_bitmask_or_semantics() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcK1FilterOrd {
+    public function m1(): void {}
+    public static function sm1(): void {}
+}
+function names(array $items): string {
+    $out = [];
+    foreach ($items as $item) {
+        $out[] = $item->getName();
+    }
+    return implode(",", $out);
+}
+$r = new ReflectionClass('ElephcK1FilterOrd');
+echo names($r->getMethods()), "|";
+echo names($r->getMethods(ReflectionMethod::IS_STATIC)), "|";
+echo names($r->getMethods(ReflectionMethod::IS_PUBLIC)), "|";
+echo names($r->getMethods(ReflectionMethod::IS_PUBLIC | ReflectionMethod::IS_STATIC));
+"#,
+    );
+    assert_eq!(out, "m1,sm1|sm1|m1,sm1|m1,sm1");
+}
+
+/// K1 Part B: `new ReflectionMethod($obj, 'method')` / `new ReflectionProperty($obj, 'prop')`
+/// with a REAL (non-boxed) object argument reflects `get_class($obj)` (php -n verified legal PHP
+/// — `object|string` is the real constructor signature, not `string`-only). `getDeclaringClass()`
+/// is a pre-existing, unrelated un-backed stub (always `null`), so only `getName()` is exercised.
+#[test]
+fn test_reflection_k1_method_and_property_construction_from_object_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcK1ObjArg {
+    public function bark(): string { return "woof"; }
+    public $name = "Rex";
+}
+$obj = new ElephcK1ObjArg();
+$rm = new ReflectionMethod($obj, 'bark');
+$rp = new ReflectionProperty($obj, 'name');
+echo $rm->getName(), "|", $rp->getName();
+"#,
+    );
+    assert_eq!(out, "bark|name");
+}
+
+/// K1 Part B: a boxed `Mixed`-typed first argument (runtime tag 6 = object) resolves the SAME
+/// way as a statically-typed object argument — the Mixed-boxed counterpart of
+/// `test_reflection_k1_method_and_property_construction_from_object_argument`.
+#[test]
+fn test_reflection_k1_method_construction_from_mixed_boxed_object_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcK1MixedObjArg {
+    public function bark(): string { return "woof"; }
+}
+function pick(bool $b): mixed { return $b ? new ElephcK1MixedObjArg() : "nope"; }
+$obj = pick($argc > 0);
+$rm = new ReflectionMethod($obj, 'bark');
+echo $rm->getName();
+"#,
+    );
+    assert_eq!(out, "bark");
+}
+
+/// K1 Part B: `ReflectionMethod`/`ReflectionProperty` share `ReflectionClass`'s EXACT
+/// `object|string` weak-coercion semantics for a non-coercible-looking SCALAR first argument —
+/// php -n verified `new ReflectionMethod(42, 'm')` throws `ReflectionException: Class "42" does
+/// not exist`, NEVER a `\TypeError` (only a genuinely non-coercible type like `array` does).
+#[test]
+fn test_reflection_k1_method_scalar_weak_coercion_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+function results(bool $b): array {
+    $out = [];
+    foreach ([42, 4.2, true, false, null] as $v) {
+        $x = $b ? $v : "unused";
+        try {
+            new ReflectionMethod($x, "m");
+            $out[] = "no-throw";
+        } catch (\ReflectionException $e) {
+            $out[] = $e->getMessage();
+        }
+    }
+    return $out;
+}
+foreach (results($argc > 0) as $line) {
+    echo $line, "|";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Class \"42\" does not exist|Class \"4.2\" does not exist|Class \"1\" does not exist|Class \"\" does not exist|Class \"\" does not exist|"
+    );
+}
+
+/// K1 Part B + Jury Addendum #4: a genuinely non-coercible `array` first argument throws a real,
+/// CATCHABLE `\TypeError` for `ReflectionMethod`/`ReflectionProperty` (php -n verified — never a
+/// `\ReflectionException`, and construction never proceeds with garbage).
+#[test]
+fn test_reflection_k1_method_and_property_array_argument_throws_catchable_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+function tryBuildMethod(): string {
+    try {
+        new ReflectionMethod([1, 2], "m");
+        return "no-throw";
+    } catch (\TypeError $e) {
+        return "TypeError";
+    } catch (\Throwable $e) {
+        return get_class($e);
+    }
+}
+function tryBuildProperty(): string {
+    try {
+        new ReflectionProperty([1, 2], "p");
+        return "no-throw";
+    } catch (\TypeError $e) {
+        return "TypeError";
+    } catch (\Throwable $e) {
+        return get_class($e);
+    }
+}
+echo tryBuildMethod(), "|", tryBuildProperty();
+"#,
+    );
+    assert_eq!(out, "TypeError|TypeError");
+}
+
+/// K1 Part A heap-cleanliness: `getMethods()`/`getProperties()` build an OWNED array of OWNED
+/// `ReflectionMethod`/`ReflectionProperty` shells (each constructed through the dynamic J4
+/// dispatcher) — every allocation performed while enumerating must be balanced when the array
+/// itself goes out of scope.
+#[test]
+fn test_reflection_k1_get_methods_and_get_properties_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ElephcK1HeapEnum {
+    public function m1(): void {}
+    public function m2(): void {}
+    public int $p1 = 1;
+    public int $p2 = 2;
+}
+function run(): void {
+    $rc = new ReflectionClass('ElephcK1HeapEnum');
+    $methods = $rc->getMethods();
+    $props = $rc->getProperties();
+    echo count($methods), count($props);
+}
+run();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "22");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
 }

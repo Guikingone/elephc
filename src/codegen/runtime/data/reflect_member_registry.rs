@@ -26,16 +26,27 @@
 //!   trait flattening before the checker ever builds `ClassInfo`, so they need no
 //!   special handling either (php -n verified: `getDeclaringClass()` for a
 //!   trait-provided member reports the USING class, never the trait).
-//! - This table intentionally does NOT implement the `getMethods()`/`getProperties()`
-//!   parent-private-exclusion ENUMERATION rule (php -n verified: `getMethods()` on a
-//!   subclass omits an inherited-but-not-overridden parent-private method, while
+//! - K1: `getMethods()`/`getProperties()` ENUMERATION (php -n verified: a subclass
+//!   omits an inherited-but-not-overridden PARENT-PRIVATE method/property, while
 //!   `getMethod()`/a direct `new ReflectionMethod($sub, $name)` construction still
-//!   FINDS it) — that filter belongs to the future enumeration consumer of this same
-//!   table (compare a found row's `declaring_class_id` against the receiver's own
-//!   class id and skip private mismatches), not to the table itself. This delivery
-//!   ships POINT LOOKUP only (dynamic constructor + `getMethod`/`getProperty`); the
-//!   `declaring_class_id` field is carried on every row specifically so that future
-//!   enumeration work does not need a table format change.
+//!   FINDS it) is implemented, but NOT by re-walking this table at runtime:
+//!   `crate::codegen_ir::lower_inst::objects::reflection::reflection_class_extra_metadata`
+//!   bakes an already-ordered, already-filtered name array
+//!   (`ReflectionClass::__methods_ordered`/`__properties_ordered`) at `ReflectionClass`
+//!   CONSTRUCTION time using `method_decl_order_and_names`/`property_decl_order_and_names`
+//!   below directly against `ClassInfo` — the SAME closed-world-switch trick the existing
+//!   dynamic `ReflectionClass($runtimeName)` dispatcher already uses (every dispatch
+//!   case is a compile-time-known class name, see `emit_reflection_class_dynamic_construct`)
+//!   means EVERY construction path, literal or dynamic, resolves to a compile-time-known
+//!   `reflected_class: &str` by the time the metadata bake runs, so no runtime table walk
+//!   is needed for this consumer. `getMethods()`/`getProperties()` are then a plain PHP-level
+//!   loop (`crate::types::checker::builtin_types::reflection`) over that baked array,
+//!   constructing one shell per visible name through the EXISTING dynamic
+//!   `ReflectionMethod`/`ReflectionProperty` dispatcher below — no new runtime assembly.
+//!   `declaring_class_id`/`decl_order` are still carried on every ROW regardless (Jury
+//!   Addendum #1/#3: future point-lookup-adjacent consumers may want them; kept for the ABI
+//!   layout's own documentation value even though today's enumeration consumer computes its
+//!   own order independently via the same Rust function, not by reading these row fields).
 //! - Row layouts (see `METHOD_ROW_SIZE`/`PROPERTY_ROW_SIZE`/`INDEX_ROW_SIZE`/
 //!   `CLASS_ID_ROW_SIZE` below) all start with an 8-byte-aligned `{name_ptr,
 //!   name_len}` pair so `__rt_sorted_name_search` (generic, entry-size-parameterized)
@@ -61,7 +72,7 @@
 //!   hundreds of classes, keeping the emitted `.data` size close to the row-array
 //!   size instead of also scaling with total (row-count × average-name-length).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ir::Module;
 use crate::names::php_symbol_key;
@@ -72,12 +83,15 @@ use super::instanceof::escaped_ascii;
 
 /// Byte size of one `_reflect_class_id_table` entry: `{name_ptr:8, name_len:8, class_id:8}`.
 pub(crate) const CLASS_ID_ROW_SIZE: usize = 24;
-/// Byte size of one `_reflect_method_table` entry:
-/// `{name_ptr:8, name_len:8, real_name_ptr:8, real_name_len:8, modifiers:4, declaring_class_id:4}`.
-pub(crate) const METHOD_ROW_SIZE: usize = 40;
-/// Byte size of one `_reflect_property_table` entry:
-/// `{name_ptr:8, name_len:8, modifiers:4, declaring_class_id:4}`.
-pub(crate) const PROPERTY_ROW_SIZE: usize = 24;
+/// Byte size of one `_reflect_method_table` entry: `{name_ptr:8, name_len:8, real_name_ptr:8,
+/// real_name_len:8, modifiers:4, declaring_class_id:4, decl_order:4, _pad:4}` — the trailing 4
+/// bytes are unused padding, kept only to hold the row size at an 8-byte multiple (`.p2align 3`
+/// covers the TABLE start, not each individual row) now that `decl_order` (Jury Addendum #1)
+/// pushed the natural size to 44.
+pub(crate) const METHOD_ROW_SIZE: usize = 48;
+/// Byte size of one `_reflect_property_table` entry: `{name_ptr:8, name_len:8, modifiers:4,
+/// declaring_class_id:4, decl_order:4, _pad:4}` — see `METHOD_ROW_SIZE`'s padding note.
+pub(crate) const PROPERTY_ROW_SIZE: usize = 32;
 /// Byte size of one `_reflect_method_index`/`_reflect_property_index` entry: `{start:8, count:8}`.
 pub(crate) const INDEX_ROW_SIZE: usize = 16;
 
@@ -92,18 +106,40 @@ pub(crate) const METHOD_ROW_MODIFIERS_OFFSET: usize = 32;
 /// layout's own documentation value.
 #[allow(dead_code)]
 pub(crate) const METHOD_ROW_DECLARING_CLASS_ID_OFFSET: usize = 36;
+/// Byte offset of `decl_order` within a method row (Jury Addendum #1). Not yet read by any
+/// dispatcher — `ReflectionClass::getMethods()` consumes the SAME order via
+/// `ReflectionClassExtraMetadata::methods_ordered`, computed directly from
+/// `method_decl_order_and_names` at compile time rather than by reading this row field back out
+/// of the emitted table (see `crate::codegen_ir::lower_inst::objects::reflection`); kept for the
+/// ABI layout's own documentation/future-consumer value, matching `METHOD_ROW_DECLARING_CLASS_ID_OFFSET`.
+#[allow(dead_code)]
+pub(crate) const METHOD_ROW_DECL_ORDER_OFFSET: usize = 40;
 /// Byte offset of `modifiers` within a property row.
 pub(crate) const PROPERTY_ROW_MODIFIERS_OFFSET: usize = 16;
 /// Byte offset of `declaring_class_id` within a property row. Not yet read (see
 /// `METHOD_ROW_DECLARING_CLASS_ID_OFFSET`).
 #[allow(dead_code)]
 pub(crate) const PROPERTY_ROW_DECLARING_CLASS_ID_OFFSET: usize = 20;
+/// Byte offset of `decl_order` within a property row. Not yet read (see
+/// `METHOD_ROW_DECL_ORDER_OFFSET`).
+#[allow(dead_code)]
+pub(crate) const PROPERTY_ROW_DECL_ORDER_OFFSET: usize = 24;
 /// Byte offset of `class_id` within a `_reflect_class_id_table` entry.
 pub(crate) const CLASS_ID_ROW_CLASS_ID_OFFSET: usize = 16;
 /// Byte offset of `count` within an index-table entry. Not yet read via this named constant (the
 /// dispatcher reads it with a raw `+8` immediate offset); kept for the ABI layout's documentation.
 #[allow(dead_code)]
 pub(crate) const INDEX_ROW_COUNT_OFFSET: usize = 8;
+
+// Jury Addendum #2: assert the manual row-layout byte math above against the actual field
+// widths (`ptr`/`len` fields are 8-byte quads, `modifiers`/`declaring_class_id`/`decl_order`/
+// padding are 4-byte longs) instead of trusting the doc comments alone.
+const _: () = assert!(METHOD_ROW_SIZE == 8 + 8 + 8 + 8 + 4 + 4 + 4 + 4, "METHOD_ROW_SIZE must match name_ptr+name_len+real_name_ptr+real_name_len+modifiers+declaring_class_id+decl_order+pad");
+const _: () = assert!(METHOD_ROW_SIZE % 8 == 0, "METHOD_ROW_SIZE must stay an 8-byte multiple so consecutive rows keep their leading pointer fields naturally aligned");
+const _: () = assert!(PROPERTY_ROW_SIZE == 8 + 8 + 4 + 4 + 4 + 4, "PROPERTY_ROW_SIZE must match name_ptr+name_len+modifiers+declaring_class_id+decl_order+pad");
+const _: () = assert!(PROPERTY_ROW_SIZE % 8 == 0, "PROPERTY_ROW_SIZE must stay an 8-byte multiple so consecutive rows keep their leading pointer fields naturally aligned");
+const _: () = assert!(METHOD_ROW_DECL_ORDER_OFFSET + 4 <= METHOD_ROW_SIZE, "decl_order must fit inside the method row");
+const _: () = assert!(PROPERTY_ROW_DECL_ORDER_OFFSET + 4 <= PROPERTY_ROW_SIZE, "decl_order must fit inside the property row");
 
 /// One flattened method row before layout/emission.
 struct MethodRow {
@@ -113,6 +149,15 @@ struct MethodRow {
     real_name: String,
     modifiers: u32,
     declaring_class_id: u32,
+    /// PHP `getMethods()` declaration-order position among the RECEIVING class's (`class_name`
+    /// in `class_method_rows`) own visible rows — see `method_decl_order_and_names`. Carried on
+    /// every row per Jury Addendum #1 even though no dispatcher currently reads it back out of
+    /// the emitted table (`ReflectionClass::getMethods()`'s enumeration instead consumes the
+    /// SAME order via `ReflectionClassExtraMetadata::methods_ordered`, computed by the same
+    /// function at compile time — see `crate::codegen_ir::lower_inst::objects::reflection`) —
+    /// kept for the ABI layout's own documentation/future-consumer value, matching this file's
+    /// existing `declaring_class_id` precedent.
+    decl_order: u32,
 }
 
 /// One flattened property row before layout/emission.
@@ -121,6 +166,9 @@ struct PropertyRow {
     name: String,
     modifiers: u32,
     declaring_class_id: u32,
+    /// PHP `getProperties()` declaration-order position — see `MethodRow::decl_order` and
+    /// `property_decl_order_and_names`.
+    decl_order: u32,
 }
 
 /// Measured byte totals for the emitted tables, returned so callers can report the
@@ -188,11 +236,103 @@ fn find_method_decl<'a>(module: &'a Module, class_name: &str, method_key: &str) 
         .find(|decl| php_symbol_key(&decl.name) == method_key)
 }
 
+/// Walks `class_name`'s ancestor chain (itself, then each `parent`, …) and assigns PHP
+/// declaration-order positions to every method key VISIBLE to `class_name` (own + inherited,
+/// including an unoverridden PRIVATE ancestor member — `ClassInfo.methods` still carries a row
+/// for it, see the file-level "FLATTEN ALGORITHM" doc comment) — php -n VERIFIED order:
+/// `class_name`'s own declared methods first, in THEIR OWN source order, then each ancestor's
+/// own declared methods appended (nearest ancestor first), skipping any key already claimed by
+/// a more-derived level. An override therefore keeps the POSITION of the level that
+/// (re)declares it, not the original ancestor's position (verified against a 3-level A/B/C
+/// hierarchy with an override and a non-overriding leaf class — see the J4 spec's Part A).
+///
+/// Returns `(decl_order_by_key, ordered_real_names)`: `decl_order_by_key` has an entry for
+/// EVERY visible key (`class_method_rows` bakes this into every row's `decl_order` field, per
+/// Jury Addendum #1, even for a parent-private key `getMethods()` itself excludes below);
+/// `ordered_real_names` is already filtered to the `getMethods()`-VISIBLE subset (Jury Addendum
+/// #3: an ancestor-declared PRIVATE method is excluded from ENUMERATION independently of any
+/// `$filter` bitmask, though `getMethod()`/dynamic-construction POINT LOOKUP still finds it —
+/// php -n verified), in final display order, using each level's real declared spelling.
+/// `crate::codegen_ir::lower_inst::objects::reflection::reflection_class_extra_metadata` bakes
+/// `ordered_real_names` verbatim into `ReflectionClass::__methods_ordered`.
+pub(crate) fn method_decl_order_and_names(module: &Module, class_name: &str) -> (HashMap<String, u32>, Vec<String>) {
+    let mut order = HashMap::new();
+    let mut ordered_names = Vec::new();
+    let mut counter: u32 = 0;
+    let mut current = Some(class_name.to_string());
+    let mut visited = HashSet::new();
+    while let Some(level_name) = current {
+        if !visited.insert(level_name.clone()) {
+            break; // cycle guard against malformed metadata
+        }
+        let Some(info) = module.class_infos.get(&level_name) else {
+            break;
+        };
+        for decl in &info.method_decls {
+            let key = php_symbol_key(&decl.name);
+            if order.contains_key(&key) {
+                continue; // already claimed by a more-derived level
+            }
+            order.insert(key, counter);
+            counter += 1;
+            let visible = decl.visibility != Visibility::Private || level_name == class_name;
+            if visible {
+                ordered_names.push(decl.name.clone());
+            }
+        }
+        current = info.parent.clone();
+    }
+    (order, ordered_names)
+}
+
+/// Property counterpart of `method_decl_order_and_names`: walks `ClassInfo.own_property_decl_order`
+/// (instance and static combined, in source order — mirrors `method_decls` for properties, which
+/// have no per-class body to also carry) instead of `method_decls`, and looks up each level's OWN
+/// declared visibility via `property_visibilities`/`static_property_visibilities` (a name can
+/// never be in both — the checker rejects redeclaring a static property as instance or vice
+/// versa). Property names are case-sensitive, so `decl_order_by_key` is keyed by the EXACT
+/// declared name (not `php_symbol_key`-folded, unlike the method version).
+pub(crate) fn property_decl_order_and_names(module: &Module, class_name: &str) -> (HashMap<String, u32>, Vec<String>) {
+    let mut order = HashMap::new();
+    let mut ordered_names = Vec::new();
+    let mut counter: u32 = 0;
+    let mut current = Some(class_name.to_string());
+    let mut visited = HashSet::new();
+    while let Some(level_name) = current {
+        if !visited.insert(level_name.clone()) {
+            break; // cycle guard against malformed metadata
+        }
+        let Some(info) = module.class_infos.get(&level_name) else {
+            break;
+        };
+        for name in &info.own_property_decl_order {
+            if order.contains_key(name) {
+                continue; // already claimed by a more-derived level
+            }
+            order.insert(name.clone(), counter);
+            counter += 1;
+            let visibility = info
+                .property_visibilities
+                .get(name)
+                .or_else(|| info.static_property_visibilities.get(name))
+                .cloned()
+                .unwrap_or(Visibility::Public);
+            let visible = visibility != Visibility::Private || level_name == class_name;
+            if visible {
+                ordered_names.push(name.clone());
+            }
+        }
+        current = info.parent.clone();
+    }
+    (order, ordered_names)
+}
+
 /// Builds one class's flattened, segment-sorted method rows (both instance and
 /// static methods, keyed the same way `ClassInfo::methods`/`static_methods` already
 /// are — see the file-level "FLATTEN ALGORITHM" doc comment).
 fn class_method_rows(module: &Module, class_name: &str, info: &ClassInfo) -> Vec<MethodRow> {
     let mut rows = Vec::with_capacity(info.methods.len() + info.static_methods.len());
+    let (decl_order, _) = method_decl_order_and_names(module, class_name);
     for method_key in info.methods.keys().chain(info.static_methods.keys()) {
         let Some(decl) = find_method_decl(module, class_name, method_key) else {
             continue; // no declaring AST found (never happens for a sound ClassInfo); skip defensively
@@ -213,6 +353,7 @@ fn class_method_rows(module: &Module, class_name: &str, info: &ClassInfo) -> Vec
             real_name: decl.name.clone(),
             modifiers: method_modifiers_bitmask(decl),
             declaring_class_id,
+            decl_order: decl_order.get(method_key).copied().unwrap_or(u32::MAX),
         });
     }
     rows.sort_by(|a, b| a.search_name.as_bytes().cmp(b.search_name.as_bytes()));
@@ -255,6 +396,7 @@ fn property_modifiers_bitmask(info: &ClassInfo, property_name: &str, is_static: 
 /// static properties).
 fn class_property_rows(module: &Module, class_name: &str, info: &ClassInfo) -> Vec<PropertyRow> {
     let mut rows = Vec::with_capacity(info.properties.len() + info.static_properties.len());
+    let (decl_order, _) = property_decl_order_and_names(module, class_name);
     for (name, _) in &info.properties {
         let declaring_class = info
             .property_declaring_classes
@@ -270,6 +412,7 @@ fn class_property_rows(module: &Module, class_name: &str, info: &ClassInfo) -> V
             name: name.clone(),
             modifiers: property_modifiers_bitmask(info, name, false),
             declaring_class_id,
+            decl_order: decl_order.get(name).copied().unwrap_or(u32::MAX),
         });
     }
     for (name, _) in &info.static_properties {
@@ -287,6 +430,7 @@ fn class_property_rows(module: &Module, class_name: &str, info: &ClassInfo) -> V
             name: name.clone(),
             modifiers: property_modifiers_bitmask(info, name, true),
             declaring_class_id,
+            decl_order: decl_order.get(name).copied().unwrap_or(u32::MAX),
         });
     }
     rows.sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()));
@@ -390,6 +534,18 @@ pub(crate) fn emit_reflect_member_registry_data(module: &Module) -> (String, Ref
     }
     class_id_rows.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
 
+    // Jury Addendum #2: every index entry's segment must stay inside its row table — a bound
+    // violation here would make the ARM64/x86_64 dispatchers' `mul`-computed segment address
+    // walk off the end of `_reflect_method_table`/`_reflect_property_table` at runtime.
+    debug_assert!(
+        method_index.iter().all(|&(start, count)| start + count <= method_rows.len()),
+        "a _reflect_method_index segment exceeds the method row table"
+    );
+    debug_assert!(
+        property_index.iter().all(|&(start, count)| start + count <= property_rows.len()),
+        "a _reflect_property_index segment exceeds the property row table"
+    );
+
     let mut out = String::new();
     let mut names = StringInterner::new();
     out.push_str(".data\n");
@@ -430,6 +586,8 @@ pub(crate) fn emit_reflect_member_registry_data(module: &Module) -> (String, Ref
         out.push_str(&format!("    .quad {}\n", row.real_name.len()));
         out.push_str(&format!("    .long {}\n", row.modifiers));
         out.push_str(&format!("    .long {}\n", row.declaring_class_id));
+        out.push_str(&format!("    .long {}\n", row.decl_order));
+        out.push_str("    .long 0\n"); // padding: keeps METHOD_ROW_SIZE an 8-byte multiple
     }
 
     out.push_str(".p2align 3\n");
@@ -453,6 +611,8 @@ pub(crate) fn emit_reflect_member_registry_data(module: &Module) -> (String, Ref
         out.push_str(&format!("    .quad {}\n", row.name.len()));
         out.push_str(&format!("    .long {}\n", row.modifiers));
         out.push_str(&format!("    .long {}\n", row.declaring_class_id));
+        out.push_str(&format!("    .long {}\n", row.decl_order));
+        out.push_str("    .long 0\n"); // padding: keeps PROPERTY_ROW_SIZE an 8-byte multiple
     }
 
     out.push_str(".p2align 3\n");

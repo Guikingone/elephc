@@ -1610,14 +1610,17 @@ $r = new ReflectionMethod('C', 'm');
     assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
 }
 
-/// Verifies the constructor's first-parameter relaxation to `object|string`: passing an
-/// object as the first `ReflectionMethod` argument no longer produces the shell's
-/// parameter-type error ("expects Str, got Object"). It still errors, but from a
-/// separate downstream reflection-constructor validation (which requires a compile-time
-/// string class name to resolve attributes) — a limitation outside this shell change.
-/// This test pins that the *shell-level* type error is gone.
+/// Verifies the constructor's first-parameter relaxation to `object|string` (K1 Part B): passing
+/// an object as the first `ReflectionMethod` argument type-checks cleanly end to end. Previously
+/// this still errored downstream ("first argument must be a string class name") because
+/// `reflection_class_literal_arg` only accepted a non-literal argument for `ReflectionMethod`/
+/// `ReflectionProperty` when it was STATICALLY `Str`-typed; K1 Part B widened that gate to accept
+/// ANY non-literal expression (matching PHP's real `object|string` signature — php -n verified
+/// `new ReflectionMethod($obj, 'm')` is legal PHP) and routes it to the EIR dynamic dispatcher
+/// (`crate::codegen_ir::lower_inst::objects::reflection_members::lower_reflection_member_new_dynamic`),
+/// which performs the actual runtime type determination (see that function's doc comment).
 #[test]
-fn test_reflection_method_construct_object_first_arg_not_shell_type_error() {
+fn test_reflection_method_construct_object_first_arg_type_checks() {
     let result = type_checks_cleanly(
         r#"<?php
 class C { public function m(): void {} }
@@ -1625,15 +1628,7 @@ $o = new C();
 $r = new ReflectionMethod($o, 'm');
 "#,
     );
-    let message = result.expect_err("object-first-arg construction still errors downstream");
-    assert!(
-        !message.contains("expects Str"),
-        "shell parameter-type error should be gone, got: {message}"
-    );
-    assert!(
-        message.contains("first argument must be a string class name"),
-        "expected the downstream string-class-name error, got: {message}"
-    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
 }
 
 /// Verifies a global-constant attribute argument (`#[A(CONST)]`) resolves to the

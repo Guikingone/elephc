@@ -19,13 +19,27 @@
 //!   `module_needs_reflection_member_dynamic_dispatch()` scan).
 //!
 //! Key details:
-//! - SCOPE: this delivery accepts a `Str`-typed class-name AND member-name argument only (not
-//!   `object|string` weak coercion like `ReflectionClass`'s dynamic path) — a documented, narrower
-//!   scope; `crate::types::checker::inference::objects::constructors::reflection_class_literal_arg`
-//!   rejects any other type at compile time with a loud diagnostic, never a crash.
-//! - `getMethods()`/`getProperties()` array enumeration is NOT implemented by this delivery (the
-//!   table's `declaring_class_id` field exists specifically so a future enumeration pass does not
-//!   need a table format change) — see the `reflect_member_registry` module doc comment.
+//! - SCOPE (K1 Part B): the class-name (first) argument accepts PHP's real `object|string`
+//!   weak-coercion surface — `Str`, `Object`, and `Mixed`/`Union` runtime tags all resolve via
+//!   `emit_reflection_member_class_operand_to_arg_regs`, mirroring
+//!   `crate::codegen_ir::lower_inst::objects::reflection::lower_reflection_class_new_dynamic`'s
+//!   `ReflectionClass` precedent exactly (int/float/bool/null weak-cast to a class-name STRING
+//!   lookup; array/resource/other throw a catchable `\TypeError`). The member-name (second)
+//!   argument stays `Str`-only at the PHP/checker level (`reflection_member_name_arg` rejects
+//!   anything else at compile time, no weak coercion), but its EIR-codegen representation may
+//!   still be a boxed `Mixed`/`Union` cell (e.g. a `foreach` element of a `str_array_type()`
+//!   array — see `lower_reflection_member_new_dynamic`'s doc comment), which is unboxed rather
+//!   than rejected.
+//! - K1 Part A: `getMethods()`/`getProperties()` array enumeration is implemented, but NOT by
+//!   this file — `crate::codegen_ir::lower_inst::objects::reflection::
+//!   reflection_class_extra_metadata` bakes an already decl-order/private-filtered name array at
+//!   `ReflectionClass` construction time, and the checker-level `getMethods()`/`getProperties()`
+//!   bodies (`crate::types::checker::builtin_types::reflection`) loop over it, constructing one
+//!   shell per name through the dynamic dispatchers THIS file already provides — no enumeration
+//!   logic needed here. `declaring_class_id`/`decl_order` are still carried on every flat-table
+//!   row regardless (see the `reflect_member_registry` module doc comment) for a future
+//!   point-lookup-adjacent consumer, even though today's enumeration consumer never reads them
+//!   back out of the table.
 //! - Every dispatcher uses ONE fixed-size reserved temporary stack frame (not LIFO push/pop
 //!   juggling) so field offsets stay constant across the intervening runtime calls
 //!   (`__rt_strtolower`/`__rt_sorted_name_search`/`__rt_str_persist` all clobber caller-saved
@@ -170,9 +184,27 @@ pub(super) fn lower_reflection_property_new_dynamic(
 }
 
 /// Shared operand-materialization + dispatch-call lowering for both
-/// `lower_reflection_method_new_dynamic`/`lower_reflection_property_new_dynamic`. Both operands
-/// must resolve to `Str` at codegen time (checker-enforced); anything else is an internal error
-/// (never reachable for a module that passed type checking).
+/// `lower_reflection_method_new_dynamic`/`lower_reflection_property_new_dynamic`. The
+/// member-name operand must be STATICALLY `Str` (checker-enforced: `reflection_member_name_arg`
+/// only accepts `Str`) — but its EIR-codegen-level representation can still legitimately be a
+/// boxed `Mixed`/`Union` cell rather than a raw `(ptr, len)` pair (e.g. a `str_array_type()`
+/// element extracted by a `foreach`, as `ReflectionClass::getMethods()`/`getProperties()`'s own
+/// synthesized body does over `__methods_ordered`/`__properties_ordered` — arrays are stored as
+/// generically Mixed-boxed cells at the runtime representation layer regardless of their
+/// checker-level element type). Both representations are accepted: `Str` materializes directly;
+/// `Mixed`/`Union` unboxes via `__rt_mixed_unbox` and takes the tag-1 (string) payload UNCONDITIONALLY
+/// (no runtime tag branch) — sound because the checker's `Str`-only gate guarantees this value is
+/// ALWAYS a string at the PHP level, so an unboxed non-string tag here would mean an unrelated
+/// EIR-vs-checker static-type divergence bug elsewhere, not a legitimate input this call site
+/// needs to handle. Any OTHER codegen type is a genuine internal error (never reachable for a
+/// module that passed type checking).
+///
+/// The class-name operand accepts EVERY `PhpType` (php -n verified: `ReflectionMethod`/
+/// `ReflectionProperty` share `ReflectionClass`'s exact `object|string` weak-coercion semantics
+/// for this argument — see `emit_reflection_member_class_operand_to_arg_regs`, which performs the
+/// same tag-check, weak-coerce, or catchable-`\TypeError`-throw runtime determination
+/// `crate::codegen_ir::lower_inst::objects::reflection::lower_reflection_class_new_dynamic` does
+/// for `ReflectionClass`).
 fn lower_reflection_member_new_dynamic(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -181,23 +213,36 @@ fn lower_reflection_member_new_dynamic(
     dispatch_label: &str,
     owner: &str,
 ) -> Result<()> {
-    if !matches!(ctx.value_php_type(class_operand)?, PhpType::Str) {
-        return Err(CodegenIrError::unsupported(format!(
-            "{} dynamic constructor with a non-string class-name argument",
-            owner
-        )));
-    }
-    if !matches!(ctx.value_php_type(member_operand)?, PhpType::Str) {
+    let member_ty = ctx.value_php_type(member_operand)?;
+    if !matches!(member_ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_)) {
         return Err(CodegenIrError::unsupported(format!(
             "{} dynamic constructor with a non-string member-name argument",
             owner
         )));
     }
-    // Materialize the member-name operand FIRST and park it, since materializing the class-name
-    // operand next would otherwise overwrite the same string-result registers.
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.load_string_value_to_regs(member_operand, "x0", "x1")?,
-        Arch::X86_64 => ctx.load_string_value_to_regs(member_operand, "rdi", "rsi")?,
+    // Materialize the member-name operand FIRST and park it, since resolving the class-name
+    // operand next (which may itself call `__rt_mixed_unbox`/the object-class-name lookup) would
+    // otherwise overwrite the same string-result registers.
+    if matches!(member_ty, PhpType::Str) {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.load_string_value_to_regs(member_operand, "x0", "x1")?,
+            Arch::X86_64 => ctx.load_string_value_to_regs(member_operand, "rdi", "rsi")?,
+        }
+    } else {
+        ctx.load_value_to_result(member_operand)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        // __rt_mixed_unbox leaves the string payload in abi::string_result_regs (x1/x2 on
+        // AArch64, rax/rdx on x86_64); move it into this call's arg0/arg1 convention.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x0, x1");                          // move the unboxed member-name pointer into arg0
+                ctx.emitter.instruction("mov x1, x2");                          // move the unboxed member-name length into arg1
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, rax");                        // move the unboxed member-name pointer into arg0
+                ctx.emitter.instruction("mov rsi, rdx");                        // move the unboxed member-name length into arg1
+            }
+        }
     }
     abi::emit_push_reg_pair(
         ctx.emitter,
@@ -210,10 +255,7 @@ fn lower_reflection_member_new_dynamic(
             Arch::X86_64 => "rsi",
         },
     );
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.load_string_value_to_regs(class_operand, "x0", "x1")?,
-        Arch::X86_64 => ctx.load_string_value_to_regs(class_operand, "rdi", "rsi")?,
-    }
+    emit_reflection_member_class_operand_to_arg_regs(ctx, class_operand, owner)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => abi::emit_pop_reg_pair(ctx.emitter, "x2", "x3"),
         Arch::X86_64 => abi::emit_pop_reg_pair(ctx.emitter, "rdx", "rcx"),
@@ -223,6 +265,308 @@ fn lower_reflection_member_new_dynamic(
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
     ctx.store_result_value(result)
+}
+
+/// Materializes `class_operand` into the dispatch call's class-name argument registers (`x0`/`x1`
+/// on AArch64, `rdi`/`rsi` on x86_64) — the SAME postcondition regardless of which arm runs, so
+/// the caller's subsequent member-name pop + dispatch call stays identical either way.
+///
+/// Mirrors `crate::codegen_ir::lower_inst::objects::reflection::
+/// lower_reflection_class_new_dynamic`'s tag-check-then-unbox precedent for `ReflectionClass`'s
+/// own `object|string` constructor argument, INCLUDING its int/float/bool/null weak-coercion
+/// arms (php -n verified: `ReflectionMethod`/`ReflectionProperty` weak-coerce this argument
+/// IDENTICALLY to `ReflectionClass` — `new ReflectionMethod(42, 'm')` throws
+/// `ReflectionException: Class "42" does not exist`, never a `\TypeError`). A statically
+/// known-uncoercible type (`array`, `callable`, …), or a `Mixed`/`Union` operand whose runtime
+/// tag resolves to neither string/object/scalar/null, throws a catchable `\TypeError` and never
+/// returns.
+fn emit_reflection_member_class_operand_to_arg_regs(
+    ctx: &mut FunctionContext<'_>,
+    class_operand: ValueId,
+    owner: &str,
+) -> Result<()> {
+    match ctx.value_php_type(class_operand)? {
+        PhpType::Str => match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.load_string_value_to_regs(class_operand, "x0", "x1")?,
+            Arch::X86_64 => ctx.load_string_value_to_regs(class_operand, "rdi", "rsi")?,
+        },
+        PhpType::Object(_) => {
+            ctx.load_value_to_result(class_operand)?;
+            super::super::builtins::types::emit_dynamic_object_class_name(ctx, "get_class");
+            emit_reflection_member_move_string_result_to_arg_regs(ctx);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            ctx.load_value_to_result(class_operand)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            emit_reflection_member_class_from_mixed_tag(ctx, owner)?;
+        }
+        // A STATICALLY int/float/bool/void-typed argument is not boxed as Mixed — it is a raw
+        // scalar in the ABI result register(s) — but PHP's weak-coercion rule above applies
+        // identically regardless of whether the checker knew the concrete type at compile time
+        // or only a boxed Mixed tag at runtime, so these get the SAME `(string)` cast treatment
+        // inline, without any unboxing step (mirrors `lower_reflection_class_new_dynamic`).
+        PhpType::Int => {
+            ctx.load_value_to_result(class_operand)?;
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");
+            emit_reflection_member_move_string_result_to_arg_regs(ctx);
+        }
+        PhpType::Float => {
+            ctx.load_value_to_result(class_operand)?;
+            abi::emit_call_label(ctx.emitter, "__rt_ftoa");
+            emit_reflection_member_move_string_result_to_arg_regs(ctx);
+        }
+        PhpType::Bool => {
+            ctx.load_value_to_result(class_operand)?;
+            emit_reflection_member_loaded_bool_to_string(ctx);
+            emit_reflection_member_move_string_result_to_arg_regs(ctx);
+        }
+        // A statically `void`/`never`-typed argument only arises from a degenerate expression;
+        // treated the same as PHP's `null` weak-coercion (→ "") for consistency with the
+        // Mixed-tag null case below.
+        PhpType::Void | PhpType::Never => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
+            abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+            emit_reflection_member_move_string_result_to_arg_regs(ctx);
+        }
+        // Any other statically-known type (array, resource, callable, …) is genuinely NOT
+        // coercible to `object|string` in real PHP either — throw the same catchable
+        // `\TypeError` rather than a compiler-internal error.
+        _ => {
+            ctx.load_value_to_result(class_operand)?;
+            emit_reflection_member_argument_type_error_throw(ctx, owner)?;
+        }
+    }
+    Ok(())
+}
+
+/// Moves a (pointer, length) pair from the standard string-RESULT register convention
+/// (`abi::string_result_regs`: `x1`/`x2` on AArch64, `rax`/`rdx` on x86_64 — what
+/// `emit_dynamic_object_class_name` produces) into this dispatch call's class-name ARGUMENT
+/// register convention (`x0`/`x1` on AArch64, `rdi`/`rsi` on x86_64). Mirrors
+/// `crate::codegen_ir::lower_inst::objects::reflection::
+/// emit_dispatch_call_from_string_result_regs`'s register move half (that sibling also issues the
+/// dispatch call itself; this one does not, since the caller here still has a member-name operand
+/// to pop off the parking stack slot first).
+fn emit_reflection_member_move_string_result_to_arg_regs(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // move the resolved class-name pointer into the dispatch call's arg0
+            ctx.emitter.instruction("mov x1, x2");                              // move the resolved class-name length into the dispatch call's arg1
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // move the resolved class-name pointer into the dispatch call's arg0
+            ctx.emitter.instruction("mov rsi, rdx");                            // move the resolved class-name length into the dispatch call's arg1
+        }
+    }
+}
+
+/// After `__rt_mixed_unbox` has run (tag in `x0`/`rax`, primary payload in `x1`/`rdi`, string
+/// length in `x2`/`rdx`), branches on the runtime tag: `1` (string) materializes the payload
+/// directly into the dispatch call's argument registers; `6` (object) resolves the object's
+/// concrete runtime class name first; `0`/`2`/`3`/`8` (int/float/bool/null) weak-coerce to their
+/// `(string)` cast exactly like `ReflectionClass`; any other tag (array, resource, …) throws a
+/// catchable `\TypeError`. Mirrors `crate::codegen_ir::lower_inst::objects::reflection::
+/// emit_reflection_class_dynamic_dispatch_from_mixed_tag` in full (php -n verified:
+/// `ReflectionMethod`/`ReflectionProperty` share `ReflectionClass`'s exact runtime tag
+/// disposition for this argument — see `emit_reflection_member_class_operand_to_arg_regs`'s doc
+/// comment).
+fn emit_reflection_member_class_from_mixed_tag(ctx: &mut FunctionContext<'_>, owner: &str) -> Result<()> {
+    let str_label = ctx.next_label("reflect_member_dyn_mixed_str");
+    let object_label = ctx.next_label("reflect_member_dyn_mixed_obj");
+    let int_label = ctx.next_label("reflect_member_dyn_mixed_int");
+    let float_label = ctx.next_label("reflect_member_dyn_mixed_float");
+    let bool_label = ctx.next_label("reflect_member_dyn_mixed_bool");
+    let null_label = ctx.next_label("reflect_member_dyn_mixed_null");
+    let type_error_label = ctx.next_label("reflect_member_dyn_mixed_type_error");
+    let done_label = ctx.next_label("reflect_member_dyn_mixed_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #1");                              // runtime tag 1 means the boxed union holds a string payload
+            ctx.emitter.instruction(&format!("b.eq {}", str_label));            // a string payload is already (ptr, len) — dispatch directly
+            ctx.emitter.instruction("cmp x0, #6");                              // runtime tag 6 means the boxed union holds an object payload
+            ctx.emitter.instruction(&format!("b.eq {}", object_label));         // resolve the object's own runtime class name first
+            ctx.emitter.instruction("cmp x0, #0");                              // runtime tag 0 means the boxed union holds an int payload
+            ctx.emitter.instruction(&format!("b.eq {}", int_label));            // PHP weak-coerces int to string for this constructor
+            ctx.emitter.instruction("cmp x0, #2");                              // runtime tag 2 means the boxed union holds a float payload
+            ctx.emitter.instruction(&format!("b.eq {}", float_label));          // PHP weak-coerces float to string for this constructor
+            ctx.emitter.instruction("cmp x0, #3");                              // runtime tag 3 means the boxed union holds a bool payload
+            ctx.emitter.instruction(&format!("b.eq {}", bool_label));           // PHP weak-coerces bool to string for this constructor
+            ctx.emitter.instruction("cmp x0, #8");                              // runtime tag 8 means the boxed union holds null
+            ctx.emitter.instruction(&format!("b.eq {}", null_label));           // PHP weak-coerces null to "" for this constructor (deprecated but accepted)
+            ctx.emitter.instruction(&format!("b {}", type_error_label));        // array/resource/other: not coercible to `object|string`
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 1");                              // runtime tag 1 means the boxed union holds a string payload
+            ctx.emitter.instruction(&format!("je {}", str_label));              // a string payload is already (ptr, len) — dispatch directly
+            ctx.emitter.instruction("cmp rax, 6");                              // runtime tag 6 means the boxed union holds an object payload
+            ctx.emitter.instruction(&format!("je {}", object_label));           // resolve the object's own runtime class name first
+            ctx.emitter.instruction("cmp rax, 0");                              // runtime tag 0 means the boxed union holds an int payload
+            ctx.emitter.instruction(&format!("je {}", int_label));              // PHP weak-coerces int to string for this constructor
+            ctx.emitter.instruction("cmp rax, 2");                              // runtime tag 2 means the boxed union holds a float payload
+            ctx.emitter.instruction(&format!("je {}", float_label));            // PHP weak-coerces float to string for this constructor
+            ctx.emitter.instruction("cmp rax, 3");                              // runtime tag 3 means the boxed union holds a bool payload
+            ctx.emitter.instruction(&format!("je {}", bool_label));             // PHP weak-coerces bool to string for this constructor
+            ctx.emitter.instruction("cmp rax, 8");                              // runtime tag 8 means the boxed union holds null
+            ctx.emitter.instruction(&format!("je {}", null_label));             // PHP weak-coerces null to "" for this constructor (deprecated but accepted)
+            ctx.emitter.instruction(&format!("jmp {}", type_error_label));      // array/resource/other: not coercible to `object|string`
+        }
+    }
+
+    // -- tag 1 (string): __rt_mixed_unbox already left (ptr, len) in x1/x2 (AArch64) or
+    //    rdi/rdx (x86_64) — move into the dispatch call's own argument convention. --
+    ctx.emitter.label(&str_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // move the unboxed string pointer into the dispatch call's arg0
+            ctx.emitter.instruction("mov x1, x2");                              // move the unboxed string length into the dispatch call's arg1
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rsi, rdx");                            // move the unboxed string length into the dispatch call's arg1 (rdi already holds arg0)
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    // -- tag 6 (object): __rt_mixed_unbox left the object pointer in x1 (AArch64) / rdi
+    //    (x86_64) — resolve its concrete runtime class name, then move into the arg convention. --
+    ctx.emitter.label(&object_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // move the unboxed object pointer into the class-name lookup register
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // move the unboxed object pointer into the class-name lookup register
+    }
+    super::super::builtins::types::emit_dynamic_object_class_name(ctx, "get_class");
+    emit_reflection_member_move_string_result_to_arg_regs(ctx);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    // -- tag 0 (int): weak-cast the unboxed int payload to decimal text via __rt_itoa. --
+    ctx.emitter.label(&int_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // move the unboxed int payload into __rt_itoa's argument register
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // move the unboxed int payload into __rt_itoa's argument register
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_itoa");                             // weak-cast the int payload to its decimal string text
+    emit_reflection_member_move_string_result_to_arg_regs(ctx);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    // -- tag 2 (float): __rt_mixed_unbox parked the float bit pattern in the SAME payload
+    //    register as the int case — weak-cast it to text via __rt_ftoa the same way. --
+    ctx.emitter.label(&float_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("fmov d0, x1"),                // reinterpret the unboxed float bit pattern into __rt_ftoa's argument register
+        Arch::X86_64 => ctx.emitter.instruction("movq xmm0, rdi"),              // reinterpret the unboxed float bit pattern into __rt_ftoa's argument register
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_ftoa");                             // weak-cast the float payload to its decimal string text
+    emit_reflection_member_move_string_result_to_arg_regs(ctx);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    // -- tag 3 (bool): weak-cast the unboxed bool payload to "1"/"" via the shared helper. --
+    ctx.emitter.label(&bool_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // move the unboxed bool payload into the loaded-bool-to-string helper's argument register
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // move the unboxed bool payload into the loaded-bool-to-string helper's argument register
+    }
+    emit_reflection_member_loaded_bool_to_string(ctx);
+    emit_reflection_member_move_string_result_to_arg_regs(ctx);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    // -- tag 8 (null): weak-cast to an empty string (PHP emits a deprecation notice this
+    //    implementation does not reproduce, matching `lower_reflection_class_new_dynamic`). --
+    ctx.emitter.label(&null_label);
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);                      // null weak-coerces to an empty string pointer
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);                      // null weak-coerces to a zero string length
+    emit_reflection_member_move_string_result_to_arg_regs(ctx);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    // -- any other tag: not coercible to `object|string` — throw a catchable \TypeError, never
+    //    returns. --
+    ctx.emitter.label(&type_error_label);
+    emit_reflection_member_argument_type_error_throw(ctx, owner)?;
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Weak-casts an ALREADY-LOADED (not boxed/unboxed — a raw scalar in the ABI int-result
+/// register) bool value to `"1"` (true) or `""` (false), leaving the result in
+/// `abi::string_result_regs`. Mirrors `crate::codegen_ir::lower_inst::objects::reflection::
+/// emit_reflection_class_loaded_bool_to_string` byte-for-byte (private to that sibling module,
+/// duplicated here rather than widening its visibility for one caller — matches this file's own
+/// existing precedent of small parallel helpers, e.g. `scan_functions`/`object_new_class_name`).
+fn emit_reflection_member_loaded_bool_to_string(ctx: &mut FunctionContext<'_>) {
+    let false_label = ctx.next_label("reflect_member_dyn_bool_str_false");
+    let done_label = ctx.next_label("reflect_member_dyn_bool_str_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cbz x0, {}", false_label));              // false weak-casts to an empty string
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");                     // true weak-casts to "1" via decimal text
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the empty-string fallback after true conversion
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("mov x2, #0");                              // false has zero string length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // test whether the loaded bool payload is false
+            ctx.emitter
+                .instruction(&format!("je {}", false_label));                  // false weak-casts to an empty string
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");                     // true weak-casts to "1" via decimal text
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the empty-string fallback after true conversion
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("mov rdx, 0");                              // false has zero string length
+        }
+    }
+    ctx.emitter.label(&done_label);
+}
+
+/// Throws a catchable `\TypeError` for a dynamic `ReflectionMethod`/`ReflectionProperty`
+/// constructor whose runtime class-name argument resolved to neither a string nor an object.
+/// Mirrors `crate::codegen_ir::lower_inst::objects::reflection::
+/// emit_reflection_class_argument_type_error_throw`'s allocate/stamp/publish/jump sequence
+/// (stamps `_spl_type_error_class_id`, NOT `_reflection_exception_class_id` — a wrong argument
+/// SHAPE is a `\TypeError` in real PHP, distinct from a wrong-but-well-shaped class/member NAME,
+/// which throws `\ReflectionException` via `emit_reflect_exception_throw` above). Never returns.
+fn emit_reflection_member_argument_type_error_throw(ctx: &mut FunctionContext<'_>, owner: &str) -> Result<()> {
+    let message = format!("{}::__construct(): Argument #1 must be of type object|string", owner);
+    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &message_label);        // message pointer
+            ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // message byte length
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");              // own a heap copy of the message bytes
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                   // park the owned message across the allocation call
+            ctx.emitter.instruction("mov x0, #32");                             // request Throwable payload storage
+            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");               // allocate the TypeError object payload
+            ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = object instance
+            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation as a runtime object
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_spl_type_error_class_id", 0); // load TypeError's runtime class id
+            ctx.emitter.instruction("str x9, [x0]");                            // store the class id at the object header
+            abi::emit_pop_reg_pair(ctx.emitter, "x9", "x10");                   // reload the owned message pointer/length
+            ctx.emitter.instruction("str x9, [x0, #8]");                        // store the exception message pointer
+            ctx.emitter.instruction("str x10, [x0, #16]");                      // store the exception message length
+            ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
+            abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);  // publish the active exception object
+            abi::emit_jump(ctx.emitter, "__rt_throw_current");                  // enter the standard exception unwinder
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", &message_label);       // message pointer
+            ctx.emitter.instruction(&format!("mov rsi, {}", message_len));      // message byte length
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");              // own a heap copy of the message (ptr in rax, len carried in rdx)
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                 // park the owned message across the allocation call
+            ctx.emitter.instruction("mov rax, 32");                             // request Throwable payload storage
+            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");               // allocate the TypeError object payload
+            ctx.emitter.instruction("mov r10, 0x4548504c00000006");             // x86_64 heap-kind word: object magic + kind 6
+            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation as a runtime object
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_type_error_class_id", 0); // load TypeError's runtime class id
+            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at the object header
+            abi::emit_pop_reg_pair(ctx.emitter, "r10", "r11");                  // reload the owned message pointer/length
+            ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store the exception message pointer
+            ctx.emitter.instruction("mov QWORD PTR [rax + 16], r11");           // store the exception message length
+            ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
+            abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0); // publish the active exception object
+            abi::emit_jump(ctx.emitter, "__rt_throw_current");                  // enter the standard exception unwinder
+        }
+    }
+    Ok(())
 }
 
 /// Frame offsets for the method dispatcher's fixed 96-byte reserved temporary frame.

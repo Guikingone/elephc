@@ -1007,6 +1007,13 @@ struct ReflectionClassExtraMetadata {
     interfaces_lower: Vec<String>,
     methods_lower: Vec<String>,
     properties: Vec<String>,
+    /// K1 Part A: own + inherited method names, EXACT declared spelling, in real PHP
+    /// `getMethods()` declaration order, with parent-private members already excluded — see
+    /// `crate::codegen::runtime::data::reflect_member_registry::method_decl_order_and_names`.
+    /// Bakes `ReflectionClass::__methods_ordered`; `getMethods()` loops over it.
+    methods_ordered: Vec<String>,
+    /// Property counterpart of `methods_ordered` — bakes `__properties_ordered`.
+    properties_ordered: Vec<String>,
     const_names: Vec<String>,
     const_values: Vec<AttrArgValue>,
     /// The reflected class's declaring source file, or `None` when it is unknown (a builtin/
@@ -1066,6 +1073,11 @@ fn reflection_class_extra_metadata(
     let mut properties: Vec<String> = info.properties.iter().map(|(name, _)| name.clone()).collect();
     properties.extend(info.static_properties.iter().map(|(name, _)| name.clone()));
 
+    let (_, methods_ordered) =
+        crate::codegen::runtime::method_decl_order_and_names(ctx.module, class_name);
+    let (_, properties_ordered) =
+        crate::codegen::runtime::property_decl_order_and_names(ctx.module, class_name);
+
     let (const_names, const_values) = collect_reflection_class_constants(ctx, class_name);
     let source_file = ctx
         .module
@@ -1089,6 +1101,8 @@ fn reflection_class_extra_metadata(
             .collect(),
         methods_lower,
         properties,
+        methods_ordered,
+        properties_ordered,
         const_names,
         const_values,
         source_file,
@@ -1245,6 +1259,8 @@ fn emit_reflection_class_extra_metadata(
             off("__interfaces_lower")?,
             off("__methods_lower")?,
             off("__properties")?,
+            off("__methods_ordered")?,
+            off("__properties_ordered")?,
             off("__const_names")?,
             off("__const_values")?,
             off("__file")?,
@@ -1262,6 +1278,8 @@ fn emit_reflection_class_extra_metadata(
         interfaces_lower_off,
         methods_off,
         properties_off,
+        methods_ordered_off,
+        properties_ordered_off,
         const_names_off,
         const_values_off,
         file_off,
@@ -1300,6 +1318,12 @@ fn emit_reflection_class_extra_metadata(
     })?;
     emit_reflection_replace_array_property(ctx, properties_off, properties_off + 8, |ctx| {
         super::super::builtins::attributes::emit_string_array(ctx, &metadata.properties)
+    })?;
+    emit_reflection_replace_array_property(ctx, methods_ordered_off, methods_ordered_off + 8, |ctx| {
+        super::super::builtins::attributes::emit_string_array(ctx, &metadata.methods_ordered)
+    })?;
+    emit_reflection_replace_array_property(ctx, properties_ordered_off, properties_ordered_off + 8, |ctx| {
+        super::super::builtins::attributes::emit_string_array(ctx, &metadata.properties_ordered)
     })?;
     emit_reflection_replace_array_property(ctx, const_names_off, const_names_off + 8, |ctx| {
         super::super::builtins::attributes::emit_string_array(ctx, &metadata.const_names)

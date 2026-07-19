@@ -145,6 +145,7 @@ impl ClassBuildState {
             static_property_visibilities: self.static_property_visibilities,
             declared_static_properties: self.declared_static_properties,
             final_static_properties: self.final_static_properties,
+            own_property_decl_order: class.properties.iter().map(|prop| prop.name.clone()).collect(),
             method_decls: class.methods.clone(),
             methods: self.method_sigs,
             static_methods: self.static_sigs,

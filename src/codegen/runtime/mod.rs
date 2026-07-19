@@ -41,6 +41,7 @@ pub(crate) use data::{
     METHOD_ROW_REAL_NAME_LEN_OFFSET, METHOD_ROW_REAL_NAME_PTR_OFFSET, METHOD_ROW_SIZE,
     PROPERTY_ROW_MODIFIERS_OFFSET, PROPERTY_ROW_SIZE,
 };
+pub(crate) use data::{method_decl_order_and_names, property_decl_order_and_names};
 /// Emit fixed runtime data section (symbols, constants, type metadata).
 pub(crate) use data::emit_runtime_data_user;
 /// Emit user-program-specific runtime data section.

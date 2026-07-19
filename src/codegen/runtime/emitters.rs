@@ -191,12 +191,18 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
 
     // Closed-world constant/enum/class/interface/trait registry lookups backing
     // non-literal defined()/constant()/enum_exists()/class_exists()/
-    // interface_exists()/trait_exists(). The shared binary search is emitted once
-    // when either feature needs it; each feature's own entry points are emitted
-    // under its own gate. Their data tables live in user data.
-    if features.const_introspection || features.class_introspection || features.class_relation_introspection {
-        system::emit_rt_sorted_name_search(emitter);
-    }
+    // interface_exists()/trait_exists(). Each feature's own entry points are emitted
+    // under its own gate below. Their data tables live in user data.
+    //
+    // The shared generic binary search is UNCONDITIONAL (not feature-gated): the always-emitted
+    // `ReflectionClass::getMethod()`/`getProperty()` shell method bodies lower through the
+    // dynamic `ReflectionMethod`/`ReflectionProperty` dispatchers
+    // (`crate::codegen_ir::lower_inst::objects::reflection_members`), which call
+    // `__rt_sorted_name_search` for their flat-table lookups — so every user program's assembly
+    // references this symbol regardless of the introspection feature flags, and gating it here
+    // would make a `RuntimeFeatures::none()` runtime fail to link (caught by the
+    // `tests/codegen/optimizer/` fixtures that link against the shared base runtime object).
+    system::emit_rt_sorted_name_search(emitter);
     if features.const_introspection {
         system::emit_rt_defined(emitter);
         system::emit_rt_enum_exists(emitter);

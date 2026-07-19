@@ -187,6 +187,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         static_property_visibilities: HashMap::new(),
         declared_static_properties: Default::default(),
         final_static_properties: Default::default(),
+        own_property_decl_order: Vec::new(),
         method_decls: Vec::new(),
         methods,
         static_methods,

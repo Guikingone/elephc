@@ -186,6 +186,15 @@ pub struct ClassInfo {
     pub static_property_visibilities: HashMap<String, Visibility>,
     pub declared_static_properties: HashSet<String>,
     pub final_static_properties: HashSet<String>,
+    /// Names of properties (instance and static combined) THIS class itself declares, in
+    /// source AST order — mirrors `method_decls` below but as bare names (a property has no
+    /// per-class body to also carry). Used by
+    /// `crate::codegen::runtime::data::reflect_member_registry::property_decl_order_and_names`
+    /// to reconstruct PHP's real `ReflectionClass::getProperties()` declaration order (own
+    /// class's own order first, then each ancestor's own order appended — php -n verified),
+    /// which the accumulated, parent-first `properties`/`static_properties` vectors below
+    /// cannot reproduce on their own.
+    pub own_property_decl_order: Vec<String>,
     pub method_decls: Vec<ClassMethod>,
     pub methods: HashMap<String, FunctionSig>,
     pub static_methods: HashMap<String, FunctionSig>,

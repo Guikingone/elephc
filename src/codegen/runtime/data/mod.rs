@@ -34,6 +34,11 @@ pub(crate) use reflect_member_registry::{
     METHOD_ROW_REAL_NAME_LEN_OFFSET, METHOD_ROW_REAL_NAME_PTR_OFFSET, METHOD_ROW_SIZE,
     PROPERTY_ROW_MODIFIERS_OFFSET, PROPERTY_ROW_SIZE,
 };
+/// Computes `ReflectionClass::getMethods()`/`getProperties()`'s PHP declaration order (and
+/// parent-private-exclusion filtering) from `ClassInfo` directly — shared between the flat
+/// member registry's per-row `decl_order` field and the `ReflectionClass` construction-time
+/// metadata bake (`crate::codegen_ir::lower_inst::objects::reflection`).
+pub(crate) use reflect_member_registry::{method_decl_order_and_names, property_decl_order_and_names};
 /// Emit fixed runtime data section (heap globals, fatal/assertion messages, lookup tables, builtin callable metadata).
 pub(crate) use user::emit_runtime_data_user;
 

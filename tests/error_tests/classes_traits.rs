@@ -630,31 +630,59 @@ fn test_error_reflection_class_undefined_class() {
 /// constructors::reflection_class_literal_arg` and `crate::codegen_ir::lower_inst::objects::
 /// reflection::lower_reflection_class_new_dynamic`). Full runtime-behavior coverage (weak
 /// scalar coercion, object resolution, `\TypeError` on array/resource) lives in the codegen
-/// tests in `tests/codegen/oop/reflection.rs`.
+/// tests in `tests/codegen/oop/reflection.rs`. K1 (see
+/// `test_reflection_method_dynamic_class_argument_compiles`) later extended the SAME
+/// class-name-argument relaxation to `ReflectionMethod`/`ReflectionProperty` too — the relaxation
+/// is no longer `ReflectionClass`-only.
 #[test]
 fn test_reflection_class_non_string_argument_compiles() {
     expect_ok("<?php $name = 42; $r = new ReflectionClass($name); echo get_class($r);");
 }
 
-/// Verifies that `new ReflectionMethod($name, 'foo')` with a dynamic (non-literal) class-name
-/// argument STAYS loud — the PART C dynamic-dispatch relaxation is `ReflectionClass`-only; a
-/// two-level class×method dispatch was judged not to extend naturally (code-size explosion) and
-/// is explicitly out of scope.
+/// SUPERSEDES the old `test_error_reflection_method_dynamic_class_argument_stays_loud`: K1 (see
+/// `crate::codegen_ir::lower_inst::objects::reflection_members`) extends the SAME
+/// `ReflectionClass`-style dynamic-dispatch relaxation to `ReflectionMethod`'s class-name
+/// argument too (the earlier "PART C is `ReflectionClass`-only" scoping note this test's name
+/// referenced no longer holds) — a non-literal `Str`/`Mixed`/`Union`/`Object` class-name argument
+/// compiles and resolves through the J4 flat member-table dispatcher at runtime instead of
+/// erroring at compile time. Full runtime-behavior coverage (weak scalar coercion, object
+/// resolution, `\TypeError` on array) lives in `tests/codegen/oop/reflection.rs`.
 #[test]
-fn test_error_reflection_method_dynamic_class_argument_stays_loud() {
-    expect_error(
-        "<?php $name = 'C'; class C { public function foo(): void {} } $r = new ReflectionMethod($name, 'foo');",
-        "requires a string literal class name",
+fn test_reflection_method_dynamic_class_argument_compiles() {
+    expect_ok(
+        "<?php $name = 'C'; class C { public function foo(): void {} } $r = new ReflectionMethod($name, 'foo'); echo $r->getName();",
     );
 }
 
-/// Verifies that `new ReflectionProperty($name, 'prop')` with a dynamic (non-literal) class-name
-/// argument STAYS loud, for the same reason as `ReflectionMethod` above.
+/// Property counterpart of `test_reflection_method_dynamic_class_argument_compiles`.
 #[test]
-fn test_error_reflection_property_dynamic_class_argument_stays_loud() {
+fn test_reflection_property_dynamic_class_argument_compiles() {
+    expect_ok(
+        "<?php $name = 'C'; class C { public int $prop = 1; } $r = new ReflectionProperty($name, 'prop'); echo $r->getName();",
+    );
+}
+
+/// K1 Part B did NOT widen the SECOND (member-name) argument the same way: the constructor
+/// signature still declares `method_name`/`property_name` as `Str` (see
+/// `builtin_reflection_owner_class`/`builtin_reflection_property` in
+/// `crate::types::checker::builtin_types::reflection`), so a non-`Str` argument there is still
+/// rejected by the normal callable-signature type check, before `reflection_member_name_arg`
+/// (which ALSO keeps requiring `Str`, no `Mixed`/`Object`/weak-coercion acceptance — php -n
+/// verified real PHP does not weak-coerce this argument either) ever runs.
+#[test]
+fn test_error_reflection_method_non_string_member_name_argument_stays_loud() {
     expect_error(
-        "<?php $name = 'C'; class C { public int $prop = 1; } $r = new ReflectionProperty($name, 'prop');",
-        "requires a string literal class name",
+        "<?php class C { public function foo(): void {} } $r = new ReflectionMethod('C', 42);",
+        "parameter $method_name expects Str, got Int",
+    );
+}
+
+/// Property counterpart of `test_error_reflection_method_non_string_member_name_argument_stays_loud`.
+#[test]
+fn test_error_reflection_property_non_string_member_name_argument_stays_loud() {
+    expect_error(
+        "<?php class C { public int $prop = 1; } $r = new ReflectionProperty('C', 42);",
+        "parameter $property_name expects Str, got Int",
     );
 }
 

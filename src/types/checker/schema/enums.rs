@@ -431,6 +431,7 @@ pub(crate) fn insert_enum_metadata(
             static_property_visibilities: HashMap::new(),
             declared_static_properties: HashSet::new(),
             final_static_properties: HashSet::new(),
+            own_property_decl_order: Vec::new(),
             method_decls,
             methods,
             static_methods,

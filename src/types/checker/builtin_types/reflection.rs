@@ -711,6 +711,121 @@ fn modifier_bit_test_expr(modifiers_property: &str, mask: i64) -> Expr {
     )
 }
 
+/// Returns a public `getMethods(int $filter = 0): array` / `getProperties(int $filter = 0):
+/// array` method (K1 Part A) whose body is `get_members_body(names_property, member_class)`.
+fn get_members_method(method_name: &str, names_property: &str, member_class: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("filter".to_string(), Some(TypeExpr::Int), int_lit(0), false)],
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(array_type()),
+        by_ref_return: false,
+        body: get_members_body(names_property, member_class),
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds the shared `getMethods([$filter]): array<ReflectionMethod>` /
+/// `getProperties([$filter]): array<ReflectionProperty>` body: iterates
+/// `$this->names_property` (already PHP declaration-order and parent-private-excluded — see
+/// `crate::codegen::runtime::data::reflect_member_registry::method_decl_order_and_names`/
+/// `property_decl_order_and_names`, which bake it at construction time), constructs a
+/// `member_class` shell for each visible name via the EXISTING dynamic constructor
+/// (`new ReflectionMethod($this->__name, $name)` / `new ReflectionProperty(...)` — the J4
+/// flat-registry dispatcher, which soundly serves both a literal- and a
+/// dynamically-constructed `$this` since `$this->__name` is always a runtime string), and
+/// keeps only the ones matching `$filter`: `0` means no filtering (PHP's real no-arg/zero
+/// behavior — php -n verified), otherwise PHP's OR-bitmask semantics
+/// `($m->getModifiers() & $filter) !== 0`.
+fn get_members_body(names_property: &str, member_class: &str) -> Vec<Stmt> {
+    let dummy_span = crate::span::Span::dummy();
+    let filter_is_zero = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(var_expr("filter")),
+            op: BinOp::StrictEq,
+            right: Box::new(Expr::new(ExprKind::IntLiteral(0), dummy_span)),
+        },
+        dummy_span,
+    );
+    let modifiers_match_filter = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(Expr::new(
+                ExprKind::BinaryOp {
+                    left: Box::new(Expr::new(
+                        ExprKind::MethodCall {
+                            object: Box::new(var_expr("__m")),
+                            method: "getModifiers".to_string(),
+                            args: Vec::new(),
+                        },
+                        dummy_span,
+                    )),
+                    op: BinOp::BitAnd,
+                    right: Box::new(var_expr("filter")),
+                },
+                dummy_span,
+            )),
+            op: BinOp::StrictNotEq,
+            right: Box::new(Expr::new(ExprKind::IntLiteral(0), dummy_span)),
+        },
+        dummy_span,
+    );
+    vec![
+        Stmt::assign("__result", Expr::new(ExprKind::ArrayLiteral(Vec::new()), dummy_span)),
+        Stmt::new(
+            StmtKind::Foreach {
+                array: this_prop_expr(names_property),
+                key_var: None,
+                value_var: "__n".to_string(),
+                value_by_ref: false,
+                body: vec![
+                    Stmt::assign(
+                        "__m",
+                        Expr::new(
+                            ExprKind::NewObject {
+                                class_name: Name::unqualified(member_class),
+                                args: vec![this_prop_expr("__name"), var_expr("__n")],
+                            },
+                            dummy_span,
+                        ),
+                    ),
+                    Stmt::new(
+                        StmtKind::If {
+                            condition: Expr::new(
+                                ExprKind::BinaryOp {
+                                    left: Box::new(filter_is_zero.clone()),
+                                    op: BinOp::Or,
+                                    right: Box::new(modifiers_match_filter.clone()),
+                                },
+                                dummy_span,
+                            ),
+                            then_body: vec![Stmt::new(
+                                StmtKind::ArrayPush {
+                                    array: "__result".to_string(),
+                                    value: var_expr("__m"),
+                                },
+                                dummy_span,
+                            )],
+                            elseif_clauses: Vec::new(),
+                            else_body: None,
+                        },
+                        dummy_span,
+                    ),
+                ],
+            },
+            dummy_span,
+        ),
+        Stmt::new(StmtKind::Return(Some(var_expr("__result"))), dummy_span),
+    ]
+}
+
 /// Builds the `getConstants(): array` body: iterates the parallel
 /// `$this->names_property`/`$this->values_property` slots baked at
 /// construction time (own + inherited class constants that fold to a
@@ -1359,6 +1474,16 @@ fn builtin_reflection_class() -> FlattenedClass {
             // Own + inherited property names, exact case. Backs
             // `hasProperty()`.
             builtin_property("__properties", Visibility::Private, Some(str_array_type()), empty_array()),
+            // K1 Part A: own + inherited method/property names, EXACT declared spelling, in
+            // real PHP `getMethods()`/`getProperties()` declaration order (own class's own
+            // declared order first, then each ancestor's own declared order appended) with
+            // parent-private members already excluded (php -n verified — see
+            // `crate::codegen::runtime::data::reflect_member_registry::
+            // method_decl_order_and_names`/`property_decl_order_and_names`, which bake these).
+            // Unlike `__methods_lower`/`__properties` above (unordered membership-test sets),
+            // these back the actual `getMethods()`/`getProperties()` ENUMERATION bodies below.
+            builtin_property("__methods_ordered", Visibility::Private, Some(str_array_type()), empty_array()),
+            builtin_property("__properties_ordered", Visibility::Private, Some(str_array_type()), empty_array()),
             // Own + inherited class-constant names/values that fold to a
             // compile-time literal, in parallel index order. Back
             // `getConstants()`/`getConstant()`.
@@ -1465,6 +1590,17 @@ fn builtin_reflection_class() -> FlattenedClass {
                 TypeExpr::Bool,
                 exact_membership_expr("name", "__properties"),
             ),
+            // PHP: `getMethods(int $filter = 0): ReflectionMethod[]` / `getProperties(int
+            // $filter = 0): ReflectionProperty[]` (K1 Part A). Both iterate the already
+            // decl-order/private-filtered `__methods_ordered`/`__properties_ordered` slot,
+            // constructing a shell per visible name through the EXISTING J4 dynamic
+            // `ReflectionMethod($this->__name, $name)`/`ReflectionProperty(...)` dispatcher
+            // (soundly serves both a literal- and a dynamically-constructed receiver, same as
+            // `getMethod`/`getProperty` above), then keeps only entries matching `$filter`
+            // (`0` = no filtering; otherwise PHP's OR-bitmask semantics `(modifiers & filter)
+            // != 0`, php -n verified — see `get_members_body`).
+            get_members_method("getMethods", "__methods_ordered", "ReflectionMethod"),
+            get_members_method("getProperties", "__properties_ordered", "ReflectionProperty"),
             builtin_reflection_string_arg_method(
                 "isSubclassOf",
                 "class",
