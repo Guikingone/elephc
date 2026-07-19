@@ -53,6 +53,11 @@ pub(crate) fn lower_main(
         check_result.global_env.clone(),
         check_result.global_env.clone(),
         &check_result.functions,
+        // `main` itself can never call func_num_args()/func_get_args()/func_get_arg() —
+        // `func_args_scan::validate_func_args_global_scope` already rejects that at the
+        // checker level — but it still needs the full set here so CALLS from `main` INTO
+        // an arity-hungry function append the hidden operand correctly.
+        &check_result.func_args_functions,
         &check_result.extern_functions,
         &check_result.extern_globals,
         &check_result.callable_param_sigs,
@@ -627,14 +632,25 @@ pub(crate) fn lower_user_function(
     function.flags.by_ref_return = signature.by_ref_return;
     function.source_signature = Some(source_signature(name, &eir_signature));
     function.signature = Some(eir_runtime_metadata_signature(&eir_signature));
+    let is_arity_hungry = check_result.func_args_functions.contains(name);
+    if is_arity_hungry {
+        function.params.push(arity_hungry_hidden_argc_param());
+    }
     attach_generator_source_if_needed(&mut function, body, eir_signature.params.len());
+    let env = if is_arity_hungry {
+        env_with_arity_hungry_hidden_argc(&eir_signature)
+    } else {
+        env_from_signature(&eir_signature)
+    };
+    let body_params = params_with_arity_hungry_hidden_argc(&eir_signature.params, is_arity_hungry);
     let closures = lower_body_into_function(
         &mut function,
         &mut module.data,
         body,
-        env_from_signature(&eir_signature),
+        env,
         check_result.global_env.clone(),
         &check_result.functions,
+        &check_result.func_args_functions,
         &check_result.extern_functions,
         &check_result.extern_globals,
         &check_result.callable_param_sigs,
@@ -646,7 +662,7 @@ pub(crate) fn lower_user_function(
         constants,
         None,
         body_return_type.clone(),
-        &eir_signature.params,
+        &body_params,
         None,
         false,
         std::collections::HashSet::new(),
@@ -717,6 +733,18 @@ pub(crate) fn lower_class_method(
         body_params.insert(0, ("this".to_string(), this_type));
     }
     function.params.extend(function_params(signature));
+    let is_arity_hungry = check_result.func_args_functions.contains(&name);
+    if is_arity_hungry {
+        function.params.push(arity_hungry_hidden_argc_param());
+        env.insert(
+            crate::types::checker::func_args_scan::HIDDEN_ARGC_PARAM_NAME.to_string(),
+            PhpType::Int,
+        );
+        body_params.push((
+            crate::types::checker::func_args_scan::HIDDEN_ARGC_PARAM_NAME.to_string(),
+            PhpType::Int,
+        ));
+    }
     attach_generator_source_if_needed(&mut function, body, body_params.len());
     let closures = lower_body_into_function(
         &mut function,
@@ -725,6 +753,7 @@ pub(crate) fn lower_class_method(
         env,
         check_result.global_env.clone(),
         &check_result.functions,
+        &check_result.func_args_functions,
         &check_result.extern_functions,
         &check_result.extern_globals,
         &check_result.callable_param_sigs,
@@ -791,6 +820,7 @@ pub(crate) fn lower_property_init_thunk(
         env,
         check_result.global_env.clone(),
         &check_result.functions,
+        &check_result.func_args_functions,
         &check_result.extern_functions,
         &check_result.extern_globals,
         &check_result.callable_param_sigs,
@@ -845,6 +875,7 @@ fn property_init_body(class_info: &ClassInfo) -> Vec<Stmt> {
 }
 
 /// Lowers one closure literal into an EIR function plus any nested closure functions.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_closure_function(
     parent: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -855,6 +886,7 @@ pub(crate) fn lower_closure_function(
     captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
     by_ref_return: bool,
+    is_static: bool,
 ) -> FunctionSig {
     let mut signature = closure_signature_from_ast(params, variadic, return_type, body, captures, parent.classes);
     signature.by_ref_return = by_ref_return;
@@ -865,10 +897,12 @@ pub(crate) fn lower_closure_function(
         body,
         captures,
         self_ref_callable_capture,
+        is_static,
     )
 }
 
 /// Lowers one closure literal using contextual types for unannotated parameters.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_closure_function_with_context(
     parent: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -880,6 +914,7 @@ pub(crate) fn lower_closure_function_with_context(
     contextual_arg_types: &[PhpType],
     self_ref_callable_capture: Option<&str>,
     by_ref_return: bool,
+    is_static: bool,
 ) -> FunctionSig {
     let mut signature = closure_signature_from_ast(params, variadic, return_type, body, captures, parent.classes);
     signature.by_ref_return = by_ref_return;
@@ -899,6 +934,7 @@ pub(crate) fn lower_closure_function_with_context(
         body,
         captures,
         self_ref_callable_capture,
+        is_static,
     )
 }
 
@@ -910,6 +946,7 @@ fn lower_closure_function_with_signature(
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
+    is_static: bool,
 ) -> FunctionSig {
     // Generator closures lower their body as a Mixed-returning coroutine; see
     // `generator_body_return_type`.
@@ -921,6 +958,7 @@ fn lower_closure_function_with_signature(
     );
     function.flags = FunctionFlags {
         is_closure: true,
+        is_static,
         by_ref_return: signature.by_ref_return,
         ..FunctionFlags::default()
     };
@@ -948,6 +986,7 @@ fn lower_closure_function_with_signature(
         env,
         parent.top_level_env.clone(),
         parent.functions,
+        parent.func_args_functions,
         parent.extern_functions,
         parent.extern_globals,
         parent.callable_param_sigs,
@@ -976,6 +1015,7 @@ fn lower_body_into_function(
     env: TypeEnv,
     top_level_env: TypeEnv,
     functions: &std::collections::HashMap<String, FunctionSig>,
+    func_args_functions: &std::collections::HashSet<String>,
     extern_functions: &std::collections::HashMap<String, crate::types::ExternFunctionSig>,
     extern_globals: &std::collections::HashMap<String, PhpType>,
     callable_param_sigs: &std::collections::HashMap<(String, String), FunctionSig>,
@@ -1008,6 +1048,7 @@ fn lower_body_into_function(
         data,
         env,
         functions,
+        func_args_functions,
         extern_functions,
         extern_globals,
         callable_param_sigs,
@@ -1351,6 +1392,51 @@ fn dynamic_param_container_return_type(return_type: &PhpType) -> PhpType {
         ),
         other => other,
     }
+}
+
+/// Builds the hidden trailing arity-count EIR ABI parameter (`__fga_argc`, plain `Int`)
+/// appended to a function/method/closure that calls `func_num_args`/`func_get_args`/
+/// `func_get_arg`. Kept OUTSIDE the checker-visible `FunctionSig::params` list (unlike the
+/// synthesized variadic tail) so caller-visible arg-count/named-argument matching never sees
+/// it — mirrors how `CALLED_CLASS_ID_PARAM`/`"this"` are appended directly to
+/// `function.params` for methods.
+fn arity_hungry_hidden_argc_param() -> FunctionParam {
+    let php_type = PhpType::Int;
+    FunctionParam {
+        name: crate::types::checker::func_args_scan::HIDDEN_ARGC_PARAM_NAME.to_string(),
+        ir_type: value_ir_type(&php_type),
+        php_type,
+        by_ref: false,
+        variadic: false,
+    }
+}
+
+/// Returns a body-local type environment seeded from `signature`'s params plus the hidden
+/// `__fga_argc` local, for a function/method known to be arity-hungry.
+fn env_with_arity_hungry_hidden_argc(signature: &FunctionSig) -> TypeEnv {
+    let mut env = env_from_signature(signature);
+    env.insert(
+        crate::types::checker::func_args_scan::HIDDEN_ARGC_PARAM_NAME.to_string(),
+        PhpType::Int,
+    );
+    env
+}
+
+/// Returns `params` followed by the hidden `__fga_argc` local declaration when
+/// `is_arity_hungry` is set, otherwise `params` unchanged. Drives per-param
+/// `declare_local`/`mark_local_initialized` setup in `lower_body_into_function`.
+fn params_with_arity_hungry_hidden_argc(
+    params: &[(String, PhpType)],
+    is_arity_hungry: bool,
+) -> Vec<(String, PhpType)> {
+    let mut params = params.to_vec();
+    if is_arity_hungry {
+        params.push((
+            crate::types::checker::func_args_scan::HIDDEN_ARGC_PARAM_NAME.to_string(),
+            PhpType::Int,
+        ));
+    }
+    params
 }
 
 /// Converts closure captures into hidden EIR ABI parameters.

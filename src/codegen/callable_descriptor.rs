@@ -47,6 +47,10 @@ pub(crate) const CALLABLE_DESC_INVOCATION_OFFSET: usize = 48;
 pub(crate) const CALLABLE_DESC_INVOKER_OFFSET: usize = 56;
 pub(crate) const CALLABLE_DESC_STATIC_SIZE: usize = 64;
 pub(crate) const CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET: usize = CALLABLE_DESC_STATIC_SIZE;
+/// Byte offset of the environment record's `is_static` word (the fifth word — see
+/// `environment_record`), read by `__rt_closure_bind`.
+#[allow(dead_code)]
+pub(crate) const CALLABLE_DESC_ENV_IS_STATIC_OFFSET: usize = 32;
 
 const CALLABLE_DESC_VARIADIC_NONE: u64 = u64::MAX;
 
@@ -100,6 +104,11 @@ pub(crate) struct CallableDescriptorSpec<'a> {
     pub(crate) hidden_params: &'a [(String, PhpType, bool)],
     pub(crate) invocation: CallableDescriptorInvocation,
     pub(crate) invoker_label: Option<&'a str>,
+    /// `true` only for a closure literal declared `static function`/`static fn`. Every other
+    /// descriptor kind (first-class callable, method, function, builtin, extern, …) always
+    /// passes `false` — the flag only matters to `__rt_closure_bind`'s PHP-faithful rejection of
+    /// binding a non-null `$newThis` onto a static closure (see `closure_bind.rs`).
+    pub(crate) is_static: bool,
 }
 
 impl CallableDescriptorInvocation {
@@ -160,6 +169,7 @@ pub(crate) fn static_descriptor_with_meta(
         hidden_params,
         invocation,
         None,
+        false,
     )
 }
 
@@ -175,6 +185,7 @@ pub(crate) fn static_descriptor_with_optional_invoker_meta(
     hidden_params: &[(String, PhpType, bool)],
     invocation: CallableDescriptorInvocation,
     invoker_label: Option<&str>,
+    is_static: bool,
 ) -> String {
     let spec = CallableDescriptorSpec {
         entry_label,
@@ -185,6 +196,7 @@ pub(crate) fn static_descriptor_with_optional_invoker_meta(
         hidden_params,
         invocation,
         invoker_label,
+        is_static,
     };
     static_descriptor_from_spec(data, &spec)
 }
@@ -209,13 +221,14 @@ fn static_descriptor_from_spec(
         .sig
         .map(|sig| DataWord::Symbol(signature_record(data, sig)))
         .unwrap_or(DataWord::U64(0));
-    let environment_word = if spec.captures.is_empty() && spec.hidden_params.is_empty() {
+    let environment_word = if spec.captures.is_empty() && spec.hidden_params.is_empty() && !spec.is_static {
         DataWord::U64(0)
     } else {
         DataWord::Symbol(environment_record(
             data,
             spec.captures,
             spec.hidden_params,
+            spec.is_static,
         ))
     };
     let invocation_word = DataWord::Symbol(invocation_record(data, &spec.invocation));
@@ -262,6 +275,11 @@ pub(crate) fn emit_load_descriptor_address_with_meta(
     );
     abi::emit_symbol_address(emitter, dest_reg, &descriptor_label);
 }
+
+// `emit_load_descriptor_address_with_meta`'s only caller
+// (`crate::codegen::expr::objects::allocation`, frozen legacy) has no closure-literal shape to
+// carry an `is_static` bit for, so it stays routed through `static_descriptor_with_meta`'s
+// `is_static: false` default rather than growing its own parameter.
 
 /// Emits assembly for loading the ABI entry slot from a descriptor.
 pub(crate) fn emit_load_entry_from_descriptor(
@@ -400,10 +418,16 @@ fn signature_record(data: &mut DataSection, sig: &FunctionSig) -> String {
 }
 
 /// Builds the descriptor environment record for captures and hidden wrapper params.
+///
+/// The fifth word (offset 32, `CALLABLE_DESC_ENV_IS_STATIC_OFFSET`) is `1` only for a closure
+/// literal declared `static function`/`static fn`; `__rt_closure_bind` reads it to reject binding
+/// a non-null `$newThis` onto a static closure with PHP's own null-return-plus-warning divergence
+/// instead of silently rebinding a receiver the closure body can never observe.
 fn environment_record(
     data: &mut DataSection,
     captures: &[(String, PhpType, bool)],
     hidden_params: &[(String, PhpType, bool)],
+    is_static: bool,
 ) -> String {
     let capture_table = optional_symbol(binding_table(data, captures));
     let hidden_table = optional_symbol(binding_table(data, hidden_params));
@@ -412,6 +436,7 @@ fn environment_record(
         DataWord::U64(hidden_params.len() as u64),
         capture_table,
         hidden_table,
+        DataWord::U64(u64::from(is_static)),
     ])
 }
 
@@ -686,6 +711,7 @@ mod tests {
             &[],
             CallableDescriptorInvocation::named(CallableDescriptorShape::Function, "demo"),
             Some("_call_invoker"),
+            false,
         );
         let asm = data.emit();
 

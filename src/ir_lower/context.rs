@@ -118,6 +118,12 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub local_types: TypeEnv,
     initialized_slots: HashSet<LocalSlotId>,
     pub functions: &'m HashMap<String, FunctionSig>,
+    /// Canonical keys (free-function name, or `"Class::method"`) of user functions/methods
+    /// whose body calls `func_num_args`/`func_get_args`/`func_get_arg`. See
+    /// `crate::types::checker::func_args_scan`. Consulted at call-lowering sites to append
+    /// the hidden trailing arity-count ABI operand, and at function-body lowering to bind
+    /// the matching hidden local.
+    pub func_args_functions: &'m HashSet<String>,
     pub extern_functions: &'m HashMap<String, ExternFunctionSig>,
     pub extern_globals: &'m HashMap<String, PhpType>,
     pub callable_param_sigs: &'m HashMap<(String, String), FunctionSig>,
@@ -187,6 +193,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         data: &'m mut DataPool,
         env: TypeEnv,
         functions: &'m HashMap<String, FunctionSig>,
+        func_args_functions: &'m HashSet<String>,
         extern_functions: &'m HashMap<String, ExternFunctionSig>,
         extern_globals: &'m HashMap<String, PhpType>,
         callable_param_sigs: &'m HashMap<(String, String), FunctionSig>,
@@ -212,6 +219,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             local_types: env,
             initialized_slots: HashSet::new(),
             functions,
+            func_args_functions,
             extern_functions,
             extern_globals,
             callable_param_sigs,
@@ -624,6 +632,34 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// diagnostic label (e.g. the `F` in a `TypeError`'s `"F(): ..."` message).
     pub(crate) fn owner_name(&self) -> &str {
         &self.owner_name
+    }
+
+    /// Returns `true` when `callee_key` (a free-function name, or `"Class::method"`) calls
+    /// `func_num_args`/`func_get_args`/`func_get_arg` at its own scope and therefore expects
+    /// the hidden trailing arity-count ABI operand at direct call sites.
+    pub(crate) fn is_arity_hungry_callee(&self, callee_key: &str) -> bool {
+        self.func_args_functions.contains(callee_key)
+    }
+
+    /// Returns `true` when the function/method body currently being lowered is itself
+    /// arity-hungry (see `is_arity_hungry_callee`).
+    pub(crate) fn self_is_arity_hungry(&self) -> bool {
+        self.is_arity_hungry_callee(&self.owner_name)
+    }
+
+    /// Returns the checker-resolved `FunctionSig` for the function/method body currently
+    /// being lowered — looked up from `functions` for a free function, or from `classes`
+    /// (instance then static methods) for a `"Class::method"`-named method body.
+    pub(crate) fn self_signature(&self) -> Option<&'m FunctionSig> {
+        if let Some((class_name, method_name)) = self.owner_name.split_once("::") {
+            let class = self.classes.get(class_name)?;
+            class
+                .methods
+                .get(method_name)
+                .or_else(|| class.static_methods.get(method_name))
+        } else {
+            self.functions.get(&self.owner_name)
+        }
     }
 
     /// Returns a deterministic EIR function name for the next closure literal in this body.

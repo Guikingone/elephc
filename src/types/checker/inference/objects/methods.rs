@@ -828,11 +828,17 @@ impl Checker {
         };
         let class_name = resolved_class_name.as_str();
         // `Closure::bind($closure, $newThis [, $scope])` is the static form of
-        // `$closure->bindTo(...)`: it returns a new closure with `$this` rebound.
-        // `$scope` is accepted and ignored (closed-world visibility).
+        // `$closure->bindTo(...)`: it returns a new closure with `$this` rebound. A literal
+        // `$scope` (`X::class`) additionally rebinds the closure's VISIBILITY scope to `X` when
+        // `check_closure_bind_call_args`'s JURY-mandated lexical gate proves it sound (see
+        // `crate::types::checker::inference::expr::static_closure`'s module doc comment); an
+        // omitted/non-literal/gate-failing `$scope` checks the closure body normally (no
+        // rebind), matching the original (unrelaxed) behavior exactly.
         if class_name.trim_start_matches('\\') == "Closure" && php_symbol_key(method) == "bind" {
-            for arg in args {
-                self.infer_type(arg, env)?;
+            if let Some(closure_arg) = args.first() {
+                let rest: Vec<&Expr> = args.get(1..2).unwrap_or(&[]).iter().collect();
+                let scope_arg = args.get(2);
+                super::super::check_closure_bind_call_args(self, closure_arg, &rest, scope_arg, env)?;
             }
             return Ok(PhpType::Callable);
         }

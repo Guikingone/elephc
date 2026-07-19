@@ -246,6 +246,19 @@ pub enum Op {
     LoadStaticLocal,
     StoreStaticLocal,
     InitStaticLocal,
+    /// Reads a static local's once-flag as a `Bool` without mutating it or touching the value
+    /// slot. No operands. Immediate: the static local's slot. Emitted as the condition of the
+    /// once-guard `CondBr` that `crate::ir_lower::stmt::lower_static_var` wraps around the whole
+    /// initializer evaluation — the flag-true arm skips straight past `<init>`'s instructions
+    /// (and `InitStaticLocal` itself) instead of only skipping the final store, so a
+    /// side-effecting or heap-allocating `<init>` runs exactly once across calls. Contrast with
+    /// `IncludeOnceGuard`, which marks its flag before running its guarded body (fine for
+    /// include-cycle prevention); a static initializer must stay unmarked until `InitStaticLocal`
+    /// finishes storing, so a reentrant call mid-`<init>` (e.g. `<init>` recursing into the same
+    /// function) still observes "uninitialized" — matching PHP's own `static $x; $x ??= <init>;`
+    /// reentrancy behavior (php-verified: nested calls each re-evaluate `<init>` independently;
+    /// the outermost completed store wins last).
+    StaticLocalInitialized,
     LoadStaticProperty,
     /// Loads a static property selected by a runtime name string (`self::${$expr}`).
     /// Operand: the runtime property-name (a `Str` value). Immediate: the receiver class name
@@ -528,7 +541,7 @@ impl Op {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
             LoadGlobal | LoadStaticProperty | LoadStaticPropRefCell | ScopedConstantGet | ClassAttrNames
-            | ClassAttrArgs | ClassGetAttributes | CatchCurrent => E::READS_GLOBAL,
+            | ClassAttrArgs | ClassGetAttributes | CatchCurrent | StaticLocalInitialized => E::READS_GLOBAL,
             StoreGlobal | StoreStaticLocal | StoreStaticProperty | InitStaticLocal | IncludeOnceMark
             | FunctionVariantMark | TryPushHandler | TryPopHandler => E::WRITES_GLOBAL,
             IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL,
@@ -670,6 +683,7 @@ impl Op {
             LoadStaticLocal => "load_static_local",
             StoreStaticLocal => "store_static_local",
             InitStaticLocal => "init_static_local",
+            StaticLocalInitialized => "static_local_initialized",
             LoadStaticProperty => "load_static_property",
             LoadDynamicStaticProperty => "load_dynamic_static_property",
             StoreDynamicStaticProperty => "store_dynamic_static_property",

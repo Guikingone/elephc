@@ -1340,6 +1340,301 @@ echo $f->call(new Greeter(), "?");
     assert_eq!(out, "Hi Ada!|Hi Ada?");
 }
 
+// --- __rt_closure_bind generalization: captureless, N captures, static-closure divergence ---
+
+/// Regression test for the `__rt_closure_bind` generalization
+/// (`crate::codegen::runtime::callables::closure_bind`): binding a CAPTURELESS closure (no
+/// `use(...)`, no implicit `$this`) must succeed and return a working copy, not fatal. The
+/// pre-generalization runtime hard-required exactly one `$this` capture.
+#[test]
+fn test_closure_bind_captureless_closure() {
+    let out = compile_and_run(
+        r#"<?php
+$f = function () { return 42; };
+$bound = \Closure::bind($f, null);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// Regression test: binding a captureless `static` closure with a `null` new `$this` must
+/// succeed (php-verified: PHP only rejects a NON-null `$this` on a static closure).
+#[test]
+fn test_closure_bind_captureless_static_closure_null_this_succeeds() {
+    let out = compile_and_run(
+        r#"<?php
+$f = \Closure::bind(static function () { return 7; }, null);
+echo $f();
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Regression test: binding a closure with several by-value captures (int, string) must copy
+/// every capture into the new descriptor, not just a single `$this` slot. The pre-generalization
+/// runtime fataled on any capture shape other than exactly one `$this`.
+#[test]
+fn test_closure_bind_multiple_by_value_captures() {
+    let out = compile_and_run(
+        r#"<?php
+function make($a, $b, $c) {
+    return function () use ($a, $b, $c) { return "$a-$b-$c"; };
+}
+$f = make(1, "hi", "z");
+$bound = \Closure::bind($f, null);
+echo $f(), "|", $bound();
+"#,
+    );
+    assert_eq!(out, "1-hi-z|1-hi-z");
+}
+
+/// Regression test: rebinding `$this` on a closure that ALSO has other by-value captures must
+/// only touch the `$this` slot, leaving the other captures intact on the bound copy.
+#[test]
+fn test_closure_bind_this_capture_alongside_other_captures() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public int $v;
+    public function __construct(int $v) { $this->v = $v; }
+    public function adder($n) {
+        return function () use ($n) { return $this->v + $n; };
+    }
+}
+$c1 = new C(1);
+$c2 = new C(100);
+$f = $c1->adder(5);
+$bound = \Closure::bind($f, $c2);
+echo $f(), " ", $bound();
+"#,
+    );
+    assert_eq!(out, "6 105");
+}
+
+/// Regression test (JURY ADDENDUM #4): a by-value capture must NOT alias mutably between the
+/// source and bound closures — binding a closure creates an independent copy whose captured
+/// (by-value) locals are its OWN, not a pointer shared with the source. Proven with TWO
+/// independently-created closures (each holding a different captured string): binding one
+/// must not disturb the other's capture. Each closure is invoked exactly once — a pre-existing,
+/// unrelated gap where calling the SAME closure a second time to read a captured string returns
+/// an empty string instead of the capture (reproduced without any `Closure::bind` involvement:
+/// `$f = make("orig"); echo $f(); echo $f();` — the second call already returns "" on `main`)
+/// means a second-call assertion on either closure would fail for a reason unrelated to bind.
+#[test]
+fn test_closure_bind_by_value_capture_independent_across_bound_copies() {
+    let out = compile_and_run(
+        r#"<?php
+function make($label) {
+    return function () use ($label) { return $label; };
+}
+$f = make("orig");
+$other = make("other");
+$bound = \Closure::bind($f, null);
+echo $bound();
+echo $other();
+"#,
+    );
+    assert_eq!(out, "origother");
+}
+
+/// Regression test (JURY ADDENDUM #4): a by-reference capture (`use (&$x)`) SHARES the same
+/// storage between the source and bound closures — mutating through either is visible through
+/// both (php-verified: interleaved calls each advance the SAME shared counter).
+#[test]
+fn test_closure_bind_by_ref_capture_shares_storage() {
+    let out = compile_and_run(
+        r#"<?php
+function counter() {
+    $n = 0;
+    $inc = function () use (&$n) { return ++$n; };
+    $bound = \Closure::bind($inc, null);
+    return $inc() . " " . $bound() . " " . $inc() . " " . $bound();
+}
+echo counter();
+"#,
+    );
+    assert_eq!(out, "1 2 3 4");
+}
+
+/// Regression test (JURY ADDENDUM #5): binding a NON-null `$this` onto a `static` closure must
+/// not fatal or crash the process; PHP itself only warns and returns `?Closure`'s `null` arm.
+/// elephc's `__rt_closure_bind` returns a null descriptor for this case (documented divergence:
+/// the result stays statically typed `Callable`, so `=== null` cannot observe it at the language
+/// level yet — see the runtime-return-value assertion below, which observes the divergence the
+/// way that IS currently reachable: the process does not crash and execution continues normally
+/// past the rejected bind).
+#[test]
+fn test_closure_bind_static_closure_non_null_this_does_not_crash() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public int $v = 5; }
+$sc = \Closure::bind(static function () { return 1; }, new C());
+echo "reached";
+"#,
+    );
+    assert_eq!(out, "reached");
+}
+
+/// Regression test: omitting `$scope` (or passing `null`) keeps the closure's original scope —
+/// a private property the closure's OWN declaring class can already see remains readable after
+/// a `$this`-only rebind with no scope argument.
+#[test]
+fn test_closure_bind_omitted_scope_keeps_original_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class Account {
+    private int $balance;
+    public function __construct(int $balance) { $this->balance = $balance; }
+    public function peeker() {
+        return function () { return $this->balance; };
+    }
+}
+$a1 = new Account(10);
+$a2 = new Account(20);
+$f = $a1->peeker();
+$bound = \Closure::bind($f, $a2);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "20");
+}
+
+// --- Closure::bind scope rebind (checker relax, JURY-gated) ---
+
+/// Regression test for the checker scope-rebind relaxation
+/// (`crate::types::checker::inference::expr::static_closure::check_closure_bind_call_args`):
+/// `Closure::bind($closure, null, Scope::class)` with a literal `$scope` lets a STATIC closure
+/// literal read/write a PROTECTED property through a PARAMETER typed as (or a subclass of) the
+/// rebound scope — the `ContractsTrait::doGet()` idiom this campaign targets. Before this
+/// relaxation, `$item->secret` here was rejected: `$item`'s protected property is inaccessible
+/// from the closure's lexically enclosing (top-level) scope.
+#[test]
+fn test_closure_bind_scope_rebind_allows_protected_property_access_on_param() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    protected int $secret;
+    public function __construct(int $secret) { $this->secret = $secret; }
+}
+$reader = \Closure::bind(
+    static function (Box $item) {
+        return $item->secret;
+    },
+    null,
+    Box::class
+);
+echo $reader(new Box(42));
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// Regression test: the scope rebind also authorizes WRITES to a protected property through an
+/// eligible parameter, not just reads.
+#[test]
+fn test_closure_bind_scope_rebind_allows_protected_property_write_on_param() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    protected int $secret = 0;
+}
+$writer = \Closure::bind(
+    static function (Box $item, int $value) {
+        $item->secret = $value;
+    },
+    null,
+    Box::class
+);
+$box = new Box();
+$writer($box, 99);
+$reader = \Closure::bind(static function (Box $item) { return $item->secret; }, null, Box::class);
+echo $reader($box);
+"#,
+    );
+    assert_eq!(out, "99");
+}
+
+/// Regression test: an OMITTED `$scope` argument keeps the closure's ORIGINAL (lexical) scope —
+/// no inference from `$newThis`, matching J2's established rule. A top-level closure without a
+/// scope rebind still cannot read a protected property through a typed parameter.
+#[test]
+fn test_closure_bind_omitted_scope_does_not_relax_protected_access() {
+    let out = compile_expect_check_error(
+        r#"<?php
+class Box {
+    protected int $secret = 5;
+}
+$reader = \Closure::bind(static function (Box $item) {
+    return $item->secret;
+}, null);
+echo $reader(new Box());
+"#,
+    );
+    assert!(
+        out.contains("Cannot access protected property"),
+        "expected a protected-access error without a scope rebind, got: {}",
+        out
+    );
+}
+
+/// Regression test (JURY ADDENDUM #1): a closure body that references `$this` ANYWHERE stays
+/// loud even with a literal `$scope` argument — the lexical gate rejects the rebind because
+/// `self::`/`static::`/`$this` resolve LEXICALLY at codegen time, not against the rebound scope.
+/// This closure is a NON-static closure (so it captures `$this` automatically) whose body reads
+/// `$this->outer` — the gate must reject the relaxation and the checker must still reject the
+/// otherwise-inaccessible property read.
+#[test]
+fn test_closure_bind_this_usage_keeps_gate_loud() {
+    let out = compile_expect_check_error(
+        r#"<?php
+class Outer {
+    public int $outer = 1;
+    public function make() {
+        return function (Box $item) {
+            return $this->outer + $item->secret;
+        };
+    }
+}
+class Box {
+    protected int $secret = 5;
+}
+$outer = new Outer();
+$reader = \Closure::bind($outer->make(), $outer, Box::class);
+echo $reader(new Box());
+"#,
+    );
+    assert!(
+        out.contains("Cannot access protected property"),
+        "expected the gate to keep the protected-access error loud when the body uses $this, got: {}",
+        out
+    );
+}
+
+/// Regression test (JURY ADDENDUM #2): the relaxation applies ONLY to the closure's OWN declared
+/// PARAMETERS typed as the rebound scope — a captured (`use`) variable of the SAME class does NOT
+/// become eligible just because the scope was rebound to its class.
+#[test]
+fn test_closure_bind_scope_rebind_does_not_extend_to_captured_variables() {
+    let out = compile_expect_check_error(
+        r#"<?php
+class Box {
+    protected int $secret = 5;
+}
+$captured = new Box();
+$reader = \Closure::bind(static function () use ($captured) {
+    return $captured->secret;
+}, null, Box::class);
+echo $reader();
+"#,
+    );
+    assert!(
+        out.contains("Cannot access protected property"),
+        "expected a captured variable to stay outside the relaxed eligibility set, got: {}",
+        out
+    );
+}
+
 // --- Untyped closure/arrow-fn parameter is Mixed inside the body (PHP semantics) ---
 
 /// An untyped arrow-function parameter with no contextual hint is `Mixed` inside the body, so

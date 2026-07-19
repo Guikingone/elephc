@@ -408,6 +408,24 @@ impl Checker {
                 args,
             } => {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                // `Closure::bind($closure, $newThis [, $scope])`: the generic per-arg pre-pass
+                // below would type-check the closure LITERAL argument out of context — before
+                // `infer_static_method_call_type_with_options`'s Closure::bind handling ever
+                // gets a chance to relax property-access visibility for a JURY-safe scope
+                // rebind — and reject it. Route through the same shared
+                // `check_closure_bind_call_args` helper instead, so this `??=`-style
+                // assignment-effects pre-pass agrees with the main inference path on whether
+                // the rebind applies.
+                if matches!(receiver, crate::parser::ast::StaticReceiver::Named(name) if name.as_str().trim_start_matches('\\') == "Closure")
+                    && php_symbol_key(method) == "bind"
+                {
+                    if let Some(closure_arg) = expanded_args.first() {
+                        let rest: Vec<&Expr> = expanded_args.get(1..2).unwrap_or(&[]).iter().collect();
+                        let scope_arg = expanded_args.get(2);
+                        super::super::check_closure_bind_call_args(self, closure_arg, &rest, scope_arg, env)?;
+                    }
+                    return self.infer_type(expr, env);
+                }
                 // A static method with a by-reference parameter (e.g. the yaml
                 // `Parser::preg_match($re, $value, $match)` shape) defines the caller's argument
                 // variable. Define such variables before inferring the arguments so the

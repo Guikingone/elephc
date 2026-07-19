@@ -254,9 +254,8 @@ pub(crate) fn lower_block(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) {
 /// PHP requires `static $x = <expr>;` initializers to be compile-time constants, so PHP code uses
 /// the bare-declaration-then-`??=` idiom (see `Symfony\Component\Cache\Traits\ContractsTrait::doGet`'s
 /// `static $setMetadata; $setMetadata ??= \Closure::bind(...);`, the motivating example for this
-/// fold — though `Closure::bind` itself is currently excluded from the accepted subset below) to
-/// assign an arbitrary expression exactly once and keep it across calls. `static $x;` and
-/// `static $x = null;` are both PHP-equivalent, so this fold applies to either spelling — the
+/// fold) to assign an arbitrary expression exactly once and keep it across calls. `static $x;`
+/// and `static $x = null;` are both PHP-equivalent, so this fold applies to either spelling — the
 /// checker binds `$x`'s declaration-site type to `PhpType::Void` for both. Lowering the pair
 /// separately later widens the static local's frame slot to `<default>`'s type via
 /// `Op::StoreLocal`/`widen_local_storage_type` AFTER the `Op::InitStaticLocal` for the (now
@@ -269,34 +268,25 @@ pub(crate) fn lower_block(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) {
 /// would silently re-evaluate `<default>` on every call, breaking "assign once" persistence for
 /// any `<default>` with side effects or object identity. Folding into `Op::InitStaticLocal`
 /// sidesteps that specific problem by reusing the once-flag-guarded machinery that typed statics
-/// (`static $x = 5;`) already use correctly — but see the gates below for a SEPARATE problem the
-/// fold uncovered in that same machinery.
+/// (`static $x = 5;`) already use correctly.
 ///
-/// Only folds when ALL THREE gates hold:
-/// 1. `<default>` cannot itself evaluate to PHP null (`static_var_default_never_null`): real PHP
-///    retries `??=`'s default on every call while the static stays null, which the fold's single
-///    once-guarded write cannot reproduce, so an unprovably-nullable default is left for the
-///    existing (loud) `init_static_local` backend error instead of silently diverging.
-/// 2. `<default>`'s (re-)evaluation cannot be *observed* (`static_var_default_side_effect_free`).
-/// 3. `<default>`'s (re-)evaluation cannot *leak heap memory* even when side-effect-free
-///    (`static_var_default_leak_safe`).
+/// Only folds when this gate holds:
+/// - `<default>` cannot itself evaluate to PHP null (`static_var_default_never_null`): real PHP
+///   retries `??=`'s default on every call while the static stays null, which the fold's single
+///   once-guarded write cannot reproduce, so an unprovably-nullable default is left for the
+///   existing (loud) `init_static_local` backend error instead of silently diverging.
 ///
-/// Gates 2 and 3 exist because `Op::InitStaticLocal`'s codegen
-/// (`crate::codegen_ir::lower_inst::static_locals::lower_init_static_local`) only guards the
-/// final *store into the persistent slot* behind the once-flag branch — the value-producing
-/// instructions that compute `<default>` are separate, straight-line instructions emitted
-/// *before* `Op::InitStaticLocal` in the same block, so they execute unconditionally on every
-/// call regardless of the guard; only the FIRST call's result ever gets stored. This is a
-/// pre-existing gap in the static-local init machinery, invisible before this fold because PHP
-/// only allows compile-time-constant `static $x = <expr>;` initializers (which have nothing
-/// observable to re-run). Verified empirically with a side-effecting constructor: `echo`
-/// inside it printed 3 times across 3 calls instead of once (would-be gate-2 rejection), and
-/// closures with captures leaked heap blocks across calls even with no observable side effect
-/// (gate-3 rejection) — see `static_var_default_leak_safe`'s doc comment for the full matrix.
-/// Fixing the root cause (guarding the whole value computation, not just the store, behind the
-/// once-flag) needs new EIR-level once-guard control flow and is left as follow-up work; folding
-/// an unsafe default here would be silent-wrong, so gates 2/3 conservatively fall back to the
-/// loud `init_static_local` error instead.
+/// A second and third gate — "`<default>`'s (re-)evaluation cannot be observed" and "cannot leak
+/// heap memory" — used to be required here because `Op::InitStaticLocal`'s codegen only guarded
+/// the final *store into the persistent slot* behind the once-flag branch: the value-producing
+/// instructions that compute `<default>` were separate, straight-line instructions emitted
+/// *before* `Op::InitStaticLocal` in the same block, so they ran unconditionally on every call
+/// regardless of the guard (verified empirically: a side-effecting constructor's `echo` printed 3
+/// times across 3 calls, and closures with captures leaked heap blocks across calls even with no
+/// observable side effect). `crate::ir_lower::stmt::lower_static_var` now wraps the WHOLE
+/// initializer evaluation (not just the store) in an EIR-level once-guard `CondBr`, so those two
+/// gates are no longer needed: a side-effecting or heap-allocating `<default>` now runs exactly
+/// once across calls, matching PHP.
 fn fold_static_null_coalesce_pair<'a>(
     body: &'a [Stmt],
     index: usize,
@@ -328,10 +318,7 @@ fn fold_static_null_coalesce_pair<'a>(
     if current_name != name {
         return None;
     }
-    if !static_var_default_never_null(default)
-        || !static_var_default_side_effect_free(default)
-        || !static_var_default_leak_safe(default)
-    {
+    if !static_var_default_never_null(default) {
         return None;
     }
     Some((name.as_str(), default.as_ref(), first.span))
@@ -344,9 +331,11 @@ fn fold_static_null_coalesce_pair<'a>(
 /// sensitive folds on it (see `fold_static_null_coalesce_pair`) never silently misclassify a
 /// nullable expression as safe.
 ///
-/// Deliberately narrower than "provably non-null" alone would allow — see
-/// `static_var_default_leak_safe` for why `Closure`/`Closure::bind(...)`/`new` are excluded even
-/// though each is individually non-nullable.
+/// `ExprKind::Closure` (any closure literal — arrow or block-bodied, static or instance) always
+/// evaluates to a `Closure` object, never null. `ExprKind::NewObject` (`new Foo(...)`) always
+/// evaluates to an object or throws, never null. `\Closure::bind(...)` is handled separately by
+/// `static_var_default_closure_bind_never_null`, since its "never null" proof depends on its
+/// arguments' shape, not just its expression kind.
 fn static_var_default_never_null(expr: &Expr) -> bool {
     matches!(
         expr.kind,
@@ -356,55 +345,55 @@ fn static_var_default_never_null(expr: &Expr) -> bool {
             | ExprKind::BoolLiteral(_)
             | ExprKind::ArrayLiteral(_)
             | ExprKind::ArrayLiteralAssoc(_)
-    )
+            | ExprKind::Closure { .. }
+            | ExprKind::NewObject { .. }
+    ) || static_var_default_closure_bind_never_null(expr)
 }
 
-/// Returns true when re-evaluating `expr` a second time (as `Op::InitStaticLocal`'s codegen does
-/// on every call after the first — see `fold_static_null_coalesce_pair`) cannot be observed.
+/// Returns true when `expr` is a `\Closure::bind($closure, $newThis[, $scope])` call that is
+/// PROVABLY non-null under elephc's closed-world compilation model.
 ///
-/// Delegates to the optimizer's conservative `expr_has_side_effects` analysis
-/// (`crate::optimize::expr_has_side_effects`), which recurses through array literal elements
-/// (rejecting e.g. `[funcWithSideEffects(), 2, 3]`) and treats scalar literals as pure.
-fn static_var_default_side_effect_free(expr: &Expr) -> bool {
-    !crate::optimize::expr_has_side_effects(expr)
-}
-
-/// Returns true when re-evaluating `expr` a second time cannot leak heap memory, independent of
-/// whether it has an *observable* side effect (`static_var_default_side_effect_free` covers
-/// that).
-///
-/// `Op::InitStaticLocal`'s codegen (see `fold_static_null_coalesce_pair`'s doc comment) computes
-/// `expr` unconditionally on every call but only *stores* the result on the first — so any
-/// heap-allocating default that only reaches the codegen's `is_refcounted()`-gated
-/// discard-cleanup paths (retain-before-store, release-previous-on-restore; both already widened
-/// for `PhpType::Callable` in `crate::codegen_ir::lower_inst::static_locals` and
-/// `crate::codegen::abi::symbols`) still LEAKS its discarded calls 2..N copies whenever the
-/// underlying allocation isn't covered by that same `is_refcounted()` cleanup lattice.
-/// Empirically verified with `--heap-debug` across 3 calls:
-/// - `ExprKind::ArrayLiteral`/`ArrayLiteralAssoc` (of side-effect-free elements): clean
-///   (`is_refcounted() == true`, covered).
-/// - `ExprKind::Closure` capturing a variable: LEAKS (`live_blocks=9` after 3 calls) —
-///   `PhpType::Callable` is not `is_refcounted()`.
-/// - `ExprKind::NewObject` with a side-effecting constructor: LEAKS (`live_blocks=3`) even
-///   though `PhpType::Object` *is* `is_refcounted()` — the leak source there is distinct from the
-///   `Closure` case and not fully root-caused; conservatively excluded rather than assumed safe.
-/// - `Closure::bind(...)`: not directly testable — every reachable closure shape hits the
-///   pre-existing, unrelated `__rt_closure_bind` "captures only $this" restriction on the very
-///   first call before a second call could ever be observed. Given the confirmed `Closure` leak
-///   and the untested status here, excluded rather than assumed safe.
-///
-/// Scalar literals never allocate, so they are unconditionally safe regardless of this check.
-fn static_var_default_leak_safe(expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::StringLiteral(_) | ExprKind::BoolLiteral(_) => {
-            true
-        }
-        ExprKind::ArrayLiteral(items) => items.iter().all(static_var_default_leak_safe),
-        ExprKind::ArrayLiteralAssoc(items) => items
-            .iter()
-            .all(|(key, value)| static_var_default_leak_safe(key) && static_var_default_leak_safe(value)),
-        _ => false,
+/// PHP's `Closure::bind` returns `?Closure`: it returns null (with an `E_WARNING`) exactly when
+/// (a) the scope class name cannot be resolved, or (b) a non-null `$newThis` is bound onto a
+/// `static` closure (php-verified: `Closure::bind(static function(){}, null, C::class)` succeeds;
+/// `Closure::bind(static function(){}, new C(), C::class)` warns and returns null; a non-static
+/// closure never fails this way for any `$newThis`/scope combination, php-verified with a
+/// scope-mismatched `$newThis` and a same-scope one, both non-null). Failure mode (a) cannot
+/// occur here: `crate::types::checker`'s `validate_class_constant_receiver` already rejects an
+/// unresolvable `X::class` receiver earlier in the pipeline, so any `X::class` scope
+/// argument surviving to `ir_lower` names a real, declared class. That leaves failure mode (b) as
+/// the only one this function needs to rule out syntactically: the closure literal must not be
+/// `static`, OR (if it is) `$newThis` must be the literal `null` (PHP's own default when omitted).
+fn static_var_default_closure_bind_never_null(expr: &Expr) -> bool {
+    let ExprKind::StaticMethodCall { receiver, method, args } = &expr.kind else {
+        return false;
+    };
+    let StaticReceiver::Named(class_name) = receiver else {
+        return false;
+    };
+    if class_name.as_str().trim_start_matches('\\') != "Closure" || php_symbol_key(method) != "bind" {
+        return false;
     }
+    let Some(closure_arg) = args.first() else {
+        return false;
+    };
+    let ExprKind::Closure { is_static, .. } = &closure_arg.kind else {
+        return false;
+    };
+    if *is_static {
+        let new_this_is_null = matches!(args.get(1).map(|arg| &arg.kind), None | Some(ExprKind::Null));
+        if !new_this_is_null {
+            return false;
+        }
+    }
+    // Third arg (`$scope`), if present, must be a compiler-resolvable class-constant reference —
+    // `validate_class_constant_receiver` already proved it names a real declared class, foreclosing
+    // Closure::bind's "class not found" failure mode. `null`/omitted scope keeps the closure's
+    // original scope, which is always valid.
+    matches!(
+        args.get(2).map(|arg| &arg.kind),
+        None | Some(ExprKind::Null) | Some(ExprKind::ClassConstant { .. })
+    )
 }
 
 /// Emits EIR for `echo`.
@@ -3309,14 +3298,51 @@ fn lower_global(ctx: &mut LoweringContext<'_, '_>, vars: &[String]) {
     }
 }
 
-/// Lowers a static local variable initialization.
+/// Lowers a static local variable initialization behind a whole-initializer once-guard.
 ///
 /// Called both for a direct `StmtKind::StaticVar` statement and, with `init` substituted for the
 /// coalesced default, from `lower_block`'s `static $x; $x ??= <default>;` fold (see
 /// `fold_static_null_coalesce_pair`).
+///
+/// Emits `check flag → CondBr(already-initialized ? skip : eval)`, then lowers `init` (and the
+/// commit `Op::InitStaticLocal`) INSIDE the `eval` block, merging back at a shared `after` block.
+/// This is the fix for the gap `fold_static_null_coalesce_pair`'s doc comment describes:
+/// previously `init`'s value-producing instructions sat straight-line BEFORE `Op::InitStaticLocal`
+/// in the same block, so they ran unconditionally on every call even though only the first call's
+/// result was ever stored. Wrapping `init`'s lowering itself in the guarded block means a
+/// side-effecting or heap-allocating `<init>` now runs exactly once, matching PHP.
+///
+/// The slot is declared with a placeholder `Void` storage type BEFORE `init` is lowered (so the
+/// once-flag check can name it), then corrected to `init`'s actual lowered type via
+/// `set_local_type_exact` once known — mirroring how the direct-null-init case already leaves a
+/// `Void`-typed slot for a later `??=` to widen. This is codegen-safe because
+/// `crate::codegen_ir::lower_inst::static_locals::resolve_static_local_slot` reads the local's
+/// FINAL committed type from the module (after all of `ir_lower` has run), not whatever type was
+/// current mid-lowering.
 fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, init: &Expr, span: Span) {
+    let slot = ctx.declare_local_with_kind(name, PhpType::Void, LocalKind::StaticLocal);
+    let is_initialized = ctx.emit_value(
+        Op::StaticLocalInitialized,
+        Vec::new(),
+        Some(Immediate::LocalSlot(slot)),
+        PhpType::Bool,
+        Op::StaticLocalInitialized.default_effects(),
+        Some(span),
+    );
+
+    let eval_block = ctx.builder.create_named_block("static_local_init.eval", Vec::new());
+    let after_block = ctx.builder.create_named_block("static_local_init.after", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_initialized.value,
+        then_target: after_block,
+        then_args: Vec::new(),
+        else_target: eval_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(eval_block);
     let value = lower_expr(ctx, init);
-    let slot = ctx.declare_local_with_kind(name, ctx.builder.value_php_type(value.value), LocalKind::StaticLocal);
+    ctx.set_local_type_exact(name, ctx.builder.value_php_type(value.value));
     ctx.builder.emit_with_effects(
         Op::InitStaticLocal,
         vec![value.value],
@@ -3327,6 +3353,9 @@ fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, init: &Expr, 
         Op::InitStaticLocal.default_effects(),
         Some(span),
     );
+    branch_to(ctx, after_block);
+
+    ctx.builder.position_at_end(after_block);
 }
 
 /// Lowers an object property write.

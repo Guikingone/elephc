@@ -62,7 +62,7 @@ pub(super) fn check_property_array_push(
     match &obj_ty {
         PhpType::Object(class_name) => {
             let (prop_ty, property_has_declared_type) =
-                resolve_object_array_property(checker, class_name, property, span)?;
+                resolve_object_array_property(checker, object, class_name, property, span)?;
             let updated_prop_ty = updated_array_property_push_type(
                 checker,
                 &prop_ty,
@@ -130,7 +130,7 @@ pub(super) fn check_property_array_assign(
     match &obj_ty {
         PhpType::Object(class_name) => {
             let (prop_ty, property_has_declared_type) =
-                resolve_object_array_property(checker, class_name, property, span)?;
+                resolve_object_array_property(checker, object, class_name, property, span)?;
             if let PhpType::Object(prop_class_name) = &prop_ty {
                 if checker.object_type_implements_interface(prop_class_name, "ArrayAccess") {
                     return Ok(());
@@ -225,7 +225,7 @@ fn check_object_property_write(
                 &format!("Undefined property: {}::{}", class_name, property),
             ));
         }
-        validate_object_property_access(checker, class_name, property, true, span)?;
+        validate_object_property_access(checker, object, class_name, property, true, span)?;
         let expected_ty = class_info
             .properties
             .iter()
@@ -295,6 +295,7 @@ fn check_object_property_write(
 /// `Checker::can_access_member` to enforce access control rules.
 fn validate_object_property_access(
     checker: &Checker,
+    receiver: &Expr,
     class_name: &str,
     property: &str,
     is_write: bool,
@@ -318,7 +319,7 @@ fn validate_object_property_access(
             .get(property)
             .map(String::as_str)
             .unwrap_or(class_name);
-        if !checker.can_access_member(declaring_class, visibility) {
+        if !checker.can_access_property(receiver, declaring_class, visibility) {
             return Err(CompileError::new(
                 span,
                 &format!(
@@ -434,6 +435,7 @@ fn check_pointer_property_write(
 /// Returns an error if the class or property is undefined.
 fn resolve_object_array_property(
     checker: &Checker,
+    object: &Expr,
     class_name: &str,
     property: &str,
     span: Span,
@@ -450,7 +452,7 @@ fn resolve_object_array_property(
     }
     // Indirect array modification (`$obj->prop[] = x` / `$obj->prop[$k] = x`) is a write, so it
     // must honor PHP 8.4 asymmetric `set` visibility — not the read visibility.
-    validate_object_property_access(checker, class_name, property, true, span)?;
+    validate_object_property_access(checker, object, class_name, property, true, span)?;
     let property_has_declared_type = class_info.declared_properties.contains(property);
     let prop_ty = class_info
         .properties

@@ -40,7 +40,7 @@ impl Checker {
         }
         let obj_ty = self.infer_type(object, env)?;
         if let PhpType::Object(class_name) = &obj_ty {
-            return self.infer_property_on_class_type(class_name, property, expr);
+            return self.infer_property_on_class_type(class_name, property, object, expr);
         }
         // Non-nullsafe property access on a nullable / union object type is
         // allowed when the union resolves to a single object class.
@@ -53,7 +53,7 @@ impl Checker {
             if let Ok(Some((class_name, nullable))) =
                 self.nullsafe_object_receiver(&obj_ty, expr, "property access")
             {
-                let property_ty = self.infer_property_on_class_type(&class_name, property, expr)?;
+                let property_ty = self.infer_property_on_class_type(&class_name, property, object, expr)?;
                 return if nullable {
                     Ok(self.normalize_union_type(vec![property_ty, PhpType::Void]))
                 } else {
@@ -61,7 +61,7 @@ impl Checker {
                 };
             }
             if let Some(class_name) = self.union_single_object_class(&obj_ty) {
-                return self.infer_property_on_class_type(&class_name, property, expr);
+                return self.infer_property_on_class_type(&class_name, property, object, expr);
             }
             // Union of two or more distinct object classes (`A|B`): the property
             // must exist on every object member; codegen dispatches on the runtime
@@ -70,7 +70,7 @@ impl Checker {
             if object_classes.len() >= 2 {
                 let mut property_types = Vec::with_capacity(object_classes.len());
                 for class_name in &object_classes {
-                    property_types.push(self.infer_property_on_class_type(class_name, property, expr)?);
+                    property_types.push(self.infer_property_on_class_type(class_name, property, object, expr)?);
                 }
                 return Ok(self.normalize_union_type(property_types));
             }
@@ -163,7 +163,7 @@ impl Checker {
         }
         match self.nullsafe_object_receiver(&obj_ty, expr, "property access") {
             Ok(Some((class_name, nullable))) => {
-                let property_ty = self.infer_property_on_class_type(&class_name, property, expr)?;
+                let property_ty = self.infer_property_on_class_type(&class_name, property, object, expr)?;
                 if nullable {
                     Ok(self.normalize_union_type(vec![property_ty, PhpType::Void]))
                 } else {
@@ -176,7 +176,7 @@ impl Checker {
                 // (`Foo|false`, or a union carrying a `Mixed` member). A `?->` receiver may
                 // be non-object at runtime, so the result always admits `Void`.
                 if let Some(class_name) = self.union_single_object_class(&obj_ty) {
-                    let property_ty = self.infer_property_on_class_type(&class_name, property, expr)?;
+                    let property_ty = self.infer_property_on_class_type(&class_name, property, object, expr)?;
                     return Ok(self.normalize_union_type(vec![property_ty, PhpType::Void]));
                 }
                 if matches!(&obj_ty, PhpType::Union(members)
@@ -247,6 +247,7 @@ impl Checker {
         &self,
         class_name: &str,
         property: &str,
+        receiver: &Expr,
         expr: &Expr,
     ) -> Result<PhpType, CompileError> {
         if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
@@ -273,7 +274,7 @@ impl Checker {
                     .get(property)
                     .map(String::as_str)
                     .unwrap_or(class_name);
-                if !self.can_access_member(declaring_class, visibility) {
+                if !self.can_access_property(receiver, declaring_class, visibility) {
                     return Err(CompileError::new(
                         expr.span,
                         &format!(

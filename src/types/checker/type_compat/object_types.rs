@@ -35,6 +35,43 @@ impl Checker {
         }
     }
 
+    /// Checks whether `receiver` can access a member with the given visibility declared in
+    /// `declaring_class`, additionally consulting an active `Closure::bind`/`bindTo` scope
+    /// rebind (`Checker::bound_scope_context`) when the normal `can_access_member` check fails.
+    ///
+    /// The bound-scope override applies ONLY when `receiver` is exactly `ExprKind::Variable(name)`
+    /// naming one of the active rebind's `eligible_params` (JURY ADDENDUM #2: "->prop writes/reads
+    /// allowed only on PARAMETERS whose declared type equals (or is a subclass of) the rebound
+    /// scope class") — never for a computed expression, a captured variable, or `$this` (which the
+    /// lexical gate that populates `bound_scope_context` already proved absent from the body).
+    pub(crate) fn can_access_property(
+        &self,
+        receiver: &Expr,
+        declaring_class: &str,
+        visibility: &Visibility,
+    ) -> bool {
+        if self.can_access_member(declaring_class, visibility) {
+            return true;
+        }
+        let Some(context) = self.bound_scope_context.as_ref() else {
+            return false;
+        };
+        let crate::parser::ast::ExprKind::Variable(name) = &receiver.kind else {
+            return false;
+        };
+        if !context.eligible_params.contains(name) {
+            return false;
+        }
+        match visibility {
+            Visibility::Public => true,
+            Visibility::Protected => {
+                context.scope_class == declaring_class
+                    || self.is_subclass_of(&context.scope_class, declaring_class)
+            }
+            Visibility::Private => context.scope_class == declaring_class,
+        }
+    }
+
     /// Returns the string label ("public", "protected", "private") for a visibility level.
     pub(crate) fn visibility_label(visibility: &Visibility) -> &'static str {
         match visibility {

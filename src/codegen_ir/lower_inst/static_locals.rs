@@ -50,22 +50,40 @@ pub(super) fn lower_store_static_local(ctx: &mut FunctionContext<'_>, inst: &Ins
     Ok(())
 }
 
-/// Lowers a static-local declaration initializer guarded by the per-slot marker.
+/// Lowers a static-local initializer commit: stores the already-computed value into the
+/// persistent slot, then marks the slot initialized.
+///
+/// This instruction no longer re-checks the once-flag itself: `crate::ir_lower::stmt::
+/// lower_static_var` now wraps the WHOLE initializer evaluation (this instruction's value
+/// operand included) in an EIR-level `CondBr` keyed on `Op::StaticLocalInitialized`, so
+/// `Op::InitStaticLocal` is only ever reached on a call path that observed the flag unset. The
+/// flag is set AFTER the store completes here (not before, unlike the old inline once-check this
+/// replaces) so a crash between the two, or a reentrant call recursing back into the same
+/// function mid-initializer, both still observe "uninitialized" — matching PHP's own
+/// `static $x; $x ??= <init>;` reentrancy behavior (see `Op::StaticLocalInitialized`'s doc
+/// comment for the php-verified matrix).
 pub(super) fn lower_init_static_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     let slot = resolve_static_local_slot(ctx, inst)?;
     ensure_static_local_type_supported(&slot, inst)?;
     ensure_static_local_value_supported(ctx, &slot, value, inst)?;
-    let initialized_label = ctx.next_label("static_local_initialized");
-    abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &slot.init_symbol, 0);
-    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &initialized_label);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
-    abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &slot.init_symbol, 0);
     ctx.load_value_to_result(value)?;
     abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &slot.php_type, false);
     clear_static_local_high_word_if_needed(ctx, &slot);
-    ctx.emitter.label(&initialized_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &slot.init_symbol, 0);
     Ok(())
+}
+
+/// Lowers a static-local once-flag read into a `Bool` result, without mutating the flag or
+/// touching the value slot. Emitted as the once-guard `CondBr`'s condition in
+/// `crate::ir_lower::stmt::lower_static_var` — a flag-true result skips straight past the
+/// initializer's instructions (and `Op::InitStaticLocal`) instead of only skipping the final
+/// store, so a side-effecting or heap-allocating initializer runs exactly once across calls.
+pub(super) fn lower_static_local_initialized(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let slot = resolve_static_local_slot(ctx, inst)?;
+    abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &slot.init_symbol, 0);
+    store_if_result(ctx, inst)
 }
 
 /// Resolves a local-slot immediate into static-local symbol metadata.

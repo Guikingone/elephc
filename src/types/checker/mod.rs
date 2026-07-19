@@ -25,6 +25,8 @@ mod callables;
 pub(crate) mod yield_validation;
 /// goto_validation
 pub(crate) mod goto_validation;
+/// func_args_scan
+pub(crate) mod func_args_scan;
 mod driver;
 mod extern_decl;
 mod functions;
@@ -114,6 +116,17 @@ pub(crate) struct Checker {
     pub declared_interfaces: HashSet<String>,
     /// Name of the class currently being type-checked (used for `$this` resolution).
     pub current_class: Option<String>,
+    /// Active `Closure::bind($closure, $newThis, $scope)`/`bindTo` scope rebind, set only while
+    /// type-checking a closure LITERAL argument that the checker has proven safe to relax
+    /// (see `crate::types::checker::inference::expr::static_closure::resolve_bind_scope_class`
+    /// and the JURY-mandated lexical gate). `Property access on a parameter whose declared type
+    /// equals or subclasses `scope_class` is checked against `scope_class`'s visibility instead
+    /// of the closure's lexically enclosing `current_class` — narrower than swapping
+    /// `current_class` itself, which would also (unsoundly) loosen unrelated `self::`/`static::`/
+    /// `$this` resolution; the lexical gate proves those are absent from the body before this is
+    /// ever set, and `can_access_property` only consults it for a receiver naming one of
+    /// `eligible_params`.
+    pub(crate) bound_scope_context: Option<BoundScopeContext>,
     /// Name of the current method being type-checked, when inside a class body.
     pub current_method: Option<String>,
     /// Whether the current method being type-checked is static.
@@ -196,6 +209,13 @@ pub(crate) struct Checker {
     /// frees a cell that another object's slot may alias (double-free guard). See
     /// `apply_reference_property_promotions`.
     pub reference_property_rebind_targets: HashSet<(String, String)>,
+    /// Canonical keys of user functions/methods whose body calls `func_num_args()`,
+    /// `func_get_args()`, or `func_get_arg()` at its own scope. Free functions are keyed
+    /// by their canonical name (matching `functions`); methods are keyed as
+    /// `"ClassName::method_name"`. Populated by
+    /// `func_args_scan::mark_func_args_functions` once all signatures are resolved, and
+    /// carried into `CheckResult::func_args_functions` for `crate::ir_lower`.
+    pub func_args_functions: HashSet<String>,
 }
 
 /// A saved snapshot of every per-body, variable-name-keyed callable side table
@@ -264,6 +284,19 @@ impl Checker {
     }
 }
 
+#[derive(Clone, Debug)]
+/// An active `Closure::bind`/`bindTo` scope rebind while checking a gated closure literal's
+/// body — see `Checker::bound_scope_context`'s doc comment for the soundness argument.
+pub(crate) struct BoundScopeContext {
+    /// The literal `$scope` class the closure was rebound to (`X::class`'s resolved name).
+    pub(crate) scope_class: String,
+    /// Names of the closure's OWN declared parameters whose declared type is `Object(class)`
+    /// where `class` is `scope_class` or a subclass of it — the only receivers
+    /// `can_access_property` will authorize against `scope_class` instead of the closure's
+    /// lexically enclosing `current_class`.
+    pub(crate) eligible_params: HashSet<String>,
+}
+
 #[derive(Clone)]
 /// FnDecl stores a user-defined function's declaration metadata: parameter names,
 /// types, defaults, variadic marker, return type, span, body statements, and
@@ -316,6 +349,7 @@ pub fn check_types(program: &Program, target_platform: Platform) -> Result<Check
         extern_globals: checker.extern_globals,
         required_libraries: checker.required_libraries,
         warnings,
+        func_args_functions: checker.func_args_functions,
     })
 }
 
