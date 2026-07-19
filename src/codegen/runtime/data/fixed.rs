@@ -9,8 +9,8 @@
 //! - Fixed symbols are cached across compilations, so only target-independent runtime data belongs here.
 
 use super::{
-    DIRNAME_LEVELS_MSG, HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
-    HASH_UNKNOWN_ALGO_MSG,
+    CLOSURE_BIND_STATIC_THIS_WARNING_MSG, DIRNAME_LEVELS_MSG, HASH_HMAC_UNKNOWN_ALGO_MSG,
+    HASH_INIT_UNKNOWN_ALGO_MSG, HASH_UNKNOWN_ALGO_MSG,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, STR_REPEAT_TIMES_MSG,
     PRINT_R_CAPTURE_OVERFLOW_MSG, PRINT_R_CAPTURE_RECURSION_MSG,
 };
@@ -275,7 +275,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _arr_cap_err_msg\n_arr_cap_err_msg:\n    .ascii \"Fatal error: array capacity exceeded\\n\"\n");
     out.push_str(".globl _buffer_bounds_msg\n_buffer_bounds_msg:\n    .ascii \"Fatal error: buffer index out of bounds\\n\"\n");
     out.push_str(".globl _buffer_uaf_msg\n_buffer_uaf_msg:\n    .ascii \"Fatal error: use of buffer after buffer_free()\\n\"\n");
-    out.push_str(".globl _closure_bind_unsupported_msg\n_closure_bind_unsupported_msg:\n    .ascii \"Fatal error: Closure::bind requires a closure that captures only $this\\n\"\n");
+    out.push_str(&format!(
+        ".globl _diag_closure_bind_static_this_msg\n_diag_closure_bind_static_this_msg:\n    .ascii {:?}\n",
+        CLOSURE_BIND_STATIC_THIS_WARNING_MSG
+    ));
     out.push_str(".globl _iterable_unsupported_kind_msg\n_iterable_unsupported_kind_msg:\n    .ascii \"Fatal error: foreach over iterable with unsupported kind\\n\"\n");
     out.push_str(".globl _array_cast_unsupported_msg\n_array_cast_unsupported_msg:\n    .ascii \"Fatal error: (array) cast of associative array or object is unsupported\\n\"\n");
     out.push_str(".globl _array_arg_type_error_msg\n_array_arg_type_error_msg:\n    .ascii \"Fatal error: Uncaught TypeError: array builtin argument must be of type array\\n\"\n");

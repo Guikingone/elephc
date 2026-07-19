@@ -296,6 +296,7 @@ fn materialize_extern_static_function_descriptor_callback(
             function_name,
         ),
         Some(&invoker_label),
+        false,
     );
     abi::emit_symbol_address(ctx.emitter, abi::int_result_reg(ctx.emitter), &descriptor_label);
     emit_stateful_extern_callback_trampoline(ctx, &signature);

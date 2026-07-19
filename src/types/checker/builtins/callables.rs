@@ -757,6 +757,48 @@ pub(crate) fn check_callback_builtin_call(
     }
 
     if let ExprKind::StringLiteral(cb_name) = &callback.kind {
+        // A literal-name callback applied PER-ELEMENT of a runtime collection (array_map/
+        // array_filter/array_reduce/array_walk/usort family/preg_replace_callback/
+        // iterator_apply — the SAME label set `callback_builtin_allows_complex_descriptor_env`
+        // above tracks) is always lowered through
+        // `crate::ir_lower::expr::lower_static_callable_value_call`, which receives
+        // already-materialized per-element operands with no room to append the hidden
+        // trailing arity-count operand an arity-hungry function needs. Refuse here instead
+        // of letting that path silently pass a parameter-count-mismatched operand list.
+        //
+        // `call_user_func()`/`call_user_func_array()` are deliberately NOT in this gate: with
+        // a fully static argument list (e.g. `call_user_func_array('f', [1, 2, 3])`) they
+        // lower through the DIFFERENT, supported `lower_static_callable_call` path (full
+        // `&[Expr]` argument list, same machinery as a direct call) — see
+        // `test_func_num_args_through_call_user_func_array_literal_name`. A genuinely
+        // dynamic-array `call_user_func_array()` call still falls back to the pre-materialized
+        // path, caught by that path's own defense-in-depth panic.
+        const PER_ELEMENT_CALLBACK_LABELS: &[&str] = &[
+            "array_map() callback",
+            "array_filter() callback",
+            "array_reduce() callback",
+            "array_walk() callback",
+            "array_walk_recursive() callback",
+            "preg_replace_callback() callback",
+            "usort() callback",
+            "uksort() callback",
+            "uasort() callback",
+            "iterator_apply() callback",
+        ];
+        if PER_ELEMENT_CALLBACK_LABELS.contains(&label)
+            && checker.func_args_functions.contains(cb_name.as_str())
+        {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "'{}' cannot be used as a callback for {} — it calls \
+                     func_num_args()/func_get_args()/func_get_arg(), which this compiler \
+                     only supports through direct calls, not through this per-element \
+                     dynamic-callable path",
+                    cb_name, label
+                ),
+            ));
+        }
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
             return checker.check_known_callable_call(&sig, callback_args, span, env, label);
         }

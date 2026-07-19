@@ -1321,9 +1321,14 @@ fn lower_setlocale(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<
     store_if_result(ctx, inst)
 }
 
-/// Lowers the synthetic `closure_bind` call: rebinds a closure's captured
-/// `$this` to a new receiver via `__rt_closure_bind(descriptor, new_this)`,
-/// returning the rebound closure descriptor.
+/// Lowers the synthetic `closure_bind` call: rebinds a closure to a new `$this`
+/// receiver (or copies it unchanged when the closure has no `$this` capture, or
+/// only rebinds scope) via `__rt_closure_bind(descriptor, new_this)`, returning
+/// the rebound closure descriptor. `__rt_closure_bind`
+/// (`crate::codegen::runtime::callables::closure_bind`) generalizes over any
+/// capture shape — captureless, by-value, by-reference, any capture count — and
+/// returns a null descriptor instead of rebinding when the source is a `static`
+/// closure and `new_this` is non-null (PHP's own divergence).
 fn lower_closure_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "closure_bind", 2)?;
     let descriptor = expect_operand(inst, 0)?;

@@ -222,6 +222,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::LoadStaticLocal => static_locals::lower_load_static_local(ctx, &inst),
         Op::StoreStaticLocal => static_locals::lower_store_static_local(ctx, &inst),
         Op::InitStaticLocal => static_locals::lower_init_static_local(ctx, &inst),
+        Op::StaticLocalInitialized => static_locals::lower_static_local_initialized(ctx, &inst),
         Op::LoadStaticProperty => static_properties::lower_load_static_property(ctx, &inst),
         Op::LoadDynamicStaticProperty => static_properties::lower_load_dynamic_static_property(ctx, &inst),
         Op::StoreDynamicStaticProperty => static_properties::lower_store_dynamic_static_property(ctx, &inst),
@@ -333,6 +334,7 @@ fn lower_closure_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             callable_descriptor::CallableDescriptorShape::Closure,
         ),
         Some(&invoker_label),
+        closure.flags.is_static,
     );
     if captures.is_empty() {
         abi::emit_symbol_address(ctx.emitter, abi::int_result_reg(ctx.emitter), &descriptor_label);
@@ -735,6 +737,7 @@ fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst: &Instruct
             &[],
             descriptor.invocation,
             invoker_label.as_deref(),
+            false,
         );
         abi::emit_symbol_address(ctx.emitter, abi::int_result_reg(ctx.emitter), &descriptor_label);
     } else {
@@ -807,6 +810,7 @@ fn emit_static_late_bound_first_class_callable(
             method_key.clone(),
         ),
         Some(&invoker_label),
+        false,
     );
     emit_runtime_descriptor_with_called_class_capture(ctx, &descriptor_label, &called_class_id)?;
     Ok(true)
@@ -901,6 +905,7 @@ fn emit_instance_method_first_class_callable(
             method_name,
         ),
         Some(&invoker_label),
+        false,
     );
     emit_runtime_descriptor_with_receiver_capture(ctx, &descriptor_label, receiver, &receiver_ty)?;
     Ok(true)

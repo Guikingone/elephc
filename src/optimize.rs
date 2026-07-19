@@ -31,13 +31,6 @@ pub use class_existence::{
 pub use function_existence::{
     fold_function_existence, fold_function_existence_in_method_bodies, FunctionExistenceSet,
 };
-/// Re-exported so `crate::ir_lower` can reuse the optimizer's conservative side-effect
-/// analysis for its `static $x; $x ??= <default>;` once-guarded-init fold (see
-/// `crate::ir_lower::stmt::static_var_default_side_effect_free`): `Op::InitStaticLocal`'s
-/// value operand is evaluated unconditionally on every call (only the final store into the
-/// persistent slot is once-guarded), so the fold must not accept a `<default>` whose
-/// (re-)evaluation could be observable.
-pub(crate) use control::expr_has_side_effects;
 use control::*;
 use effects::*;
 use fold::*;

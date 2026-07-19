@@ -32,6 +32,22 @@ impl Checker {
         decl: &FnDecl,
         param_types: Vec<(String, PhpType)>,
     ) -> Result<PhpType, CompileError> {
+        // `param_types` may be a round-trip of a PREVIOUSLY resolved (and already
+        // `ensure_variadic_for_func_args`-mutated) signature — e.g. via
+        // `respecialize_resolved_function_params_if_needed`, which clones
+        // `stored_sig.params` (already carrying the synthetic
+        // `func_args_scan::SYNTHETIC_VARIADIC_NAME` slot) before calling back in here.
+        // Strip it before rebuilding: this function always re-derives `variadic` from
+        // `decl.variadic` (the real source declaration) below and re-applies
+        // `ensure_variadic_for_func_args` itself, so carrying the old synthetic slot
+        // through would leave it un-marked-variadic (a stray extra required param) or,
+        // on the next call, duplicated.
+        let param_types: Vec<(String, PhpType)> = param_types
+            .into_iter()
+            .filter(|(pname, _)| {
+                pname != super::super::super::func_args_scan::SYNTHETIC_VARIADIC_NAME
+            })
+            .collect();
         let mut local_env: TypeEnv = HashMap::new();
         for (pname, pty) in &param_types {
             local_env.insert(pname.clone(), pty.clone());
@@ -103,6 +119,10 @@ impl Checker {
                 .collect(),
             variadic: decl.variadic.clone(),
         };
+        let mut provisional_sig = provisional_sig;
+        if super::super::super::func_args_scan::body_calls_func_args_intrinsic(&decl.body) {
+            super::super::super::func_args_scan::ensure_variadic_for_func_args(&mut provisional_sig);
+        }
         self.functions.insert(name.to_string(), provisional_sig);
 
         let mut return_type = PhpType::Void;
@@ -215,7 +235,7 @@ impl Checker {
             }
         }
 
-        let sig = FunctionSig {
+        let mut sig = FunctionSig {
             params: param_types,
             defaults: decl.defaults.clone(),
             return_type: return_type.clone(),
@@ -233,6 +253,9 @@ impl Checker {
                 &decl.attributes,
             ),
         };
+        if super::super::super::func_args_scan::body_calls_func_args_intrinsic(&decl.body) {
+            super::super::super::func_args_scan::ensure_variadic_for_func_args(&mut sig);
+        }
         self.functions.insert(name.to_string(), sig);
         if return_type == PhpType::Callable {
             if let Some(callable_sig) = matching_callable_sig(&callable_return_sigs) {

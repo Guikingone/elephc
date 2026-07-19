@@ -23,6 +23,7 @@ use super::super::Checker;
 use super::syntactic::wider_type_syntactic;
 use static_closure::body_must_not_use_this;
 pub(crate) use static_closure::closure_body_uses_this;
+pub(crate) use static_closure::check_closure_bind_call_args;
 impl Checker {
     /// Infers the PHP return type of `expr` in the given `env`.
     ///

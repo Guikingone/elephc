@@ -35,6 +35,7 @@ use std::collections::HashSet;
 
 mod constants;
 mod filter;
+mod func_args_intrinsics;
 mod nullsafe_chain;
 
 /// Lowers an expression and returns its EIR value.
@@ -1886,6 +1887,9 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
         return value;
     }
     let canonical = name.as_str();
+    if func_args_intrinsics::is_func_args_intrinsic(canonical) {
+        return func_args_intrinsics::lower_func_args_intrinsic(ctx, canonical, args, expr);
+    }
     if let Some(value) = lower_lazy_isset(ctx, canonical, args, expr) {
         return value;
     }
@@ -1956,6 +1960,17 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     }
     if is_user_function {
         let data = ctx.intern_function_name(canonical);
+        let mut operands = operands;
+        if let Some(sig) = sig.as_ref() {
+            func_args_intrinsics::maybe_append_hidden_argc_operand(
+                ctx,
+                canonical,
+                sig,
+                args,
+                expr.span,
+                &mut operands,
+            );
+        }
         let call = ctx.emit_value(
             Op::Call,
             operands.clone(),
@@ -3165,6 +3180,21 @@ fn lower_static_callable_value_call(
 ) -> Option<LoweredValue> {
     match target {
         StaticCallableBinding::UserFunction(function_name) => {
+            // `operands` here is a flat pre-materialized value list built by this call site's
+            // own caller (e.g. `array_map`/`array_reduce` element application), NOT run
+            // through the named/default/variadic-aware `lower_args_with_signature` this
+            // module's direct-call sites use — so the hidden trailing arity-count operand
+            // cannot be safely appended here. Refuse rather than silently pass a
+            // parameter-count-mismatched operand list.
+            if ctx.is_arity_hungry_callee(&function_name) {
+                panic!(
+                    "compiler limitation: '{}' cannot be invoked through this dynamic-callable \
+                     path (e.g. array_map/array_reduce/array_walk with a callback name) — it \
+                     calls func_num_args()/func_get_args()/func_get_arg(), which this compiler \
+                     only supports through direct calls",
+                    function_name,
+                );
+            }
             let php_type = call_return_type(ctx, &function_name, &operands);
             let data = ctx.intern_function_name(&function_name);
             Some(ctx.emit_value(
@@ -3510,7 +3540,22 @@ fn lower_static_callable_call(
     match target {
         StaticCallableBinding::UserFunction(function_name) => {
             let sig = ctx.functions.get(&function_name).cloned();
-            let operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
+            let mut operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
+            // Unlike `lower_static_callable_value_call`, `callback_args` here is a real
+            // `&[Expr]` list run through the same `lower_args_with_signature` direct-call
+            // machinery — so the hidden trailing arity-count operand can be appended exactly
+            // like an ordinary direct call (e.g. a statically-named `call_user_func('f', ...)`
+            // or `array_map('f', ...)` callback).
+            if let Some(sig) = sig.as_ref() {
+                func_args_intrinsics::maybe_append_hidden_argc_operand(
+                    ctx,
+                    &function_name,
+                    sig,
+                    callback_args,
+                    expr.span,
+                    &mut operands,
+                );
+            }
             let php_type = call_return_type(ctx, &function_name, &operands);
             let data = ctx.intern_function_name(&function_name);
             Some(ctx.emit_value(
@@ -8065,6 +8110,7 @@ fn lower_closure_with_context(
             &capture_params,
             self_ref_callable_capture,
             by_ref_return,
+            is_static,
         )
     } else {
         function::lower_closure_function_with_context(
@@ -8078,6 +8124,7 @@ fn lower_closure_with_context(
             contextual_arg_types,
             self_ref_callable_capture,
             by_ref_return,
+            is_static,
         )
     };
     let data = ctx.intern_string(&name);
@@ -10039,6 +10086,20 @@ fn static_receiver_class_name(
 
 /// Lowers first-class callable creation.
 fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, target: &CallableTarget, expr: &Expr) -> LoweredValue {
+    // A first-class callable descriptor is invoked later through the generic
+    // `CallableDescriptorInvoke` uniform-invoke ABI, which knows nothing about the hidden
+    // trailing arity-count parameter an arity-hungry function/method carries. Refuse to build
+    // one rather than let it silently mismatch the callee's real parameter count.
+    if let CallableTarget::Function(name) = target {
+        if ctx.is_arity_hungry_callee(name.as_str()) {
+            panic!(
+                "compiler limitation: '{}(...)' cannot be used as a first-class callable — it \
+                 calls func_num_args()/func_get_args()/func_get_arg(), which this compiler only \
+                 supports through direct calls, not through the dynamic callable-invoke ABI",
+                name.as_str(),
+            );
+        }
+    }
     let operands = if let CallableTarget::Method { object, .. } = target {
         vec![lower_expr(ctx, object).value]
     } else {

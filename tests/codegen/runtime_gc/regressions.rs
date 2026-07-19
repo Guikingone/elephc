@@ -1668,3 +1668,70 @@ echo "done";
         out.stderr
     );
 }
+
+/// Regression test for the once-guard fix
+/// (`crate::ir_lower::stmt::lower_static_var`/`Op::StaticLocalInitialized`): a `static $f;
+/// $f ??= function() use (...) {...};` closure default must allocate its closure descriptor
+/// exactly once across calls, not once per call. Before the fix, `Op::InitStaticLocal`'s codegen
+/// only guarded the final store — the closure-creating instructions ran unconditionally on every
+/// call, leaking a fresh (unstored, unreleased) closure descriptor on calls 2..N. Calling the
+/// closure-returning function 3 times must leave exactly the one persistent closure live.
+#[test]
+fn test_regression_static_closure_default_once_guard_no_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function make() {
+    $x = 10;
+    static $f;
+    $f ??= function () use ($x) {
+        return $x;
+    };
+    return $f();
+}
+echo make();
+echo make();
+echo make();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "101010");
+    assert!(
+        out.stderr
+            .contains("HEAP DEBUG: leak summary: live_blocks=1"),
+        "expected only the one persistent closure descriptor to remain live, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for the once-guard fix: a `static $obj = new Sentinel();` direct initializer
+/// must construct the object exactly once across calls, not once per call. Before the fix, the
+/// `new Sentinel()` value-producing instructions ran unconditionally on every call (only the
+/// final store into the persistent slot was once-guarded), leaking a fresh (unstored, unreleased)
+/// object on calls 2..N. Calling the function 3 times must leave exactly the one persistent
+/// object live.
+#[test]
+fn test_regression_static_direct_new_object_initializer_once_guard_no_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Sentinel {
+    public int $hits = 0;
+}
+function f() {
+    static $s = new Sentinel();
+    $s->hits++;
+    return $s->hits;
+}
+echo f();
+echo f();
+echo f();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "123");
+    assert!(
+        out.stderr
+            .contains("HEAP DEBUG: leak summary: live_blocks=1"),
+        "expected only the one persistent Sentinel instance to remain live, got: {}",
+        out.stderr
+    );
+}

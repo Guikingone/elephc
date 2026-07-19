@@ -99,6 +99,21 @@ impl Checker {
             .unwrap_or_else(|| name.to_string());
         let name = canonical_name.as_str();
 
+        // A direct call into a func_num_args()/func_get_args()/func_get_arg()-using
+        // function needs a compile-time-known passed-argument count (see
+        // `crate::ir_lower::expr::func_args_intrinsics::compute_static_passed_count`); a
+        // spread of anything but a literal array/assoc-array cannot supply that. Gate it
+        // here with a normal diagnostic instead of letting it reach EIR lowering, where the
+        // same condition is only a defense-in-depth panic.
+        if self.func_args_functions.contains(name)
+            && super::super::func_args_scan::call_has_dynamic_spread(args)
+        {
+            return Err(super::super::func_args_scan::dynamic_spread_call_error(
+                &format!("Function '{}'", name),
+                span,
+            ));
+        }
+
         if let Some(mut sig) = self.functions.get(name).cloned() {
             if let Some(reason) = sig.deprecation.as_deref() {
                 let message = if reason.is_empty() {
@@ -216,8 +231,17 @@ impl Checker {
                 ),
             ));
         }
+        // A function whose body calls `func_num_args`/`func_get_args`/`func_get_arg` accepts
+        // unlimited trailing positional arguments — `resolve_function_signature` synthesizes a
+        // variadic tail for it via `func_args_scan::ensure_variadic_for_func_args` — but THIS is
+        // the raw-`decl` pre-resolution arg-count check, which runs before that signature
+        // exists (first-seen forward call, before `resolve_unchecked_functions`). Treat it as
+        // variadic here too so a forward call with extra arguments is not rejected before the
+        // real signature relaxation ever gets a chance to apply.
+        let is_arity_hungry_decl =
+            super::super::func_args_scan::body_calls_func_args_intrinsic(&decl.body);
         if !has_spread {
-            if decl.variadic.is_some() {
+            if decl.variadic.is_some() || is_arity_hungry_decl {
                 if effective_arg_count < required {
                     return Err(CompileError::new(
                         span,

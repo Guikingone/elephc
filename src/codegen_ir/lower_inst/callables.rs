@@ -430,6 +430,7 @@ pub(super) fn emit_invokable_object_descriptor_value(
             method_key,
         ),
         Some(&invoker_label),
+        false,
     );
     emit_runtime_descriptor_with_receiver_capture(ctx, &descriptor_label, receiver, &receiver_ty)
 }
@@ -1147,6 +1148,7 @@ fn emit_runtime_array_instance_descriptor_invoke(
             target.method_name.as_str(),
         ),
         Some(&invoker_label),
+        false,
     );
     emit_runtime_descriptor_with_saved_receiver_capture(ctx, &descriptor_label, &receiver_ty);
     emit_descriptor_reg_invoker_call_with_mixed_arg(
@@ -1188,6 +1190,7 @@ fn emit_runtime_array_instance_descriptor_value(
             target.method_name.as_str(),
         ),
         Some(&invoker_label),
+        false,
     );
     emit_runtime_descriptor_with_saved_receiver_capture(ctx, &descriptor_label, &receiver_ty);
     Ok(())

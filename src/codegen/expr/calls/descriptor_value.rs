@@ -47,6 +47,7 @@ pub(super) fn emit_callable_descriptor_value(
         hidden_params,
         invocation,
         invoker_label.as_deref(),
+        false,
     );
 
     if captures.is_empty() {

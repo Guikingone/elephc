@@ -72,6 +72,13 @@ pub(crate) const PRINT_R_CAPTURE_OVERFLOW_MSG: &str =
 /// which bounds self-referential/cyclic array structures instead of looping forever.
 pub(crate) const PRINT_R_CAPTURE_RECURSION_MSG: &str =
     "Fatal error: print_r(): possible infinite recursion (nesting too deep)\n";
+/// PHP's own `E_WARNING` text (php-verified against PHP 8.5) when `Closure::bind()`/
+/// `Closure::bindTo()` binds a non-null `$newThis` onto a `static` closure. `__rt_closure_bind`
+/// (`crate::codegen::runtime::callables::closure_bind`) emits this instead of rebinding and
+/// returns a null descriptor, matching PHP's `?Closure` return type instead of silently ignoring
+/// the rejected bind or fataling.
+pub(crate) const CLOSURE_BIND_STATIC_THIS_WARNING_MSG: &str =
+    "Warning: Cannot bind an instance to a static closure, this will be an error in PHP 9\n";
 /// Fatal error message when `ob_start()` would push past the fixed
 /// `OB_MAX_LEVELS` output-buffering nesting cap.
 pub(crate) const OB_MAX_LEVELS_MSG: &str =

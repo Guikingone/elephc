@@ -42,6 +42,9 @@ use super::schema::{
     build_class_info_recursive, build_enum_info, build_interface_info_recursive,
     drop_unresolvable_attribute_arg_refs, resolve_const_default_references,
 };
+use super::func_args_scan::{
+    mark_func_args_functions, validate_func_args_global_scope, validate_func_args_method_bodies,
+};
 use super::yield_validation::validate_yield_contexts;
 use super::Checker;
 
@@ -75,6 +78,7 @@ pub(super) fn check_types_impl(
 
     errors.extend(validate_yield_contexts(program));
     errors.extend(super::goto_validation::validate_goto_labels(program));
+    errors.extend(validate_func_args_global_scope(program));
 
     checker.collect_function_decls(program, &mut errors);
 
@@ -290,6 +294,36 @@ pub(super) fn check_types_impl(
     checker.type_check_methods_until_stable(&methods_to_check, &global_env, &mut errors)?;
     patch_builtin_spl_storage_signatures(&mut checker);
     apply_implicit_stringable_interfaces(&mut checker.classes);
+
+    // Detect functions/methods that call func_num_args()/func_get_args()/func_get_arg()
+    // and relax their signature to accept unlimited trailing positional arguments (reusing
+    // the variadic call-argument machinery), BEFORE the authoritative call-site check below
+    // validates every call in the program against these signatures.
+    let fn_decl_bodies: HashMap<String, Vec<Stmt>> = checker
+        .fn_decls
+        .iter()
+        .map(|(name, decl)| (name.clone(), decl.body.clone()))
+        .collect();
+    let class_method_bodies: HashMap<String, Vec<(String, bool, Vec<Stmt>)>> = methods_to_check
+        .iter()
+        .map(|class| {
+            (
+                class.name.clone(),
+                class
+                    .methods
+                    .iter()
+                    .map(|method| (method.name.clone(), method.is_static, method.body.clone()))
+                    .collect(),
+            )
+        })
+        .collect();
+    checker.func_args_functions = mark_func_args_functions(
+        &mut checker.functions,
+        &fn_decl_bodies,
+        &mut checker.classes,
+        &class_method_bodies,
+    );
+    errors.extend(validate_func_args_method_bodies(&class_method_bodies));
 
     let (final_global_env, final_top_level_errors) = checker.check_top_level_program(program);
     for (initial_errors, final_errors) in initial_top_level_errors

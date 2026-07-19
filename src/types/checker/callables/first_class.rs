@@ -36,6 +36,23 @@ impl Checker {
         match target {
             CallableTarget::Function(name) => {
                 let function_name = name.as_str();
+                // A first-class callable descriptor is invoked later through the generic
+                // uniform-invoke ABI (`Op::CallableDescriptorInvoke`), which knows nothing
+                // about the hidden trailing arity-count parameter an arity-hungry function
+                // carries — refuse here rather than let `crate::ir_lower` silently mismatch
+                // the callee's real parameter count.
+                if self.func_args_functions.contains(function_name) {
+                    return Err(CompileError::new(
+                        span,
+                        &format!(
+                            "'{}(...)' cannot be used as a first-class callable — it calls \
+                             func_num_args()/func_get_args()/func_get_arg(), which this \
+                             compiler only supports through direct calls, not through the \
+                             dynamic callable-invoke ABI",
+                            function_name
+                        ),
+                    ));
+                }
                 if let Some(sig) = self.functions.get(function_name) {
                     let effective_sig =
                         Self::callable_sig_for_declared_params(sig, &sig.declared_params);

@@ -171,6 +171,7 @@ impl Checker {
             enums: HashMap::new(),
             declared_interfaces: HashSet::new(),
             current_class: None,
+            bound_scope_context: None,
             current_method: None,
             current_method_is_static: false,
             current_by_ref_return: false,
@@ -194,6 +195,7 @@ impl Checker {
             absent_class_warnings: std::cell::RefCell::new(Vec::new()),
             reference_property_promotions: HashSet::new(),
             reference_property_rebind_targets: HashSet::new(),
+            func_args_functions: HashSet::new(),
         }
     }
 }

@@ -310,6 +310,7 @@ fn receiver_bound_instance_method_descriptor(
             resolved_method,
         ),
         invoker_label.as_deref(),
+        false,
     )
 }
 

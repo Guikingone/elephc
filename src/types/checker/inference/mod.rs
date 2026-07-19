@@ -19,3 +19,4 @@ pub(super) mod syntactic;
 
 pub use syntactic::{infer_expr_type_syntactic, infer_return_type_syntactic};
 pub(crate) use expr::closure_body_uses_this;
+pub(crate) use expr::check_closure_bind_call_args;

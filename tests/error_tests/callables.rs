@@ -20,6 +20,91 @@ fn test_error_call_user_func_wrong_args() {
     );
 }
 
+/// php-verified: real PHP fatals at runtime with "func_get_args() cannot be called from the
+/// global scope". elephc rejects this at compile time instead (a native AOT compiler has no
+/// runtime "global scope" concept to fall back to), with an equivalent message.
+#[test]
+fn test_error_func_get_args_global_scope() {
+    expect_error(
+        r#"<?php func_get_args();"#,
+        "Cannot call func_get_args() from the global scope",
+    );
+}
+
+/// Companion to `test_error_func_get_args_global_scope` for `func_num_args()`.
+#[test]
+fn test_error_func_num_args_global_scope() {
+    expect_error(
+        r#"<?php func_num_args();"#,
+        "Cannot call func_num_args() from the global scope",
+    );
+}
+
+/// Gated dynamic-invoker form: first-class-callable syntax (`f(...)`) creates a generic
+/// callable descriptor invoked later through the uniform-invoke ABI, which does not know
+/// about an arity-hungry function's hidden trailing arity-count parameter — refused as a
+/// normal compile-time diagnostic (checked in
+/// `Checker::resolve_first_class_callable_sig`) rather than reaching EIR lowering.
+#[test]
+fn test_error_func_num_args_first_class_callable() {
+    expect_error(
+        r#"<?php
+function f($a, $b = 2) { echo func_num_args(); }
+$fn = f(...);
+$fn(1, 2, 3);
+"#,
+        "cannot be used as a first-class callable",
+    );
+}
+
+/// Gated call shape: a spread argument whose length is NOT statically known (a variable, not
+/// a literal array) into an arity-hungry function's call site. A statically-sized spread
+/// (`f(...[7, 8])`) IS supported — see
+/// `codegen::callables::func_args_intrinsics::test_func_num_args_static_spread_call_is_counted`.
+#[test]
+fn test_error_func_num_args_dynamic_spread() {
+    expect_error(
+        r#"<?php
+function f($a, $b = 2) { echo func_num_args(); }
+$args = [1, 2, 3];
+f(...$args);
+"#,
+        "cannot be called with a dynamic-length spread",
+    );
+}
+
+/// Gated call shape: a literal-named callback applied PER-ELEMENT of a runtime array (e.g.
+/// `array_map`) is lowered through a path that cannot append the hidden arity-count operand.
+/// `call_user_func_array()` with a literal name and array IS supported (a different, static
+/// argument-list lowering path) — see
+/// `codegen::callables::func_args_intrinsics::test_func_num_args_through_call_user_func_array_literal_name`.
+#[test]
+fn test_error_func_num_args_array_map_callback_literal_name() {
+    expect_error(
+        r#"<?php
+function dyn($a, $b = 2) { echo func_num_args(); }
+array_map('dyn', [1, 2, 3]);
+"#,
+        "cannot be used as a callback for array_map() callback",
+    );
+}
+
+/// Gated surface: a method body calling `func_num_args()`/`func_get_args()`/`func_get_arg()`
+/// is rejected at compile time (methods are never marked arity-hungry — virtual dispatch
+/// means a call site cannot always know which concrete override runs).
+#[test]
+fn test_error_func_num_args_in_method_body() {
+    expect_error(
+        r#"<?php
+class C {
+    function m($a) { return func_num_args(); }
+}
+(new C())->m(1);
+"#,
+        "this compiler does not support in methods",
+    );
+}
+
 /// Verifies that error function exists wrong args.
 #[test]
 fn test_error_function_exists_wrong_args() {

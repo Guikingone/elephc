@@ -9,7 +9,7 @@
 //! Key details:
 //! - Fields are consumed by optimizer, codegen, and linker setup; keep additions explicit and phase-owned.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::{Platform, Target};
 use crate::errors::{CompileError, CompileWarning};
@@ -39,6 +39,10 @@ pub struct CheckResult {
     pub extern_globals: HashMap<String, PhpType>,
     pub required_libraries: Vec<String>,
     pub warnings: Vec<CompileWarning>,
+    /// Canonical keys of user functions/methods that call `func_num_args()`,
+    /// `func_get_args()`, or `func_get_arg()` at their own scope. See
+    /// `crate::types::checker::func_args_scan`.
+    pub func_args_functions: HashSet<String>,
 }
 
 /// Runs type checking using the host platform (auto-detected from the build environment).

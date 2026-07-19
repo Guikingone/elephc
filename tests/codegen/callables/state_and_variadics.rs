@@ -227,6 +227,147 @@ b();
     assert_eq!(out, "110220");
 }
 
+/// Regression test for the once-guard fix (EIR-level `CondBr` wrapping the WHOLE static
+/// initializer evaluation, not just the final store — see `crate::ir_lower::stmt::lower_static_var`):
+/// a direct `static $x = <call-with-side-effect>();` initializer (PHP 8.1+ allows non-constant
+/// static initializers, php-verified: `static $x = make();` across 3 calls prints the side effect
+/// exactly once) must only run its side effect on the FIRST call, not on every call. Before the
+/// fix, `Op::InitStaticLocal`'s codegen re-evaluated the initializer's value-producing
+/// instructions unconditionally on every call (only the final store was once-guarded), so this
+/// would have printed the side effect 3 times instead of once.
+#[test]
+fn test_static_direct_initializer_side_effect_runs_once() {
+    let out = compile_and_run(
+        r#"<?php
+function make() {
+    echo "init;";
+    return 42;
+}
+function f() {
+    static $x = make();
+    return $x;
+}
+echo f();
+echo f();
+echo f();
+"#,
+    );
+    assert_eq!(out, "init;424242");
+}
+
+/// Regression test: a direct `static $obj = new Sentinel();` initializer must construct the
+/// object exactly once across calls (php-verified: PHP 8.1+'s "new in initializers" runs the
+/// constructor once, not once per call) and the returned object identity must persist — reading
+/// a property mutated on a previous call proves the SAME instance survives across calls, not a
+/// freshly reconstructed one.
+#[test]
+fn test_static_direct_initializer_new_object_runs_once_and_persists() {
+    let out = compile_and_run(
+        r#"<?php
+class Sentinel {
+    public int $hits = 0;
+    public function __construct() {
+        echo "ctor;";
+    }
+}
+function f() {
+    static $s = new Sentinel();
+    $s->hits++;
+    return $s->hits;
+}
+echo f();
+echo f();
+echo f();
+"#,
+    );
+    assert_eq!(out, "ctor;123");
+}
+
+/// Regression test: the `static $x; $x ??= <default>;` once-guarded-init fold
+/// (`crate::ir_lower::stmt::fold_static_null_coalesce_pair`) now accepts a closure-literal
+/// default (widened `static_var_default_never_null` gate) now that the whole-initializer
+/// once-guard makes a captured closure safe to fold. The closure must be created exactly once —
+/// asserted by observing that its capture (`$x`, a value captured at creation time) never
+/// changes across calls even though the captured variable's value differs on each call.
+#[test]
+fn test_static_null_coalesce_closure_default_persists_across_calls() {
+    let out = compile_and_run(
+        r#"<?php
+function make() {
+    $x = 10;
+    static $f;
+    $f ??= function () use ($x) {
+        return $x;
+    };
+    return $f();
+}
+echo make();
+echo make();
+echo make();
+"#,
+    );
+    assert_eq!(out, "101010");
+}
+
+/// Regression test: the `static $x; $x ??= <default>;` fold now also accepts a `new` default
+/// (widened `static_var_default_never_null` gate). The constructor side effect must run exactly
+/// once and the same object instance must persist across calls.
+#[test]
+fn test_static_null_coalesce_new_object_default_persists_across_calls() {
+    let out = compile_and_run(
+        r#"<?php
+class Sentinel {
+    public int $hits = 0;
+    public function __construct() {
+        echo "ctor;";
+    }
+}
+function f() {
+    static $s;
+    $s ??= new Sentinel();
+    $s->hits++;
+    return $s->hits;
+}
+echo f();
+echo f();
+echo f();
+"#,
+    );
+    assert_eq!(out, "ctor;123");
+}
+
+/// Regression test matching PHP's own reentrancy behavior for a static initializer that
+/// recurses into the same function mid-evaluation (php-verified: a `new Box($n)` default whose
+/// constructor recurses into `f($n + 1)` and reads/combines the nested static's own value —
+/// `f(0)` prints `ctor(0);ctor(1);ctor(2);` then `201`, and a second `f(0)` prints `201` alone
+/// with no more constructor calls). Each nested call independently observes "uninitialized"
+/// since the once-flag is only set AFTER the outermost completed store, and the LAST completed
+/// store wins — exercising the crash-safety ordering from `Op::StaticLocalInitialized`'s doc
+/// comment: the flag must be set AFTER the store, so a reentrant call mid-initializer still sees
+/// "uninitialized" rather than a torn value.
+#[test]
+fn test_static_reentrant_initializer_matches_php_semantics() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public int $v;
+    public function __construct($n) {
+        echo "ctor($n);";
+        $this->v = $n < 2 ? f($n + 1) + 100 : 1;
+    }
+}
+function f($n) {
+    static $x;
+    $x ??= new Box($n);
+    return $x->v;
+}
+echo f(0), "\n";
+echo f(0), "\n";
+"#,
+    );
+    assert_eq!(out, "ctor(0);ctor(1);ctor(2);201\n201\n");
+}
+
 // --- Pass by reference ---
 
 /// Verifies that a `&$var` parameter increments the caller's variable in place.

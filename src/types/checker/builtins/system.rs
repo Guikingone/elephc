@@ -36,6 +36,28 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Int))
         }
+        "func_num_args" => {
+            if !args.is_empty() {
+                return Err(CompileError::new(span, "func_num_args() takes no arguments"));
+            }
+            Ok(Some(PhpType::Int))
+        }
+        "func_get_args" => {
+            if !args.is_empty() {
+                return Err(CompileError::new(span, "func_get_args() takes no arguments"));
+            }
+            Ok(Some(PhpType::Array(Box::new(PhpType::Mixed))))
+        }
+        "func_get_arg" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "func_get_arg() expects exactly 1 argument (position)",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Mixed))
+        }
         "setlocale" => {
             // `setlocale(int $category, string|array $locales, string ...$rest): string|false`.
             // elephc has no real locale machinery; this is a minimal sound stub that
