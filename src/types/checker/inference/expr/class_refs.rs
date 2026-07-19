@@ -154,7 +154,7 @@ impl Checker {
         while let Some(cn) = current_class.as_deref() {
             if let Some(info) = self.classes.get(cn) {
                 if let Some(value_expr) = info.constants.get(name).cloned() {
-                    return self.infer_type(&value_expr, &TypeEnv::default());
+                    return self.infer_const_value_type(&value_expr);
                 }
             }
             current_class = self.classes.get(cn).and_then(|i| i.parent.clone());
@@ -163,13 +163,13 @@ impl Checker {
         if let Some(class_info) = self.classes.get(&class_name).cloned() {
             for iface_name in &class_info.interfaces {
                 if let Some(value) = self.lookup_interface_constant(iface_name, name) {
-                    return self.infer_type(&value, &TypeEnv::default());
+                    return self.infer_const_value_type(&value);
                 }
             }
         }
         // Direct interface receiver (`Limits::MAX`).
         if let Some(value) = self.lookup_interface_constant(&class_name, name) {
-            return self.infer_type(&value, &TypeEnv::default());
+            return self.infer_const_value_type(&value);
         }
         // On an enum, a `::name` that is neither a declared case nor a constant is an undefined
         // case — report that rather than the generic class-constant message.
@@ -190,6 +190,18 @@ impl Checker {
             expr.span,
             &format!("Undefined class constant: {}::{}", class_name, name),
         ))
+    }
+
+    /// Infers a class/interface constant's value type with `compile_time_const_depth`
+    /// incremented: this is a genuinely compile-time-evaluated context (PHP itself rejects any
+    /// function call in a class-constant initializer — "Constant expression contains invalid
+    /// operations"), so the curated late-bound undefined-function carve-out
+    /// (`functions::late_bound`) must not apply while inferring it, matching top-level `const`.
+    fn infer_const_value_type(&mut self, value_expr: &Expr) -> Result<PhpType, CompileError> {
+        self.compile_time_const_depth += 1;
+        let result = self.infer_type(value_expr, &TypeEnv::default());
+        self.compile_time_const_depth -= 1;
+        result
     }
 
     /// Looks up a constant by name on an interface, traversing parent interfaces breadth-first

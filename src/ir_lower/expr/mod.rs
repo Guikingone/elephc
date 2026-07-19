@@ -36,6 +36,7 @@ use std::collections::HashSet;
 mod constants;
 mod filter;
 mod func_args_intrinsics;
+mod late_bound_call;
 mod nullsafe_chain;
 
 /// Lowers an expression and returns its EIR value.
@@ -1931,9 +1932,14 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     if let Some(value) = filter::lower_static_filter_var(ctx, canonical, args, expr) {
         return value;
     }
-    let sig = call_signature(ctx, canonical, args);
     let is_extern = ctx.extern_functions.contains_key(canonical);
     let is_user_function = ctx.functions.contains_key(canonical);
+    if !is_extern && !is_user_function {
+        if let Some(value) = late_bound_call::lower_late_bound_undefined_call(ctx, canonical, expr) {
+            return value;
+        }
+    }
+    let sig = call_signature(ctx, canonical, args);
     let operands = if is_extern || is_user_function {
         lower_args_with_signature(ctx, sig.as_ref(), args)
     } else {

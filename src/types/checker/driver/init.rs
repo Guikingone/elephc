@@ -196,6 +196,7 @@ impl Checker {
             reference_property_promotions: HashSet::new(),
             reference_property_rebind_targets: HashSet::new(),
             func_args_functions: HashSet::new(),
+            compile_time_const_depth: 0,
         }
     }
 }

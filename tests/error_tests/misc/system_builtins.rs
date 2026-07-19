@@ -613,6 +613,16 @@ fn test_include_path_with_undefined_const_errors() {
 // NOT behind a provably-false guard still errors loudly (an unguarded/always-reached call to an
 // extension function elephc cannot resolve), and a plausible-but-uncurated name is left alone by
 // the pre-checker fold, so its guard is resolved normally instead of assumed absent.
+//
+// NOTE: a SEPARATE, narrower, EXACT-name curated allowlist (`crate::types::checker::builtins::
+// late_bound`, `apcu_exists`, `opcache_invalidate`, `igbinary_serialize`, ...) makes an UNGUARDED
+// call to one of ITS names compile successfully instead — PHP is late-bound, so the compiler
+// accepts the call site and lowers it to a catchable `\Error` throw with PHP's exact message
+// (see `tests/codegen/late_bound_functions.rs` for that behavior's coverage). That allowlist is
+// deliberately much narrower than `NEVER_AVAILABLE_FUNCTION_PREFIXES`'s broad prefix match (no
+// prefix wildcards: `apcu_ftch`/a same-family sibling not on the exact list stays loud), so the
+// tests below intentionally use names that are prefix-matched for the `function_exists` fold but
+// NOT on the late-bound exact allowlist, to keep pinning the "still a compile error" gate.
 
 /// Verifies an UNGUARDED call to a curated never-available extension function still errors loudly:
 /// the pre-checker fold only prunes DEAD branches behind a provably-false guard, never the call
@@ -625,14 +635,70 @@ fn test_error_fastcgi_finish_request_unguarded_call_still_loud() {
     );
 }
 
-/// Verifies an UNGUARDED call to another curated never-available extension function still errors
-/// loudly, mirroring `test_error_fastcgi_finish_request_unguarded_call_still_loud` for the
-/// `extension_loaded`-adjacent `igbinary_*` family.
+/// Verifies an UNGUARDED call to an `igbinary_*`-family name that is NOT on the late-bound exact
+/// allowlist (`igbinary_serialize`/`igbinary_unserialize` are; this one deliberately is not)
+/// still errors loudly, mirroring `test_error_fastcgi_finish_request_unguarded_call_still_loud`.
+/// Pins that `NEVER_AVAILABLE_FUNCTION_PREFIXES`'s broad `igbinary_` prefix match (used only for
+/// the `function_exists`/`extension_loaded` fold) never leaks into late-bound-call eligibility.
 #[test]
-fn test_error_igbinary_serialize_unguarded_call_still_loud() {
+fn test_error_igbinary_get_flags_unguarded_call_still_loud() {
     expect_error(
-        "<?php igbinary_serialize([1]);",
-        "Undefined function: igbinary_serialize",
+        "<?php igbinary_get_flags();",
+        "Undefined function: igbinary_get_flags",
+    );
+}
+
+/// Verifies an UNGUARDED call to the curated LATE-BOUND `igbinary_serialize` no longer errors at
+/// compile time (JURY ADDENDUM: it lowers to a catchable `\Error` throw instead — see
+/// `tests/codegen/late_bound_functions.rs` for the runtime-throw coverage). This is the direct
+/// regression pin for the pre-L1 expectation this exact call used to error loudly.
+#[test]
+fn test_igbinary_serialize_unguarded_call_no_longer_compile_errors() {
+    expect_ok("<?php igbinary_serialize([1]); echo 'ok';");
+}
+
+/// Verifies a TYPO of a curated late-bound name (`apcu_exists` → `apcu_exsts`) still errors
+/// loudly at compile time — the late-bound carve-out is EXACT-name-only, never a prefix or
+/// fuzzy match (jury addendum #1).
+#[test]
+fn test_error_late_bound_name_typo_still_loud() {
+    expect_error(
+        "<?php apcu_exsts('key');",
+        "Undefined function: apcu_exsts",
+    );
+}
+
+/// Verifies a genuinely-undefined USER function with a curated-looking name segment
+/// (`apcu_exists_wrapper`) still errors loudly — the late-bound carve-out matches complete
+/// names only, never a substring/prefix of a curated name.
+#[test]
+fn test_error_late_bound_name_substring_still_loud() {
+    expect_error(
+        "<?php apcu_exists_wrapper('key');",
+        "Undefined function: apcu_exists_wrapper",
+    );
+}
+
+/// Verifies a curated late-bound name used in a top-level `const` initializer still errors
+/// loudly: PHP itself rejects ANY function call in a constant expression
+/// ("Constant expression contains invalid operations"), and this context is genuinely
+/// compile-time-evaluated in elephc (`Checker::compile_time_const_depth`), so the late-bound
+/// carve-out must not apply there.
+#[test]
+fn test_error_late_bound_name_in_const_decl_still_loud() {
+    expect_error(
+        "<?php const X = apcu_exists('key'); echo X;",
+        "Undefined function: apcu_exists",
+    );
+}
+
+/// Verifies a curated late-bound name used in a class constant initializer still errors loudly,
+/// mirroring `test_error_late_bound_name_in_const_decl_still_loud` for class/interface constants.
+#[test]
+fn test_error_late_bound_name_in_class_const_decl_still_loud() {
+    expect_error(
+        "<?php class C { const X = apcu_exists('key'); } echo C::X;",
+        "Undefined function: apcu_exists",
     );
 }
 

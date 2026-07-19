@@ -216,6 +216,20 @@ pub(crate) struct Checker {
     /// `func_args_scan::mark_func_args_functions` once all signatures are resolved, and
     /// carried into `CheckResult::func_args_functions` for `crate::ir_lower`.
     pub func_args_functions: HashSet<String>,
+    /// Nesting depth of genuinely compile-time-evaluated expression contexts: top-level
+    /// `const` declarations and class/interface constant values (`infer_class_constant_type_by_name`).
+    /// Non-zero while type-checking one of these values. Consulted by the curated late-bound
+    /// undefined-function carve-out (`functions::late_bound`) so a call to a curated extension
+    /// function name (e.g. `apcu_fetch`) inside a const context stays the ordinary compile-time
+    /// "Undefined function" diagnostic instead of being accepted as a runtime-throwing call —
+    /// PHP itself never lets ANY function call reach these contexts ("Constant expression
+    /// contains invalid operations"), so this only ever preserves elephc's pre-existing,
+    /// stricter-than-necessary-elsewhere diagnostic rather than changing behavior. Deliberately
+    /// does NOT cover parameter/property default values: elephc lazily substitutes those default
+    /// expressions as ordinary call arguments at each omitted-argument call site (verified: a
+    /// never-called function with a curated name as its default value compiles with zero errors),
+    /// so they are genuine runtime call sites, not compile-time-evaluated ones.
+    pub compile_time_const_depth: usize,
 }
 
 /// A saved snapshot of every per-body, variable-name-keyed callable side table

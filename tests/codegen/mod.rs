@@ -36,6 +36,7 @@ mod image;
 mod arrays;
 mod calendar;
 mod callables;
+mod late_bound_functions;
 mod shutdown_functions;
 mod system;
 mod filter_var;

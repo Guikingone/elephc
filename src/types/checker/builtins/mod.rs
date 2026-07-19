@@ -13,6 +13,7 @@ mod callables;
 mod catalog;
 mod intl;
 mod io;
+pub(crate) mod late_bound;
 mod mbstring;
 mod numeric;
 mod pointers;
@@ -35,6 +36,7 @@ pub(crate) use callables::{
     callback_supports_complex_descriptor_env, check_preg_replace_callback_first_class_call,
     runtime_callable_array_type,
 };
+pub(crate) use late_bound::is_late_bound_undefined_function;
 
 impl Checker {
     /// Records an external link library required on every target.

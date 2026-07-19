@@ -1092,13 +1092,21 @@ pub(super) fn check_typed_assign(
 /// Infers the type of the constant value expression and inserts it into
 /// `checker.constants` under `name`. Unlike variable assignments, constants are
 /// stored on the checker itself and not in the local type environment.
+///
+/// Runs with `compile_time_const_depth` incremented: a top-level `const` value is a
+/// genuinely compile-time-evaluated context (PHP itself rejects any function call there —
+/// "Constant expression contains invalid operations"), so the curated late-bound
+/// undefined-function carve-out must not apply inside it.
 pub(super) fn check_const_decl(
     checker: &mut Checker,
     name: &str,
     value: &Expr,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let ty = checker.infer_type(value, env)?;
+    checker.compile_time_const_depth += 1;
+    let ty = checker.infer_type(value, env);
+    checker.compile_time_const_depth -= 1;
+    let ty = ty?;
     checker.constants.entry(name.to_string()).or_insert(ty);
     Ok(())
 }
