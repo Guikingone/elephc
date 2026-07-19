@@ -243,26 +243,39 @@ impl Checker {
                 None => Ok(()),
             },
             "ReflectionMethod" => {
-                let reflected_class = reflected_class
-                    .expect("ReflectionMethod always resolves a literal reflected class or errors");
-                let method_name = self.reflection_string_literal_arg(
+                let method_name = self.reflection_member_name_arg(
                     class_name,
                     "method name",
                     normalized_args.get(1),
                     env,
                 )?;
-                self.validate_reflection_method_attrs(&reflected_class, &method_name, expr)
+                // Either the class or the method name is a non-literal `Str` (routed to the EIR
+                // dynamic dispatcher, `crate::codegen_ir::lower_inst::objects::
+                // reflection_members::lower_reflection_method_new_dynamic`): the reflected member
+                // is not known at compile time, so the attribute-argument-support validation
+                // (which only matters for `getAttributes()`) is skipped, matching the
+                // `ReflectionClass` dynamic-name precedent. On a MISS at runtime, codegen throws a
+                // catchable `\ReflectionException`, matching PHP.
+                match (reflected_class, method_name) {
+                    (Some(reflected_class), Some(method_name)) => {
+                        self.validate_reflection_method_attrs(&reflected_class, &method_name, expr)
+                    }
+                    _ => Ok(()),
+                }
             }
             "ReflectionProperty" => {
-                let reflected_class = reflected_class
-                    .expect("ReflectionProperty always resolves a literal reflected class or errors");
-                let property_name = self.reflection_string_literal_arg(
+                let property_name = self.reflection_member_name_arg(
                     class_name,
                     "property name",
                     normalized_args.get(1),
                     env,
                 )?;
-                self.validate_reflection_property_attrs(&reflected_class, &property_name, expr)
+                match (reflected_class, property_name) {
+                    (Some(reflected_class), Some(property_name)) => {
+                        self.validate_reflection_property_attrs(&reflected_class, &property_name, expr)
+                    }
+                    _ => Ok(()),
+                }
             }
             _ => Ok(()),
         }
@@ -303,20 +316,19 @@ impl Checker {
                 self.resolve_reflection_class_constant(receiver, arg.span)?
             }
             _ if reflection_type == "ReflectionClass" => return Ok(None),
-            _ if !matches!(arg_ty, PhpType::Str) => {
-                return Err(CompileError::new(
-                    arg.span,
-                    &format!(
-                        "{}::__construct() first argument must be a string class name",
-                        reflection_type
-                    ),
-                ));
-            }
+            // `ReflectionMethod`/`ReflectionProperty`: a non-literal `Str`-typed first argument
+            // routes to the EIR dynamic two-string dispatcher (see `crate::codegen_ir::
+            // lower_inst::objects::reflection_members`) instead of erroring — mirrors
+            // `ReflectionClass`'s dynamic-name acceptance above, but scoped to `Str` only (NOT
+            // `object|string` weak coercion like `ReflectionClass` — a documented, narrower scope
+            // for this construction path; a non-`Str` argument still hits the type-error arm
+            // below).
+            _ if matches!(arg_ty, PhpType::Str) => return Ok(None),
             _ => {
                 return Err(CompileError::new(
                     arg.span,
                     &format!(
-                        "{}::__construct() requires a string literal class name (dynamic lookup is not yet supported)",
+                        "{}::__construct() first argument must be a string class name",
                         reflection_type
                     ),
                 ));
@@ -367,6 +379,39 @@ impl Checker {
                     reflection_type, label
                 ),
             )),
+        }
+    }
+
+    /// Extracts a method/property-name argument from a `ReflectionMethod`/`ReflectionProperty`
+    /// constructor call, ACCEPTING a non-literal `Str`-typed expression (unlike
+    /// `reflection_string_literal_arg`, which `ReflectionFunction` still uses unchanged): a
+    /// string literal resolves immediately (`Some(name)`, the existing literal-path behavior,
+    /// byte-for-byte unaffected); any other `Str`-typed expression returns `None`, signaling the
+    /// caller to route to the EIR dynamic two-string dispatcher
+    /// (`crate::codegen_ir::lower_inst::objects::reflection_members`) instead of erroring. A
+    /// non-`Str` argument is still a compile-time type error — this scope does not attempt PHP's
+    /// full weak-coercion behavior for the member-name argument.
+    fn reflection_member_name_arg(
+        &mut self,
+        reflection_type: &str,
+        label: &str,
+        arg: Option<&Expr>,
+        env: &TypeEnv,
+    ) -> Result<Option<String>, CompileError> {
+        let arg = arg.expect("reflection constructor arity was validated");
+        let arg_ty = self.infer_type(arg, env)?;
+        if !matches!(arg_ty, PhpType::Str) {
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "{}::__construct() {} argument must be a string",
+                    reflection_type, label
+                ),
+            ));
+        }
+        match &arg.kind {
+            ExprKind::StringLiteral(value) => Ok(Some(value.clone())),
+            _ => Ok(None),
         }
     }
 

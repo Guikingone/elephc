@@ -179,11 +179,43 @@ fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                 Op::ExprCall | Op::CallableDescriptorInvoke => {
                     features.descriptor_invoker = true;
                 }
+                Op::ObjectNew => {
+                    if object_new_requires_class_introspection(module, function, inst) {
+                        features.class_introspection = true;
+                    }
+                }
                 _ => {}
             }
         }
     }
     features
+}
+
+/// Returns true when a lowered `new ReflectionMethod(...)`/`new ReflectionProperty(...)` needs
+/// the closed-world class registry search machinery (`__rt_sorted_name_search`, shared with
+/// `class_exists()`'s registry lookup — see `builtin_call_requires_class_introspection` above):
+/// specifically, when either of the first two constructor operands is not a compile-time
+/// constant string, routing to the dynamic dispatcher in
+/// `crate::codegen_ir::lower_inst::objects::reflection_members`, which reuses
+/// `__rt_sorted_name_search` for its own flat method/property table lookups.
+fn object_new_requires_class_introspection(
+    module: &Module,
+    function: &Function,
+    inst: &crate::ir::Instruction,
+) -> bool {
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return false;
+    };
+    let Some(class_name) = module.data.class_names.get(data.as_raw() as usize) else {
+        return false;
+    };
+    if class_name != "ReflectionMethod" && class_name != "ReflectionProperty" {
+        return false;
+    }
+    inst.operands
+        .iter()
+        .take(2)
+        .any(|&operand| !value_is_const_string(function, operand))
 }
 
 /// Iterates every function-like body already materialized into the EIR module.

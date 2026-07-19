@@ -150,6 +150,15 @@ pub fn generate_user_asm_from_ir_with_options(
         &mut emitter,
         &mut data,
     )?;
+    // Emits the shared, program-wide dynamic `ReflectionMethod(class, method)`/
+    // `ReflectionProperty(class, property)` construction dispatchers (see
+    // `lower_inst::objects::reflection_members`) once every per-function body has been lowered —
+    // a no-op unless the program actually contains a dynamic-argument construction site.
+    lower_inst::objects::reflection_members::emit_reflection_member_dynamic_dispatch_if_needed(
+        module,
+        &mut emitter,
+        &mut data,
+    )?;
     Ok(finalize_user_asm(module, emitter, data, emit, exported_functions))
 }
 
@@ -243,6 +252,10 @@ fn finalize_user_asm(
     if module.required_runtime_features.class_relation_introspection {
         user_asm.push('\n');
         user_asm.push_str(&runtime::emit_class_relation_registry_data(module));
+    }
+    if lower_inst::objects::reflection_members::module_needs_reflection_member_dynamic_dispatch(module) {
+        user_asm.push('\n');
+        user_asm.push_str(&runtime::emit_reflect_member_registry_data(module).0);
     }
     if matches!(emit, Emit::Cdylib) && module.target.platform == Platform::Linux {
         let mut exported: HashSet<String> = exported_functions

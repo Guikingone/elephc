@@ -12,6 +12,7 @@ mod class_relation_registry;
 mod const_registry;
 mod fixed;
 mod instanceof;
+mod reflect_member_registry;
 mod user;
 
 /// Emit the closed-world constant/enum registry data tables for runtime lookups.
@@ -22,6 +23,17 @@ pub(crate) use const_registry::emit_class_registry_data;
 /// `class_implements()`/`class_parents()`/`class_uses()`.
 pub(crate) use class_relation_registry::emit_class_relation_registry_data;
 pub(crate) use fixed::emit_runtime_data_fixed;
+/// Emit the closed-world flat method/property registry tables backing dynamic
+/// `ReflectionMethod`/`ReflectionProperty` construction and `getMethod`/`getProperty`.
+pub(crate) use reflect_member_registry::emit_reflect_member_registry_data;
+/// Row-layout byte-offset/size constants — the shared ABI contract between the table emitter
+/// here and the raw-assembly dynamic dispatcher in
+/// `crate::codegen_ir::lower_inst::objects::reflection_members`.
+pub(crate) use reflect_member_registry::{
+    CLASS_ID_ROW_CLASS_ID_OFFSET, CLASS_ID_ROW_SIZE, INDEX_ROW_SIZE, METHOD_ROW_MODIFIERS_OFFSET,
+    METHOD_ROW_REAL_NAME_LEN_OFFSET, METHOD_ROW_REAL_NAME_PTR_OFFSET, METHOD_ROW_SIZE,
+    PROPERTY_ROW_MODIFIERS_OFFSET, PROPERTY_ROW_SIZE,
+};
 /// Emit fixed runtime data section (heap globals, fatal/assertion messages, lookup tables, builtin callable metadata).
 pub(crate) use user::emit_runtime_data_user;
 

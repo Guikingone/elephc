@@ -79,6 +79,31 @@ pub(super) fn lower_reflection_owner_new(
             }
         }
     }
+    if class_name == "ReflectionMethod" || class_name == "ReflectionProperty" {
+        if let (Some(&class_operand), Some(&member_operand)) =
+            (inst.operands.first(), inst.operands.get(1))
+        {
+            let dynamic = !is_const_string_or_class_value(ctx.function, class_operand)
+                || !is_const_string_or_class_value(ctx.function, member_operand);
+            if dynamic {
+                return if class_name == "ReflectionMethod" {
+                    super::reflection_members::lower_reflection_method_new_dynamic(
+                        ctx,
+                        inst,
+                        class_operand,
+                        member_operand,
+                    )
+                } else {
+                    super::reflection_members::lower_reflection_property_new_dynamic(
+                        ctx,
+                        inst,
+                        class_operand,
+                        member_operand,
+                    )
+                };
+            }
+        }
+    }
     let metadata = reflection_owner_metadata(ctx, class_name, inst)?;
     let (class_id, property_count, uninitialized_marker_offsets) = {
         let class_info = ctx
@@ -412,7 +437,7 @@ fn reflection_param_counts(signature: Option<&crate::types::FunctionSig>) -> (i6
 }
 
 /// Stores an integer immediate into a Reflection object's property slot.
-fn emit_reflection_int_property(
+pub(super) fn emit_reflection_int_property(
     ctx: &mut FunctionContext<'_>,
     value: i64,
     low_offset: usize,
@@ -810,7 +835,7 @@ fn const_data_operand(
 }
 
 /// Writes a heap-persisted string into the current Reflection object result slot.
-fn emit_reflection_string_property(
+pub(super) fn emit_reflection_string_property(
     ctx: &mut FunctionContext<'_>,
     value: &str,
     low_offset: usize,
@@ -843,7 +868,7 @@ fn emit_reflection_string_property(
 }
 
 /// Replaces the Reflection object's default `__attrs` array with populated metadata.
-fn emit_reflection_attrs_property(
+pub(super) fn emit_reflection_attrs_property(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
     attr_names: &[String],
@@ -1537,7 +1562,7 @@ fn emit_reflection_property_modifiers(
     let Some((bits, has_declared_type)) = property_modifiers_and_type(ctx, owner_class, property_name) else {
         return Ok(());
     };
-    let (modifiers_off, has_type_off) = {
+    let (modifiers_off, has_type_off, name_off) = {
         let ci = ctx
             .module
             .class_infos
@@ -1549,10 +1574,18 @@ fn emit_reflection_property_modifiers(
                 .copied()
                 .ok_or_else(|| CodegenIrError::missing_entry("property offset", 0))
         };
-        (off("__modifiers")?, off("__has_declared_type")?)
+        (off("__modifiers")?, off("__has_declared_type")?, off("__name")?)
     };
     emit_reflection_int_property(ctx, bits, modifiers_off, modifiers_off + 8);
     emit_reflection_int_property(ctx, has_declared_type as i64, has_type_off, has_type_off + 8);
+    // PHP: `getName()` returns the property's declared name — property names are
+    // case-SENSITIVE, so the exact `property_name` the constructor was called with (which the
+    // checker already validated exists, exact case, on `owner_class`) IS the declared spelling.
+    // Pre-existing gap fixed here (found via the J4 dynamic-construction test suite):
+    // `__name` was never baked for `ReflectionProperty` before this change (only
+    // `ReflectionMethod`'s literal path fixed the equivalent gap earlier), so
+    // `getName()` silently returned `''` for every literally-constructed `ReflectionProperty`.
+    emit_reflection_string_property(ctx, property_name, name_off, name_off + 8);
     Ok(())
 }
 
@@ -1580,7 +1613,7 @@ const DYNAMIC_CLASS_DISPATCH_LABEL: &str = "_elephc_reflect_class_new_dynamic";
 /// (an `Op::ConstStr` or `Op::ConstClassName` instruction) — the shape the literal metadata bake
 /// above requires. Shared by the per-call-site dispatch decision and the module-wide scan that
 /// decides whether the dynamic dispatcher needs to be emitted at all.
-fn is_const_string_or_class_value(function: &Function, value: ValueId) -> bool {
+pub(super) fn is_const_string_or_class_value(function: &Function, value: ValueId) -> bool {
     let Some(value_ref) = function.value(value) else {
         return false;
     };

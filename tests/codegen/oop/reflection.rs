@@ -808,3 +808,258 @@ echo $rf->getNumberOfRequiredParameters();
     );
     assert_eq!(out, "target|target|2|1");
 }
+
+/// Verifies dynamic `new ReflectionMethod($class, $method)` construction (both arguments
+/// non-literal runtime strings, forcing the flat-table dynamic dispatcher instead of the
+/// compile-time literal bake) resolves visibility/staticness modifiers correctly. php -n
+/// verified: `bark` is public, non-static; `getName()` returns the declared spelling.
+#[test]
+fn test_reflection_method_dynamic_construction_visibility_and_static_bits() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcDynMbase {
+    public static function kind() { return "animal"; }
+}
+class ElephcDynMdog extends ElephcDynMbase {
+    public function bark(): string { return "woof"; }
+}
+$className = $argc > 0 ? "ElephcDynMdog" : "NOPE";
+$methodName = $argc > 0 ? "bark" : "NOPE";
+$rm = new ReflectionMethod($className, $methodName);
+echo $rm->getName();
+echo "|";
+echo $rm->isPublic() ? "1" : "0";
+echo "|";
+echo $rm->isStatic() ? "1" : "0";
+echo "|";
+// inherited static method resolves through the same class's table segment
+$staticName = $argc > 0 ? "kind" : "NOPE";
+$rm2 = new ReflectionMethod($className, $staticName);
+echo $rm2->getName();
+echo "|";
+echo $rm2->isStatic() ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "bark|1|0|kind|1");
+}
+
+/// Verifies dynamic `new ReflectionProperty($class, $property)` construction resolves
+/// visibility/staticness/readonly modifiers correctly, and that property-name matching is
+/// case-SENSITIVE (php -n verified: PHP property names, unlike class/method names, are
+/// case-sensitive identifiers).
+#[test]
+fn test_reflection_property_dynamic_construction_modifiers_and_case_sensitivity() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcDynPdog {
+    public $name = "Rex";
+    public readonly int $age;
+    public function __construct() { $this->age = 3; }
+}
+$className = $argc > 0 ? "ElephcDynPdog" : "NOPE";
+$propName = $argc > 0 ? "name" : "NOPE";
+$rp = new ReflectionProperty($className, $propName);
+echo $rp->getName();
+echo "|";
+echo $rp->isPublic() ? "1" : "0";
+echo "|";
+$ageProp = $argc > 0 ? "age" : "NOPE";
+$rp2 = new ReflectionProperty($className, $ageProp);
+echo ($rp2->getModifiers() & ReflectionProperty::IS_READONLY) ? "1" : "0";
+echo "|";
+// wrong-case query must miss (case-sensitive), even though a case-insensitive match exists
+$wrongCase = $argc > 0 ? "Name" : "NOPE";
+try {
+    new ReflectionProperty($className, $wrongCase);
+    echo "no throw";
+} catch (\ReflectionException $e) {
+    echo "caught";
+}
+"#,
+    );
+    assert_eq!(out, "name|1|1|caught");
+}
+
+/// Verifies `ReflectionClass::getMethod()`/`getProperty()` delegate to the SAME dynamic
+/// two-string dispatcher as a direct `new ReflectionMethod($class, $name)` construction, and
+/// that a miss on a dynamically-constructed `ReflectionClass` receiver still throws a catchable
+/// `\ReflectionException` echoing the ORIGINAL member name (php -n verified message format).
+#[test]
+fn test_reflection_class_get_method_and_get_property_delegate_to_dynamic_dispatcher() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcDynGmpDog {
+    public $name = "Rex";
+    public function bark(): string { return "woof"; }
+}
+$className = $argc > 0 ? "ElephcDynGmpDog" : "NOPE";
+$rc = new ReflectionClass($className);
+$rm = $rc->getMethod("bark");
+echo $rm->getName();
+echo "|";
+$rp = $rc->getProperty("name");
+echo $rp->getName();
+echo "|";
+try {
+    $rc->getMethod("nope");
+    echo "no throw";
+} catch (\ReflectionException $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "bark|name|Method ElephcDynGmpDog::nope() does not exist");
+}
+
+/// Verifies a dynamic `new ReflectionMethod($class, $method)` construction with an unknown
+/// method name throws a real, catchable `\ReflectionException` echoing the class and method
+/// names exactly as queried (php -n verified message format: `Method CLASS::NAME() does not
+/// exist`).
+#[test]
+fn test_reflection_method_dynamic_construction_unknown_method_throws_reflection_exception() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcDynMmissDog {
+    public function bark(): string { return "woof"; }
+}
+$className = $argc > 0 ? "ElephcDynMmissDog" : "NOPE";
+try {
+    new ReflectionMethod($className, "meow");
+    echo "no throw";
+} catch (\ReflectionException $e) {
+    echo "caught:" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "caught:Method ElephcDynMmissDog::meow() does not exist");
+}
+
+/// Verifies a dynamic `new ReflectionProperty($class, $property)` construction with an unknown
+/// property name throws a real, catchable `\ReflectionException` (php -n verified message
+/// format: `Property CLASS::$NAME does not exist`).
+#[test]
+fn test_reflection_property_dynamic_construction_unknown_property_throws_reflection_exception() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcDynPmissDog {
+    public $name = "Rex";
+}
+$className = $argc > 0 ? "ElephcDynPmissDog" : "NOPE";
+try {
+    new ReflectionProperty($className, "nope");
+    echo "no throw";
+} catch (\ReflectionException $e) {
+    echo "caught:" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "caught:Property ElephcDynPmissDog::$nope does not exist");
+}
+
+/// Verifies a dynamic `new ReflectionMethod($class, $method)`/`new ReflectionProperty($class,
+/// $property)` construction with an unknown CLASS name throws the SAME `\ReflectionException`
+/// message format the dynamic `ReflectionClass($name)` constructor already uses (php -n
+/// verified: `Class "NAME" does not exist`), echoing the original unmodified class-name query.
+#[test]
+fn test_reflection_method_and_property_dynamic_construction_unknown_class_throws_reflection_exception() {
+    let out = compile_and_run(
+        r#"<?php
+$className = $argc > 0 ? "ElephcDynNoSuchClassForMembers" : "NOPE";
+try {
+    new ReflectionMethod($className, "bark");
+    echo "no throw";
+} catch (\ReflectionException $e) {
+    echo "caught:" . $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionProperty($className, "name");
+    echo "no throw";
+} catch (\ReflectionException $e) {
+    echo "caught:" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "caught:Class \"ElephcDynNoSuchClassForMembers\" does not exist|caught:Class \"ElephcDynNoSuchClassForMembers\" does not exist"
+    );
+}
+
+/// Verifies dynamic `ReflectionMethod`/`ReflectionProperty` construction is case-insensitive for
+/// the CLASS name (matching PHP class-name semantics — mirrors the existing `ReflectionClass`
+/// dynamic-construction case-insensitivity test) while the METHOD name is also case-insensitive
+/// (php -n verified: PHP method names, unlike property names, are case-insensitive).
+#[test]
+fn test_reflection_method_dynamic_construction_case_insensitive_class_and_method() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcDynCiDog {
+    public function bark(): string { return "woof"; }
+}
+$className = $argc > 0 ? "elephcdyncidog" : "NOPE";
+$methodName = $argc > 0 ? "BARK" : "NOPE";
+$rm = new ReflectionMethod($className, $methodName);
+echo $rm->getName();
+"#,
+    );
+    assert_eq!(out, "bark");
+}
+
+/// Regression: the pre-existing LITERAL-argument `new ReflectionMethod("Class", "method")` /
+/// `new ReflectionProperty("Class", "property")` construction paths stay byte-for-byte unchanged
+/// when a dynamic-argument call site is ALSO present in the same program (both routes compile:
+/// the dynamic dispatchers are emitted once, and every literal call site still takes the direct
+/// compile-time metadata bake — mirrors
+/// `test_reflection_class_literal_construction_unaffected_by_dynamic_dispatcher_presence`).
+#[test]
+fn test_reflection_method_property_literal_construction_unaffected_by_dynamic_dispatcher_presence() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcDynLitDog {
+    public $name = "Rex";
+    public function bark(): string { return "woof"; }
+}
+$literalMethod = new ReflectionMethod("ElephcDynLitDog", "bark");
+echo $literalMethod->getName();
+echo "|";
+$literalProp = new ReflectionProperty("ElephcDynLitDog", "name");
+echo $literalProp->getName();
+echo "|";
+$className = $argc > 0 ? "ElephcDynLitDog" : "NOPE";
+$methodName = $argc > 0 ? "bark" : "NOPE";
+$dynamicMethod = new ReflectionMethod($className, $methodName);
+echo $dynamicMethod->getName();
+"#,
+    );
+    assert_eq!(out, "bark|name|bark");
+}
+
+/// Heap-cleanliness regression for the SUCCESS path: dynamic `ReflectionMethod`/
+/// `ReflectionProperty` construction and `getMethod`/`getProperty` delegation must not leak —
+/// every allocation performed while resolving/constructing the shell must be balanced. (The
+/// CAUGHT-exception path has a separate, pre-existing, unrelated leak — see
+/// `crate::codegen_ir::lower_inst::objects::reflection_members`'s "getAttributes()" doc note and
+/// the project's tracked "caught exception not freed at catch-end" gap — so this test
+/// deliberately exercises ONLY the success paths, matching how heap-debug assertions are scoped
+/// elsewhere in this file.)
+#[test]
+fn test_reflection_method_property_dynamic_construction_heap_clean() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcDynHeapDog {
+    public $name = "Rex";
+    public function bark(): string { return "woof"; }
+}
+$className = $argc > 0 ? "ElephcDynHeapDog" : "NOPE";
+$methodName = $argc > 0 ? "bark" : "NOPE";
+$rm = new ReflectionMethod($className, $methodName);
+$rp = new ReflectionProperty($className, "name");
+$rc = new ReflectionClass($className);
+$rm2 = $rc->getMethod($methodName);
+$rp2 = $rc->getProperty("name");
+echo $rm->getName() . $rp->getName() . $rm2->getName() . $rp2->getName();
+"#,
+    );
+    assert_eq!(out, "barknamebarkname");
+}

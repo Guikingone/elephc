@@ -49,6 +49,12 @@ use crate::codegen_ir::{CodegenIrError, Result};
 // `reflection::emit_reflection_class_dynamic_dispatch_if_needed` (see the matching note on
 // `lower_inst`'s `pub(crate) mod objects;`).
 pub(crate) mod reflection;
+// `pub(crate)` so `codegen_ir/mod.rs` can reach
+// `reflection_members::emit_reflection_member_dynamic_dispatch_if_needed`/
+// `module_needs_reflection_member_dynamic_dispatch`, and `reflection.rs` can reach
+// `reflection_members::lower_reflection_method_new_dynamic`/
+// `lower_reflection_property_new_dynamic`.
+pub(crate) mod reflection_members;
 mod return_type_guard;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;

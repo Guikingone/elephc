@@ -33,6 +33,14 @@ pub(crate) use data::emit_class_registry_data;
 pub(crate) use data::emit_class_relation_registry_data;
 pub(crate) use data::emit_const_registry_data;
 pub(crate) use data::emit_runtime_data_fixed;
+/// Emit the closed-world flat method/property registry tables backing dynamic
+/// `ReflectionMethod`/`ReflectionProperty` construction and `getMethod`/`getProperty`.
+pub(crate) use data::emit_reflect_member_registry_data;
+pub(crate) use data::{
+    CLASS_ID_ROW_CLASS_ID_OFFSET, CLASS_ID_ROW_SIZE, INDEX_ROW_SIZE, METHOD_ROW_MODIFIERS_OFFSET,
+    METHOD_ROW_REAL_NAME_LEN_OFFSET, METHOD_ROW_REAL_NAME_PTR_OFFSET, METHOD_ROW_SIZE,
+    PROPERTY_ROW_MODIFIERS_OFFSET, PROPERTY_ROW_SIZE,
+};
 /// Emit fixed runtime data section (symbols, constants, type metadata).
 pub(crate) use data::emit_runtime_data_user;
 /// Emit user-program-specific runtime data section.

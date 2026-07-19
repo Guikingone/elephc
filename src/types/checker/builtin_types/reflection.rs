@@ -193,6 +193,19 @@ pub(crate) fn inject_builtin_reflection(
             TypeExpr::Bool,
             modifier_bit_test_expr("__modifiers", 64),
         ));
+        // php -n verified bit values: IS_PRIVATE=4, IS_FINAL=32. Added alongside
+        // `isPublic`/`isProtected`/`isStatic`/`isAbstract` above (J4: the flat method-table
+        // dynamic-construction feature needs the full visibility-bit surface).
+        reflection_method.methods.push(builtin_reflection_computed_method(
+            "isPrivate",
+            TypeExpr::Bool,
+            modifier_bit_test_expr("__modifiers", 4),
+        ));
+        reflection_method.methods.push(builtin_reflection_computed_method(
+            "isFinal",
+            TypeExpr::Bool,
+            modifier_bit_test_expr("__modifiers", 32),
+        ));
         reflection_method
             .methods
             .push(builtin_reflection_unsupported_tostring_method("ReflectionMethod"));
@@ -1378,14 +1391,37 @@ fn builtin_reflection_class() -> FlattenedClass {
                 mixed_type(),
                 null_lit(),
             ),
-            // PHP: `getProperty(string $name): ReflectionProperty`. Un-backed
-            // stub returning `null` typed `mixed` (object return → mixed); the
-            // `name` parameter lets named/positional calls type-check.
-            builtin_reflection_literal_method_with_params(
+            // PHP: `getMethod(string $name): ReflectionMethod`. Delegates to the dynamic
+            // `ReflectionMethod($this->__name, $name)` constructor (J4: the flat method-table
+            // dynamic-construction feature) — `$this->__name` is a RUNTIME string even for a
+            // literally-constructed receiver, so this single body soundly serves both a
+            // literal-constructed and a dynamically-constructed `ReflectionClass`. A miss throws
+            // the SAME catchable `\ReflectionException` the constructor throws.
+            builtin_reflection_string_arg_method(
+                "getMethod",
+                "name",
+                TypeExpr::Named(Name::unqualified("ReflectionMethod")),
+                Expr::new(
+                    ExprKind::NewObject {
+                        class_name: Name::unqualified("ReflectionMethod"),
+                        args: vec![this_prop_expr("__name"), var_expr("name")],
+                    },
+                    crate::span::Span::dummy(),
+                ),
+            ),
+            // PHP: `getProperty(string $name): ReflectionProperty`. Delegates to the dynamic
+            // `ReflectionProperty($this->__name, $name)` constructor. See `getMethod` above.
+            builtin_reflection_string_arg_method(
                 "getProperty",
-                mixed_type(),
-                null_lit(),
-                vec![("name", Some(TypeExpr::Str), None, false)],
+                "name",
+                TypeExpr::Named(Name::unqualified("ReflectionProperty")),
+                Expr::new(
+                    ExprKind::NewObject {
+                        class_name: Name::unqualified("ReflectionProperty"),
+                        args: vec![this_prop_expr("__name"), var_expr("name")],
+                    },
+                    crate::span::Span::dummy(),
+                ),
             ),
             // -- real, construction-baked closed-world metadata accessors --
             builtin_reflection_slot_getter("isAbstract", "__is_abstract", TypeExpr::Bool),
@@ -1667,6 +1703,35 @@ fn builtin_reflection_property() -> FlattenedClass {
     class
         .methods
         .push(builtin_reflection_slot_getter("hasType", "__has_declared_type", TypeExpr::Bool));
+    // Real visibility/staticness/readonly checks — single-bit tests against `__modifiers` (php -n
+    // verified bit values: IS_PUBLIC=1, IS_PROTECTED=2, IS_PRIVATE=4, IS_STATIC=16,
+    // IS_READONLY=128). Mirrors `ReflectionMethod`'s `isPublic`/`isProtected`/`isPrivate`/
+    // `isStatic` accessors above.
+    class.methods.push(builtin_reflection_computed_method(
+        "isPublic",
+        TypeExpr::Bool,
+        modifier_bit_test_expr("__modifiers", 1),
+    ));
+    class.methods.push(builtin_reflection_computed_method(
+        "isProtected",
+        TypeExpr::Bool,
+        modifier_bit_test_expr("__modifiers", 2),
+    ));
+    class.methods.push(builtin_reflection_computed_method(
+        "isPrivate",
+        TypeExpr::Bool,
+        modifier_bit_test_expr("__modifiers", 4),
+    ));
+    class.methods.push(builtin_reflection_computed_method(
+        "isStatic",
+        TypeExpr::Bool,
+        modifier_bit_test_expr("__modifiers", 16),
+    ));
+    class.methods.push(builtin_reflection_computed_method(
+        "isReadOnly",
+        TypeExpr::Bool,
+        modifier_bit_test_expr("__modifiers", 128),
+    ));
     class
         .methods
         .push(builtin_reflection_unsupported_tostring_method("ReflectionProperty"));
