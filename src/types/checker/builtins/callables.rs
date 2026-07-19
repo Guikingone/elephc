@@ -1546,13 +1546,26 @@ pub(super) fn check_builtin(
                 ));
             }
             let first_ty = checker.infer_type(&args[0], env)?;
-            if !matches!(first_ty, PhpType::Object(_))
-                && !matches!(args[0].kind, ExprKind::StringLiteral(_))
+            // A literal string name or a statically `Object`-typed expression fold to
+            // compile-time metadata (see `lower_class_relation`'s literal fast path).
+            // A non-literal `Str`, and any `Mixed`/`Union` value that may hold an
+            // object or string at runtime, are accepted here too and lowered to the
+            // `__rt_class_implements`/`__rt_class_parents`/`__rt_class_uses` closed-world
+            // registry search, cloning the `class_exists`/`enum_exists` non-literal
+            // pattern above. `Object`-typed arguments are ALSO always resolved through
+            // the object's runtime class id rather than its static type: a variable
+            // typed as a base class may hold a derived-class instance at runtime, and
+            // PHP's `class_implements()` reflects the runtime class, not the static
+            // type (verified against `php -n`).
+            if !matches!(
+                first_ty,
+                PhpType::Object(_) | PhpType::Str | PhpType::Mixed | PhpType::Union(_)
+            ) && !matches!(args[0].kind, ExprKind::StringLiteral(_))
             {
                 return Err(CompileError::new(
                     span,
                     &format!(
-                        "{}() first argument must be an object or string literal in AOT mode",
+                        "{}() first argument must be an object or string in AOT mode",
                         name
                     ),
                 ));

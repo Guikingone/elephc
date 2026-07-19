@@ -55,6 +55,17 @@ pub struct RuntimeFeatures {
     /// families gate distinct data tables and helpers that a program may need
     /// independently.
     pub class_introspection: bool,
+    /// True when the program performs a `class_implements()`/`class_parents()`/
+    /// `class_uses()` lookup whose target cannot be resolved to a single known
+    /// class/interface/trait at compile time: a non-literal name, or an object
+    /// argument (whose runtime class must be resolved dynamically since the
+    /// static type is not a sound stand-in for the runtime type under
+    /// polymorphism). Gates the `_class_relation_table`/`_interface_relation_table`/
+    /// `_trait_relation_table` payload registries and their runtime search
+    /// helpers. Kept as a sibling of `class_introspection` rather than folded
+    /// into it: a program can use non-literal `class_exists()` without ever
+    /// needing the (larger) per-class relation payload tables, and vice versa.
+    pub class_relation_introspection: bool,
 }
 
 impl RuntimeFeatures {
@@ -67,6 +78,7 @@ impl RuntimeFeatures {
             web: false,
             const_introspection: false,
             class_introspection: false,
+            class_relation_introspection: false,
         }
     }
 
@@ -80,6 +92,7 @@ impl RuntimeFeatures {
             web: true,
             const_introspection: true,
             class_introspection: true,
+            class_relation_introspection: true,
         }
     }
 }
@@ -1074,6 +1087,7 @@ mod tests {
             web: false,
             const_introspection: false,
             class_introspection: false,
+            class_relation_introspection: false,
         })
         .iter()
         .any(|lib| lib == "elephc_crypto"));

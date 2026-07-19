@@ -30,6 +30,7 @@ pub(crate) mod spl;
 mod system;
 
 pub(crate) use data::emit_class_registry_data;
+pub(crate) use data::emit_class_relation_registry_data;
 pub(crate) use data::emit_const_registry_data;
 pub(crate) use data::emit_runtime_data_fixed;
 /// Emit fixed runtime data section (symbols, constants, type metadata).

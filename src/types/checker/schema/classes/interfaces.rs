@@ -27,16 +27,33 @@ use super::state::ClassBuildState;
 ///
 /// Validates that each interface exists, that `Throwable` is only implementable by
 /// `Error`/`Exception`, and that non-interfaces are not being implemented as interfaces.
-/// Pushes collected interface names onto `state.interfaces` in breadth-first order.
+/// Pushes collected interface names onto `state.interfaces`, matching PHP's own
+/// `class_implements()`/reflection linearization order (`php -n` verified — see
+/// `resolve_interface_ancestors` for the derivation):
+///
+/// - If `class` declares no own `implements` clause, its interfaces are inherited
+///   *reversed* from the parent class's already-resolved list (`state.interfaces`,
+///   seeded by `ClassBuildState::from_parent`): PHP's linearization flips the order at
+///   every generation that adds nothing of its own. Verified: `class Base implements IB
+///   {}` (`IB extends IA`) reports `[IB, IA]`; `class Kid extends Base {}` (no own
+///   `implements`) reports `[IA, IB]` — the reverse, not a copy.
+/// - If `class` declares its own `implements` clause, the parent's list (unreversed) is
+///   kept as-is, then the own-declared interfaces are appended as one contiguous block in
+///   source order, then — for each own-declared interface in that same order — its own
+///   transitive ancestor chain (`resolve_interface_ancestors`) is appended *reversed*.
+///   Verified: `class Mid extends Base implements IC {}` reports `[IB, IA, IC]` (parent
+///   list untouched, own interface appended last, no reversal since `IC` has no parents
+///   of its own to reverse).
+///
+/// Entries are deduplicated by case-insensitive name, keeping the first (earliest)
+/// occurrence — matching PHP's "already implemented" skip during interface linking.
 pub(super) fn collect_interfaces(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
     class_map: &HashMap<String, FlattenedClass>,
     checker: &Checker,
 ) -> Result<(), CompileError> {
-    let mut seen_interfaces: HashSet<String> = state.interfaces.iter().cloned().collect();
-    let mut queue = Vec::new();
-    for interface_name in class.implements.iter().rev() {
+    for interface_name in &class.implements {
         if interface_is_throwable_contract(checker, interface_name)
             && !class_can_implement_throwable_contract(state, class)
         {
@@ -63,24 +80,79 @@ pub(super) fn collect_interfaces(
                 &format!("Unknown interface: {}", interface_name),
             ));
         }
-        queue.push(interface_name.clone());
     }
-    while let Some(interface_name) = queue.pop() {
-        if !seen_interfaces.insert(interface_name.clone()) {
-            continue;
+
+    if class.implements.is_empty() {
+        // Pure inheritance: no own interfaces to add, just flip the parent's order.
+        state.interfaces.reverse();
+        return Ok(());
+    }
+
+    let mut seen: HashSet<String> = state
+        .interfaces
+        .iter()
+        .map(|name| php_symbol_key(name))
+        .collect();
+
+    // -- own declared interfaces, as one contiguous block in source order --
+    for interface_name in &class.implements {
+        push_dedup(&mut state.interfaces, &mut seen, interface_name.clone());
+    }
+
+    // -- each own interface's own transitive ancestor chain, individually reversed --
+    for interface_name in &class.implements {
+        let ancestors = resolve_interface_ancestors(interface_name, checker)?;
+        for ancestor in ancestors.into_iter().rev() {
+            push_dedup(&mut state.interfaces, &mut seen, ancestor);
         }
-        let interface_info = checker.interfaces.get(&interface_name).ok_or_else(|| {
-            CompileError::new(
-                crate::span::Span::dummy(),
-                &format!("Unknown interface: {}", interface_name),
-            )
-        })?;
-        for parent_name in interface_info.parents.iter().rev() {
-            queue.push(parent_name.clone());
-        }
-        state.interfaces.push(interface_name);
     }
     Ok(())
+}
+
+/// Appends `name` to `list` unless its case-insensitive key is already in `seen`.
+fn push_dedup(list: &mut Vec<String>, seen: &mut HashSet<String>, name: String) {
+    if seen.insert(php_symbol_key(&name)) {
+        list.push(name);
+    }
+}
+
+/// Computes `interface_name`'s own transitively extended ancestor interfaces (excluding
+/// itself), in PHP's linearization order: this interface's own directly declared `extends`
+/// list first (source order, as one contiguous block), then — for each of those parents in
+/// that same order — that parent's own ancestor list, individually reversed, appended.
+///
+/// This is the same rule `collect_interfaces` applies to a class's own `implements` clause,
+/// and is also what `class_implements()`/`class_parents()` must report when the target
+/// itself names an interface (see the mirrored implementations in
+/// `crate::codegen_ir::lower_inst::builtins::class_relations` and
+/// `crate::codegen::runtime::data::class_relation_registry`, kept in sync with this rule
+/// since neither shares this checker-internal helper directly).
+fn resolve_interface_ancestors(
+    interface_name: &str,
+    checker: &Checker,
+) -> Result<Vec<String>, CompileError> {
+    let interface_info = checker.interfaces.get(interface_name).ok_or_else(|| {
+        CompileError::new(
+            crate::span::Span::dummy(),
+            &format!("Unknown interface: {}", interface_name),
+        )
+    })?;
+    let direct_parents = interface_info.parents.clone();
+    if direct_parents.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut result = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for parent in &direct_parents {
+        push_dedup(&mut result, &mut seen, parent.clone());
+    }
+    for parent in &direct_parents {
+        let grandparents = resolve_interface_ancestors(parent, checker)?;
+        for grandparent in grandparents.into_iter().rev() {
+            push_dedup(&mut result, &mut seen, grandparent);
+        }
+    }
+    Ok(result)
 }
 
 /// Returns `true` if `interface_name` is or extends `Throwable` (case-insensitive).

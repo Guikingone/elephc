@@ -244,7 +244,7 @@ If `$autoload` is `false`, no compile-time load is forced; the call returns whet
 | `spl_classes()` | Returns the indexed array of SPL/core class and interface names shipped by the compiler today (currently 61 entries: SPL/core interfaces, throwable types, SPL exception classes, runtime-backed containers, and storage/decorator/filesystem iterators). The list grows as later phases ship more SPL types |
 | `spl_object_id($obj)` | The object's heap pointer cast to int — unique per object, stable per process |
 | `spl_object_hash($obj)` | The object's heap pointer formatted as a decimal string. PHP returns a 32-character hex string; we return a decimal string. Both are unique-per-object and stable per-process — only the textual format differs |
-| `get_class($obj)` | Resolves to the argument's static type name. Inside a method called with no argument, returns the current class context |
+| `get_class($obj)` | Resolves to the object's runtime class name (not its static declared type, so a base-typed variable holding a derived instance reports the derived class). Inside a method called with no argument, returns the current class context |
 | `get_parent_class($obj)` | Returns the parent class name from `ctx.classes[name].parent`, or empty string when the class has no parent |
 | `class_implements($object_or_class, bool $autoload = true)` | Returns an associative `interface => interface` array for a class/object, including inherited parent interfaces. When the argument names an interface, returns that interface's parent interfaces |
 | `class_parents($object_or_class, bool $autoload = true)` | Returns an associative `parent => parent` array, starting with the immediate parent and then ancestors |
@@ -253,11 +253,22 @@ If `$autoload` is `false`, no compile-time load is forced; the call returns whet
 | `is_subclass_of($obj, "Foo")` | Same as `is_a` but excludes the case where the static type *is* `Foo` |
 | `class_alias($original, $alias)` | At compile time, top-level literal calls synthesize `class $alias extends $original {}`. The alias is realised as a *subclass* rather than a true name alias: `new $alias()`, `$obj instanceof $alias`, and `$alias::CONST` work; `(new $original()) instanceof $alias` returns `false` (it would be `true` under PHP runtime semantics). Runtime-dynamic call shapes are rejected because elephc cannot mutate the class table after compilation |
 
-`class_implements`, `class_parents`, and `class_uses` accept either an object
-expression with a known static class type or a string literal class-like name.
-The optional `$autoload` flag must be a literal bool or int in the current AOT
-model. A string name that is not compiled into the binary returns `false`,
-matching PHP's unresolved-name result.
+`class_implements`, `class_parents`, and `class_uses` accept an object
+expression or a string class-like name, literal or runtime-computed. A literal
+string name folds to compile-time metadata. A non-literal string name, and
+every object argument, resolve at runtime through a closed-world per-class
+relation registry (`_class_relation_table`/`_interface_relation_table`/
+`_trait_relation_table`); object arguments always resolve through the
+object's *runtime* class, never its static declared type, so a base-typed
+parameter holding a derived-class instance reports the derived class's
+relations. The optional `$autoload` flag must be a literal bool or int in the
+current AOT model — elephc's closed-world class table already contains every
+declared class, so autoloading has no runtime effect either way. A name that
+is not compiled into the binary returns `false`, matching PHP's
+unresolved-name result; a name that resolves to a class-like symbol of the
+"wrong" kind for the relation being asked (e.g. `class_parents()` on an
+interface, or `class_implements()` on a trait) returns an empty array rather
+than `false`, matching PHP.
 
 ### Closure-based autoload (`spl_autoload_register`)
 

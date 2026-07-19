@@ -10,9 +10,12 @@
 
 mod build_argv;
 mod rt_class_exists;
+mod rt_class_relation_lookup;
+mod rt_class_relation_probe;
 mod rt_constant;
 mod rt_defined;
 mod rt_enum_exists;
+mod rt_hash_from_name_list;
 mod rt_interface_exists;
 mod rt_sorted_name_search;
 mod rt_trait_exists;
@@ -130,9 +133,12 @@ pub(crate) use strtotime::emit_strtotime;
 pub(crate) use strtotime::emit_strtotime_data;
 pub(crate) use time::emit_time;
 pub(crate) use rt_class_exists::emit_rt_class_exists;
+pub(crate) use rt_class_relation_lookup::emit_rt_class_relation_lookup;
+pub(crate) use rt_class_relation_probe::emit_rt_class_relation_probe;
 pub(crate) use rt_constant::emit_rt_constant;
 pub(crate) use rt_defined::emit_rt_defined;
 pub(crate) use rt_enum_exists::emit_rt_enum_exists;
+pub(crate) use rt_hash_from_name_list::emit_rt_hash_from_name_list;
 pub(crate) use rt_interface_exists::emit_rt_interface_exists;
 pub(crate) use rt_sorted_name_search::emit_rt_sorted_name_search;
 pub(crate) use rt_trait_exists::emit_rt_trait_exists;

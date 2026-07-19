@@ -240,6 +240,10 @@ fn finalize_user_asm(
             &trait_names,
         ));
     }
+    if module.required_runtime_features.class_relation_introspection {
+        user_asm.push('\n');
+        user_asm.push_str(&runtime::emit_class_relation_registry_data(module));
+    }
     if matches!(emit, Emit::Cdylib) && module.target.platform == Platform::Linux {
         let mut exported: HashSet<String> = exported_functions
             .values()

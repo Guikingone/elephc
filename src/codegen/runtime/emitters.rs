@@ -194,7 +194,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // interface_exists()/trait_exists(). The shared binary search is emitted once
     // when either feature needs it; each feature's own entry points are emitted
     // under its own gate. Their data tables live in user data.
-    if features.const_introspection || features.class_introspection {
+    if features.const_introspection || features.class_introspection || features.class_relation_introspection {
         system::emit_rt_sorted_name_search(emitter);
     }
     if features.const_introspection {
@@ -206,6 +206,11 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
         system::emit_rt_class_exists(emitter);
         system::emit_rt_interface_exists(emitter);
         system::emit_rt_trait_exists(emitter);
+    }
+    if features.class_relation_introspection {
+        system::emit_rt_class_relation_probe(emitter);
+        system::emit_rt_class_relation_lookup(emitter);
+        system::emit_rt_hash_from_name_list(emitter);
     }
 
     // Exception runtime functions

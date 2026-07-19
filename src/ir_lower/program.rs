@@ -146,6 +146,8 @@ fn include_lowered_runtime_features(module: &mut Module) {
     module.required_runtime_features.descriptor_invoker |= features.descriptor_invoker;
     module.required_runtime_features.const_introspection |= features.const_introspection;
     module.required_runtime_features.class_introspection |= features.class_introspection;
+    module.required_runtime_features.class_relation_introspection |=
+        features.class_relation_introspection;
 }
 
 /// Derives optional runtime features from the actual EIR instruction stream.
@@ -169,6 +171,9 @@ fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                     }
                     if builtin_call_requires_class_introspection(module, function, inst) {
                         features.class_introspection = true;
+                    }
+                    if builtin_call_requires_class_relation_introspection(module, function, inst) {
+                        features.class_relation_introspection = true;
                     }
                 }
                 Op::ExprCall | Op::CallableDescriptorInvoke => {
@@ -292,6 +297,34 @@ fn builtin_call_requires_class_introspection(
     matches!(
         php_symbol_key(name.trim_start_matches('\\')).as_str(),
         "class_exists" | "interface_exists" | "trait_exists"
+    ) && inst
+        .operands
+        .first()
+        .copied()
+        .is_some_and(|operand| !value_is_const_string(function, operand))
+}
+
+/// Returns true when a lowered builtin call needs the per-class relation payload registry.
+///
+/// `class_implements`/`class_parents`/`class_uses` fold their target to compile-time
+/// metadata whenever the first argument is a literal class-name string (see
+/// `crate::codegen_ir::lower_inst::builtins::class_relations::lower_class_relation`);
+/// every other shape — a non-literal string, or any object argument (the runtime
+/// class of an object cannot be assumed to equal its static declared type under
+/// polymorphism) — must search the emitted `_class_relation_table`/
+/// `_interface_relation_table`/`_trait_relation_table` payload registries at
+/// runtime, mirroring `builtin_call_requires_class_introspection` above.
+fn builtin_call_requires_class_relation_introspection(
+    module: &Module,
+    function: &Function,
+    inst: &crate::ir::Instruction,
+) -> bool {
+    let Some(name) = builtin_call_name(module, inst) else {
+        return false;
+    };
+    matches!(
+        php_symbol_key(name.trim_start_matches('\\')).as_str(),
+        "class_implements" | "class_parents" | "class_uses"
     ) && inst
         .operands
         .first()

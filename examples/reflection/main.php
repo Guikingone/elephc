@@ -6,7 +6,12 @@
 // ReflectionParameter read metadata baked from the function declaration, so
 // parameter names, positions, optionality and declared types are all known.
 
-class Mailer {}
+interface Notifier {}
+trait Loggable {}
+
+class Mailer implements Notifier {
+    use Loggable;
+}
 
 function send(string $to, Mailer $mailer, int $retries = 3, ?string $subject = null): void
 {
@@ -56,3 +61,27 @@ try {
 } catch (\ReflectionException $e) {
     echo "No such class: ", $e->getMessage(), "\n";
 }
+
+// class_implements()/class_parents()/class_uses() on that same RUNTIME-chosen
+// name. A non-literal name (or an object argument) resolves through a
+// closed-world per-class relation registry instead of compile-time-folded
+// metadata; an unknown name returns `false` rather than throwing.
+$implements = class_implements($className);
+if ($implements === false) {
+    echo "  implements: (unknown class)\n";
+} else {
+    echo "  implements:";
+    foreach ($implements as $interfaceName => $_) {
+        echo " ", $interfaceName;
+    }
+    echo "\n";
+}
+
+$uses = class_uses($className);
+echo "  uses traits:";
+if ($uses !== false) {
+    foreach ($uses as $traitName => $_) {
+        echo " ", $traitName;
+    }
+}
+echo "\n";

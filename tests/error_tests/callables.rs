@@ -79,12 +79,19 @@ fn test_error_class_implements_wrong_args() {
     );
 }
 
-/// Verifies that error class implements requires literal or object.
+// `class_implements()`/`class_parents()`/`class_uses()` with a non-literal string
+// name or an object argument are no longer AOT-mode errors: they compile to a
+// closed-world `__rt_class_implements`/`__rt_class_parents`/`__rt_class_uses`
+// per-class relation registry lookup, cloning the `class_exists` non-literal
+// path. See the positive codegen coverage in
+// `tests/codegen/spl/introspection.rs`.
+
+/// Verifies that error class implements requires object or string.
 #[test]
-fn test_error_class_implements_requires_literal_or_object() {
+fn test_error_class_implements_requires_object_or_string() {
     expect_error(
-        r#"<?php $name = "DateTime"; class_implements($name);"#,
-        "class_implements() first argument must be an object or string literal in AOT mode",
+        r#"<?php class_implements(42);"#,
+        "class_implements() first argument must be an object or string in AOT mode",
     );
 }
 
