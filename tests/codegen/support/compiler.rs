@@ -42,6 +42,48 @@ pub(crate) fn codegen_fixture_uses_ir_backend() -> bool {
     selected_test_codegen_backend() == TestCodegenBackend::Ir
 }
 
+/// Runs the frontend through type checking ONLY (tokenize → parse → resolve → name-resolve →
+/// autoload → conditional-function hoist → prelude injection → pre-checker extension fold →
+/// checker), mirroring `compile_source_to_asm_with_defines_repr`'s front half, and returns the
+/// checker's error message. Panics if `source` type-checks cleanly (use this only for fixtures
+/// that must fail). Used for asserting a specific compile-time diagnostic without paying for a
+/// full assemble/link/run cycle.
+pub(crate) fn compile_expect_check_error(source: &str) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("elephc_check_err_{}_{}", std::process::id(), id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
+    let ast = elephc::parser::parse(&tokens).expect("parse failed");
+    let synthetic_main = dir.join("test.php");
+    let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
+    let ast = elephc::conditional::apply(ast, &HashSet::new());
+    let (autoload_registry, ast) = elephc::autoload::Registry::build(&dir, ast);
+    let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
+    let resolved = elephc::autoload::collect_aliases(resolved);
+    let resolved = elephc::pdo_prelude::inject_if_used(resolved);
+    let resolved = elephc::tz_prelude::inject_if_used(resolved);
+    let resolved = elephc::list_id_prelude::inject_if_used(resolved);
+    let resolved = elephc::image_prelude::inject_if_used(resolved);
+    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+    let (resolved, _autoload_warnings) =
+        elephc::autoload::run(resolved, &dir, &autoload_registry).expect("autoload failed");
+    let resolved = elephc::resolver::hoist_conditional_function_declarations(resolved);
+    let resolved = elephc::var_export_prelude::inject_if_used(resolved);
+    let resolved = elephc::shutdown_prelude::inject_if_used(resolved);
+    let resolved = elephc::optimize::fold_constants(resolved);
+    let pre_check_extension_set = elephc::optimize::FunctionExistenceSet::for_pre_check(&resolved);
+    let resolved = elephc::optimize::fold_function_existence(resolved, &pre_check_extension_set);
+    let resolved = elephc::optimize::prune_dead_static_branches(resolved);
+    let result = elephc::types::check_with_target(&resolved, target());
+
+    let _ = fs::remove_dir_all(&dir);
+    match result {
+        Ok(_) => panic!("expected source to fail type checking, but it checked cleanly"),
+        Err(e) => e.message,
+    }
+}
+
 // Variant of `compile_source_to_asm_with_defines` that uses an empty define set.
 // Runs the full pipeline (tokenize → parse → resolve → type check → optimize → codegen)
 // and returns user assembly, runtime assembly, and required libraries for linking.
@@ -129,16 +171,33 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     let resolved = elephc::tz_prelude::inject_if_used(resolved);
     let resolved = elephc::list_id_prelude::inject_if_used(resolved);
     let resolved = elephc::image_prelude::inject_if_used(resolved);
-    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+    // Mirror `pipeline::compile`'s Composer-global-function pre-scan: install the
+    // `autoload.files` global-function fallback set around BOTH the main name-resolution pass
+    // and `autoload::run` (which name-resolves each autoloaded file in isolation).
+    let known_composer_globals =
+        elephc::autoload::scan_composer_global_functions(&autoload_registry);
     let (resolved, _autoload_warnings) =
-        elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
+        elephc::name_resolver::with_known_composer_global_functions(known_composer_globals, || {
+            let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+            elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed")
+        });
     let resolved = elephc::resolver::hoist_conditional_function_declarations(resolved);
     // Mirror `pipeline::compile`: inject the var_export prelude AFTER autoload::run and
     // the conditional-function hoist so usage inside PSR-4 autoloaded files is detected
     // and the declaration is present before the type checker collects functions. Name
     // resolution of those calls is handled by the name_resolver prelude-global fallback.
     let resolved = elephc::var_export_prelude::inject_if_used(resolved);
+    // Mirror `pipeline::compile`: inject the register_shutdown_function prelude at the same stage
+    // as var_export, immediately after it.
+    let resolved = elephc::shutdown_prelude::inject_if_used(resolved);
     let resolved = elephc::optimize::fold_constants(resolved);
+    // Mirror `pipeline::compile`'s pre-checker curated-extension `function_exists`/
+    // `extension_loaded` fold+prune (see `FunctionExistenceSet::for_pre_check`), placed right
+    // after `fold_constants` and before type checking so codegen fixtures exercise the same
+    // guarded-extension-call pruning real compilation does.
+    let pre_check_extension_set = elephc::optimize::FunctionExistenceSet::for_pre_check(&resolved);
+    let resolved = elephc::optimize::fold_function_existence(resolved, &pre_check_extension_set);
+    let resolved = elephc::optimize::prune_dead_static_branches(resolved);
     let mut check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized = elephc::optimize::propagate_constants(resolved);

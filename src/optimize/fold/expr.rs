@@ -101,11 +101,20 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::BinaryOp { left, op, right } => {
             let left = fold_expr(*left);
             let right = fold_expr(*right);
-            try_fold_binary_op(&op, &left, &right).unwrap_or_else(|| ExprKind::BinaryOp {
-                left: Box::new(left),
-                op,
-                right: Box::new(right),
-            })
+            // `try_fold_precheck_short_circuit` only ever fires inside the pre-checker
+            // extension-guard fold window (see `crate::optimize::function_existence`); it is a
+            // no-op everywhere else, so this adds no behavior to ordinary constant folding.
+            try_fold_binary_op(&op, &left, &right)
+                .or_else(|| {
+                    crate::optimize::function_existence::try_fold_precheck_short_circuit(
+                        &op, &left, &right,
+                    )
+                })
+                .unwrap_or_else(|| ExprKind::BinaryOp {
+                    left: Box::new(left),
+                    op,
+                    right: Box::new(right),
+                })
         }
         ExprKind::InstanceOf { value, target } => ExprKind::InstanceOf {
             value: Box::new(fold_expr(*value)),
@@ -185,6 +194,11 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             // fold (see `crate::optimize::function_existence`); otherwise keep the call unchanged.
             crate::optimize::class_existence::try_fold_class_existence(&name, &args)
                 .or_else(|| crate::optimize::function_existence::try_fold_function_exists(&name, &args))
+                .or_else(|| {
+                    crate::optimize::function_existence::try_fold_extension_loaded_pre_check(
+                        &name, &args,
+                    )
+                })
                 .unwrap_or(ExprKind::FunctionCall { name, args })
         }
         ExprKind::ArrayLiteral(items) => {
@@ -230,21 +244,34 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             let condition = fold_expr(*condition);
             let then_expr = fold_expr(*then_expr);
             let else_expr = fold_expr(*else_expr);
-            try_fold_ternary(&condition, &then_expr, &else_expr).unwrap_or_else(|| {
-                ExprKind::Ternary {
+            // `try_fold_precheck_ternary` only ever fires inside the pre-checker extension-guard
+            // fold window; elsewhere it is a no-op and `try_fold_ternary`'s stricter (both-branches-
+            // scalar) rule is unchanged.
+            try_fold_ternary(&condition, &then_expr, &else_expr)
+                .or_else(|| {
+                    crate::optimize::function_existence::try_fold_precheck_ternary(
+                        &condition, &then_expr, &else_expr,
+                    )
+                })
+                .unwrap_or_else(|| ExprKind::Ternary {
                     condition: Box::new(condition),
                     then_expr: Box::new(then_expr),
                     else_expr: Box::new(else_expr),
-                }
-            })
+                })
         }
         ExprKind::ShortTernary { value, default } => {
             let value = fold_expr(*value);
             let default = fold_expr(*default);
-            try_fold_short_ternary(&value, &default).unwrap_or_else(|| ExprKind::ShortTernary {
-                value: Box::new(value),
-                default: Box::new(default),
-            })
+            try_fold_short_ternary(&value, &default)
+                .or_else(|| {
+                    crate::optimize::function_existence::try_fold_precheck_short_ternary(
+                        &value, &default,
+                    )
+                })
+                .unwrap_or_else(|| ExprKind::ShortTernary {
+                    value: Box::new(value),
+                    default: Box::new(default),
+                })
         }
         ExprKind::Cast { target, expr } => {
             let expr = fold_expr(*expr);

@@ -603,3 +603,47 @@ fn test_include_path_with_undefined_const_errors() {
         err.message
     );
 }
+
+// -- Pre-checker curated-extension `function_exists` fold: correctness gates --
+//
+// `crate::optimize::function_existence::FunctionExistenceSet::for_pre_check` false-folds
+// `function_exists`/`extension_loaded` ONLY for a small curated allowlist of PHP extensions
+// elephc never provides (see `NEVER_AVAILABLE_FUNCTION_PREFIXES` in
+// `src/optimize/function_existence.rs`). These tests pin the two correctness gates: a call that is
+// NOT behind a provably-false guard still errors loudly (an unguarded/always-reached call to an
+// extension function elephc cannot resolve), and a plausible-but-uncurated name is left alone by
+// the pre-checker fold, so its guard is resolved normally instead of assumed absent.
+
+/// Verifies an UNGUARDED call to a curated never-available extension function still errors loudly:
+/// the pre-checker fold only prunes DEAD branches behind a provably-false guard, never the call
+/// itself when it is always reached.
+#[test]
+fn test_error_fastcgi_finish_request_unguarded_call_still_loud() {
+    expect_error(
+        "<?php fastcgi_finish_request();",
+        "Undefined function: fastcgi_finish_request",
+    );
+}
+
+/// Verifies an UNGUARDED call to another curated never-available extension function still errors
+/// loudly, mirroring `test_error_fastcgi_finish_request_unguarded_call_still_loud` for the
+/// `extension_loaded`-adjacent `igbinary_*` family.
+#[test]
+fn test_error_igbinary_serialize_unguarded_call_still_loud() {
+    expect_error(
+        "<?php igbinary_serialize([1]);",
+        "Undefined function: igbinary_serialize",
+    );
+}
+
+/// Verifies the pre-checker fold does not over-reach beyond its curated allowlist: a plausible but
+/// unknown/absent function name is left unfolded (neither true- nor false-folded) pre-checker, so
+/// a call to it inside a NON-provably-false guard is still checked and still errors — the guard's
+/// dynamic-looking condition is not assumed false just because the callee is unresolved.
+#[test]
+fn test_error_uncurated_unknown_function_guard_stays_unfolded_and_errors() {
+    expect_error(
+        "<?php if (function_exists('totally_made_up_fn_xyz') || true) { totally_made_up_fn_xyz(); }",
+        "Undefined function: totally_made_up_fn_xyz",
+    );
+}

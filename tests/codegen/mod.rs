@@ -36,6 +36,7 @@ mod image;
 mod arrays;
 mod calendar;
 mod callables;
+mod shutdown_functions;
 mod system;
 mod filter_var;
 mod json;

@@ -47,6 +47,8 @@ pub mod pdo_prelude;
 pub mod image_prelude;
 /// Resolution of includes.
 pub mod resolver;
+/// Conditionally-injected `register_shutdown_function` prelude (elephc-PHP callback registry).
+pub mod shutdown_prelude;
 /// Source span tracking.
 pub mod span;
 mod string_bytes;

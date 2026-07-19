@@ -75,6 +75,7 @@ impl Symbols {
             .cloned()
             .or_else(|| canonical_builtin_function_name(name))
             .or_else(|| super::canonical_prelude_global_function_name(name))
+            .or_else(|| super::canonical_known_composer_global_function_name(name))
     }
 
     /// Returns whether `name` resolves to a user-declared (or extern) function,
@@ -177,6 +178,65 @@ pub(super) fn collect_symbols(
                     &mut symbols.extern_classes,
                     canonical_name_for_decl(namespace.as_deref(), name),
                 );
+            }
+            // Conditionally-declared functions (`if (!function_exists('X')) { function X(){} }`,
+            // the composer-polyfill `files` shape) are still nested inside their guard body at
+            // this pass — `crate::resolver::hoist_conditional_function_declarations` only moves
+            // them to the top level LATER, after name resolution runs. Without this recursive
+            // discovery, `Symbols::canonical_function`'s namespace-fallback lookup (see
+            // `name_resolver::names::resolve_function_name`) never sees these names, so an
+            // unqualified call to one from inside a `namespace` resolves to the (never-declared)
+            // namespace-qualified form instead of falling back to the eventual global function.
+            // Recursing here only builds the lookup table; the AST itself is untouched. Mirrors
+            // the same statement shapes `hoist_conditional_function_declarations` descends
+            // through, EXCEPT it does not track `function_exists` guards or drop dead branches —
+            // registering an unreachable/never-hoisted nested declaration is harmless here since
+            // `canonical_function` already prefers a real match over the builtin/prelude fallback.
+            // Function/method/closure bodies are never descended into, matching the hoist pass:
+            // a function declared inside another function is a runtime-local declaration.
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                collect_symbols(then_body, namespace.as_deref(), symbols);
+                for (_, body) in elseif_clauses {
+                    collect_symbols(body, namespace.as_deref(), symbols);
+                }
+                if let Some(body) = else_body {
+                    collect_symbols(body, namespace.as_deref(), symbols);
+                }
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. } => {
+                collect_symbols(body, namespace.as_deref(), symbols);
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    collect_symbols(body, namespace.as_deref(), symbols);
+                }
+                if let Some(body) = default {
+                    collect_symbols(body, namespace.as_deref(), symbols);
+                }
+            }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                collect_symbols(try_body, namespace.as_deref(), symbols);
+                for catch in catches {
+                    collect_symbols(&catch.body, namespace.as_deref(), symbols);
+                }
+                if let Some(body) = finally_body {
+                    collect_symbols(body, namespace.as_deref(), symbols);
+                }
+            }
+            StmtKind::Synthetic(body) | StmtKind::IncludeOnceGuard { body, .. } => {
+                collect_symbols(body, namespace.as_deref(), symbols);
             }
             StmtKind::ConstDecl { name, .. } => {
                 symbols

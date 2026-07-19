@@ -643,12 +643,21 @@ pub(super) fn lower_usleep(
 }
 
 /// Lowers `exit(status?)` and `die(status?)` by terminating the current process.
+///
+/// Runs the `register_shutdown_function` prelude's runner (a no-op when the program never
+/// references it) BEFORE the process-terminating syscall, matching PHP: registered shutdown
+/// functions run before `exit()`/`die()` too, not just at normal script end. This must happen
+/// before the status operand is loaded into the ABI result register — a function call does not
+/// touch the operand's own stack slot, but loading it first and then calling a function would
+/// clobber the just-loaded result register.
 pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "exit", 0, 1)?;
     let Some(status) = inst.operands.first().copied() else {
+        ctx.emit_shutdown_functions_runner_call_if_present();
         abi::emit_exit(ctx.emitter, 0);
         return Ok(());
     };
+    ctx.emit_shutdown_functions_runner_call_if_present();
     require_integer_like(ctx.load_value_to_result(status)?, "exit status")?;
     emit_dynamic_exit(ctx);
     Ok(())

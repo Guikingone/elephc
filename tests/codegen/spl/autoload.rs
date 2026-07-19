@@ -2089,3 +2089,124 @@ fn test_psr4_autoload_walks_up_from_subdir_entry() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies the Composer-global-function fallback (`autoload::scan_composer_global_functions` +
+/// `name_resolver::with_known_composer_global_functions`): a NAMESPACED caller in a PSR-4
+/// autoloaded class can call, unqualified, a global function that is conditionally declared
+/// (behind `if (!function_exists(...))`) in a DIFFERENT `autoload.files` bootstrap — the
+/// per-file isolated name resolution alone cannot see it, so the pre-scanned fallback set must.
+/// Mirrors symfony/polyfill's real shape (`grapheme_strlen` declared in
+/// `polyfill-intl-grapheme/bootstrap.php`, called bare from `Symfony\Component\String`).
+/// Cross-checked with `php -n` over the equivalent multi-file `require` program (prints "4").
+#[test]
+fn test_composer_files_global_polyfill_visible_to_namespaced_psr4_caller() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"},"files":["bootstrap.php"]}}"#,
+            ),
+            (
+                "bootstrap.php",
+                "<?php\nif (!function_exists('acme_polyfill_helper')) {\n    function acme_polyfill_helper(string $s): int { return strlen($s) - 1; }\n}\n",
+            ),
+            (
+                "src/Word.php",
+                "<?php\nnamespace App;\n\nclass Word {\n    public function len(string $s): int {\n        return acme_polyfill_helper($s);\n    }\n}\n",
+            ),
+            ("main.php", "<?php\n$w = new \\App\\Word();\necho $w->len(\"hello\");\n"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "4");
+}
+
+/// Control for the Composer-global-function fallback: a NAMESPACE-LOCAL function with the same
+/// name must still win over the global `autoload.files` polyfill — the fallback is the LAST
+/// resolution tier, consulted only when the namespace-local/imported/builtin/prelude lookups all
+/// miss. Cross-checked with `php -n` over the equivalent multi-file `require` program
+/// (prints "999": PHP's unqualified-call rule also prefers the current-namespace function).
+#[test]
+fn test_composer_files_global_polyfill_shadowed_by_namespace_local_function() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"},"files":["bootstrap.php"]}}"#,
+            ),
+            (
+                "bootstrap.php",
+                "<?php\nif (!function_exists('acme_polyfill_helper')) {\n    function acme_polyfill_helper(string $s): int { return strlen($s) - 1; }\n}\n",
+            ),
+            (
+                "src/Word.php",
+                "<?php\nnamespace App;\n\nfunction acme_polyfill_helper(string $s): int {\n    return 999;\n}\n\nclass Word {\n    public function len(string $s): int {\n        return acme_polyfill_helper($s);\n    }\n}\n",
+            ),
+            ("main.php", "<?php\n$w = new \\App\\Word();\necho $w->len(\"hello\");\n"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "999");
+}
+
+/// REGRESSION GATE for the pre-checker prune (see `crate::optimize::precheck_prune`): with
+/// composer autoload present AND an entry `require` of a helper file whose top level ends in
+/// `return` (the composer-bootstrap shape — the resolver inlines the file and the name resolver
+/// flattens its wrapper, leaving a main-level `Return`), the type checker must STILL see and
+/// report errors in (a) entry-file statements AFTER the require and (b) a PSR-4-autoloaded class's
+/// method body — including an effect-free expression statement (`$undef + 1;`), which the full
+/// post-checker prune deletes. An earlier pre-checker use of the full
+/// `prune_constant_control_flow` silently dropped both (everything after the inlined `return`,
+/// and every effect-free `ExprStmt`), shrinking a ~930-error Symfony compile to 26 reported
+/// errors while the rest of the program went unchecked. Goes through the real CLI so
+/// `pipeline::compile`'s own pass ordering is what is under test.
+#[test]
+fn test_precheck_prune_keeps_entry_and_psr4_bodies_checked_with_composer_autoload() {
+    let dir = make_cli_test_dir("precheck_prune_gate");
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(
+        dir.join("composer.json"),
+        r#"{"autoload":{"psr-4":{"App\\":"src/"},"files":["bootstrap.php"]}}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("bootstrap.php"),
+        "<?php\nif (!function_exists('gate_helper')) {\n    function gate_helper(): int { return 1; }\n}\n",
+    )
+    .unwrap();
+    // Helper file whose top level ends in `return` — the composer vendor-bootstrap shape.
+    fs::write(
+        dir.join("helper.php"),
+        "<?php\nfunction helper_fn(): int { return 42; }\nreturn helper_fn();\n",
+    )
+    .unwrap();
+    // PSR-4 class whose method body contains an effect-free undefined-variable expression
+    // statement: checker-visible, but deleted by the full prune's ExprStmt effect-drop.
+    fs::write(
+        dir.join("src/Gate.php"),
+        "<?php\nnamespace App;\n\nclass Gate {\n    public function probe(): int {\n        $zzz_sentinel_undef + 1;\n        return 0;\n    }\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nrequire __DIR__ . '/helper.php';\n$g = new \\App\\Gate();\necho $g->probe();\necho $zzz_entry_after_require;\n",
+    )
+    .unwrap();
+
+    let mut compile_cmd = elephc_cli_command(&dir);
+    compile_cmd.arg(dir.join("main.php")).arg("--check");
+    let out = compile_cmd.output().expect("failed to run elephc CLI");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("Undefined variable: $zzz_sentinel_undef"),
+        "PSR-4 method-body error must be reported (effect-free ExprStmt must survive the \
+         pre-checker prune); stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Undefined variable: $zzz_entry_after_require"),
+        "entry-file error AFTER a require of a top-level-return file must be reported (no \
+         trailing-statement drop before the checker); stderr: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

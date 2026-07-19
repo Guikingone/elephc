@@ -294,9 +294,18 @@ pub(crate) fn compile_and_run_files_with_defines(
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
-    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let (resolved, _autoload_warnings) = elephc::autoload::run(resolved, base_dir, &autoload_registry)
-        .expect("autoload failed");
+    // Mirror `pipeline::compile`'s Composer-global-function pre-scan: install the
+    // `autoload.files` global-function fallback set around BOTH the main name-resolution pass
+    // and `autoload::run` (which name-resolves each autoloaded file in isolation), so a
+    // namespaced caller in a PSR-4 fixture can resolve an unqualified call to a
+    // `function_exists`-guarded global declared in a different `autoload.files` bootstrap.
+    let known_composer_globals =
+        elephc::autoload::scan_composer_global_functions(&autoload_registry);
+    let (resolved, _autoload_warnings) =
+        elephc::name_resolver::with_known_composer_global_functions(known_composer_globals, || {
+            let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+            elephc::autoload::run(resolved, base_dir, &autoload_registry).expect("autoload failed")
+        });
     let resolved = elephc::resolver::hoist_conditional_function_declarations(resolved);
     // Mirror `pipeline::compile`: inject the var_export prelude after autoload::run and
     // the conditional-function hoist so usage inside PSR-4 autoloaded files is detected

@@ -10,6 +10,7 @@
 //! - Composer files execute before the entry program while class-triggered files splice before first use.
 
 mod alias;
+mod composer_global_functions;
 mod index;
 mod interpret;
 mod polyfill_prune;
@@ -21,6 +22,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 pub use registry::Registry;
+pub use composer_global_functions::scan_composer_global_functions;
 
 use crate::errors::{CompileError, CompileWarning};
 use crate::parser::ast::Program;

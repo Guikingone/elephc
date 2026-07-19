@@ -65,6 +65,20 @@ sidebar:
 
 `extension_loaded()` resolves at compile time. elephc is a closed-world AOT compiler with no dynamically loaded PHP extensions, so it currently reports every extension as not loaded (`false`), matching extension names case-insensitively like PHP. This is the correct value for code that uses `extension_loaded()` to choose between a native extension and a userland fallback: the fallback path is selected, and elephc-provided functions remain available through `function_exists()` and the builtin catalog.
 
+A small curated set of `function_exists()`/`extension_loaded()` guards is additionally folded before the type checker runs, not just after: `fastcgi_finish_request`, `litespeed_finish_request`, `igbinary_*`, `frankenphp_*`, `apcu_*`, `opcache_*`, and `xdebug_*`. These names cover functions elephc has zero catalog presence under, so a guarded call to one of them (e.g. a Composer runtime's `if (function_exists('fastcgi_finish_request')) { fastcgi_finish_request(); }`, or `extension_loaded('igbinary') ? igbinary_serialize(...) : ...`) is pruned to the guard's `false` branch before the checker ever sees the unresolvable call, so the surrounding program still compiles. This pre-check fold only ever proves one of these curated names absent — it never reports a name present, and a program that declares its own function with one of these names is left untouched (the guard resolves to the user's real function instead).
+
+`register_shutdown_function(callable $callback, mixed ...$args): void` registers a callback that runs after the script's normal output — in registration order — both at normal script end and before `exit()`/`die()`. It is implemented as a real elephc-PHP prelude function (injected only into binaries that reference it), backed by a registration-ordered registry and a re-entry guard, so a callback that itself calls `exit()` does not re-run the queue. A callback registered by another shutdown callback (mid-run) still runs before the process exits, matching PHP.
+
+```php
+register_shutdown_function(function () {
+    echo "cleanup\n";
+});
+echo "main\n";
+// prints "main\ncleanup\n"
+```
+
+Only closures, first-class callables, and other values already typed `callable` are accepted as `$callback`; a `'funcname'` string or `[$obj, 'method']` array-callable form is rejected at compile time (`expects Callable, got Str`/`Array`) rather than silently accepted without visibility enforcement — pass a closure instead (`register_shutdown_function(fn() => someFunc())`). Fatal-error-triggered shutdown (PHP also runs registered shutdown functions after certain fatal errors) is not modeled: elephc has no error/fatal-signal handling infrastructure to hook it into.
+
 `php_uname()` supports PHP's standard one-character modes:
 
 | Mode | Result |

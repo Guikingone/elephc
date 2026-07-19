@@ -125,6 +125,32 @@ impl<'a> FunctionContext<'a> {
             })
     }
 
+    /// Emits a direct call to the `register_shutdown_function` prelude's internal runner
+    /// (`shutdown_prelude::RUN_SHUTDOWN_FUNCTIONS_NAME`) when that function exists in this
+    /// compilation unit, and does nothing otherwise. The runner only exists when
+    /// `shutdown_prelude::inject_if_used` actually prepended the prelude — i.e. only when the
+    /// program calls `register_shutdown_function()` — so programs that never reference it pay
+    /// nothing here (no emitted instruction). Shared by the top-level epilogue
+    /// (`frame::emit_main_epilogue`, "after main code, before teardown") and `exit()`/`die()`
+    /// lowering (`lower_inst::builtins::system::lower_exit`), the two script-end points PHP's
+    /// shutdown-function contract covers that elephc actually models (fatal-error-triggered
+    /// shutdown is out of scope — elephc has no error/fatal-signal handling infrastructure to hook
+    /// it into). The runner is a normal zero-argument `void` PHP function, so a bare call needs no
+    /// argument materialization; the callee's own prologue only requires the caller's stack to
+    /// already be 16-byte aligned, which holds at both call sites (mirrors the existing bare
+    /// `__rt_heap_debug_report` call emitted from the same epilogue location).
+    pub(super) fn emit_shutdown_functions_runner_call_if_present(&mut self) {
+        if self
+            .function_by_name(crate::shutdown_prelude::RUN_SHUTDOWN_FUNCTIONS_NAME)
+            .is_some()
+        {
+            self.emitter
+                .comment("run registered shutdown functions (registration order)");
+            let symbol = crate::names::function_symbol(crate::shutdown_prelude::RUN_SHUTDOWN_FUNCTIONS_NAME);
+            abi::emit_call_label(self.emitter, &symbol);
+        }
+    }
+
     /// Returns true when an extern declaration exists for a PHP function name.
     pub(super) fn has_extern_function(&self, name: &str) -> bool {
         let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));

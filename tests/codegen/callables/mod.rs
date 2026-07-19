@@ -11,5 +11,6 @@ mod closures;
 mod expr_calls;
 mod language_features;
 mod constants_and_system;
+mod shutdown_functions;
 mod state_and_variadics;
 mod pipe;

@@ -15,6 +15,8 @@ use super::loop_exit::block_contains_loop_exit;
 /// Recursively processes a block of statements, pruning each one and stopping early
 /// if a statement has a terminal effect (return, throw, break, etc.) that prevents
 /// fallthrough. Preserves effectful statements even when they produce unused results.
+/// Post-checker only: the trailing-statement drop and the effect-free `ExprStmt` removal are
+/// checker-observable, so the PRE-checker window uses `crate::optimize::precheck_prune` instead.
 pub(crate) fn prune_block(body: Vec<Stmt>) -> Vec<Stmt> {
     // `goto`/`label` introduce unstructured control flow: a `label:` is reachable through a `goto`
     // even when the textually-preceding statement terminates, so it must not be dropped as
@@ -43,11 +45,19 @@ pub(crate) fn prune_block(body: Vec<Stmt>) -> Vec<Stmt> {
 /// do-while with false condition becoming just its body).
 pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
     let span = stmt.span;
+    // Preserved across every reconstructed `Stmt` below: attributes (`#[Attribute(...)]`) are
+    // declaration metadata the checker's reflection-attribute support reads directly off the AST
+    // (`class_attribute_names()`/`class_get_attributes()`/etc.), not something this pass folds or
+    // prunes. Dropping them here (as a stale `Vec::new()` literal previously did) silently erased
+    // every attribute on any statement this pass touches — invisible whenever pruning ran strictly
+    // after the checker had already snapshotted attributes elsewhere, but checker-observable once a
+    // pre-checker prune pass exists (see `crate::optimize::FunctionExistenceSet::for_pre_check`).
+    let attributes = stmt.attributes.clone();
     match stmt.kind {
         StmtKind::Echo(expr) => vec![Stmt {
             kind: StmtKind::Echo(prune_expr(expr)),
             span,
-            attributes: Vec::new(),
+            attributes: attributes.clone(),
         }],
         StmtKind::Assign { name, value } => vec![Stmt {
             kind: StmtKind::Assign {
@@ -55,12 +65,12 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                 value: prune_expr(value),
             },
             span,
-            attributes: Vec::new(),
+            attributes: attributes.clone(),
         }],
         StmtKind::RefAssign { target, source } => vec![Stmt {
             kind: StmtKind::RefAssign { target, source },
             span,
-            attributes: Vec::new(),
+            attributes: attributes.clone(),
         }],
         StmtKind::If {
             condition,
@@ -85,7 +95,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                         else_body,
                     },
                     span,
-                    attributes: Vec::new(),
+                    attributes: attributes.clone(),
                 }]
             }
         }
@@ -99,7 +109,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                         body: prune_block(body),
                     },
                     span,
-                    attributes: Vec::new(),
+                    attributes: attributes.clone(),
                 }],
             }
         }
@@ -114,7 +124,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                         condition,
                     },
                     span,
-                    attributes: Vec::new(),
+                    attributes: attributes.clone(),
                 }],
             }
         }
@@ -137,7 +147,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                         body: prune_block(body),
                     },
                     span,
-                    attributes: Vec::new(),
+                    attributes: attributes.clone(),
                 }],
             }
         }
@@ -156,7 +166,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                 body: prune_block(body),
             },
             span,
-            attributes: Vec::new(),
+            attributes: attributes.clone(),
         }],
         StmtKind::Switch {
             subject,
@@ -193,7 +203,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                             finally_body,
                         },
                         span,
-                        attributes: Vec::new(),
+                        attributes: attributes.clone(),
                     }];
                 }
             }
@@ -216,7 +226,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                                 finally_body: Some(finally_body),
                             },
                             span,
-                            attributes: Vec::new(),
+                            attributes: attributes.clone(),
                         }]
                     }
                 } else {
@@ -232,7 +242,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                         finally_body,
                     },
                     span,
-                    attributes: Vec::new(),
+                    attributes: attributes.clone(),
                 }]
             };
             hoisted_prefix.append(&mut remaining);
@@ -244,7 +254,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                 body: prune_block(body),
             },
             span,
-            attributes: Vec::new(),
+            attributes: attributes.clone(),
         }],
         StmtKind::FunctionDecl {
             by_ref_return,
@@ -265,12 +275,12 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                 body: prune_block(body),
             },
             span,
-            attributes: Vec::new(),
+            attributes: attributes.clone(),
         }],
         StmtKind::Return(expr) => vec![Stmt {
             kind: StmtKind::Return(expr.map(prune_expr)),
             span,
-            attributes: Vec::new(),
+            attributes: attributes.clone(),
         }],
         StmtKind::ClassDecl {
             name,
@@ -303,7 +313,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                 constants,
                 },
                 span,
-                attributes: Vec::new(),
+                attributes: attributes.clone(),
             }]
         }
         StmtKind::ExprStmt(expr) => {
@@ -312,7 +322,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                 vec![Stmt {
                     kind: StmtKind::ExprStmt(expr),
                     span,
-                    attributes: Vec::new(),
+                    attributes: attributes.clone(),
                 }]
             } else {
                 Vec::new()
@@ -335,12 +345,12 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                 constants,
             },
             span,
-            attributes: Vec::new(),
+            attributes: attributes.clone(),
         }],
         StmtKind::PackedClassDecl { name, fields } => vec![Stmt {
             kind: StmtKind::PackedClassDecl { name, fields },
             span,
-            attributes: Vec::new(),
+            attributes: attributes.clone(),
         }],
         StmtKind::InterfaceDecl {
             name,
@@ -360,7 +370,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             constants,
             },
             span,
-            attributes: Vec::new(),
+            attributes: attributes.clone(),
         }],
         StmtKind::TraitDecl {
             name,
@@ -380,9 +390,9 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             constants,
             },
             span,
-            attributes: Vec::new(),
+            attributes: attributes.clone(),
         }],
-        kind => vec![Stmt { kind, span, attributes: Vec::new() }],
+        kind => vec![Stmt { kind, span, attributes: attributes.clone() }],
     }
 }
 

@@ -21,6 +21,7 @@ mod class_existence;
 mod control;
 mod effects;
 mod fold;
+mod precheck_prune;
 mod function_existence;
 mod propagate;
 
@@ -80,6 +81,16 @@ pub fn prune_constant_control_flow(program: Program) -> Program {
         || prune_block(program),
     )
 }
+
+/// PRE-checker prune: removes ONLY statically-dead `if`/`elseif` branches so curated
+/// `function_exists`/`extension_loaded` false-folds drop their dead guarded extension calls
+/// before type checking. Deliberately NOT `prune_constant_control_flow`, whose other rewrites are
+/// checker-observable and must never run before the checker: it deletes effect-free `ExprStmt`s
+/// (hiding `$undefined_var + 1;` errors), drops everything after a terminal statement (a
+/// top-level `return` inlined from an included file swallowed the entire rest of the program —
+/// entry statements and autoload-spliced code included), and drops dead loop/switch bodies the
+/// checker used to validate. See `crate::optimize::precheck_prune`.
+pub use precheck_prune::prune_dead_static_branches;
 
 /// Eliminates code with no observable side effects.
 type ConstantEnv = HashMap<String, ScalarValue>;

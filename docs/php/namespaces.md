@@ -38,6 +38,8 @@ Supported forms: `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use function`, `use con
 - Fully-qualified `\Lib\Tool` always refers to global canonical name
 - Included files keep their own namespace and imports; an include cannot inherit the caller's namespace scope
 
+The global fallback also covers a function declared conditionally, the Composer-polyfill shape (`if (!function_exists('some_func')) { function some_func() {...} }`), whether the guard and declaration live in the same program as the caller or in a separate Composer `autoload.files` entry loaded independently. A namespaced caller's unqualified `some_func()` still resolves to the eventual global declaration in both cases, matching PHP.
+
 ## Case sensitivity
 
 elephc follows PHP's symbol case rules:

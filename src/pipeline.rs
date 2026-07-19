@@ -20,8 +20,8 @@ use crate::timings::CompileTimings;
 use crate::{
     autoload, codegen, codegen_ir, conditional, errors, exports, ir, ir_lower, ir_passes, lexer,
     linker, list_id_prelude, magic_constants, name_resolver, optimize, parser, pdo_prelude,
-    resolver, runtime_cache, source_map, tree_shake, tz_prelude, types, var_export_prelude,
-    web_prelude,
+    resolver, runtime_cache, shutdown_prelude, source_map, tree_shake, tz_prelude, types,
+    var_export_prelude, web_prelude,
 };
 
 /// Holds the paths for all compilation output files (assembly, object, binary, source map).
@@ -181,18 +181,37 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = web_prelude::inject_if_web(ast, web);
     timings.record_since("web-prelude", phase_started);
 
+    // Pre-scan Composer `autoload.files` entries for globally-declared (non-namespaced) free
+    // functions, INCLUDING ones nested inside `if (!function_exists('X')) { function X() {} }`
+    // guards, before any name resolution runs. Each `autoload.files`/PSR-4 file is name-resolved
+    // in isolation (`autoload::load_autoloaded_file`), so a namespaced caller in one file cannot
+    // see a same-program global declared in a DIFFERENT file through its own per-file symbol
+    // table; installing this set lets `name_resolver::symbols::Symbols::canonical_function`'s
+    // global fallback see it anyway, mirroring the existing `PRELUDE_GLOBAL_FUNCTIONS` mechanism
+    // but for the program's own Composer polyfills instead of elephc's built-in preludes. The
+    // install spans BOTH the main name-resolution pass and `autoload::run` (every per-file
+    // isolated resolve happens inside `autoload::run`), since a namespaced caller can live in the
+    // main program, an `include`d file, or another autoloaded file.
     let phase_started = Instant::now();
-    let ast = match name_resolver::resolve(ast) {
-        Ok(resolved) => resolved,
-        Err(e) => {
-            errors::report(&e);
-            process::exit(1);
-        }
-    };
+    let known_composer_global_functions = autoload::scan_composer_global_functions(&autoload_registry);
+    timings.record_since("composer-global-fn-scan", phase_started);
+
+    // Both the main name-resolution pass and `autoload::run` (which name-resolves every spliced
+    // file in isolation) run inside ONE install of `known_composer_global_functions`, so a
+    // namespaced caller anywhere in the program — main, `include`d, or autoloaded — sees the same
+    // fallback set regardless of which of these two passes resolves its call site.
+    let phase_started = Instant::now();
+    let autoload_result = name_resolver::with_known_composer_global_functions(
+        known_composer_global_functions,
+        || -> Result<(parser::ast::Program, Vec<errors::CompileWarning>), errors::CompileError> {
+            let ast = name_resolver::resolve(ast)?;
+            autoload::run(ast, &autoload_root, &autoload_registry)
+        },
+    );
     timings.record_since("name-resolve", phase_started);
 
     let phase_started = Instant::now();
-    let ast = match autoload::run(ast, &autoload_root, &autoload_registry) {
+    let ast = match autoload_result {
         Ok((resolved, autoload_warnings)) => {
             for warning in &autoload_warnings {
                 errors::report_warning(warning);
@@ -236,9 +255,46 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = var_export_prelude::inject_if_used(ast);
     timings.record_since("var-export-prelude", phase_started);
 
+    // Inject the register_shutdown_function prelude (a pure elephc-PHP callback registry) only
+    // when the program references register_shutdown_function and does not declare its own.
+    // Placed at the exact same pipeline stage as var_export_prelude for the same reasons: after
+    // autoload::run + the conditional-function hoist (so PSR-4 autoloaded usage is detected too)
+    // and before the checker's function discovery. `codegen_ir` calls the prelude's internal
+    // `__elephc_run_shutdown_functions()` runner directly by symbol (see
+    // `shutdown_prelude::RUN_SHUTDOWN_FUNCTIONS_NAME`) from the top-level epilogue and from
+    // `exit()`/`die()` lowering, so this must run before EIR lowering — which it does, being this
+    // early in the pipeline.
+    let phase_started = Instant::now();
+    let ast = shutdown_prelude::inject_if_used(ast);
+    timings.record_since("shutdown-prelude", phase_started);
+
     let phase_started = Instant::now();
     let ast = optimize::fold_constants(ast);
     timings.record_since("opt-fold", phase_started);
+
+    // Pre-checker FALSE-ONLY fold+prune of curated never-available PHP extension guards
+    // (fastcgi_finish_request, litespeed_finish_request, igbinary_*, frankenphp_*, apcu_*,
+    // opcache_*, xdebug_*) so a Composer runtime's `if (function_exists('fastcgi_finish_request'))
+    // { fastcgi_finish_request(); }` (or an `extension_loaded('igbinary') ? igbinary_serialize(...)
+    // : ...` ternary) never reaches the checker with a call to a name elephc cannot resolve. Reuses
+    // `fold_function_existence`/`prune_constant_control_flow` exactly as the post-checker pass does
+    // below, but with `FunctionExistenceSet::for_pre_check`, which only ever proves a curated
+    // extension name absent and never true-folds (JURY ADDENDUM #1 in the shutdown/extension-fold
+    // spec) — any name the program itself declares (a real polyfill, not just a guard) is excluded.
+    // Placed immediately after `fold_constants` (magic constants/`ifdef` conditionals have already
+    // been substituted well before this point) and before tree-shaking, which only reads `ast`.
+    // The prune here MUST be the minimal pre-checker variant (`prune_dead_static_branches`): this
+    // is the only prune that runs BEFORE the type checker, and the full
+    // `prune_constant_control_flow` performs checker-observable drops — the
+    // unreachable-trailing-statement drop lets a top-level `return` inlined from an included file
+    // swallow the entire rest of the program, and the effect-free-`ExprStmt` removal deletes
+    // statements the checker must still validate — silently exempting entry statements and
+    // autoload-spliced code from type checking.
+    let phase_started = Instant::now();
+    let pre_check_extension_set = optimize::FunctionExistenceSet::for_pre_check(&ast);
+    let ast = optimize::fold_function_existence(ast, &pre_check_extension_set);
+    let ast = optimize::prune_dead_static_branches(ast);
+    timings.record_since("opt-precheck-ext-fold", phase_started);
 
     // Tree-shaking (Stage 2), behind `--tree-shake`: harvest the structural skeleton and run the
     // reachability fixpoint over the fully-autoloaded, constant-folded program. The result is

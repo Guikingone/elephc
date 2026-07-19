@@ -159,6 +159,47 @@ pub(crate) fn canonical_prelude_global_function_name(name: &str) -> Option<Strin
         .map(|prelude| (*prelude).to_string())
 }
 
+thread_local! {
+    /// Global (non-namespaced) function names discovered by `autoload::scan_composer_global_functions`
+    /// pre-scanning Composer `autoload.files` entries, keyed by `php_symbol_key`. Installed by
+    /// `crate::pipeline::compile()` via `with_known_composer_global_functions` for the span covering
+    /// the main name-resolution pass and `autoload::run` (every per-file isolated resolve happens
+    /// inside that span too). Empty outside that window, so an unrelated `resolve()` call (e.g. in a
+    /// test that does not go through the pipeline) sees no extra fallback names.
+    static KNOWN_COMPOSER_GLOBAL_FUNCTIONS: std::cell::RefCell<HashMap<String, String>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// Installs `names` (see `autoload::scan_composer_global_functions`) as the known-composer-global-
+/// function fallback set for the duration of `f`, then restores whatever was installed before.
+///
+/// Each Composer-autoloaded file is name-resolved in isolation (`autoload::load_autoloaded_file`),
+/// so a namespaced caller in one file cannot see a `function_exists`-guarded global declared in a
+/// DIFFERENT `autoload.files` entry through its own (per-file) symbol table alone — the guard and
+/// the declaration are visible only within that declaring file's own isolated pass. This mirrors
+/// `PRELUDE_GLOBAL_FUNCTIONS` (elephc's own always-available prelude globals) but for names the
+/// PROGRAM's own Composer polyfills provide, computed per-compile instead of hardcoded.
+pub fn with_known_composer_global_functions<T>(
+    names: HashMap<String, String>,
+    f: impl FnOnce() -> T,
+) -> T {
+    KNOWN_COMPOSER_GLOBAL_FUNCTIONS.with(|slot| {
+        let previous = slot.replace(names);
+        let result = f();
+        slot.replace(previous);
+        result
+    })
+}
+
+/// Returns the canonical (originally declared case) name for a known Composer `autoload.files`
+/// global function, or `None` when `name` (case/backslash-normalized) is not currently installed.
+/// Mirrors `canonical_prelude_global_function_name` so `Symbols::canonical_function` can chain it
+/// as one more fallback tier exactly like the prelude-global and builtin tiers.
+pub(crate) fn canonical_known_composer_global_function_name(name: &str) -> Option<String> {
+    let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    KNOWN_COMPOSER_GLOBAL_FUNCTIONS.with(|slot| slot.borrow().get(&key).cloned())
+}
+
 /// Reports whether `name` matches one of PHP's procedural date/time aliases
 /// (e.g. `date_create`, `idate`, `gmstrftime`). The name set is the same as the one
 /// rewritten by `expressions::rewrite_date_procedural_alias`, minus the per-arity guards,
