@@ -1276,6 +1276,27 @@ fn builtin_reflection_function() -> FlattenedClass {
             // `kind` field (`CALLABLE_DESC_KIND_CLOSURE` → `true`, any other shape → `false` — a
             // wrapped/FCC-resolved target always has a real name in real PHP).
             builtin_property("__is_anonymous", Visibility::Private, Some(TypeExpr::Bool), bool_lit(false)),
+            // N1 item 3: backs `getReturnType()`. `__return_type` holds the baked
+            // `ReflectionNamedType` (boxed `Mixed`, `null` when the reflected target has no
+            // declared return type — the SAME "backed but null" convention `ReflectionParameter`'s
+            // `__type`/`getType()` already uses for an untyped parameter) for the two STATIC
+            // construction paths (string-literal/first-class-callable named function, closure
+            // literal — see `reflection_named_type_info`/`reflection_function_construction_metadata`
+            // in `crate::codegen_ir::lower_inst::objects::reflection`). `__unbacked_return_type`
+            // gates `getReturnType()` for the DYNAMIC descriptor-based construction path (see
+            // `crate::codegen_ir::lower_inst::objects::reflection_function_dynamic`), which has no
+            // per-value declared-return-type record to read at runtime — SEPARATE flag from
+            // `__unbacked_params`/`__unbacked_file` (JURY ADDENDUM pattern), since a closure
+            // LITERAL'S own return-type annotation IS statically known (unlike its declaring
+            // file/line) and so stays backed even though `__unbacked_file`/`__unbacked_params` are
+            // both `true` for that same instance.
+            builtin_property("__return_type", Visibility::Private, Some(mixed_type()), null_lit()),
+            builtin_property(
+                "__unbacked_return_type",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                bool_lit(false),
+            ),
         ],
         methods: vec![
             builtin_reflection_function_constructor_method(),
@@ -1303,6 +1324,16 @@ fn builtin_reflection_function() -> FlattenedClass {
                 Vec::new(),
                 None,
             ),
+            // N1 item 3: same treatment as `getStartLine` above — elephc tracks no declaration
+            // line numbers at all (start OR end), for ANY reflected function/closure/method,
+            // static or dynamic. php -n VERIFIED signature: `getEndLine(): int|false`.
+            builtin_reflection_unconditional_throw_method(
+                "getEndLine",
+                TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Bool]),
+                "ReflectionFunction::getEndLine() is not supported: elephc does not track function/closure declaration line numbers",
+                Vec::new(),
+                None,
+            ),
             builtin_reflection_slot_getter("getNumberOfParameters", "__num_params", TypeExpr::Int),
             builtin_reflection_slot_getter(
                 "getNumberOfRequiredParameters",
@@ -1316,10 +1347,46 @@ fn builtin_reflection_function() -> FlattenedClass {
                 "ReflectionFunction::getParameters() is not supported for a dynamically-reflected instance: elephc does not yet build a runtime ReflectionParameter[] array for a compile-time-unknown parameter count",
                 this_prop_expr("__params"),
             ),
+            // N1 item 3: `getReturnType(): ?ReflectionType` (php -n VERIFIED). Backed for the two
+            // STATIC construction paths (string-literal/first-class-callable named function,
+            // closure literal) from the reflected target's OWN declared/inferred return type,
+            // baked into `__return_type` at construction time — reusing the SAME
+            // `reflection_named_type_info` machinery `ReflectionParameter::getType()` already
+            // uses for parameters (see `crate::codegen_ir::lower_inst::objects::reflection`).
+            // `__return_type` stays `null` (its declared default) when the target has no return
+            // type annotation, matching `getType()`'s "backed but null" precedent for an untyped
+            // parameter — NOT a throw, since "no declared return type" is itself a fully
+            // determinable, real answer. Gated on `__unbacked_return_type` for a dynamically-
+            // reflected instance, which has no per-value declared-return-type record to read.
+            builtin_reflection_guarded_method(
+                "getReturnType",
+                mixed_type(),
+                "__unbacked_return_type",
+                "ReflectionFunction::getReturnType() is not supported for a dynamically-reflected instance: elephc does not track a per-value declared return type for a runtime callable descriptor",
+                this_prop_expr("__return_type"),
+            ),
             builtin_reflection_slot_getter("isAnonymous", "__is_anonymous", TypeExpr::Bool),
             // PHP: getClosureThis(): ?object — the bound `$this` of a closure, or null.
             // No runtime backing yet; returns null, typed `mixed` (covers `?object`).
             builtin_reflection_literal_method("getClosureThis", mixed_type(), null_lit()),
+            // N1 item 3: `getClosureScopeClass(): ?ReflectionClass` (php -n VERIFIED: returns the
+            // `ReflectionClass` of the class a closure was LEXICALLY DECLARED inside — i.e. the
+            // class whose method body contains the closure literal, not necessarily the bound
+            // `$this` object's class — or `null` for a closure with no declaring class, a plain
+            // named function, or an FCC target). elephc's EIR module (`crate::ir::Function`) has
+            // no "this closure's own lexical declaring-class scope" field at all (verified: no
+            // such tracking exists anywhere in `src/ir/`, `src/ir_lower/`, or `src/codegen_ir/` —
+            // only method/property DECLARING-class maps for member lookups, which answer a
+            // different question). Always throws rather than faking a value or narrowing to the
+            // bound-`$this` class, which would silently diverge from PHP for a static closure or
+            // one bound to an unrelated object via `Closure::bindTo`.
+            builtin_reflection_unconditional_throw_method(
+                "getClosureScopeClass",
+                mixed_type(),
+                "ReflectionFunction::getClosureScopeClass() is not supported: elephc does not track a closure's lexical declaring-class scope",
+                Vec::new(),
+                None,
+            ),
             // PHP real signature: `invoke(mixed ...$args): mixed` (variadic, php -n verified via
             // `ReflectionMethod("ReflectionFunction", "invoke")->getParameters()`). Always throws
             // (M2 PART A / JURY ADDENDUM item 5): no wiring yet through the SAME uniform closure

@@ -390,6 +390,19 @@ pub(crate) fn compile(config: CliConfig) {
     optimize::fold_function_existence_in_method_bodies(&mut check_result, &function_existence_set);
     timings.record_since("opt-func-exists", phase_started);
 
+    // Coerce literal string-callable arguments (`'someFunc'`) at `callable`-typed
+    // regular-parameter positions into their first-class-callable AST equivalent, so a call
+    // like `register_shutdown_function('someFunc')` reaches EIR lowering as the same node shape
+    // as writing `someFunc(...)` explicitly. The type checker (above, via `check_with_target`)
+    // already ACCEPTED this coercion on an ephemeral copy of the call's arguments — this pass
+    // performs the equivalent rewrite on the real AST that `ir_lower` will actually walk. See
+    // `crate::optimize::callable_coercion` module docs for the exact (narrow, documented) scope.
+    let phase_started = Instant::now();
+    let callable_coercion_set = optimize::CallableCoercionSet::from_check_result(&check_result);
+    let ast = optimize::coerce_callable_string_args(ast, &callable_coercion_set);
+    optimize::coerce_callable_string_args_in_method_bodies(&mut check_result, &callable_coercion_set);
+    timings.record_since("opt-callable-coercion", phase_started);
+
     let phase_started = Instant::now();
     let ast = optimize::prune_constant_control_flow(ast);
     timings.record_since("opt-post", phase_started);

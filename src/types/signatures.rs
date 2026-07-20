@@ -63,7 +63,15 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
         variadic_name.clone(),
         PhpType::Array(Box::new(PhpType::Mixed)),
     ));
-    wrapper_sig.defaults.push(None);
+    // Matches `variadic()`'s and `ensure_variadic_for_func_args`'s convention: the
+    // variadic slot's own `defaults` entry is `Some(<empty array literal>)`, not `None`.
+    // Call-argument-count validation (`call_validation::check_known_callable_call_with_options`)
+    // counts `None` defaults as "required parameters" — a bare `None` here falsely demanded
+    // an argument for the variadic tail itself, rejecting zero-arg calls to variadic methods
+    // (this path is exercised unconditionally by `build_method_sig` for every class method).
+    wrapper_sig
+        .defaults
+        .push(Some(Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy())));
     wrapper_sig.ref_params.push(false);
     wrapper_sig.declared_params.push(false);
     wrapper_sig
@@ -1965,5 +1973,15 @@ mod tests {
         assert_eq!(wrapper_sig.defaults.len(), 2);
         assert_eq!(wrapper_sig.ref_params.len(), 2);
         assert_eq!(wrapper_sig.declared_params.len(), 2);
+        // Regression: the synthesized variadic slot's default must be `Some(<empty array>)`,
+        // matching `variadic()`/`ensure_variadic_for_func_args`'s convention — NOT `None`.
+        // A bare `None` makes call-argument-count validation treat the variadic tail as a
+        // required parameter, falsely rejecting zero-arg calls (this exact regression made
+        // every zero/under-count call to a variadic class method error "expects at least 1
+        // arguments, got 0" even though PHP accepts it).
+        assert!(matches!(
+            &wrapper_sig.defaults[1],
+            Some(expr) if matches!(expr.kind, ExprKind::ArrayLiteral(ref items) if items.is_empty())
+        ));
     }
 }

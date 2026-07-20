@@ -175,8 +175,16 @@ pub(super) fn lower_reflection_function_new(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    let (full_name, short_name, num_params, num_required, param_infos, source_file, unbacked_name) =
-        reflection_function_construction_metadata(ctx, inst)?;
+    let ReflectionFunctionConstructionMetadata {
+        full_name,
+        short_name,
+        num_params,
+        num_required,
+        param_infos,
+        source_file,
+        unbacked_name,
+        return_type_info,
+    } = reflection_function_construction_metadata(ctx, inst)?;
     let (
         class_id,
         property_count,
@@ -190,6 +198,8 @@ pub(super) fn lower_reflection_function_new(
         unbacked_file_off,
         unbacked_params_off,
         is_anonymous_off,
+        return_type_off,
+        unbacked_return_type_off,
     ) = {
         let class_info = ctx
             .module
@@ -216,6 +226,8 @@ pub(super) fn lower_reflection_function_new(
             slot("__unbacked_file")?,
             slot("__unbacked_params")?,
             slot("__is_anonymous")?,
+            slot("__return_type")?,
+            slot("__unbacked_return_type")?,
         )
     };
     super::emit_object_allocation(
@@ -242,6 +254,11 @@ pub(super) fn lower_reflection_function_new(
     emit_reflection_int_property(ctx, unbacked_name as i64, unbacked_file_off, unbacked_file_off + 8);
     emit_reflection_int_property(ctx, unbacked_name as i64, is_anonymous_off, is_anonymous_off + 8);
     emit_reflection_int_property(ctx, 0, unbacked_params_off, unbacked_params_off + 8);
+    // N1 item 3: `__unbacked_return_type` stays `false` for EVERY static construction path
+    // (named function, first-class callable, closure literal) — a closure literal's OWN return
+    // type annotation is statically known even though `__unbacked_file`/`__is_anonymous` are
+    // `true` for that same instance (see the property doc comment on `__unbacked_return_type`).
+    emit_reflection_int_property(ctx, 0, unbacked_return_type_off, unbacked_return_type_off + 8);
 
     // Build the `ReflectionParameter[]` array and store it into `__params`.
     let params_off = ctx
@@ -305,10 +322,96 @@ pub(super) fn lower_reflection_function_new(
     abi::emit_push_reg(ctx.emitter, object_reg);
     abi::emit_pop_reg(ctx.emitter, result_reg);
 
+    // N1 item 3: build and store `__return_type` (a boxed `ReflectionNamedType`, or left at its
+    // zero-initialized `null` default when the reflected target has no declared return type).
+    // Object pointer is in the ABI int-result register on entry (from the copy above) and is
+    // left there on exit, matching every other chained baker in this file.
+    emit_reflection_function_return_type(ctx, return_type_info.as_ref(), return_type_off)?;
+
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
     ctx.store_result_value(result)
+}
+
+/// Builds a `ReflectionNamedType` for `return_type_info` (`(name, is_builtin, allows_null)`) and
+/// stores it, boxed as `Mixed`, into the `ReflectionFunction` object's `__return_type` slot at
+/// `return_type_off`. A `None` `return_type_info` is a no-op: `__return_type` stays at its
+/// zero-initialized `null` default, which is the correct answer for an untyped reflected target
+/// (matches `ReflectionParameter::getType()`'s "backed but null" precedent). Requires the
+/// `ReflectionFunction` object pointer in the ABI int-result register on entry and leaves it
+/// there on exit, mirroring `emit_reflection_parameter_array`'s per-parameter block (this is
+/// that exact same construction, applied once instead of looped over parameters).
+///
+/// KNOWN PRE-EXISTING LEAK (discovered while adding this function, NOT introduced by it — see
+/// N1 checker-bundle spec item 3 final report): `emit_reflection_parameter_array`'s identical
+/// "allocate a `ReflectionNamedType`, persist its `__name` string, box the object pointer as
+/// `Mixed`, store into a property slot" sequence already leaks the boxed object (and its own
+/// `__name` string) when the OWNING object (there, a `ReflectionParameter`; here, a
+/// `ReflectionFunction`) is freed — confirmed via a sentinel A/B heap-debug rebuild:
+/// `getParameters()[0]->getType()->getName()` on a typed parameter alone (this function never
+/// invoked) leaks 4 live blocks / 240 bytes for 2 calls with NEITHER this function's nor any
+/// other N1-item-3 change present. This function reuses that exact idiom and therefore inherits
+/// the same gap for `__return_type`, compounding the total leak for a `ReflectionFunction`
+/// construction that resolves a return type (whether or not the PHP program ever calls
+/// `getReturnType()`, since this bakes eagerly like every other slot in `lower_reflection_function_new`).
+/// Root cause is presumed to be in how the owning object's property-cleanup sweep (or
+/// `__rt_mixed_from_value`'s object-tag handling) frees a `Mixed` slot holding a nested object
+/// pointer, not anything specific to `ReflectionFunction`/`ReflectionNamedType` — out of scope
+/// for N1 (a runtime ownership/GC fix, not a checker/codegen-shell fix), and left as a
+/// documented, non-silent residual rather than attempted under time pressure in a shared
+/// worktree where another agent owns adjacent runtime/array GC paths.
+fn emit_reflection_function_return_type(
+    ctx: &mut FunctionContext<'_>,
+    return_type_info: Option<&(String, bool, bool)>,
+    return_type_off: usize,
+) -> Result<()> {
+    let Some((type_name, builtin, allows_null)) = return_type_info else {
+        return Ok(());
+    };
+    let named_type = ctx
+        .module
+        .class_infos
+        .get("ReflectionNamedType")
+        .map(|ci| {
+            let off = |n: &str| ci.property_offsets.get(n).copied().unwrap_or(0);
+            (
+                ci.class_id,
+                ci.properties.len(),
+                super::uninitialized_property_marker_offsets(ci),
+                off("__name"),
+                off("__allows_null"),
+                off("__builtin"),
+            )
+        });
+    let Some((nt_id, nt_count, nt_markers, nt_name, nt_anull, nt_builtin)) = named_type else {
+        return Ok(());
+    };
+    // Preserve the ReflectionFunction object pointer across the nested allocation below (which
+    // clobbers the ABI int-result register with the new ReflectionNamedType object) — mirrors
+    // `emit_reflection_parameter_array`'s identical push/peek/pop discipline around its own
+    // nested `ReflectionNamedType` allocation.
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    super::emit_object_allocation(ctx, nt_id, nt_count, false, &nt_markers, &[])?;
+    emit_reflection_string_property(ctx, type_name, nt_name, nt_name + 8);
+    emit_reflection_int_property(ctx, *builtin as i64, nt_builtin, nt_builtin + 8);
+    emit_reflection_int_property(ctx, *allows_null as i64, nt_anull, nt_anull + 8);
+    // `__return_type` is a `mixed` property, so its value must be a *boxed* Mixed cell (mirrors
+    // `ReflectionParameter::__type`'s identical requirement in `emit_reflection_parameter_array`).
+    crate::codegen::emit_box_current_value_as_mixed(
+        ctx.emitter,
+        &crate::types::PhpType::Object("ReflectionNamedType".to_string()),
+    );
+    let cell_reg = abi::int_result_reg(ctx.emitter);
+    let function_reg = abi::symbol_scratch_reg(ctx.emitter);
+    // Peek (not pop) the still-pushed ReflectionFunction object pointer: `cell_reg` must stay
+    // valid for the store below, and the actual pop (landing the pointer back in the ABI
+    // int-result register, per this function's exit convention) happens afterward.
+    abi::emit_load_temporary_stack_slot(ctx.emitter, function_reg, 0);
+    abi::emit_store_to_address(ctx.emitter, cell_reg, function_reg, return_type_off);
+    abi::emit_store_zero_to_address(ctx.emitter, function_reg, return_type_off + 8);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    Ok(())
 }
 
 /// Resolves ALL metadata needed to construct a `ReflectionFunction` instance from its single
@@ -337,9 +440,18 @@ pub(super) fn lower_reflection_function_new(
 fn reflection_function_construction_metadata(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
-) -> Result<(String, String, i64, i64, Vec<ReflectionParamInfo>, String, bool)> {
+) -> Result<ReflectionFunctionConstructionMetadata> {
     let Some(name_operand) = inst.operands.first().copied() else {
-        return Ok((String::new(), String::new(), 0, 0, Vec::new(), String::new(), false));
+        return Ok(ReflectionFunctionConstructionMetadata {
+            full_name: String::new(),
+            short_name: String::new(),
+            num_params: 0,
+            num_required: 0,
+            param_infos: Vec::new(),
+            source_file: String::new(),
+            unbacked_name: false,
+            return_type_info: None,
+        });
     };
     if let Some(closure_name) = closure_new_operand_name(ctx, name_operand) {
         let signature = ctx
@@ -350,15 +462,17 @@ fn reflection_function_construction_metadata(
             .and_then(|function| function.signature.as_ref());
         let (num_params, num_required) = reflection_param_counts(signature);
         let param_infos = reflection_param_infos_from_signature(signature);
-        return Ok((
-            String::new(),
-            String::new(),
+        let return_type_info = reflection_return_type_info(signature);
+        return Ok(ReflectionFunctionConstructionMetadata {
+            full_name: String::new(),
+            short_name: String::new(),
             num_params,
             num_required,
             param_infos,
-            String::new(),
-            true,
-        ));
+            source_file: String::new(),
+            unbacked_name: true,
+            return_type_info,
+        });
     }
     let function_name = reflection_function_name_operand(ctx, name_operand)?;
     let key = php_symbol_key(function_name.trim_start_matches('\\'));
@@ -370,6 +484,7 @@ fn reflection_function_construction_metadata(
         .and_then(|function| function.signature.as_ref());
     let (num_params, num_required) = reflection_param_counts(signature);
     let param_infos = reflection_param_infos_from_signature(signature);
+    let return_type_info = reflection_return_type_info(signature);
     let short_name = function_name
         .trim_start_matches('\\')
         .rsplit('\\')
@@ -377,15 +492,34 @@ fn reflection_function_construction_metadata(
         .unwrap_or(&function_name)
         .to_string();
     let source_file = ctx.module.function_source_files.get(&key).cloned().unwrap_or_default();
-    Ok((
-        function_name.clone(),
+    Ok(ReflectionFunctionConstructionMetadata {
+        full_name: function_name.clone(),
         short_name,
         num_params,
         num_required,
         param_infos,
         source_file,
-        false,
-    ))
+        unbacked_name: false,
+        return_type_info,
+    })
+}
+
+/// Return value of `reflection_function_construction_metadata`: everything needed to populate a
+/// STATICALLY-constructed `ReflectionFunction` instance's slots (named function, first-class
+/// callable, or closure literal — never the dynamic descriptor path, which has its own separate
+/// construction in `reflection_function_dynamic.rs`).
+struct ReflectionFunctionConstructionMetadata {
+    full_name: String,
+    short_name: String,
+    num_params: i64,
+    num_required: i64,
+    param_infos: Vec<ReflectionParamInfo>,
+    source_file: String,
+    unbacked_name: bool,
+    /// `Some((name, is_builtin, allows_null))` when the reflected target declares a return type
+    /// `reflection_return_type_info` can represent as a single `ReflectionNamedType`; `None` for
+    /// an untyped target or an unsupported shape (backs `getReturnType()`, N1 item 3).
+    return_type_info: Option<(String, bool, bool)>,
 }
 
 /// Resolves the `new ReflectionFunction(...)` name operand to a function name string, accepting
@@ -523,6 +657,29 @@ fn reflection_named_type_info(ty: &crate::types::PhpType) -> Option<(String, boo
         }
         _ => None,
     }
+}
+
+/// Maps a function/closure signature's declared return type to `ReflectionNamedType` metadata
+/// `(name, is_builtin, allows_null)` for `getReturnType()` (N1 item 3), or `None` when the
+/// signature has no declared return type, is untyped, or the shape is unsupported (a union
+/// return type beyond `T|null`).
+///
+/// Wraps `reflection_named_type_info` with a top-level `void` case: `PhpType::Void` as a FULL
+/// return type genuinely means the `: void` keyword (php -n verified: `getReturnType()` on a `:
+/// void` function returns a `ReflectionNamedType` named `"void"`), unlike its OVERLOADED meaning
+/// as the "this union member is null" marker inside `reflection_named_type_info`'s own `Union`
+/// arm — intentionally NOT folded into that shared helper, to avoid coupling the two meanings.
+fn reflection_return_type_info(
+    signature: Option<&crate::types::FunctionSig>,
+) -> Option<(String, bool, bool)> {
+    let signature = signature?;
+    if !signature.declared_return {
+        return None;
+    }
+    if matches!(signature.return_type, crate::types::PhpType::Void) {
+        return Some(("void".to_string(), true, false));
+    }
+    reflection_named_type_info(&signature.return_type)
 }
 
 /// Extracts per-parameter reflection metadata from an already-resolved function/closure

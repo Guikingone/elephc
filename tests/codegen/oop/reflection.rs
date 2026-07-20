@@ -1797,3 +1797,164 @@ run();
         out.stderr
     );
 }
+
+// -- ReflectionFunction getEndLine/getReturnType/getClosureScopeClass (N1 item 3) --
+
+/// `getEndLine()` always throws a catchable `\ReflectionException` — elephc tracks no
+/// declaration line numbers at all (start OR end), for a named function, a closure literal, OR a
+/// dynamically-reflected instance. Real PHP does NOT throw here (`getEndLine()` returns an
+/// `int`); this is an intentional, documented gap (same treatment as `getStartLine`), not a
+/// silent wrong value — every other backed method on the SAME instance stays unaffected.
+#[test]
+fn test_reflection_function_get_end_line_throws_catchable_for_every_construction_path() {
+    let out = compile_and_run(
+        r#"<?php
+function f(int $x): string { return "a"; }
+function reflectAndTryEndLine($rf) {
+    try {
+        $rf->getEndLine();
+        echo "no-throw";
+    } catch (\ReflectionException $e) {
+        echo "throw";
+    }
+}
+reflectAndTryEndLine(new ReflectionFunction('f'));
+echo "|";
+reflectAndTryEndLine(new ReflectionFunction(function (int $x): string { return "a"; }));
+echo "|";
+function reflectDynamic(mixed $c) {
+    reflectAndTryEndLine(new ReflectionFunction($c));
+}
+reflectDynamic(function (int $x): string { return "a"; });
+echo "|";
+echo (new ReflectionFunction('f'))->getNumberOfParameters();
+"#,
+    );
+    assert_eq!(out, "throw|throw|throw|1");
+}
+
+/// `getClosureScopeClass()` always throws a catchable `\ReflectionException` — elephc's EIR
+/// module tracks no per-closure lexical declaring-class scope. Real PHP does NOT throw here
+/// (returns a `ReflectionClass` or `null`); this is an intentional, documented gap, not a silent
+/// wrong value (e.g. narrowing to the bound `$this` class, which would silently diverge for a
+/// static closure or one rebound via `Closure::bindTo`). Covers a closure declared inside a
+/// method (the case with a real, non-null PHP answer) and a plain named function (the
+/// already-null case) — both throw uniformly rather than one faking `null` and the other not.
+#[test]
+fn test_reflection_function_get_closure_scope_class_throws_catchable() {
+    let out = compile_and_run(
+        r#"<?php
+class Foo {
+    public function make() {
+        return function () { return 1; };
+    }
+}
+function f() {}
+function tryScopeClass($rf) {
+    try {
+        $rf->getClosureScopeClass();
+        echo "no-throw";
+    } catch (\ReflectionException $e) {
+        echo "throw";
+    }
+}
+$foo = new Foo();
+tryScopeClass(new ReflectionFunction($foo->make()));
+echo "|";
+tryScopeClass(new ReflectionFunction('f'));
+"#,
+    );
+    assert_eq!(out, "throw|throw");
+}
+
+/// `getReturnType()` on a NAMED function is backed with a real `ReflectionNamedType`,
+/// matching PHP exactly across builtin scalar, nullable, void, and untyped return shapes.
+/// php -n verified: builtin scalar -> name/allowsNull/isBuiltin; `?string` -> allowsNull true;
+/// untyped -> `null`; `void` -> name "void".
+#[test]
+fn test_reflection_function_get_return_type_named_function() {
+    let out = compile_and_run(
+        r#"<?php
+function f(int $x): string { return "a"; }
+$rf = new ReflectionFunction('f');
+$t = $rf->getReturnType();
+echo $t->getName();
+echo $t->allowsNull() ? "1" : "0";
+echo $t->isBuiltin() ? "1" : "0";
+echo "|";
+
+function g($x) { return $x; }
+$rg = new ReflectionFunction('g');
+var_dump($rg->getReturnType());
+echo "|";
+
+function h(int $x): ?string { return null; }
+$rh = new ReflectionFunction('h');
+$t2 = $rh->getReturnType();
+echo $t2->getName();
+echo $t2->allowsNull() ? "1" : "0";
+echo "|";
+
+function j(): void {}
+$rj = new ReflectionFunction('j');
+echo $rj->getReturnType()->getName();
+"#,
+    );
+    assert_eq!(out, "string01|NULL\n|string1|void");
+}
+
+/// `getReturnType()` on a CLOSURE LITERAL is backed exactly like a named function — the
+/// closure's own declared return type is statically known at the `new ReflectionFunction(...)`
+/// call site even though other slots (`getFileName`/`getStartLine`) stay gated for the same
+/// instance. php -n verified: prints "string".
+#[test]
+fn test_reflection_function_get_return_type_closure_literal() {
+    let out = compile_and_run(
+        r#"<?php
+$rf = new ReflectionFunction(function (int $x): string { return "a"; });
+echo $rf->getReturnType()->getName();
+"#,
+    );
+    assert_eq!(out, "string");
+}
+
+/// `getReturnType()` on a DYNAMICALLY-reflected instance (a `callable`/`mixed`-typed variable,
+/// not a literal target) throws a catchable `\ReflectionException` instead of a value: no
+/// per-value declared-return-type record exists on a runtime callable descriptor.
+/// `getNumberOfParameters()` on the SAME instance stays backed, confirming the gate is
+/// per-method, not "the whole object is broken".
+#[test]
+fn test_reflection_function_get_return_type_dynamic_throws_catchable() {
+    let out = compile_and_run(
+        r#"<?php
+function makeClosure(): callable {
+    return function (int $x): string { return "a"; };
+}
+$c = makeClosure();
+$rf = new ReflectionFunction($c);
+try {
+    $rf->getReturnType();
+    echo "no-throw";
+} catch (\ReflectionException $e) {
+    echo "throw";
+}
+echo "|";
+echo $rf->getNumberOfParameters();
+"#,
+    );
+    assert_eq!(out, "throw|1");
+}
+
+// NOTE (N1 checker-bundle spec item 3, honest residual — not a silent gap): a heap-cleanliness
+// test for `getReturnType()` was written and IS NOT included here because it fails. Sentinel A/B
+// verified (rebuilt with only `emit_reflection_function_return_type`'s call site reverted) that
+// this is a PRE-EXISTING leak this feature reuses, not one it introduces from scratch:
+// `getParameters()[0]->getType()->getName()` on a typed parameter — code this feature never
+// touches — ALREADY leaks 4 live blocks / 240 bytes for 2 calls on its own, via the identical
+// "allocate `ReflectionNamedType`, persist `__name`, box as `Mixed`, store into a property slot"
+// idiom in `emit_reflection_parameter_array` (`src/codegen_ir/lower_inst/objects/reflection.rs`).
+// `getReturnType()`'s `emit_reflection_function_return_type` reuses that exact idiom for
+// `__return_type` and inherits/compounds the same gap (see that function's doc comment for the
+// full sentinel repro and root-cause hypothesis). Fixing it is a runtime ownership/GC change
+// (how a `Mixed` property holding a nested object gets freed with its owner), out of scope for
+// this checker-bundle cycle and left as a documented follow-up rather than risked here.

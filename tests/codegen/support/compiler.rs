@@ -214,6 +214,15 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
         &mut check_result,
         &function_existence_set,
     );
+    // Mirror `pipeline::compile`: coerce literal string-callable arguments at `callable`-typed
+    // parameter positions into their first-class-callable AST equivalent (see
+    // `crate::optimize::callable_coercion`), placed at the same stage as real compilation.
+    let callable_coercion_set = elephc::optimize::CallableCoercionSet::from_check_result(&check_result);
+    let optimized = elephc::optimize::coerce_callable_string_args(optimized, &callable_coercion_set);
+    elephc::optimize::coerce_callable_string_args_in_method_bodies(
+        &mut check_result,
+        &callable_coercion_set,
+    );
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);

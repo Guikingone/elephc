@@ -40,6 +40,27 @@ fn test_error_func_num_args_global_scope() {
     );
 }
 
+/// Regression guard for the `callable_wrapper_sig` variadic-defaults fix (N1 item 1): a
+/// variadic METHOD with a REQUIRED leading parameter must still reject a call that omits
+/// the required parameter. `callable_wrapper_sig` only relaxed the SYNTHESIZED variadic
+/// slot's own default; the required parameter ahead of it keeps its `None` default and
+/// must still count toward `required`. php -n verified: `class M { function v($first,
+/// ...$rest) {} } (new M)->v();` fatals with `ArgumentCountError: Too few arguments to
+/// function M::v(), 0 passed ... and exactly 1 expected`.
+#[test]
+fn test_error_variadic_method_still_requires_leading_required_param() {
+    expect_error(
+        r#"<?php
+class M {
+    function v($first, ...$rest) {}
+}
+$m = new M();
+$m->v();
+"#,
+        "Method M::v expects at least 1 arguments, got 0",
+    );
+}
+
 /// Gated dynamic-invoker form: first-class-callable syntax (`f(...)`) creates a generic
 /// callable descriptor invoked later through the uniform-invoke ABI, which does not know
 /// about an arity-hungry function's hidden trailing arity-count parameter — refused as a

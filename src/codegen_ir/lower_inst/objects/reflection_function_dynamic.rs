@@ -160,6 +160,7 @@ pub(super) fn lower_reflection_function_new_dynamic(
         unbacked_file_off,
         unbacked_params_off,
         is_anonymous_off,
+        unbacked_return_type_off,
     ) = {
         let class_info = ctx
             .module
@@ -184,6 +185,7 @@ pub(super) fn lower_reflection_function_new_dynamic(
             slot("__unbacked_file")?,
             slot("__unbacked_params")?,
             slot("__is_anonymous")?,
+            slot("__unbacked_return_type")?,
         )
     };
     super::emit_object_allocation(
@@ -199,9 +201,13 @@ pub(super) fn lower_reflection_function_new_dynamic(
     // `__unbacked_name` stays `false` (already zeroed by `emit_object_allocation`): getName()/
     // getShortName() are backed below. `__unbacked_file`/`__unbacked_params` are unconditionally
     // `true` for every dynamic instance (no source-file/line tracking, no runtime parameter-array
-    // loop — see the module doc comment).
+    // loop — see the module doc comment). N1 item 3: `__unbacked_return_type` is likewise
+    // unconditionally `true` here — a runtime callable descriptor carries no per-value declared
+    // return-type record to read (unlike the two STATIC construction paths in `reflection.rs`,
+    // where the reflected target's return type is known at COMPILE time).
     emit_store_object_property_immediate(ctx, 1, unbacked_file_off);
     emit_store_object_property_immediate(ctx, 1, unbacked_params_off);
+    emit_store_object_property_immediate(ctx, 1, unbacked_return_type_off);
 
     // -- branch on the descriptor's own `kind` field to select the name/anonymity story --
     let closure_label = ctx.next_label("reflect_fn_dyn_closure");
