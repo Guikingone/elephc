@@ -455,11 +455,19 @@ impl Checker {
     ///   between top-level, free-function, and method contexts).
     /// - Any OTHER Closure-shaped value (a `Closure`-typed variable/parameter/expression whose
     ///   identity is not statically resolvable at this call site, e.g. `function f(Closure $c) {
-    ///   new ReflectionFunction($c); }`) is REJECTED at compile time: elephc has no way to
-    ///   derive even the parameter count for such a value, so a `ReflectionFunction` instance
-    ///   backed by it could never answer any query soundly — loud under-accept beats
-    ///   constructing an object that throws on every method call.
-    /// - Anything else (not `Str`, not Closure-shaped) is a compile-time type error, mirroring
+    ///   new ReflectionFunction($c); }`) is now ACCEPTED (M2 PART A): the runtime closure
+    ///   descriptor a `Closure`/`callable`-typed value ALWAYS points at
+    ///   (`crate::codegen::callable_descriptor`) already carries the exact same
+    ///   signature/name/invocation metadata this constructor bakes for a literal at compile
+    ///   time, so `crate::codegen_ir::lower_inst::objects::reflection::
+    ///   lower_reflection_function_new_dynamic` reads it at RUNTIME instead — with a tag check
+    ///   before touching it (JURY ADDENDUM item 3). A `Mixed`/`Union` value (e.g. a
+    ///   `?Closure`-typed local, or one widened to `mixed` by an unrelated branch-merge) is
+    ///   ALSO accepted for the SAME reason: the dynamic lowering unboxes it and dispatches on
+    ///   the runtime tag, throwing a catchable `\TypeError`/`\ReflectionException` for anything
+    ///   that isn't actually a callable descriptor at runtime — never a partial/wrong object.
+    /// - Anything ELSE STATICALLY KNOWN to be non-Closure/non-Mixed/non-Str (e.g. a statically
+    ///   `int`/`array`/`Object`-typed argument) is still a compile-time type error, mirroring
     ///   PHP's real `TypeError` for this argument (php -n verified: `new
     ///   ReflectionFunction([1,2])` throws `TypeError: ReflectionFunction::__construct():
     ///   Argument #1 ($function) must be of type Closure|string, array given`).
@@ -489,10 +497,15 @@ impl Checker {
             if matches!(arg.kind, ExprKind::Closure { .. }) {
                 return Ok(());
             }
-            return Err(CompileError::new(
-                expr.span,
-                "ReflectionFunction::__construct(): a dynamically-typed Closure value is not yet supported (pass a closure literal, a first-class callable, or a function name string)",
-            ));
+            // A dynamically-typed Closure/callable value (not a literal or FCC resolvable at
+            // this call site) — accepted; see the doc comment above and
+            // `lower_reflection_function_new_dynamic`.
+            return Ok(());
+        }
+        if matches!(arg_ty, PhpType::Mixed | PhpType::Union(_)) {
+            // Genuinely unknown at compile time — the dynamic runtime path performs its own
+            // tag check and throws a catchable diagnostic for any non-callable payload.
+            return Ok(());
         }
         Err(CompileError::new(
             arg.span,

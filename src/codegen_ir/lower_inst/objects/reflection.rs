@@ -187,6 +187,9 @@ pub(super) fn lower_reflection_function_new(
         nr_off,
         file_off,
         unbacked_off,
+        unbacked_file_off,
+        unbacked_params_off,
+        is_anonymous_off,
     ) = {
         let class_info = ctx
             .module
@@ -210,6 +213,9 @@ pub(super) fn lower_reflection_function_new(
             slot("__num_required")?,
             slot("__file")?,
             slot("__unbacked_name")?,
+            slot("__unbacked_file")?,
+            slot("__unbacked_params")?,
+            slot("__is_anonymous")?,
         )
     };
     super::emit_object_allocation(
@@ -226,6 +232,16 @@ pub(super) fn lower_reflection_function_new(
     emit_reflection_int_property(ctx, num_required, nr_off, nr_off + 8);
     emit_reflection_string_property(ctx, &source_file, file_off, file_off + 8);
     emit_reflection_int_property(ctx, unbacked_name as i64, unbacked_off, unbacked_off + 8);
+    // M2 PART A: for this (static-operand) construction path, `__unbacked_file` and
+    // `__is_anonymous` always mirror `__unbacked_name`'s own value — a closure LITERAL is both
+    // name-unbacked AND always anonymous (`true`/`true`); a string-literal/first-class-callable
+    // target is fully backed and never anonymous (`false`/`false`). `__unbacked_params` stays
+    // `false`: this path always builds the real `__params` array below (compile-time-unrolled),
+    // unlike the dynamic path (`reflection_function_dynamic`), which cannot cheaply build one for
+    // a compile-time-unknown parameter count and gates `getParameters()` off instead.
+    emit_reflection_int_property(ctx, unbacked_name as i64, unbacked_file_off, unbacked_file_off + 8);
+    emit_reflection_int_property(ctx, unbacked_name as i64, is_anonymous_off, is_anonymous_off + 8);
+    emit_reflection_int_property(ctx, 0, unbacked_params_off, unbacked_params_off + 8);
 
     // Build the `ReflectionParameter[]` array and store it into `__params`.
     let params_off = ctx
@@ -381,6 +397,21 @@ fn reflection_function_name_operand(ctx: &FunctionContext<'_>, value: ValueId) -
         return Ok(name);
     }
     const_required_string_operand(ctx, value, "ReflectionFunction")
+}
+
+/// Returns true when `new ReflectionFunction($operand)` can be resolved at COMPILE TIME: a
+/// closure literal, a first-class callable targeting a plain free function, or a compile-time
+/// constant string. `crate::codegen_ir::lower_inst::objects::lower_object_new()` routes anything
+/// else (M2 PART A: a genuinely dynamic `Closure`/`callable`-typed value, or a `Mixed`/`Union`
+/// value the checker accepted for the same reason — see
+/// `crate::types::checker::inference::objects::constructors::
+/// validate_reflection_function_constructor_arg`) to
+/// `super::reflection_function_dynamic::lower_reflection_function_new_dynamic` instead. Mirrors
+/// `is_const_string_or_class_value`'s role for `ReflectionClass`.
+pub(super) fn is_reflection_function_static_operand(ctx: &FunctionContext<'_>, value: ValueId) -> bool {
+    closure_new_operand_name(ctx, value).is_some()
+        || first_class_callable_operand_name(ctx, value).is_some()
+        || const_required_string_operand(ctx, value, "ReflectionFunction").is_ok()
 }
 
 /// Returns the target function's name when `value` is a `Op::FirstClassCallableNew` operand

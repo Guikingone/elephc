@@ -1638,3 +1638,162 @@ run();
         out.stderr
     );
 }
+
+// -- M2 PART A: `new ReflectionFunction($dynamicValue)` on a non-statically-resolvable
+// Closure/Mixed value (see `crate::codegen_ir::lower_inst::objects::reflection_function_dynamic`) --
+
+/// Verifies the dynamic (`Closure`-typed parameter, not a literal or first-class-callable
+/// resolvable at the call site) construction path backs `getNumberOfParameters()`/
+/// `getNumberOfRequiredParameters()`/`isAnonymous()`/`getName()` from the runtime callable
+/// descriptor's own signature record, and that every method with no runtime backing for a
+/// dynamic instance (`getFileName()`/`getStartLine()`/`getParameters()`/`invoke()`/
+/// `invokeArgs()`) throws a catchable `\ReflectionException` (JURY ADDENDUM item 4) rather than
+/// silently returning a partial/fabricated value. php -n verified:
+/// `(new ReflectionFunction($closure))->getNumberOfParameters() === 2`,
+/// `->getNumberOfRequiredParameters() === 1`, `->isAnonymous() === true` for a closure literal
+/// passed through a `Closure`-typed parameter; `getName()` intentionally returns elephc's PHP
+/// <8.5 `"{closure}"` marker (JURY ADDENDUM item 2) rather than PHP 8.5's
+/// `"{closure:FILE:LINE}"` format, a documented benign debug-string divergence.
+#[test]
+fn test_reflection_function_dynamic_closure_backed_methods_and_guarded_throws() {
+    let out = compile_and_run(
+        r#"<?php
+function reflect(Closure $c) {
+    $rf = new ReflectionFunction($c);
+    echo $rf->getNumberOfParameters();
+    echo "|";
+    echo $rf->getNumberOfRequiredParameters();
+    echo "|";
+    echo $rf->isAnonymous() ? "1" : "0";
+    echo "|";
+    echo $rf->getName();
+    echo "|";
+    try {
+        $rf->getFileName();
+        echo "no-throw";
+    } catch (\ReflectionException $ignored) {
+        echo "throw";
+    }
+    echo "|";
+    try {
+        $rf->getStartLine();
+        echo "no-throw";
+    } catch (\ReflectionException $ignored) {
+        echo "throw";
+    }
+    echo "|";
+    try {
+        $rf->getParameters();
+        echo "no-throw";
+    } catch (\ReflectionException $ignored) {
+        echo "throw";
+    }
+    echo "|";
+    try {
+        $rf->invoke(1);
+        echo "no-throw";
+    } catch (\ReflectionException $ignored) {
+        echo "throw";
+    }
+    echo "|";
+    try {
+        $rf->invokeArgs([1]);
+        echo "no-throw";
+    } catch (\ReflectionException $ignored) {
+        echo "throw";
+    }
+}
+reflect(function ($x, $y = 1) { return $x; });
+"#,
+    );
+    assert_eq!(out, "2|1|1|{closure}|throw|throw|throw|throw|throw");
+}
+
+/// Verifies a dynamic construction over a first-class callable targeting a NAMED free function
+/// (wrapped in a `Closure`-typed parameter, forcing the dynamic path instead of the
+/// `first_class_callable_operand_name` compile-time bake) stays FULLY named: `getName()` returns
+/// the target's real name and `isAnonymous()` is `false` — the descriptor's own `kind` field
+/// (read at runtime, not baked) distinguishes this from an anonymous closure literal. php -n
+/// verified: `(new ReflectionFunction(target(...)))->getName() === "target"`,
+/// `->isAnonymous() === false`.
+#[test]
+fn test_reflection_function_dynamic_named_target_backed_name_and_not_anonymous() {
+    let out = compile_and_run(
+        r#"<?php
+function target(string $s, int $y = 1): string { return $s; }
+function reflect(Closure $c) {
+    $rf = new ReflectionFunction($c);
+    echo $rf->getName();
+    echo "|";
+    echo $rf->isAnonymous() ? "1" : "0";
+    echo "|";
+    echo $rf->getNumberOfParameters();
+    echo "|";
+    echo $rf->getNumberOfRequiredParameters();
+}
+reflect(target(...));
+"#,
+    );
+    assert_eq!(out, "target|0|2|1");
+}
+
+/// JURY ADDENDUM item 3: the ctor performs a runtime TAG CHECK on a `Mixed`-typed operand before
+/// touching the descriptor. A non-callable runtime value (array, object) throws a catchable
+/// `\TypeError`; a genuinely callable one (a closure literal reaching this same call site through
+/// the SAME `mixed`-typed parameter) proceeds normally instead of being misrouted. php -n
+/// verified: `new ReflectionFunction([1, 2])` throws `TypeError: ...must be of type
+/// Closure|string, array given` — elephc matches this wording exactly for the array tag; the
+/// object case intentionally uses a documented generic `"object given"` fallback instead of the
+/// real class name (`stdClass given` in real PHP) — see
+/// `crate::codegen_ir::lower_inst::objects::reflection_function_dynamic`'s module doc comment.
+#[test]
+fn test_reflection_function_dynamic_ctor_tag_check_type_error_and_valid_closure() {
+    let out = compile_and_run(
+        r#"<?php
+function reflect(mixed $c) {
+    try {
+        new ReflectionFunction($c);
+        echo "no-throw";
+    } catch (\TypeError $e) {
+        echo $e->getMessage();
+    }
+    echo "\n";
+}
+reflect([1, 2]);
+reflect(new stdClass());
+reflect(function ($x) { return $x; });
+"#,
+    );
+    assert_eq!(
+        out,
+        "ReflectionFunction::__construct(): Argument #1 ($function) must be of type Closure|string, array given\nReflectionFunction::__construct(): Argument #1 ($function) must be of type Closure|string, object given\nno-throw\n"
+    );
+}
+
+/// Heap-cleanliness: constructing a dynamic `ReflectionFunction` instance and reading its backed
+/// slots (`getNumberOfParameters()`/`isAnonymous()`/`getName()`) must not leak the object, its
+/// persisted name string, or the unboxed Mixed cell along the way.
+#[test]
+fn test_reflection_function_dynamic_closure_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function reflect(mixed $c) {
+    $rf = new ReflectionFunction($c);
+    echo $rf->getNumberOfParameters();
+    echo $rf->isAnonymous() ? "1" : "0";
+    echo $rf->getName();
+}
+function run(): void {
+    reflect(function ($x, $y) { return $x + $y; });
+}
+run();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "21{closure}");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}

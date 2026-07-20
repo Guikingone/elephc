@@ -55,6 +55,10 @@ pub(crate) mod reflection;
 // `reflection_members::lower_reflection_method_new_dynamic`/
 // `lower_reflection_property_new_dynamic`.
 pub(crate) mod reflection_members;
+// M2 PART A: `new ReflectionFunction($dynamicValue)` for a non-statically-resolvable operand —
+// see `reflection::is_reflection_function_static_operand`'s dispatch check in `lower_object_new`
+// below and the module's own doc comment for the full design.
+mod reflection_function_dynamic;
 mod return_type_guard;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
@@ -133,6 +137,15 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
         return lower_fiber_new(ctx, inst);
     }
     if class_name == "ReflectionFunction" {
+        if let Some(&function_operand) = inst.operands.first() {
+            if !reflection::is_reflection_function_static_operand(ctx, function_operand) {
+                return reflection_function_dynamic::lower_reflection_function_new_dynamic(
+                    ctx,
+                    inst,
+                    function_operand,
+                );
+            }
+        }
         return reflection::lower_reflection_function_new(ctx, inst);
     }
     if reflection::is_reflection_owner_class(&class_name) {

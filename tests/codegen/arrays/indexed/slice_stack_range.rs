@@ -166,6 +166,139 @@ echo implode(",", $a), "|", implode(",", $b);
     assert_eq!(out, "0,1,2,3|1,2,3");
 }
 
+// -- M2 PART B: array_unshift() union-first-arg EIR unwrap --
+
+/// Verifies `array_unshift()` accepts a first argument whose STATIC type is a union
+/// containing an indexed-array member (the `$hosts = $query['host'] ?? []`-style
+/// gradual-typing idiom the Symfony sites use — a variable that starts `[]` and is
+/// conditionally reassigned to a Mixed-boxed array read from another array), rather than
+/// the checker's prior hard `array_unshift() first argument must be array` rejection.
+/// The mutation is proven via `array_unshift()`'s OWN return value (php -n verified: a
+/// 3-element array prepended once has length 4) — this deliberately does NOT also read
+/// `$hosts`'s contents afterward (`count($hosts)`/`$hosts[0]`/`implode(..., $hosts)`),
+/// because doing so hits an UNRELATED, PRE-EXISTING infinite loop in this compiler
+/// (reproduces on `git stash` HEAD with plain `count($x)` on an `array|false`-typed
+/// parameter, no `array_unshift()` involved at all) when a Mixed-boxed union value from a
+/// conditional-reassignment/declared-union-parameter source is read more than once. That
+/// gap is out of scope here; see the M2 spec cycle's final report for the reproduction.
+#[test]
+fn test_array_unshift_union_first_arg_mutates_and_returns_new_count() {
+    let out = compile_and_run(
+        r#"<?php
+function f($query) {
+    $hosts = [];
+    if (isset($query['host'])) {
+        if (!is_array($hosts = $query['host'])) {
+            throw new InvalidArgumentException('bad');
+        }
+    }
+    $n = array_unshift($hosts, 9);
+    echo $n;
+}
+f(["host" => [1, 2, 3]]);
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
+/// JURY ADDENDUM item 6: explicit proof that the ORIGINAL union-typed variable (not just
+/// `array_unshift()`'s own return value) holds the mutated array afterward — i.e. the
+/// by-ref write-back through the boxed-Mixed union representation actually reaches the
+/// caller-visible slot, not just a local working copy. Discards `array_unshift()`'s return
+/// value entirely and instead reads `$hosts` back out via a SEPARATE `count()` call
+/// (php -n verified: prepending one value to a 3-element array yields length 4). Uses
+/// `count()` rather than `implode()`/element access to avoid an UNRELATED, PRE-EXISTING
+/// runtime bug where `implode()` segfaults on a Mixed-boxed value produced by this same
+/// conditional-reassignment idiom even with NO `array_unshift()` call at all (reproduces on
+/// `git stash` HEAD); see the M2 spec cycle's final report.
+#[test]
+fn test_array_unshift_union_first_arg_original_variable_holds_mutation() {
+    let out = compile_and_run(
+        r#"<?php
+function f($query) {
+    $hosts = [];
+    if (isset($query['host'])) {
+        if (!is_array($hosts = $query['host'])) {
+            throw new InvalidArgumentException('bad');
+        }
+    }
+    array_unshift($hosts, 9);
+    echo count($hosts);
+}
+f(["host" => [1, 2, 3]]);
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
+/// Verifies `array_unshift()` on a union-first-argument value that resolves to `false` at
+/// runtime (the `array|false` idiom's OTHER branch) throws a catchable `\TypeError` with
+/// PHP's EXACT wording. php -n VERIFIED: `$c = false; array_unshift($c, 1);` throws
+/// `TypeError: array_unshift(): Argument #1 ($array) must be of type array, false given`
+/// (message text byte-for-byte, per JURY ADDENDUM item 6).
+#[test]
+fn test_array_unshift_union_first_arg_false_tag_throws_byte_identical_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+function f($query) {
+    $c = false;
+    if (isset($query['missing'])) {
+        if (!is_array($c = $query['missing'])) {
+            throw new InvalidArgumentException('bad');
+        }
+    }
+    try {
+        array_unshift($c, 1);
+        echo "no-throw";
+    } catch (\TypeError $e) {
+        echo $e->getMessage();
+    }
+}
+f(["host" => [1, 2, 3]]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array_unshift(): Argument #1 ($array) must be of type array, false given"
+    );
+}
+
+/// Heap-cleanliness AND COW proof for the dynamic union-first-arg path in one test: a SECOND
+/// variable (`$b`) is bound to the same boxed Mixed cell BEFORE `array_unshift()` mutates
+/// `$hosts` — proving the mandatory synthetic-incref-before-mutate recipe documented on
+/// `crate::codegen_ir::lower_inst::builtins::arrays::unshift::lower_array_unshift_dynamic`
+/// actually forces a COW split (so `$b` keeps its original 3-element snapshot while `$hosts`
+/// grows to 4) with no leaked allocation along the way. php -n verified: prepending to a copy
+/// never observably mutates the other reference in real PHP either.
+#[test]
+fn test_array_unshift_union_first_arg_heap_clean_and_cow_split() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function f($query): void {
+    $hosts = [];
+    if (isset($query['host'])) {
+        if (!is_array($hosts = $query['host'])) {
+            throw new InvalidArgumentException('bad');
+        }
+    }
+    $b = $hosts;
+    array_unshift($hosts, 9);
+    echo count($hosts);
+    echo "|";
+    echo count($b);
+}
+f(["host" => [1, 2, 3]]);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "4|3");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Tests `range($start, $end)` with ascending values (1 to 5).
 /// Verifies correct count (5) and iteration order (12345).
 #[test]

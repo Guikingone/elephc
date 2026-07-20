@@ -597,14 +597,21 @@ fn builtin_reflection_get_file_name_method() -> ClassMethod {
 }
 
 /// `ReflectionFunction`-only `getFileName()`: same `__file` slot as
-/// `builtin_reflection_get_file_name_method`, but gated on `__unbacked_name` for a
-/// closure-literal-backed instance — see `builtin_reflection_guarded_method`.
+/// `builtin_reflection_get_file_name_method`, but gated on `__unbacked_file` — a closure-literal-
+/// backed instance (elephc cannot reproduce PHP's per-closure declaring-file tracking) OR a
+/// dynamic descriptor-based instance (M2 PART A: no source file is tracked for ANY dynamically
+/// reflected value either — see `crate::codegen_ir::lower_inst::objects::reflection_function_dynamic`).
+/// `__unbacked_file` is a SEPARATE flag from `__unbacked_name` (JURY ADDENDUM item 2): the dynamic
+/// path sets `__unbacked_name = false` (so `getName()`/`getShortName()` stay backed, returning
+/// `"{closure}"` or the resolved real name) while STILL setting `__unbacked_file = true` (so
+/// `getFileName()`/`getStartLine()` keep throwing) — a closure-literal instance sets BOTH flags
+/// `true`, matching its pre-existing behavior unchanged.
 fn builtin_reflection_function_get_file_name_method() -> ClassMethod {
     builtin_reflection_guarded_method(
         "getFileName",
         str_or_false_type(),
-        "__unbacked_name",
-        "ReflectionFunction::getFileName() is not supported for a closure-literal-backed instance: elephc cannot reproduce PHP's per-closure declaring-file tracking",
+        "__unbacked_file",
+        "ReflectionFunction::getFileName() is not supported for this instance: elephc does not track a declaring source file for a closure-literal-backed or dynamically-reflected instance",
         empty_string_sentinel_expr("__file"),
     )
 }
@@ -679,6 +686,55 @@ fn builtin_reflection_unsupported_tostring_method(class_name: &str) -> ClassMeth
                 ExprKind::NewObject {
                     class_name: Name::unqualified("Error"),
                     args: vec![Expr::new(ExprKind::StringLiteral(message), dummy_span)],
+                },
+                dummy_span,
+            )),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public method (optionally with regular params and/or a variadic tail) whose body
+/// unconditionally throws a `ReflectionException(message)` — never returns. Used for methods this
+/// shell cannot back for ANY construction path yet (`getStartLine`'s missing declaration-line
+/// tracking) or cannot back SOUNDLY for the dynamic descriptor-based construction path
+/// (`invoke`/`invokeArgs`: no wiring yet through the uniform closure invoker; `getParameters`'s
+/// per-parameter runtime array is deferred — see
+/// `crate::codegen_ir::lower_inst::objects::reflection_function_dynamic`'s module doc). Mirrors
+/// `builtin_reflection_guarded_method`'s throw shape but skips the `if` guard entirely (M2 PART A,
+/// JURY ADDENDUM item 4: "ALL unbacked ReflectionFunction/ReflectionParameter methods guarded with
+/// catchable ReflectionException — never partial objects"): the body never returns a value, so no
+/// declared `return_type` is ever silently violated either.
+fn builtin_reflection_unconditional_throw_method(
+    method_name: &str,
+    return_type: TypeExpr,
+    message: &str,
+    params: Vec<(&str, Option<TypeExpr>, Option<Expr>, bool)>,
+    variadic: Option<(&str, TypeExpr)>,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: params
+            .into_iter()
+            .map(|(name, ty, default, by_ref)| (name.to_string(), ty, default, by_ref))
+            .collect(),
+        variadic: variadic.as_ref().map(|(name, _)| name.to_string()),
+        variadic_type: variadic.map(|(_, ty)| ty),
+        return_type: Some(return_type),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Throw(Expr::new(
+                ExprKind::NewObject {
+                    class_name: Name::unqualified("ReflectionException"),
+                    args: vec![Expr::new(ExprKind::StringLiteral(message.to_string()), dummy_span)],
                 },
                 dummy_span,
             )),
@@ -1193,6 +1249,33 @@ fn builtin_reflection_function() -> FlattenedClass {
             // `builtin_reflection_guarded_method`). String-literal and first-class-callable
             // constructions leave this `false` (fully backed, same as any named function).
             builtin_property("__unbacked_name", Visibility::Private, Some(TypeExpr::Bool), bool_lit(false)),
+            // M2 PART A / JURY ADDENDUM item 2: SEPARATE from `__unbacked_name` — gates
+            // `getFileName()`/`getStartLine()` independently of whether `getName()` is backed. A
+            // closure-literal instance sets BOTH this and `__unbacked_name` `true` (unchanged
+            // behavior). A dynamic descriptor-based instance (see
+            // `crate::codegen_ir::lower_inst::objects::reflection_function_dynamic`) sets this
+            // `true` while leaving `__unbacked_name` `false`, so `getName()` stays backed
+            // (`"{closure}"` or the resolved real name) while `getFileName()`/`getStartLine()`
+            // still throw — no per-value source-file/line tracking exists for ANY dynamically
+            // reflected value. String-literal and first-class-callable static constructions leave
+            // this `false` (unchanged: `getFileName()` reads the real `__file` slot).
+            builtin_property("__unbacked_file", Visibility::Private, Some(TypeExpr::Bool), bool_lit(false)),
+            // M2 PART A: gates `getParameters()` — SEPARATE from `__unbacked_name`/`__unbacked_file`
+            // since `getNumberOfParameters()`/`getNumberOfRequiredParameters()` stay cheaply backed
+            // for a dynamic descriptor (two register reads off its signature record — see
+            // `reflection_function_dynamic`), but building the actual per-parameter
+            // `ReflectionParameter[]` array would need a genuine RUNTIME loop over a
+            // compile-time-unknown parameter count (the compile-time paths unroll this loop in
+            // Rust — see `emit_reflection_parameter_array`); deferred rather than faked. Only the
+            // dynamic construction path sets this `true`; the two static paths leave it `false`
+            // (unchanged: `__params` stays the compile-time-baked array).
+            builtin_property("__unbacked_params", Visibility::Private, Some(TypeExpr::Bool), bool_lit(false)),
+            // M2 PART A: backs `isAnonymous()`. `true` for a closure LITERAL (always anonymous in
+            // real PHP — php -n verified) and `false` for a named/first-class-callable static
+            // construction; for a dynamic descriptor, computed at runtime from the descriptor's own
+            // `kind` field (`CALLABLE_DESC_KIND_CLOSURE` → `true`, any other shape → `false` — a
+            // wrapped/FCC-resolved target always has a real name in real PHP).
+            builtin_property("__is_anonymous", Visibility::Private, Some(TypeExpr::Bool), bool_lit(false)),
         ],
         methods: vec![
             builtin_reflection_function_constructor_method(),
@@ -1211,31 +1294,55 @@ fn builtin_reflection_function() -> FlattenedClass {
                 "ReflectionFunction::getShortName() is not supported for a closure-literal-backed instance: elephc cannot reproduce PHP's per-closure name format (which embeds the declaring file/function and line)",
                 this_prop_expr("__short"),
             ),
+            // Always throws: elephc tracks no declaration line number for ANY reflected
+            // function/closure/method, static or dynamic (M2 PART A / JURY ADDENDUM item 2).
+            builtin_reflection_unconditional_throw_method(
+                "getStartLine",
+                TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Bool]),
+                "ReflectionFunction::getStartLine() is not supported: elephc does not track function/closure declaration line numbers",
+                Vec::new(),
+                None,
+            ),
             builtin_reflection_slot_getter("getNumberOfParameters", "__num_params", TypeExpr::Int),
             builtin_reflection_slot_getter(
                 "getNumberOfRequiredParameters",
                 "__num_required",
                 TypeExpr::Int,
             ),
-            builtin_reflection_slot_getter("getParameters", "__params", array_type()),
+            builtin_reflection_guarded_method(
+                "getParameters",
+                array_type(),
+                "__unbacked_params",
+                "ReflectionFunction::getParameters() is not supported for a dynamically-reflected instance: elephc does not yet build a runtime ReflectionParameter[] array for a compile-time-unknown parameter count",
+                this_prop_expr("__params"),
+            ),
+            builtin_reflection_slot_getter("isAnonymous", "__is_anonymous", TypeExpr::Bool),
             // PHP: getClosureThis(): ?object — the bound `$this` of a closure, or null.
             // No runtime backing yet; returns null, typed `mixed` (covers `?object`).
             builtin_reflection_literal_method("getClosureThis", mixed_type(), null_lit()),
-            // PHP: `invoke(?array $args = null): mixed`. Un-backed stub returning
-            // `null` typed `mixed`; the nullable-array parameter lets named and
-            // positional calls type-check against PHP's signature.
-            builtin_reflection_literal_method_with_params(
+            // PHP real signature: `invoke(mixed ...$args): mixed` (variadic, php -n verified via
+            // `ReflectionMethod("ReflectionFunction", "invoke")->getParameters()`). Always throws
+            // (M2 PART A / JURY ADDENDUM item 5): no wiring yet through the SAME uniform closure
+            // invoker `$closure(...)` direct calls use — the earlier `(?array $args=null)`-shaped
+            // stub silently returning `null` on every call (any ctor path, not just dynamic) was
+            // itself a "no stub" policy violation, fixed here to a loud guarded throw instead.
+            builtin_reflection_unconditional_throw_method(
                 "invoke",
                 mixed_type(),
-                null_lit(),
-                vec![(
-                    "args",
-                    Some(TypeExpr::Nullable(Box::new(array_type()))),
-                    null_lit(),
-                    false,
-                )],
+                "ReflectionFunction::invoke() is not supported: elephc does not yet dispatch through the uniform closure invoker from a Reflection object",
+                Vec::new(),
+                Some(("args", mixed_type())),
             ),
-            // PHP: `getClosureCalledClass(): ?ReflectionClass`. Un-backed stub
+            // PHP real signature: `invokeArgs(array $args): mixed` (required array, no default —
+            // php -n verified). Same guarded-throw rationale as `invoke()` above.
+            builtin_reflection_unconditional_throw_method(
+                "invokeArgs",
+                mixed_type(),
+                "ReflectionFunction::invokeArgs() is not supported: elephc does not yet dispatch through the uniform closure invoker from a Reflection object",
+                vec![("args", Some(array_type()), None, false)],
+                None,
+            ),
+            // PHP: getClosureCalledClass(): ?ReflectionClass. Un-backed stub
             // returning `null` typed `mixed` (object return → mixed).
             builtin_reflection_literal_method(
                 "getClosureCalledClass",

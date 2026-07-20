@@ -446,8 +446,17 @@ pub(super) fn check_builtin(
             // support — `__rt_array_unshift_grow` (capacity-aware, COW-safe) is
             // called once per value in reverse source order, so N >= 1 prepended
             // values are supported (php-verified order: array_unshift($a, 1, 2) →
-            // [1, 2, ...old]). Union-typed first-argument acceptance (the `array|bool`
-            // gradual-typing idiom) is a SEPARATE, out-of-scope concern (H1).
+            // [1, 2, ...old]). M2 PART B: a union containing an indexed-`array` member
+            // (the `$a = $x ?: false` gradual-typing idiom) is ALSO accepted — the
+            // by-ref first argument is EIR-unwrapped from its boxed Mixed representation
+            // with a runtime tag check (see
+            // `crate::codegen_ir::lower_inst::builtins::arrays::unshift::
+            // lower_array_unshift_union`): the indexed-array tag mutates the ORIGINAL
+            // by-ref slot in place (COW-safe), any other runtime tag throws a
+            // php-verified catchable `\TypeError`. A union whose ONLY array-shaped
+            // member is associative (`AssocArray`) still stays rejected here — the
+            // dynamic lowering only supports the indexed-array runtime shape the
+            // existing scalar (`Int`/`Bool`) element helper already handles.
             if args.len() < 2 {
                 return Err(CompileError::new(
                     span,
@@ -458,7 +467,14 @@ pub(super) fn check_builtin(
             for value_arg in &args[1..] {
                 checker.infer_type(value_arg, env)?;
             }
-            if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            let accepted = match &arr_ty {
+                PhpType::Array(_) | PhpType::AssocArray { .. } => true,
+                PhpType::Union(members) => {
+                    members.iter().any(|member| matches!(member, PhpType::Array(_)))
+                }
+                _ => false,
+            };
+            if !accepted {
                 return Err(CompileError::new(
                     span,
                     "array_unshift() first argument must be array",

@@ -1069,19 +1069,22 @@ echo $u->m(5);
 
 /// `ReflectionFunction::__construct(Closure|string $function)`: a `Closure`-typed value whose
 /// identity is not statically resolvable at the `new ReflectionFunction(...)` call site (here, a
-/// declared `Closure $c` parameter) is rejected at COMPILE TIME rather than accepted and left to
-/// throw on every subsequent method call — elephc has no way to derive even the parameter count
-/// for such a value, so loud under-accept beats constructing an object that can answer nothing.
+/// declared `Closure $c` parameter) is NOW ACCEPTED (M2 PART A — was rejected at compile time
+/// before this feature; see `crate::codegen_ir::lower_inst::objects::reflection_function_dynamic`
+/// and `tests/codegen/oop/reflection.rs`'s
+/// `test_reflection_function_dynamic_closure_backed_methods_and_guarded_throws` for the full
+/// runtime-behavior coverage this now compiles to). This is a type-check-only regression test
+/// confirming the call no longer raises the old compile-time rejection; see the codegen test
+/// above for the actual runtime output.
 #[test]
-fn test_error_reflection_function_dynamic_closure_argument_rejected() {
-    expect_error(
+fn test_reflection_function_dynamic_closure_argument_accepted() {
+    expect_ok(
         r#"<?php
 function reflect(Closure $c) {
     return new ReflectionFunction($c);
 }
 reflect(function ($x) { return $x; });
 "#,
-        "a dynamically-typed Closure value is not yet supported",
     );
 }
 
