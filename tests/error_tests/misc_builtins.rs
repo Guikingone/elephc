@@ -204,10 +204,18 @@ expect_builtin_arity_error!(
     "filter_var(): filter 274 is not supported yet"
 );
 
+// FILTER_VALIDATE_IP itself is a real implementation (see `tests/codegen/filter_var.rs`'s
+// `test_filter_var_ip_*` tests), including FILTER_FLAG_IPV4/FILTER_FLAG_IPV6 family
+// restrictions. FILTER_FLAG_NO_PRIV_RANGE (8388608, php-verified)/FILTER_FLAG_NO_RES_RANGE stay
+// loud and are deliberately NOT registered as named constants at all: PHP's private/reserved-
+// range matrix has quirks (php-verified: a link-local IPv6 literal is NOT "private" for
+// FILTER_FLAG_NO_PRIV_RANGE) that a partial implementation would silently mis-validate — see
+// `crate::types::filter_constants`'s module doc. Uses the raw flag value (not the constant name,
+// which does not exist) to exercise the flag-combination rejection directly.
 expect_builtin_arity_error!(
-    test_error_filter_var_unsupported_validate_ip,
-    "<?php filter_var(\"127.0.0.1\", FILTER_VALIDATE_IP);",
-    "filter_var(): filter 275 is not supported yet"
+    test_error_filter_var_unsupported_flag_no_priv_range,
+    "<?php filter_var(\"10.0.0.1\", FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | 8388608);",
+    "filter_var(): flag combination"
 );
 
 expect_builtin_arity_error!(
@@ -255,5 +263,89 @@ fn test_filter_var_fully_qualified_constant_recognized() {
     assert!(
         check_source("<?php $r = filter_var(\"42\", \\FILTER_VALIDATE_INT); echo $r;").is_ok(),
         "a fully-qualified FILTER_VALIDATE_INT should resolve statically",
+    );
+}
+
+// -- M1 easy sweep: verified "keep loud" verdicts --------------------------
+//
+// Each of these is a genuine PHP builtin elephc does not implement, kept as a
+// loud "Undefined function" diagnostic rather than a silent accept. See
+// `crate::types::checker::builtins::late_bound`'s module doc for the full
+// per-name reasoning (why each is out of scope for the M1 easy sweep, and
+// what real Symfony call site reaches it).
+
+/// `get_defined_functions()` — reachable from
+/// `Symfony\Component\ErrorHandler\ErrorEnhancer\UndefinedFunctionErrorEnhancer::enhance()` —
+/// stays a compile-time "Undefined function": a real implementation needs a correct
+/// 'internal'/'user' split sourced from EIR `Function`/`FunctionFlags` plus a pay-for-use data
+/// table, scoped as real follow-up work rather than a five-minute catalog entry.
+#[test]
+fn test_error_get_defined_functions_kept_loud() {
+    expect_error(
+        "<?php $fns = get_defined_functions(); var_dump($fns);",
+        "Undefined function: get_defined_functions",
+    );
+}
+
+/// `parse_ini_file()` — reachable from `Symfony\Component\DependencyInjection\Loader\IniFileLoader`
+/// with `process_sections = true` and `\INI_SCANNER_RAW` — stays a compile-time "Undefined
+/// function": a real implementation needs genuinely new "build a nested PHP array from parsed
+/// runtime data" machinery respecting this codebase's ownership/COW/GC invariants, scoped as real
+/// follow-up work.
+#[test]
+fn test_error_parse_ini_file_kept_loud() {
+    expect_error(
+        "<?php $cfg = parse_ini_file(\"/tmp/does-not-matter.ini\", true); var_dump($cfg);",
+        "Undefined function: parse_ini_file",
+    );
+}
+
+/// `headers_send()` — a genuine PHP 8.4 core builtin (informational/1xx-response support)
+/// `Symfony\Component\HttpFoundation\Response::sendHeaders()` guards with
+/// `!function_exists('headers_send')` — stays a compile-time "Undefined function": elephc's type
+/// checker still visits and rejects the guarded branch's body regardless of runtime reachability
+/// (no PHP_VERSION_ID-style branch-pruning for `function_exists` guards on names the checker has
+/// never heard of), so the guard does not save this call site. It needs real response-bridge
+/// semantics, not just a signature.
+#[test]
+fn test_error_headers_send_kept_loud() {
+    expect_error(
+        "<?php headers_send(103);",
+        "Undefined function: headers_send",
+    );
+}
+
+/// Regression: `function_exists('headers_send')` itself type-checks cleanly on its own (the
+/// argument is just a string literal — php-verified to runtime-evaluate `false`, since elephc, like
+/// a PHP build without this PHP 8.4 feature, does not define it). Only the guarded CALL to
+/// `headers_send(...)` is loud (see `test_error_headers_send_kept_loud` above), mirroring the real
+/// `Response::sendHeaders()` guard shape: the guard condition itself is never the problem, the
+/// checker unconditionally visiting the guarded branch's body is.
+#[test]
+fn test_headers_send_function_exists_guard_condition_type_checks() {
+    expect_ok("<?php $has = function_exists('headers_send'); echo $has ? 'has' : 'no';");
+}
+
+/// `deepclone_to_array`/`deepclone_from_array`/`deepclone_hydrate` (the PHP 8.5 `deepclone`
+/// surface `symfony/polyfill-deepclone` guards) stay "Undefined function" in a single-file compile
+/// with no vendor polyfill present at all — matching real Symfony usage after the polyfill's own
+/// redefinition guard is pruned by `crate::autoload::polyfill_prune` (see that module's doc for the
+/// full, `--web`-sentinel-verified root cause: the real vendor `DeepClone` class body uses dynamic
+/// first-class-callable syntax elephc's parser cannot parse at all, so pruning the guard — not
+/// implementing the functions — is the only sound option).
+#[test]
+fn test_error_deepclone_to_array_kept_loud() {
+    expect_error(
+        "<?php $a = deepclone_to_array(new stdClass()); var_dump($a);",
+        "Undefined function: deepclone_to_array",
+    );
+}
+
+/// Same verdict for `deepclone_from_array`.
+#[test]
+fn test_error_deepclone_from_array_kept_loud() {
+    expect_error(
+        "<?php $o = deepclone_from_array([]); var_dump($o);",
+        "Undefined function: deepclone_from_array",
     );
 }

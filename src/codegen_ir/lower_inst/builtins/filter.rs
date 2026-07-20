@@ -1,10 +1,10 @@
 //! Purpose:
 //! Lowers the literal-dispatched `filter_var()` synthetic builtins
 //! (`filter_var$int[_nof]`, `filter_var$float[_nof]`, `filter_var$bool[_nof]`,
-//! `filter_var$default[_nof]`) produced by `crate::ir_lower::expr::filter` into
-//! target-aware EIR backend code, dispatching on the value operand's concrete
-//! PHP type and calling the dedicated `__rt_filter_*` runtime parsers for
-//! string input.
+//! `filter_var$default[_nof]`, `filter_var$ip[4|6][_nof]`) produced by
+//! `crate::ir_lower::expr::filter` into target-aware EIR backend code,
+//! dispatching on the value operand's concrete PHP type and calling the
+//! dedicated `__rt_filter_*` runtime parsers for string input.
 //!
 //! Called from:
 //! - `crate::codegen_ir::lower_inst::builtins::lower_builtin_call()`.
@@ -229,6 +229,186 @@ pub(super) fn lower_filter_var_default(
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Lowers `filter_var$ip`/`filter_var$ip_nof` (`FILTER_VALIDATE_IP` with
+/// neither/both of `FILTER_FLAG_IPV4`/`FILTER_FLAG_IPV6` set — accepts either
+/// address family).
+pub(super) fn lower_filter_var_ip(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    null_on_failure: bool,
+) -> Result<()> {
+    lower_filter_var_ip_family(ctx, inst, IpFamily::Either, null_on_failure)
+}
+
+/// Lowers `filter_var$ip4`/`filter_var$ip4_nof` (`FILTER_VALIDATE_IP` with
+/// `FILTER_FLAG_IPV4` — restricts to IPv4 literals).
+pub(super) fn lower_filter_var_ip4(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    null_on_failure: bool,
+) -> Result<()> {
+    lower_filter_var_ip_family(ctx, inst, IpFamily::V4, null_on_failure)
+}
+
+/// Lowers `filter_var$ip6`/`filter_var$ip6_nof` (`FILTER_VALIDATE_IP` with
+/// `FILTER_FLAG_IPV6` — restricts to IPv6 literals).
+pub(super) fn lower_filter_var_ip6(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    null_on_failure: bool,
+) -> Result<()> {
+    lower_filter_var_ip_family(ctx, inst, IpFamily::V6, null_on_failure)
+}
+
+/// Which address family(ies) `FILTER_VALIDATE_IP` accepts, per the
+/// `FILTER_FLAG_IPV4`/`FILTER_FLAG_IPV6` flags (php-verified matrix: either
+/// flag alone restricts to that family, both or neither accept either).
+#[derive(Clone, Copy)]
+enum IpFamily {
+    V4,
+    V6,
+    Either,
+}
+
+/// Shared `FILTER_VALIDATE_IP` lowering: only string (and Mixed-unboxed-string)
+/// input can ever succeed — every other concrete type (int/float/bool/null/
+/// array/assoc) is unconditionally NOT a valid IP literal (php-verified:
+/// `filter_var(123, FILTER_VALIDATE_IP)` and friends are always `false`; unlike
+/// `FILTER_VALIDATE_INT/FLOAT/BOOL`, there is no bool/int/float passthrough
+/// special case here).
+fn lower_filter_var_ip_family(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    family: IpFamily,
+    null_on_failure: bool,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "filter_var", 1)?;
+    let value = expect_operand(inst, 0)?;
+    match ctx.value_php_type(value)?.codegen_repr() {
+        PhpType::Str => emit_ip_validate_call(ctx, IpStringSource::Str(value), family, null_on_failure)?,
+        PhpType::Int
+        | PhpType::Float
+        | PhpType::Bool
+        | PhpType::Void
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. } => emit_filter_failure(ctx, null_on_failure),
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_mixed_ip_dispatch(ctx, value, family, null_on_failure)?
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "filter_var(FILTER_VALIDATE_IP) for PHP type {:?}",
+                other
+            )))
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Where the candidate IP literal comes from: an already-Str-typed operand
+/// (load directly), or a Mixed operand that must be unboxed and tag-checked
+/// as a string on every (re-)load, since the validator calls below clobber
+/// the scratch registers holding the previous load.
+#[derive(Clone, Copy)]
+enum IpStringSource {
+    Str(ValueId),
+    MixedString(ValueId),
+}
+
+/// Loads the candidate IP literal into the ABI string-result registers,
+/// unboxing from a Mixed cell first when the source requires it.
+fn load_ip_string_operand(ctx: &mut FunctionContext<'_>, source: IpStringSource) -> Result<()> {
+    match source {
+        IpStringSource::Str(value) => {
+            ctx.load_value_to_result(value)?;
+        }
+        IpStringSource::MixedString(value) => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                  // x0/rax=tag, x1/rdi=lo, x2/rdx=hi
+            move_mixed_string_payload_to_string_result(ctx);
+        }
+    }
+    Ok(())
+}
+
+/// Calls the `__rt_filter_validate_ip4`/`ip6` runtime validators per `family`
+/// (trying v4 then v6 for the `Either` case) and boxes the result: the
+/// original string unmodified on success (php-verified: `FILTER_VALIDATE_IP`
+/// never normalizes/trims a valid literal), or the filter failure otherwise.
+fn emit_ip_validate_call(
+    ctx: &mut FunctionContext<'_>,
+    source: IpStringSource,
+    family: IpFamily,
+    null_on_failure: bool,
+) -> Result<()> {
+    let fail_label = ctx.next_label("filter_ip_fail");
+    let done_label = ctx.next_label("filter_ip_done");
+
+    match family {
+        IpFamily::V4 => {
+            load_ip_string_operand(ctx, source)?;
+            abi::emit_call_label(ctx.emitter, "__rt_filter_validate_ip4");
+            emit_branch_if_int_reg_zero(ctx, &fail_label);
+        }
+        IpFamily::V6 => {
+            load_ip_string_operand(ctx, source)?;
+            abi::emit_call_label(ctx.emitter, "__rt_filter_validate_ip6");
+            emit_branch_if_int_reg_zero(ctx, &fail_label);
+        }
+        IpFamily::Either => {
+            let v6_label = ctx.next_label("filter_ip_either_v6");
+            let success_label = ctx.next_label("filter_ip_either_success");
+            load_ip_string_operand(ctx, source)?;
+            abi::emit_call_label(ctx.emitter, "__rt_filter_validate_ip4");
+            emit_branch_if_int_reg_zero(ctx, &v6_label);
+            abi::emit_jump(ctx.emitter, &success_label);
+            ctx.emitter.label(&v6_label);
+            load_ip_string_operand(ctx, source)?;                                   // reload: the v4 attempt clobbered the string registers
+            abi::emit_call_label(ctx.emitter, "__rt_filter_validate_ip6");
+            emit_branch_if_int_reg_zero(ctx, &fail_label);
+            ctx.emitter.label(&success_label);
+        }
+    }
+
+    // Success: reload the original literal (the validator call clobbered the
+    // registers holding it) and box it unmodified.
+    load_ip_string_operand(ctx, source)?;
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&fail_label);
+    emit_filter_failure(ctx, null_on_failure);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Unboxes a Mixed value and dispatches `FILTER_VALIDATE_IP`: only the string
+/// tag can succeed, every other tag (int/float/bool/null/array/hash/object)
+/// fails unconditionally, mirroring the concretely-typed dispatch above.
+fn emit_mixed_ip_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    family: IpFamily,
+    null_on_failure: bool,
+) -> Result<()> {
+    let str_label = ctx.next_label("filter_ip_mixed_str");
+    let fail_label = ctx.next_label("filter_ip_mixed_fail");
+    let done_label = ctx.next_label("filter_ip_mixed_done");
+
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                          // x0/rax=tag, x1/rdi=lo, x2/rdx=hi
+    emit_branch_on_mixed_tag(ctx, 1, &str_label);
+    abi::emit_jump(ctx.emitter, &fail_label);
+
+    ctx.emitter.label(&str_label);
+    emit_ip_validate_call(ctx, IpStringSource::MixedString(value), family, null_on_failure)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&fail_label);
+    emit_filter_failure(ctx, null_on_failure);
+    ctx.emitter.label(&done_label);
+    Ok(())
 }
 
 /// Which filter kind a Mixed-tag dispatch resumes into after unboxing.

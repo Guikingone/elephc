@@ -18,9 +18,17 @@
 //!   was a bug (regression-tested by `filter_default_is_516`).
 //! - `FILTER_CALLBACK`, `FILTER_REQUIRE_SCALAR`, `FILTER_REQUIRE_ARRAY`,
 //!   `FILTER_FORCE_ARRAY`, and every `FILTER_VALIDATE_*` id beyond
-//!   INT/FLOAT/BOOL(EAN) are registered for name resolution only; elephc's
+//!   INT/FLOAT/BOOL(EAN)/IP are registered for name resolution only; elephc's
 //!   `filter_var()` lowering rejects them with a loud diagnostic (see
 //!   `crate::types::checker::builtins::system`).
+//! - `FILTER_FLAG_IPV4`/`FILTER_FLAG_IPV6` restrict `FILTER_VALIDATE_IP` to a
+//!   single address family (both, or neither, accept either family — see
+//!   `crate::ir_lower::expr::filter`). `FILTER_FLAG_NO_PRIV_RANGE`/
+//!   `FILTER_FLAG_NO_RES_RANGE` are deliberately NOT registered: PHP's
+//!   private/reserved-range matrix diverges from the naive RFC 1918/4193
+//!   ranges (php-verified: `fe80::1` — a link-local IPv6 address — passes
+//!   `FILTER_FLAG_NO_PRIV_RANGE`), so a partial implementation would silently
+//!   mis-validate; `filter_var()` keeps these flags loud instead.
 
 /// Tuple of `(name, value)` pairs for PHP `ext/filter` integer constants.
 ///
@@ -45,6 +53,8 @@ pub(crate) const FILTER_INT_CONSTANTS: &[(&str, i64)] = &[
     ("FILTER_REQUIRE_SCALAR", 33_554_432),
     ("FILTER_REQUIRE_ARRAY", 16_777_216),
     ("FILTER_FORCE_ARRAY", 67_108_864),
+    ("FILTER_FLAG_IPV4", 1_048_576),
+    ("FILTER_FLAG_IPV6", 2_097_152),
 ];
 
 #[cfg(test)]
@@ -123,5 +133,13 @@ mod tests {
         assert_eq!(value_of("FILTER_REQUIRE_ARRAY"), 16_777_216);
         assert_eq!(value_of("FILTER_FORCE_ARRAY"), 67_108_864);
         assert_eq!(value_of("FILTER_CALLBACK"), 1024);
+    }
+
+    /// Verifies the IP-family restriction flags, php-verified with
+    /// `php -n -r 'var_dump(FILTER_FLAG_IPV4, FILTER_FLAG_IPV6);'`.
+    #[test]
+    fn test_filter_flag_ip_family_matches_php() {
+        assert_eq!(value_of("FILTER_FLAG_IPV4"), 1_048_576);
+        assert_eq!(value_of("FILTER_FLAG_IPV6"), 2_097_152);
     }
 }

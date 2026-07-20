@@ -1,8 +1,9 @@
 //! Purpose:
 //! Collects the `ext/filter` (`filter_var()`) runtime emitters: dedicated
-//! decimal-only int/float parsers and the boolean token matcher, plus the
-//! shared PHP-filter whitespace trimmer they all use. The module owns
-//! re-export wiring only — each leaf file implements exactly one helper.
+//! decimal-only int/float parsers, the boolean token matcher, and the
+//! IPv4/IPv6 literal validators, plus the shared PHP-filter whitespace
+//! trimmer they all use. The module owns re-export wiring only — each leaf
+//! file implements exactly one helper.
 //!
 //! Called from:
 //! - `crate::codegen::runtime::emitters::emit_runtime()` during the filter runtime section.
@@ -17,6 +18,8 @@ mod trim_ws;
 mod validate_bool;
 mod validate_float;
 mod validate_int;
+mod validate_ip4;
+mod validate_ip6;
 
 /// Trims PHP-filter whitespace (`{0x09, 0x0A, 0x0B, 0x0D, 0x20}`, NOT form feed)
 /// from both ends of a PHP string.
@@ -28,3 +31,9 @@ pub use validate_int::emit_filter_validate_int;
 pub use validate_float::emit_filter_validate_float;
 /// Boolean token matcher backing `FILTER_VALIDATE_BOOL(EAN)`.
 pub use validate_bool::emit_filter_validate_bool_str;
+/// Strict IPv4 dotted-quad check (`inet_pton(AF_INET, ...)`) backing
+/// `FILTER_VALIDATE_IP` with `FILTER_FLAG_IPV4` (and the either-family path).
+pub use validate_ip4::emit_filter_validate_ip4;
+/// IPv6 literal check (`inet_pton(AF_INET6, ...)`) backing
+/// `FILTER_VALIDATE_IP` with `FILTER_FLAG_IPV6` (and the either-family path).
+pub use validate_ip6::emit_filter_validate_ip6;

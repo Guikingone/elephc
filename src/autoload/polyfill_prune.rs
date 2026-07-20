@@ -26,14 +26,43 @@ use std::collections::HashSet;
 use super::walk::collect_called_function_names;
 use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
 
-/// Functions elephc declares to provide, whose PHP polyfill redefinition guards are
-/// pruned at compile time.
+/// Functions whose PHP polyfill redefinition guards are pruned at compile time, either because
+/// elephc genuinely provides them, OR (see the `deepclone` case below) because the vendor
+/// polyfill body they guard cannot be compiled at all and letting it through is verified to be
+/// strictly worse than a clean "Undefined function" diagnostic.
 ///
-/// These are the PHP 8.5 `deepclone` surface that the `symfony/polyfill-deepclone`
-/// package guards with `if (!function_exists('X')) { function X(...) { ... } }`.
-/// The wrapper bodies delegate to a 97 KB `DeepClone` class; pruning the guards keeps
-/// that class out of the closed-world compile when nothing calls the functions.
-/// Comparison is case-insensitive to match PHP function-name semantics.
+/// `deepclone_to_array`/`deepclone_from_array`/`deepclone_hydrate` (the PHP 8.5 `deepclone`
+/// surface `symfony/polyfill-deepclone` guards) were briefly REMOVED from this list during the M1
+/// easy sweep on the theory that elephc doesn't implement them (true) so the guard should stay
+/// intact and let the real vendor body compile instead (WRONG — reverted after `--web` sentinel
+/// verification below). Restored here with the corrected root cause:
+/// - The vendor guard's then-branch declares `deepclone_to_array()` etc. delegating to
+///   `Symfony\Polyfill\DeepClone\DeepClone::toArray()`/`fromArray()`/`hydrate()`, which PSR-4
+///   autoload then has to resolve and PARSE (`vendor/symfony/polyfill-deepclone/DeepClone.php`,
+///   ~97 KB). That file uses DYNAMIC first-class-callable syntax elephc's parser does not support
+///   at all — `return $name(...);`, `$obj->$name(...)`, `$obj::$name(...)` (callee is a runtime
+///   variable, not a literal name) — and fails with a hard parse error ("Unexpected token: RParen"
+///   at `DeepClone.php:1268`), which `crate::pipeline::compile()` treats as fatal
+///   (`process::exit(1)` right after reporting it).
+/// - Verified with the `--web` sentinel on `examples/symfony-app`: leaving the guard un-pruned
+///   collapses the diagnostic corpus from 864 real errors (spanning the whole app) down to 83
+///   parse-cascade errors from ONLY `DeepClone.php` — the entire rest of the program is never even
+///   type-checked, since the pipeline aborts at the parse stage. That is an anomalous drop per this
+///   campaign's sentinel discipline, not a fix: it trades 4 clean, informative "Undefined function"
+///   diagnostics for hiding ~99% of the corpus's signal.
+/// - So these three stay pruned — NOT because elephc provides a working reimplementation (it does
+///   not; no catalog entry, no prelude, no EIR lowering exists for any of them), but because
+///   pruning the guard is the only way to keep the unparseable vendor body out of the reference
+///   graph. A bare/namespaced call to any of the three still fails loudly as "Undefined function"
+///   (via `crate::autoload::composer_global_functions`'s scan feeding the namespace fallback with
+///   the correct unqualified name, now that the scan follows the guard's `require
+///   __DIR__.'/bootstrapNN.php'` — see that module's doc — even though the declaration itself is
+///   pruned away here) — this is the honestly-reported "keep loud" verdict for the M1 spec's
+///   deepclone item, not a silent accept-and-ignore. Extend this list only with names that are
+///   either genuinely implemented elsewhere (a real catalog builtin or prelude) or, like this case,
+///   provably unparseable/unreachable without the prune — never as a placeholder for a
+///   still-missing feature that WOULD otherwise compile. Comparison is case-insensitive to match
+///   PHP function-name semantics.
 const PROVIDED_POLYFILL_FUNCTIONS: &[&str] = &[
     "deepclone_to_array",
     "deepclone_from_array",
@@ -59,7 +88,15 @@ const OPTIONAL_HELPER_FUNCTIONS: &[&str] = &[
 /// Removes provided-function polyfill guards from the program, replacing each matched
 /// `if`/`else` with its statically live branch and recursing into nested bodies.
 pub fn prune_provided_function_polyfills(program: Program) -> Program {
-    prune_stmt_list(program, &provided_guard_live_branch)
+    prune_provided_function_polyfills_with(program, PROVIDED_POLYFILL_FUNCTIONS)
+}
+
+/// Same as `prune_provided_function_polyfills` but accepts an explicit `provided` allowlist
+/// instead of the module's `PROVIDED_POLYFILL_FUNCTIONS` constant, so the pruning MECHANISM can
+/// be exercised by tests independently of which (if any) names are currently listed as provided
+/// in production.
+fn prune_provided_function_polyfills_with(program: Program, provided: &[&str]) -> Program {
+    prune_stmt_list(program, &move |stmt| provided_guard_live_branch(stmt, provided))
 }
 
 /// Removes definition guards (`if (!function_exists('X')) { function X(...) { ... } }`) for the
@@ -120,9 +157,9 @@ fn prune_stmt_list(
 }
 
 /// If `stmt` is a provided-function guard (`if (function_exists('X'))` or
-/// `if (!function_exists('X'))` with no `elseif` clauses), returns `Ok` with the
-/// statically live branch's statements. Otherwise returns `Err(stmt)` unchanged.
-fn provided_guard_live_branch(stmt: Stmt) -> Result<Vec<Stmt>, Stmt> {
+/// `if (!function_exists('X'))` with no `elseif` clauses, `X` in `provided`), returns `Ok` with
+/// the statically live branch's statements. Otherwise returns `Err(stmt)` unchanged.
+fn provided_guard_live_branch(stmt: Stmt, provided: &[&str]) -> Result<Vec<Stmt>, Stmt> {
     let Stmt { kind, span, attributes } = stmt;
     match kind {
         StmtKind::If {
@@ -130,7 +167,7 @@ fn provided_guard_live_branch(stmt: Stmt) -> Result<Vec<Stmt>, Stmt> {
             then_body,
             elseif_clauses,
             else_body,
-        } if elseif_clauses.is_empty() => match provided_function_exists_condition(&condition) {
+        } if elseif_clauses.is_empty() => match provided_function_exists_condition(&condition, provided) {
             // `function_exists('X')` is true for a provided function: the then-branch lives.
             Some(true) => Ok(then_body),
             // `!function_exists('X')` is false for a provided function: the else-branch lives.
@@ -362,12 +399,11 @@ fn optional_helper_name_in_guard(condition: &Expr, then_body: &[Stmt]) -> Option
 /// Classifies an `if` condition as a provided-function existence guard.
 ///
 /// Returns `Some(true)` for `function_exists('X')` and `Some(false)` for
-/// `!function_exists('X')` when `X` is in `PROVIDED_POLYFILL_FUNCTIONS`; `None`
-/// otherwise.
-fn provided_function_exists_condition(condition: &Expr) -> Option<bool> {
+/// `!function_exists('X')` when `X` is in `provided`; `None` otherwise.
+fn provided_function_exists_condition(condition: &Expr, provided: &[&str]) -> Option<bool> {
     match &condition.kind {
-        ExprKind::Not(inner) => is_provided_function_exists_call(inner).then_some(false),
-        _ => is_provided_function_exists_call(condition).then_some(true),
+        ExprKind::Not(inner) => is_provided_function_exists_call(inner, provided).then_some(false),
+        _ => is_provided_function_exists_call(condition, provided).then_some(true),
     }
 }
 
@@ -375,8 +411,8 @@ fn provided_function_exists_condition(condition: &Expr) -> Option<bool> {
 ///
 /// Matches `function_exists` case-insensitively after trimming a leading namespace
 /// separator (PHP resolves the call to the global builtin), and requires a single
-/// string-literal argument naming one of `PROVIDED_POLYFILL_FUNCTIONS`.
-fn is_provided_function_exists_call(expr: &Expr) -> bool {
+/// string-literal argument naming one of `provided`.
+fn is_provided_function_exists_call(expr: &Expr, provided: &[&str]) -> bool {
     let ExprKind::FunctionCall { name, args } = &expr.kind else {
         return false;
     };
@@ -394,9 +430,9 @@ fn is_provided_function_exists_call(expr: &Expr) -> bool {
         return false;
     };
     let key = fn_name.trim_start_matches('\\');
-    PROVIDED_POLYFILL_FUNCTIONS
+    provided
         .iter()
-        .any(|provided| provided.eq_ignore_ascii_case(key))
+        .any(|candidate| candidate.eq_ignore_ascii_case(key))
 }
 
 #[cfg(test)]
@@ -404,6 +440,13 @@ mod tests {
     use super::*;
     use crate::names::Name;
     use crate::span::Span;
+
+    /// Fixture allowlist for exercising the `provided`-function-guard pruning MECHANISM in
+    /// isolation from production reality: `PROVIDED_POLYFILL_FUNCTIONS` is currently empty (see
+    /// its doc comment — elephc provides none of the deepclone functions it once incorrectly
+    /// listed there), so these tests inject their own names via
+    /// `prune_provided_function_polyfills_with` instead of asserting against the real constant.
+    const TEST_PROVIDED: &[&str] = &["provided_fn_a", "provided_fn_b", "provided_fn_c"];
 
     /// Builds a `function_exists("name")` call expression.
     fn function_exists_call(name: &str) -> Expr {
@@ -437,24 +480,24 @@ mod tests {
         )
     }
 
-    /// `if (!function_exists('deepclone_to_array')) { def }` is removed entirely:
+    /// `if (!function_exists('provided_fn_a')) { def }` is removed entirely:
     /// the function is provided, so the redefinition then-branch is dead.
     #[test]
     fn prunes_negated_guard_for_provided_function() {
         let program = vec![guard_if(Expr::new(
-            ExprKind::Not(Box::new(function_exists_call("deepclone_to_array"))),
+            ExprKind::Not(Box::new(function_exists_call("provided_fn_a"))),
             Span::dummy(),
         ))];
-        let pruned = prune_provided_function_polyfills(program);
+        let pruned = prune_provided_function_polyfills_with(program, TEST_PROVIDED);
         assert!(pruned.is_empty(), "provided-function guard should be removed");
     }
 
-    /// `if (function_exists('deepclone_hydrate')) { body }` keeps its then-branch:
+    /// `if (function_exists('provided_fn_b')) { body }` keeps its then-branch:
     /// the function is provided, so the positive condition is statically true.
     #[test]
     fn keeps_then_branch_for_positive_provided_guard() {
-        let program = vec![guard_if(function_exists_call("deepclone_hydrate"))];
-        let pruned = prune_provided_function_polyfills(program);
+        let program = vec![guard_if(function_exists_call("provided_fn_b"))];
+        let pruned = prune_provided_function_polyfills_with(program, TEST_PROVIDED);
         assert_eq!(pruned.len(), 1, "live then-branch statement should remain");
         assert!(matches!(pruned[0].kind, StmtKind::ExprStmt(_)));
     }
@@ -466,7 +509,7 @@ mod tests {
             ExprKind::Not(Box::new(function_exists_call("some_other_helper"))),
             Span::dummy(),
         ))];
-        let pruned = prune_provided_function_polyfills(program);
+        let pruned = prune_provided_function_polyfills_with(program, TEST_PROVIDED);
         assert_eq!(pruned.len(), 1, "unrelated guard should be preserved");
         assert!(matches!(pruned[0].kind, StmtKind::If { .. }));
     }
@@ -479,14 +522,14 @@ mod tests {
             ExprKind::FunctionCall {
                 name: Name::unqualified("\\Function_Exists"),
                 args: vec![Expr::new(
-                    ExprKind::StringLiteral("DeepClone_To_Array".to_string()),
+                    ExprKind::StringLiteral("Provided_Fn_A".to_string()),
                     Span::dummy(),
                 )],
             },
             Span::dummy(),
         );
         let program = vec![guard_if(Expr::new(ExprKind::Not(Box::new(call)), Span::dummy()))];
-        let pruned = prune_provided_function_polyfills(program);
+        let pruned = prune_provided_function_polyfills_with(program, TEST_PROVIDED);
         assert!(pruned.is_empty(), "case/namespace variations should still prune");
     }
 
@@ -494,16 +537,48 @@ mod tests {
     #[test]
     fn prunes_guard_nested_in_outer_block() {
         let inner = guard_if(Expr::new(
-            ExprKind::Not(Box::new(function_exists_call("deepclone_from_array"))),
+            ExprKind::Not(Box::new(function_exists_call("provided_fn_c"))),
             Span::dummy(),
         ));
         let program = vec![Stmt::new(StmtKind::Synthetic(vec![inner]), Span::dummy())];
-        let pruned = prune_provided_function_polyfills(program);
+        let pruned = prune_provided_function_polyfills_with(program, TEST_PROVIDED);
         assert_eq!(pruned.len(), 1, "outer wrapper should remain");
         let StmtKind::Synthetic(body) = &pruned[0].kind else {
             panic!("expected synthetic wrapper");
         };
         assert!(body.is_empty(), "nested provided-function guard should be removed");
+    }
+
+    /// The production `prune_provided_function_polyfills` entry point (using the real
+    /// `PROVIDED_POLYFILL_FUNCTIONS` allowlist, not `TEST_PROVIDED`) prunes the `deepclone_*`
+    /// guards — see the constant's doc comment for the `--web`-sentinel-verified root cause: this
+    /// is deliberate even though elephc has no real implementation of them, because leaving the
+    /// guard intact pulls in an unparseable vendor class body and aborts the whole compile.
+    #[test]
+    fn production_entry_point_prunes_deepclone_guards() {
+        assert_eq!(
+            PROVIDED_POLYFILL_FUNCTIONS,
+            &["deepclone_to_array", "deepclone_from_array", "deepclone_hydrate"]
+        );
+        let program = vec![guard_if(Expr::new(
+            ExprKind::Not(Box::new(function_exists_call("deepclone_to_array"))),
+            Span::dummy(),
+        ))];
+        let pruned = prune_provided_function_polyfills(program);
+        assert!(pruned.is_empty(), "deepclone_to_array guard should be pruned in production");
+    }
+
+    /// A guard for an UNRELATED function name is left untouched by the production entry point —
+    /// the allowlist's blast radius stays scoped to the three `deepclone_*` names.
+    #[test]
+    fn production_entry_point_leaves_unrelated_guards_alone() {
+        let program = vec![guard_if(Expr::new(
+            ExprKind::Not(Box::new(function_exists_call("some_other_helper"))),
+            Span::dummy(),
+        ))];
+        let pruned = prune_provided_function_polyfills(program);
+        assert_eq!(pruned.len(), 1, "unrelated guard should be preserved");
+        assert!(matches!(pruned[0].kind, StmtKind::If { .. }));
     }
 
     /// Builds `if (!function_exists('name')) { function name() {} }`, the definition-guard shape

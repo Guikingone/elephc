@@ -115,6 +115,48 @@ echo var_export(["x" => 1], true);
     assert_eq!(out, "array (\n  'x' => 1,\n)");
 }
 
+/// Verifies that `register_shutdown_function` (a `crate::shutdown_prelude`-injected global user
+/// function, like `var_export` above) is ALSO resolved by the namespace fallback for a bare call
+/// inside a namespace block — the own-feature gap this regression guards: the prelude injection
+/// runs after the main name-resolution pass, so without an entry in `name_resolver`'s
+/// `PRELUDE_GLOBAL_FUNCTIONS` a namespaced unqualified call hit "Undefined function" instead of
+/// falling back to `\register_shutdown_function`. Cross-checked with
+/// `php -r 'namespace N; register_shutdown_function(function () { echo "shutdown\n"; }); echo "main\n";'`
+/// (prints "main\nshutdown\n").
+#[test]
+fn test_namespace_bare_call_falls_back_to_prelude_global_register_shutdown_function() {
+    let out = compile_and_run(
+        r#"<?php
+namespace N;
+register_shutdown_function(function () {
+    echo "shutdown\n";
+});
+echo "main\n";
+"#,
+    );
+    assert_eq!(out, "main\nshutdown\n");
+}
+
+/// Verifies the namespace fallback does NOT shadow a same-namespace user declaration: a
+/// namespaced `function register_shutdown_function(...)` still wins for a bare call in that SAME
+/// namespace (PHP resolves a same-namespace function before falling back to the global one).
+/// Cross-checked with `php -r 'namespace N; function register_shutdown_function($cb) { return
+/// "user-owned-ns"; } echo register_shutdown_function(function () { echo "never\n"; });'` (prints
+/// "user-owned-ns", the callback never runs).
+#[test]
+fn test_namespace_user_declared_register_shutdown_function_wins_over_prelude_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+namespace N;
+function register_shutdown_function(callable $cb): string {
+    return "user-owned-ns";
+}
+echo register_shutdown_function(function () { echo "never\n"; });
+"#,
+    );
+    assert_eq!(out, "user-owned-ns");
+}
+
 /// Verifies that a declared return type (`Box`) resolves to the same-namespace class
 /// inside a typed local variable declaration (`Box $box = ...`). Checks both return-type
 /// resolution and typed local variable initialization.

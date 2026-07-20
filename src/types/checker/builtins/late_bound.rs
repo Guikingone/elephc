@@ -25,13 +25,36 @@
 //!   families this project already treats as "never available"
 //!   (`crate::optimize::function_existence::NEVER_AVAILABLE_FUNCTION_PREFIXES`'s families):
 //!   `opcache_invalidate`, `opcache_compile_file`, `apcu_exists`, `apcu_store`, `apcu_delete`,
-//!   `xdebug_is_enabled`, `igbinary_serialize`, `igbinary_unserialize`,
-//!   `frankenphp_handle_request`. Non-extension-shaped undefined names surfaced by the same
-//!   scan (`debug_backtrace`, `proc_open`, `eval`, `token_get_all`, `next`, `parse_ini_file`,
-//!   `is_uploaded_file`, `move_uploaded_file`, `request_parse_body`, `headers_send`,
-//!   `get_defined_functions`, `highlight_file`, `register_shutdown_function`) are OUT of
-//!   scope: they are either core PHP functions elephc genuinely lacks (a real gap, not a
-//!   late-bound guard pattern) or handled by unrelated work.
+//!   `apcu_add`, `xdebug_is_enabled`, `igbinary_serialize`, `igbinary_unserialize`,
+//!   `frankenphp_handle_request` (`apcu_add` added in the M1 easy sweep: `ApcuAdapter::clear()`
+//!   only reaches it behind `!apcu_exists(...)`, and `apcu_exists` already throws before
+//!   returning, so the site cannot depend on `apcu_add`'s return value). Non-extension-shaped
+//!   undefined names surfaced by the same scan (`debug_backtrace`, `proc_open`, `eval`,
+//!   `token_get_all`, `next`, `is_uploaded_file`, `move_uploaded_file`, `request_parse_body`,
+//!   `highlight_file`) are OUT of scope: they are either core PHP functions elephc genuinely
+//!   lacks (a real gap, not a late-bound guard pattern) or handled by unrelated work.
+//!   `register_shutdown_function` was ALSO in that original "out of scope" list but is now a real
+//!   fix elsewhere — see `crate::name_resolver::PRELUDE_GLOBAL_FUNCTIONS` (an own-feature
+//!   namespace-fallback gap, not a late-bound guard pattern: PHP's own
+//!   `register_shutdown_function` genuinely exists, elephc's namespace resolver just failed to
+//!   fall back to it). `get_defined_functions` and `parse_ini_file` remain OUT of scope after the
+//!   M1 easy sweep too, but for a DIFFERENT reason than "not a late-bound guard pattern": both are
+//!   reachable in real Symfony call sites (`UndefinedFunctionErrorEnhancer::enhance()`,
+//!   `IniFileLoader::load()`) and a real (not late-bound-stub) implementation was scoped and
+//!   evaluated, but deliberately deferred as a loud compile error rather than risked half-built —
+//!   `get_defined_functions` needs a correct 'internal'/'user' split sourced from EIR
+//!   `Function`/`FunctionFlags` (excluding methods/closures/synthetic wrapper flags and
+//!   `PRELUDE_GLOBAL_FUNCTIONS` entries) plus a pay-for-use data-table gate mirroring
+//!   `crate::codegen::runtime_features::RuntimeFeatures::const_introspection`'s multi-file
+//!   pattern; `parse_ini_file` needs genuinely new "build a nested PHP array from parsed runtime
+//!   data" machinery that must respect this codebase's ownership/COW/GC invariants — both are
+//!   real, scoped feature work for a follow-up session, not a five-minute catalog entry.
+//!   `headers_send` is a genuine PHP 8.4 builtin (informational/1xx-response support) elephc does
+//!   not implement; confirmed (`Symfony\Component\HttpFoundation\Response::sendHeaders()` guards
+//!   the call with `!function_exists('headers_send')`, but elephc's type checker still visits and
+//!   rejects the guarded branch's body regardless of runtime reachability, so the guard does not
+//!   save this call site) it needs real response-bridge semantics, not just a signature — stays a
+//!   compile-time error instead of moving here.
 //! - `is_late_bound_undefined_function` matches on the LAST `\`-separated segment of the
 //!   canonical name (case-insensitively): an unqualified call site written inside a namespace
 //!   reaches this point already rewritten to its namespaced attempt form (e.g.
@@ -58,6 +81,7 @@ const LATE_BOUND_UNDEFINED_FUNCTIONS: &[&str] = &[
     "apcu_exists",
     "apcu_store",
     "apcu_delete",
+    "apcu_add",
     "xdebug_is_enabled",
     "igbinary_serialize",
     "igbinary_unserialize",
@@ -88,6 +112,16 @@ mod tests {
         assert!(is_late_bound_undefined_function("apcu_exists"));
         assert!(is_late_bound_undefined_function("APCU_EXISTS"));
         assert!(is_late_bound_undefined_function("Apcu_Exists"));
+    }
+
+    /// `apcu_add` (added in the M1 easy sweep alongside its `apcu_exists`/`apcu_store`/
+    /// `apcu_delete` siblings) matches case-insensitively and is distinct from the unrelated
+    /// `apcu_add_something`-shaped name.
+    #[test]
+    fn matches_apcu_add() {
+        assert!(is_late_bound_undefined_function("apcu_add"));
+        assert!(is_late_bound_undefined_function("APCU_ADD"));
+        assert!(!is_late_bound_undefined_function("apcu_add_multi"));
     }
 
     /// A curated name reached through a namespaced attempt (unqualified call inside a

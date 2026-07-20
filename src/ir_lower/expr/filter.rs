@@ -65,6 +65,32 @@ pub(super) fn lower_static_filter_var(
         (259, true) => "filter_var$float_nof",
         (258, false) => "filter_var$bool",
         (258, true) => "filter_var$bool_nof",
+        // VALIDATE_IP: FILTER_FLAG_IPV4 (1048576) / FILTER_FLAG_IPV6 (2097152)
+        // restrict the accepted family; both set or neither set accept either
+        // family (php-verified — see `crate::types::filter_constants`'s module
+        // doc for the exact matrix).
+        (275, _) => {
+            let ipv4 = flags & 1_048_576 != 0;
+            let ipv6 = flags & 2_097_152 != 0;
+            let family = match (ipv4, ipv6) {
+                (true, false) => "ip4",
+                (false, true) => "ip6",
+                _ => "ip",
+            };
+            let value = super::lower_expr(ctx, &args[0]);
+            let synthetic_name = if null_on_failure {
+                format!("filter_var${family}_nof")
+            } else {
+                format!("filter_var${family}")
+            };
+            return Some(super::emit_builtin_call_value(
+                ctx,
+                &synthetic_name,
+                vec![value.value],
+                PhpType::Mixed,
+                expr.span,
+            ));
+        }
         _ => return None,
     };
     let value = super::lower_expr(ctx, &args[0]);

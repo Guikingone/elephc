@@ -606,6 +606,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     filter::emit_filter_validate_int(emitter);
     filter::emit_filter_validate_float(emitter);
     filter::emit_filter_validate_bool_str(emitter);
+    filter::emit_filter_validate_ip4(emitter);
+    filter::emit_filter_validate_ip6(emitter);
 
     // Pointer runtime functions
     pointers::emit_ptoa(emitter);

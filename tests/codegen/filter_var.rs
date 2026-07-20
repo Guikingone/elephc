@@ -336,3 +336,137 @@ fn test_filter_var_fully_qualified_form() {
     let out = compile_and_run("<?php var_dump(filter_var(\"42\", \\FILTER_VALIDATE_INT));");
     assert_eq!(out, "int(42)\n");
 }
+
+// -- FILTER_VALIDATE_IP with FILTER_FLAG_IPV4/FILTER_FLAG_IPV6 --------------
+//
+// Every assertion is php-verified with `php -n -r 'var_dump(filter_var(...));'`
+// (PHP 8.5.6 local).
+
+/// `FILTER_FLAG_IPV4` values: `FILTER_FLAG_IPV4 == 1048576`,
+/// `FILTER_FLAG_IPV6 == 2097152` (php-verified).
+#[test]
+fn test_filter_flag_ipv4_ipv6_constant_values() {
+    let out = compile_and_run("<?php echo FILTER_FLAG_IPV4, \",\", FILTER_FLAG_IPV6;");
+    assert_eq!(out, "1048576,2097152");
+}
+
+/// With no restriction flag, either an IPv4 or an IPv6 literal is valid, and
+/// the original string is returned unmodified on success.
+#[test]
+fn test_filter_var_ip_no_flag_accepts_either_family() {
+    assert_eq!(
+        fv(r#"filter_var("192.168.1.1", FILTER_VALIDATE_IP)"#),
+        "string(11) \"192.168.1.1\"\n"
+    );
+    assert_eq!(fv(r#"filter_var("::1", FILTER_VALIDATE_IP)"#), "string(3) \"::1\"\n");
+}
+
+/// `FILTER_FLAG_IPV4` accepts a v4 literal, rejects a v6 literal.
+#[test]
+fn test_filter_var_ip_flag_ipv4_restricts_family() {
+    assert_eq!(
+        fv(r#"filter_var("192.168.1.1", FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)"#),
+        "string(11) \"192.168.1.1\"\n"
+    );
+    assert_eq!(
+        fv(r#"filter_var("::1", FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)"#),
+        "bool(false)\n"
+    );
+}
+
+/// `FILTER_FLAG_IPV6` accepts a v6 literal, rejects a v4 literal.
+#[test]
+fn test_filter_var_ip_flag_ipv6_restricts_family() {
+    assert_eq!(fv(r#"filter_var("::1", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)"#), "string(3) \"::1\"\n");
+    assert_eq!(
+        fv(r#"filter_var("192.168.1.1", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)"#),
+        "bool(false)\n"
+    );
+}
+
+/// Both flags combined behave like neither: either family is accepted
+/// (php-verified: `FILTER_FLAG_IPV4|FILTER_FLAG_IPV6` is NOT a contradiction).
+#[test]
+fn test_filter_var_ip_both_flags_accept_either_family() {
+    assert_eq!(
+        fv(r#"filter_var("192.168.1.1", FILTER_VALIDATE_IP, FILTER_FLAG_IPV4|FILTER_FLAG_IPV6)"#),
+        "string(11) \"192.168.1.1\"\n"
+    );
+    assert_eq!(
+        fv(r#"filter_var("::1", FILTER_VALIDATE_IP, FILTER_FLAG_IPV4|FILTER_FLAG_IPV6)"#),
+        "string(3) \"::1\"\n"
+    );
+}
+
+/// Strict grammar rejects: partial dotted-quad, out-of-range octet, leading
+/// zero octet, and embedded whitespace.
+#[test]
+fn test_filter_var_ip_rejects_malformed_ipv4() {
+    assert_eq!(fv(r#"filter_var("not-an-ip", FILTER_VALIDATE_IP)"#), "bool(false)\n");
+    assert_eq!(fv(r#"filter_var("192.168.1", FILTER_VALIDATE_IP)"#), "bool(false)\n");
+    assert_eq!(fv(r#"filter_var("300.1.1.1", FILTER_VALIDATE_IP)"#), "bool(false)\n");
+    assert_eq!(fv(r#"filter_var("192.168.1.01", FILTER_VALIDATE_IP)"#), "bool(false)\n");
+    assert_eq!(fv(r#"filter_var(" 192.168.1.1", FILTER_VALIDATE_IP)"#), "bool(false)\n");
+}
+
+/// An embedded-IPv4 IPv6 literal (`::ffff:a.b.c.d`) is a valid IPv6 address.
+#[test]
+fn test_filter_var_ip_embedded_ipv4_form() {
+    assert_eq!(
+        fv(r#"filter_var("::ffff:192.168.1.1", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)"#),
+        "string(18) \"::ffff:192.168.1.1\"\n"
+    );
+}
+
+/// Regression: a leading-zero octet in the embedded-IPv4 tail of an IPv6
+/// literal must reject, same as a standalone IPv4 leading-zero octet — macOS
+/// `inet_pton(AF_INET6, ...)` silently ACCEPTS this (confirmed with a
+/// standalone C probe), so `__rt_filter_validate_ip6` must isolate the tail
+/// and pre-check it itself rather than trusting the libc call alone.
+#[test]
+fn test_filter_var_ip_embedded_ipv4_rejects_leading_zero_octet() {
+    assert_eq!(
+        fv(r#"filter_var("::ffff:192.168.01.1", FILTER_VALIDATE_IP)"#),
+        "bool(false)\n"
+    );
+    assert_eq!(
+        fv(r#"filter_var("::ffff:192.168.1.01", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)"#),
+        "bool(false)\n"
+    );
+}
+
+/// Non-string input (int/bool/float/null/array) always fails
+/// `FILTER_VALIDATE_IP` — no bool/int/float passthrough special case, unlike
+/// `FILTER_VALIDATE_INT/FLOAT/BOOL`.
+#[test]
+fn test_filter_var_ip_non_string_input_always_fails() {
+    assert_eq!(fv("filter_var(123, FILTER_VALIDATE_IP)"), "bool(false)\n");
+    assert_eq!(fv("filter_var(true, FILTER_VALIDATE_IP)"), "bool(false)\n");
+    assert_eq!(fv("filter_var(1.5, FILTER_VALIDATE_IP)"), "bool(false)\n");
+    assert_eq!(fv("filter_var(null, FILTER_VALIDATE_IP)"), "bool(false)\n");
+    assert_eq!(fv("filter_var([1], FILTER_VALIDATE_IP)"), "bool(false)\n");
+}
+
+/// `FILTER_NULL_ON_FAILURE` turns an IP validation failure into `null`.
+#[test]
+fn test_filter_var_ip_null_on_failure() {
+    let out = compile_and_run(
+        r#"<?php var_dump(filter_var("bad", FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_NULL_ON_FAILURE));"#,
+    );
+    assert_eq!(out, "NULL\n");
+}
+
+/// A Mixed-typed operand (heterogeneous array element) dispatches through the
+/// same unboxed-string validation path as a concretely-typed string.
+#[test]
+fn test_filter_var_ip_mixed_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+$data = ["ip" => "10.0.0.1", "n" => 5];
+foreach ($data as $v) {
+    echo filter_var($v, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ?: "false", ",";
+}
+"#,
+    );
+    assert_eq!(out, "10.0.0.1,false,");
+}

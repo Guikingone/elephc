@@ -133,11 +133,12 @@ pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
 }
 
 /// Function names elephc provides as prelude-injected global user functions (see
-/// `crate::var_export_prelude` and siblings in `crate::pipeline`), rather than as catalog
-/// builtins. PHP considers these always-available global functions, so a bare namespaced call
-/// `var_export(...)` inside `namespace N` must fall back to the global `\var_export` — but they
-/// are NOT in the builtin catalog (registering them there caused redeclaration/link errors), so
-/// the builtin-fallback path in `canonical_function` does not see them.
+/// `crate::var_export_prelude`, `crate::shutdown_prelude`, and siblings in `crate::pipeline`),
+/// rather than as catalog builtins. PHP considers these always-available global functions, so a
+/// bare namespaced call `var_export(...)` / `register_shutdown_function(...)` inside `namespace N`
+/// must fall back to the global function — but they are NOT in the builtin catalog (registering
+/// them there caused redeclaration/link errors), so the builtin-fallback path in
+/// `canonical_function` does not see them.
 ///
 /// Each autoloaded file is name-resolved in isolation by `autoload::load_autoloaded_file`, so the
 /// prelude declaration (injected into the main program before the main name-resolution pass) is
@@ -145,7 +146,12 @@ pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
 /// fallback for bare calls correct without re-injecting the prelude per file or duplicating the
 /// catalog. Extend this set only with prelude-injected globals that PHP treats as unconditionally
 /// available.
-const PRELUDE_GLOBAL_FUNCTIONS: &[&str] = &["var_export"];
+///
+/// `register_shutdown_function` was added after `crate::shutdown_prelude` shipped (its injection
+/// runs, like `var_export_prelude`'s, AFTER the main name-resolution pass — see
+/// `crate::pipeline::compile()` — so without an entry here a namespaced unqualified call could
+/// not fall back to the prelude's global declaration and hit "Undefined function" instead).
+const PRELUDE_GLOBAL_FUNCTIONS: &[&str] = &["var_export", "register_shutdown_function"];
 
 /// Returns the canonical name for a prelude-injected global function, case-normalized with a
 /// leading `\` stripped. Returns `None` if the name is not a known prelude global. Mirrors

@@ -1239,12 +1239,16 @@ pub(super) fn check_builtin(
             // array|int $options = 0): mixed — the filtered value, `false` on
             // failure, or `null` on failure when FILTER_NULL_ON_FAILURE is set.
             //
-            // Core semantics (VALIDATE_INT/FLOAT/BOOL + DEFAULT/UNSAFE_RAW
+            // Core semantics (VALIDATE_INT/FLOAT/BOOL/IP + DEFAULT/UNSAFE_RAW
             // passthrough) are implemented with dedicated runtime parsers — see
             // `crate::ir_lower::expr::filter` and
-            // `crate::codegen_ir::lower_inst::builtins::filter`. Everything else
-            // (VALIDATE_IP/EMAIL/URL/MAC/DOMAIN/REGEXP, array-form `$options`,
-            // FILTER_CALLBACK, REQUIRE_ARRAY/FORCE_ARRAY) is kept LOUD here rather
+            // `crate::codegen_ir::lower_inst::builtins::filter`. VALIDATE_IP
+            // honors FILTER_FLAG_IPV4/FILTER_FLAG_IPV6 as family restrictions
+            // (either flag alone restricts to that family; both or neither
+            // accept either family) via libc `inet_pton`; FLAG_NO_PRIV_RANGE/
+            // NO_RES_RANGE stay loud (see `filter_constants`'s module doc).
+            // Everything else (VALIDATE_EMAIL/URL/MAC/DOMAIN/REGEXP, array-form
+            // `$options`, FILTER_CALLBACK, REQUIRE_ARRAY/FORCE_ARRAY) is kept LOUD here rather
             // than silently mis-validated. FILTER_REQUIRE_SCALAR is accepted as a
             // verified no-op: without REQUIRE_ARRAY/FORCE_ARRAY an array input
             // already fails every supported filter by default (php-verified), so
@@ -1280,7 +1284,7 @@ pub(super) fn check_builtin(
             } else {
                 516 // FILTER_DEFAULT (== FILTER_UNSAFE_RAW)
             };
-            if !matches!(filter_id, 516 | 257 | 258 | 259) {
+            if !matches!(filter_id, 516 | 257 | 258 | 259 | 275) {
                 return Err(CompileError::new(
                     span,
                     &format!(
@@ -1319,7 +1323,20 @@ pub(super) fn check_builtin(
                 0
             };
             const ALLOWED_FLAGS: i64 = 134_217_728 /* NULL_ON_FAILURE */ | 33_554_432 /* REQUIRE_SCALAR, verified no-op */;
-            if flags & !ALLOWED_FLAGS != 0 {
+            // FILTER_FLAG_IPV4 (1048576) / FILTER_FLAG_IPV6 (2097152) only apply
+            // to FILTER_VALIDATE_IP; every other filter keeps its existing
+            // allowed-flags set. FILTER_FLAG_NO_PRIV_RANGE/NO_RES_RANGE are
+            // deliberately absent from both sets (see `filter_constants`'s module
+            // doc): PHP's private/reserved-range matrix has quirks (e.g.
+            // link-local IPv6 is NOT "private" for this flag) that would need a
+            // full php-verified v4+v6 implementation, so they stay loud.
+            const IP_ALLOWED_FLAGS: i64 = ALLOWED_FLAGS | 1_048_576 /* FLAG_IPV4 */ | 2_097_152 /* FLAG_IPV6 */;
+            let allowed_flags = if filter_id == 275 {
+                IP_ALLOWED_FLAGS
+            } else {
+                ALLOWED_FLAGS
+            };
+            if flags & !allowed_flags != 0 {
                 return Err(CompileError::new(
                     span,
                     &format!(
