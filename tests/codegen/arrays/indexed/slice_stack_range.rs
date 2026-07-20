@@ -299,6 +299,133 @@ f(["host" => [1, 2, 3]]);
     );
 }
 
+/// N2 family sweep: `array_slice()`'s dynamic union-array path already handled the ACCEPTED tag
+/// (4 = indexed array) correctly, but silently fell back to an EMPTY result array for any OTHER
+/// tag instead of matching PHP's real `\TypeError` — a `SILENT-WRONG` gap (php -n VERIFIED:
+/// `array_slice(false, 1)` throws, it does not return `[]`). Fixed by routing the wrong-tag
+/// branch through the SAME shared `union_type_guard::emit_mixed_wrong_tag_type_error_dispatch`
+/// `implode()`'s fix uses (`crate::codegen_ir::lower_inst::builtins::arrays::
+/// lower_mixed_array_slice_aarch64`/`_x86_64`).
+#[test]
+fn test_array_slice_union_first_arg_false_tag_throws_byte_identical_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+$hosts = [];
+$u = $hosts ?: false;
+try {
+    var_dump(array_slice($u, 1));
+} catch (\TypeError $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "array_slice(): Argument #1 ($array) must be of type array, false given"
+    );
+}
+
+/// Verifies `array_slice()`'s union-array path still slices correctly on the ACCEPTED (indexed
+/// array) tag after the wrong-tag throw was added — the fix must not regress the success path.
+#[test]
+fn test_array_slice_union_first_arg_array_tag_still_slices() {
+    let out = compile_and_run(
+        r#"<?php
+$hosts = [1, 2, 3];
+$u = $hosts ?: false;
+$b = array_slice($u, 1);
+echo $b[0] . "," . $b[1];
+"#,
+    );
+    assert_eq!(out, "2,3");
+}
+
+/// N2 family sweep: `count()`'s dynamic Mixed/union path (`__rt_mixed_count`) is a QUIET
+/// non-container boundary by design (shared with JSON-decoded-mixed counting elsewhere), so it
+/// silently returned `0` instead of PHP's real `\TypeError` for the `array|false` idiom's `false`
+/// branch — a `SILENT-WRONG` gap (php -n VERIFIED: `count(false)` throws
+/// `count(): Argument #1 ($value) must be of type Countable|array, false given`, it does not
+/// return `0`). Fixed by gating the non-container tags (0/1/2/3/8) with the shared
+/// `union_type_guard` wrong-tag dispatch before `__rt_mixed_count`
+/// (`crate::codegen_ir::lower_inst::builtins::lower_count_dynamic`); tags 4/5/6 (array/hash/
+/// Countable object) are unchanged.
+#[test]
+fn test_count_union_first_arg_false_tag_throws_byte_identical_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+$hosts = [];
+$u = $hosts ?: false;
+try {
+    var_dump(count($u));
+} catch (\TypeError $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "count(): Argument #1 ($value) must be of type Countable|array, false given"
+    );
+}
+
+/// Verifies `count()`'s union-array path still counts correctly on the ACCEPTED (indexed array)
+/// tag after the wrong-tag throw was added — the fix must not regress the success path (matches
+/// the spec's own baseline probe: "count($u) works").
+#[test]
+fn test_count_union_first_arg_array_tag_still_counts() {
+    let out = compile_and_run(
+        r#"<?php
+$hosts = [1, 2, 3];
+$u = $hosts ?: false;
+echo count($u);
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+/// Heap-cleanliness proof for the `array_slice()`/`count()` wrong-tag `\TypeError` fixes: both
+/// the accepted-tag success path and the wrong-tag throw-and-catch path must leave a clean heap
+/// (modulo the PRE-EXISTING, already-documented "caught exception object not freed at catch-end"
+/// gap that `test_array_unshift_union_first_arg_false_tag_throws_byte_identical_type_error`'s own
+/// baseline already exhibits — this asserts the ARRAY payload itself is never leaked/double-freed,
+/// not that the thrown TypeError object is reclaimed).
+#[test]
+fn test_array_slice_and_count_union_wrong_tag_heap_clean_besides_known_exception_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$hosts = [];
+$u = $hosts ?: false;
+try {
+    array_slice($u, 0);
+} catch (\TypeError $e) {
+    echo "1:", $e->getMessage(), "|";
+}
+try {
+    count($u);
+} catch (\TypeError $e) {
+    echo "2:", $e->getMessage();
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "1:array_slice(): Argument #1 ($array) must be of type array, false given|\
+2:count(): Argument #1 ($value) must be of type Countable|array, false given"
+    );
+    // Two thrown-and-caught TypeErrors leak exactly 2 * 48 bytes under the KNOWN, pre-existing
+    // "caught exception not freed at catch-end" gap (see
+    // `test_array_unshift_union_first_arg_false_tag_throws_byte_identical_type_error`'s own
+    // baseline) — assert THAT bounded, already-documented shape rather than a clean heap, so any
+    // FUTURE leak beyond it (e.g. a real array-payload leak from this fix) still fails the test.
+    assert!(
+        out.stderr
+            .contains("HEAP DEBUG: leak summary: live_blocks=2 live_bytes=96"),
+        "expected exactly the known 2-exception-object leak, got: {}",
+        out.stderr
+    );
+}
+
 /// Tests `range($start, $end)` with ascending values (1 to 5).
 /// Verifies correct count (5) and iteration order (12345).
 #[test]

@@ -508,12 +508,24 @@ pub(super) fn lower_str_split(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers `implode(glue, array)` by selecting the string or integer array helper.
+///
+/// A union-boxed `array` argument (the `$hosts = $x ?: false`-style gradual-typing idiom — the
+/// checker's `implode` branch never restricts arg 2's type at all, so ANY value can reach here)
+/// arrives with codegen-erased `PhpType::Mixed`/`Union` and is routed to `lower_implode_dynamic`
+/// instead of the STATIC-array path below, which assumes a compile-time-known element layout.
 pub(super) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() != 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "implode expected 2 args, got {}",
             inst.operands.len()
         )));
+    }
+    let array = expect_operand(inst, 1)?;
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return lower_implode_dynamic(ctx, inst);
     }
     let runtime_label = implode_runtime_label(ctx, inst)?;
     match ctx.emitter.target.arch {
@@ -522,6 +534,130 @@ pub(super) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     }
     abi::emit_call_label(ctx.emitter, runtime_label);
     store_if_result(ctx, inst)
+}
+
+/// Lowers `implode(glue, $array)` when `$array` is a boxed `Mixed`/union value.
+///
+/// ROOT CAUSE (see `--emit-ir` evidence on the `$hosts = [1,2,3]; $u = $hosts ?: false;
+/// implode(",", $u);` repro): the join that produces `$u` is CORRECT — both ternary arms
+/// `mixed_box`/`__rt_mixed_from_array_kind` the value into a properly tagged Mixed cell before
+/// the merge. The SIGSEGV was a READER bug: the old dynamic path unconditionally called the
+/// generic `__rt_implode` runtime routine after unboxing, but `__rt_implode` only correctly
+/// handles STRING (value_type 1, 16-byte `{ptr,len}` slots) and boxed-Mixed (value_type 7)
+/// element layouts — for an indexed array of raw 8-byte INT/BOOL scalars (value_type 0, exactly
+/// what `[1,2,3]` produces), it misread each element as a `{ptr,len}` pair and dereferenced the
+/// integer VALUE as a pointer (e.g. address `0x1`) → SIGSEGV. The STATIC path already avoids this
+/// by routing `array<Int|Bool>` to the dedicated `__rt_implode_int` helper
+/// (`implode_runtime_label`); this dynamic path restores that same distinction by reading the
+/// array's OWN element `value_type` tag AT RUNTIME (the array header carries it, the same field
+/// `__rt_implode` itself already reads) and branching to whichever existing, already-tested
+/// runtime routine matches — no new runtime assembly, only a runtime-resolved choice between two
+/// proven helpers.
+///
+/// The `$array` argument is unwrapped via the shared
+/// `crate::codegen_ir::lower_inst::builtins::arrays::union_type_guard::emit_borrow_array_or_type_error`
+/// seam: tag 4 (indexed array) borrows the payload (COW/ownership of the union local untouched);
+/// any other tag throws php-verified `implode(): Argument #2 ($array) must be of type ?array, X
+/// given` (`implode`'s real internal signature types `$array` as `?array` — php -n VERIFIED
+/// against PHP 8.5's `ReflectionFunction`/thrown-message output for `false`/`true`/int/float/
+/// string/object givens).
+fn lower_implode_dynamic(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let glue = expect_string_operand(ctx, inst, 0, "implode")?;
+    let array = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_implode_dynamic_aarch64(ctx, glue, array)?,
+        Arch::X86_64 => lower_implode_dynamic_x86_64(ctx, glue, array)?,
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Builds `implode`'s php-verified wrong-type message for a given runtime type name.
+fn implode_wrong_type_message(given: &str) -> String {
+    format!(
+        "implode(): Argument #2 ($array) must be of type ?array, {} given",
+        given
+    )
+}
+
+/// Emits the AArch64 dynamic `implode()` call: borrow-or-throw the array, then branch on the
+/// array's own element `value_type` tag to call `__rt_implode_int` (raw scalar elements) or
+/// `__rt_implode` (string/boxed-mixed elements).
+fn lower_implode_dynamic_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    glue: ValueId,
+    array: ValueId,
+) -> Result<()> {
+    ctx.load_string_value_to_regs(glue, "x1", "x2")?;
+    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the glue string across the union unwrap
+    super::arrays::union_type_guard::emit_borrow_array_or_type_error(
+        ctx,
+        array,
+        implode_wrong_type_message,
+    )?;
+    // x0 = borrowed indexed-array payload pointer.
+    ctx.emitter.instruction("ldr x10, [x0, #-8]");                              // load the packed indexed-array kind word
+    ctx.emitter.instruction("lsr x10, x10, #8");                                // move the value_type tag into the low bits
+    ctx.emitter.instruction("and x10, x10, #0x7f");                             // isolate the array's own element value_type tag
+    ctx.emitter.instruction("mov x3, x0");                                      // pass the array pointer as the third implode argument
+    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the glue string into primary implode argument registers
+    let generic_label = ctx.next_label("implode_dyn_generic_elem");
+    let done_label = ctx.next_label("implode_dyn_done");
+    // Only value_type 1 (16-byte `{ptr,len}` string slots) and 7 (8-byte boxed Mixed cell
+    // pointers) are safe for `__rt_implode`'s `{ptr,len}`-shaped element reads. EVERY other tag
+    // — 0/2/3 (raw int/float/bool 8-byte scalars, the common case) and any exotic/unswept tag
+    // (4/5/6/8: nested array/hash/object/void element slots, none of which implode's STATIC path
+    // supports either — see `implode_runtime_label`) — is routed to `__rt_implode_int` instead:
+    // its `itoa`-based read never dereferences the slot as a pointer, so it cannot SIGSEGV even
+    // when the stringified digits are not php-exact for a tag this compiler does not otherwise
+    // support implode() over.
+    ctx.emitter.instruction("cmp x10, #1");                                     // are the array's elements 16-byte string slots?
+    ctx.emitter.instruction(&format!("b.eq {}", generic_label));
+    ctx.emitter.instruction("cmp x10, #7");                                     // are the array's elements boxed Mixed cells?
+    ctx.emitter.instruction(&format!("b.eq {}", generic_label));
+    abi::emit_call_label(ctx.emitter, "__rt_implode_int");                     // raw scalar elements (and any other tag): convert each via itoa
+    ctx.emitter.instruction(&format!("b {}", done_label));
+    ctx.emitter.label(&generic_label);
+    abi::emit_call_label(ctx.emitter, "__rt_implode");                         // string/boxed-mixed elements: the generic implode helper
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits the x86_64 dynamic `implode()` call: borrow-or-throw the array, then branch on the
+/// array's own element `value_type` tag to call `__rt_implode_int` (raw scalar elements) or
+/// `__rt_implode` (string/boxed-mixed elements).
+fn lower_implode_dynamic_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    glue: ValueId,
+    array: ValueId,
+) -> Result<()> {
+    ctx.load_string_value_to_regs(glue, "rax", "rdx")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                        // preserve the glue string across the union unwrap
+    super::arrays::union_type_guard::emit_borrow_array_or_type_error(
+        ctx,
+        array,
+        implode_wrong_type_message,
+    )?;
+    // rax = borrowed indexed-array payload pointer.
+    ctx.emitter.instruction("mov r10, QWORD PTR [rax - 8]");                    // load the packed indexed-array kind word
+    ctx.emitter.instruction("shr r10, 8");                                      // move the value_type tag into the low bits
+    ctx.emitter.instruction("and r10, 0x7f");                                   // isolate the array's own element value_type tag
+    ctx.emitter.instruction("mov rdx, rax");                                    // pass the array pointer as the third implode argument
+    abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");                         // restore the glue string into primary implode argument registers
+    let generic_label = ctx.next_label("implode_dyn_generic_elem");
+    let done_label = ctx.next_label("implode_dyn_done");
+    // See the AArch64 twin above: only tags 1 (string) and 7 (boxed Mixed) are safe for
+    // `__rt_implode`'s `{ptr,len}`-shaped reads; every other tag (including any exotic/unswept
+    // one) routes to `__rt_implode_int`'s non-dereferencing `itoa` read instead.
+    ctx.emitter.instruction("cmp r10, 1");                                      // are the array's elements 16-byte string slots?
+    ctx.emitter.instruction(&format!("je {}", generic_label));
+    ctx.emitter.instruction("cmp r10, 7");                                      // are the array's elements boxed Mixed cells?
+    ctx.emitter.instruction(&format!("je {}", generic_label));
+    abi::emit_call_label(ctx.emitter, "__rt_implode_int");                     // raw scalar elements (and any other tag): convert each via itoa
+    ctx.emitter.instruction(&format!("jmp {}", done_label));
+    ctx.emitter.label(&generic_label);
+    abi::emit_call_label(ctx.emitter, "__rt_implode");                         // string/boxed-mixed elements: the generic implode helper
+    ctx.emitter.label(&done_label);
+    Ok(())
 }
 
 /// Lowers `hash(algo, data, binary?)` through the shared runtime digest dispatcher.
@@ -2819,7 +2955,9 @@ fn materialize_str_split_length_x86_64(
     Ok(())
 }
 
-/// Returns the runtime helper label required for an `implode()` array operand.
+/// Returns the runtime helper label required for a STATICALLY typed `implode()` array operand.
+/// The `Mixed`/`Union` (gradual-typing) case never reaches here — `lower_implode` routes it to
+/// `lower_implode_dynamic`, which resolves the helper from the array's RUNTIME element tag.
 fn implode_runtime_label(ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<&'static str> {
     let array = expect_operand(inst, 1)?;
     match ctx.value_php_type(array)? {
@@ -2831,7 +2969,6 @@ fn implode_runtime_label(ctx: &FunctionContext<'_>, inst: &Instruction) -> Resul
                 other
             ))),
         },
-        PhpType::Mixed | PhpType::Union(_) => Ok("__rt_implode"),
         other => Err(CodegenIrError::unsupported(format!(
             "implode array PHP type {:?}",
             other
@@ -2863,42 +3000,25 @@ fn lower_implode_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
     Ok(())
 }
 
-/// Loads the raw indexed-array payload consumed by `implode()` on AArch64.
+/// Loads the raw indexed-array payload consumed by `implode()` on AArch64 for a STATICALLY
+/// typed array operand (the `Mixed`/`Union` case is handled by `lower_implode_dynamic` instead).
 fn load_implode_array_aarch64(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
 ) -> Result<()> {
-    match ctx.value_php_type(array)?.codegen_repr() {
-        PhpType::Mixed | PhpType::Union(_) => {
-            ctx.load_value_to_reg(array, "x0")?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed array payload to implode()
-            Ok(())
-        }
-        _ => {
-            ctx.load_value_to_reg(array, "x0")?;
-            Ok(())
-        }
-    }
+    ctx.load_value_to_reg(array, "x0")?;
+    Ok(())
 }
 
 /// Loads the raw indexed-array payload consumed by `implode()` on x86_64.
+/// Loads the raw indexed-array payload consumed by `implode()` on x86_64 for a STATICALLY typed
+/// array operand (the `Mixed`/`Union` case is handled by `lower_implode_dynamic` instead).
 fn load_implode_array_x86_64(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
 ) -> Result<()> {
-    match ctx.value_php_type(array)?.codegen_repr() {
-        PhpType::Mixed | PhpType::Union(_) => {
-            ctx.load_value_to_reg(array, "rax")?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-            ctx.emitter.instruction("mov rax, rdi");                            // pass the unboxed array payload to implode()
-            Ok(())
-        }
-        _ => {
-            ctx.load_value_to_reg(array, "rax")?;
-            Ok(())
-        }
-    }
+    ctx.load_value_to_reg(array, "rax")?;
+    Ok(())
 }
 
 /// Materializes AArch64 `substr_replace()` runtime arguments.

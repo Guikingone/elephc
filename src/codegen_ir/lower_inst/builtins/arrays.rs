@@ -32,6 +32,7 @@ mod keys;
 mod search;
 mod shift;
 mod unshift;
+pub(in crate::codegen_ir::lower_inst::builtins) mod union_type_guard;
 pub(in crate::codegen_ir::lower_inst::builtins) mod values;
 
 /// Rejects `call_user_func*` calls that escaped the dedicated EIR callback lowering path.
@@ -4299,13 +4300,14 @@ fn lower_mixed_array_slice_aarch64(
     length: Option<ValueId>,
 ) -> Result<()> {
     let empty_label = ctx.next_label("mixed_array_slice_empty");
+    let wrong_tag_label = ctx.next_label("mixed_array_slice_wrong_tag");
     let done_label = ctx.next_label("mixed_array_slice_done");
     ctx.load_value_to_reg(array, "x0")?;
     abi::emit_push_reg(ctx.emitter, "x0");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     ctx.emitter.instruction("cmp x0, #4");                                      // require an indexed-array payload before slicing the Mixed cell
-    ctx.emitter.instruction(&format!("b.ne {}", empty_label));                  // return an empty slice for non-array Mixed payloads
-    ctx.emitter.instruction(&format!("cbz x1, {}", empty_label));               // return an empty slice for null array payloads
+    ctx.emitter.instruction(&format!("b.ne {}", wrong_tag_label));              // any other runtime tag is a php TypeError, not an empty slice
+    ctx.emitter.instruction(&format!("cbz x1, {}", empty_label));               // defensive: an impossible null array payload still slices to empty
     ctx.emitter.instruction("mov x0, x1");                                      // pass the unboxed indexed-array payload to the Mixed conversion helper
     ctx.emitter.instruction("ldr x1, [x0, #-8]");                               // load indexed-array metadata before Mixed-slot conversion
     ctx.emitter.instruction("lsr x1, x1, #8");                                  // move the runtime value_type tag into the low bits
@@ -4316,12 +4318,26 @@ fn lower_mixed_array_slice_aarch64(
     abi::emit_push_reg(ctx.emitter, "x0");
     materialize_mixed_slice_args(ctx, offset, length, "array_slice")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_slice_refcounted");
-    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the empty-array fallback after slicing the boxed payload
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the empty-array/throw fallbacks after slicing the boxed payload
     ctx.emitter.label(&empty_label);
     abi::emit_pop_reg(ctx.emitter, "x9");
     allocate_empty_mixed_array_result(ctx);
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the wrong-tag throw dispatch after the empty-array fallback
+    union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+        ctx,
+        &wrong_tag_label,
+        &array_slice_wrong_type_message,
+    );
     ctx.emitter.label(&done_label);
     Ok(())
+}
+
+/// Builds `array_slice`'s php-verified wrong-type message for a given runtime type name.
+fn array_slice_wrong_type_message(given: &str) -> String {
+    format!(
+        "array_slice(): Argument #1 ($array) must be of type array, {} given",
+        given
+    )
 }
 
 /// Materializes a boxed-Mixed indexed array for `array_slice()` on x86_64.
@@ -4332,14 +4348,15 @@ fn lower_mixed_array_slice_x86_64(
     length: Option<ValueId>,
 ) -> Result<()> {
     let empty_label = ctx.next_label("mixed_array_slice_empty");
+    let wrong_tag_label = ctx.next_label("mixed_array_slice_wrong_tag");
     let done_label = ctx.next_label("mixed_array_slice_done");
     ctx.load_value_to_reg(array, "rax")?;
     abi::emit_push_reg(ctx.emitter, "rax");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     ctx.emitter.instruction("cmp rax, 4");                                      // require an indexed-array payload before slicing the Mixed cell
-    ctx.emitter.instruction(&format!("jne {}", empty_label));                   // return an empty slice for non-array Mixed payloads
-    ctx.emitter.instruction("test rdi, rdi");                                   // verify the unboxed indexed-array payload is present
-    ctx.emitter.instruction(&format!("je {}", empty_label));                    // return an empty slice for null array payloads
+    ctx.emitter.instruction(&format!("jne {}", wrong_tag_label));               // any other runtime tag is a php TypeError, not an empty slice
+    ctx.emitter.instruction("test rdi, rdi");                                   // defensive: an impossible null array payload still slices to empty
+    ctx.emitter.instruction(&format!("je {}", empty_label));
     ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");                    // load indexed-array metadata before Mixed-slot conversion
     ctx.emitter.instruction("shr rsi, 8");                                      // move the runtime value_type tag into the low bits
     ctx.emitter.instruction("and rsi, 0x7f");                                   // isolate the indexed-array value_type tag
@@ -4349,10 +4366,16 @@ fn lower_mixed_array_slice_x86_64(
     abi::emit_push_reg(ctx.emitter, "rax");
     materialize_mixed_slice_args(ctx, offset, length, "array_slice")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_slice_refcounted");
-    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the empty-array fallback after slicing the boxed payload
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the empty-array/throw fallbacks after slicing the boxed payload
     ctx.emitter.label(&empty_label);
     abi::emit_pop_reg(ctx.emitter, "r11");
     allocate_empty_mixed_array_result(ctx);
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the wrong-tag throw dispatch after the empty-array fallback
+    union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+        ctx,
+        &wrong_tag_label,
+        &array_slice_wrong_type_message,
+    );
     ctx.emitter.label(&done_label);
     Ok(())
 }

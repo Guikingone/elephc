@@ -199,6 +199,11 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                         &name, &args,
                     )
                 })
+                .or_else(|| {
+                    crate::optimize::callable_coercion::try_coerce_callable_string_args(
+                        &name, &args,
+                    )
+                })
                 .unwrap_or(ExprKind::FunctionCall { name, args })
         }
         ExprKind::ArrayLiteral(items) => {

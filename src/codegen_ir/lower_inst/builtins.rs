@@ -1252,8 +1252,7 @@ fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> 
             store_if_result(ctx, inst)
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            ctx.load_value_to_result(value)?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
+            lower_count_dynamic(ctx, value)?;
             store_if_result(ctx, inst)
         }
         PhpType::Object(class_name)
@@ -1270,6 +1269,77 @@ fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> 
             other
         ))),
     }
+}
+
+/// Lowers `count()`/`sizeof()` for a boxed `Mixed`/union value.
+///
+/// `__rt_mixed_count` (see `crate::codegen::runtime::arrays::mixed_count`) is a QUIET boundary
+/// by design (it also backs JSON-decoded-mixed counting elsewhere): tags 4/5 (array/hash) and 6
+/// (a recognized `Countable` SPL object) count normally, but any OTHER tag silently returns `0`
+/// instead of matching PHP's real `count(): Argument #1 ($value) must be of type Countable|array,
+/// X given` `\TypeError` — a `SILENT-WRONG` gap for the union-boxed `$hosts = $x ?: false`-style
+/// idiom this family sweep targets (php -n VERIFIED: `count(false)` throws, it does not return 0).
+/// This gates the CLEARLY non-container tags (0/1/2/3/8 — int/string/float/bool/null) with the
+/// shared `union_type_guard` wrong-tag `\TypeError` dispatch BEFORE reaching `__rt_mixed_count`;
+/// tags 4/5/6 fall through to the existing, unchanged `__rt_mixed_count` call (including its
+/// quiet zero for an object tag that is not one of the few recognized `Countable` SPL classes —
+/// deciding "is this arbitrary user class `Countable`" is a deeper, separate gap this scoped fix
+/// does not attempt).
+fn lower_count_dynamic(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(value, "x0")?;
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // preserve the original boxed Mixed cell pointer across the tag probe
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");              // tag=x0, payload_lo=x1 (needed for the true/false wrong-tag split)
+            let ok_label = ctx.next_label("count_dynamic_ok");
+            let wrong_tag_label = ctx.next_label("count_dynamic_wrong_tag");
+            ctx.emitter.instruction("cmp x0, #4");                              // tag 4 = indexed array
+            ctx.emitter.instruction(&format!("b.eq {}", ok_label));
+            ctx.emitter.instruction("cmp x0, #5");                              // tag 5 = associative array
+            ctx.emitter.instruction(&format!("b.eq {}", ok_label));
+            ctx.emitter.instruction("cmp x0, #6");                              // tag 6 = object (Countable dispatch handled inside __rt_mixed_count)
+            ctx.emitter.instruction(&format!("b.eq {}", ok_label));
+            ctx.emitter.instruction(&format!("b {}", wrong_tag_label));
+            arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+                ctx,
+                &wrong_tag_label,
+                &count_wrong_type_message,
+            );
+            ctx.emitter.label(&ok_label);
+            ctx.emitter.instruction("ldr x0, [sp], #16");                       // reload the original boxed Mixed cell pointer for __rt_mixed_count
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(value, "rax")?;
+            abi::emit_push_reg(ctx.emitter, "rax");                             // preserve the original boxed Mixed cell pointer across the tag probe
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");              // tag=rax, payload_lo=rdi (needed for the true/false wrong-tag split)
+            let ok_label = ctx.next_label("count_dynamic_ok");
+            let wrong_tag_label = ctx.next_label("count_dynamic_wrong_tag");
+            ctx.emitter.instruction("cmp rax, 4");                              // tag 4 = indexed array
+            ctx.emitter.instruction(&format!("je {}", ok_label));
+            ctx.emitter.instruction("cmp rax, 5");                              // tag 5 = associative array
+            ctx.emitter.instruction(&format!("je {}", ok_label));
+            ctx.emitter.instruction("cmp rax, 6");                              // tag 6 = object (Countable dispatch handled inside __rt_mixed_count)
+            ctx.emitter.instruction(&format!("je {}", ok_label));
+            ctx.emitter.instruction(&format!("jmp {}", wrong_tag_label));
+            arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+                ctx,
+                &wrong_tag_label,
+                &count_wrong_type_message,
+            );
+            ctx.emitter.label(&ok_label);
+            abi::emit_pop_reg(ctx.emitter, "rax");                              // reload the original boxed Mixed cell pointer for __rt_mixed_count
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
+    Ok(())
+}
+
+/// Builds `count`/`sizeof`'s php-verified wrong-type message for a given runtime type name.
+fn count_wrong_type_message(given: &str) -> String {
+    format!(
+        "count(): Argument #1 ($value) must be of type Countable|array, {} given",
+        given
+    )
 }
 
 /// Lowers `end($array)` by reading the last element of a boxed Mixed array.

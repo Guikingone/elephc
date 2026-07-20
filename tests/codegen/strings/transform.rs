@@ -238,6 +238,119 @@ echo implode(", ", $parts);
     assert_eq!(out, "one, two, three");
 }
 
+/// REGRESSION for the N2 union-boxed-array READ SIGSEGV: `$u = $hosts ?: false;
+/// implode(",", $u)` used to segfault (rc=139) — `--emit-ir` showed the Elvis join correctly
+/// boxes both arms into a tagged `Heap(Mixed)` cell (proving the JOIN representation was sound),
+/// but `implode`'s dynamic Mixed-array reader unconditionally called the generic `__rt_implode`
+/// runtime routine after unboxing, which only correctly handles STRING (value_type 1) and
+/// boxed-Mixed (value_type 7) element layouts — for `[1,2,3]`'s raw 8-byte int elements
+/// (value_type 0) it misread each integer VALUE as a `{ptr,len}` string pair and dereferenced it
+/// as a pointer. Fixed in `crate::codegen_ir::lower_inst::builtins::strings::lower_implode_dynamic`
+/// by reading the array's OWN runtime element tag and branching to the already-existing, already
+/// tag-correct `__rt_implode_int` helper instead. php -n verified: `1,2,3`.
+#[test]
+fn test_implode_union_array_false_idiom_int_array_no_longer_segfaults() {
+    let out = compile_and_run(
+        r#"<?php
+$hosts = [1, 2, 3];
+$u = $hosts ?: false;
+echo implode(",", $u);
+"#,
+    );
+    assert_eq!(out, "1,2,3");
+}
+
+/// Same repro shape as `test_implode_union_array_false_idiom_int_array_no_longer_segfaults` but
+/// with a `array<string>`-element source array, exercising the OTHER branch of the runtime
+/// element-tag dispatch (`__rt_implode`, value_type 1) instead of `__rt_implode_int`.
+#[test]
+fn test_implode_union_array_false_idiom_string_array() {
+    let out = compile_and_run(
+        r#"<?php
+$parts = ["a", "b", "c"];
+$u = $parts ?: false;
+echo implode("-", $u);
+"#,
+    );
+    assert_eq!(out, "a-b-c");
+}
+
+/// Verifies `implode(",", $u)` on the OTHER branch of the `$hosts = $x ?: false` idiom (an empty,
+/// therefore falsy, source array collapses `$u` to boxed `false`) throws a catchable `\TypeError`
+/// with PHP's EXACT wording instead of reading a null/zero payload as an array pointer. php -n
+/// VERIFIED against PHP 8.5's real (nullable) `implode(string $separator, ?array $array)`
+/// signature: `implode(): Argument #2 ($array) must be of type ?array, false given`.
+#[test]
+fn test_implode_union_false_tag_throws_byte_identical_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+$hosts = [];
+$u = $hosts ?: false;
+try {
+    echo implode(",", $u);
+} catch (\TypeError $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "implode(): Argument #2 ($array) must be of type ?array, false given"
+    );
+}
+
+/// Sweeps the shared `union_type_guard` wrong-tag `\TypeError` dispatch (int/float/true/null)
+/// through `implode()`'s union-array argument — the SAME dispatch `array_slice()`/`count()` reuse
+/// for this family. php -n VERIFIED every message.
+#[test]
+fn test_implode_union_wrong_scalar_tags_throw_byte_identical_type_errors() {
+    let out = compile_and_run(
+        r#"<?php
+function probe($v): string {
+    $u = $v ?: false;
+    try {
+        return implode(",", $u);
+    } catch (\TypeError $e) {
+        return $e->getMessage();
+    }
+}
+echo probe(0), "|";
+echo probe(1.5), "|";
+echo probe(true), "|";
+echo probe(null);
+"#,
+    );
+    assert_eq!(
+        out,
+        "implode(): Argument #2 ($array) must be of type ?array, false given|\
+implode(): Argument #2 ($array) must be of type ?array, float given|\
+implode(): Argument #2 ($array) must be of type ?array, true given|\
+implode(): Argument #2 ($array) must be of type ?array, false given"
+    );
+}
+
+/// Heap-cleanliness proof for the SIGSEGV fix: the union-boxed array payload is only BORROWED
+/// (`crate::codegen_ir::lower_inst::builtins::arrays::union_type_guard::emit_borrow_array_or_type_error`
+/// — no incref/decref/tag mutation on the source cell), so running the (formerly crashing) repro
+/// under `--heap-debug` must report a clean heap with no leaked or double-freed blocks.
+#[test]
+fn test_implode_union_array_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$hosts = [1, 2, 3];
+$u = $hosts ?: false;
+echo implode(",", $u);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1,2,3");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 // --- v0.4 batch 2: more string functions ---
 
 /// Verifies ucwords capitalizes the first character of each word in a string.

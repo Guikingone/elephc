@@ -276,6 +276,56 @@ fn test_by_ref_foreach_nested_json_decode_assoc_payloads() {
     assert_eq!(out, "101|102");
 }
 
+/// N2 family sweep probe: `foreach` over the `$hosts = $x ?: false`-style union-boxed idiom.
+/// The ACCEPTED tag (array) iterates correctly (same boxed-Mixed indexed-array foreach path any
+/// `array<mixed>`-typed local already uses — no new lowering needed). php -n verified: `1|2|3`.
+#[test]
+fn test_foreach_over_union_array_false_idiom_array_tag_iterates() {
+    let out = compile_and_run(
+        r#"<?php
+$hosts = [1, 2, 3];
+$u = $hosts ?: false;
+foreach ($u as $v) {
+    echo $v, "|";
+}
+"#,
+    );
+    assert_eq!(out, "1|2|3|");
+}
+
+/// N2 family sweep probe, JURY ADDENDUM item 3 ("foreach over a union: handle the object tag
+/// separately or keep it loud — never route Traversable through the array-only unwrap"): on the
+/// OTHER branch of the idiom (`$u` collapses to boxed `false`), `foreach` does NOT SIGSEGV and
+/// does NOT silently skip/misbehave — it fatals loudly (`EX_SOFTWARE`/70, diagnostic to stderr),
+/// the SAME pre-existing "foreach over iterable with unsupported kind" fatal any non-iterable
+/// boxed `Mixed` already hits (see `test_mixed_foreach_fatal_preserves_prior_side_effects`).
+/// This is a PROBE, not a fix: PHP's real behavior for `foreach (false as $v)` is a catchable-free
+/// `Warning` plus a skipped loop body (not a fatal), which this compiler does not yet model for
+/// ANY non-iterable Mixed receiver — an existing, broader gap outside this spec's SIGSEGV-focused
+/// scope. The acceptance bar here is soundness (loud, not silently wrong, never a crash), which
+/// this already satisfies without touching the shared foreach lowering.
+#[test]
+fn test_foreach_over_union_array_false_idiom_false_tag_is_loud_not_a_segfault() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$hosts = [];
+$u = $hosts ?: false;
+echo "before|";
+foreach ($u as $v) {
+    echo $v;
+}
+"#,
+    );
+    assert!(!out.success, "program unexpectedly succeeded");
+    assert_eq!(out.stdout, "before|");
+    assert!(
+        out.stderr
+            .contains("Fatal error: foreach over iterable with unsupported kind"),
+        "{}",
+        out.stderr
+    );
+}
+
 /// Verifies that a fatal error during `foreach` over a non-iterable `mixed` preserves prior side effects;
 /// "S" is echoed before the fatal error, confirming `side()` ran before the foreach check.
 #[test]

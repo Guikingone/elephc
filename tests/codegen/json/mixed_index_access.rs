@@ -146,13 +146,27 @@ fn test_mixed_count_assoc() {
     assert_eq!(out, "3");
 }
 
-/// `count()` on a non-container Mixed payload returns 0 (PHP would emit a
-/// warning and return 1 in older versions / 0 in PHP 8+; elefant collapses
-/// to 0).
+/// `count()` on a non-container Mixed payload throws a catchable `\TypeError`, matching PHP 8's
+/// real behavior. php -n VERIFIED: `count(json_decode("42"))` throws `TypeError: count():
+/// Argument #1 ($value) must be of type Countable|array, int given` — PHP does NOT quietly
+/// return 0 (that was this test's own PRE-EXISTING incorrect assumption, corrected alongside the
+/// `crate::codegen_ir::lower_inst::builtins::lower_count_dynamic` union-array-family SIGSEGV fix,
+/// which also closed this silent-wrong gap for `count()`'s non-container Mixed/union tags).
 #[test]
 fn test_mixed_count_scalar_is_zero() {
-    let out = compile_and_run(r#"<?php echo count(json_decode("42"));"#);
-    assert_eq!(out, "0");
+    let out = compile_and_run(
+        r#"<?php
+try {
+    echo count(json_decode("42"));
+} catch (\TypeError $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "count(): Argument #1 ($value) must be of type Countable|array, int given"
+    );
 }
 
 /// Nested access with int key first, then string key: `arr[0]["x"]` on an

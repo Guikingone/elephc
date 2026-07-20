@@ -33,7 +33,6 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
     matches!(
         name,
         "strlen"
-            | "count"
             | "intval"
             | "floatval"
             | "boolval"
@@ -101,7 +100,6 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "grapheme_strrev"
             | "str_pad"
             | "explode"
-            | "implode"
             | "str_split"
             | "strcmp"
             | "strcasecmp"
@@ -216,7 +214,6 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "array_keys"
             | "array_values"
             | "array_merge"
-            | "array_slice"
             | "array_combine"
             | "array_flip"
             | "array_reverse"
