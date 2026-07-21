@@ -113,17 +113,33 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     let resolved = elephc::optimize::prune_dead_static_branches(resolved);
     let mut check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
+    let optimized = elephc::optimize::propagate_constants(resolved);
+    // Mirror `pipeline::compile`: fold class/function existence probes against the closed
+    // world (both top-level and inside method bodies) so guarded absent-class branches are
+    // DCE'd before lowering, exactly as in real compilation.
+    let existence_sets = elephc::optimize::ClassExistenceSets::from_program_and_check_result(
+        &optimized,
+        &check_result,
+    );
+    let optimized = elephc::optimize::fold_class_existence(optimized, &existence_sets);
+    elephc::optimize::fold_class_existence_in_method_bodies(&mut check_result, &existence_sets);
+    let function_existence_set =
+        elephc::optimize::FunctionExistenceSet::from_check_result(&check_result);
+    let optimized = elephc::optimize::fold_function_existence(optimized, &function_existence_set);
+    elephc::optimize::fold_function_existence_in_method_bodies(
+        &mut check_result,
+        &function_existence_set,
+    );
     // Mirror `pipeline::compile`: rewrite literal string-callable arguments at `callable`-typed
     // positions into their first-class-callable AST equivalent on the REAL AST that lowering
     // walks (the checker already accepted the coercion on an ephemeral copy).
     let callable_coercion_set =
         elephc::optimize::CallableCoercionSet::from_check_result(&check_result);
-    let resolved = elephc::optimize::coerce_callable_string_args(resolved, &callable_coercion_set);
+    let optimized = elephc::optimize::coerce_callable_string_args(optimized, &callable_coercion_set);
     elephc::optimize::coerce_callable_string_args_in_method_bodies(
         &mut check_result,
         &callable_coercion_set,
     );
-    let optimized = elephc::optimize::propagate_constants(resolved);
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);

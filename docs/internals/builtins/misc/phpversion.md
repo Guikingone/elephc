@@ -10,18 +10,19 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/phpversion.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/phpversion.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:614](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L614) (`lower_phpversion`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:616](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L616) (`lower_phpversion`)
 - **Function symbol**: `lower_phpversion()`
 
 
 ### Lowering notes
 
-- Lowers `phpversion()` as the compiler package version string.
+- Lowers `phpversion()` as the compiler package version string. The one-argument
+- `phpversion($extension)` form returns `false` (no loadable extensions exist in an
+- AOT binary), matching PHP's behavior for an unknown extension.
 
 ## Runtime helpers
 
 The following runtime helpers are referenced:
-- `__rt_constant`
 - `__rt_defined`
 
 ## Signature summary

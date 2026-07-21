@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/count.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/count.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1166](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1166) (`lower_count`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1172](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1172) (`lower_count`)
 - **Function symbol**: `lower_count()`
 
 

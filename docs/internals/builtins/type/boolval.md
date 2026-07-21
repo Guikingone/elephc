@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/boolval.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/boolval.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1499](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1499) (`lower_boolval`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1505](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1505) (`lower_boolval`)
 - **Function symbol**: `lower_boolval()`
 
 

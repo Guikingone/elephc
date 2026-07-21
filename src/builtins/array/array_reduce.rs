@@ -35,10 +35,14 @@ builtin! {
 /// Validates the callback for an `array_reduce` call and returns `PhpType::Int`.
 ///
 /// Uses the initial-value and array-element types as the two callback parameter contexts.
-/// Arity (exactly 3 args) is pre-validated by `check_arity`.
+/// Arity (2–3 args) is pre-validated by `check_arity`; PHP's `$initial` parameter defaults
+/// to `null`, so a two-argument call uses `Void` (null) as the initial-value context.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    let initial_ty = cx.checker.infer_type(&cx.args[2], cx.env)?;
+    let initial_ty = match cx.args.get(2) {
+        Some(initial_arg) => cx.checker.infer_type(initial_arg, cx.env)?,
+        None => PhpType::Void,
+    };
     let callback_arg_types = [
         initial_ty,
         crate::types::checker::builtins::array_element_type(&arr_ty),

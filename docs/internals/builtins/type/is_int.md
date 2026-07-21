@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_int.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_int.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1659](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1659) (`lower_static_type_predicate`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1665](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1665) (`lower_static_type_predicate`)
 - **Function symbol**: `lower_static_type_predicate()`
 
 

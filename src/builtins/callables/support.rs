@@ -24,17 +24,13 @@ use crate::types::PhpType;
 /// Requires that the first argument is a string literal and, if present, the second argument
 /// is a literal bool or int (the autoload flag). Returns `Bool` on success.
 /// Arguments are pre-inferred by the registry common path before this hook runs.
-pub(crate) fn check_class_like_exists(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    if !matches!(cx.args[0].kind, ExprKind::StringLiteral(_)) {
-        return Err(CompileError::new(
-            cx.span,
-            &format!("{}() first argument must be a string literal in AOT mode", cx.name),
-        ));
-    }
-    // The optional autoload flag may be dynamic: it never contributes an AOT
-    // autoload demand (the demand walker treats non-literals as false), and
-    // existence still folds from the literal class name. The registry common
-    // path has already inferred it.
+pub(crate) fn check_class_like_exists(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    // A string literal (or `Name::class`) folds to a compile-time boolean using the
+    // closed world before codegen; a NON-literal name is accepted too and lowered to
+    // the closed-world registry probe (`lower_dynamic_class_like_exists` →
+    // `__rt_class_exists`/`__rt_interface_exists`/`__rt_trait_exists`). elephc's
+    // autoload is a compile-time pass, so the `$autoload` flag has no runtime effect
+    // and accepts any value. The registry common path has already inferred the args.
     Ok(PhpType::Bool)
 }
 
