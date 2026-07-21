@@ -2,25 +2,26 @@
 title: "uasort() — internals"
 description: "Compiler internals for uasort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 44
+  order: 61
 ---
 
 ## `uasort()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1131](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1131) (`lower_uasort`)
+- **Signature**: [`src/builtins/array/uasort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/uasort.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1134](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1134) (`lower_uasort`)
 - **Function symbol**: `lower_uasort()`
 
 
 ### Lowering notes
 
-- Lowers `uasort()` through the legacy user-sort helper for static comparators.
+- Lowers `uasort()` through the user-sort helper for static comparators.
 
 ## Runtime helpers
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+The following runtime helpers are referenced:
+- `__rt_array_is_list`
 
 ## Signature summary
 
@@ -33,7 +34,12 @@ function uasort(array $array, callable $callback): bool
 - **Arity**: takes exactly 2 arguments.
 - **By-reference parameters**: `$array`.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/uasort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/uasort.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
+- **By-reference parameters**: `$array`.
+
 ## Cross-references
 
 - [User reference for `uasort()`](../../../php/builtins/array/uasort.md)
-

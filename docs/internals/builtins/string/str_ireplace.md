@@ -2,17 +2,21 @@
 title: "str_ireplace() — internals"
 description: "Compiler internals for str_ireplace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 381
+  order: 402
 ---
 
 ## `str_ireplace()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/string/str_ireplace.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_ireplace.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:842](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L842) (`lower_string_replace`)
+- **Function symbol**: `lower_string_replace()`
 
+
+### Lowering notes
+
+- Lowers `str_replace()`/`str_ireplace()` with three string operands.
 
 ## Runtime helpers
 
@@ -21,15 +25,18 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function str_ireplace(mixed $search, mixed $replace, mixed $subject, int $count): mixed
+function str_ireplace(string $search, string $replace, string $subject, int $count = null): string
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes 3–4 arguments (1 optional).
-- **By-reference parameters**: `$count`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/str_ireplace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_ireplace.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 
 - [User reference for `str_ireplace()`](../../../php/builtins/string/str_ireplace.md)
-

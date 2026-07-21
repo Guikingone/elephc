@@ -1,8 +1,8 @@
 ---
 title: "chdir()"
-description: "Lowers `chdir(path)` through the target-aware runtime helper."
+description: "Changes the current directory."
 sidebar:
-  order: 82
+  order: 103
 ---
 
 ## chdir()
@@ -11,12 +11,17 @@ sidebar:
 function chdir(string $directory): bool
 ```
 
-Lowers `chdir(path)` through the target-aware runtime helper.
+Changes the current directory.
 
 **Parameters**:
 - `$directory` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/chdir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/chdir.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

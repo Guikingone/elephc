@@ -9,8 +9,11 @@
 //! - Assignment checking must distinguish value writes, by-reference mutation, nullable access, and declared property contracts.
 
 use crate::errors::CompileError;
+use crate::errors::CompileWarning;
 use crate::names::{php_symbol_key, Name};
-use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver, TypeExpr};
+use crate::parser::ast::{
+    is_compound_assignment_self_read, CallableTarget, Expr, ExprKind, StaticReceiver, TypeExpr,
+};
 use crate::span::Span;
 use crate::types::{PhpType, TypeEnv};
 
@@ -106,9 +109,33 @@ pub(super) fn check_assign(
     // disagree with the lowering (it routes on the index's runtime IR type) and
     // produce a spurious `AssocArray -> Array(Mixed)` backend error.
     checker.foreach_key_locals.remove(name);
+
+    // PHP allows compound assignment on an undefined variable (`$x += 1`),
+    // treating the undefined variable as null/0 with a warning. The parser
+    // lowers `$x += 1` to `Assign { name: "x", value: BinaryOp { left:
+    // Variable("x"), op: Add, right: 1 } }`. When `$x` is not in `env`, the
+    // inference of the BinaryOp would fail with "Undefined variable: $x".
+    // Inject the variable as Void (null) so inference treats it as 0/null,
+    // matching PHP semantics. `??=` is exempt: null-coalesce is designed to
+    // handle undefined variables without warning.
+    if !env.contains_key(name) && is_compound_assignment_self_read(value, name, span) {
+        let is_null_coalesce = matches!(&value.kind, ExprKind::NullCoalesce { .. });
+        env.insert(name.to_string(), PhpType::Void);
+        if !is_null_coalesce {
+            checker.warnings.push(CompileWarning {
+                span,
+                message: format!("Undefined variable: ${} (treated as null)", name),
+            });
+        }
+    }
+
     let null_coalesce_default = null_coalesce_assignment_default(name, value);
-    let saved_self_ref_ty = if env.contains_key(name) && closure_captures_name_by_ref(value, name) {
-        Some(env.insert(name.to_string(), PhpType::Callable))
+    let saved_self_ref_ty = if closure_captures_name_by_ref(value, name) {
+        if let Some(previous_ty) = env.insert(name.to_string(), PhpType::Callable) {
+            Some(Some(previous_ty))
+        } else {
+            Some(None)
+        }
     } else {
         None
     };
@@ -121,6 +148,7 @@ pub(super) fn check_assign(
     } else {
         value
     };
+    let reflection_class_target = reflection_class_assignment_target(checker, callable_source, env);
     let ty_result: Result<PhpType, CompileError> = (|| {
         if let Some(default) = null_coalesce_default {
             if let Some(existing) = env.get(name).cloned() {
@@ -176,6 +204,7 @@ pub(super) fn check_assign(
         }
     };
     metadata_result?;
+    update_reflection_class_assignment_metadata(checker, name, reflection_class_target);
     merge_local_assignment_type(checker, name, &ty, span, env)
 }
 
@@ -237,52 +266,23 @@ pub(super) fn check_ref_assign(
             clear_callable_metadata(checker, target);
             Ok(())
         }
-        ExprKind::ArrayAccess { array, .. } => {
-            // `$x = &$arr[$k]`: the local aliases the array element's reference cell. Type the
-            // target to the element type and mark it by-reference so codegen routes its
-            // loads/stores through the shared cell (write-through / read-through).
-            //
-            // SLICE 1 only supports a plain local-variable array base. A property or static
-            // property element base (`&$this->prop[$k]`, `&self::$arr[$k]`) is a later slice, so
-            // loud-error here instead of falling through to a lowering path that cannot promote it.
-            if !matches!(array.kind, ExprKind::Variable(_)) {
+        ExprKind::ArrayAccess { array, index } => {
+            let array_ty = checker.infer_type(array, env)?;
+            let index_ty = checker.infer_type(index, env)?;
+            if !matches!(array_ty, PhpType::Array(_)) {
                 return Err(CompileError::new(
                     span,
-                    "Reference to an array element is only supported on a plain array variable",
+                    "Reference assignment to an array element requires an indexed array",
                 ));
             }
-            let element_ty = checker.infer_type(source, env)?;
-            // A kind-6 reference cell holds a single inner value word; a multi-word string element
-            // would drop its length, so reject it loudly instead of miscompiling.
-            if element_ty.codegen_repr() == PhpType::Str {
+            if !matches!(index_ty, PhpType::Int) {
                 return Err(CompileError::new(
                     span,
-                    "Reference to a string array element is not yet supported",
+                    "Reference assignment to an array element requires an integer index",
                 ));
             }
-            // Taking a reference into an indexed array de-packs it into a hash (Zend behavior):
-            // retype the base variable to an associative array so downstream reads, cleanup, and
-            // `array_is_list()` all agree with the promoted runtime representation. The element
-            // value is widened to Mixed so a whole-value reassign through the reference that
-            // changes the inner type (int->array, int->string) is read back through the runtime
-            // value-tag stamped by `__rt_ref_cell_store` (`__rt_deref_if_reference` returns the
-            // cell's inner tag, and the Mixed read path dispatches on it). The LOCAL alias keeps
-            // the original element type so the int->int / array->array store fast path (which
-            // routes through the alias, not the element type) is preserved.
-            if let ExprKind::Variable(array_name) = &array.kind {
-                if let Some(PhpType::Array(_)) =
-                    env.get(array_name).map(|ty| ty.codegen_repr())
-                {
-                    env.insert(
-                        array_name.clone(),
-                        PhpType::AssocArray {
-                            key: Box::new(PhpType::Mixed),
-                            value: Box::new(PhpType::Mixed),
-                        },
-                    );
-                }
-            }
-            env.insert(target.to_string(), element_ty);
+            let target_ty = checker.infer_type(source, env)?;
+            env.insert(target.to_string(), target_ty);
             checker.active_ref_params.insert(target.to_string());
             clear_callable_metadata(checker, target);
             Ok(())
@@ -644,6 +644,7 @@ fn check_ref_assign_variable(
     } else {
         clear_callable_metadata(checker, target);
     }
+    copy_reflection_class_metadata(checker, target, source);
     Ok(())
 }
 
@@ -822,6 +823,82 @@ pub(super) fn update_callable_assignment_metadata(
         checker.first_class_callable_targets.remove(name);
     }
     Ok(())
+}
+
+/// Updates static `ReflectionClass` metadata for one assigned local.
+fn update_reflection_class_assignment_metadata(
+    checker: &mut Checker,
+    name: &str,
+    reflected_class: Option<String>,
+) {
+    if let Some(reflected_class) = reflected_class {
+        checker
+            .reflection_class_targets
+            .insert(name.to_string(), reflected_class);
+    } else {
+        checker.reflection_class_targets.remove(name);
+    }
+}
+
+/// Mirrors static `ReflectionClass` metadata across a reference alias assignment.
+fn copy_reflection_class_metadata(checker: &mut Checker, target: &str, source: &str) {
+    if let Some(reflected_class) = checker.reflection_class_targets.get(source).cloned() {
+        checker
+            .reflection_class_targets
+            .insert(target.to_string(), reflected_class);
+    } else {
+        checker.reflection_class_targets.remove(target);
+    }
+}
+
+/// Resolves the statically-known class reflected by a `new ReflectionClass(...)` expression.
+fn reflection_class_assignment_target(
+    checker: &Checker,
+    source: &Expr,
+    env: &TypeEnv,
+) -> Option<String> {
+    let ExprKind::NewObject { class_name, args } = &source.kind else {
+        return None;
+    };
+    if php_symbol_key(class_name.as_str().trim_start_matches('\\')) != "reflectionclass" {
+        return None;
+    }
+    let class_arg = reflection_class_constructor_arg(args)?;
+    match &class_arg.kind {
+        ExprKind::StringLiteral(class_name) => {
+            resolve_class_name(checker, class_name).map(str::to_string)
+        }
+        ExprKind::ClassConstant { receiver } => {
+            resolve_static_receiver_class(checker, receiver, class_arg.span).ok()
+        }
+        _ => match env
+            .get(variable_name(class_arg).unwrap_or_default())
+            .cloned()
+            .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(class_arg))
+            .codegen_repr()
+        {
+            PhpType::Object(class_name) if !class_name.is_empty() => Some(class_name),
+            _ => None,
+        },
+    }
+}
+
+/// Returns the ReflectionClass constructor class argument after simple named-argument matching.
+fn reflection_class_constructor_arg(args: &[Expr]) -> Option<&Expr> {
+    if let Some(positional) = args.iter().find(|arg| !matches!(arg.kind, ExprKind::NamedArg { .. })) {
+        return Some(positional);
+    }
+    args.iter().find_map(|arg| {
+        let ExprKind::NamedArg { name, value } = &arg.kind else {
+            return None;
+        };
+        match php_symbol_key(name).as_str() {
+            "class" | "classname" | "class_name" | "objectorclass" | "object_or_class" => {
+                Some(value.as_ref())
+            }
+            _ => None,
+        }
+    })
 }
 
 /// Returns true when a local assignment stores an array whose elements are callable descriptors.
@@ -1084,6 +1161,8 @@ pub(super) fn check_typed_assign(
     // real type error) instead of gradually widening like an inferred local.
     checker.declared_typed_locals.insert(name.to_string());
     env.insert(name.to_string(), declared_ty);
+    let reflected_class = reflection_class_assignment_target(checker, value, env);
+    update_reflection_class_assignment_metadata(checker, name, reflected_class);
     Ok(())
 }
 
@@ -1130,6 +1209,7 @@ pub(super) fn check_list_unpack(
                 let unpack_ty = *elem_ty.clone();
                 env.insert(var.clone(), unpack_ty.clone());
                 update_list_unpack_callable_metadata(checker, var, value, &unpack_ty);
+                checker.reflection_class_targets.remove(var);
             }
         }
         // Gradual right-hand side (`AssocArray`, `Mixed`, `?array`, or a union containing an

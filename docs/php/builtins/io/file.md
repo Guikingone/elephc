@@ -1,24 +1,27 @@
 ---
 title: "file()"
-description: "Lowers `file(path)` through the target-aware runtime line-array helper."
+description: "Reads an entire file into an array."
 sidebar:
-  order: 144
+  order: 165
 ---
 
 ## file()
 
 ```php
-function file(string $filename, int $flags, mixed $context): array
+function file(string $filename): array
 ```
 
-Lowers `file(path)` through the target-aware runtime line-array helper.
+Reads an entire file into an array.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$flags` (`int`)
-- `$context` (`mixed`)
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/file.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/file.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

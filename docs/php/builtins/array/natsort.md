@@ -1,8 +1,8 @@
 ---
 title: "natsort()"
-description: "Lowers `natsort()` for indexed integer arrays through the natural-sort runtime wrapper."
+description: "Sorts an array using a natural order algorithm."
 sidebar:
-  order: 39
+  order: 56
 ---
 
 ## natsort()
@@ -11,12 +11,17 @@ sidebar:
 function natsort(array $array): bool
 ```
 
-Lowers `natsort()` for indexed integer arrays through the natural-sort runtime wrapper.
+Sorts an array using a natural order algorithm.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/natsort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/natsort.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

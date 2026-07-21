@@ -2,13 +2,13 @@
 title: "define()"
 description: "Defines a named constant at runtime."
 sidebar:
-  order: 258
+  order: 289
 ---
 
 ## define()
 
 ```php
-function define(string $constant_name, mixed $value, bool $case_insensitive): bool
+function define(string $constant_name, mixed $value): bool
 ```
 
 Defines a named constant at runtime.
@@ -16,9 +16,13 @@ Defines a named constant at runtime.
 **Parameters**:
 - `$constant_name` (`string`)
 - `$value` (`mixed`)
-- `$case_insensitive` (`bool`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/define.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/define.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

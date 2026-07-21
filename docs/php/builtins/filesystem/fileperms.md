@@ -1,8 +1,8 @@
 ---
 title: "fileperms()"
-description: "Lowers `fileperms(path)` and boxes the runtime integer-or-false result."
+description: "Gets file permissions."
 sidebar:
-  order: 98
+  order: 119
 ---
 
 ## fileperms()
@@ -11,12 +11,17 @@ sidebar:
 function fileperms(string $filename): mixed
 ```
 
-Lowers `fileperms(path)` and boxes the runtime integer-or-false result.
+Gets file permissions.
 
 **Parameters**:
 - `$filename` (`string`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fileperms.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fileperms.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

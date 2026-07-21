@@ -47,6 +47,7 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
     "DomainException",
     "EmptyIterator",
     "Error",
+    "ArithmeticError",
     "Exception",
     "Fiber",
     "FiberError",
@@ -76,8 +77,17 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
     "RecursiveIteratorIterator",
     "ReflectionAttribute",
     "ReflectionClass",
+    "ReflectionObject",
+    "ReflectionClassConstant",
+    "ReflectionEnumBackedCase",
+    "ReflectionEnumUnitCase",
+    "ReflectionFunction",
     "ReflectionMethod",
+    "ReflectionNamedType",
+    "ReflectionParameter",
     "ReflectionProperty",
+    "ReflectionUnionType",
+    "ReflectionIntersectionType",
     "RuntimeException",
     "SeekableIterator",
     "SortDirection",
@@ -321,6 +331,9 @@ fn load_autoloaded_file(
     let tokens = crate::lexer::tokenize(&content).map_err(|e| e.with_file(file_label.clone()))?;
     let parsed = crate::parser::parse(&tokens).map_err(|e| e.with_file(file_label.clone()))?;
     let parsed = crate::magic_constants::substitute_file_and_scope_constants(parsed, path);
+    // Strict-PHP audit of the autoloaded user file on its freshly parsed AST,
+    // before resolution can synthesize compiler-internal names into it.
+    crate::strict_php::check_file(&parsed, &file_label)?;
     let include_base = path.parent().unwrap_or(base_dir);
     let resolved = if lenient_includes {
         crate::resolver::resolve_lenient_includes(parsed, include_base)?

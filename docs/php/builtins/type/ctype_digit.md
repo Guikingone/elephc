@@ -1,8 +1,8 @@
 ---
 title: "ctype_digit()"
-description: "Lowers `ctype_digit(string)` by checking every byte against the ASCII digit range."
+description: "Checks if all characters in the string are digits."
 sidebar:
-  order: 411
+  order: 431
 ---
 
 ## ctype_digit()
@@ -11,12 +11,17 @@ sidebar:
 function ctype_digit(string $text): bool
 ```
 
-Lowers `ctype_digit(string)` by checking every byte against the ASCII digit range.
+Checks if all characters in the string are digits.
 
 **Parameters**:
 - `$text` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/ctype_digit.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/ctype_digit.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

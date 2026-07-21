@@ -12,12 +12,11 @@ use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
-use super::arrays::array_arg_is_gradually_acceptable;
 use super::super::Checker;
 
 type BuiltinResult = Result<Option<PhpType>, CompileError>;
 
-/// Type-checks numeric and type-inspection PHP builtins.
+/// Type-checks numeric and language-construct PHP builtins.
 ///
 /// Validates argument count, argument types, and special cases (e.g., `buffer_free`
 /// restriction on `$this`, locals-only) for the builtin functions in the numeric
@@ -25,15 +24,10 @@ type BuiltinResult = Result<Option<PhpType>, CompileError>;
 /// arity mismatch.
 ///
 /// ## Supported builtins
-/// - Type checks: `is_bool`, `boolval`, `is_callable`, `is_null`, `is_float`, `is_int`,
-///   `is_iterable`, `is_string`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`,
-///   `is_resource`, `is_array`, `is_object`, `is_scalar`
-/// - Numeric: `abs`, `floor`, `ceil`, `sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`,
-///   `sinh`, `cosh`, `tanh`, `log2`, `log10`, `exp`, `deg2rad`, `rad2deg`, `atan2`, `hypot`,
-///   `pi`, `round`, `pow`, `intdiv`, `fmod`, `fdiv`, `log`
-/// - Random: `rand`, `mt_rand`, `random_int`
-/// - Cast/retype: `floatval`, `settype`, `gettype`
-/// - Array/string helpers: `min`, `max`, `number_format`
+/// - Legacy scalar aliases not yet migrated into `src/builtins/`: `strval`,
+///   `is_double`, `is_real`, `is_integer`, `is_long`
+/// - Numeric conversions not yet migrated: `hexdec`, `bindec`
+/// - Type inspection not yet migrated: `get_debug_type`
 /// - Control: `exit`, `die`, `empty`
 /// - Unset: `unset`
 /// - Buffers: `buffer_len`, `buffer_free`
@@ -68,9 +62,14 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Void))
         }
-        "is_bool" | "boolval" | "is_callable" | "is_null" | "is_float" | "is_int"
-        | "is_iterable" | "is_string" | "is_numeric" | "is_nan" | "is_finite"
-        | "is_infinite" | "is_resource" | "is_array" | "is_object" | "is_scalar" => {
+        "strval" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "strval() takes exactly 1 argument"));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Str))
+        }
+        "is_double" | "is_real" | "is_integer" | "is_long" => {
             if args.len() != 1 {
                 return Err(CompileError::new(
                     span,
@@ -80,62 +79,7 @@ pub(super) fn check_builtin(
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Bool))
         }
-        "get_resource_type" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    "get_resource_type() takes exactly 1 argument",
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Str))
-        }
-        "get_resource_id" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    "get_resource_id() takes exactly 1 argument",
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Int))
-        }
-        "floatval" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "floatval() takes exactly 1 argument"));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Float))
-        }
-        "abs" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "abs() takes exactly 1 argument"));
-            }
-            let ty = checker.infer_type(&args[0], env)?;
-            Ok(Some(abs_result_type(&ty)))
-        }
-        "floor" | "ceil" | "sqrt" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
-        | "sinh" | "cosh" | "tanh" | "log2" | "log10" | "exp" | "deg2rad"
-        | "rad2deg" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes exactly 1 argument", name),
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Float))
-        }
-        "log" => {
-            if args.is_empty() || args.len() > 2 {
-                return Err(CompileError::new(span, "log() takes 1 or 2 arguments"));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Float))
-        }
-        "atan2" | "hypot" => {
+        "method_exists" | "property_exists" => {
             if args.len() != 2 {
                 return Err(CompileError::new(
                     span,
@@ -144,99 +88,7 @@ pub(super) fn check_builtin(
             }
             checker.infer_type(&args[0], env)?;
             checker.infer_type(&args[1], env)?;
-            Ok(Some(PhpType::Float))
-        }
-        "pi" => {
-            if !args.is_empty() {
-                return Err(CompileError::new(span, "pi() takes no arguments"));
-            }
-            Ok(Some(PhpType::Float))
-        }
-        "round" => {
-            if args.is_empty() || args.len() > 2 {
-                return Err(CompileError::new(span, "round() takes 1 or 2 arguments"));
-            }
-            checker.infer_type(&args[0], env)?;
-            if args.len() == 2 {
-                checker.infer_type(&args[1], env)?;
-            }
-            Ok(Some(PhpType::Float))
-        }
-        "pow" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(span, "pow() takes exactly 2 arguments"));
-            }
-            checker.infer_type(&args[0], env)?;
-            checker.infer_type(&args[1], env)?;
-            Ok(Some(PhpType::Float))
-        }
-        "min" | "max" => {
-            // PHP overloads min/max as `min/max(array $value_array)` (a single array
-            // argument) or `min/max(mixed $value, mixed ...$values)` (two or more
-            // scalar arguments). Both forms require at least one argument.
-            if args.is_empty() {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() requires at least 1 argument", name),
-                ));
-            }
-            if args.len() == 1 {
-                // Single-argument form: the lone argument must be an array. It is
-                // accepted under the gradual boundary (concrete array, `Mixed`, or a
-                // union containing an array); a concrete scalar is a type error, which
-                // matches PHP's `min(1)` / `max(1)` TypeError.
-                let ty = checker.infer_type(&args[0], env)?;
-                if !array_arg_is_gradually_acceptable(&ty) {
-                    return Err(CompileError::new(
-                        span,
-                        &format!("{}() single argument must be array", name),
-                    ));
-                }
-                return Ok(Some(min_max_single_array_result(&ty)));
-            }
-            // Two-or-more-argument scalar form: any argument types are accepted; a
-            // float argument promotes the result to float.
-            let mut has_float = false;
-            for arg in args {
-                let t = checker.infer_type(arg, env)?;
-                if t == PhpType::Float {
-                    has_float = true;
-                }
-            }
-            if has_float {
-                Ok(Some(PhpType::Float))
-            } else {
-                Ok(Some(PhpType::Int))
-            }
-        }
-        "clamp" => {
-            if args.len() != 3 {
-                return Err(CompileError::new(span, "clamp() takes exactly 3 arguments"));
-            }
-            let mut arg_types = Vec::with_capacity(args.len());
-            for arg in args {
-                arg_types.push(checker.infer_type(arg, env)?);
-            }
-            if arg_types.iter().all(|ty| *ty == PhpType::Str) {
-                Ok(Some(PhpType::Str))
-            } else if arg_types.iter().all(|ty| *ty == PhpType::Int) {
-                Ok(Some(PhpType::Int))
-            } else if arg_types
-                .iter()
-                .all(|ty| matches!(ty, PhpType::Int | PhpType::Float))
-            {
-                Ok(Some(PhpType::Float))
-            } else {
-                Ok(Some(PhpType::Mixed))
-            }
-        }
-        "intdiv" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(span, "intdiv() takes exactly 2 arguments"));
-            }
-            checker.infer_type(&args[0], env)?;
-            checker.infer_type(&args[1], env)?;
-            Ok(Some(PhpType::Int))
+            Ok(Some(PhpType::Bool))
         }
         "hexdec" => {
             // PHP: hexdec(string $hex_string): int|float. Non-hex characters are
@@ -254,56 +106,6 @@ pub(super) fn check_builtin(
             }
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Int))
-        }
-        "fmod" | "fdiv" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes exactly 2 arguments", name),
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            checker.infer_type(&args[1], env)?;
-            Ok(Some(PhpType::Float))
-        }
-        "rand" | "mt_rand" => {
-            if !args.is_empty() && args.len() != 2 {
-                return Err(CompileError::new(
-                    span,
-                    &format!("{}() takes 0 or 2 arguments", name),
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Int))
-        }
-        "random_int" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(span, "random_int() takes exactly 2 arguments"));
-            }
-            checker.infer_type(&args[0], env)?;
-            checker.infer_type(&args[1], env)?;
-            Ok(Some(PhpType::Int))
-        }
-        "number_format" => {
-            if args.is_empty() || args.len() > 4 {
-                return Err(CompileError::new(
-                    span,
-                    "number_format() takes 1 to 4 arguments",
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Str))
-        }
-        "gettype" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "gettype() takes exactly 1 argument"));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Str))
         }
         "get_debug_type" => {
             if args.len() != 1 {
@@ -327,85 +129,7 @@ pub(super) fn check_builtin(
                 return Err(CompileError::new(span, "unset() takes at least 1 argument"));
             }
             for arg in args {
-                // `unset($obj->prop)` on an undeclared property dispatches to
-                // `__unset`; the helper infers the receiver but skips the bare
-                // property access that would otherwise reject the property.
-                if checker
-                    .isset_unset_property_magic_class(arg, "__unset", env)?
-                    .is_some()
-                {
-                    continue;
-                }
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Void))
-        }
-        "settype" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(span, "settype() takes exactly 2 arguments"));
-            }
-            checker.infer_type(&args[0], env)?;
-            let ty = checker.infer_type(&args[1], env)?;
-            if ty != PhpType::Str {
-                return Err(CompileError::new(
-                    span,
-                    "settype() second argument must be a string",
-                ));
-            }
-            Ok(Some(PhpType::Bool))
-        }
-        "buffer_len" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "buffer_len() takes exactly 1 argument"));
-            }
-            let ty = checker.infer_type(&args[0], env)?;
-            if !matches!(ty, PhpType::Buffer(_)) {
-                return Err(CompileError::new(
-                    span,
-                    "buffer_len() argument must be buffer<T>",
-                ));
-            }
-            Ok(Some(PhpType::Int))
-        }
-        "buffer_free" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "buffer_free() takes exactly 1 argument"));
-            }
-            match &args[0].kind {
-                ExprKind::Variable(name) => {
-                    if checker.current_class.is_some() && name == "this" {
-                        return Err(CompileError::new(span, "buffer_free() cannot free $this"));
-                    }
-                    if checker.active_ref_params.contains(name)
-                        || checker.active_globals.contains(name)
-                        || checker.active_statics.contains(name)
-                    {
-                        return Err(CompileError::new(
-                            span,
-                            "buffer_free() argument must be a local variable",
-                        ));
-                    }
-                }
-                _ => {
-                    let ty = checker.infer_type(&args[0], env)?;
-                    if !matches!(ty, PhpType::Buffer(_)) {
-                        return Err(CompileError::new(
-                            span,
-                            "buffer_free() argument must be buffer<T>",
-                        ));
-                    }
-                    return Err(CompileError::new(
-                        span,
-                        "buffer_free() argument must be a local variable",
-                    ));
-                }
-            }
-            let ty = checker.infer_type(&args[0], env)?;
-            if !matches!(ty, PhpType::Buffer(_)) {
-                return Err(CompileError::new(
-                    span,
-                    "buffer_free() argument must be buffer<T>",
-                ));
+                check_unset_arg(checker, arg, env)?;
             }
             Ok(Some(PhpType::Void))
         }
@@ -420,7 +144,7 @@ pub(super) fn check_builtin(
 /// element shape (including `Mixed` and empty-array sentinels) yields `Mixed` so
 /// heterogeneous or gradually-typed arrays are handled at runtime. Keeps
 /// `max([1, 2, 3])` an `Int` while `max([1.5, 2.5])` becomes `Float`.
-fn min_max_single_array_result(ty: &PhpType) -> PhpType {
+pub(crate) fn min_max_single_array_result(ty: &PhpType) -> PhpType {
     let elem = match ty {
         PhpType::Array(elem) => elem.as_ref().clone(),
         PhpType::AssocArray { value, .. } => value.as_ref().clone(),
@@ -433,17 +157,77 @@ fn min_max_single_array_result(ty: &PhpType) -> PhpType {
     }
 }
 
-/// Returns the most precise supported result type for `abs($value)`.
-fn abs_result_type(ty: &PhpType) -> PhpType {
-    match ty {
-        PhpType::Float => PhpType::Float,
-        PhpType::Mixed => PhpType::Mixed,
-        PhpType::Union(members) if members.iter().any(|member| *member == PhpType::Float) => {
-            PhpType::Mixed
+
+/// Type-checks one `unset()` operand while preserving PHP's non-reading property semantics.
+fn check_unset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(), CompileError> {
+    if let ExprKind::PropertyAccess { object, property }
+    | ExprKind::NullsafePropertyAccess { object, property } = &arg.kind
+    {
+        let object_ty = checker.infer_type(object, env)?;
+        if unset_object_property_probe_is_valid(checker, &object_ty, property, arg)? {
+            return Ok(());
         }
-        PhpType::Union(members) if members.iter().any(|member| *member == PhpType::Mixed) => {
-            PhpType::Mixed
-        }
-        _ => PhpType::Int,
     }
+    checker.infer_type(arg, env).map(|_| ())
+}
+
+/// Returns true when `unset($object->property)` can be checked without reading the property.
+fn unset_object_property_probe_is_valid(
+    checker: &Checker,
+    object_ty: &PhpType,
+    property: &str,
+    arg: &Expr,
+) -> Result<bool, CompileError> {
+    match object_ty {
+        PhpType::Object(class_name) => {
+            unset_property_probe_is_valid_on_class(checker, class_name, property, arg)
+        }
+        PhpType::Mixed => Ok(true),
+        PhpType::Union(members) => {
+            if let Some(class_name) = checker.union_single_object_class(object_ty) {
+                unset_property_probe_is_valid_on_class(checker, &class_name, property, arg)
+            } else {
+                Ok(members.iter().any(|member| matches!(member, PhpType::Mixed)))
+            }
+        }
+        _ => Ok(false),
+    }
+}
+
+/// Checks one known receiver class for PHP `unset($object->property)` magic/no-op legality.
+fn unset_property_probe_is_valid_on_class(
+    checker: &Checker,
+    class_name: &str,
+    property: &str,
+    arg: &Expr,
+) -> Result<bool, CompileError> {
+    if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
+        return Ok(true);
+    }
+    let Some(class_info) = checker.classes.get(class_name) else {
+        return Ok(false);
+    };
+    if let Some(visibility) = class_info.property_visibilities.get(property) {
+        let declaring_class = class_info
+            .property_declaring_classes
+            .get(property)
+            .map(String::as_str)
+            .unwrap_or(class_name);
+        if !checker.can_access_member(declaring_class, visibility) {
+            if class_info.methods.contains_key("__unset") {
+                return Ok(true);
+            }
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "Cannot access {} property: {}::{}",
+                    Checker::visibility_label(visibility),
+                    class_name,
+                    property
+                ),
+            ));
+        }
+        return Ok(false);
+    }
+    Ok(true)
 }

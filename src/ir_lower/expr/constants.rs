@@ -48,6 +48,20 @@ pub(super) fn lower_static_defined_call(
         return None;
     };
     let exists = ctx.constant_value(constant_name).is_some();
+    if !exists && (ctx.has_eval_barrier() || ctx.eval_executed()) {
+        // Barrier-free AOT evals can still define constants dynamically; the
+        // probe needs the eval context, so make sure its slot exists.
+        ctx.declare_eval_context_local();
+        let data = ctx.intern_global_name(constant_name);
+        return Some(ctx.emit_value(
+            Op::EvalConstantExists,
+            Vec::new(),
+            Some(Immediate::Data(data)),
+            PhpType::Bool,
+            Op::EvalConstantExists.default_effects(),
+            Some(expr.span),
+        ));
+    }
     Some(emit_typed_constant(
         ctx,
         Op::ConstBool,
@@ -94,12 +108,31 @@ pub(super) fn lower_const_ref(
     if let Some((value, php_type)) = ctx.constant_value(name.as_str()) {
         return lower_constant_value(ctx, value, php_type, expr);
     }
+    if ctx.has_eval_barrier() || ctx.eval_executed() {
+        // Barrier-free AOT evals can still define constants dynamically; the
+        // fetch needs the eval context, so make sure its slot exists.
+        ctx.declare_eval_context_local();
+        let data = ctx.intern_global_name(name.as_str());
+        return ctx.emit_value(
+            Op::EvalConstantFetch,
+            Vec::new(),
+            Some(Immediate::Data(data)),
+            PhpType::Mixed,
+            Op::EvalConstantFetch.default_effects(),
+            Some(expr.span),
+        );
+    }
     let data = ctx.intern_global_name(name.as_str());
+    // A constant that reaches this fallback was defined at RUNTIME (`define()` in a
+    // function body the prescan does not fold). `lower_define` stores the raw value
+    // by its own static type, so the read must NOT be typed `Mixed` (the general
+    // syntactic fallback) — a Mixed-typed load would dereference the raw scalar as a
+    // boxed cell. Mirror the raw-store convention with the historical `Int` view.
     ctx.emit_value(
         Op::LoadGlobal,
         Vec::new(),
         Some(Immediate::GlobalName(data)),
-        super::fallback_expr_type(expr),
+        PhpType::Int,
         Op::LoadGlobal.default_effects(),
         Some(expr.span),
     )
@@ -177,7 +210,8 @@ fn constant_expr_type(kind: &ExprKind) -> PhpType {
         ExprKind::IntLiteral(_) => PhpType::Int,
         ExprKind::FloatLiteral(_) => PhpType::Float,
         ExprKind::StringLiteral(_) => PhpType::Str,
-        ExprKind::BoolLiteral(_) => PhpType::Bool,
+        ExprKind::BoolLiteral(false) => PhpType::False,
+        ExprKind::BoolLiteral(true) => PhpType::Bool,
         ExprKind::Null => PhpType::Void,
         _ => PhpType::Int,
     }

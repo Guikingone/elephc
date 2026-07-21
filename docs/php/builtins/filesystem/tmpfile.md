@@ -1,8 +1,8 @@
 ---
 title: "tmpfile()"
-description: "Lowers `tmpfile()` and boxes the anonymous stream descriptor or PHP false."
+description: "Creates a temporary file."
 sidebar:
-  order: 132
+  order: 153
 ---
 
 ## tmpfile()
@@ -11,11 +11,16 @@ sidebar:
 function tmpfile(): mixed
 ```
 
-Lowers `tmpfile()` and boxes the anonymous stream descriptor or PHP false.
+Creates a temporary file.
 
 **Parameters**: none.
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/tmpfile.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/tmpfile.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,25 +1,29 @@
 ---
 title: "htmlentities()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Converts all applicable characters in a string into their HTML entities."
 sidebar:
-  order: 353
+  order: 379
 ---
 
 ## htmlentities()
 
 ```php
-function htmlentities(string $string, int $flags, string $encoding, bool $double_encode): string
+function htmlentities(string $string, int $flags = 11, string $encoding = 'UTF-8'): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Converts all applicable characters in a string into their HTML entities.
 
 **Parameters**:
 - `$string` (`string`)
-- `$flags` (`int`)
-- `$encoding` (`string`)
-- `$double_encode` (`bool`)
+- `$flags` (`int`), default `11`, optional
+- `$encoding` (`string`), default `'UTF-8'`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/htmlentities.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/htmlentities.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

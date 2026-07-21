@@ -11,7 +11,7 @@
 use std::collections::HashSet;
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::{
     CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind,
 };
@@ -27,7 +27,7 @@ use super::{parse_args, parse_expr};
 /// Consumes a single leading `&` token if present, returning whether one was seen.
 ///
 /// Used to detect the by-reference-return marker in `fn &()` / `function &()`.
-pub(crate) fn consume_optional_ampersand(tokens: &[(Token, Span)], pos: &mut usize) -> bool {
+pub(crate) fn consume_optional_ampersand(tokens: &[SpannedToken], pos: &mut usize) -> bool {
     if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Ampersand)) {
         *pos += 1;
         true
@@ -40,7 +40,7 @@ pub(crate) fn consume_optional_ampersand(tokens: &[(Token, Span)], pos: &mut usi
 /// Consumes the `match` keyword, parenthesized subject expression, and the braced arm list.
 /// Handles comma-separated patterns within a single arm, and an optional `default =>` fallback arm.
 pub(super) fn parse_match_expr(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Expr, CompileError> {
@@ -117,14 +117,17 @@ pub(super) fn parse_match_expr(
 /// Consumes attribute lists (discarded for now), then dispatches to `parse_closure` or `parse_arrow_closure`.
 /// Supports static and non-static variants, and the `static` keyword between attributes and the callable.
 pub(super) fn parse_attributed_closure(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Expr, CompileError> {
     // PHP 8.0 allows `#[Foo] function() {…}`, `#[Foo] fn() => …`, and the
     // static variants. Attributes parse for shape only and are discarded.
     crate::parser::consume_attribute_lists(tokens, pos)?;
-    let span = tokens.get(*pos).map(|(_, s)| *s).unwrap_or(span);
+    let span = tokens
+        .get(*pos)
+        .map(|(_, metadata)| metadata.span)
+        .unwrap_or(span);
     match tokens.get(*pos).map(|(t, _)| t) {
         Some(Token::Function) => parse_closure(tokens, pos, span, false),
         Some(Token::Fn) => parse_arrow_closure(tokens, pos, span, false),
@@ -153,7 +156,7 @@ pub(super) fn parse_attributed_closure(
 /// Consumes the `function` keyword and parameter list, an optional `use ($vars)` capture clause,
 /// an optional `: ReturnType` annotation, and the block body. Sets `is_arrow: false`.
 pub(super) fn parse_closure(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     is_static: bool,
@@ -165,7 +168,8 @@ pub(super) fn parse_closure(
         return Err(CompileError::new(span, "Unexpected token: Function"));
     }
     *pos = after_fn + 1;
-    let (params, variadic, variadic_type) = parse_closure_params(tokens, pos, span)?;
+    let (params, variadic, variadic_by_ref, variadic_type) =
+        parse_closure_params(tokens, pos, span)?;
     let mut captures = Vec::new();
     let mut capture_refs = Vec::new();
     if *pos < tokens.len() && tokens[*pos].0 == Token::Use {
@@ -178,7 +182,7 @@ pub(super) fn parse_closure(
             if !captures.is_empty() {
                 if tokens[*pos].0 != Token::Comma {
                     return Err(CompileError::new(
-                        tokens[*pos].1,
+                        tokens[*pos].1.span,
                         "Expected ',' between captured variables",
                     ));
                 }
@@ -220,6 +224,7 @@ pub(super) fn parse_closure(
         ExprKind::Closure {
             params,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -237,7 +242,7 @@ pub(super) fn parse_closure(
 /// Consumes the `fn` keyword and parameter list, optional `: ReturnType`, then the `=>` and body expression.
 /// Wraps the body expression in a `Return` statement and stores implicit by-value captures.
 pub(super) fn parse_arrow_closure(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     is_static: bool,
@@ -249,7 +254,8 @@ pub(super) fn parse_arrow_closure(
         return Err(CompileError::new(span, "Expected '(' after 'fn'"));
     }
     *pos += 1;
-    let (params, variadic, variadic_type) = parse_closure_params(tokens, pos, span)?;
+    let (params, variadic, variadic_by_ref, variadic_type) =
+        parse_closure_params(tokens, pos, span)?;
     let return_type = parse_optional_closure_return_type(tokens, pos, span)?;
     if *pos >= tokens.len() || tokens[*pos].0 != Token::DoubleArrow {
         return Err(CompileError::new(
@@ -265,6 +271,7 @@ pub(super) fn parse_arrow_closure(
         ExprKind::Closure {
             params,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -343,12 +350,13 @@ fn collect_arrow_expr_captures(
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
         | ExprKind::PtrCast { expr: inner, .. }
         | ExprKind::Cast { expr: inner, .. }
-        | ExprKind::Clone(inner)
+        | ExprKind::ObjectClassName { object: inner }
         | ExprKind::YieldFrom(inner) => collect_arrow_expr_captures(inner, bound, seen, captures),
         ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
             collect_arrow_expr_captures(value, bound, seen, captures);
@@ -465,6 +473,17 @@ fn collect_arrow_expr_captures(
                 collect_arrow_expr_captures(arg, bound, seen, captures);
             }
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            collect_arrow_expr_captures(object, bound, seen, captures);
+            collect_arrow_expr_captures(method, bound, seen, captures);
+            for arg in args {
+                collect_arrow_expr_captures(arg, bound, seen, captures);
+            }
+        }
         ExprKind::FirstClassCallable(CallableTarget::Method { object, .. }) => {
             collect_arrow_expr_captures(object, bound, seen, captures);
         }
@@ -505,7 +524,7 @@ fn collect_arrow_expr_captures(
 /// Parses the optional `: ReturnType` clause after a closure's parameter list.
 /// Returns `Some(TypeExpr)` if a colon is present, otherwise `None`.
 fn parse_optional_closure_return_type(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Option<crate::parser::ast::TypeExpr>, CompileError> {
@@ -521,25 +540,27 @@ fn parse_optional_closure_return_type(
 /// Consumes typed parameters, by-reference `&`, variadic `...`, default values, and PHP 8.0 parameter attributes.
 /// Returns the parameter list and an optional variadic parameter name.
 fn parse_closure_params(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<
     (
         Vec<(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)>,
         Option<String>,
+        bool,
         Option<crate::parser::ast::TypeExpr>,
     ),
     CompileError,
 > {
     let mut params = Vec::new();
     let mut variadic = None;
+    let mut variadic_by_ref = false;
     let mut variadic_type = None;
     while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
         if !params.is_empty() || variadic.is_some() {
             if tokens[*pos].0 != Token::Comma {
                 return Err(CompileError::new(
-                    tokens[*pos].1,
+                    tokens[*pos].1.span,
                     "Expected ',' between parameters",
                 ));
             }
@@ -575,6 +596,7 @@ fn parse_closure_params(
             match tokens.get(*pos).map(|(token, _)| token) {
                 Some(Token::Variable(name)) => {
                     variadic = Some(name.clone());
+                    variadic_by_ref = is_ref;
                     variadic_type = type_ann;
                     *pos += 1;
                 }
@@ -601,18 +623,27 @@ fn parse_closure_params(
         return Err(CompileError::new(span, "Expected ')' after parameters"));
     }
     *pos += 1;
-    Ok((params, variadic, variadic_type))
+    Ok((params, variadic, variadic_by_ref, variadic_type))
 }
 
 /// Parses a named expression that could be a constant reference, function call, buffer_new<T>, ptr_cast<T>, or static/class method access.
 /// Disambiguates based on the token that follows the name: `(` for calls, `<T>` for buffer_new/ptr_cast, `::` for static access.
 /// On `new` after a name, delegates to `parse_new_object`; otherwise returns a `ConstRef` if no suffix matches.
 pub(super) fn parse_named_expr(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Expr, CompileError> {
     let name = parse_name(tokens, pos, span, "Expected name")?;
+    // PHP's legacy `array(...)` construct is an array literal, not a call:
+    // its elements may use `key => value` pairs that call arguments reject.
+    if name.parts.len() == 1
+        && name.parts[0].eq_ignore_ascii_case("array")
+        && *pos < tokens.len()
+        && tokens[*pos].0 == Token::LParen
+    {
+        return super::prefix::parse_legacy_array_literal(tokens, pos, span);
+    }
     if name.parts.len() == 1
         && name.parts[0] == "buffer_new"
         && *pos < tokens.len()
@@ -685,6 +716,7 @@ pub(super) fn parse_named_expr(
             ))
         } else {
             let args = parse_args(tokens, pos, span)?;
+            let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
             Ok(Expr::new(ExprKind::FunctionCall { name, args }, span))
         }
     } else if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleColon {
@@ -711,6 +743,7 @@ pub(super) fn parse_named_expr(
                     // dynamic-dispatch path, exactly like the variable-receiver form `$c::$m()`.
                     *pos += 1; // consume '('
                     let dynamic_args = parse_args(tokens, pos, span)?;
+                    let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                     crate::parser::expr::pratt::reject_named_args_in_dynamic_call(
                         &dynamic_args,
                         span,
@@ -750,19 +783,15 @@ pub(super) fn parse_named_expr(
                     span,
                 ));
             }
-            Some(Token::Identifier(member)) => {
-                let member = member.clone();
-                *pos += 1;
-                member
-            }
-            Some(Token::Match) => {
-                *pos += 1;
-                "MATCH".to_string()
-            }
             // PHP 8 allows semi-reserved keywords as static method / class-constant names
             // (e.g. `Foo::self()`, `Foo::print`); `class` and `$var` are handled above.
-            Some(t) if crate::parser::keyword_name::bareword_name_from_token(t).is_some() => {
-                let member = crate::parser::keyword_name::bareword_name_from_token(t).unwrap();
+            Some(t)
+                if crate::parser::keyword_name::bareword_name_from_token(t, &tokens[*pos].1)
+                    .is_some() =>
+            {
+                let member =
+                    crate::parser::keyword_name::bareword_name_from_token(t, &tokens[*pos].1)
+                        .unwrap();
                 *pos += 1;
                 member
             }
@@ -780,6 +809,7 @@ pub(super) fn parse_named_expr(
                 ))
             } else {
                 let args = parse_args(tokens, pos, span)?;
+                let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                 Ok(Expr::new(
                     ExprKind::StaticMethodCall {
                         receiver: StaticReceiver::Named(name),
@@ -810,7 +840,7 @@ pub(super) fn parse_named_expr(
 /// Consumes the `new` keyword, then handles late-static-binding receivers (`self`/`static`/`parent`) separately from class-name construction.
 /// Returns `NewScopedObject` for the former and `NewObject` for the latter.
 pub(super) fn parse_new_object(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Expr, CompileError> {
@@ -839,13 +869,15 @@ pub(super) fn parse_new_object(
     if let Some(receiver) = scoped_receiver {
         *pos += 1;
         if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
-            return Err(CompileError::new(
+            reject_parenthesis_free_new_postfix(tokens, *pos)?;
+            return Ok(Expr::new(
+                ExprKind::NewScopedObject { receiver, args: Vec::new() },
                 span,
-                "Expected '(' after self/static/parent",
             ));
         }
         *pos += 1;
         let args = parse_args(tokens, pos, span)?;
+        let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
         return Ok(Expr::new(
             ExprKind::NewScopedObject { receiver, args },
             span,
@@ -857,7 +889,7 @@ pub(super) fn parse_new_object(
     // (array offsets and property reads). The resulting class-name expression is resolved
     // through the runtime class table at codegen time.
     if let Some((Token::Variable(name), var_span)) =
-        tokens.get(*pos).map(|(token, s)| (token.clone(), *s))
+        tokens.get(*pos).map(|(token, s)| (token.clone(), s.span))
     {
         *pos += 1;
         let name_expr = parse_new_variable_chain(
@@ -866,13 +898,18 @@ pub(super) fn parse_new_object(
             Expr::new(ExprKind::Variable(name), var_span),
         )?;
         if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
-            return Err(CompileError::new(
+            reject_dynamic_new_class_reference(tokens, *pos)?;
+            return Ok(Expr::new(
+                ExprKind::NewDynamic {
+                    name_expr: Box::new(name_expr),
+                    args: Vec::new(),
+                },
                 span,
-                "Expected '(' after class-name expression in 'new'",
             ));
         }
         *pos += 1;
         let args = parse_args(tokens, pos, span)?;
+        let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
         return Ok(Expr::new(
             ExprKind::NewDynamic {
                 name_expr: Box::new(name_expr),
@@ -886,7 +923,7 @@ pub(super) fn parse_new_object(
     // The inner expression evaluates to a class-string (or object) and is resolved through the
     // same runtime class table as `new $var(args)`.
     if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LParen)) {
-        let paren_span = tokens[*pos].1;
+        let paren_span = tokens[*pos].1.span;
         *pos += 1;
         let name_expr = parse_expr(tokens, pos)?;
         if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
@@ -915,10 +952,12 @@ pub(super) fn parse_new_object(
 
     let class_name = parse_name(tokens, pos, span, "Expected class name after 'new'")?;
     if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
-        return Err(CompileError::new(span, "Expected '(' after class name"));
+        reject_parenthesis_free_new_postfix(tokens, *pos)?;
+        return Ok(Expr::new(ExprKind::NewObject { class_name, args: Vec::new() }, span));
     }
     *pos += 1;
     let args = parse_args(tokens, pos, span)?;
+    let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
     Ok(Expr::new(ExprKind::NewObject { class_name, args }, span))
 }
 
@@ -934,7 +973,7 @@ pub(super) fn parse_new_object(
 /// The result is the class-name expression for a `NewDynamic`. Variable-variable bases
 /// (`$$name`) are intentionally unsupported, matching the rest of the compiler.
 fn parse_new_variable_chain(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     base: Expr,
 ) -> Result<Expr, CompileError> {
@@ -942,7 +981,7 @@ fn parse_new_variable_chain(
     loop {
         match tokens.get(*pos).map(|(token, _)| token) {
             Some(Token::LBracket) => {
-                let bracket_span = tokens[*pos].1;
+                let bracket_span = tokens[*pos].1.span;
                 *pos += 1;
                 let index = parse_expr(tokens, pos)?;
                 if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
@@ -958,7 +997,7 @@ fn parse_new_variable_chain(
                 );
             }
             Some(Token::Arrow) => {
-                let arrow_span = tokens[*pos].1;
+                let arrow_span = tokens[*pos].1.span;
                 *pos += 1;
                 lhs = match parse_object_member(tokens, pos, arrow_span, false)? {
                     ObjectMember::Named(property) => Expr::new(
@@ -981,4 +1020,44 @@ fn parse_new_variable_chain(
         }
     }
     Ok(lhs)
+}
+
+/// Rejects postfix access that would otherwise bind to `new Foo` without constructor parentheses.
+fn reject_parenthesis_free_new_postfix(
+    tokens: &[SpannedToken],
+    pos: usize,
+) -> Result<(), CompileError> {
+    if let Some((token, token_span)) = tokens.get(pos) {
+        if is_new_without_parens_postfix(token) {
+            return Err(CompileError::new(
+                token_span.span,
+                "Parentheses are required before accessing a parenthesis-free new expression",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Rejects unsupported dynamic class-name references before they become object postfix access.
+fn reject_dynamic_new_class_reference(
+    tokens: &[SpannedToken],
+    pos: usize,
+) -> Result<(), CompileError> {
+    if let Some((token, token_span)) = tokens.get(pos) {
+        if is_new_without_parens_postfix(token) {
+            return Err(CompileError::new(
+                token_span.span,
+                "Dynamic class-name expressions after 'new' are not supported",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Returns true for postfix tokens that cannot follow a parenthesis-free `new Foo` in PHP.
+fn is_new_without_parens_postfix(token: &Token) -> bool {
+    matches!(
+        token,
+        Token::Arrow | Token::QuestionArrow | Token::DoubleColon | Token::LBracket
+    )
 }

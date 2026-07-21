@@ -1,8 +1,8 @@
 ---
 title: "array_fill()"
-description: "Lowers `array_fill()` for pointer-sized scalar and refcounted payloads."
+description: "Fill an array with values."
 sidebar:
-  order: 6
+  order: 9
 ---
 
 ## array_fill()
@@ -11,7 +11,7 @@ sidebar:
 function array_fill(int $start_index, int $count, mixed $value): array
 ```
 
-Lowers `array_fill()` for pointer-sized scalar and refcounted payloads.
+Fill an array with values.
 
 **Parameters**:
 - `$start_index` (`int`)
@@ -19,6 +19,11 @@ Lowers `array_fill()` for pointer-sized scalar and refcounted payloads.
 - `$value` (`mixed`)
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_fill.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_fill.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

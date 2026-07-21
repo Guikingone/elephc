@@ -2,17 +2,21 @@
 title: "stream_bucket_prepend() — internals"
 description: "Compiler internals for stream_bucket_prepend(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 325
+  order: 353
 ---
 
 ## `stream_bucket_prepend()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/io/stream_bucket_prepend.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_bucket_prepend.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2062](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2062) (`lower_stream_bucket_append_or_prepend`)
+- **Function symbol**: `lower_stream_bucket_append_or_prepend()`
 
+
+### Lowering notes
+
+- Lowers `stream_bucket_append` and `stream_bucket_prepend` over the `_buckets` array.
 
 ## Runtime helpers
 
@@ -28,7 +32,11 @@ function stream_bucket_prepend(mixed $brigade, mixed $bucket): void
 
 - **Arity**: takes exactly 2 arguments.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_bucket_prepend.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_bucket_prepend.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `stream_bucket_prepend()`](../../../php/builtins/streams/stream_bucket_prepend.md)
-

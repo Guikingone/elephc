@@ -1,8 +1,8 @@
 ---
 title: "stream_wrapper_restore()"
-description: "Lowers `stream_wrapper_restore(protocol)` as a successful no-op."
+description: "Restores a previously unregistered built-in wrapper."
 sidebar:
-  order: 210
+  order: 244
 ---
 
 ## stream_wrapper_restore()
@@ -11,12 +11,17 @@ sidebar:
 function stream_wrapper_restore(string $protocol): bool
 ```
 
-Lowers `stream_wrapper_restore(protocol)` as a successful no-op.
+Restores a previously unregistered built-in wrapper.
 
 **Parameters**:
 - `$protocol` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_wrapper_restore.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_wrapper_restore.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

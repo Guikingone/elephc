@@ -1,27 +1,30 @@
 ---
 title: "fputcsv()"
-description: "Lowers `fputcsv(stream, fields, separator?, enclosure?)` for string arrays."
+description: "Format line as CSV and write to file pointer."
 sidebar:
-  order: 151
+  order: 172
 ---
 
 ## fputcsv()
 
 ```php
-function fputcsv(resource $stream, array $fields, string $separator = ',', string $enclosure = '"', string $escape = '\\', string $eol = '\n'): int
+function fputcsv(resource $stream, array $fields, string $separator = ',', string $enclosure = '"'): int
 ```
 
-Lowers `fputcsv(stream, fields, separator?, enclosure?)` for string arrays.
+Format line as CSV and write to file pointer.
 
 **Parameters**:
 - `$stream` (`resource`)
 - `$fields` (`array`)
 - `$separator` (`string`), default `','`, optional
 - `$enclosure` (`string`), default `'"'`, optional
-- `$escape` (`string`), default `'\\'`, optional
-- `$eol` (`string`), default `'\n'`, optional
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fputcsv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fputcsv.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

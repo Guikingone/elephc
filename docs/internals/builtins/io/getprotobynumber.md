@@ -2,15 +2,15 @@
 title: "getprotobynumber() — internals"
 description: "Compiler internals for getprotobynumber(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 164
+  order: 185
 ---
 
 ## `getprotobynumber()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3246](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3246) (`lower_getprotobynumber`)
+- **Signature**: [`src/builtins/io/getprotobynumber.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/getprotobynumber.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3463](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3463) (`lower_getprotobynumber`)
 - **Function symbol**: `lower_getprotobynumber()`
 
 
@@ -33,7 +33,11 @@ function getprotobynumber(int $protocol): mixed
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/network_env/getprotobynumber.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/getprotobynumber.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `getprotobynumber()`](../../../php/builtins/io/getprotobynumber.md)
-

@@ -1,8 +1,8 @@
 ---
 title: "link()"
-description: "Lowers `link(oldpath, newpath)` through the target-aware libc wrapper."
+description: "Creates a hard link."
 sidebar:
-  order: 114
+  order: 135
 ---
 
 ## link()
@@ -11,13 +11,18 @@ sidebar:
 function link(string $target, string $link): bool
 ```
 
-Lowers `link(oldpath, newpath)` through the target-aware libc wrapper.
+Creates a hard link.
 
 **Parameters**:
 - `$target` (`string`)
 - `$link` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/link.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/link.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

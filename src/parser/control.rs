@@ -9,7 +9,7 @@
 //! - Control parsers must preserve PHP statement nesting and spans for later flow and diagnostic passes.
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::{BinOp, CatchClause, Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::parser::foreach_target::{lower_foreach_binding, parse_foreach_binding, ForeachBinding};
@@ -18,7 +18,7 @@ use crate::span::Span;
 
 /// Parse: if (expr) { stmts } (elseif (expr) { stmts })* (else { stmts })?
 pub fn parse_if(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -65,7 +65,7 @@ pub fn parse_if(
 
 /// Parse: ifdef SYMBOL { stmts } (else { stmts })?
 pub fn parse_ifdef(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -97,7 +97,7 @@ pub fn parse_ifdef(
 
 /// Parse: while (expr) { stmts }
 pub fn parse_while(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -125,7 +125,7 @@ pub fn parse_while(
 /// assignment order). By-ref bindings stay plain-variable-only: `as &$this->v` remains a
 /// loud error until foreach by-ref write-through is implemented.
 pub fn parse_foreach(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -262,7 +262,7 @@ pub fn parse_foreach(
 /// body. The `Foreach` node itself uses the synthetic variable as `value_var`, so every
 /// downstream pass that reads `value_var` continues to work unchanged.
 fn finish_foreach_destructure(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     array: Expr,
@@ -292,7 +292,7 @@ fn finish_foreach_destructure(
 
 /// Parse: do { stmts } while (expr);
 pub fn parse_do_while(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -308,7 +308,7 @@ pub fn parse_do_while(
 
 /// Parse: for (init; condition; update) { stmts }
 pub fn parse_for(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -344,7 +344,7 @@ pub fn parse_for(
 /// Parse: try { stmts } (catch (TypeA|TypeB $e) { stmts })+ (finally { stmts })?
 ///     or: try { stmts } finally { stmts }
 pub fn parse_try(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -437,14 +437,14 @@ pub fn parse_try(
 /// list after each iteration), matching PHP's `for ($i = 0, $j = 10; ...; $i++, $j--)` and
 /// `for (next($paths); ...; next($paths))`.
 fn parse_for_clause_list(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     terminator: &Token,
 ) -> Result<Option<Box<Stmt>>, CompileError> {
     if *pos >= tokens.len() || tokens[*pos].0 == *terminator {
         return Ok(None);
     }
-    let list_span = tokens[*pos].1;
+    let list_span = tokens[*pos].1.span;
     let mut stmts = Vec::new();
     loop {
         stmts.push(parse_for_clause_item(tokens, pos)?);
@@ -470,10 +470,10 @@ fn parse_for_clause_list(
 /// ...) parsed with `parse_expr` and wrapped in an effect-only `ExprStmt`, matching PHP's
 /// arbitrary-expression `for` clauses.
 fn parse_for_clause_item(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<Stmt, CompileError> {
-    let span = tokens[*pos].1;
+    let span = tokens[*pos].1.span;
     if for_clause_fast_path_applies(tokens, *pos) {
         return parse_assign_inline(tokens, pos, span);
     }
@@ -487,7 +487,7 @@ fn parse_for_clause_item(
 /// to the full-expression path), or a `$v` head directly followed by `=`, a compound
 /// assignment, or `??=`. Only these shapes take `parse_assign_inline`, keeping their AST
 /// byte-identical to the pre-expression-list parser.
-fn for_clause_fast_path_applies(tokens: &[(Token, Span)], pos: usize) -> bool {
+fn for_clause_fast_path_applies(tokens: &[SpannedToken], pos: usize) -> bool {
     match tokens.get(pos).map(|(t, _)| t) {
         Some(Token::PlusPlus | Token::MinusMinus) => {
             matches!(tokens.get(pos + 1).map(|(t, _)| t), Some(Token::Variable(_)))
@@ -531,7 +531,7 @@ fn for_clause_item_boundary(token: Option<&Token>) -> bool {
 /// `StmtKind::Assign`. Callers gate entry through `for_clause_fast_path_applies`; other
 /// shapes error loudly here.
 pub fn parse_assign_inline(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -635,7 +635,7 @@ pub fn parse_assign_inline(
 
 /// Parse: switch (expr) { case expr: stmts... case expr: stmts... default: stmts... }
 pub fn parse_switch(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -680,7 +680,7 @@ pub fn parse_switch(
             default = Some(body);
         } else {
             return Err(CompileError::new(
-                tokens[*pos].1,
+                tokens[*pos].1.span,
                 "Expected 'case' or 'default' inside switch",
             ));
         }

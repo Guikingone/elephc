@@ -1,23 +1,27 @@
 ---
 title: "arsort()"
-description: "Lowers `arsort()` for indexed integer arrays through the descending value-sort wrapper."
+description: "Sorts an array in descending order and maintains index association."
 sidebar:
-  order: 32
+  order: 47
 ---
 
 ## arsort()
 
 ```php
-function arsort(array $array, int $flags): bool
+function arsort(array $array): bool
 ```
 
-Lowers `arsort()` for indexed integer arrays through the descending value-sort wrapper.
+Sorts an array in descending order and maintains index association.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
-- `$flags` (`int`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/arsort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/arsort.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

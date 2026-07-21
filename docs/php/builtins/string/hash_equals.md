@@ -1,8 +1,8 @@
 ---
 title: "hash_equals()"
-description: "Lowers `hash_equals(known, user)` through the timing-safe runtime compare helper."
+description: "Compares two strings using a constant-time algorithm."
 sidebar:
-  order: 345
+  order: 372
 ---
 
 ## hash_equals()
@@ -11,13 +11,18 @@ sidebar:
 function hash_equals(string $known_string, string $user_string): bool
 ```
 
-Lowers `hash_equals(known, user)` through the timing-safe runtime compare helper.
+Compares two strings using a constant-time algorithm.
 
 **Parameters**:
 - `$known_string` (`string`)
 - `$user_string` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/hash_equals.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_equals.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

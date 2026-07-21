@@ -2,15 +2,15 @@
 title: "dirname() — internals"
 description: "Compiler internals for dirname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 88
+  order: 109
 ---
 
 ## `dirname()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3932](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3932) (`lower_dirname`)
+- **Signature**: [`src/builtins/io/dirname.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/dirname.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4571](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4571) (`lower_dirname`)
 - **Function symbol**: `lower_dirname()`
 
 
@@ -27,14 +27,18 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function dirname(string $path, int $levels): string
+function dirname(string $path, int $levels = 1): string
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/dirname.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/dirname.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `dirname()`](../../../php/builtins/filesystem/dirname.md)
-

@@ -1,8 +1,8 @@
 ---
 title: "grapheme_strrev()"
-description: "Lowers `grapheme_strrev()` and boxes its `string|false` result as `Mixed`."
+description: "Reverses a string by grapheme cluster, returning false on failure."
 sidebar:
-  order: 337
+  order: 364
 ---
 
 ## grapheme_strrev()
@@ -11,12 +11,17 @@ sidebar:
 function grapheme_strrev(string $string): mixed
 ```
 
-Lowers `grapheme_strrev()` and boxes its `string|false` result as `Mixed`.
+Reverses a string by grapheme cluster, returning false on failure.
 
 **Parameters**:
 - `$string` (`string`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/grapheme_strrev.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/grapheme_strrev.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,24 +1,29 @@
 ---
 title: "touch()"
-description: "Lowers `touch(path, mtime?, atime?)` through the target-aware runtime helper."
+description: "Sets access and modification time of a file."
 sidebar:
-  order: 133
+  order: 154
 ---
 
 ## touch()
 
 ```php
-function touch(string $filename, int $mtime, int $atime): bool
+function touch(string $filename, int $mtime = null, int $atime = null): bool
 ```
 
-Lowers `touch(path, mtime?, atime?)` through the target-aware runtime helper.
+Sets access and modification time of a file.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$mtime` (`int`), optional
-- `$atime` (`int`), optional
+- `$mtime` (`int`), default `null`, optional
+- `$atime` (`int`), default `null`, optional
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/touch.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/touch.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

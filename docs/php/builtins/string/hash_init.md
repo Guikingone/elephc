@@ -1,25 +1,29 @@
 ---
 title: "hash_init()"
-description: "Lowers `hash_init(algo)` and returns a boxed HashContext resource."
+description: "Initialize an incremental hashing context."
 sidebar:
-  order: 348
+  order: 375
 ---
 
 ## hash_init()
 
 ```php
-function hash_init(string $algo, int $flags = 0, string $key = '', array $options = []): mixed
+function hash_init(string $algo, int $flags = 0, string $key = ''): mixed
 ```
 
-Lowers `hash_init(algo)` and returns a boxed HashContext resource.
+Initialize an incremental hashing context.
 
 **Parameters**:
 - `$algo` (`string`)
 - `$flags` (`int`), default `0`, optional
 - `$key` (`string`), default `''`, optional
-- `$options` (`array`), default `[]`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/hash_init.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_init.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

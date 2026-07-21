@@ -1,8 +1,8 @@
 ---
 title: "stream_bucket_make_writeable()"
-description: "Lowers `stream_bucket_make_writeable(brigade)` by popping the brigade head."
+description: "Returns a bucket object from the brigade for use in a stream filter."
 sidebar:
-  order: 172
+  order: 206
 ---
 
 ## stream_bucket_make_writeable()
@@ -11,12 +11,17 @@ sidebar:
 function stream_bucket_make_writeable(mixed $brigade): mixed
 ```
 
-Lowers `stream_bucket_make_writeable(brigade)` by popping the brigade head.
+Returns a bucket object from the brigade for use in a stream filter.
 
 **Parameters**:
 - `$brigade` (`mixed`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_bucket_make_writeable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_bucket_make_writeable.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

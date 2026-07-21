@@ -2,17 +2,21 @@
 title: "class_uses() — internals"
 description: "Compiler internals for class_uses(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 56
+  order: 73
 ---
 
 ## `class_uses()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/callables/class_uses.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/class_uses.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/class_relations.rs`:32](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/class_relations.rs#L32) (`lower_class_relation`)
+- **Function symbol**: `lower_class_relation()`
 
+
+### Lowering notes
+
+- Lowers `class_implements()`, `class_parents()`, and `class_uses()` from static metadata.
 
 ## Runtime helpers
 
@@ -21,14 +25,18 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function class_uses(mixed $object_or_class, bool $autoload): mixed
+function class_uses(mixed $object_or_class, bool $autoload = true): mixed
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/class_uses.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/class_uses.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `class_uses()`](../../../php/builtins/class/class_uses.md)
-

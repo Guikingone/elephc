@@ -42,11 +42,11 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     let (autoload_registry, parsed) = crate::autoload::Registry::build(parent, parsed);
     let ast = crate::resolver::resolve(parsed, parent).expect("resolver failed");
     let ast = crate::autoload::collect_aliases(ast);
-    let ast = crate::pdo_prelude::inject_if_used(ast);
-    let ast = crate::tz_prelude::inject_if_used(ast);
+    let ast = crate::pdo_prelude::inject_if_used(ast, false);
+    let ast = crate::tz_prelude::inject_if_used(ast, false);
     let ast = crate::list_id_prelude::inject_if_used(ast);
     let ast = crate::var_export_prelude::inject_if_used(ast);
-    let ast = crate::image_prelude::inject_if_used(ast);
+    let ast = crate::image_prelude::inject_if_used(ast, false);
     let ast = crate::name_resolver::resolve(ast).expect("name resolution failed");
     let (ast, _autoload_warnings) =
         crate::autoload::run(ast, parent, &autoload_registry).expect("autoload failed");
@@ -56,14 +56,7 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     let ast = crate::optimize::prune_constant_control_flow(ast);
     let ast = crate::optimize::normalize_control_flow(ast);
     let ast = crate::optimize::eliminate_dead_code(ast);
-    crate::ir_lower::lower_program(
-        &ast,
-        &check_result,
-        target,
-        &std::collections::HashMap::new(),
-        &std::collections::HashMap::new(),
-    )
-    .expect("EIR lowering failed")
+    crate::ir_lower::lower_program(&ast, &check_result, target, false).expect("EIR lowering failed")
 }
 
 /// Verifies lowering emits valid EIR for functions, arrays, foreach, and loops.
@@ -111,6 +104,38 @@ echo $counter->value();
         "missing lowered method body: {text}"
     );
     assert!(text.contains("flags(method)"), "missing method flag: {text}");
+}
+
+/// Verifies a native program without Reflection references does not lower the synthetic surface.
+#[test]
+fn plain_program_omits_unreferenced_builtin_reflection_methods() {
+    let module = lower_source("<?php echo 1;");
+    assert!(
+        module
+            .class_methods
+            .iter()
+            .all(|function| !function.name.starts_with("Reflection")),
+        "plain EIR unexpectedly contains builtin Reflection methods"
+    );
+}
+
+/// Verifies a native ReflectionClass use retains its constructor and called method body.
+#[test]
+fn native_reflection_program_lowers_reachable_builtin_methods() {
+    let module = lower_source(
+        r#"<?php
+class Plain {}
+$reflection = new ReflectionClass('Plain');
+echo $reflection->getName();
+"#,
+    );
+    let method_names = module
+        .class_methods
+        .iter()
+        .map(|function| function.name.as_str())
+        .collect::<HashSet<_>>();
+    assert!(method_names.contains("ReflectionClass::__construct"));
+    assert!(method_names.contains("ReflectionClass::getName"));
 }
 
 /// Verifies mixed float/integer comparisons coerce both operands before `fcmp`.

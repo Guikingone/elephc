@@ -1,8 +1,8 @@
 ---
 title: "chmod()"
-description: "Lowers `chmod(path, mode)` through the target-aware runtime helper."
+description: "Changes file mode."
 sidebar:
-  order: 84
+  order: 105
 ---
 
 ## chmod()
@@ -11,13 +11,18 @@ sidebar:
 function chmod(string $filename, int $permissions): bool
 ```
 
-Lowers `chmod(path, mode)` through the target-aware runtime helper.
+Changes file mode.
 
 **Parameters**:
 - `$filename` (`string`)
 - `$permissions` (`int`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/chmod.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/chmod.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

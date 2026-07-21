@@ -2,15 +2,15 @@
 title: "array_pop() — internals"
 description: "Compiler internals for array_pop(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 17
+  order: 27
 ---
 
 ## `array_pop()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1048](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1048) (`lower_array_pop`)
+- **Signature**: [`src/builtins/array/array_pop.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_pop.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1051](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1051) (`lower_array_pop`)
 - **Function symbol**: `lower_array_pop()`
 
 
@@ -35,7 +35,12 @@ function array_pop(array $array): mixed
 - **Arity**: takes exactly 1 argument.
 - **By-reference parameters**: `$array`.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_pop.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_pop.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
+- **By-reference parameters**: `$array`.
+
 ## Cross-references
 
 - [User reference for `array_pop()`](../../../php/builtins/array/array_pop.md)
-

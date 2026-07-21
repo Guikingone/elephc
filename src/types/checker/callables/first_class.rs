@@ -70,6 +70,8 @@ impl Checker {
                 if let Some(sig) = self.extern_functions.get(function_name) {
                     return Ok(FunctionSig {
                         params: sig.params.clone(),
+                        param_type_exprs: vec![None; sig.params.len()],
+                        param_attributes: Vec::new(),
                         defaults: vec![None; sig.params.len()],
                         return_type: sig.return_type.clone(),
                         declared_return: true,
@@ -213,6 +215,8 @@ impl Checker {
                                     declared_params: vec![true],
                                     variadic: Some("args".to_string()),
                                     deprecation: None,
+                                    param_attributes: Vec::new(),
+                                    param_type_exprs: Vec::new(),
                                 });
                             }
                             return Err(CompileError::new(

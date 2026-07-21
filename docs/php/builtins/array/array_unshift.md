@@ -1,8 +1,8 @@
 ---
 title: "array_unshift()"
-description: "Lowers `array_unshift()` by ensuring uniqueness, prepending one scalar value, and returning count."
+description: "Prepends one or more elements to the beginning of an array."
 sidebar:
-  order: 29
+  order: 43
 ---
 
 ## array_unshift()
@@ -11,13 +11,18 @@ sidebar:
 function array_unshift(array $array, ...$values): int
 ```
 
-Lowers `array_unshift()` by ensuring uniqueness, prepending one scalar value, and returning count.
+Prepends one or more elements to the beginning of an array.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
 - `...$values` — variadic: collects excess arguments into `$values`.
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_unshift.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_unshift.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

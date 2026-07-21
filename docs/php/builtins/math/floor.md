@@ -1,8 +1,8 @@
 ---
 title: "floor()"
-description: "Lowers `floor()` for concrete integer-like and floating operands."
+description: "Rounds a number down to the nearest integer."
 sidebar:
-  order: 230
+  order: 264
 ---
 
 ## floor()
@@ -11,12 +11,17 @@ sidebar:
 function floor(float $num): float
 ```
 
-Lowers `floor()` for concrete integer-like and floating operands.
+Rounds a number down to the nearest integer.
 
 **Parameters**:
 - `$num` (`float`)
 
 **Returns**: `float`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/floor.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/floor.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

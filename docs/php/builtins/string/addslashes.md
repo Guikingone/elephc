@@ -1,8 +1,8 @@
 ---
 title: "addslashes()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Adds backslashes before characters that need to be escaped."
 sidebar:
-  order: 325
+  order: 356
 ---
 
 ## addslashes()
@@ -11,12 +11,17 @@ sidebar:
 function addslashes(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Adds backslashes before characters that need to be escaped.
 
 **Parameters**:
 - `$string` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/addslashes.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/addslashes.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

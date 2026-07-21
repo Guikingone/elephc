@@ -1,8 +1,8 @@
 ---
 title: "base64_encode()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Encodes binary data into a Base64 string."
 sidebar:
-  order: 327
+  order: 358
 ---
 
 ## base64_encode()
@@ -11,12 +11,17 @@ sidebar:
 function base64_encode(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Encodes binary data into a Base64 string.
 
 **Parameters**:
 - `$string` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/base64_encode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/base64_encode.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

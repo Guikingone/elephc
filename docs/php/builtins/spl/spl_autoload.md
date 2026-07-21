@@ -1,23 +1,28 @@
 ---
 title: "spl_autoload()"
-description: "Lowers no-op autoload calls by preserving arg effects and returning PHP null if used."
+description: "Default implementation for __autoload()."
 sidebar:
-  order: 310
+  order: 341
 ---
 
 ## spl_autoload()
 
 ```php
-function spl_autoload(string $class, string $file_extensions): void
+function spl_autoload(string $class, string $file_extensions = null): void
 ```
 
-Lowers no-op autoload calls by preserving arg effects and returning PHP null if used.
+Default implementation for __autoload().
 
 **Parameters**:
 - `$class` (`string`)
-- `$file_extensions` (`string`), optional
+- `$file_extensions` (`string`), default `null`, optional
 
 **Returns**: `void`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

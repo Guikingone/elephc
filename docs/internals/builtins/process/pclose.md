@@ -2,15 +2,15 @@
 title: "pclose() — internals"
 description: "Compiler internals for pclose(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 298
+  order: 325
 ---
 
 ## `pclose()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3407](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3407) (`lower_pclose`)
+- **Signature**: [`src/builtins/io/pclose.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/pclose.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3626](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3626) (`lower_pclose`)
 - **Function symbol**: `lower_pclose()`
 
 
@@ -33,7 +33,11 @@ function pclose(resource $handle): int
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/pclose.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/pclose.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `pclose()`](../../../php/builtins/process/pclose.md)
-

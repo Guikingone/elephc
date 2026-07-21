@@ -1,23 +1,28 @@
 ---
 title: "implode()"
-description: "Lowers `implode(glue, array)` by selecting the string or integer array helper."
+description: "Joins array elements into a single string using a separator."
 sidebar:
-  order: 355
+  order: 381
 ---
 
 ## implode()
 
 ```php
-function implode(string $separator, array $array): string
+function implode(string $separator, array $array = null): string
 ```
 
-Lowers `implode(glue, array)` by selecting the string or integer array helper.
+Joins array elements into a single string using a separator.
 
 **Parameters**:
 - `$separator` (`string`)
-- `$array` (`array`), optional
+- `$array` (`array`), default `null`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/implode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/implode.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

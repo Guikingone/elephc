@@ -1,24 +1,29 @@
 ---
 title: "strrpos()"
-description: "Lowers `strpos()`/`strrpos()` and boxes position-or-false results as Mixed."
+description: "Finds the numeric position of the last occurrence of a substring."
 sidebar:
-  order: 392
+  order: 414
 ---
 
 ## strrpos()
 
 ```php
-function strrpos(string $haystack, string $needle, int $value): mixed
+function strrpos(string $haystack, string $needle, int $offset = 0): mixed
 ```
 
-Lowers `strpos()`/`strrpos()` and boxes position-or-false results as Mixed.
+Finds the numeric position of the last occurrence of a substring.
 
 **Parameters**:
 - `$haystack` (`string`)
 - `$needle` (`string`)
-- `$value` (`int`)
+- `$offset` (`int`), default `0`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/strrpos.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strrpos.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

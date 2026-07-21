@@ -1,24 +1,29 @@
 ---
 title: "stream_get_line()"
-description: "Lowers `stream_get_line(stream, length, ending?)`."
+description: "Gets line from stream resource up to a given delimiter."
 sidebar:
-  order: 186
+  order: 220
 ---
 
 ## stream_get_line()
 
 ```php
-function stream_get_line(resource $stream, int $length, string $ending): string
+function stream_get_line(resource $stream, int $length, string $ending = ''): string
 ```
 
-Lowers `stream_get_line(stream, length, ending?)`.
+Gets line from stream resource up to a given delimiter.
 
 **Parameters**:
 - `$stream` (`resource`)
 - `$length` (`int`)
-- `$ending` (`string`), optional
+- `$ending` (`string`), default `''`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_get_line.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_get_line.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,8 @@
 ---
 title: "usleep()"
-description: "Lowers `usleep(microseconds)` through the target's C library symbol."
+description: "Delays execution for a number of microseconds."
 sidebar:
-  order: 301
+  order: 331
 ---
 
 ## usleep()
@@ -11,12 +11,17 @@ sidebar:
 function usleep(int $microseconds): void
 ```
 
-Lowers `usleep(microseconds)` through the target's C library symbol.
+Delays execution for a number of microseconds.
 
 **Parameters**:
 - `$microseconds` (`int`)
 
 **Returns**: `void`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/usleep.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/usleep.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

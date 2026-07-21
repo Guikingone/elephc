@@ -22,6 +22,7 @@ use super::super::Checker;
 /// environment bindings, default value expressions, by-reference flags, and declared-param flags.
 pub(crate) struct ClosureSignatureContext {
     pub params: Vec<(String, PhpType)>,
+    pub param_type_exprs: Vec<Option<TypeExpr>>,
     pub env: TypeEnv,
     pub defaults: Vec<Option<Expr>>,
     pub ref_params: Vec<bool>,
@@ -29,24 +30,6 @@ pub(crate) struct ClosureSignatureContext {
 }
 
 impl Checker {
-    /// Validates captured variables exist in the current environment, then builds a
-    /// `ClosureSignatureContext` by resolving parameter type annotations, default value
-    /// compatibility, and inserting parameter bindings into a cloned environment that
-    /// includes variadic and capture bindings. Returns the context for use in closure
-    /// return type inference.
-    pub(crate) fn prepare_closure_signature_context(
-        &mut self,
-        params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
-        variadic: &Option<String>,
-        captures: &[String],
-        span: Span,
-        env: &TypeEnv,
-    ) -> Result<ClosureSignatureContext, CompileError> {
-        self.prepare_closure_signature_context_with_param_hints(
-            params, variadic, captures, span, env, &[],
-        )
-    }
-
     /// Builds the closure signature/environment, typing unannotated parameters
     /// from `contextual_param_types` when a hint is available at that position.
     ///
@@ -60,6 +43,7 @@ impl Checker {
         &mut self,
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         variadic: &Option<String>,
+        variadic_by_ref: bool,
         captures: &[String],
         span: Span,
         env: &TypeEnv,
@@ -76,6 +60,7 @@ impl Checker {
 
         let mut closure_env = env.clone();
         let mut param_types = Vec::new();
+        let mut param_type_exprs = Vec::new();
         let mut defaults = Vec::new();
         let mut ref_params = Vec::new();
         let mut declared_params = Vec::new();
@@ -88,7 +73,7 @@ impl Checker {
                         span,
                         &format!("Closure parameter ${}", name),
                     )?;
-                    self.validate_declared_default_type(
+                    self.validate_resolved_declared_default_type(
                         &declared_ty,
                         default.as_ref(),
                         span,
@@ -110,6 +95,7 @@ impl Checker {
 
             closure_env.insert(name.clone(), env_ty);
             param_types.push((name.clone(), sig_ty));
+            param_type_exprs.push(type_ann.clone());
             defaults.push(default.clone());
             ref_params.push(*is_ref);
             declared_params.push(type_ann.is_some());
@@ -118,17 +104,62 @@ impl Checker {
         if let Some(name) = variadic {
             closure_env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Int)));
             param_types.push((name.clone(), PhpType::Array(Box::new(PhpType::Mixed))));
+            param_type_exprs.push(None);
             defaults.push(None);
-            ref_params.push(false);
+            ref_params.push(variadic_by_ref);
             declared_params.push(false);
         }
 
         Ok(ClosureSignatureContext {
             params: param_types,
+            param_type_exprs,
             env: closure_env,
             defaults,
             ref_params,
             declared_params,
+        })
+    }
+
+    /// Resolves a closure signature while applying contextual types only to unannotated params.
+    ///
+    /// Array-callback builtins use this after checking the closure body with the same hints so
+    /// invocation validation and return inference observe one consistent parameter environment.
+    pub(crate) fn resolve_closure_signature_with_param_hints(
+        &mut self,
+        params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+        variadic: &Option<String>,
+        variadic_by_ref: bool,
+        return_type: &Option<TypeExpr>,
+        body: &[Stmt],
+        captures: &[String],
+        by_ref_return: bool,
+        span: Span,
+        env: &TypeEnv,
+        param_hints: &[PhpType],
+    ) -> Result<FunctionSig, CompileError> {
+        let closure_sig = self.prepare_closure_signature_context_with_param_hints(
+            params,
+            variadic,
+            variadic_by_ref,
+            captures,
+            span,
+            env,
+            param_hints,
+        )?;
+        let (return_type, declared_return) =
+            self.resolve_closure_return_type(body, return_type, span, &closure_sig.env)?;
+        Ok(FunctionSig {
+            params: closure_sig.params,
+            param_type_exprs: closure_sig.param_type_exprs,
+            param_attributes: Vec::new(),
+            defaults: closure_sig.defaults,
+            return_type,
+            declared_return,
+            by_ref_return,
+            ref_params: closure_sig.ref_params,
+            declared_params: closure_sig.declared_params,
+            variadic: variadic.clone(),
+            deprecation: None,
         })
     }
 
@@ -223,38 +254,27 @@ impl Checker {
             ExprKind::Closure {
                 params,
                 variadic,
+                variadic_by_ref,
                 return_type,
                 body,
                 captures,
                 capture_refs: _,
                 by_ref_return,
                 ..
-            } => {
-                let closure_sig = self.prepare_closure_signature_context(
+            } => self
+                .resolve_closure_signature_with_param_hints(
                     params,
                     variadic,
+                    *variadic_by_ref,
+                    return_type,
+                    body,
                     captures,
+                    *by_ref_return,
                     expr.span,
                     env,
-                )?;
-                let (return_type, declared_return) = self.resolve_closure_return_type(
-                    body,
-                    return_type,
-                    expr.span,
-                    &closure_sig.env,
-                )?;
-                Ok(Some(FunctionSig {
-                    params: closure_sig.params,
-                    defaults: closure_sig.defaults,
-                    return_type,
-                    declared_return,
-                    by_ref_return: *by_ref_return,
-                    ref_params: closure_sig.ref_params,
-                    declared_params: closure_sig.declared_params,
-                    variadic: variadic.clone(),
-                    deprecation: None,
-                }))
-            }
+                    &[],
+                )
+                .map(Some),
             ExprKind::FirstClassCallable(target) => self
                 .resolve_first_class_callable_sig(target, expr.span, env)
                 .map(Some),

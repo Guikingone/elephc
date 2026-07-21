@@ -1,23 +1,27 @@
 ---
 title: "fgets()"
-description: "Lowers `fgets(stream)` through the shared line-read runtime helper."
+description: "Gets line from file pointer."
 sidebar:
-  order: 143
+  order: 164
 ---
 
 ## fgets()
 
 ```php
-function fgets(resource $stream, int $length): mixed
+function fgets(resource $stream): mixed
 ```
 
-Lowers `fgets(stream)` through the shared line-read runtime helper.
+Gets line from file pointer.
 
 **Parameters**:
 - `$stream` (`resource`)
-- `$length` (`int`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fgets.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fgets.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

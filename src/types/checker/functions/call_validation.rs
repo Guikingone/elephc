@@ -116,6 +116,24 @@ fn is_assoc_spread_source(expr: &Expr, env: &TypeEnv) -> bool {
 }
 
 impl Checker {
+    /// Returns true when an argument expression is an l-value supported by by-reference calls.
+    pub(crate) fn is_by_ref_argument_lvalue(
+        &mut self,
+        arg: &Expr,
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        match &arg.kind {
+            ExprKind::Variable(_) => Ok(true),
+            ExprKind::ArrayAccess { array, .. } if matches!(array.kind, ExprKind::Variable(_)) => {
+                Ok(matches!(
+                    self.infer_type(array, env)?.codegen_repr(),
+                    PhpType::Array(_)
+                ))
+            }
+            _ => Ok(false),
+        }
+    }
+
     /// Normalizes arguments for a user-defined function call, allowing unknown named arguments
     /// to be collected into the variadic parameter.
     pub(crate) fn normalize_named_call_args(
@@ -270,20 +288,31 @@ impl Checker {
         if expected == actual {
             return true;
         }
-
         match (expected, actual) {
             (PhpType::Mixed, _) => true,
             (_, PhpType::Never) => true, // never is the bottom type — compatible with any expected type
+            (PhpType::Bool, PhpType::False) => true,
+            // The backend has explicit boxed-Mixed cast funnels for scalar boundaries.
+            // Refcounted/object boundaries do not yet validate the runtime tag, so keep
+            // those statically rejected instead of treating Mixed as universally safe.
+            (PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str, PhpType::Mixed) => true,
             (PhpType::Iterable, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable) => true,
-            (PhpType::Union(members), _) => {
-                members.iter().any(|m| Self::types_compatible(m, actual))
-            }
+            (PhpType::Union(expected_members), PhpType::Union(actual_members)) => actual_members
+                .iter()
+                .all(|actual_member| {
+                    expected_members.iter().any(|expected_member| {
+                        Self::types_compatible(expected_member, actual_member)
+                    })
+                }),
+            (PhpType::Union(members), _) => members
+                .iter()
+                .any(|member| Self::types_compatible(member, actual)),
             (
                 PhpType::AssocArray { key, value },
                 PhpType::Array(_) | PhpType::AssocArray { .. },
             ) if **key == PhpType::Mixed && **value == PhpType::Mixed => true,
-            (PhpType::Float, PhpType::Int | PhpType::Bool | PhpType::Void) => true,
-            (PhpType::Int, PhpType::Bool | PhpType::Void) => true,
+            (PhpType::Float, PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void) => true,
+            (PhpType::Int, PhpType::Bool | PhpType::False | PhpType::Void) => true,
             (PhpType::Bool, PhpType::Int | PhpType::Void) => true,
             (PhpType::Pointer(_), PhpType::Pointer(_) | PhpType::Void) => true,
             (PhpType::Resource(_), PhpType::Resource(_)) => {
@@ -451,7 +480,7 @@ impl Checker {
             }
             if param_idx < regular_param_count {
                 if sig.ref_params.get(param_idx).copied().unwrap_or(false)
-                    && !super::is_by_ref_lvalue(arg)
+                    && !self.is_by_ref_argument_lvalue(arg, caller_env)?
                 {
                     let param_name = sig
                         .params

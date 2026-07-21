@@ -294,9 +294,9 @@ fn visit_expr(expr: &Expr, st: &mut State) {
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Spread(inner)
-        | ExprKind::Clone(inner)
         | ExprKind::Cast { expr: inner, .. }
         | ExprKind::PtrCast { expr: inner, .. } => visit_expr(inner, st),
         ExprKind::NullCoalesce { value, default } => {
@@ -342,6 +342,17 @@ fn visit_expr(expr: &Expr, st: &mut State) {
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             visit_expr(object, st);
+            for a in args {
+                visit_expr(a, st);
+            }
+        }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            visit_expr(object, st);
+            visit_expr(method, st);
             for a in args {
                 visit_expr(a, st);
             }
@@ -392,6 +403,7 @@ fn visit_expr(expr: &Expr, st: &mut State) {
         }
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => visit_expr(object, st),
+        ExprKind::ObjectClassName { object } => visit_expr(object, st),
         ExprKind::DynamicPropertyAccess { object, property }
         | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
             visit_expr(object, st);

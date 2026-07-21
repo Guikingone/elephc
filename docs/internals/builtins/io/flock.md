@@ -2,15 +2,15 @@
 title: "flock() — internals"
 description: "Compiler internals for flock(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 147
+  order: 168
 ---
 
 ## `flock()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3088](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3088) (`lower_flock`)
+- **Signature**: [`src/builtins/io/flock.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/flock.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3305](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3305) (`lower_flock`)
 - **Function symbol**: `lower_flock()`
 
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function flock(resource $stream, int $operation, bool $would_block): bool
+function flock(resource $stream, int $operation, bool $would_block = null): bool
 ```
 
 ## What the type checker enforces
@@ -33,7 +33,12 @@ function flock(resource $stream, int $operation, bool $would_block): bool
 - **Arity**: takes 2–3 arguments (1 optional).
 - **By-reference parameters**: `$would_block`.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/flock.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/flock.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
+- **By-reference parameters**: `$would_block`.
+
 ## Cross-references
 
 - [User reference for `flock()`](../../../php/builtins/io/flock.md)
-

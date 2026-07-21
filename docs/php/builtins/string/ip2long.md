@@ -1,8 +1,8 @@
 ---
 title: "ip2long()"
-description: "Lowers `ip2long(string)` and boxes invalid-address results as PHP false."
+description: "Converts a string containing an IPv4 address into a long integer."
 sidebar:
-  order: 358
+  order: 384
 ---
 
 ## ip2long()
@@ -11,12 +11,17 @@ sidebar:
 function ip2long(string $ip): mixed
 ```
 
-Lowers `ip2long(string)` and boxes invalid-address results as PHP false.
+Converts a string containing an IPv4 address into a long integer.
 
 **Parameters**:
 - `$ip` (`string`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/ip2long.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/ip2long.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

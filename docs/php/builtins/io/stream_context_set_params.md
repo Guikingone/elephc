@@ -1,8 +1,8 @@
 ---
 title: "stream_context_set_params()"
-description: "Lowers `stream_context_set_params(context, params)` as an accepted parameter update."
+description: "Sets parameters on the specified context."
 sidebar:
-  order: 180
+  order: 214
 ---
 
 ## stream_context_set_params()
@@ -11,13 +11,18 @@ sidebar:
 function stream_context_set_params(resource $context, array $params): bool
 ```
 
-Lowers `stream_context_set_params(context, params)` as an accepted parameter update.
+Sets parameters on the specified context.
 
 **Parameters**:
 - `$context` (`resource`)
 - `$params` (`array`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_set_params.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_set_params.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

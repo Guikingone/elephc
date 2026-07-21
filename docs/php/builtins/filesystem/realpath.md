@@ -1,8 +1,8 @@
 ---
 title: "realpath()"
-description: "Lowers `realpath(path)` and boxes the owned runtime string-or-false result."
+description: "Returns canonicalized absolute pathname."
 sidebar:
-  order: 122
+  order: 143
 ---
 
 ## realpath()
@@ -11,12 +11,17 @@ sidebar:
 function realpath(string $path): mixed
 ```
 
-Lowers `realpath(path)` and boxes the owned runtime string-or-false result.
+Returns canonicalized absolute pathname.
 
 **Parameters**:
 - `$path` (`string`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/realpath.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/realpath.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

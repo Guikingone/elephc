@@ -1,8 +1,8 @@
 ---
 title: "is_finite()"
-description: "Lowers `is_finite()` by rejecting NaN and both infinities."
+description: "Checks whether a float is finite."
 sidebar:
-  order: 234
+  order: 268
 ---
 
 ## is_finite()
@@ -11,12 +11,17 @@ sidebar:
 function is_finite(float $num): bool
 ```
 
-Lowers `is_finite()` by rejecting NaN and both infinities.
+Checks whether a float is finite.
 
 **Parameters**:
 - `$num` (`float`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/is_finite.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_finite.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

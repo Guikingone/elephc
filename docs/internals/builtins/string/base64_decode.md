@@ -2,44 +2,42 @@
 title: "base64_decode() — internals"
 description: "Compiler internals for base64_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 329
+  order: 357
 ---
 
 ## `base64_decode()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:93](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L93) (`lower_base64_decode`)
-- **Function symbol**: `lower_base64_decode()`
+- **Signature**: [`src/builtins/string/base64_decode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/base64_decode.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:75](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L75) (`lower_unary_string_runtime`)
+- **Function symbol**: `lower_unary_string_runtime()`
 
 
 ### Lowering notes
 
-- Lowers `base64_decode(string $string, bool $strict = false)`.
-- PHP accepts an optional second `$strict` argument. elephc decodes the same
-- way regardless of `$strict`, so the second operand (already evaluated for its
-- side effects during argument lowering) is ignored here; only the first string
-- operand is materialized into the runtime call's argument registers.
+- Lowers a one-argument string builtin that directly delegates to a runtime helper.
 
 ## Runtime helpers
 
 The following runtime helpers are referenced:
-- `__rt_base64_decode`
-- `__rt_grapheme_strrev`
-- `__rt_strcopy`
+- `__rt_htmlspecialchars`
 
 ## Signature summary
 
 ```php
-function base64_decode(string $string, bool $strict): string
+function base64_decode(string $string): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 1–2 arguments (1 optional).
+- **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/base64_decode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/base64_decode.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 
 - [User reference for `base64_decode()`](../../../php/builtins/string/base64_decode.md)
-

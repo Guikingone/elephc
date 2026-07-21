@@ -1,8 +1,8 @@
 ---
 title: "time()"
-description: "Lowers `time()` through the shared wall-clock runtime helper."
+description: "Returns the current Unix timestamp."
 sidebar:
-  order: 80
+  order: 101
 ---
 
 ## time()
@@ -11,11 +11,16 @@ sidebar:
 function time(): int
 ```
 
-Lowers `time()` through the shared wall-clock runtime helper.
+Returns the current Unix timestamp.
 
 **Parameters**: none.
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/time.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/time.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

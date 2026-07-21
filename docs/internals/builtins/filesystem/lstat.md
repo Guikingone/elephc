@@ -2,15 +2,15 @@
 title: "lstat() — internals"
 description: "Compiler internals for lstat(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 116
+  order: 137
 ---
 
 ## `lstat()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4891](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4891) (`lower_lstat`)
+- **Signature**: [`src/builtins/io/lstat.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/lstat.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5530](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5530) (`lower_lstat`)
 - **Function symbol**: `lower_lstat()`
 
 
@@ -34,7 +34,11 @@ function lstat(string $filename): mixed
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/lstat.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/lstat.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `lstat()`](../../../php/builtins/filesystem/lstat.md)
-

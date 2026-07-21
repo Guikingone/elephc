@@ -1,23 +1,28 @@
 ---
 title: "strtotime()"
-description: "Lowers `strtotime(datetime[, baseTimestamp])` through the shared parser runtime helper."
+description: "Parses an English textual datetime description into a Unix timestamp."
 sidebar:
-  order: 79
+  order: 100
 ---
 
 ## strtotime()
 
 ```php
-function strtotime(string $datetime, int $baseTimestamp): mixed
+function strtotime(string $datetime, int $baseTimestamp = null): mixed
 ```
 
-Lowers `strtotime(datetime[, baseTimestamp])` through the shared parser runtime helper.
+Parses an English textual datetime description into a Unix timestamp.
 
 **Parameters**:
 - `$datetime` (`string`)
-- `$baseTimestamp` (`int`), optional
+- `$baseTimestamp` (`int`), default `null`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/strtotime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/strtotime.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

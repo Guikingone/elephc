@@ -36,11 +36,7 @@ pub(crate) const PHP_RUNTIME_INT_CONSTANTS: &[(&str, i64)] = &[
 pub(crate) const PHP_RUNTIME_PLATFORM_CONSTANTS: &[(&str, i64, i64)] =
     &[("PHP_MAXPATHLEN", 1024, 4096)];
 
-/// The PHP version string reported by `PHP_VERSION`.
-pub(crate) const PHP_VERSION_STR: &str = "8.4.0";
 
-/// The SAPI name reported by `PHP_SAPI` (always CLI for elephc-compiled programs).
-pub(crate) const PHP_SAPI_STR: &str = "cli";
 
 #[cfg(test)]
 mod tests {

@@ -1,8 +1,8 @@
 ---
 title: "is_nan()"
-description: "Lowers `is_nan()` by checking whether the normalized float is unordered with itself."
+description: "Checks whether a float is NAN."
 sidebar:
-  order: 236
+  order: 270
 ---
 
 ## is_nan()
@@ -11,12 +11,17 @@ sidebar:
 function is_nan(float $num): bool
 ```
 
-Lowers `is_nan()` by checking whether the normalized float is unordered with itself.
+Checks whether a float is NAN.
 
 **Parameters**:
 - `$num` (`float`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/is_nan.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_nan.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

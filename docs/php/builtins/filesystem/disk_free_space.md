@@ -1,8 +1,8 @@
 ---
 title: "disk_free_space()"
-description: "Lowers `disk_free_space(path)` through the shared disk-space runtime helper."
+description: "Returns available space on filesystem or disk partition."
 sidebar:
-  order: 89
+  order: 110
 ---
 
 ## disk_free_space()
@@ -11,12 +11,17 @@ sidebar:
 function disk_free_space(string $directory): float
 ```
 
-Lowers `disk_free_space(path)` through the shared disk-space runtime helper.
+Returns available space on filesystem or disk partition.
 
 **Parameters**:
 - `$directory` (`string`)
 
 **Returns**: `float`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/disk_free_space.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/disk_free_space.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

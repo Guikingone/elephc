@@ -1,23 +1,28 @@
 ---
 title: "lchown()"
-description: "Lowers `lchown(path, owner)` for integer UIDs and string user names without following symlinks."
+description: "Changes user ownership of a symlink."
 sidebar:
-  order: 113
+  order: 134
 ---
 
 ## lchown()
 
 ```php
-function lchown(string $filename, int $user): bool
+function lchown(string $filename, string $user): bool
 ```
 
-Lowers `lchown(path, owner)` for integer UIDs and string user names without following symlinks.
+Changes user ownership of a symlink.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$user` (`int`)
+- `$user` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/lchown.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/lchown.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

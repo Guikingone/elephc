@@ -1,8 +1,8 @@
 ---
 title: "strrev()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Reverses a string."
 sidebar:
-  order: 391
+  order: 413
 ---
 
 ## strrev()
@@ -11,12 +11,17 @@ sidebar:
 function strrev(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Reverses a string.
 
 **Parameters**:
 - `$string` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/strrev.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strrev.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

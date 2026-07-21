@@ -1,8 +1,8 @@
 ---
 title: "stream_context_get_params()"
-description: "Lowers `stream_context_get_params(context)` to an empty associative hash."
+description: "Retrieves parameters from the specified stream context."
 sidebar:
-  order: 177
+  order: 211
 ---
 
 ## stream_context_get_params()
@@ -11,12 +11,17 @@ sidebar:
 function stream_context_get_params(resource $context): array
 ```
 
-Lowers `stream_context_get_params(context)` to an empty associative hash.
+Retrieves parameters from the specified stream context.
 
 **Parameters**:
 - `$context` (`resource`)
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_get_params.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_get_params.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

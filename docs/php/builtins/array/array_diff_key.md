@@ -1,8 +1,8 @@
 ---
 title: "array_diff_key()"
-description: "Lowers `array_diff_key()` for two associative arrays by filtering first-operand keys."
+description: "Computes the difference of arrays using keys for comparison."
 sidebar:
-  order: 5
+  order: 8
 ---
 
 ## array_diff_key()
@@ -11,13 +11,18 @@ sidebar:
 function array_diff_key(array $array, ...$arrays): array
 ```
 
-Lowers `array_diff_key()` for two associative arrays by filtering first-operand keys.
+Computes the difference of arrays using keys for comparison.
 
 **Parameters**:
 - `$array` (`array`)
 - `...$arrays` — variadic: collects excess arguments into `$arrays`.
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_diff_key.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_diff_key.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

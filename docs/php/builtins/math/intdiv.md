@@ -1,8 +1,8 @@
 ---
 title: "intdiv()"
-description: "Lowers `intdiv()` for concrete integer-like numeric operands."
+description: "Integer division."
 sidebar:
-  order: 233
+  order: 267
 ---
 
 ## intdiv()
@@ -11,13 +11,18 @@ sidebar:
 function intdiv(int $num1, int $num2): int
 ```
 
-Lowers `intdiv()` for concrete integer-like numeric operands.
+Integer division.
 
 **Parameters**:
 - `$num1` (`int`)
 - `$num2` (`int`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/intdiv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/intdiv.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

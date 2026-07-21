@@ -1,8 +1,8 @@
 ---
 title: "uksort()"
-description: "Lowers `uksort()` through the legacy user-sort helper for static comparators."
+description: "Sorts an array by keys using a user-defined comparison function."
 sidebar:
-  order: 45
+  order: 62
 ---
 
 ## uksort()
@@ -11,13 +11,18 @@ sidebar:
 function uksort(array $array, callable $callback): bool
 ```
 
-Lowers `uksort()` through the legacy user-sort helper for static comparators.
+Sorts an array by keys using a user-defined comparison function.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
 - `$callback` (`callable`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/uksort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/uksort.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

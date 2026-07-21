@@ -1,23 +1,28 @@
 ---
 title: "count()"
-description: "Lowers `count(array)` for concrete array values by reading the runtime length header."
+description: "Counts all elements in an array or Countable object."
 sidebar:
-  order: 34
+  order: 51
 ---
 
 ## count()
 
 ```php
-function count(array $value, int $mode): int
+function count(array $value, int $mode = 0): int
 ```
 
-Lowers `count(array)` for concrete array values by reading the runtime length header.
+Counts all elements in an array or Countable object.
 
 **Parameters**:
 - `$value` (`array`)
-- `$mode` (`int`), optional
+- `$mode` (`int`), default `0`, optional
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/count.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/count.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

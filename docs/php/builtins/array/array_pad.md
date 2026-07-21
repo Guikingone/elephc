@@ -1,8 +1,8 @@
 ---
 title: "array_pad()"
-description: "Lowers `array_pad()` by copying an indexed array and filling missing slots."
+description: "Pads an array to the specified length with a value."
 sidebar:
-  order: 16
+  order: 26
 ---
 
 ## array_pad()
@@ -11,7 +11,7 @@ sidebar:
 function array_pad(array $array, int $length, mixed $value): array
 ```
 
-Lowers `array_pad()` by copying an indexed array and filling missing slots.
+Pads an array to the specified length with a value.
 
 **Parameters**:
 - `$array` (`array`)
@@ -19,6 +19,11 @@ Lowers `array_pad()` by copying an indexed array and filling missing slots.
 - `$value` (`mixed`)
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_pad.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_pad.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

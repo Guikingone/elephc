@@ -1,8 +1,8 @@
 ---
 title: "json_last_error_msg()"
-description: "Lowers `json_last_error_msg()` through the runtime message lookup table."
+description: "Returns the error string of the last json_encode() or json_decode() call."
 sidebar:
-  order: 216
+  order: 250
 ---
 
 ## json_last_error_msg()
@@ -11,11 +11,16 @@ sidebar:
 function json_last_error_msg(): string
 ```
 
-Lowers `json_last_error_msg()` through the runtime message lookup table.
+Returns the error string of the last json_encode() or json_decode() call.
 
 **Parameters**: none.
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/json/json_last_error_msg.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/json/json_last_error_msg.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

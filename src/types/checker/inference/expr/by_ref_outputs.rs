@@ -30,12 +30,19 @@ use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::super::super::Checker;
 
+// Retained for the checker unit tests and pending re-integration after the
+// origin/main merge; not all entry points are reachable from the production
+// checker paths yet.
+#[allow(dead_code)]
 impl Checker {
     /// Returns `(name, type)` pairs for currently-undefined plain `$variable` arguments that a
     /// user function call binds to by-reference parameters, so the caller scope can define them.
     ///
     /// Returns an empty vector for builtins, extern functions, or unknown callees (their
     /// by-reference semantics are handled by dedicated builtin paths or do not apply).
+    // Retained for the checker unit tests and pending re-integration after the
+    // origin/main merge; not reachable from the production checker paths yet.
+    #[allow(dead_code)]
     pub(crate) fn function_call_by_ref_outputs(
         &self,
         name: &Name,
@@ -654,6 +661,9 @@ impl Checker {
 /// skip-if-defined behavior is correct. When it is unclear whether a param is out-only, it is
 /// treated as in-out — the safe default that preserves today's behavior. Matching is
 /// case-insensitive via `php_symbol_key`, consistent with the rest of the checker.
+// Retained for the checker unit tests and pending re-integration after the
+// origin/main merge; not reachable from the production checker paths yet.
+#[allow(dead_code)]
 fn builtin_out_only_ref_param(name: &str, index: usize) -> bool {
     matches!(
         (php_symbol_key(name).as_str(), index),
@@ -672,6 +682,9 @@ fn builtin_out_only_ref_param(name: &str, index: usize) -> bool {
 /// downstream indexing/count reads accept (mirroring the types the previous hardcoded
 /// preg_match/preg_replace/parse_str paths inserted). Unknown builtins or positions default to
 /// `Mixed`, which is compatible with every later use.
+// Retained for the checker unit tests and pending re-integration after the
+// origin/main merge; not reachable from the production checker paths yet.
+#[allow(dead_code)]
 fn builtin_out_param_type(builtin: &str, index: usize) -> PhpType {
     let lower = builtin.to_ascii_lowercase();
     match lower.as_str() {

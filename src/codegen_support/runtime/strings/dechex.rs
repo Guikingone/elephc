@@ -1,0 +1,146 @@
+//! Purpose:
+//! Emits the `__rt_dechex` runtime helper assembly for integer-to-hex-string conversion.
+//! Implements PHP's `dechex()`: converts a 64-bit integer to its lowercase hexadecimal string.
+//!
+//! Called from:
+//! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::strings`.
+//!
+//! Key details:
+//! - AArch64 input: x0=integer; output: x1=ptr, x2=len (written right-to-left into _concat_buf).
+//! - x86_64 input: rax=integer; output: rax=ptr, rdx=len.
+//! - Negative values are interpreted as unsigned 64-bit (matching PHP's behaviour).
+
+use crate::codegen::{abi, emit::Emitter, platform::Arch};
+
+/// Emits the `__rt_dechex` runtime helper for integer-to-hex-string conversion.
+///
+/// Converts the input integer to its lowercase hexadecimal representation, writes
+/// digits right-to-left into a 17-byte scratch area in `_concat_buf`, then returns
+/// a pointer/length pair to the result.
+///
+/// # Input registers
+/// - AArch64: x0 = integer value
+/// - x86_64: rax = integer value
+///
+/// # Output registers
+/// - AArch64: x1 = string pointer, x2 = string length
+/// - x86_64: rax = string pointer, rdx = string length
+pub fn emit_dechex(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_dechex_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: dechex ---");
+    emitter.label_global("__rt_dechex");
+
+    // -- set up stack frame --
+    emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes for frame pointer and link register
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address
+    emitter.instruction("mov x29, sp");                                         // establish new frame pointer
+
+    // -- get concat_buf write position --
+    abi::emit_symbol_address(emitter, "x6", "_concat_off");
+    emitter.instruction("ldr x8, [x6]");                                        // load current offset into concat_buf
+    abi::emit_symbol_address(emitter, "x7", "_concat_buf");
+    emitter.instruction("add x9, x7, x8");                                      // compute write position: buf + offset
+    emitter.instruction("add x9, x9, #16");                                     // advance to end of 17-byte scratch area (digits written right-to-left)
+
+    // -- initialize counters and handle the zero special case --
+    emitter.instruction("mov x10, #0");                                         // digit count = 0
+    emitter.instruction("cbnz x0, __rt_dechex_loop");                           // if value != 0, start digit extraction loop
+    emitter.instruction("mov w11, #48");                                        // ASCII '0'
+    emitter.instruction("strb w11, [x9]");                                      // store '0' at current position
+    emitter.instruction("sub x9, x9, #1");                                      // move write cursor left
+    emitter.instruction("mov x10, #1");                                         // digit count = 1
+    emitter.instruction("b __rt_dechex_done");                                  // skip digit extraction for zero
+
+    // -- extract hex digits right-to-left --
+    emitter.label("__rt_dechex_loop");
+    emitter.instruction("cbz x0, __rt_dechex_done");                            // if quotient is 0, all digits extracted
+    emitter.instruction("and x11, x0, #0xf");                                   // isolate the lowest 4-bit nibble
+    emitter.instruction("cmp x11, #10");                                        // check if nibble is >= 10 (a letter digit)
+    emitter.instruction("b.ge __rt_dechex_letter");                             // yes -> map to 'a'-'f'
+    emitter.instruction("add x11, x11, #48");                                   // map 0-9 to ASCII '0'-'9'
+    emitter.instruction("b __rt_dechex_store");                                 // go store the digit
+    emitter.label("__rt_dechex_letter");
+    emitter.instruction("add x11, x11, #87");                                   // map 10-15 to ASCII 'a'-'f' (10 + 87 = 97 = 'a')
+    emitter.label("__rt_dechex_store");
+    emitter.instruction("strb w11, [x9]");                                      // store the hex digit at current position
+    emitter.instruction("sub x9, x9, #1");                                      // move write cursor left (right-to-left)
+    emitter.instruction("add x10, x10, #1");                                    // increment digit count
+    emitter.instruction("lsr x0, x0, #4");                                      // shift value right by 4 bits for next nibble
+    emitter.instruction("b __rt_dechex_loop");                                  // continue extracting digits
+
+    // -- finalize: update concat_buf offset and return ptr/len --
+    emitter.label("__rt_dechex_done");
+    emitter.instruction("add x8, x8, #17");                                     // advance concat_off by scratch area size
+    emitter.instruction("str x8, [x6]");                                        // store updated offset back to _concat_off
+    emitter.instruction("add x1, x9, #1");                                      // result ptr = one past last written position
+    emitter.instruction("mov x2, x10");                                         // result length = digit count
+
+    // -- restore frame and return --
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // deallocate stack frame
+    emitter.instruction("ret");                                                 // return to caller
+}
+
+/// Emits the x86_64 Linux `__rt_dechex` runtime helper.
+///
+/// Input: rax = integer value. Output: rax = string pointer, rdx = string length.
+fn emit_dechex_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: dechex ---");
+    emitter.label_global("__rt_dechex");
+
+    // -- set up stack frame --
+    emitter.instruction("push rbp");                                            // save the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame pointer
+
+    // -- get concat_buf write position --
+    abi::emit_symbol_address(emitter, "r8", "_concat_off");
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat buffer offset
+    abi::emit_symbol_address(emitter, "r10", "_concat_buf");
+    emitter.instruction("add r10, r9");                                         // compute the current concat buffer write position
+    emitter.instruction("add r10, 16");                                         // advance to end of 17-byte scratch area for right-to-left digit writes
+
+    // -- initialize counter and handle the zero special case --
+    emitter.instruction("xor ecx, ecx");                                        // digit count = 0
+    emitter.instruction("test rax, rax");                                       // check whether the input is zero
+    emitter.instruction("jne __rt_dechex_loop_x86_64");                         // non-zero -> start digit extraction
+    emitter.instruction("mov BYTE PTR [r10], 48");                              // store ASCII '0' into the scratch area
+    emitter.instruction("dec r10");                                             // move the write cursor left
+    emitter.instruction("mov ecx, 1");                                          // digit count = 1 for the zero special case
+    emitter.instruction("jmp __rt_dechex_done_x86_64");                         // skip digit extraction for zero
+
+    // -- extract hex digits right-to-left --
+    emitter.label("__rt_dechex_loop_x86_64");
+    emitter.instruction("test rax, rax");                                       // check whether more digits remain
+    emitter.instruction("je __rt_dechex_done_x86_64");                          // done when value reaches zero
+    emitter.instruction("mov r11, rax");                                        // copy value for nibble extraction
+    emitter.instruction("and r11, 0xf");                                        // isolate the lowest 4-bit nibble
+    emitter.instruction("cmp r11, 10");                                         // check if nibble is >= 10 (a letter digit)
+    emitter.instruction("jl __rt_dechex_num_x86_64");                           // < 10 -> map to '0'-'9'
+    emitter.instruction("add r11, 87");                                         // map 10-15 to ASCII 'a'-'f' (10 + 87 = 97)
+    emitter.instruction("jmp __rt_dechex_store_x86_64");                        // go store the letter digit
+    emitter.label("__rt_dechex_num_x86_64");
+    emitter.instruction("add r11, 48");                                         // map 0-9 to ASCII '0'-'9'
+    emitter.label("__rt_dechex_store_x86_64");
+    emitter.instruction("mov BYTE PTR [r10], r11b");                            // store the hex digit at the current scratch position
+    emitter.instruction("dec r10");                                             // move the write cursor left for the next digit
+    emitter.instruction("inc ecx");                                             // increment the output length
+    emitter.instruction("shr rax, 4");                                          // shift value right by 4 bits for next nibble
+    emitter.instruction("jmp __rt_dechex_loop_x86_64");                         // continue extracting digits
+
+    // -- finalize: update concat_buf offset and return ptr/len --
+    emitter.label("__rt_dechex_done_x86_64");
+    emitter.instruction("add r9, 17");                                          // advance concat_off by scratch area size
+    emitter.instruction("mov QWORD PTR [r8], r9");                              // store the updated concat buffer offset
+    emitter.instruction("lea rax, [r10 + 1]");                                  // return string pointer as one byte past the last decremented position
+    emitter.instruction("mov rdx, rcx");                                        // return string length in rdx
+
+    // -- restore frame and return --
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return to caller with rax=ptr, rdx=len
+}

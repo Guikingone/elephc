@@ -1,8 +1,8 @@
 ---
 title: "filemtime()"
-description: "Lowers `filemtime(path)` through the target-aware runtime stat helper."
+description: "Gets file modification time."
 sidebar:
-  order: 96
+  order: 117
 ---
 
 ## filemtime()
@@ -11,12 +11,17 @@ sidebar:
 function filemtime(string $filename): int
 ```
 
-Lowers `filemtime(path)` through the target-aware runtime stat helper.
+Gets file modification time.
 
 **Parameters**:
 - `$filename` (`string`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/filemtime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/filemtime.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

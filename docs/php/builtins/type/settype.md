@@ -1,8 +1,8 @@
 ---
 title: "settype()"
-description: "Lowers `settype($local, \"type\")` by mutating the resolved local slot and returning true."
+description: "Sets the type of a variable."
 sidebar:
-  order: 430
+  order: 450
 ---
 
 ## settype()
@@ -11,13 +11,18 @@ sidebar:
 function settype(mixed $var, string $type): bool
 ```
 
-Lowers `settype($local, "type")` by mutating the resolved local slot and returning true.
+Sets the type of a variable.
 
 **Parameters**:
 - `$var` (`mixed`), passed by reference
 - `$type` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/settype.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/settype.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

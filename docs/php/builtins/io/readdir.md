@@ -1,8 +1,8 @@
 ---
 title: "readdir()"
-description: "Lowers `readdir(dir_handle)` for libc, glob, and userspace-wrapper handles."
+description: "Read entry from directory handle."
 sidebar:
-  order: 169
+  order: 203
 ---
 
 ## readdir()
@@ -11,12 +11,17 @@ sidebar:
 function readdir(resource $dir_handle): mixed
 ```
 
-Lowers `readdir(dir_handle)` for libc, glob, and userspace-wrapper handles.
+Read entry from directory handle.
 
 **Parameters**:
 - `$dir_handle` (`resource`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/readdir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/readdir.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

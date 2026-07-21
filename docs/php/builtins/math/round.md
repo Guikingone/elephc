@@ -1,23 +1,28 @@
 ---
 title: "round()"
-description: "Lowers `round()` for concrete integer-like and floating operands."
+description: "Rounds a float."
 sidebar:
-  order: 248
+  order: 282
 ---
 
 ## round()
 
 ```php
-function round(float $num, int $precision): float
+function round(float $num, int $precision = 0): float
 ```
 
-Lowers `round()` for concrete integer-like and floating operands.
+Rounds a float.
 
 **Parameters**:
 - `$num` (`float`)
-- `$precision` (`int`), optional
+- `$precision` (`int`), default `0`, optional
 
 **Returns**: `float`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/round.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/round.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

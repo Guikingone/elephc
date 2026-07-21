@@ -1,8 +1,8 @@
 ---
 title: "ucfirst()"
-description: "Lowers `ucfirst()` by copying the string and uppercasing the first ASCII byte."
+description: "Uppercases the first character of a string."
 sidebar:
-  order: 401
+  order: 421
 ---
 
 ## ucfirst()
@@ -11,12 +11,17 @@ sidebar:
 function ucfirst(string $string): string
 ```
 
-Lowers `ucfirst()` by copying the string and uppercasing the first ASCII byte.
+Uppercases the first character of a string.
 
 **Parameters**:
 - `$string` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/ucfirst.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/ucfirst.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

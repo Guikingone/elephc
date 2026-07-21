@@ -1,8 +1,8 @@
 ---
 title: "rand()"
-description: "rand() — math builtin supported by Elephc."
+description: "Generate a random integer."
 sidebar:
-  order: 246
+  order: 280
 ---
 
 ## rand()
@@ -11,13 +11,18 @@ sidebar:
 function rand(int $min, int $max): int
 ```
 
-`rand()` is a math builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Generate a random integer.
 
 **Parameters**:
 - `$min` (`int`)
 - `$max` (`int`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/rand.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/rand.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
@@ -26,4 +31,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `rand` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/rand.md).
 

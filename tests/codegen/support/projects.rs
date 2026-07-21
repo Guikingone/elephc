@@ -10,12 +10,10 @@
 use super::*;
 
 /// Combines checker-required libraries with libraries required by feature-gated runtime helpers.
-fn required_libraries_for_codegen(
-    program: &elephc::parser::ast::Program,
+fn required_libraries_for_runtime_features(
     check_result: &elephc::types::CheckResult,
+    runtime_features: elephc::codegen::RuntimeFeatures,
 ) -> Vec<String> {
-    let runtime_features =
-        elephc::codegen::runtime_features_for_program_and_classes(program, &check_result.classes);
     let mut required_libraries = check_result.required_libraries.clone();
     for lib in elephc::codegen::required_libraries_for_runtime_features(runtime_features) {
         if !required_libraries.contains(&lib) {
@@ -23,6 +21,36 @@ fn required_libraries_for_codegen(
         }
     }
     required_libraries
+}
+
+/// Generates user and runtime assembly for project fixtures through the canonical EIR backend.
+fn generate_project_asm(
+    program: &elephc::parser::ast::Program,
+    check_result: &elephc::types::CheckResult,
+    source_path: &Path,
+    heap_size: usize,
+    gc_stats: bool,
+    heap_debug: bool,
+    requires_elephc_tls: bool,
+) -> (String, String, elephc::codegen::RuntimeFeatures) {
+    let ir_module = lower_and_validate_ir_for_codegen_fixture(program, check_result, source_path);
+    let exported_functions = HashMap::new();
+    let regalloc_linear = !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
+    let user_asm = elephc::codegen::generate_user_asm_from_ir_with_options(
+        &ir_module,
+        gc_stats,
+        heap_debug,
+        requires_elephc_tls,
+        elephc::codegen::Emit::Executable,
+        &exported_functions,
+        regalloc_linear,
+        false,
+    )
+    .expect("EIR backend codegen failed for project fixture");
+    let runtime_features = ir_module.required_runtime_features;
+    let runtime_asm =
+        elephc::codegen::generate_runtime_with_features(heap_size, target(), runtime_features);
+    (user_asm, runtime_asm, runtime_features)
 }
 
 // Creates an isolated temporary directory for CLI tests using a unique prefix,
@@ -153,6 +181,38 @@ pub(crate) fn compile_and_run_expect_failure(source: &str) -> String {
     output
 }
 
+/// Compiles a PHP source string through type checking and returns the expected diagnostic.
+pub(crate) fn compile_expect_type_error(source: &str) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_type_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
+    let ast = elephc::parser::parse(&tokens).expect("parse failed");
+    let synthetic_main = dir.join("test.php");
+    let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
+    let define_set = HashSet::new();
+    let ast = elephc::conditional::apply(ast, &define_set);
+    let (autoload_registry, ast) = elephc::autoload::Registry::build(&dir, ast);
+    elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
+    let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
+    let resolved = elephc::autoload::collect_aliases(resolved);
+    let resolved = elephc::pdo_prelude::inject_if_used(resolved, false);
+    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+    let (resolved, _autoload_warnings) =
+        elephc::autoload::run(resolved, &dir, &autoload_registry).expect("autoload failed");
+    let resolved = elephc::optimize::fold_constants(resolved);
+    let error = match elephc::types::check_with_target(&resolved, target()) {
+        Ok(_) => panic!("source unexpectedly passed type checking"),
+        Err(error) => error.to_string(),
+    };
+
+    let _ = fs::remove_dir_all(&dir);
+    error
+}
+
 // Compiles a multi-file PHP project (using library directly, not CLI) where the
 // main entry point is `main_file`. Writes all files to an isolated temp directory,
 // runs the full pipeline, links, and asserts the binary exits successfully.
@@ -198,33 +258,10 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let resolved = elephc::resolver::hoist_conditional_function_declarations(resolved);
     let resolved = elephc::optimize::fold_constants(resolved);
-    let mut check_result =
+    let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized = elephc::optimize::propagate_constants(resolved);
-    let existence_sets = elephc::optimize::ClassExistenceSets::from_program_and_check_result(
-        &optimized,
-        &check_result,
-    );
-    let optimized = elephc::optimize::fold_class_existence(optimized, &existence_sets);
-    elephc::optimize::fold_class_existence_in_method_bodies(&mut check_result, &existence_sets);
-    let function_existence_set =
-        elephc::optimize::FunctionExistenceSet::from_check_result(&check_result);
-    let optimized = elephc::optimize::fold_function_existence(optimized, &function_existence_set);
-    elephc::optimize::fold_function_existence_in_method_bodies(
-        &mut check_result,
-        &function_existence_set,
-    );
-    // Mirror `pipeline::compile`: coerce literal string-callable arguments at `callable`-typed
-    // parameter positions into their first-class-callable AST equivalent (see
-    // `crate::optimize::callable_coercion`), placed at the same stage as real compilation.
-    let callable_coercion_set = elephc::optimize::CallableCoercionSet::from_check_result(&check_result);
-    let optimized = elephc::optimize::coerce_callable_string_args(optimized, &callable_coercion_set);
-    elephc::optimize::coerce_callable_string_args_in_method_bodies(
-        &mut check_result,
-        &callable_coercion_set,
-    );
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
@@ -232,28 +269,17 @@ pub(crate) fn compile_and_run_files_expect_failure(
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
-    let (user_asm, runtime_asm) = elephc::codegen::generate(
+    let (user_asm, runtime_asm, runtime_features) = generate_project_asm(
         &optimized,
-        &check_result.global_env,
-        &check_result.functions,
-        &check_result.callable_param_sigs,
-        &check_result.callable_return_sigs,
-        &check_result.callable_array_return_sigs,
-        &check_result.interfaces,
-        &check_result.classes,
-        &check_result.enums,
-        &check_result.packed_classes,
-        &check_result.extern_functions,
-        &check_result.extern_classes,
-        &check_result.extern_globals,
+        &check_result,
+        &php_path,
         8_388_608,
         false,
         false,
-        target(),
         requires_elephc_tls,
-        default_null_repr(),
     );
-    let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
+    let required_libraries =
+        required_libraries_for_runtime_features(&check_result, runtime_features);
 
     let elephc_err = assemble_and_run_expect_failure(
         &user_asm,
@@ -303,51 +329,13 @@ pub(crate) fn compile_and_run_files_with_defines(
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
-    // Mirror `pipeline::compile`'s Composer-global-function pre-scan: install the
-    // `autoload.files` global-function fallback set around BOTH the main name-resolution pass
-    // and `autoload::run` (which name-resolves each autoloaded file in isolation), so a
-    // namespaced caller in a PSR-4 fixture can resolve an unqualified call to a
-    // `function_exists`-guarded global declared in a different `autoload.files` bootstrap.
-    let known_composer_globals =
-        elephc::autoload::scan_composer_global_functions(&autoload_registry);
+    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let (resolved, _autoload_warnings) =
-        elephc::name_resolver::with_known_composer_global_functions(known_composer_globals, || {
-            let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-            elephc::autoload::run(resolved, base_dir, &autoload_registry).expect("autoload failed")
-        });
-    let resolved = elephc::resolver::hoist_conditional_function_declarations(resolved);
-    // Mirror `pipeline::compile`: inject the var_export prelude after autoload::run and
-    // the conditional-function hoist so usage inside PSR-4 autoloaded files is detected
-    // and the declaration is present before the type checker collects functions. Other
-    // preludes (pdo/tz/list_id/image) are intentionally not injected here to keep this
-    // path minimal; var_export is the only prelude the autoload fixtures exercise.
-    let resolved = elephc::var_export_prelude::inject_if_used(resolved);
+        elephc::autoload::run(resolved, base_dir, &autoload_registry).expect("autoload failed");
     let resolved = elephc::optimize::fold_constants(resolved);
-    let mut check_result =
+    let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized = elephc::optimize::propagate_constants(resolved);
-    let existence_sets = elephc::optimize::ClassExistenceSets::from_program_and_check_result(
-        &optimized,
-        &check_result,
-    );
-    let optimized = elephc::optimize::fold_class_existence(optimized, &existence_sets);
-    elephc::optimize::fold_class_existence_in_method_bodies(&mut check_result, &existence_sets);
-    let function_existence_set =
-        elephc::optimize::FunctionExistenceSet::from_check_result(&check_result);
-    let optimized = elephc::optimize::fold_function_existence(optimized, &function_existence_set);
-    elephc::optimize::fold_function_existence_in_method_bodies(
-        &mut check_result,
-        &function_existence_set,
-    );
-    // Mirror `pipeline::compile`: coerce literal string-callable arguments at `callable`-typed
-    // parameter positions into their first-class-callable AST equivalent (see
-    // `crate::optimize::callable_coercion`), placed at the same stage as real compilation.
-    let callable_coercion_set = elephc::optimize::CallableCoercionSet::from_check_result(&check_result);
-    let optimized = elephc::optimize::coerce_callable_string_args(optimized, &callable_coercion_set);
-    elephc::optimize::coerce_callable_string_args_in_method_bodies(
-        &mut check_result,
-        &callable_coercion_set,
-    );
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
@@ -355,28 +343,17 @@ pub(crate) fn compile_and_run_files_with_defines(
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
-    let (user_asm, runtime_asm) = elephc::codegen::generate(
+    let (user_asm, runtime_asm, runtime_features) = generate_project_asm(
         &optimized,
-        &check_result.global_env,
-        &check_result.functions,
-        &check_result.callable_param_sigs,
-        &check_result.callable_return_sigs,
-        &check_result.callable_array_return_sigs,
-        &check_result.interfaces,
-        &check_result.classes,
-        &check_result.enums,
-        &check_result.packed_classes,
-        &check_result.extern_functions,
-        &check_result.extern_classes,
-        &check_result.extern_globals,
+        &check_result,
+        &php_path,
         8_388_608,
         false,
         false,
-        target(),
         requires_elephc_tls,
-        default_null_repr(),
     );
-    let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
+    let required_libraries =
+        required_libraries_for_runtime_features(&check_result, runtime_features);
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let elephc_out = assemble_and_run(
@@ -436,7 +413,6 @@ pub(crate) fn compile_files_fails_with_defines(
         let resolved = elephc::resolver::resolve(ast, base_dir)?;
         let resolved = elephc::autoload::collect_aliases(resolved);
         let resolved = elephc::name_resolver::resolve(resolved)?;
-        let resolved = elephc::resolver::hoist_conditional_function_declarations(resolved);
         let resolved = elephc::optimize::fold_constants(resolved);
         elephc::types::check_with_target(&resolved, target())?;
         Ok(())
@@ -465,23 +441,9 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved = elephc::optimize::fold_constants(resolved);
-    let mut check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
+    let check_result =
+        elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized = elephc::optimize::propagate_constants(resolved);
-    let existence_sets = elephc::optimize::ClassExistenceSets::from_program_and_check_result(
-        &optimized,
-        &check_result,
-    );
-    let optimized = elephc::optimize::fold_class_existence(optimized, &existence_sets);
-    elephc::optimize::fold_class_existence_in_method_bodies(&mut check_result, &existence_sets);
-    // Mirror `pipeline::compile`: coerce literal string-callable arguments at `callable`-typed
-    // parameter positions into their first-class-callable AST equivalent (see
-    // `crate::optimize::callable_coercion`), placed at the same stage as real compilation.
-    let callable_coercion_set = elephc::optimize::CallableCoercionSet::from_check_result(&check_result);
-    let optimized = elephc::optimize::coerce_callable_string_args(optimized, &callable_coercion_set);
-    elephc::optimize::coerce_callable_string_args_in_method_bodies(
-        &mut check_result,
-        &callable_coercion_set,
-    );
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
@@ -489,28 +451,17 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
-    let (user_asm, runtime_asm) = elephc::codegen::generate(
+    let (user_asm, runtime_asm, runtime_features) = generate_project_asm(
         &optimized,
-        &check_result.global_env,
-        &check_result.functions,
-        &check_result.callable_param_sigs,
-        &check_result.callable_return_sigs,
-        &check_result.callable_array_return_sigs,
-        &check_result.interfaces,
-        &check_result.classes,
-        &check_result.enums,
-        &check_result.packed_classes,
-        &check_result.extern_functions,
-        &check_result.extern_classes,
-        &check_result.extern_globals,
+        &check_result,
+        &synthetic_main,
         8_388_608,
         false,
         false,
-        target(),
         requires_elephc_tls,
-        default_null_repr(),
     );
-    let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
+    let required_libraries =
+        required_libraries_for_runtime_features(&check_result, runtime_features);
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let asm_path = dir.join("test.s");
@@ -577,6 +528,9 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
 // Compiles a PHP source string, runs the binary, and returns stdout alongside the
 // temp directory path. The directory is preserved after the run so callers can
 // inspect written files (e.g., for file I/O fixture verification).
+//
+// Routes through `compile_source_to_asm_with_options` so it shares the production
+// EIR backend (and the full frontend, including the preludes) with `compile_and_run`.
 /// Provides the Compile and run in dir helper used by the projects module.
 pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
@@ -585,60 +539,8 @@ pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBu
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
-    let ast = elephc::parser::parse(&tokens).expect("parse failed");
-    let synthetic_main = dir.join("test.php");
-    let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
-    let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
-    let resolved = elephc::autoload::collect_aliases(resolved);
-    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let resolved = elephc::optimize::fold_constants(resolved);
-    let mut check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
-    let optimized = elephc::optimize::propagate_constants(resolved);
-    let existence_sets = elephc::optimize::ClassExistenceSets::from_program_and_check_result(
-        &optimized,
-        &check_result,
-    );
-    let optimized = elephc::optimize::fold_class_existence(optimized, &existence_sets);
-    elephc::optimize::fold_class_existence_in_method_bodies(&mut check_result, &existence_sets);
-    // Mirror `pipeline::compile`: coerce literal string-callable arguments at `callable`-typed
-    // parameter positions into their first-class-callable AST equivalent (see
-    // `crate::optimize::callable_coercion`), placed at the same stage as real compilation.
-    let callable_coercion_set = elephc::optimize::CallableCoercionSet::from_check_result(&check_result);
-    let optimized = elephc::optimize::coerce_callable_string_args(optimized, &callable_coercion_set);
-    elephc::optimize::coerce_callable_string_args_in_method_bodies(
-        &mut check_result,
-        &callable_coercion_set,
-    );
-    let optimized = elephc::optimize::prune_constant_control_flow(optimized);
-    let optimized = elephc::optimize::normalize_control_flow(optimized);
-    let optimized = elephc::optimize::eliminate_dead_code(optimized);
-    let requires_elephc_tls = check_result
-        .required_libraries
-        .iter()
-        .any(|lib| lib == "elephc_tls");
-    let (user_asm, runtime_asm) = elephc::codegen::generate(
-        &optimized,
-        &check_result.global_env,
-        &check_result.functions,
-        &check_result.callable_param_sigs,
-        &check_result.callable_return_sigs,
-        &check_result.callable_array_return_sigs,
-        &check_result.interfaces,
-        &check_result.classes,
-        &check_result.enums,
-        &check_result.packed_classes,
-        &check_result.extern_functions,
-        &check_result.extern_classes,
-        &check_result.extern_globals,
-        8_388_608,
-        false,
-        false,
-        target(),
-        requires_elephc_tls,
-        default_null_repr(),
-    );
-    let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let elephc_out = assemble_and_run(

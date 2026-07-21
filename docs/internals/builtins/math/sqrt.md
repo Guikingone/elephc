@@ -2,15 +2,15 @@
 title: "sqrt() — internals"
 description: "Compiler internals for sqrt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 251
+  order: 285
 ---
 
 ## `sqrt()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math.rs`:97](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math.rs#L97) (`lower_sqrt`)
+- **Signature**: [`src/builtins/math/sqrt.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/sqrt.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math.rs`:97](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math.rs#L97) (`lower_sqrt`)
 - **Function symbol**: `lower_sqrt()`
 
 
@@ -32,7 +32,11 @@ function sqrt(float $num): float
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/sqrt.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/sqrt.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `sqrt()`](../../../php/builtins/math/sqrt.md)
-

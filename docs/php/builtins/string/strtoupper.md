@@ -1,8 +1,8 @@
 ---
 title: "strtoupper()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Converts a string to uppercase."
 sidebar:
-  order: 396
+  order: 417
 ---
 
 ## strtoupper()
@@ -11,12 +11,17 @@ sidebar:
 function strtoupper(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Converts a string to uppercase.
 
 **Parameters**:
 - `$string` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/strtoupper.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strtoupper.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

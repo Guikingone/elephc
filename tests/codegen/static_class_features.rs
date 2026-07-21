@@ -75,6 +75,42 @@ fn test_class_class_concat_in_message() {
     assert_eq!(out, "From: Logger");
 }
 
+/// Verifies `$object::class` returns the object's fully-qualified runtime class name.
+#[test]
+fn test_object_class_name_returns_runtime_fqn() {
+    let out = compile_and_run(
+        "<?php namespace App; class Pluto {} $pippo = new Pluto(); echo $pippo::class;",
+    );
+    assert_eq!(out, "App\\Pluto");
+}
+
+/// Verifies `$object::class` reads the concrete subclass even when the expression is typed as its base class.
+#[test]
+fn test_object_class_name_preserves_concrete_subclass() {
+    let out = compile_and_run(
+        "<?php class Base {} class Child extends Base {} function pick(bool $base): Base { return $base ? new Base() : new Child(); } echo pick(false)::class;",
+    );
+    assert_eq!(out, "Child");
+}
+
+/// Verifies `::class` accepts object-only unions and dispatches using the selected runtime object.
+#[test]
+fn test_object_class_name_accepts_object_union() {
+    let out = compile_and_run(
+        "<?php class Left {} class Right {} function pick(bool $left): Left|Right { return $left ? new Left() : new Right(); } echo pick(false)::class;",
+    );
+    assert_eq!(out, "Right");
+}
+
+/// Verifies an object-valued expression before `::class` is evaluated exactly once.
+#[test]
+fn test_object_class_name_evaluates_receiver_once() {
+    let out = compile_and_run(
+        "<?php class Probe {} function make_probe(): Probe { echo 'once|'; return new Probe(); } echo make_probe()::class;",
+    );
+    assert_eq!(out, "once|Probe");
+}
+
 // --- new self() / new static() / new parent() ---
 
 /// Verifies `new self()` inside a static method returns an instance of the lexical (defining) class `Box` and that fields are accessible.
@@ -95,6 +131,15 @@ fn test_new_static_returns_instance_of_called_class() {
     assert_eq!(out, "Child");
 }
 
+/// Verifies a static child override may narrow a parent-class return to `static`.
+#[test]
+fn test_static_override_covariant_self_return() {
+    let out = compile_and_run(
+        "<?php class Base { public static function make(): Base { return new static(); } } class Child extends Base { public static function make(): static { return new static(); } } echo Child::make() instanceof Child ? 'ok' : 'no';",
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Verifies `new parent()` inside a child class returns an instance of the parent class `Base`.
 #[test]
 fn test_new_parent_returns_instance_of_parent_class() {
@@ -102,6 +147,15 @@ fn test_new_parent_returns_instance_of_parent_class() {
         "<?php\nclass Base {\n    public string $tag = \"base\";\n}\nclass Child extends Base {\n    public static function makeBase(): Base { return new parent(); }\n}\n$b = Child::makeBase();\necho $b->tag;\n",
     );
     assert_eq!(out, "base");
+}
+
+/// Verifies `new self`, `new static`, and `new parent` work without constructor parentheses.
+#[test]
+fn test_new_relative_receivers_without_constructor_parentheses() {
+    let out = compile_and_run(
+        "<?php\nclass Base {\n    public function who(): string { return \"base\"; }\n    public static function makeStatic() { return new static; }\n}\nclass Child extends Base {\n    public function who(): string { return \"child\"; }\n    public static function makeSelf() { return new self; }\n    public static function makeParent() { return new parent; }\n}\necho Child::makeSelf()->who(), \"|\", Child::makeStatic()->who(), \"|\", Child::makeParent()->who();\n",
+    );
+    assert_eq!(out, "child|child|base");
 }
 
 /// Verifies `new self()` passes constructor arguments correctly.

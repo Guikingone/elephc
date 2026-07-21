@@ -1,8 +1,8 @@
 ---
 title: "is_object()"
-description: "Lowers `is_object()`: true for statically-known objects, or a boxed Mixed/Union value whose"
+description: "Checks whether a variable is an object."
 sidebar:
-  order: 426
+  order: 446
 ---
 
 ## is_object()
@@ -11,12 +11,17 @@ sidebar:
 function is_object(mixed $value): bool
 ```
 
-Lowers `is_object()`: true for statically-known objects, or a boxed Mixed/Union value whose
+Checks whether a variable is an object.
 
 **Parameters**:
 - `$value` (`mixed`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/is_object.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_object.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

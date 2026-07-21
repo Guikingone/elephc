@@ -2,15 +2,15 @@
 title: "settype() — internals"
 description: "Compiler internals for settype(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 433
+  order: 450
 ---
 
 ## `settype()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/types.rs`:25](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/types.rs#L25) (`lower_settype`)
+- **Signature**: [`src/builtins/types/settype.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/settype.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`:25](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs#L25) (`lower_settype`)
 - **Function symbol**: `lower_settype()`
 
 
@@ -33,7 +33,12 @@ function settype(mixed $var, string $type): bool
 - **Arity**: takes exactly 2 arguments.
 - **By-reference parameters**: `$var`.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/settype.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/settype.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
+- **By-reference parameters**: `$var`.
+
 ## Cross-references
 
 - [User reference for `settype()`](../../../php/builtins/type/settype.md)
-

@@ -1,8 +1,8 @@
 ---
 title: "stream_filter_remove()"
-description: "Lowers `stream_filter_remove(filter)` and clears both direction tables for the fd."
+description: "Removes a filter from a stream."
 sidebar:
-  order: 183
+  order: 217
 ---
 
 ## stream_filter_remove()
@@ -11,12 +11,17 @@ sidebar:
 function stream_filter_remove(resource $stream_filter): bool
 ```
 
-Lowers `stream_filter_remove(filter)` and clears both direction tables for the fd.
+Removes a filter from a stream.
 
 **Parameters**:
 - `$stream_filter` (`resource`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_filter_remove.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_filter_remove.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

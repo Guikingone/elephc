@@ -13,7 +13,6 @@ use std::collections::{HashMap, HashSet};
 use crate::codegen::platform::Platform;
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::date_constants::{DATE_INT_CONSTANTS, DATE_STRING_CONSTANTS};
-use crate::types::error_constants::ERROR_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::php_runtime_constants::{
     PHP_RUNTIME_INT_CONSTANTS, PHP_RUNTIME_PLATFORM_CONSTANTS,
@@ -30,6 +29,9 @@ use crate::types::upload_constants::UPLOAD_ERR_INT_CONSTANTS;
 use crate::types::url_constants::URL_INT_CONSTANTS;
 use crate::types::tokenizer_constants::TOKENIZER_INT_CONSTANTS;
 use crate::types::xml_constants::XML_INT_CONSTANTS;
+use crate::types::ent_constants::ENT_INT_CONSTANTS;
+use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
+use crate::types::session_constants::SESSION_INT_CONSTANTS;
 use crate::types::PhpType;
 
 use super::super::Checker;
@@ -37,9 +39,10 @@ use super::super::Checker;
 impl Checker {
     /// Constructs a new `Checker` with pre-populated builtin constants and empty declaration tables.
     ///
-    /// Initializes the global constant map with PHP built-in constants (`PHP_OS`, pathinfo
-    /// constants, `FNM_*` flags, `STDIN`/`STDOUT`/`STDERR` stream resources, `LOCK_*` constants),
-    /// array constants, JSON integer constants, and preg flag constants. All other tables (function declarations,
+    /// Initializes the global constant map with PHP built-in constants (`PHP_OS`, `SID`, pathinfo
+    /// constants, `ENT_*` HTML-escaping flags, `FNM_*` flags, stream resources, and lock flags),
+    /// array, JSON, stream, date, and preg constants, `PHP_SESSION_*`
+    /// session-status constants, and `E_*` error-level constants. All other tables (function declarations,
     /// classes, interfaces, enums, etc.) are initialized empty.
     ///
     /// # Arguments
@@ -51,11 +54,17 @@ impl Checker {
     pub(super) fn new(target_platform: Platform) -> Self {
         let mut constants = HashMap::new();
         constants.insert("PHP_OS".to_string(), PhpType::Str);
+        // Deprecated session-id constant; elephc is cookie-only so it always
+        // resolves to the empty string (see `codegen::prescan::collect_constants`).
+        constants.insert("SID".to_string(), PhpType::Str);
         constants.insert("PATHINFO_DIRNAME".to_string(), PhpType::Int);
         constants.insert("PATHINFO_BASENAME".to_string(), PhpType::Int);
         constants.insert("PATHINFO_EXTENSION".to_string(), PhpType::Int);
         constants.insert("PATHINFO_FILENAME".to_string(), PhpType::Int);
         constants.insert("PATHINFO_ALL".to_string(), PhpType::Int);
+        for (name, _value) in ENT_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
         constants.insert("FNM_NOESCAPE".to_string(), PhpType::Int);
         constants.insert("FNM_PATHNAME".to_string(), PhpType::Int);
         constants.insert("FNM_PERIOD".to_string(), PhpType::Int);
@@ -82,7 +91,7 @@ impl Checker {
         for (name, _value) in DATE_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
-        for (name, _value) in ERROR_INT_CONSTANTS {
+        for (name, _value) in ERROR_LEVEL_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         for (name, _value) in PHP_RUNTIME_INT_CONSTANTS {
@@ -147,12 +156,37 @@ impl Checker {
         for (name, _value) in DATE_STRING_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Str);
         }
+        for (name, _value) in SESSION_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        // debug_backtrace() option flags (not part of the E_* error-level table).
+        constants.insert("DEBUG_BACKTRACE_IGNORE_ARGS".to_string(), PhpType::Int);
+        constants.insert("DEBUG_BACKTRACE_PROVIDE_OBJECT".to_string(), PhpType::Int);
+        // Lexer-tokenized numeric / math constants — needed so `use const PHP_INT_MAX as X`
+        // aliases resolve through ConstRef rather than only via dedicated lexer tokens.
+        constants.insert("PHP_INT_MAX".to_string(), PhpType::Int);
+        constants.insert("PHP_INT_MIN".to_string(), PhpType::Int);
+        constants.insert("PHP_FLOAT_MAX".to_string(), PhpType::Float);
+        constants.insert("PHP_FLOAT_MIN".to_string(), PhpType::Float);
+        constants.insert("PHP_FLOAT_EPSILON".to_string(), PhpType::Float);
+        constants.insert("INF".to_string(), PhpType::Float);
+        constants.insert("NAN".to_string(), PhpType::Float);
+        constants.insert("M_PI".to_string(), PhpType::Float);
+        constants.insert("M_E".to_string(), PhpType::Float);
+        constants.insert("M_SQRT2".to_string(), PhpType::Float);
+        constants.insert("M_PI_2".to_string(), PhpType::Float);
+        constants.insert("M_PI_4".to_string(), PhpType::Float);
+        constants.insert("M_LOG2E".to_string(), PhpType::Float);
+        constants.insert("M_LOG10E".to_string(), PhpType::Float);
+        constants.insert("PHP_EOL".to_string(), PhpType::Str);
+        constants.insert("DIRECTORY_SEPARATOR".to_string(), PhpType::Str);
 
         Self {
             target_platform,
             fn_decls: HashMap::new(),
             function_variant_groups: HashMap::new(),
             functions: HashMap::new(),
+            resolving_functions: HashSet::new(),
             constants,
             closure_return_types: HashMap::new(),
             callable_sigs: HashMap::new(),
@@ -164,12 +198,16 @@ impl Checker {
             callable_captures: HashMap::new(),
             callable_array_targets: HashMap::new(),
             first_class_callable_targets: HashMap::new(),
+            reflection_class_targets: HashMap::new(),
             interfaces: HashMap::new(),
             classes: HashMap::new(),
             static_return_methods: HashSet::new(),
             declared_classes: HashSet::new(),
             enums: HashMap::new(),
             declared_interfaces: HashSet::new(),
+            declared_traits: HashSet::new(),
+            declared_trait_methods: HashMap::new(),
+            declared_trait_constants: HashMap::new(),
             current_class: None,
             bound_scope_context: None,
             current_method: None,
@@ -189,6 +227,7 @@ impl Checker {
             active_statics: HashSet::new(),
             foreach_key_locals: HashSet::new(),
             declared_typed_locals: HashSet::new(),
+            eval_barrier_active: false,
             break_continue_depth: 0,
             finally_break_continue_bases: Vec::new(),
             warnings: Vec::new(),
@@ -197,6 +236,7 @@ impl Checker {
             reference_property_rebind_targets: HashSet::new(),
             func_args_functions: HashSet::new(),
             compile_time_const_depth: 0,
+            throw_access_sites: HashMap::new(),
         }
     }
 }

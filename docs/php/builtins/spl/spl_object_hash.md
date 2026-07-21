@@ -1,8 +1,8 @@
 ---
 title: "spl_object_hash()"
-description: "Lowers `spl_object_hash(object)` by formatting the loaded object pointer as a string."
+description: "Return hash id for given object."
 sidebar:
-  order: 317
+  order: 348
 ---
 
 ## spl_object_hash()
@@ -11,12 +11,17 @@ sidebar:
 function spl_object_hash(object $object): string
 ```
 
-Lowers `spl_object_hash(object)` by formatting the loaded object pointer as a string.
+Return hash id for given object.
 
 **Parameters**:
 - `$object` (`object`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/spl_object_hash.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/spl_object_hash.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

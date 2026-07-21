@@ -2,15 +2,15 @@
 title: "tempnam() — internals"
 description: "Compiler internals for tempnam(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 131
+  order: 152
 ---
 
 ## `tempnam()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3810](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3810) (`lower_tempnam`)
+- **Signature**: [`src/builtins/io/tempnam.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/tempnam.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4449](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4449) (`lower_tempnam`)
 - **Function symbol**: `lower_tempnam()`
 
 
@@ -35,7 +35,11 @@ function tempnam(string $directory, string $prefix): string
 
 - **Arity**: takes exactly 2 arguments.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/tempnam.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/tempnam.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `tempnam()`](../../../php/builtins/filesystem/tempnam.md)
-

@@ -2,15 +2,15 @@
 title: "opendir() — internals"
 description: "Compiler internals for opendir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 168
+  order: 202
 ---
 
 ## `opendir()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3326](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3326) (`lower_opendir`)
+- **Signature**: [`src/builtins/io/opendir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/opendir.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3543](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3543) (`lower_opendir`)
 - **Function symbol**: `lower_opendir()`
 
 
@@ -35,7 +35,11 @@ function opendir(string $directory): mixed
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/opendir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/opendir.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `opendir()`](../../../php/builtins/io/opendir.md)
-

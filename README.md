@@ -21,11 +21,11 @@
 </p>
 
 <p align="center">
-  <strong>3 native targets &middot; no Zend Engine &middot; zero runtime dependencies &middot; single standalone binary</strong>
+  <strong>3 native targets &middot; no Zend Engine &middot; no external PHP runtime &middot; single standalone binary</strong>
 </p>
 
 <p align="center">
-  A PHP-to-native compiler that takes a subset of PHP and compiles it directly to native assembly, producing standalone binaries for <strong>macOS ARM64</strong>, <strong>Linux ARM64</strong>, and <strong>Linux x86_64</strong>. No opcode fallback, just real machine code.
+  A PHP-to-native compiler that takes a subset of PHP and compiles it directly to native assembly, producing standalone binaries for <strong>macOS ARM64</strong>, <strong>Linux ARM64</strong>, and <strong>Linux x86_64</strong>. Ordinary source is AOT-compiled with no opcode fallback; experimental <code>eval()</code> can embed an optional interpreter bridge when runtime parsing is required.
 </p>
 
 <p align="center">
@@ -41,6 +41,18 @@ elephc is built and maintained independently. You can support the project by eit
 - 🐦 **[Following me on X (@nahime0)](https://x.com/nahime0)** for updates, new features, and behind-the-scenes development.
 - ⭐ **[Starring the repo](https://github.com/illegalstudio/elephc/stargazers)** — it helps others discover it and keeps the project going.
 - 💜 **[Sponsoring on GitHub](https://github.com/sponsors/nahime0)** — every contribution, big or small, makes a real difference.
+
+## Core Contributors
+
+<p>
+  <a href="https://github.com/nahime0"><img src="https://github.com/nahime0.png" width="40" alt="Vincenzo Petrucci"></a>
+  &nbsp;<a href="https://github.com/nahime0"><b>Vincenzo Petrucci</b></a>
+</p>
+
+<p>
+  <a href="https://github.com/Guikingone"><img src="https://github.com/Guikingone.png" width="40" alt="Guillaume Loulier"></a>
+  &nbsp;<a href="https://github.com/Guikingone"><b>Guillaume Loulier</b></a>
+</p>
 
 ## An async HTTP server in PHP
 
@@ -76,6 +88,8 @@ I made the project as modular as possible. Every function has its own codegen fi
 
 You can write PHP using the constructs documented in the [docs](docs/). Classes with single inheritance, interfaces, `instanceof`, nullsafe access (`?->`), abstract classes, final classes, methods and typed/static properties, PHP-style static property redeclarations, constructor property promotion, traits, constructors, instance/static methods, case-insensitive PHP symbol lookup for functions/classes/methods, `self::` / `parent::` / `static::` with late static binding, `readonly` properties and classes, enums, PHP 8 attributes on declarations, named arguments, first-class callables, typed function and method parameters and returns, `try` / `catch` / `finally` / `throw`, visibility modifiers, union and nullable types, copy-on-write arrays, associative arrays with PHP insertion order and integer/numeric-string key normalization, array union with `+`, closures, generator functions and generator closures with `yield` / `yield from`, namespaces, includes, compile-time Composer/SPL autoloading, class/introspection helpers, `PDO` database access (`PDO` / `PDOStatement` / `PDOException`) with SQLite, PostgreSQL, and MySQL/MariaDB drivers, image creation and manipulation (GD raster I/O, drawing, transforms/filters, Exif/IPTC metadata, and the `Imagick`/`Gmagick`/Cairo object APIs) on a pure-Rust codec/raster bridge, and PHP 8.1-style `Fiber` coroutines on macOS ARM64, Linux ARM64, and Linux x86_64.
 
+Experimental [`eval()` support](docs/php/eval.md) AOT-lowers eligible literal fragments and falls back to the optional, statically linked Magician interpreter for dynamic fragments. Runnable examples live in [`examples/eval/`](examples/eval/) and [`examples/eval-globals/`](examples/eval-globals/).
+
 For performance-oriented code, elephc exposes compiler extensions beyond standard PHP — see the Why section above.
 
 Then compile and run:
@@ -97,13 +111,13 @@ elephc is designed to be read. The code generation and runtime layers are heavil
 
 There are several ways to make PHP easier to distribute or faster to run: bundling a PHP runtime into one executable, encrypting bytecode, running through the Zend VM with JIT, or compiling selected hot paths while falling back to opcodes for dynamic code.
 
-elephc takes a narrower but cleaner route: it is a from-scratch compiler for a static subset of PHP. It parses PHP source, type-checks it, lowers it to target-specific assembly, assembles and links it into a native executable, and ships only the small runtime routines needed by the generated program. If elephc compiles a construct, that construct is native code rather than interpreted PHP.
+elephc takes a narrower but cleaner route: it is a from-scratch compiler for a static subset of PHP. It parses PHP source, type-checks it, lowers it to target-specific assembly, assembles and links it into a native executable, and ships only the small runtime routines needed by the generated program. Ordinary supported constructs are native code. Eligible literal `eval()` fragments can also be lowered ahead of time; fragments that require runtime parsing use the optional Magician interpreter bridge.
 
 That tradeoff is intentional:
 
-- **Less legacy compatibility** than a VM-backed PHP implementation.
+- **Less long-tail compatibility** than a VM-backed PHP implementation.
 - **More mechanical transparency**: readable assembly output, source maps, line-by-line commented codegen, and a documented memory model.
-- **No hidden runtime dependency**: the generated binary does not need PHP, the Zend Engine, a loader extension, or an embedded interpreter.
+- **No hidden external PHP runtime dependency**: the generated binary does not need PHP, the Zend Engine, or a loader extension. A program that needs dynamic `eval()` embeds its optional interpreter bridge directly in the standalone binary.
 - **Native-oriented extensions**: `extern`, `ptr`, `buffer<T>`, and `packed class` let PHP-shaped code cross into systems, FFI, game, and performance-sensitive workloads.
 
 That does not mean elephc has to live outside the existing PHP ecosystem. The current CLI path produces standalone executables, but the roadmap also includes shared/static library output and an experimental PHP extension bridge. That opens a practical middle path: keep a framework such as WordPress, Laravel, or Symfony running on PHP, then compile static, performance-sensitive modules into native libraries or PHP extensions.
@@ -145,11 +159,8 @@ xattr -cr elephc
 
 ## Usage
 
-> **Important:** Starting with v0.23.10, elephc uses the new EIR backend by default.
-> The legacy AST backend is frozen: it will not receive new language or runtime
-> features, and it is scheduled for complete removal in v0.26.0. If you need to
-> compare behavior with the old backend during the transition, compile with
-> `--ast-backend`.
+> **Important:** elephc lowers every build through the EIR pipeline and the
+> target-aware assembly emitter.
 
 ```bash
 # Compile a PHP file to a native binary
@@ -168,6 +179,9 @@ elephc --gc-stats heavy.php
 # Enable compile-time feature branches
 elephc --define DEBUG app.php
 
+# Accept only PHP-compatible constructs (reject every elephc extension)
+elephc --strict-php app.php
+
 # Print per-phase compiler timings
 elephc --timings hello.php
 
@@ -185,6 +199,11 @@ elephc --no-ir-opt hot.php
 
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
+
+# Force-enable a bridge crate (pdo, tls, crypto, phar, tz, image, eval, web) regardless of auto-detection
+elephc app.php --with-pdo --with-crypto
+# --with-eval force-links Magician; normal eval use is detected automatically
+elephc app.php --with-eval
 
 # Explicit target selection
 # Supported targets today: macos-aarch64, linux-aarch64, linux-x86_64
@@ -320,26 +339,26 @@ The full list of supported constructs, operators, and control structures is in t
 
 </details>
 
-### Built-in functions (380+)
+### Built-in functions (420+)
 
-Over 380 PHP built-ins are implemented natively, grouped here by category — strings, arrays, math, I/O, streams/sockets, system, and more.
+Over 420 PHP built-ins are implemented natively, grouped here by category — strings, arrays, math, I/O, streams/sockets, system, and more.
 
 <details>
 <summary>Show all built-in functions by category</summary>
 
 **Strings:** `strlen`, `substr`, `strpos`, `strrpos`, `strstr`, `str_replace`, `str_ireplace`, `substr_replace`, `strtolower`, `strtoupper`, `ucfirst`, `lcfirst`, `ucwords`, `trim`, `ltrim`, `rtrim`, `str_repeat`, `str_pad`, `strrev`, `chop`, `grapheme_strrev`, `str_split`, `strcmp`, `strcasecmp`, `str_contains`, `str_starts_with`, `str_ends_with`, `ord`, `chr`, `explode`, `implode`, `sprintf`, `printf`, `vprintf`, `vsprintf`, `sscanf`, `md5`, `sha1`, `hash`, `hash_algos`, `hash_equals`, `hash_hmac`, `hash_init`, `hash_update`, `hash_final`, `hash_copy`, `crc32`, `number_format`, `addslashes`, `stripslashes`, `nl2br`, `wordwrap`, `bin2hex`, `hex2bin`, `htmlspecialchars`, `htmlentities`, `html_entity_decode`, `urlencode`, `urldecode`, `rawurlencode`, `rawurldecode`, `base64_encode`, `base64_decode`, `gzcompress`, `gzdeflate`, `gzinflate`, `gzuncompress`, `ip2long`, `long2ip`, `inet_ntop`, `inet_pton`, `ctype_alpha`, `ctype_digit`, `ctype_alnum`, `ctype_space`
 
-**Arrays:** `count`, `array_push`, `array_pop`, `in_array`, `array_keys`, `array_values`, `sort`, `rsort`, `isset`, `array_key_exists`, `array_search`, `array_merge`, `array_slice`, `array_splice`, `array_combine`, `array_flip`, `array_reverse`, `array_unique`, `array_sum`, `array_product`, `array_chunk`, `array_pad`, `array_fill`, `array_fill_keys`, `array_diff`, `array_intersect`, `array_diff_key`, `array_intersect_key`, `array_unshift`, `array_shift`, `asort`, `arsort`, `ksort`, `krsort`, `natsort`, `natcasesort`, `shuffle`, `array_rand`, `array_column`, `range`, `array_map`, `array_filter`, `array_reduce`, `array_walk`, `usort`, `uksort`, `uasort`, `call_user_func`, `call_user_func_array`, `function_exists`
+**Arrays:** `count`, `array_push`, `array_pop`, `in_array`, `array_keys`, `array_values`, `sort`, `rsort`, `isset`, `array_key_exists`, `array_search`, `array_merge`, `array_slice`, `array_splice`, `array_combine`, `array_flip`, `array_reverse`, `array_unique`, `array_sum`, `array_product`, `array_chunk`, `array_pad`, `array_fill`, `array_fill_keys`, `array_diff`, `array_intersect`, `array_diff_key`, `array_intersect_key`, `array_unshift`, `array_shift`, `asort`, `arsort`, `ksort`, `krsort`, `natsort`, `natcasesort`, `shuffle`, `array_rand`, `array_column`, `range`, `array_map`, `array_filter`, `array_reduce`, `array_walk`, `array_walk_recursive`, `array_is_list`, `array_key_first`, `array_key_last`, `array_replace`, `array_replace_recursive`, `array_merge_recursive`, `array_diff_assoc`, `array_intersect_assoc`, `array_udiff`, `array_uintersect`, `array_find`, `array_any`, `array_all`, `array_multisort`, `usort`, `uksort`, `uasort`, `call_user_func`, `call_user_func_array`, `function_exists`
 
 **Math:** `abs`, `floor`, `ceil`, `round`, `sqrt`, `pow`, `min`, `max`, `clamp`, `intdiv`, `fmod`, `fdiv`, `rand`, `mt_rand`, `random_int`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `log`, `log2`, `log10`, `exp`, `hypot`, `deg2rad`, `rad2deg`, `pi`
 
-**Types and class introspection:** `gettype`, `settype`, `empty`, `unset`, `is_int`, `is_float`, `is_string`, `is_bool`, `is_null`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`, `is_iterable`, `is_callable`, `is_resource`, `boolval`, `floatval`, `intval`, `get_resource_type`, `get_resource_id`, `class_exists`, `interface_exists`, `trait_exists`, `enum_exists`, `class_alias`, `get_class`, `get_parent_class`, `get_declared_classes`, `get_declared_interfaces`, `get_declared_traits`, `is_a`, `is_subclass_of`, `class_implements`, `class_parents`, `class_uses`
+**Types and class introspection:** `gettype`, `settype`, `empty`, `unset`, `is_int`, `is_float`, `is_string`, `is_bool`, `is_null`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`, `is_iterable`, `is_callable`, `is_resource`, `is_array`, `is_object`, `is_scalar`, `boolval`, `floatval`, `intval`, `get_resource_type`, `get_resource_id`, `class_exists`, `interface_exists`, `trait_exists`, `enum_exists`, `class_alias`, `get_class`, `get_parent_class`, `get_declared_classes`, `get_declared_interfaces`, `get_declared_traits`, `is_a`, `is_subclass_of`, `class_implements`, `class_parents`, `class_uses`
 
-**I/O:** `fopen`, `fclose`, `fread`, `fwrite`, `fprintf`, `vfprintf`, `fscanf`, `fgets`, `fgetc`, `fpassthru`, `flock`, `tmpfile`, `readfile`, `feof`, `readline`, `fseek`, `ftell`, `rewind`, `file_get_contents`, `file_put_contents`, `file`, `hash_file`, `fgetcsv`, `fputcsv`, `file_exists`, `is_file`, `is_dir`, `is_readable`, `is_writable`, `is_writeable`, `is_executable`, `is_link`, `symlink`, `link`, `readlink`, `linkinfo`, `filesize`, `filemtime`, `fileatime`, `filectime`, `fileperms`, `fileowner`, `filegroup`, `fileinode`, `filetype`, `stat`, `lstat`, `fstat`, `clearstatcache`, `disk_free_space`, `disk_total_space`, `basename`, `dirname`, `pathinfo`, `realpath`, `fnmatch`, `touch`, `chmod`, `chown`, `chgrp`, `lchown`, `lchgrp`, `umask`, `ftruncate`, `fflush`, `fsync`, `fdatasync`, `copy`, `rename`, `unlink`, `mkdir`, `rmdir`, `opendir`, `readdir`, `rewinddir`, `closedir`, `scandir`, `glob`, `getcwd`, `chdir`, `tempnam`, `sys_get_temp_dir`, `var_dump`, `print_r`
+**I/O:** `fopen`, `fclose`, `fread`, `fwrite`, `fprintf`, `vfprintf`, `fscanf`, `fgets`, `fgetc`, `fpassthru`, `flock`, `tmpfile`, `readfile`, `feof`, `readline`, `fseek`, `ftell`, `rewind`, `file_get_contents`, `file_put_contents`, `file`, `hash_file`, `fgetcsv`, `fputcsv`, `file_exists`, `is_file`, `is_dir`, `is_readable`, `is_writable`, `is_writeable`, `is_executable`, `is_link`, `symlink`, `link`, `readlink`, `linkinfo`, `filesize`, `filemtime`, `fileatime`, `filectime`, `fileperms`, `fileowner`, `filegroup`, `fileinode`, `filetype`, `stat`, `lstat`, `fstat`, `clearstatcache`, `disk_free_space`, `disk_total_space`, `basename`, `dirname`, `pathinfo`, `realpath`, `realpath_cache_get`, `realpath_cache_size`, `fnmatch`, `touch`, `chmod`, `chown`, `chgrp`, `lchown`, `lchgrp`, `umask`, `ftruncate`, `fflush`, `fsync`, `fdatasync`, `copy`, `rename`, `unlink`, `mkdir`, `rmdir`, `opendir`, `readdir`, `rewinddir`, `closedir`, `scandir`, `glob`, `getcwd`, `chdir`, `tempnam`, `sys_get_temp_dir`, `var_dump`, `print_r`
 
 **Streams and sockets:** `stream_isatty`, `stream_is_local`, `stream_supports_lock`, `stream_get_wrappers`, `stream_get_transports`, `stream_get_filters`, `stream_context_create`, `stream_context_get_default`, `stream_context_set_default`, `stream_context_set_option`, `stream_context_set_params`, `stream_context_get_options`, `stream_context_get_params`, `stream_resolve_include_path`, `stream_get_contents`, `stream_copy_to_stream`, `stream_get_line`, `stream_get_meta_data`, `stream_set_chunk_size`, `stream_set_read_buffer`, `stream_set_write_buffer`, `stream_set_blocking`, `stream_set_timeout`, `stream_select`, `stream_filter_register`, `stream_filter_append`, `stream_filter_prepend`, `stream_filter_remove`, `stream_bucket_new`, `stream_bucket_make_writeable`, `stream_bucket_append`, `stream_bucket_prepend`, `stream_wrapper_register`, `stream_wrapper_unregister`, `stream_wrapper_restore`, `stream_socket_server`, `stream_socket_client`, `stream_socket_accept`, `stream_socket_enable_crypto`, `stream_socket_shutdown`, `stream_socket_sendto`, `stream_socket_recvfrom`, `stream_socket_get_name`, `stream_socket_pair`, `fsockopen`, `pfsockopen`, `popen`, `pclose`, `gethostname`, `gethostbyname`, `gethostbyaddr`, `getprotobyname`, `getprotobynumber`, `getservbyname`, `getservbyport`
 
-**System:** `exit`, `die`, `time`, `microtime`, `hrtime`, `date`, `gmdate`, `mktime`, `gmmktime`, `checkdate`, `getdate`, `localtime`, `strtotime`, `date_default_timezone_get`, `date_default_timezone_set`, `sleep`, `usleep`, `getenv`, `putenv`, `php_uname`, `phpversion`, `exec`, `shell_exec`, `system`, `passthru`, `json_encode`, `json_decode`, `json_last_error`, `json_last_error_msg`, `json_validate`, `preg_match`, `preg_match_all`, `preg_replace_callback`, `preg_replace`, `preg_split`, `define`, `defined`, `class_attribute_names`, `class_attribute_args`, `class_get_attributes`
+**System:** `exit`, `die`, `time`, `microtime`, `hrtime`, `date`, `gmdate`, `mktime`, `gmmktime`, `checkdate`, `getdate`, `localtime`, `strtotime`, `date_default_timezone_get`, `date_default_timezone_set`, `sleep`, `usleep`, `getenv`, `putenv`, `php_uname`, `phpversion`, `exec`, `shell_exec`, `system`, `passthru`, `json_encode`, `json_decode`, `json_last_error`, `json_last_error_msg`, `json_validate`, `preg_match`, `preg_match_all`, `preg_replace_callback`, `preg_replace`, `preg_split`, `define`, `defined`, `class_attribute_names`, `class_attribute_args`, `class_get_attributes`, `serialize`, `unserialize`, `header`, `http_response_code`
 
 **SPL/autoload:** `spl_autoload_register`, `spl_autoload_unregister`, `spl_autoload_functions`, `spl_autoload_extensions`, `spl_autoload_call`, `spl_autoload`, `spl_classes`, `spl_object_id`, `spl_object_hash`, `iterator_to_array`, `iterator_count`, `iterator_apply`
 
@@ -449,6 +468,7 @@ src/
 ├── magic_constants/     # File/scope/trait magic-constant walkers
 ├── autoload/            # Composer/SPL AOT autoload indexing and file insertion
 ├── resolver/            # Include/require resolution, declaration discovery, once guards
+├── eval_aot.rs          # Compile-time planning for literal eval AOT vs bridge fallback
 ├── runtime_cache.rs     # Preassembled runtime object cache
 ├── source_map.rs        # Assembly/source-map sidecar emission
 ├── termination.rs       # Structured terminal-effect analysis
@@ -509,21 +529,18 @@ src/
 │
 ├── ir/                  # EIR data model, builder, validator, and printer
 ├── ir_lower/            # Active AST → EIR lowering
-├── codegen_ir/          # Active EIR → target assembly backend
-├── codegen/             # Frozen legacy AST backend plus shared ABI/runtime/target helpers
-│   ├── mod.rs           # Pipeline entry, main/global codegen orchestration
-│   ├── driver_support.rs # Pipeline glue and orchestration helpers
-│   ├── prescan.rs       # Pre-pass collecting program-wide codegen metadata
-│   ├── program_usage.rs # Usage analysis feeding metadata emission
+├── codegen/             # Active EIR → target assembly backend
+├── codegen_support/     # Shared ABI/runtime/target helpers used by codegen
+│   ├── mod.rs           # Shared metadata registries and support re-exports
+│   ├── driver_support.rs # Runtime object, deferred callable, boxing, and hash-key helpers
+│   ├── prescan.rs       # Constant pre-scan feeding EIR lowering
+│   ├── program_usage.rs # Required-class usage analysis feeding metadata emission
 │   ├── expr.rs          # Expression codegen dispatcher
 │   ├── expr/            # Focused expression helpers (arrays, calls, objects, binops, ...)
 │   ├── stmt.rs          # Statement codegen dispatcher
 │   ├── stmt/            # Focused statement helpers (arrays, control_flow, io, storage, ...)
 │   ├── abi/             # Target-aware calling-convention, frame, and value helpers
-│   ├── functions/       # User function emission, wrappers, and epilogue cleanup
-│   ├── main_emission.rs # Top-level program emission
-│   ├── class_methods.rs # Class/static method emission orchestration
-│   ├── function_variants.rs # Include-loaded function dispatchers
+│   ├── functions/       # Closure/FCC wrapper emission and epilogue cleanup
 │   ├── interface_wrappers.rs # Interface dispatch return-shape adapters
 │   ├── callables.rs     # Top-level callable metadata and indirect-call helpers
 │   ├── ffi.rs           # Extern function/global/class codegen
@@ -558,6 +575,9 @@ src/
 │       └── generators/  # Generator frame layout and __rt_gen_* helpers
 │
 └── errors/              # Error formatting with line:col
+
+crates/
+└── elephc-magician/     # Optional EvalIR interpreter staticlib for dynamic eval
 ```
 
 </details>
@@ -579,7 +599,7 @@ ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 
 The **[docs/](docs/)** directory is a complete wiki covering every aspect of the compiler. Inside you'll find:
 
-- **PHP syntax reference** — types, operators, control structures, functions, classes, namespaces, and all 380+ built-in functions with signatures and examples
+- **PHP syntax reference** — types, operators, control structures, functions, classes, namespaces, and all 420+ built-in functions with signatures and examples
 - **Compiler extensions** — pointers, `buffer<T>`, `packed class`, FFI with `extern`, and conditional compilation with `ifdef` — the features that take PHP beyond the web
 - **Compiler internals** — a step-by-step walkthrough of the full pipeline, from lexing to Pratt parsing to type checking to code generation and runtime structure
 - **ARM64 primer** — an introduction to ARM64 assembly for people who've never seen it, plus a quick reference of the ARM64 instruction set used by elephc's AArch64 backend
@@ -598,3 +618,13 @@ MIT
 [![Nuno Maduro: PHP Is Getting a Compiler?](https://img.youtube.com/vi/x06307Ui3uY/maxresdefault.jpg)](https://www.youtube.com/watch?v=x06307Ui3uY)
 
 **[Nuno Maduro: PHP Is Getting a Compiler?](https://www.youtube.com/watch?v=x06307Ui3uY)**
+
+## Star History
+
+<a href="https://www.star-history.com/?type=date&repos=illegalstudio%2Felephc">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=illegalstudio/elephc&type=date&theme=dark&legend=top-left&sealed_token=EQEmXlxMmVDs1v5rzSNsUSteRrE0JAStXJfEZTdWICM7iAlfoR7s3K86rK1-DPBD9s1ZEtWxIlT60K_2NpKFy58a3IINIamTOE_A8XrxqQyFkogm0ThuNY6desq_LayMIwk-GN2EeQpmClT97SY8-rR9W5R_AFj5dyaIAtHNcXE8KsuWFRt9r6Fx7jbh" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=illegalstudio/elephc&type=date&legend=top-left&sealed_token=EQEmXlxMmVDs1v5rzSNsUSteRrE0JAStXJfEZTdWICM7iAlfoR7s3K86rK1-DPBD9s1ZEtWxIlT60K_2NpKFy58a3IINIamTOE_A8XrxqQyFkogm0ThuNY6desq_LayMIwk-GN2EeQpmClT97SY8-rR9W5R_AFj5dyaIAtHNcXE8KsuWFRt9r6Fx7jbh" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=illegalstudio/elephc&type=date&legend=top-left&sealed_token=EQEmXlxMmVDs1v5rzSNsUSteRrE0JAStXJfEZTdWICM7iAlfoR7s3K86rK1-DPBD9s1ZEtWxIlT60K_2NpKFy58a3IINIamTOE_A8XrxqQyFkogm0ThuNY6desq_LayMIwk-GN2EeQpmClT97SY8-rR9W5R_AFj5dyaIAtHNcXE8KsuWFRt9r6Fx7jbh" />
+ </picture>
+</a>

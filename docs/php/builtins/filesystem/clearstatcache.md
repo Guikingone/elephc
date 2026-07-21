@@ -1,23 +1,28 @@
 ---
 title: "clearstatcache()"
-description: "Lowers `clearstatcache(...)` as an ordered no-op after EIR operand evaluation."
+description: "Clears file status cache."
 sidebar:
-  order: 86
+  order: 107
 ---
 
 ## clearstatcache()
 
 ```php
-function clearstatcache(bool $clear_realpath_cache, string $filename): void
+function clearstatcache(bool $clear_realpath_cache = false, string $filename = ''): void
 ```
 
-Lowers `clearstatcache(...)` as an ordered no-op after EIR operand evaluation.
+Clears file status cache.
 
 **Parameters**:
-- `$clear_realpath_cache` (`bool`), optional
-- `$filename` (`string`), optional
+- `$clear_realpath_cache` (`bool`), default `false`, optional
+- `$filename` (`string`), default `''`, optional
 
 **Returns**: `void`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/clearstatcache.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/clearstatcache.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,8 @@
 ---
 title: "is_writable()"
-description: "Lowers `is_writable(path)` through the target-aware runtime access helper."
+description: "Tells whether the filename is writable."
 sidebar:
-  order: 110
+  order: 131
 ---
 
 ## is_writable()
@@ -11,12 +11,17 @@ sidebar:
 function is_writable(string $filename): bool
 ```
 
-Lowers `is_writable(path)` through the target-aware runtime access helper.
+Tells whether the filename is writable.
 
 **Parameters**:
 - `$filename` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/is_writable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/is_writable.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

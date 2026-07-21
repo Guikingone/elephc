@@ -1,23 +1,27 @@
 ---
 title: "array_unique()"
-description: "Lowers `array_unique()` for indexed arrays with 8-byte payload slots."
+description: "Removes duplicate values from an array."
 sidebar:
-  order: 28
+  order: 42
 ---
 
 ## array_unique()
 
 ```php
-function array_unique(array $array, int $flags): array
+function array_unique(array $array): array
 ```
 
-Lowers `array_unique()` for indexed arrays with 8-byte payload slots.
+Removes duplicate values from an array.
 
 **Parameters**:
 - `$array` (`array`)
-- `$flags` (`int`)
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_unique.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_unique.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,23 +1,28 @@
 ---
 title: "rtrim()"
-description: "rtrim() — string builtin supported by Elephc."
+description: "Strips whitespace (or other characters) from the end of a string."
 sidebar:
-  order: 372
+  order: 396
 ---
 
 ## rtrim()
 
 ```php
-function rtrim(string $string, string $characters): string
+function rtrim(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string
 ```
 
-`rtrim()` is a string builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Strips whitespace (or other characters) from the end of a string.
 
 **Parameters**:
 - `$string` (`string`)
-- `$characters` (`string`), optional
+- `$characters` (`string`), default `' \n\r\t\x0b\x0c\x00'`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/rtrim.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/rtrim.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
@@ -26,4 +31,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `rtrim` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/rtrim.md).
 

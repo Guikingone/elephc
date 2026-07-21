@@ -1,8 +1,8 @@
 ---
 title: "opendir()"
-description: "Lowers `opendir(path)` and boxes the directory stream as `resource|false`."
+description: "Open directory handle."
 sidebar:
-  order: 168
+  order: 202
 ---
 
 ## opendir()
@@ -11,12 +11,17 @@ sidebar:
 function opendir(string $directory): mixed
 ```
 
-Lowers `opendir(path)` and boxes the directory stream as `resource|false`.
+Open directory handle.
 
 **Parameters**:
 - `$directory` (`string`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/opendir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/opendir.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

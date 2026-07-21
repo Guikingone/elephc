@@ -1,8 +1,8 @@
 ---
 title: "vprintf()"
-description: "Lowers `vprintf(format, values)` as `vsprintf()` followed by stdout emission."
+description: "Outputs a formatted string using an array of values."
 sidebar:
-  order: 405
+  order: 425
 ---
 
 ## vprintf()
@@ -11,13 +11,18 @@ sidebar:
 function vprintf(string $format, array $values): int
 ```
 
-Lowers `vprintf(format, values)` as `vsprintf()` followed by stdout emission.
+Outputs a formatted string using an array of values.
 
 **Parameters**:
 - `$format` (`string`)
 - `$values` (`array`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/formatting/vprintf.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/formatting/vprintf.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

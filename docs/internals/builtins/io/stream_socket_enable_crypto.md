@@ -2,15 +2,15 @@
 title: "stream_socket_enable_crypto() — internals"
 description: "Compiler internals for stream_socket_enable_crypto(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 201
+  order: 235
 ---
 
 ## `stream_socket_enable_crypto()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2328](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2328) (`lower_stream_socket_enable_crypto`)
+- **Signature**: [`src/builtins/io/stream_socket_enable_crypto.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_socket_enable_crypto.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2545](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2545) (`lower_stream_socket_enable_crypto`)
 - **Function symbol**: `lower_stream_socket_enable_crypto()`
 
 
@@ -25,14 +25,18 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function stream_socket_enable_crypto(resource $stream, bool $enable, int $crypto_method, resource $session_stream): bool
+function stream_socket_enable_crypto(resource $stream, bool $enable, int $crypto_method = null, resource $session_stream = null): bool
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes 2–4 arguments (2 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_enable_crypto.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_enable_crypto.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `stream_socket_enable_crypto()`](../../../php/builtins/io/stream_socket_enable_crypto.md)
-

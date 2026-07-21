@@ -2,15 +2,15 @@
 title: "max() — internals"
 description: "Compiler internals for max(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 240
+  order: 274
 ---
 
 ## `max()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math.rs`:204](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math.rs#L204) (`lower_min_max`)
+- **Signature**: [`src/builtins/math/max.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/max.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math.rs`:204](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math.rs#L204) (`lower_min_max`)
 - **Function symbol**: `lower_min_max()`
 
 
@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function max(mixed $value, ...$values): float
+function max(mixed $value, ...$values): mixed
 ```
 
 ## What the type checker enforces
@@ -33,7 +33,12 @@ function max(mixed $value, ...$values): float
 - **Arity**: takes exactly 1 argument.
 - **Variadic**: collects excess arguments into `$values`.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/max.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/max.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+- **Variadic**: collects excess arguments into `$values`.
+
 ## Cross-references
 
 - [User reference for `max()`](../../../php/builtins/math/max.md)
-

@@ -1,22 +1,27 @@
 ---
 title: "stream_context_get_default()"
-description: "Lowers `stream_context_get_default(options?)`."
+description: "Retrieves the default stream context."
 sidebar:
-  order: 175
+  order: 209
 ---
 
 ## stream_context_get_default()
 
 ```php
-function stream_context_get_default(array $options): mixed
+function stream_context_get_default(array $options = null): mixed
 ```
 
-Lowers `stream_context_get_default(options?)`.
+Retrieves the default stream context.
 
 **Parameters**:
-- `$options` (`array`), optional
+- `$options` (`array`), default `null`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_get_default.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_get_default.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

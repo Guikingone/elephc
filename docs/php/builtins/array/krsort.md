@@ -1,23 +1,27 @@
 ---
 title: "krsort()"
-description: "Lowers `krsort()` through the legacy reverse key-sort helper surface."
+description: "Sorts an array by key in descending order."
 sidebar:
-  order: 36
+  order: 53
 ---
 
 ## krsort()
 
 ```php
-function krsort(array $array, int $flags): bool
+function krsort(array $array): bool
 ```
 
-Lowers `krsort()` through the legacy reverse key-sort helper surface.
+Sorts an array by key in descending order.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
-- `$flags` (`int`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/krsort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/krsort.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

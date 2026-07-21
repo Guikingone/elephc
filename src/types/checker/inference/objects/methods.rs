@@ -10,7 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver, TypeExpr};
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::super::super::Checker;
@@ -21,8 +21,11 @@ impl Checker {
     ///
     /// Dispatches to `infer_method_call_on_class_type` for `Object` types,
     /// `infer_method_call_on_interface_type` for interface types, and
-    /// handles nullable union receivers. Returns `PhpType::Int` as a fallback
-    /// for unhandled types (e.g. `Mixed` without specific handler).
+    /// handles nullable union receivers. A `Mixed` receiver dispatches at
+    /// runtime over the classes that declare the method, so its result is the
+    /// union of those candidates' return types (see
+    /// `mixed_receiver_method_return_type`). Other unhandled receiver types fall
+    /// back to `PhpType::Int`.
     pub(crate) fn infer_method_call_type(
         &mut self,
         object: &Expr,
@@ -34,11 +37,13 @@ impl Checker {
         let obj_ty = self.infer_type(object, env)?;
         if let PhpType::Object(class_name) = &obj_ty {
             if self.interfaces.contains_key(class_name) {
-                return self.infer_method_call_on_interface_type(
-                    class_name, method, args, expr, env,
-                );
+                return self
+                    .infer_method_call_on_interface_type(class_name, method, args, expr, env);
             }
-            return self.infer_method_call_on_class_type(class_name, method, args, expr, env);
+            let return_ty = self.infer_method_call_on_class_type(class_name, method, args, expr, env)?;
+            return Ok(self
+                .tracked_reflection_class_method_return_type(object, method)
+                .unwrap_or(return_ty));
         }
         // Method calls on a union object type are allowed when the union has a
         // single object class. `?Foo` / `Foo|null` faults on a null receiver as in
@@ -62,16 +67,28 @@ impl Checker {
                         env,
                     );
                 }
-                return self.infer_method_call_on_class_type(&class_name, method, args, expr, env);
+                let return_ty =
+                    self.infer_method_call_on_class_type(&class_name, method, args, expr, env)?;
+                return Ok(self
+                    .tracked_reflection_class_method_return_type(object, method)
+                    .unwrap_or(return_ty));
             }
-            // Union of two or more distinct object classes (`A|B`, `A|B|false`): PHP dispatches
-            // on the runtime class, so the method only needs to exist on at least one member
-            // (see `infer_method_call_on_object_union`). Codegen already dispatches on the
-            // runtime class id (`lower_mixed_method_call`) and faults cleanly when the actual
-            // value's class has no matching candidate.
+            // Union of two or more distinct object classes (`A|B`, `A|B|false`):
+            // the method must exist on every object member; codegen dispatches on
+            // the runtime class id and the result is the union of each member's
+            // return type. A non-object runtime value faults like PHP.
             let object_classes = self.union_object_classes(&obj_ty);
             if object_classes.len() >= 2 {
-                return self.infer_method_call_on_object_union(&object_classes, method, args, expr, env);
+                let mut return_types = Vec::with_capacity(object_classes.len());
+                for class_name in &object_classes {
+                    let return_ty = if self.interfaces.contains_key(class_name) {
+                        self.infer_method_call_on_interface_type(class_name, method, args, expr, env)?
+                    } else {
+                        self.infer_method_call_on_class_type(class_name, method, args, expr, env)?
+                    };
+                    return_types.push(return_ty);
+                }
+                return Ok(self.normalize_union_type(return_types));
             }
             // No object class at all: re-run the strict check to surface its
             // diagnostic.
@@ -98,139 +115,85 @@ impl Checker {
                 _ => {}
             }
         }
-        // A method call on a gradual `Mixed` receiver has an unknown runtime class, so its return
-        // type is genuinely unknown — `Mixed`, not a default scalar. Returning `Mixed` keeps a call
-        // such as `$value->format(...)` on an un-narrowed `mixed` value compatible with any declared
-        // return type (gradual typing), which matches PHP where the method exists at runtime. This
-        // is what makes a `switch (true) { case $v instanceof DateTimeInterface: return $v->format(...) }`
-        // body (where the case arm does not narrow `$v`) type-check against a `: string` signature.
-        //
-        // The argument expressions are intentionally not re-inferred here: the receiver class is
-        // unknown so there is no signature to check them against, and the caller already inferred
-        // them (the `infer_type_with_assignment_effects` method-call path threads assignment effects
-        // through the arguments before this runs). Re-inferring them with plain `infer_type` would
-        // drop that flow state and, for an argument such as `match (true) { !$x = f() => ..., $x => ... }`,
-        // falsely report the in-condition assignment target as undefined.
+        // A method call on a `mixed` receiver dispatches on the runtime class id
+        // over exactly the classes that declare the method (see
+        // `mixed_method_candidates` / `lower_mixed_method_call` and the
+        // Mixed-receiver method emission in `ir_lower::program`). The static
+        // result is therefore the union of those candidates' return types. When
+        // they all agree on one type, codegen stores the call result raw (no
+        // boxing), so the precise type is correct; when they differ it is a
+        // union, which codegen boxes like the two-class union dispatch. Returning
+        // the historical `Int` fallback here instead made an *inferred* function
+        // return type silently coerce a boxed result: an un-annotated
+        // `function f($x) { return $x->name(); }` rendered the returned string as
+        // `0`. With no declaring class the runtime would fatal, so `mixed` is the
+        // safe static result.
         if matches!(obj_ty, PhpType::Mixed) {
-            return Ok(PhpType::Mixed);
+            return Ok(self
+                .mixed_receiver_method_return_type(method, args.len())
+                .unwrap_or(PhpType::Mixed));
         }
         Ok(PhpType::Int)
     }
 
-    /// Infers a method's return type given a resolved object/interface class name,
-    /// dispatching to the interface- or class-method path. Shared by the plain and
-    /// nullsafe method-call receiver logic.
-    fn infer_method_return_on_class_or_interface(
-        &mut self,
-        class_name: &str,
-        method: &str,
-        args: &[Expr],
-        expr: &Expr,
-        env: &TypeEnv,
-    ) -> Result<PhpType, CompileError> {
-        if self.interfaces.contains_key(class_name) {
-            self.infer_method_call_on_interface_type(class_name, method, args, expr, env)
-        } else {
-            self.infer_method_call_on_class_type(class_name, method, args, expr, env)
-        }
-    }
-
-    /// Resolves a method call against a multi-class object union (`A|B`, `A|B|false`) using
-    /// PHP-faithful lenient dispatch instead of requiring the method on every member: PHP
-    /// dispatches `$u->m()` on the runtime class, so a union type-checks as long as at least
-    /// one member declares `m`.
-    ///
-    /// - A member whose class/interface only reaches the call through `__call`/`__callStatic`
-    ///   magic forwarding does NOT count as "resolving" here (JURY ADDENDUM #3) — codegen's
-    ///   Mixed-receiver dispatch (`mixed_method_candidates` in `codegen_ir/lower_inst.rs`)
-    ///   still forwards to `__call` for such a class at runtime independently of this checker
-    ///   decision, which is a documented, sound divergence (the checker under-approximates;
-    ///   the runtime path is strictly more permissive, never less).
-    /// - Exactly one resolving member: the call is validated/typed against that member alone
-    ///   (JURY ADDENDUM #1's dominant case), with no cross-member argument requirement.
-    /// - Two or more resolving members: the call's arguments are validated against EVERY
-    ///   resolving member's signature and must be accepted by ALL of them (codegen materializes
-    ///   the call arguments once for whichever branch runs, so a per-branch ABI mismatch would
-    ///   silently pass garbage); if any resolving member rejects the arguments, the whole call
-    ///   stays loud with that member's diagnostic. When all accept, the result type is the
-    ///   union of each member's return type.
-    /// - No member resolves: reports "Undefined method" against the full union type, naming
-    ///   every object member (JURY ADDENDUM #5), matching today's diagnostic style.
-    fn infer_method_call_on_object_union(
-        &mut self,
-        object_classes: &[String],
-        method: &str,
-        args: &[Expr],
-        expr: &Expr,
-        env: &TypeEnv,
-    ) -> Result<PhpType, CompileError> {
+    /// Computes the static return type of a method call on a `mixed` receiver as
+    /// the normalized union of the declared return types of every class that
+    /// declares `method` with a matching arity. This mirrors the runtime
+    /// candidate set used by `mixed_method_candidates` in codegen, so the
+    /// inferred type stays consistent with how each candidate branch stores its
+    /// result. Falls back to the name-only candidate set when arity filtering
+    /// finds nothing (e.g. methods with default parameters), and returns `None`
+    /// when no class declares the method at all.
+    fn mixed_receiver_method_return_type(&self, method: &str, arg_count: usize) -> Option<PhpType> {
         let method_key = php_symbol_key(method);
-        let resolving: Vec<String> = object_classes
-            .iter()
-            .filter(|class_name| self.union_member_declares_method(class_name, &method_key))
-            .cloned()
-            .collect();
-        if resolving.is_empty() {
-            let union_ty = PhpType::Union(
-                object_classes
-                    .iter()
-                    .map(|class_name| PhpType::Object(class_name.clone()))
-                    .collect(),
-            );
-            return Err(CompileError::new(
-                expr.span,
-                &format!("Undefined method: {}::{}", union_ty, method),
-            ));
-        }
-        if resolving.len() == 1 {
-            return self.infer_method_return_on_class_or_interface(
-                &resolving[0],
-                method,
-                args,
-                expr,
-                env,
-            );
-        }
-        let mut return_types = Vec::with_capacity(resolving.len());
-        let mut first_err: Option<CompileError> = None;
-        for class_name in &resolving {
-            match self.infer_method_return_on_class_or_interface(class_name, method, args, expr, env) {
-                Ok(return_ty) => return_types.push(return_ty),
-                Err(err) => {
-                    if first_err.is_none() {
-                        first_err = Some(err);
-                    }
-                }
+        let mut arity_matched: Vec<PhpType> = Vec::new();
+        let mut any_matched: Vec<PhpType> = Vec::new();
+        for class_info in self.classes.values() {
+            let Some(sig) = class_info.methods.get(&method_key) else {
+                continue;
+            };
+            let ty = sig.return_type.clone();
+            if !any_matched.contains(&ty) {
+                any_matched.push(ty.clone());
+            }
+            if sig.params.len() == arg_count && !arity_matched.contains(&ty) {
+                arity_matched.push(ty);
             }
         }
-        if let Some(err) = first_err {
-            return Err(err);
+        let candidates = if arity_matched.is_empty() {
+            any_matched
+        } else {
+            arity_matched
+        };
+        if candidates.is_empty() {
+            None
+        } else {
+            Some(self.normalize_union_type(candidates))
         }
-        Ok(self.normalize_union_type(return_types))
     }
 
-    /// Returns true when `class_name` (a class or interface) literally declares `method_key` —
-    /// i.e. the receiver's runtime class dispatches straight to it rather than only through
-    /// `__call` magic forwarding. Used by `infer_method_call_on_object_union` to decide whether
-    /// a union member "resolves" a call (JURY ADDENDUM #3 excludes `__call`-only members).
-    fn union_member_declares_method(&self, class_name: &str, method_key: &str) -> bool {
-        if let Some(interface_info) = self.interfaces.get(class_name) {
-            return interface_info.methods.contains_key(method_key);
+    /// Returns a concrete reflected object type for tracked `ReflectionClass` construction helpers.
+    fn tracked_reflection_class_method_return_type(
+        &self,
+        object: &Expr,
+        method: &str,
+    ) -> Option<PhpType> {
+        let ExprKind::Variable(name) = &object.kind else {
+            return None;
+        };
+        let reflected_class = self.reflection_class_targets.get(name)?;
+        match php_symbol_key(method).as_str() {
+            "newinstance" | "newinstanceargs" | "newinstancewithoutconstructor" => {
+                Some(PhpType::Object(reflected_class.clone()))
+            }
+            _ => None,
         }
-        self.classes
-            .get(class_name)
-            .map(|class_info| class_info.methods.contains_key(method_key))
-            .unwrap_or(false)
     }
 
     /// Infers the type of a nullsafe method call expression (`$obj?->method(...)`).
     ///
-    /// Mirrors the gradual receiver handling of the plain `->` path: a `Mixed` receiver
-    /// (or a union whose only non-object members include `Mixed`) has an unknown runtime
-    /// class, so the result is `Mixed`; a `?Object`/`Object|null` receiver yields the
-    /// method's return type unioned with `Void`; a gradual object-plus-scalar union
-    /// (`Foo|false`) or multi-class union (`A|B`) dispatches on the runtime class id. A
-    /// proven-null receiver short-circuits to `Void`, and a proven non-object stays loud.
+    /// Returns `PhpType::Void` for invalid receivers. For valid nullable object
+    /// unions, returns a union of the method's return type with `void`.
     pub(crate) fn infer_nullsafe_method_call_type(
         &mut self,
         object: &Expr,
@@ -240,58 +203,48 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
-        // Gradual `Mixed` receiver: unknown runtime class → unknown return type. The `?->`
-        // null branch is subsumed by `Mixed`. Args were already inferred by the
-        // assignment-effects caller (same contract as the plain `->` Mixed path).
-        if matches!(obj_ty, PhpType::Mixed) {
-            return Ok(PhpType::Mixed);
+        let Some((class_name, nullable)) =
+            self.nullsafe_object_receiver(&obj_ty, expr, "method call")?
+        else {
+            return Ok(PhpType::Void);
+        };
+        let return_ty = if self.interfaces.contains_key(&class_name) {
+            self.infer_method_call_on_interface_type(&class_name, method, args, expr, env)?
+        } else {
+            self.infer_method_call_on_class_type(&class_name, method, args, expr, env)?
+        };
+        if nullable {
+            Ok(self.normalize_union_type(vec![return_ty, PhpType::Void]))
+        } else {
+            Ok(return_ty)
         }
-        match self.nullsafe_object_receiver(&obj_ty, expr, "method call") {
-            Ok(Some((class_name, nullable))) => {
-                let return_ty = self
-                    .infer_method_return_on_class_or_interface(&class_name, method, args, expr, env)?;
-                if nullable {
-                    Ok(self.normalize_union_type(vec![return_ty, PhpType::Void]))
-                } else {
-                    Ok(return_ty)
-                }
-            }
-            Ok(None) => Ok(PhpType::Void),
-            Err(strict_err) => {
-                // The strict single-class resolver rejects gradual unions that the plain
-                // `->` path still accepts (`Foo|false`, `A|B`, or a union carrying a
-                // `Mixed` member). A `?->` receiver may be non-object at runtime, so the
-                // result always admits `Void`.
-                if let Some(class_name) = self.union_single_object_class(&obj_ty) {
-                    let return_ty = self.infer_method_return_on_class_or_interface(
-                        &class_name,
-                        method,
-                        args,
-                        expr,
-                        env,
-                    )?;
-                    return Ok(self.normalize_union_type(vec![return_ty, PhpType::Void]));
-                }
-                let object_classes = self.union_object_classes(&obj_ty);
-                if object_classes.len() >= 2 {
-                    let return_ty =
-                        self.infer_method_call_on_object_union(&object_classes, method, args, expr, env)?;
-                    return Ok(self.normalize_union_type(vec![return_ty, PhpType::Void]));
-                }
-                if matches!(&obj_ty, PhpType::Union(members)
-                    if members.iter().any(|member| matches!(member, PhpType::Mixed)))
-                {
-                    return Ok(PhpType::Mixed);
-                }
-                // A `Callable` receiver (bare or nullable, e.g. `?Closure`/`?callable`) may
-                // be a `Closure` object at runtime, so `?->` on it is gradual — mirror the
-                // plain `->` path, which accepts callable receivers. Result is `Mixed`.
-                if type_contains_callable(&obj_ty) {
-                    return Ok(PhpType::Mixed);
-                }
-                Err(strict_err)
-            }
+    }
+
+    /// Infers `$obj?->$method(...)` when the method name is known only at runtime.
+    ///
+    /// The receiver must still be an object-or-null like other nullsafe member
+    /// accesses. The dynamic target prevents method signature validation, so the
+    /// return type is `Mixed`; method-name and argument expressions are inferred
+    /// only when the receiver is not statically null.
+    pub(crate) fn infer_nullsafe_dynamic_method_call_type(
+        &mut self,
+        object: &Expr,
+        method: &Expr,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let obj_ty = self.infer_type(object, env)?;
+        let Some((_class_name, _nullable)) =
+            self.nullsafe_object_receiver(&obj_ty, expr, "method call")?
+        else {
+            return Ok(PhpType::Void);
+        };
+        self.infer_type(method, env)?;
+        for arg in args {
+            self.infer_type(arg, env)?;
         }
+        Ok(PhpType::Mixed)
     }
 
     /// Infers the type of a method call on an interface type.
@@ -333,7 +286,15 @@ impl Checker {
             env,
             &format!("Method {}::{}", interface_name, method),
         )?;
-        Ok(sig.return_type)
+        let late_static_return = self.instance_method_late_static_return(interface_name, &method_key);
+        match late_static_return {
+            Some(return_type) => self.resolve_late_static_return_type_hint(
+                &return_type,
+                interface_name,
+                expr.span,
+            ),
+            None => Ok(sig.return_type),
+        }
     }
 
     /// Infers the type of a method call on a class type.
@@ -352,12 +313,7 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         self.infer_method_call_on_class_type_with_options(
-            class_name,
-            method,
-            args,
-            expr,
-            env,
-            false,
+            class_name, method, args, expr, env, false,
         )
     }
 
@@ -371,14 +327,7 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
-        self.infer_method_call_on_class_type_with_options(
-            class_name,
-            method,
-            args,
-            expr,
-            env,
-            true,
-        )
+        self.infer_method_call_on_class_type_with_options(class_name, method, args, expr, env, true)
     }
 
     /// Shared implementation for class method call inference.
@@ -392,6 +341,12 @@ impl Checker {
         allow_by_ref_spread: bool,
     ) -> Result<PhpType, CompileError> {
         let method_key = php_symbol_key(method);
+        let late_static_return_type = self
+            .instance_method_late_static_return(class_name, &method_key)
+            .map(|return_type| {
+                self.resolve_late_static_return_type_hint(&return_type, class_name, expr.span)
+            })
+            .transpose()?;
         let mut normalized_args = args.to_vec();
         let mut magic_return_ty = None;
         let mut magic_original_args = None;
@@ -416,15 +371,32 @@ impl Checker {
                         .map(String::as_str)
                         .unwrap_or(class_name);
                     if !self.can_access_member(declaring_class, visibility) {
-                        return Err(CompileError::new(
+                        // PHP raises this as a catchable `Error` at runtime instead of a
+                        // compile-time rejection. Record the throw site so EIR lowering
+                        // emits the throw sequence, and continue with the declared return
+                        // type so later passes stay type-consistent.
+                        self.throw_access_sites.insert(
                             expr.span,
-                            &format!(
-                                "Cannot access {} method: {}::{}",
-                                Self::visibility_label(visibility),
-                                class_name,
-                                method
-                            ),
-                        ));
+                            crate::types::ThrowAccessInfo {
+                                span: expr.span,
+                                kind: crate::types::ThrowAccessKind::PrivateMethod {
+                                    visibility: match visibility {
+                                        crate::parser::ast::Visibility::Private => {
+                                            "private".to_string()
+                                        }
+                                        crate::parser::ast::Visibility::Protected => {
+                                            "protected".to_string()
+                                        }
+                                        _ => "private".to_string(),
+                                    },
+                                    class_name: class_name.to_string(),
+                                    method: method.to_string(),
+                                },
+                            },
+                        );
+                        return Ok(late_static_return_type
+                            .clone()
+                            .unwrap_or_else(|| sig.return_type.clone()));
                     }
                 }
                 let declared_flags =
@@ -460,8 +432,7 @@ impl Checker {
                 }
             } else if let Some(sig) = class_info.methods.get("__call") {
                 let magic_args = Self::magic_call_args(method, args, expr.span);
-                let declared_flags =
-                    Self::declared_method_param_flags(class_info, "__call", false);
+                let declared_flags = Self::declared_method_param_flags(class_info, "__call", false);
                 let mut effective_sig =
                     Self::callable_sig_for_declared_params(sig, &declared_flags);
                 Self::relax_magic_call_validation_sig(&mut effective_sig);
@@ -508,21 +479,6 @@ impl Checker {
         for arg in &normalized_args {
             arg_types.push(self.infer_type(arg, env)?);
         }
-        // Resolve the closure's own signature for each Callable-typed argument BEFORE
-        // taking a mutable borrow of `self.classes` below (`resolve_expr_callable_sig`
-        // needs `&mut self`). Feeds the class-qualified `callable_param_sigs` write so a
-        // method's OWN callable-typed parameter gets the same cross-call specialization
-        // free functions already get (see `functions::resolution::mod::check_function_call`'s
-        // analogous write at the free-function call site).
-        let mut normalized_arg_callable_sigs: Vec<Option<FunctionSig>> =
-            Vec::with_capacity(normalized_args.len());
-        for (i, arg) in normalized_args.iter().enumerate() {
-            if arg_types.get(i) == Some(&PhpType::Callable) {
-                normalized_arg_callable_sigs.push(self.resolve_expr_callable_sig(arg, env)?);
-            } else {
-                normalized_arg_callable_sigs.push(None);
-            }
-        }
 
         let impl_class_name = self
             .classes
@@ -535,7 +491,6 @@ impl Checker {
             .get(&impl_class_name)
             .map(|class_info| Self::declared_method_param_flags(class_info, &method_key, false))
             .unwrap_or_default();
-        let mut resolved_return: Option<PhpType> = None;
         if let Some(class_info) = self.classes.get_mut(&impl_class_name) {
             if let Some(sig) = class_info.methods.get_mut(&method_key) {
                 let regular_param_count = if sig.variadic.is_some() {
@@ -546,6 +501,10 @@ impl Checker {
                 for (i, arg_ty) in arg_types.iter().enumerate() {
                     if i < regular_param_count
                         && declared_flags.get(i).copied().unwrap_or(false)
+                        && !Self::method_array_param_keeps_generic_shape(
+                            &impl_class_name,
+                            &method_key,
+                        )
                         && Self::is_generic_array_hint(&sig.params[i].1)
                         && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
                     {
@@ -567,58 +526,59 @@ impl Checker {
                             sig.params[i].1 = Self::union_param_type(&sig.params[i].1, arg_ty);
                         }
                     }
-                    if i < regular_param_count && *arg_ty == PhpType::Callable {
-                        if let Some(closure_sig) = normalized_arg_callable_sigs[i].clone() {
-                            // Keyed by the DECLARING/flattened-owner class (`impl_class_name`,
-                            // the same class whose `methods` table is mutated above) so
-                            // unrelated classes' same-named methods/params never share an
-                            // entry — matches the key scheme `ir_lower::context::Context::
-                            // callable_param_signature` already reads (`owner_name =
-                            // "{class}::{method}"`, `owner_name` built from
-                            // `format!("{}::{}", class_name, method_name)` in
-                            // `ir_lower::function::lower_class_method`).
-                            self.callable_param_sigs.insert(
-                                (format!("{}::{}", impl_class_name, method_key), sig.params[i].0.clone()),
-                                closure_sig,
-                            );
-                        }
-                    }
                 }
                 if method_variadic_tail_needs_iterable(
                     &normalized_args,
                     sig,
                     regular_param_count,
                     env,
-                ) {
+                ) && !method_variadic_param_is_by_ref(sig)
+                {
                     if let Some((_, variadic_ty)) = sig.params.last_mut() {
                         *variadic_ty = PhpType::Iterable;
                     }
-                } else if sig.variadic.is_some() && arg_types.len() > regular_param_count {
+                } else if sig.variadic.is_some()
+                    && arg_types.len() > regular_param_count
+                    && !method_variadic_param_is_by_ref(sig)
+                {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
                         elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
-                        // Never narrow a declared `mixed ...$args` variadic. `wider_type_syntactic`
-                        // lets `Str` swallow `Mixed`, so specializing a `mixed` variadic from the
-                        // first call arg would wrongly retype it to that arg's type and then reject
-                        // a later differently-typed arg. A `mixed` variadic accepts any element in
-                        // PHP, so it stays `Mixed`. Genuinely-typed variadics still specialize.
-                        if !matches!(existing_elem_ty.as_ref(), PhpType::Mixed) {
-                            **existing_elem_ty =
-                                wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
-                        }
+                        **existing_elem_ty =
+                            wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
-                resolved_return = Some(sig.return_type.clone());
+                return Ok(late_static_return_type
+                    .clone()
+                    .unwrap_or_else(|| sig.return_type.clone()));
             }
         }
-        if let Some(ret) = resolved_return {
-            // Late-bind a `: static` return to the receiver class (PHP late static binding); a
-            // genuine `: DeclaringClass`/`: self` return is not in the side-table and passes through.
-            return Ok(self.resolve_static_return(&ret, class_name, method));
-        }
         Ok(PhpType::Int)
+    }
+
+    /// Returns preserved late-static return syntax for an instance method.
+    fn instance_method_late_static_return(
+        &self,
+        receiver_type: &str,
+        method_key: &str,
+    ) -> Option<TypeExpr> {
+        if let Some(class_info) = self.classes.get(receiver_type) {
+            if let Some(return_type) = class_info.late_static_method_returns.get(method_key) {
+                return Some(return_type.clone());
+            }
+        }
+        self.interfaces
+            .get(receiver_type)
+            .and_then(|interface_info| interface_info.late_static_method_returns.get(method_key))
+            .cloned()
+    }
+
+    /// Returns true for builtin method array params whose accepted shape must remain broad.
+    fn method_array_param_keeps_generic_shape(class_name: &str, method_key: &str) -> bool {
+        matches!(class_name, "ReflectionFunction" | "ReflectionMethod")
+            && method_key == php_symbol_key("invokeArgs")
     }
 
     /// Builds synthetic `__call` arguments: `[method_name, [args...]]`.
@@ -651,7 +611,7 @@ impl Checker {
     /// Refines a `__callStatic($name, $args)` signature's array parameter from
     /// the actual static-call arguments, the static counterpart of
     /// `specialize_magic_call_signature`.
-    fn specialize_magic_callstatic_signature(
+    fn specialize_magic_static_call_signature(
         &mut self,
         class_name: &str,
         args: &[Expr],
@@ -828,17 +788,11 @@ impl Checker {
         };
         let class_name = resolved_class_name.as_str();
         // `Closure::bind($closure, $newThis [, $scope])` is the static form of
-        // `$closure->bindTo(...)`: it returns a new closure with `$this` rebound. A literal
-        // `$scope` (`X::class`) additionally rebinds the closure's VISIBILITY scope to `X` when
-        // `check_closure_bind_call_args`'s JURY-mandated lexical gate proves it sound (see
-        // `crate::types::checker::inference::expr::static_closure`'s module doc comment); an
-        // omitted/non-literal/gate-failing `$scope` checks the closure body normally (no
-        // rebind), matching the original (unrelaxed) behavior exactly.
+        // `$closure->bindTo(...)`: it returns a new closure with `$this` rebound.
+        // `$scope` is accepted and ignored (closed-world visibility).
         if class_name.trim_start_matches('\\') == "Closure" && php_symbol_key(method) == "bind" {
-            if let Some(closure_arg) = args.first() {
-                let rest: Vec<&Expr> = args.get(1..2).unwrap_or(&[]).iter().collect();
-                let scope_arg = args.get(2);
-                super::super::check_closure_bind_call_args(self, closure_arg, &rest, scope_arg, env)?;
+            for arg in args {
+                self.infer_type(arg, env)?;
             }
             return Ok(PhpType::Callable);
         }
@@ -846,12 +800,48 @@ impl Checker {
             return self
                 .check_enum_static_call(&enum_info, class_name, method, args, env, expr.span);
         }
+        let method_key = php_symbol_key(method);
+        let late_static_receiver_type = if parent_call {
+            self.current_class
+                .clone()
+                .unwrap_or_else(|| class_name.to_string())
+        } else {
+            class_name.to_string()
+        };
+        let late_static_static_return_type = self
+            .static_method_late_static_return(class_name, &method_key)
+            .map(|return_type| {
+                self.resolve_late_static_return_type_hint(
+                    &return_type,
+                    &late_static_receiver_type,
+                    expr.span,
+                )
+            })
+            .transpose()?;
+        let late_static_instance_return_type = if parent_call || self_call {
+            self.instance_method_late_static_return(class_name, &method_key)
+                .map(|return_type| {
+                    self.resolve_late_static_return_type_hint(
+                        &return_type,
+                        &late_static_receiver_type,
+                        expr.span,
+                    )
+                })
+                .transpose()?
+        } else {
+            None
+        };
         let normalized_args: Vec<Expr>;
+        let mut magic_return_ty = None;
+        let mut magic_original_args = None;
         if let Some(class_info) = self.classes.get(class_name) {
-            if let Some(sig) = class_info.static_methods.get(method) {
+            if let Some(sig) = class_info.static_methods.get(&method_key) {
                 if let Some(reason) = sig.deprecation.clone() {
                     let message = if reason.is_empty() {
-                        format!("Call to deprecated static method: {}::{}()", class_name, method)
+                        format!(
+                            "Call to deprecated static method: {}::{}()",
+                            class_name, method
+                        )
                     } else {
                         format!(
                             "Call to deprecated static method: {}::{}() — {}",
@@ -861,10 +851,10 @@ impl Checker {
                     self.warnings
                         .push(crate::errors::CompileWarning::new(expr.span, &message));
                 }
-                if let Some(visibility) = class_info.static_method_visibilities.get(method) {
+                if let Some(visibility) = class_info.static_method_visibilities.get(&method_key) {
                     let declaring_class = class_info
                         .static_method_declaring_classes
-                        .get(method)
+                        .get(&method_key)
                         .map(String::as_str)
                         .unwrap_or(class_name);
                     if !self.can_access_member(declaring_class, visibility) {
@@ -879,8 +869,13 @@ impl Checker {
                         ));
                     }
                 }
-                let declared_flags = Self::declared_method_param_flags(class_info, method, true);
-                let effective_sig = Self::callable_sig_for_declared_params(sig, &declared_flags);
+                let declared_flags =
+                    Self::declared_method_param_flags(class_info, &method_key, true);
+                let mut effective_sig =
+                    Self::callable_sig_for_declared_params(sig, &declared_flags);
+                if method_key == "__callstatic" {
+                    Self::relax_magic_call_validation_sig(&mut effective_sig);
+                }
                 normalized_args = self.normalize_named_call_args(
                     &effective_sig,
                     args,
@@ -916,16 +911,16 @@ impl Checker {
                         },
                     ));
                 }
-                let sig = class_info.methods.get(method).ok_or_else(|| {
+                let sig = class_info.methods.get(&method_key).ok_or_else(|| {
                     CompileError::new(
                         expr.span,
                         &format!("Undefined method: {}::{}", class_name, method),
                     )
                 })?;
-                if let Some(visibility) = class_info.method_visibilities.get(method) {
+                if let Some(visibility) = class_info.method_visibilities.get(&method_key) {
                     let declaring_class = class_info
                         .method_declaring_classes
-                        .get(method)
+                        .get(&method_key)
                         .map(String::as_str)
                         .unwrap_or(class_name);
                     if !self.can_access_member(declaring_class, visibility) {
@@ -940,7 +935,8 @@ impl Checker {
                         ));
                     }
                 }
-                let declared_flags = Self::declared_method_param_flags(class_info, method, false);
+                let declared_flags =
+                    Self::declared_method_param_flags(class_info, &method_key, false);
                 let effective_sig = Self::callable_sig_for_declared_params(sig, &declared_flags);
                 normalized_args = self.normalize_named_call_args(
                     &effective_sig,
@@ -981,23 +977,7 @@ impl Checker {
                         ),
                     )?;
                 }
-            } else if let Some(callstatic_sig) =
-                class_info.static_methods.get("__callstatic").cloned()
-            {
-                // Forward `Foo::missing(...)` to `Foo::__callStatic("missing", [...])`.
-                let magic_args = Self::magic_call_args(method, args, expr.span);
-                let mut validation_sig = callstatic_sig.clone();
-                Self::relax_magic_call_validation_sig(&mut validation_sig);
-                self.check_known_callable_call(
-                    &validation_sig,
-                    &magic_args,
-                    expr.span,
-                    env,
-                    &format!("Static method {}::__callStatic", class_name),
-                )?;
-                self.specialize_magic_callstatic_signature(class_name, args, env)?;
-                return Ok(callstatic_sig.return_type.clone());
-            } else if class_info.methods.contains_key(method) {
+            } else if class_info.methods.contains_key(&method_key) {
                 return Err(CompileError::new(
                     expr.span,
                     &format!(
@@ -1005,27 +985,50 @@ impl Checker {
                         class_name, method
                     ),
                 ));
+            } else if let Some(sig) = class_info.static_methods.get("__callstatic") {
+                let magic_args = Self::magic_call_args(method, args, expr.span);
+                let declared_flags =
+                    Self::declared_method_param_flags(class_info, "__callstatic", true);
+                let mut effective_sig =
+                    Self::callable_sig_for_declared_params(sig, &declared_flags);
+                Self::relax_magic_call_validation_sig(&mut effective_sig);
+                normalized_args = self.normalize_named_call_args(
+                    &effective_sig,
+                    &magic_args,
+                    expr.span,
+                    &format!("Static method {}::__callStatic", class_name),
+                    env,
+                )?;
+                if allow_by_ref_spread {
+                    self.check_known_callable_call_allowing_by_ref_spread(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!("Static method {}::__callStatic", class_name),
+                    )?;
+                } else {
+                    self.check_known_callable_call(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!("Static method {}::__callStatic", class_name),
+                    )?;
+                }
+                magic_return_ty = Some(effective_sig.return_type.clone());
+                magic_original_args = Some(args.to_vec());
             } else {
                 return Err(CompileError::new(
                     expr.span,
                     &format!("Undefined method: {}::{}", class_name, method),
                 ));
             }
-        } else if self.interfaces.contains_key(class_name) {
-            // Every interface method (static or instance) is abstract — an interface never
-            // has a runtime object to dispatch on, so `I::method()` is unconditionally invalid.
-            // PHP defers this to a runtime `Error` ("Cannot call abstract method I::f()",
-            // `php -n` verified), but the receiver is a literal class-like name here, so
-            // elephc's closed world can detect it at compile time instead of leaving it to
-            // fail at runtime — reported for both static and instance interface methods, since
-            // PHP's fatal wording does not distinguish between the two. Dynamic
-            // `$class::method()` dispatch through an interface-typed class-string is a
-            // different code path (`StaticReceiver::Named` never triggers this branch for it)
-            // and is intentionally left untouched here.
-            return Err(CompileError::new(
-                expr.span,
-                &format!("Cannot call abstract method {}::{}()", class_name, method),
-            ));
+        } else if self.eval_barrier_active && matches!(receiver, StaticReceiver::Named(_)) {
+            for arg in args {
+                self.infer_type(arg, env)?;
+            }
+            return Ok(PhpType::Mixed);
         } else {
             // A static call on a class that is unknown everywhere in the closed world is an
             // absent optional dependency (e.g. `Process::fromShellCommandline(...)`): the call
@@ -1043,27 +1046,21 @@ impl Checker {
                 &format!("Undefined class: {}", class_name),
             ));
         }
+        if let Some(return_ty) = magic_return_ty {
+            if let Some(args) = magic_original_args {
+                self.specialize_magic_static_call_signature(class_name, &args, env)?;
+            }
+            return Ok(return_ty);
+        }
         let mut arg_types = Vec::new();
         for arg in &normalized_args {
             arg_types.push(self.infer_type(arg, env)?);
-        }
-        // Resolve the closure's own signature for each Callable-typed argument BEFORE
-        // taking a mutable borrow of `self.classes` below — mirrors the instance-method
-        // call path above.
-        let mut normalized_arg_callable_sigs: Vec<Option<FunctionSig>> =
-            Vec::with_capacity(normalized_args.len());
-        for (i, arg) in normalized_args.iter().enumerate() {
-            if arg_types.get(i) == Some(&PhpType::Callable) {
-                normalized_arg_callable_sigs.push(self.resolve_expr_callable_sig(arg, env)?);
-            } else {
-                normalized_arg_callable_sigs.push(None);
-            }
         }
 
         let direct_impl_class_name = if parent_call || self_call {
             self.classes
                 .get(class_name)
-                .and_then(|class_info| class_info.method_impl_classes.get(method))
+                .and_then(|class_info| class_info.method_impl_classes.get(&method_key))
                 .cloned()
                 .unwrap_or_else(|| class_name.to_string())
         } else {
@@ -1072,10 +1069,10 @@ impl Checker {
         let static_declared_flags = self
             .classes
             .get(class_name)
-            .map(|class_info| Self::declared_method_param_flags(class_info, method, true))
+            .map(|class_info| Self::declared_method_param_flags(class_info, &method_key, true))
             .unwrap_or_default();
         if let Some(class_info) = self.classes.get_mut(class_name) {
-            if let Some(sig) = class_info.static_methods.get_mut(method) {
+            if let Some(sig) = class_info.static_methods.get_mut(&method_key) {
                 let regular_param_count = if sig.variadic.is_some() {
                     sig.params.len().saturating_sub(1)
                 } else {
@@ -1105,62 +1102,45 @@ impl Checker {
                             sig.params[i].1 = Self::union_param_type(&sig.params[i].1, arg_ty);
                         }
                     }
-                    if i < regular_param_count && *arg_ty == PhpType::Callable {
-                        if let Some(closure_sig) = normalized_arg_callable_sigs[i].clone() {
-                            // NOT "static:"-prefixed (unlike `param_specialization_seen` above):
-                            // this key must match the UNPREFIXED `"{class}::{method}"` scheme the
-                            // active EIR lowering already reads for both static and instance
-                            // methods (`ir_lower::function::lower_class_method`'s `owner_name`),
-                            // and PHP forbids a class from declaring both a static and an
-                            // instance method with the same name, so the plain key stays
-                            // unambiguous.
-                            self.callable_param_sigs.insert(
-                                (format!("{}::{}", class_name, method), sig.params[i].0.clone()),
-                                closure_sig,
-                            );
-                        }
-                    }
                 }
                 if method_variadic_tail_needs_iterable(
                     &normalized_args,
                     sig,
                     regular_param_count,
                     env,
-                ) {
+                ) && !method_variadic_param_is_by_ref(sig)
+                {
                     if let Some((_, variadic_ty)) = sig.params.last_mut() {
                         *variadic_ty = PhpType::Iterable;
                     }
-                } else if sig.variadic.is_some() && arg_types.len() > regular_param_count {
+                } else if sig.variadic.is_some()
+                    && arg_types.len() > regular_param_count
+                    && !method_variadic_param_is_by_ref(sig)
+                {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
                         elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
-                        // Never narrow a declared `mixed ...$args` variadic. `wider_type_syntactic`
-                        // lets `Str` swallow `Mixed`, so specializing a `mixed` variadic from the
-                        // first call arg would wrongly retype it to that arg's type and then reject
-                        // a later differently-typed arg. A `mixed` variadic accepts any element in
-                        // PHP, so it stays `Mixed`. Genuinely-typed variadics still specialize.
-                        if !matches!(existing_elem_ty.as_ref(), PhpType::Mixed) {
-                            **existing_elem_ty =
-                                wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
-                        }
+                        **existing_elem_ty =
+                            wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
-                return Ok(sig.return_type.clone());
+                return Ok(late_static_static_return_type
+                    .clone()
+                    .unwrap_or_else(|| sig.return_type.clone()));
             }
         }
         if parent_call || self_call {
             let instance_declared_flags = self
                 .classes
                 .get(&direct_impl_class_name)
-                .map(|class_info| Self::declared_method_param_flags(class_info, method, false))
+                .map(|class_info| Self::declared_method_param_flags(class_info, &method_key, false))
                 .unwrap_or_default();
-            let mut resolved_return: Option<PhpType> = None;
             if let Some(sig) = self
                 .classes
                 .get_mut(&direct_impl_class_name)
-                .and_then(|class_info| class_info.methods.get_mut(method))
+                .and_then(|class_info| class_info.methods.get_mut(&method_key))
             {
                 let regular_param_count = if sig.variadic.is_some() {
                     sig.params.len().saturating_sub(1)
@@ -1192,100 +1172,41 @@ impl Checker {
                         }
                     }
                 }
-                if sig.variadic.is_some() && arg_types.len() > regular_param_count {
+                if sig.variadic.is_some()
+                    && arg_types.len() > regular_param_count
+                    && !method_variadic_param_is_by_ref(sig)
+                {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
                         elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
-                        // Never narrow a declared `mixed ...$args` variadic. `wider_type_syntactic`
-                        // lets `Str` swallow `Mixed`, so specializing a `mixed` variadic from the
-                        // first call arg would wrongly retype it to that arg's type and then reject
-                        // a later differently-typed arg. A `mixed` variadic accepts any element in
-                        // PHP, so it stays `Mixed`. Genuinely-typed variadics still specialize.
-                        if !matches!(existing_elem_ty.as_ref(), PhpType::Mixed) {
-                            **existing_elem_ty =
-                                wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
-                        }
+                        **existing_elem_ty =
+                            wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
-                resolved_return = Some(sig.return_type.clone());
-            }
-            if let Some(ret) = resolved_return {
-                // `parent::`/`self::` are forwarding calls: a `: static` return late-binds to the
-                // current class (the runtime `$this` class), not the resolved parent/self class.
-                // The declaring class is looked up on the impl class, but the substitution target
-                // is `current_class`, so `parent::trimPrefix()` inside `UnicodeString` yields
-                // `UnicodeString`, not the parent's collapsed `AbstractUnicodeString`.
-                let bind = self
-                    .current_class
+                return Ok(late_static_instance_return_type
                     .clone()
-                    .unwrap_or_else(|| class_name.to_string());
-                return Ok(self.resolve_static_return_bound(
-                    &ret,
-                    &direct_impl_class_name,
-                    &bind,
-                    method,
-                ));
+                    .unwrap_or_else(|| sig.return_type.clone()));
             }
         }
         Ok(PhpType::Int)
     }
 
-    /// Late-binds a `: static` instance-method return type to the receiver class (PHP late static
-    /// binding). Both the declaring-class lookup and the substitution target are the receiver, so
-    /// `$mid->append()` — where `append(): static` is declared in `Base` — returns `Mid`.
-    fn resolve_static_return(&self, ret: &PhpType, receiver_class: &str, method: &str) -> PhpType {
-        self.resolve_static_return_bound(ret, receiver_class, receiver_class, method)
-    }
-
-    /// Core late-static-binding substitution. Resolves the declaring class of `method` on
-    /// `declaring_lookup_class` (via `method_declaring_classes`, falling back to that class for a
-    /// directly declared method) and consults `static_return_methods`. When `(declaring, method)` is
-    /// a recorded `: static` return, the declaring-class `Object` — which the flatten pass collapsed
-    /// `static` into — is rewritten to `substitute_class`, preserving nullable/union shape.
-    /// Otherwise `ret` is returned unchanged, so a genuine `: DeclaringClass` / `: self` return stays
-    /// bound to its declaring class. `declaring_lookup_class` and `substitute_class` coincide for
-    /// direct instance dispatch but differ for `parent::`/`self::` forwarding calls, where `static`
-    /// binds to the current class rather than the resolved parent/self class.
-    fn resolve_static_return_bound(
+    /// Returns preserved late-static return syntax for a static method.
+    fn static_method_late_static_return(
         &self,
-        ret: &PhpType,
-        declaring_lookup_class: &str,
-        substitute_class: &str,
-        method: &str,
-    ) -> PhpType {
-        let method_key = php_symbol_key(method);
-        let declaring = self
-            .classes
-            .get(declaring_lookup_class)
-            .and_then(|ci| ci.method_declaring_classes.get(&method_key))
-            .map(String::as_str)
-            .unwrap_or(declaring_lookup_class);
-        if !self
-            .static_return_methods
-            .contains(&(declaring.to_string(), method_key))
-        {
-            return ret.clone();
-        }
-        substitute_object_class(ret, substitute_class)
-    }
-}
-
-/// Replaces a bare `Object(_)` — or the `Object` members of a union — with `Object(receiver)`, used
-/// to late-bind a `static` return type to the receiver class. A `?static` return collapses to a
-/// `Union([Object(_), Void])`, so only the `Object` member is rewritten and the `Void` (null) arm is
-/// preserved. Non-object leaves pass through unchanged.
-fn substitute_object_class(ty: &PhpType, receiver: &str) -> PhpType {
-    match ty {
-        PhpType::Object(_) => PhpType::Object(receiver.to_string()),
-        PhpType::Union(members) => PhpType::Union(
-            members
-                .iter()
-                .map(|m| substitute_object_class(m, receiver))
-                .collect(),
-        ),
-        other => other.clone(),
+        receiver_type: &str,
+        method_key: &str,
+    ) -> Option<TypeExpr> {
+        self.classes
+            .get(receiver_type)
+            .and_then(|class_info| {
+                class_info
+                    .late_static_static_method_returns
+                    .get(method_key)
+            })
+            .cloned()
     }
 }
 
@@ -1322,6 +1243,19 @@ fn method_variadic_tail_needs_iterable(
     })
 }
 
+/// Returns whether a method signature stores its variadic slot by reference.
+fn method_variadic_param_is_by_ref(sig: &FunctionSig) -> bool {
+    let Some(variadic_name) = sig.variadic.as_ref() else {
+        return false;
+    };
+    sig.params
+        .iter()
+        .position(|(name, _)| name == variadic_name)
+        .and_then(|index| sig.ref_params.get(index))
+        .copied()
+        .unwrap_or(false)
+}
+
 /// Returns true when a spread source can carry string keys into a variadic method tail.
 fn spread_source_keeps_runtime_keys(expr: &Expr, env: &TypeEnv) -> bool {
     match &expr.kind {
@@ -1334,20 +1268,5 @@ fn spread_source_keeps_runtime_keys(expr: &Expr, env: &TypeEnv) -> bool {
             crate::types::checker::infer_expr_type_syntactic(expr),
             PhpType::AssocArray { .. } | PhpType::Iterable
         ),
-    }
-}
-
-/// Returns whether `ty` is `Callable` or a `Union` that contains a `Callable` member.
-///
-/// A callable value may be a `Closure` object at runtime, so a nullsafe method call on a
-/// callable (bare or nullable, e.g. `?Closure`/`?callable`) is accepted gradually — the
-/// same permissiveness the plain `->` path applies to callable receivers.
-fn type_contains_callable(ty: &PhpType) -> bool {
-    match ty {
-        PhpType::Callable => true,
-        PhpType::Union(members) => members
-            .iter()
-            .any(|member| matches!(member, PhpType::Callable)),
-        _ => false,
     }
 }

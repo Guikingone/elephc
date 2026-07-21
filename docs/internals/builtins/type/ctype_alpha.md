@@ -2,15 +2,15 @@
 title: "ctype_alpha() — internals"
 description: "Compiler internals for ctype_alpha(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 413
+  order: 430
 ---
 
 ## `ctype_alpha()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/ctype.rs`:20](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/ctype.rs#L20) (`lower_ctype_alpha`)
+- **Signature**: [`src/builtins/string/ctype_alpha.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ctype_alpha.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/ctype.rs`:20](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/ctype.rs#L20) (`lower_ctype_alpha`)
 - **Function symbol**: `lower_ctype_alpha()`
 
 
@@ -32,7 +32,11 @@ function ctype_alpha(string $text): bool
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/ctype_alpha.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/ctype_alpha.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `ctype_alpha()`](../../../php/builtins/type/ctype_alpha.md)
-

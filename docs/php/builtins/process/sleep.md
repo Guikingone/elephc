@@ -1,8 +1,8 @@
 ---
 title: "sleep()"
-description: "Lowers `sleep(seconds)` through the target's C library symbol."
+description: "Delays execution for a number of seconds."
 sidebar:
-  order: 299
+  order: 329
 ---
 
 ## sleep()
@@ -11,12 +11,17 @@ sidebar:
 function sleep(int $seconds): int
 ```
 
-Lowers `sleep(seconds)` through the target's C library symbol.
+Delays execution for a number of seconds.
 
 **Parameters**:
 - `$seconds` (`int`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/sleep.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/sleep.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

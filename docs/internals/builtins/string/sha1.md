@@ -2,15 +2,15 @@
 title: "sha1() — internals"
 description: "Compiler internals for sha1(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 376
+  order: 397
 ---
 
 ## `sha1()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:477](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L477) (`lower_sha1`)
+- **Signature**: [`src/builtins/string/sha1.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/sha1.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:422](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L422) (`lower_sha1`)
 - **Function symbol**: `lower_sha1()`
 
 
@@ -27,14 +27,18 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function sha1(string $string, bool $binary): string
+function sha1(string $string, bool $binary = false): string
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/sha1.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/sha1.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `sha1()`](../../../php/builtins/string/sha1.md)
-

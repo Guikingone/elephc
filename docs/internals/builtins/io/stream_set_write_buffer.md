@@ -2,15 +2,15 @@
 title: "stream_set_write_buffer() — internals"
 description: "Compiler internals for stream_set_write_buffer(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 198
+  order: 232
 ---
 
 ## `stream_set_write_buffer()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2035](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2035) (`lower_stream_set_buffer`)
+- **Signature**: [`src/builtins/io/stream_set_write_buffer.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_set_write_buffer.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2252](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2252) (`lower_stream_set_buffer`)
 - **Function symbol**: `lower_stream_set_buffer()`
 
 
@@ -32,7 +32,11 @@ function stream_set_write_buffer(resource $stream, int $size): int
 
 - **Arity**: takes exactly 2 arguments.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_write_buffer.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_write_buffer.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `stream_set_write_buffer()`](../../../php/builtins/io/stream_set_write_buffer.md)
-

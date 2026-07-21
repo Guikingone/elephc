@@ -2,15 +2,15 @@
 title: "touch() — internals"
 description: "Compiler internals for touch(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 133
+  order: 154
 ---
 
 ## `touch()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3880](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3880) (`lower_touch`)
+- **Signature**: [`src/builtins/io/touch.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/touch.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4519](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4519) (`lower_touch`)
 - **Function symbol**: `lower_touch()`
 
 
@@ -25,14 +25,18 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function touch(string $filename, int $mtime, int $atime): bool
+function touch(string $filename, int $mtime = null, int $atime = null): bool
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes 1–3 arguments (2 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/touch.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/touch.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `touch()`](../../../php/builtins/filesystem/touch.md)
-

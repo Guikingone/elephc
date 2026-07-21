@@ -1,8 +1,8 @@
 ---
 title: "array_map()"
-description: "Lowers `array_map()` through the callback runtime helper matching the callback result type."
+description: "Applies a callback to the elements of an array."
 sidebar:
-  order: 14
+  order: 22
 ---
 
 ## array_map()
@@ -11,7 +11,7 @@ sidebar:
 function array_map(callable $callback, array $array, ...$arrays): array
 ```
 
-Lowers `array_map()` through the callback runtime helper matching the callback result type.
+Applies a callback to the elements of an array.
 
 **Parameters**:
 - `$callback` (`callable`)
@@ -19,6 +19,11 @@ Lowers `array_map()` through the callback runtime helper matching the callback r
 - `...$arrays` — variadic: collects excess arguments into `$arrays`.
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_map.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_map.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

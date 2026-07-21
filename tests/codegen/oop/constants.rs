@@ -10,6 +10,28 @@
 
 use super::*;
 
+/// Verifies keyword-named class and interface constants preserve PHP's case-sensitive identity,
+/// including declarations whose spellings differ only by case.
+#[test]
+fn test_keyword_named_class_and_interface_constants_preserve_case() {
+    let out = compile_and_run(
+        "<?php
+        class KeywordConstants {
+            const Match = 1;
+            const MATCH = 2;
+            const Default = 3;
+        }
+        interface KeywordInterface {
+            const Print = 4;
+            const PRINT = 5;
+        }
+        echo KeywordConstants::Match, KeywordConstants::MATCH,
+             KeywordConstants::Default, KeywordInterface::Print, KeywordInterface::PRINT;
+        ",
+    );
+    assert_eq!(out, "12345");
+}
+
 /// Verifies class constant int.
 #[test]
 fn test_class_constant_int() {
@@ -336,6 +358,75 @@ echo $a->n;
     );
     assert_eq!(out, "5");
 }
+/// Verifies final class constants cannot be redeclared by subclasses.
+#[test]
+fn test_final_class_constant_override_fails() {
+    let err = compile_expect_type_error(
+        r#"<?php
+class Base {
+    final public const LIMIT = 1;
+}
+class Child extends Base {
+    public const LIMIT = 2;
+}
+"#,
+    );
+    assert!(err.contains("cannot override final constant"), "{err}");
+}
+
+/// Verifies final interface constants cannot be redeclared by child interfaces or implementors.
+#[test]
+fn test_final_interface_constant_override_fails() {
+    let err = compile_expect_type_error(
+        r#"<?php
+interface Limits {
+    final public const MAX = 100;
+}
+class Bound implements Limits {
+    public const MAX = 200;
+}
+"#,
+    );
+    assert!(
+        err.contains("cannot override final interface constant"),
+        "{err}"
+    );
+}
+
+/// Verifies child interfaces cannot redeclare final parent interface constants.
+#[test]
+fn test_final_parent_interface_constant_override_fails() {
+    let err = compile_expect_type_error(
+        r#"<?php
+interface Limits {
+    final public const MAX = 100;
+}
+interface ChildLimits extends Limits {
+    public const MAX = 200;
+}
+"#,
+    );
+    assert!(
+        err.contains("cannot override final interface constant"),
+        "{err}"
+    );
+}
+
+/// Verifies private class constants cannot be final.
+#[test]
+fn test_final_private_class_constant_fails() {
+    let err = compile_expect_type_error(
+        r#"<?php
+class Hidden {
+    final private const SECRET = 1;
+}
+"#,
+    );
+    assert!(
+        err.contains("Private constant Hidden::SECRET cannot be final"),
+        "{err}"
+    );
+}
 
 /// Verifies class constant with attribute compiles.
 #[test]
@@ -351,4 +442,74 @@ echo Cfg::TIMEOUT;
 "#,
     );
     assert_eq!(out, "30");
+}
+
+/// Verifies `static::CONST` uses late static binding to resolve the constant
+/// from the actual runtime class (not the declaring class).
+#[test]
+fn test_static_constant_late_static_binding() {
+    let out = compile_and_run(
+        r#"<?php
+class A { const X = 'A'; public static function show() { echo static::X; } }
+class B extends A { const X = 'B'; }
+B::show();
+"#,
+    );
+    assert_eq!(out, "B");
+}
+
+/// Verifies `static::CONST` falls back to the declaring-class value when the
+/// runtime class does not override the constant.
+#[test]
+fn test_static_constant_late_static_binding_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+class A { const X = 'A'; public static function show() { echo static::X . "\n"; } }
+class B extends A { const X = 'B'; }
+class C extends A { }
+A::show();
+B::show();
+C::show();
+"#,
+    );
+    assert_eq!(out, "A\nB\nA\n");
+}
+
+/// Verifies `static::CONST` works with integer constants and multiple overrides.
+#[test]
+fn test_static_constant_integer_override() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { const VAL = 10; public static function get() { return static::VAL; } }
+class Derived extends Base { const VAL = 20; }
+echo Base::get() . "\n";
+echo Derived::get() . "\n";
+"#,
+    );
+    assert_eq!(out, "10\n20\n");
+}
+
+/// PHP 8.3 typed class constants: `const TYPE NAME = ...` parses in class-like bodies and the
+/// constants read back byte-identically to PHP 8.5.
+#[test]
+fn test_typed_class_constants_parse_and_read() {
+    let out = compile_and_run(
+        "<?php final class C { public const string NAME = 'n'; private const int LIMIT = 3; public static function d(): string { return self::NAME . ':' . (string) self::LIMIT; } } echo C::d();",
+    );
+    assert_eq!(out, "n:3");
+}
+
+/// Verifies typed constant overrides may narrow a parent union and retain the
+/// declared type when the constant is used in another typed expression.
+#[test]
+fn test_typed_class_constant_covariant_override() {
+    let out = compile_and_run(
+        r#"<?php
+class BaseLimit { public const int|string VALUE = 1; }
+class IntLimit extends BaseLimit { public const int VALUE = 2; }
+function read_limit(): int { return IntLimit::VALUE; }
+echo read_limit();
+"#,
+    );
+    assert_eq!(out, "2");
 }

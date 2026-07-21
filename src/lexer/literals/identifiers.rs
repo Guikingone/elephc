@@ -175,6 +175,7 @@ pub(in crate::lexer) fn scan_keyword(cursor: &mut Cursor) -> Result<Token, Compi
         "declare" => Ok(Token::Declare),
         "const" => Ok(Token::Const),
         "global" => Ok(Token::Global),
+        "enddeclare" => Ok(Token::EndDeclare),
         "static" => Ok(Token::Static),
         "self" => Ok(Token::Self_),
         "trait" => Ok(Token::Trait),

@@ -117,6 +117,35 @@ expect_builtin_arity_error!(
     "libxml_get_errors() takes no arguments"
 );
 
+expect_builtin_arity_error!(
+    test_error_eval_wrong_args,
+    "<?php eval();",
+    "eval() takes exactly 1 argument"
+);
+
+/// Verifies an eval barrier allows later reads of variables that eval may create dynamically.
+#[test]
+fn test_eval_barrier_allows_dynamic_variable_read() {
+    check_source("<?php eval('$created = 1;'); echo $created;")
+        .expect("eval-created variable reads after the barrier should type-check");
+}
+
+/// Verifies an eval barrier allows later calls to functions that eval may declare dynamically.
+#[test]
+fn test_eval_barrier_allows_dynamic_function_call() {
+    check_source("<?php eval('function dyn_eval_error_test() { return 1; }'); echo dyn_eval_error_test();")
+        .expect("eval-declared function calls after the barrier should type-check");
+}
+
+/// Verifies eval does not hide undefined-variable reads that happen before the barrier.
+#[test]
+fn test_eval_barrier_does_not_hide_prior_undefined_variable() {
+    expect_error(
+        "<?php echo $created; eval('$created = 1;');",
+        "Undefined variable: $created",
+    );
+}
+
 /// Verifies that referencing an undefined constant produces the expected "Undefined constant" error.
 #[test]
 fn test_error_undefined_constant() {
@@ -303,6 +332,51 @@ fn test_error_mktime_wrong_args() {
     expect_error(
         "<?php mktime(1, 2, 3, 4, 5, 6, 7);",
         "mktime() takes exactly 6 arguments",
+    );
+}
+
+/// Verifies that `gmmktime()` rejects more than six arguments, mirroring `mktime()`.
+#[test]
+fn test_error_gmmktime_wrong_args() {
+    expect_error(
+        "<?php gmmktime(1, 2, 3, 4, 5, 6, 7);",
+        "gmmktime() takes exactly 6 arguments",
+    );
+}
+
+/// Verifies that `getdate()` rejects a second argument (it accepts at most one).
+#[test]
+fn test_error_getdate_wrong_args() {
+    expect_error(
+        "<?php getdate(1, 2);",
+        "getdate() takes at most 1 argument",
+    );
+}
+
+/// Verifies that `localtime()` rejects a third argument (it accepts at most two).
+#[test]
+fn test_error_localtime_wrong_args() {
+    expect_error(
+        "<?php localtime(1, true, 3);",
+        "localtime() takes at most 2 arguments",
+    );
+}
+
+/// Verifies that `date_default_timezone_get()` rejects any argument.
+#[test]
+fn test_error_date_default_timezone_get_wrong_args() {
+    expect_error(
+        "<?php date_default_timezone_get(\"x\");",
+        "date_default_timezone_get() takes no arguments",
+    );
+}
+
+/// Verifies that `date_default_timezone_set()` requires exactly one argument.
+#[test]
+fn test_error_date_default_timezone_set_wrong_args() {
+    expect_error(
+        "<?php date_default_timezone_set();",
+        "date_default_timezone_set() takes exactly 1 argument",
     );
 }
 
@@ -745,5 +819,26 @@ fn test_error_uncurated_unknown_function_guard_stays_unfolded_and_errors() {
     expect_error(
         "<?php if (function_exists('totally_made_up_fn_xyz') || true) { totally_made_up_fn_xyz(); }",
         "Undefined function: totally_made_up_fn_xyz",
+    );
+}
+
+/// serialize() requires exactly one argument.
+#[test]
+fn test_error_serialize_wrong_args() {
+    expect_error("<?php serialize();", "serialize() takes exactly 1 argument");
+}
+
+/// unserialize() accepts one or two arguments.
+#[test]
+fn test_error_unserialize_wrong_args() {
+    expect_error("<?php unserialize();", "unserialize() takes 1 or 2 arguments");
+}
+
+/// unserialize()'s data argument must be string-compatible.
+#[test]
+fn test_error_unserialize_non_string_data() {
+    expect_error(
+        "<?php unserialize([1, 2]);",
+        "unserialize() data argument must be string-compatible",
     );
 }

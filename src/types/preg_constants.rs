@@ -30,6 +30,9 @@ pub(crate) const PREG_INT_CONSTANTS: &[(&str, i64)] = &[
 /// The PCRE2 library version string reported by the `PCRE_VERSION` constant.
 ///
 /// Matches the PCRE2 release bundled with the emulated PHP 8.4 runtime.
+// Retained for the checker unit tests and pending re-integration after the
+// origin/main merge; not reachable from the production checker paths yet.
+#[allow(dead_code)]
 pub(crate) const PCRE_VERSION_STR: &str = "10.42 2022-12-11";
 
 #[cfg(test)]

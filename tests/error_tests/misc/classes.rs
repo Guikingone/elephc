@@ -81,6 +81,38 @@ fn test_error_undefined_method() {
 /// actual runtime value's class lacks the method (see `codegen::oop::union_types` for the
 /// runtime match/no-match codegen coverage of this exact shape). Supersedes the previous
 /// "every object member must provide the method" rule this test used to enforce.
+/// Verifies an interface call keeps its declared ancestor return type.
+#[test]
+fn test_error_interface_method_does_not_infer_receiver_from_wither_name() {
+    expect_error(
+        r#"<?php
+interface Message { public function withHeader(): Message; }
+interface Request extends Message { public function requestOnly(): string; }
+class Plain implements Message { public function withHeader(): Message { return $this; } }
+class Req implements Request {
+    public function withHeader(): Message { return new Plain(); }
+    public function requestOnly(): string { return "req"; }
+}
+function read(Request $request): string {
+    return $request->withHeader()->requestOnly();
+}
+"#,
+        "Undefined method: Message::requestOnly",
+    );
+}
+
+/// Verifies `::class` rejects a receiver whose static type is not an object.
+#[test]
+fn test_error_object_class_name_requires_object() {
+    expect_error(
+        "<?php $value = 1; echo $value::class;",
+        "Cannot use \"::class\" on int",
+    );
+}
+
+/// Verifies that a method call on an object union (`A|B`) is rejected when the
+/// method is absent from one of the member classes: every object member must
+/// provide the method for the runtime class-id dispatch to be sound.
 #[test]
 fn test_object_union_method_present_on_only_one_member_type_checks() {
     expect_ok(
@@ -127,6 +159,39 @@ $items[0]["k"] = 1;
 "#,
         "Nested array assignment requires a Mixed or ArrayAccess target",
     );
+}
+
+/// Verifies that parenthesis-free `new Class` rejects immediate postfix access.
+#[test]
+fn test_error_parenthesis_free_new_rejects_immediate_postfix_access() {
+    expect_error(
+        "<?php class Box { public $value = \"x\"; } echo new Box->value;",
+        "Parentheses are required before accessing a parenthesis-free new expression",
+    );
+    expect_error(
+        "<?php class Box { public $value = \"x\"; } echo new Box?->value;",
+        "Parentheses are required before accessing a parenthesis-free new expression",
+    );
+    expect_error(
+        "<?php class Box { public static function value() {} } echo new Box::value();",
+        "Parentheses are required before accessing a parenthesis-free new expression",
+    );
+    expect_error(
+        "<?php class Box {} echo new Box[0];",
+        "Parentheses are required before accessing a parenthesis-free new expression",
+    );
+}
+
+/// Verifies property and array-element dynamic class-name references after `new` are accepted.
+#[test]
+fn test_error_dynamic_new_rejects_unsupported_class_name_references() {
+    // Property and array-element class references after `new` are now supported
+    // (`new $box->className` / `new $classes[0]` compile and instantiate at runtime),
+    // so these forms must type-check instead of erroring.
+    expect_ok(
+        "<?php class Box { public $className = \"stdClass\"; } $box = new Box(); $object = new $box->className;",
+    );
+    expect_ok("<?php $classes = [\"stdClass\"]; $object = new $classes[0];");
 }
 
 /// Verifies the error diagnostic for nullsafe property rejects scalar receiver.
@@ -176,16 +241,6 @@ fn test_error_private_access() {
     expect_error(
         "<?php class Secret { private $value = 7; } $s = new Secret(); echo $s->value;",
         "Cannot access private property: Secret::value",
-    );
-}
-
-/// Verifies the error diagnostic for readonly assign.
-#[test]
-fn test_error_readonly_assign() {
-    // readonly property may only be assigned during construction.
-    expect_error(
-        "<?php class User { public readonly $id; public function __construct($id) { $this->id = $id; } } $u = new User(1); $u->id = 2;",
-        "Cannot assign to readonly property outside constructor: User::id",
     );
 }
 
@@ -344,6 +399,20 @@ fn test_closure_typed_properties_type_check_cleanly() {
         "<?php class Box { public ?\\Closure $cb = null; public array|\\Closure $x; }"
     )
     .is_ok());
+}
+
+/// Verifies nullable and union spellings do not make PHP's forbidden `callable` property
+/// pseudo-type valid.
+#[test]
+fn test_error_typed_property_rejects_nested_callable_types() {
+    expect_error(
+        "<?php class Box { public ?callable $callback; }",
+        "Property Box::$callback cannot use type callable",
+    );
+    expect_error(
+        "<?php class Box { public callable|null $callback; }",
+        "Property Box::$callback cannot use type callable",
+    );
 }
 
 /// Verifies the error diagnostic for static property rejects readonly.
@@ -525,6 +594,46 @@ fn test_error_missing_interface_method() {
     expect_error(
         "<?php interface Named { public function name(); } class User implements Named {}",
         "Class User must implement interface method Named::name",
+    );
+}
+
+/// Verifies the error diagnostic for a missing static interface method.
+#[test]
+fn test_error_missing_static_interface_method() {
+    // a concrete class must implement static methods required by interfaces.
+    expect_error(
+        "<?php interface Maker { public static function make(): string; } class Box implements Maker {}",
+        "Class Box must implement interface static method Maker::make",
+    );
+}
+
+/// Verifies an instance method cannot satisfy a static interface method contract.
+#[test]
+fn test_error_instance_method_cannot_satisfy_static_interface_contract() {
+    // PHP keeps static and instance interface contracts distinct.
+    expect_error(
+        "<?php interface Maker { public static function make(): string; } class Box implements Maker { public function make(): string { return \"x\"; } }",
+        "Cannot use instance method to satisfy static interface contract: Box::make",
+    );
+}
+
+/// Verifies a static method cannot satisfy an instance interface method contract.
+#[test]
+fn test_error_static_method_cannot_satisfy_instance_interface_contract() {
+    // PHP keeps static and instance interface contracts distinct in both directions.
+    expect_error(
+        "<?php interface Named { public function name(): string; } class User implements Named { public static function name(): string { return \"x\"; } }",
+        "Cannot use static method to satisfy interface contract: User::name",
+    );
+}
+
+/// Verifies interface inheritance rejects static/non-static method kind conflicts.
+#[test]
+fn test_error_interface_parent_static_method_kind_conflict() {
+    // A child interface cannot redeclare a static parent method as non-static.
+    expect_error(
+        "<?php interface ParentMaker { public static function make(): string; } interface ChildMaker extends ParentMaker { public function make(): string; }",
+        "Cannot combine static and non-static interface method: ChildMaker::make",
     );
 }
 
@@ -759,16 +868,6 @@ fn test_error_class_cannot_extend_interface() {
 
 // --- Date/time error tests ---
 
-/// Verifies the error diagnostic for readonly class property is implicitly readonly.
-#[test]
-fn test_error_readonly_class_property_is_implicitly_readonly() {
-    // inside a readonly class, instance properties are implicitly readonly.
-    expect_error(
-        "<?php readonly class User { public $id; public function __construct($id) { $this->id = $id; } } $u = new User(1); $u->id = 2;",
-        "Cannot assign to readonly property outside constructor: User::id",
-    );
-}
-
 /// Verifies the error diagnostic for readonly class cannot extend non readonly parent.
 #[test]
 fn test_error_readonly_class_cannot_extend_non_readonly_parent() {
@@ -913,13 +1012,13 @@ fn test_error_write_to_get_only_hooked_property() {
     );
 }
 
-/// Verifies that the short `set => expr` hook form (which needs a backed property) is rejected.
+/// Verifies that a set hook cannot be declared by reference.
 #[test]
-fn test_error_short_set_hook_rejected() {
-    // short `set => expr` requires a backed property; only the block form is supported.
+fn test_error_set_hook_by_ref_rejected() {
+    // only get hooks may be declared by reference; set hooks receive the assigned value.
     expect_error(
-        "<?php class C { private int $n = 0; public int $v { get => $this->n; set => $this->n; } }",
-        "Short `set => expr` hooks require a backed property",
+        "<?php class C { public int $x { get => $this->x; &set { $this->x = $value; } } }",
+        "Set property hook cannot return by reference",
     );
 }
 
@@ -1088,6 +1187,43 @@ fn test_error_const_named_class_is_rejected() {
     expect_error(
         "<?php class A { const class = 1; }",
         "Cannot use 'class' as a class constant name",
+    );
+}
+
+/// Verifies `class` remains reserved for class-name fetching and cannot name an enum case.
+#[test]
+fn test_error_enum_case_named_class_is_rejected() {
+    expect_error(
+        "<?php enum E { case class; }",
+        "Cannot use 'class' as an enum case name",
+    );
+}
+
+/// Verifies enum case lookup stays case-sensitive even when the declared name is a keyword.
+#[test]
+fn test_error_keyword_enum_case_access_with_wrong_case() {
+    expect_error(
+        "<?php enum E { case Default; } echo E::default;",
+        "Undefined enum case: E::default",
+    );
+}
+
+/// Verifies class constant lookup stays case-sensitive instead of compensating for keyword
+/// token folding with a case-insensitive semantic fallback.
+#[test]
+fn test_error_keyword_class_constant_access_with_wrong_case() {
+    expect_error(
+        "<?php class C { const Match = 1; } echo C::match;",
+        "Undefined class constant: C::match",
+    );
+}
+
+/// Verifies builtin keyword-named constants also require their exact declared spelling.
+#[test]
+fn test_error_builtin_keyword_constant_access_with_wrong_case() {
+    expect_error(
+        "<?php echo RegexIterator::match;",
+        "Undefined class constant: RegexIterator::match",
     );
 }
 

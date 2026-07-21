@@ -527,7 +527,7 @@ fn test_error_declare_missing_directive_value() {
 fn test_error_declare_empty_directives() {
     expect_error(
         "<?php declare();",
-        "Expected a directive name inside 'declare(...)'",
+        "Expected a directive name in 'declare(...)'",
     );
 }
 

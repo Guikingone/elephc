@@ -1,8 +1,8 @@
 ---
 title: "is_float()"
-description: "is_float() — type builtin supported by Elephc."
+description: "Checks whether a variable is a floating-point number."
 sidebar:
-  order: 421
+  order: 441
 ---
 
 ## is_float()
@@ -11,12 +11,17 @@ sidebar:
 function is_float(mixed $value): bool
 ```
 
-`is_float()` is a type builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Checks whether a variable is a floating-point number.
 
 **Parameters**:
 - `$value` (`mixed`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/is_float.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_float.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
@@ -25,4 +30,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `is_float` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/is_float.md).
 

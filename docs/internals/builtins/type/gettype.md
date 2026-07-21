@@ -2,15 +2,15 @@
 title: "gettype() — internals"
 description: "Compiler internals for gettype(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 419
+  order: 436
 ---
 
 ## `gettype()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:629](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L629) (`lower_gettype`)
+- **Signature**: [`src/builtins/types/gettype.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/gettype.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:418](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L418) (`lower_gettype`)
 - **Function symbol**: `lower_gettype()`
 
 
@@ -32,7 +32,11 @@ function gettype(mixed $value): string
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/gettype.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/gettype.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `gettype()`](../../../php/builtins/type/gettype.md)
-

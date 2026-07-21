@@ -1,22 +1,27 @@
 ---
 title: "umask()"
-description: "Lowers `umask(mask?)` through the target-aware runtime helper."
+description: "Changes the current umask."
 sidebar:
-  order: 134
+  order: 155
 ---
 
 ## umask()
 
 ```php
-function umask(int $mask): int
+function umask(int $mask = null): int
 ```
 
-Lowers `umask(mask?)` through the target-aware runtime helper.
+Changes the current umask.
 
 **Parameters**:
-- `$mask` (`int`), optional
+- `$mask` (`int`), default `null`, optional
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/umask.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/umask.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

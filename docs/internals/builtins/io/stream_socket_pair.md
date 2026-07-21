@@ -2,15 +2,15 @@
 title: "stream_socket_pair() — internals"
 description: "Compiler internals for stream_socket_pair(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 203
+  order: 237
 ---
 
 ## `stream_socket_pair()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2246](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2246) (`lower_stream_socket_pair`)
+- **Signature**: [`src/builtins/io/stream_socket_pair.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_socket_pair.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2463](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2463) (`lower_stream_socket_pair`)
 - **Function symbol**: `lower_stream_socket_pair()`
 
 
@@ -33,7 +33,11 @@ function stream_socket_pair(int $domain, int $type, int $protocol): mixed
 
 - **Arity**: takes exactly 3 arguments.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_pair.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_pair.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `stream_socket_pair()`](../../../php/builtins/io/stream_socket_pair.md)
-

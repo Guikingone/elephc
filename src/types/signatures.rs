@@ -9,7 +9,7 @@
 //! Key details:
 //! - Builtin signatures must match PHP so named arguments, first-class callables, and mutation semantics stay coherent.
 
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::{AttributeGroup, Expr, ExprKind, TypeExpr};
 use crate::span::Span;
 
 use super::PhpType;
@@ -22,6 +22,8 @@ use super::PhpType;
 /// named arguments, callable aliases, and mutation semantics.
 pub struct FunctionSig {
     pub params: Vec<(String, PhpType)>,
+    pub param_type_exprs: Vec<Option<TypeExpr>>,
+    pub param_attributes: Vec<Vec<AttributeGroup>>,
     pub defaults: Vec<Option<Expr>>,
     pub return_type: PhpType,
     pub declared_return: bool,
@@ -59,36 +61,72 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
         }
     }
 
+    let variadic_index = wrapper_sig.params.len();
+    let variadic_type_expr = if wrapper_sig.param_type_exprs.len() > variadic_index {
+        wrapper_sig.param_type_exprs.remove(variadic_index)
+    } else {
+        None
+    };
+    let variadic_attributes = if wrapper_sig.param_attributes.len() > variadic_index {
+        wrapper_sig.param_attributes.remove(variadic_index)
+    } else {
+        Vec::new()
+    };
+    let variadic_ref = if wrapper_sig.ref_params.len() > variadic_index {
+        wrapper_sig.ref_params.remove(variadic_index)
+    } else {
+        false
+    };
+    let variadic_declared = if wrapper_sig.declared_params.len() > variadic_index {
+        wrapper_sig.declared_params.remove(variadic_index)
+    } else {
+        false
+    };
+
     wrapper_sig.params.push((
         variadic_name.clone(),
         PhpType::Array(Box::new(PhpType::Mixed)),
     ));
-    // Matches `variadic()`'s and `ensure_variadic_for_func_args`'s convention: the
-    // variadic slot's own `defaults` entry is `Some(<empty array literal>)`, not `None`.
-    // Call-argument-count validation (`call_validation::check_known_callable_call_with_options`)
-    // counts `None` defaults as "required parameters" — a bare `None` here falsely demanded
-    // an argument for the variadic tail itself, rejecting zero-arg calls to variadic methods
-    // (this path is exercised unconditionally by `build_method_sig` for every class method).
-    wrapper_sig
-        .defaults
-        .push(Some(Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy())));
-    wrapper_sig.ref_params.push(false);
-    wrapper_sig.declared_params.push(false);
+    wrapper_sig.defaults.push(None);
+    wrapper_sig.ref_params.push(variadic_ref);
+    wrapper_sig.declared_params.push(variadic_declared);
+    wrapper_sig.param_type_exprs.push(variadic_type_expr);
+    wrapper_sig.param_attributes.push(variadic_attributes);
     wrapper_sig
 }
 
 /// Looks up a builtin function's canonical call signature.
 ///
-/// Returns `Some(FunctionSig)` for known PHP builtins (e.g., `strlen`, `array_push`);
-/// returns `None` for untracked or user-defined functions. The returned signature
-/// reflects PHP's actual parameter ordering, defaults, variadics, and by-ref params.
+/// Consults the builtin registry first; falls back to the legacy static match
+/// table when the name is not registered. Returns `Some(FunctionSig)` for known
+/// PHP builtins (e.g., `strlen`, `array_push`) and `None` for untracked or
+/// user-defined functions. The returned signature reflects PHP's actual parameter
+/// ordering, defaults, variadics, and by-ref params.
 ///
 /// Called from:
 /// - type checker builtin validation
 /// - first-class callable builtin sig construction
 /// - optimizer effect modeling for builtins
 pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
+    crate::builtins::registry::function_sig(name)
+        .or_else(|| legacy_builtin_call_sig(name))
+}
+
+/// Legacy static lookup table for builtin call signatures.
+///
+/// Returns `Some(FunctionSig)` for builtins whose signatures are hand-coded
+/// in this match table. `builtin_call_sig` delegates here when the builtin
+/// registry does not have an entry for `name`.
+///
+/// Entries for builtins that have been migrated into `src/builtins/` are kept
+/// here so that the parity gate in `src/builtins/parity_tests.rs` can compare
+/// the registry-derived signature against a stable golden. Remove an entry only
+/// after the parity gate has verified the registry matches and the golden is no
+/// longer needed.
+pub(crate) fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
     match name {
+        "eval" => Some(fixed(&["code"])),
+
         "time" | "json_last_error" | "json_last_error_msg" | "pi"
         | "ptr_null" | "getcwd" | "sys_get_temp_dir" | "tmpfile" | "hash_algos"
         | "date_default_timezone_get" => Some(fixed(&[])),
@@ -140,6 +178,7 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "decbin" => Some(fixed(&["value"])),
         "preg_last_error_msg" => Some(fixed(&[])),
         "preg_last_error" => Some(fixed(&[])),
+        // Migrated to src/builtins/string/ord.rs — kept as the parity-gate golden.
         "ord" => Some(fixed(&["character"])),
         "chr" => Some(fixed(&["codepoint"])),
         "substr_count" => Some(optional(
@@ -152,14 +191,20 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             Some(fixed(&["text"]))
         }
 
-        "floatval" | "boolval" | "gettype" | "get_debug_type" | "is_bool"
-        | "is_null" | "is_float" | "is_int" | "is_iterable" | "is_string" | "is_numeric"
+        "floatval" | "boolval" | "strval" | "gettype" | "get_debug_type" | "is_bool"
+        | "is_null" | "is_float" | "is_double" | "is_real" | "is_int" | "is_integer"
+        | "is_long" | "is_iterable" | "is_string" | "is_numeric"
         | "is_array" | "is_object" | "is_scalar"
-        | "empty" | "var_dump" => {
+        | "empty" => {
             Some(fixed(&["value"]))
         }
         "intval" => Some(optional(&["value", "base"], 1, vec![int_lit(10)])),
-        "print_r" => Some(optional(&["value", "return"], 1, vec![bool_lit(false)])),
+        "var_dump" => Some(variadic(&["value"], "values")),
+        "print_r" => Some(optional(
+            &["value", "return"],
+            1,
+            vec![bool_lit(false)],
+        )),
         "isset" => Some(variadic(&["var"], "vars")),
         "unset" => Some(variadic(&["var"], "vars")),
         "settype" => {
@@ -178,6 +223,8 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             declared_params: Vec::new(),
             variadic: None,
             deprecation: None,
+            param_attributes: Vec::new(),
+            param_type_exprs: Vec::new(),
         }),
         "func_get_args" => Some(FunctionSig {
             params: Vec::new(),
@@ -189,6 +236,8 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             declared_params: Vec::new(),
             variadic: None,
             deprecation: None,
+            param_attributes: Vec::new(),
+            param_type_exprs: Vec::new(),
         }),
         "func_get_arg" => Some(FunctionSig {
             params: vec![("position".to_string(), PhpType::Int)],
@@ -200,6 +249,8 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             declared_params: vec![true],
             variadic: None,
             deprecation: None,
+            param_attributes: Vec::new(),
+            param_type_exprs: Vec::new(),
         }),
         "extension_loaded" => Some(fixed(&["extension"])),
         "is_callable" => Some(fixed(&["value"])),
@@ -222,6 +273,14 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             &["object_or_class", "autoload"],
             1,
             vec![bool_lit(true)],
+        )),
+        "method_exists" => Some(with_return(
+            fixed(&["object_or_class", "method"]),
+            PhpType::Bool,
+        )),
+        "property_exists" => Some(with_return(
+            fixed(&["object_or_class", "property"]),
+            PhpType::Bool,
         )),
         "iterator_to_array" => Some(optional(
             &["iterator", "preserve_keys"],
@@ -279,6 +338,7 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             1,
             vec![string_lit(" \t\r\n\u{0c}\u{0b}")],
         )),
+        // Migrated to src/builtins/string/substr.rs — kept as the parity-gate golden.
         "substr" => Some(optional(&["string", "offset", "length"], 2, vec![null_lit()])),
         "strpos" => Some(optional(
             &["haystack", "needle", "offset"],
@@ -294,7 +354,6 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "str_repeat" => Some(fixed(&["string", "times"])),
         "strcmp" | "strcasecmp" => Some(fixed(&["string1", "string2"])),
         // strval(mixed $value): string — coerces its single argument to a string.
-        "strval" => Some(fixed(&["value"])),
         // strnatcmp/strnatcasecmp(string $string1, string $string2): int — the
         // natural-order comparison siblings of strcmp/strcasecmp.
         "strnatcmp" | "strnatcasecmp" => Some(fixed(&["string1", "string2"])),
@@ -562,7 +621,9 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
 
         "array_pop" | "array_shift" => Some(first_param_ref(fixed(&["array"]))),
         "array_keys" | "array_values" | "array_flip" | "array_sum" | "array_product"
-        | "array_rand" => Some(fixed(&["array"])),
+        | "array_rand" | "array_is_list" | "array_key_first" | "array_key_last" => {
+            Some(fixed(&["array"]))
+        }
         // array_reverse(array $array, bool $preserve_keys = false): array.
         "array_reverse" => Some(optional(&["array", "preserve_keys"], 1, vec![bool_lit(false)])),
         // array_unique(array $array, int $flags = SORT_STRING): array. SORT_STRING = 2.
@@ -577,10 +638,8 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "array_key_exists" => Some(fixed(&["key", "array"])),
         // array_key_first(array $array): string|int|null — reads the first key
         // without moving the internal pointer.
-        "array_key_first" => Some(fixed(&["array"])),
         // array_key_last(array $array): string|int|null — reads the last key
         // without moving the internal pointer.
-        "array_key_last" => Some(fixed(&["array"])),
         // `end(&$array)` takes the array by reference (PHP advances its internal
         // pointer); elephc only reads the last element, but the by-ref marker keeps
         // the original storage from being copied into a value temporary.
@@ -604,16 +663,20 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             Some(optional(&["needle", "haystack", "strict"], 2, vec![bool_lit(false)]))
         }
         "array_push" | "array_unshift" => Some(first_param_ref(variadic(&["array"], "values"))),
-        "array_merge" => Some(variadic(&[], "arrays")),
-        // array_is_list(array $array): bool.
-        "array_is_list" => Some(fixed(&["array"])),
+        "array_merge" | "array_merge_recursive" => Some(variadic(&[], "arrays")),
         // array_replace(array $array, array ...$replacements): array — later arrays
         // overwrite earlier entries by key (int keys are preserved, not renumbered).
         "array_replace" => Some(variadic(&["array"], "replacements")),
         // array_replace_recursive(array $array, array ...$replacements): array.
         "array_replace_recursive" => Some(variadic(&["array"], "replacements")),
-        "array_diff" | "array_intersect" | "array_diff_key" | "array_intersect_key" => {
+        "array_diff" | "array_intersect" | "array_diff_key" | "array_intersect_key"
+        | "array_diff_assoc" | "array_intersect_assoc" => {
             Some(variadic(&["array"], "arrays"))
+        }
+        "array_multisort" => {
+            let mut sig = fixed(&["array1", "array2"]);
+            sig.ref_params = vec![true, true];
+            Some(sig)
         }
         "array_combine" => Some(fixed(&["keys", "values"])),
         "array_fill_keys" => Some(fixed(&["keys", "value"])),
@@ -646,15 +709,14 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             2,
             vec![null_lit()],
         )),
-        "array_walk" | "usort" | "uksort" | "uasort" => {
+        "array_walk" | "array_walk_recursive" | "usort" | "uksort" | "uasort" => {
             Some(first_param_ref(fixed(&["array", "callback"])))
         }
         // array_walk_recursive(object|array &$array, callable $callback,
         // mixed $arg = null): true — by-ref array like array_walk, plus recursion.
-        "array_walk_recursive" => {
-            let mut sig = optional(&["array", "callback", "arg"], 2, vec![null_lit()]);
-            sig.ref_params[0] = true;
-            Some(sig)
+        "array_find" | "array_any" | "array_all" => Some(fixed(&["array", "callback"])),
+        "array_udiff" | "array_uintersect" => {
+            Some(fixed(&["array1", "array2", "callback"]))
         }
         "call_user_func" => Some(variadic(&["callback"], "args")),
         "call_user_func_array" => Some(fixed(&["callback", "args"])),
@@ -783,7 +845,6 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "get_defined_constants" => Some(optional(&["categorize"], 0, vec![bool_lit(false)])),
         // -- misc / error-handling / process builtins (recognition-only; runtime deferred) --
         // method_exists(object|string $object_or_class, string $method): bool.
-        "method_exists" => Some(fixed(&["object_or_class", "method"])),
         // trigger_error(string $message, int $error_level = E_USER_NOTICE (1024)): bool.
         "trigger_error" => Some(optional(&["message", "error_level"], 1, vec![int_lit(1024)])),
         // set_error_handler(?callable $callback, int $error_levels = E_ALL (32767)): ?callable.
@@ -950,6 +1011,20 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         )),
         "__elephc_phar_list_entries" => Some(fixed(&["filename"])),
         "__elephc_phar_set_compression" => Some(fixed(&["filename", "compression"])),
+        "__elephc_phar_get_metadata" => Some(fixed(&["filename"])),
+        "__elephc_phar_get_stub" => Some(fixed(&["filename"])),
+        "__elephc_phar_set_metadata" => Some(fixed(&["filename", "metadata"])),
+        "__elephc_phar_set_stub" => Some(fixed(&["filename", "stub"])),
+        "__elephc_phar_set_zip_password" => Some(fixed(&["password"])),
+        "__elephc_phar_get_file_metadata" => Some(fixed(&["url"])),
+        "__elephc_phar_set_file_metadata" => Some(fixed(&["url", "metadata"])),
+        "__elephc_phar_gzip_archive" => Some(fixed(&["src"])),
+        "__elephc_phar_bzip2_archive" => Some(fixed(&["src"])),
+        "__elephc_phar_decompress_archive" => Some(fixed(&["src"])),
+        "__elephc_phar_sign_openssl" => Some(fixed(&["path", "key"])),
+        "__elephc_phar_sign_hash" => Some(fixed(&["path", "algo"])),
+        "__elephc_phar_get_signature_hash" => Some(fixed(&["path"])),
+        "__elephc_phar_get_signature_type" => Some(fixed(&["path"])),
         "copy" | "rename" => Some(fixed(&["from", "to"])),
         "unlink" => Some(fixed(&["filename"])),
         "rmdir" | "chdir" => Some(fixed(&["directory"])),
@@ -1176,6 +1251,8 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         }
         "ptr_write_string" => Some(fixed(&["pointer", "string"])),
         "ptr_sizeof" => Some(fixed(&["type"])),
+        "zval_pack" => Some(fixed(&["value"])),
+        "zval_unpack" | "zval_type" | "zval_free" => Some(fixed(&["zval"])),
         "buffer_new" => Some(fixed(&["length"])),
         "buffer_len" | "buffer_free" => Some(fixed(&["buffer"])),
         _ => None,
@@ -1184,16 +1261,30 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
 
 /// Returns the signature used when a builtin is accessed as a first-class callable.
 ///
-/// Some builtins (e.g., `strlen`, `count`, `buffer_len`) have explicit first-class
-/// signatures with precise parameter and return types. Unknown builtins fall through
-/// to `general_first_class_callable_builtin_sig`.
+/// Consults the builtin registry first (via `registry::first_class_callable_sig`);
+/// falls back to the legacy static table when the name is not registered. Some builtins
+/// (e.g., `strlen`, `count`, `buffer_len`) have explicit first-class signatures with
+/// precise parameter and return types. Unknown builtins fall through to
+/// `general_first_class_callable_builtin_sig`.
 ///
 /// Called from:
 /// - first-class callable lowering for builtin references
 pub(crate) fn first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
+    crate::builtins::registry::first_class_callable_sig(name)
+        .or_else(|| legacy_first_class_callable_builtin_sig(name))
+}
+
+/// Legacy static lookup table for first-class-callable builtin signatures.
+///
+/// Returns the precise typed `FunctionSig` used when a builtin is referenced
+/// as a first-class callable. `first_class_callable_builtin_sig` delegates
+/// here when the registry does not have an entry for `name`.
+fn legacy_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
     match name {
         "strlen" => Some(FunctionSig {
             params: vec![("string".to_string(), PhpType::Str)],
+            param_type_exprs: vec![None],
+            param_attributes: vec![Vec::new()],
             defaults: vec![None],
             return_type: PhpType::Int,
             declared_return: true,
@@ -1211,6 +1302,8 @@ pub(crate) fn first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig
                     value: Box::new(PhpType::Mixed),
                 },
             )],
+            param_type_exprs: vec![None],
+            param_attributes: vec![Vec::new()],
             defaults: vec![None],
             return_type: PhpType::Int,
             declared_return: true,
@@ -1222,6 +1315,8 @@ pub(crate) fn first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig
         }),
         "buffer_len" => Some(FunctionSig {
             params: vec![("buffer".to_string(), PhpType::Buffer(Box::new(PhpType::Int)))],
+            param_type_exprs: vec![None],
+            param_attributes: vec![Vec::new()],
             defaults: vec![None],
             return_type: PhpType::Int,
             declared_return: true,
@@ -1255,7 +1350,7 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             PhpType::Bool,
         )),
         "pi" => Some(typed_first_class_builtin_sig(name, &[], PhpType::Float)),
-        "intval" | "ord" => Some(typed_first_class_builtin_sig(
+        "intval" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Str],
             PhpType::Int,
@@ -1265,14 +1360,19 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             &[PhpType::Mixed],
             PhpType::Float,
         )),
+        "strval" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Mixed],
+            PhpType::Str,
+        )),
         // NOTE: is_array/is_object/is_scalar are intentionally NOT first-class callable.
-        // The runtime callable wrapper for a builtin is emitted by the legacy backend, which
-        // has no codegen for these three predicates, so listing them here would emit an
-        // undefined `_fn_is_*` invoker reference in any program using dynamic string callbacks.
+        // No runtime callable wrapper is emitted for these three predicates, so listing
+        // them here would emit an undefined `_fn_is_*` invoker reference in any program
+        // using dynamic string callbacks.
         // Direct calls are fully supported; first-class/string-callback use is not (yet).
-        "boolval" | "is_bool" | "is_null" | "is_float" | "is_int" | "is_iterable"
-        | "is_string" | "is_numeric" | "is_nan" | "is_finite" | "is_infinite"
-        | "is_countable"
+        "boolval" | "is_bool" | "is_null" | "is_float" | "is_double" | "is_real"
+        | "is_int" | "is_integer" | "is_long" | "is_iterable" | "is_string"
+        | "is_numeric" | "is_nan" | "is_finite" | "is_infinite" | "is_countable"
         | "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" | "ctype_upper" => {
             Some(typed_first_class_builtin_sig(name, &[PhpType::Mixed], PhpType::Bool))
         }
@@ -1281,6 +1381,9 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             &[PhpType::Str],
             PhpType::Bool,
         )),
+        "method_exists" | "property_exists" => {
+            return_typed_first_class_builtin_sig(name, PhpType::Bool)
+        }
         "gettype" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Mixed],
@@ -1295,13 +1398,13 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         "grapheme_strrev" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Str],
-            PhpType::Union(vec![PhpType::Str, PhpType::Bool]),
+            PhpType::Union(vec![PhpType::Str, PhpType::False]),
         )),
         "strtolower" | "strtoupper" | "ucfirst" | "lcfirst" | "strrev"
         | "addslashes" | "stripslashes" | "nl2br" | "bin2hex" | "hex2bin"
         | "htmlspecialchars" | "htmlentities" | "html_entity_decode" | "urlencode"
         | "urldecode" | "rawurlencode" | "rawurldecode" | "base64_encode"
-        | "base64_decode" | "trim" | "ltrim" | "rtrim" | "chop" | "ucwords" | "substr"
+        | "base64_decode" | "trim" | "ltrim" | "rtrim" | "chop" | "ucwords"
         | "str_repeat" | "strstr" | "str_replace" | "str_ireplace" | "explode"
         | "implode" | "substr_replace" | "str_pad" | "str_split" | "wordwrap"
         | "sprintf" | "hash" | "hash_hmac" | "md5" | "sha1" | "crc32" | "number_format"
@@ -1512,11 +1615,6 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         }
         // -- misc / error-handling / process first-class callables (recognition-only) --
         // method_exists checks whether a class or object exposes a method and returns bool.
-        "method_exists" => Some(typed_first_class_builtin_sig(
-            name,
-            &[PhpType::Mixed, PhpType::Str],
-            PhpType::Bool,
-        )),
         // trigger_error emits a user-level error/notice and returns bool.
         "trigger_error" => Some(typed_first_class_builtin_sig(name, &[PhpType::Str], PhpType::Bool)),
         // set_error_handler installs a handler and returns the previous one (?callable).
@@ -1739,7 +1837,7 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         }
         "strtotime" => {
             let mut sig = builtin_call_sig(name)?;
-            sig.return_type = PhpType::Union(vec![PhpType::Int, PhpType::Bool]);
+            sig.return_type = PhpType::Union(vec![PhpType::Int, PhpType::False]);
             sig.declared_return = true;
             Some(sig)
         }
@@ -1761,7 +1859,7 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         "json_encode" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Mixed, PhpType::Int, PhpType::Int],
-            PhpType::Union(vec![PhpType::Str, PhpType::Bool]),
+            PhpType::Union(vec![PhpType::Str, PhpType::False]),
         )),
         "json_decode" => Some(typed_first_class_builtin_sig(
             name,
@@ -1772,6 +1870,16 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             name,
             &[PhpType::Str, PhpType::Int, PhpType::Int],
             PhpType::Bool,
+        )),
+        "serialize" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Mixed],
+            PhpType::Str,
+        )),
+        "unserialize" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str, PhpType::Mixed],
+            PhpType::Mixed,
         )),
         "preg_replace_callback" => Some(typed_first_class_builtin_sig(
             name,
@@ -1797,6 +1905,26 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             name,
             &[PhpType::Pointer(None), PhpType::Str],
             PhpType::Int,
+        )),
+        "zval_pack" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Mixed],
+            PhpType::Pointer(None),
+        )),
+        "zval_unpack" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Pointer(None)],
+            PhpType::Mixed,
+        )),
+        "zval_type" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Pointer(None)],
+            PhpType::Int,
+        )),
+        "zval_free" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Pointer(None)],
+            PhpType::Void,
         )),
         _ => None,
     }
@@ -1864,6 +1992,13 @@ fn variadic(regular_params: &[&str], variadic_name: &str) -> FunctionSig {
     make_sig(&params, defaults, Some(variadic_name))
 }
 
+/// Sets the declared return type for a signature while preserving its parameter contract.
+fn with_return(mut sig: FunctionSig, return_type: PhpType) -> FunctionSig {
+    sig.return_type = return_type;
+    sig.declared_return = true;
+    sig
+}
+
 /// Marks the first parameter of a signature as by-reference.
 fn first_param_ref(mut sig: FunctionSig) -> FunctionSig {
     if let Some(first_ref) = sig.ref_params.first_mut() {
@@ -1882,6 +2017,8 @@ fn make_sig(params: &[&str], defaults: Vec<Option<Expr>>, variadic: Option<&str>
             .iter()
             .map(|name| ((*name).to_string(), PhpType::Mixed))
             .collect(),
+        param_type_exprs: vec![None; params.len()],
+        param_attributes: vec![Vec::new(); params.len()],
         defaults,
         return_type: PhpType::Mixed,
         declared_return: false,
@@ -1921,6 +2058,8 @@ mod tests {
     fn variadic_sig(params: Vec<(String, PhpType)>) -> FunctionSig {
         FunctionSig {
             defaults: vec![None; params.len()],
+            param_type_exprs: vec![None; params.len()],
+            param_attributes: vec![Vec::new(); params.len()],
             return_type: PhpType::Mixed,
             declared_return: false,
             by_ref_return: false,

@@ -18,6 +18,7 @@ PHP source
   -> tokenize          Lexer: text -> tokens
   -> parse             Parser: tokens -> AST (Pratt expression parsing)
   -> magic-constants   lower __FILE__, __DIR__, __LINE__, __FUNCTION__, ...
+  -> (strict-audit)    reject elephc-only constructs (with --strict-php)
   -> (conditional)     apply compiler ifdef branches from --define
   -> autoload-build    discover autoload rules
   -> resolve           resolve include/require and declarations
@@ -25,6 +26,8 @@ PHP source
   -> tz-prelude         inject the timezone-introspection prelude when used
   -> list-id-prelude    inject the DateTimeZone identifier-list prelude when used
   -> var-export-prelude inject the var_export prelude when used
+  -> image-prelude      inject the image (GD/Exif/Imagick) prelude when used
+  -> web-prelude        inject the web runtime prelude with --web
   -> name-resolve       apply namespace/use rules, canonicalize names
   -> autoload-run       run autoload insertion
   -> opt-fold           AST constant folding
@@ -52,12 +55,18 @@ PHP source
   abstract syntax tree.
 - **magic-constants** — magic constants such as `__DIR__` and `__LINE__` are
   substituted before any later pass sees them.
+- **strict-PHP audit** — with [`--strict-php`](cli-reference.md#strict-php-mode),
+  the freshly parsed AST is audited and every elephc-only construct is reported
+  before any later pass runs. Included and autoloaded user files get the same
+  audit where they are parsed (inside resolve / autoload-run), while
+  compiler-injected preludes are exempt.
 - **conditional compilation** — `ifdef` branches are resolved using the symbols
   passed with [`--define`](linking-and-conditional-compilation.md#conditional-compilation).
 - **resolve / prelude injection / name-resolve** — `include`/`require` are
   resolved, declarations are discovered, demand-loaded PHP preludes for PDO,
-  timezone introspection, `DateTimeZone::listIdentifiers()`, and `var_export()`
-  are injected only when referenced, and namespace/`use` rules rewrite
+  timezone introspection, `DateTimeZone::listIdentifiers()`, `var_export()`,
+  and image processing are injected only when referenced, the web runtime
+  prelude is injected with `--web`, and namespace/`use` rules rewrite
   references to fully-qualified names. Autoloading is wired in around these
   steps.
 - **autoload-run** — Composer autoload mappings are interpreted at compile time:

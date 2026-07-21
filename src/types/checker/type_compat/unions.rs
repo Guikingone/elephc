@@ -27,6 +27,14 @@ impl Checker {
 
         let mut deduped = Vec::new();
         for member in flat {
+            // `bool` already contains the literal `false` subtype. Keep `False` only when the
+            // declaration is specifically false-only (for example `int|false`).
+            if member == PhpType::False && deduped.iter().any(|existing| existing == &PhpType::Bool) {
+                continue;
+            }
+            if member == PhpType::Bool {
+                deduped.retain(|existing| existing != &PhpType::False);
+            }
             if !deduped.iter().any(|existing| existing == &member) {
                 deduped.push(member);
             }
@@ -47,20 +55,25 @@ impl Checker {
         if expected == actual {
             return true;
         }
-
-        // Union covariance: a union actual is accepted if every member is accepted by expected.
-        // This enables `?\BackedEnum → ?\UnitEnum` and similar nullable-interface covariance.
-        if let PhpType::Union(actual_members) = actual {
-            return actual_members
-                .iter()
-                .all(|m| self.type_accepts(expected, m));
-        }
-
         match expected {
             PhpType::Mixed => true,
-            PhpType::Union(members) => members
-                .iter()
-                .any(|member| self.type_accepts(member, actual)),
+            PhpType::Bool if matches!(actual, PhpType::False) => true,
+            // PHP coercive mode: scalars accept Mixed with runtime narrowing.
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str
+                if matches!(actual, PhpType::Mixed) =>
+            {
+                true
+            }
+            PhpType::Union(members) => match actual {
+                PhpType::Union(actual_members) => actual_members.iter().all(|actual_member| {
+                    members
+                        .iter()
+                        .any(|expected_member| self.type_accepts(expected_member, actual_member))
+                }),
+                _ => members
+                    .iter()
+                    .any(|member| self.type_accepts(member, actual)),
+            },
             PhpType::Array(expected_elem) => match actual {
                 PhpType::Array(actual_elem) if matches!(actual_elem.as_ref(), PhpType::Never) => {
                     true
@@ -83,7 +96,7 @@ impl Checker {
                         && self.type_accepts(expected_value.as_ref(), actual_value.as_ref())
                 }
                 PhpType::Array(actual_elem)
-                    if matches!(expected_key.as_ref(), PhpType::Mixed)
+                    if matches!(expected_key.as_ref(), PhpType::Mixed | PhpType::Int)
                         && self.type_accepts(expected_value.as_ref(), actual_elem.as_ref()) =>
                 {
                     true
@@ -92,7 +105,8 @@ impl Checker {
             },
             PhpType::Object(expected_name) => match actual {
                 PhpType::Object(actual_name) => {
-                    expected_name == actual_name
+                    expected_name.is_empty()
+                        || expected_name == actual_name
                         || self.is_subclass_of(actual_name, expected_name)
                         || self.class_implements_interface(actual_name, expected_name)
                         || self.interface_extends_interface(actual_name, expected_name)
@@ -225,7 +239,7 @@ impl Checker {
     pub(crate) fn type_supports_mixed_int_dispatch(&self, ty: &PhpType) -> bool {
         let _ = self;
         match ty {
-            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Str => true,
+            PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void | PhpType::Str => true,
             PhpType::Union(members) => members
                 .iter()
                 .all(|member| self.type_supports_mixed_int_dispatch(member)),
@@ -274,8 +288,8 @@ impl Checker {
         if *existing == PhpType::Void {
             return Some(new_ty.clone());
         }
-        if matches!(existing, PhpType::Int | PhpType::Bool | PhpType::Float)
-            && matches!(new_ty, PhpType::Int | PhpType::Bool | PhpType::Float)
+        if matches!(existing, PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float)
+            && matches!(new_ty, PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float)
         {
             return Some(existing.clone());
         }

@@ -10,7 +10,7 @@
 
 use super::{compound, postfix};
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
@@ -38,7 +38,7 @@ use super::super::expect_semicolon;
 /// # Panics
 /// Unreachable if the first token is not `Token::Variable`.
 pub(in crate::parser::stmt) fn parse_variable_stmt(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
@@ -125,6 +125,24 @@ pub(in crate::parser::stmt) fn parse_variable_stmt(
         && compound::assignment_operator(&tokens[*pos + 1].0).is_some()
     {
         return compound::parse_assign(tokens, pos, span);
+    }
+
+    // A literal or variable directly after the variable (`$x "hi";`, `$x 5;`, `$x $y;`)
+    // can never continue the `$x` expression: the only legal statement shape there is an
+    // assignment whose `=` is missing, so report that instead of a misleading
+    // "Expected ';'" from the generic expression fallback. Only prefix-exclusive tokens
+    // are matched — operators like `-`, `(`, or `[` legitimately continue `$x` as infix
+    // or postfix syntax and must keep the expression-statement path.
+    if *pos + 1 < tokens.len()
+        && matches!(
+            tokens[*pos + 1].0,
+            Token::StringLiteral(_)
+                | Token::IntLiteral(_)
+                | Token::FloatLiteral(_)
+                | Token::Variable(_)
+        )
+    {
+        return Err(CompileError::new(span, "Expected '=' after variable name"));
     }
 
     let expr = parse_expr(tokens, pos)?;

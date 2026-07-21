@@ -2,15 +2,15 @@
 title: "array_shift() — internals"
 description: "Compiler internals for array_shift(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 24
+  order: 36
 ---
 
 ## `array_shift()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays/shift.rs`:23](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays/shift.rs#L23) (`lower_array_shift`)
+- **Signature**: [`src/builtins/array/array_shift.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_shift.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays/shift.rs`:23](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays/shift.rs#L23) (`lower_array_shift`)
 - **Function symbol**: `lower_array_shift()`
 
 
@@ -33,7 +33,12 @@ function array_shift(array $array): mixed
 - **Arity**: takes exactly 1 argument.
 - **By-reference parameters**: `$array`.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_shift.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_shift.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
+- **By-reference parameters**: `$array`.
+
 ## Cross-references
 
 - [User reference for `array_shift()`](../../../php/builtins/array/array_shift.md)
-

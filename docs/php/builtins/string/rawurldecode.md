@@ -1,8 +1,8 @@
 ---
 title: "rawurldecode()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Decodes an RFC 3986 percent-encoded string without treating '+' as a space."
 sidebar:
-  order: 370
+  order: 394
 ---
 
 ## rawurldecode()
@@ -11,12 +11,17 @@ sidebar:
 function rawurldecode(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Decodes an RFC 3986 percent-encoded string without treating '+' as a space.
 
 **Parameters**:
 - `$string` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/rawurldecode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/rawurldecode.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

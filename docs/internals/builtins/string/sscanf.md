@@ -2,15 +2,15 @@
 title: "sscanf() — internals"
 description: "Compiler internals for sscanf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 378
+  order: 399
 ---
 
 ## `sscanf()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:280](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L280) (`lower_sscanf`)
+- **Signature**: [`src/builtins/string/sscanf.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/sscanf.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:180](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L180) (`lower_sscanf`)
 - **Function symbol**: `lower_sscanf()`
 
 
@@ -35,7 +35,12 @@ function sscanf(string $string, string $format, ...$vars): array
 - **Arity**: takes exactly 2 arguments.
 - **Variadic**: collects excess arguments into `$vars`.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/formatting/sscanf.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/formatting/sscanf.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+- **Variadic**: collects excess arguments into `$vars`.
+
 ## Cross-references
 
 - [User reference for `sscanf()`](../../../php/builtins/string/sscanf.md)
-

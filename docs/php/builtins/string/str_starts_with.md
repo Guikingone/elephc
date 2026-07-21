@@ -1,8 +1,8 @@
 ---
 title: "str_starts_with()"
-description: "Lowers a two-argument string builtin that directly delegates to a runtime helper."
+description: "Checks if a string starts with a given substring."
 sidebar:
-  order: 383
+  order: 407
 ---
 
 ## str_starts_with()
@@ -11,13 +11,18 @@ sidebar:
 function str_starts_with(string $haystack, string $needle): bool
 ```
 
-Lowers a two-argument string builtin that directly delegates to a runtime helper.
+Checks if a string starts with a given substring.
 
 **Parameters**:
 - `$haystack` (`string`)
 - `$needle` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/str_starts_with.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_starts_with.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

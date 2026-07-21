@@ -27,6 +27,7 @@ pub(super) fn resolve_type_expr(
         TypeExpr::Int => TypeExpr::Int,
         TypeExpr::Float => TypeExpr::Float,
         TypeExpr::Bool => TypeExpr::Bool,
+        TypeExpr::False => TypeExpr::False,
         TypeExpr::Str => TypeExpr::Str,
         TypeExpr::Void => TypeExpr::Void,
         TypeExpr::Never => TypeExpr::Never,
@@ -81,11 +82,9 @@ pub(super) fn resolve_type_expr(
         }
         TypeExpr::Named(name) => {
             let raw = name.as_str();
-            // "object" is PHP's any-instance pseudo-type and must stay bare (not
-            // FQN-prefixed with the current namespace) just like the other
-            // pseudo-types below; `\Closure` is unaffected since Symfony writes it
-            // fully-qualified, so it already resolves via the class-name path.
-            if matches!(raw, "array" | "mixed" | "callable" | "void" | "object") {
+            if matches!(raw, "array" | "mixed" | "callable" | "void")
+                || raw.eq_ignore_ascii_case("object")
+            {
                 TypeExpr::Named(name.clone())
             } else {
                 TypeExpr::Named(resolved_name(resolve_special_or_class_name(
@@ -291,7 +290,7 @@ pub(super) fn resolve_function_name(
 }
 
 /// Resolves a constant name to its canonical form using imports, current namespace,
-/// the symbol table, and builtin globals (e.g., PHP_OS, STDIN, STDOUT, STDERR).
+/// the symbol table, and builtin globals (e.g., PHP_OS, SID, STDIN, STDOUT, STDERR).
 pub(super) fn resolve_constant_name(
     name: &Name,
     current_namespace: Option<&str>,
@@ -302,7 +301,7 @@ pub(super) fn resolve_constant_name(
         return name.as_canonical();
     }
     if name.is_unqualified() {
-        if matches!(name.as_str(), "PHP_OS") {
+        if matches!(name.as_str(), "PHP_OS" | "SID") {
             return name.as_canonical();
         }
         if let Some(alias) = name
@@ -349,11 +348,12 @@ pub(super) fn resolve_constant_name(
 }
 
 /// Returns true if `name` is a builtin global constant that should bypass symbol-table
-/// resolution (e.g., PHP_OS, STDIN, STDOUT, STDERR, FNM_* pathinfo flags).
+/// resolution (e.g., PHP_OS, SID, STDIN, STDOUT, STDERR, FNM_* pathinfo flags).
 fn is_builtin_global_constant(name: &str) -> bool {
     if matches!(
         name,
         "PHP_OS"
+            | "SID"
             | "PATHINFO_DIRNAME"
             | "PATHINFO_BASENAME"
             | "PATHINFO_EXTENSION"
@@ -369,16 +369,35 @@ fn is_builtin_global_constant(name: &str) -> bool {
             | "STDIN"
             | "STDOUT"
             | "STDERR"
+            | "PHP_INT_MAX"
+            | "PHP_INT_MIN"
+            | "PHP_FLOAT_MAX"
+            | "PHP_FLOAT_MIN"
+            | "PHP_FLOAT_EPSILON"
+            | "INF"
+            | "NAN"
+            | "M_PI"
+            | "M_E"
+            | "M_SQRT2"
+            | "M_PI_2"
+            | "M_PI_4"
+            | "M_LOG2E"
+            | "M_LOG10E"
+            | "PHP_EOL"
+            | "DIRECTORY_SEPARATOR"
+            | "DEBUG_BACKTRACE_IGNORE_ARGS"
+            | "DEBUG_BACKTRACE_PROVIDE_OBJECT"
     ) {
         return true;
     }
-    // Shared source-of-truth slices for JSON, stream/socket, error-level, PHP runtime,
+    // Shared source-of-truth slices for JSON, stream/socket, session, error-level, PHP runtime,
     // preg/PCRE, string-function, sort, mbstring, filter, upload-error, parse_url,
     // tokenizer, XML, and pcntl signal constants.
     crate::types::json_constants::JSON_INT_CONSTANTS
         .iter()
         .chain(crate::types::stream_constants::STREAM_INT_CONSTANTS.iter())
-        .chain(crate::types::error_constants::ERROR_INT_CONSTANTS.iter())
+        .chain(crate::types::session_constants::SESSION_INT_CONSTANTS.iter())
+        .chain(crate::types::error_constants::ERROR_LEVEL_CONSTANTS.iter())
         .chain(crate::types::php_runtime_constants::PHP_RUNTIME_INT_CONSTANTS.iter())
         .chain(crate::types::preg_constants::PREG_INT_CONSTANTS.iter())
         .chain(crate::types::string_constants::STRING_INT_CONSTANTS.iter())

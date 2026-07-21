@@ -1,23 +1,28 @@
 ---
 title: "chgrp()"
-description: "Lowers `chgrp(path, group)` for integer GIDs and string group names."
+description: "Changes file group."
 sidebar:
-  order: 83
+  order: 104
 ---
 
 ## chgrp()
 
 ```php
-function chgrp(string $filename, int $group): bool
+function chgrp(string $filename, string $group): bool
 ```
 
-Lowers `chgrp(path, group)` for integer GIDs and string group names.
+Changes file group.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$group` (`int`)
+- `$group` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/chgrp.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/chgrp.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,8 @@
 ---
 title: "lstat()"
-description: "Lowers `lstat(path)` and boxes the runtime lstat array or PHP false result."
+description: "Gives information about a file or symbolic link."
 sidebar:
-  order: 116
+  order: 137
 ---
 
 ## lstat()
@@ -11,12 +11,17 @@ sidebar:
 function lstat(string $filename): mixed
 ```
 
-Lowers `lstat(path)` and boxes the runtime lstat array or PHP false result.
+Gives information about a file or symbolic link.
 
 **Parameters**:
 - `$filename` (`string`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/lstat.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/lstat.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

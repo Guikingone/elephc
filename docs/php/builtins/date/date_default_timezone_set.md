@@ -1,8 +1,8 @@
 ---
 title: "date_default_timezone_set()"
-description: "Lowers `date_default_timezone_set(timezoneId)` through the shared runtime helper."
+description: "Sets the default timezone."
 sidebar:
-  order: 71
+  order: 92
 ---
 
 ## date_default_timezone_set()
@@ -11,12 +11,17 @@ sidebar:
 function date_default_timezone_set(string $timezoneId): bool
 ```
 
-Lowers `date_default_timezone_set(timezoneId)` through the shared runtime helper.
+Sets the default timezone.
 
 **Parameters**:
 - `$timezoneId` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/date_default_timezone_set.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/date_default_timezone_set.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

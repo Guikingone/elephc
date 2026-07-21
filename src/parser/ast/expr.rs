@@ -115,6 +115,8 @@ pub enum ExprKind {
     Closure {
         params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
         variadic: Option<String>,
+        /// Whether the variadic parameter was declared by reference (`&...$args`).
+        variadic_by_ref: bool,
         /// Declared element type hint on the variadic parameter (`int ...$xs`), if any.
         variadic_type: Option<TypeExpr>,
         return_type: Option<TypeExpr>,
@@ -211,6 +213,11 @@ pub enum ExprKind {
         method: String,
         args: Vec<Expr>,
     },
+    NullsafeDynamicMethodCall {
+        object: Box<Expr>,
+        method: Box<Expr>,
+        args: Vec<Expr>,
+    },
     StaticMethodCall {
         receiver: StaticReceiver,
         method: String,
@@ -231,6 +238,12 @@ pub enum ExprKind {
     /// `Static` resolves the called class via late static binding.
     ClassConstant {
         receiver: StaticReceiver,
+    },
+    /// `$object::class` or another object-valued expression followed by `::class`.
+    /// Unlike `ClassConstant`, this resolves the concrete runtime class of the
+    /// evaluated object instead of naming a compile-time static receiver.
+    ObjectClassName {
+        object: Box<Expr>,
     },
     /// Access to a user-declared class constant: `MyClass::FOO`,
     /// `self::FOO`, `parent::FOO`, `static::FOO`. Resolved at type-check
@@ -316,6 +329,30 @@ pub enum CallableTarget {
         object: Box<Expr>,
         method: String,
     },
+}
+
+/// Returns `true` when an assignment value came from `$name op= rhs` or `$name ??= rhs`.
+///
+/// Compound assignment parsing lowers the value to a regular `BinaryOp`/`NullCoalesce`, so the
+/// caller's assignment span is used to distinguish actual compound syntax from a plain
+/// self-referential assignment such as `$x = $x + 1`.
+pub fn is_compound_assignment_self_read(
+    value: &Expr,
+    name: &str,
+    assignment_span: Span,
+) -> bool {
+    if value.span.line != assignment_span.line || value.span.col != assignment_span.col {
+        return false;
+    }
+    match &value.kind {
+        ExprKind::BinaryOp { left, .. } => {
+            matches!(&left.kind, ExprKind::Variable(v) if v == name)
+        }
+        ExprKind::NullCoalesce { value: inner, .. } => {
+            matches!(&inner.kind, ExprKind::Variable(v) if v == name)
+        }
+        _ => false,
+    }
 }
 
 impl PartialEq for Expr {

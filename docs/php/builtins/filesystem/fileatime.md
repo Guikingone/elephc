@@ -1,8 +1,8 @@
 ---
 title: "fileatime()"
-description: "Lowers `fileatime(path)` and boxes the runtime integer-or-false result."
+description: "Gets last access time of file."
 sidebar:
-  order: 92
+  order: 113
 ---
 
 ## fileatime()
@@ -11,12 +11,17 @@ sidebar:
 function fileatime(string $filename): mixed
 ```
 
-Lowers `fileatime(path)` and boxes the runtime integer-or-false result.
+Gets last access time of file.
 
 **Parameters**:
 - `$filename` (`string`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fileatime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fileatime.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

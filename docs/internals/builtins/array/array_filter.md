@@ -2,15 +2,15 @@
 title: "array_filter() — internals"
 description: "Compiler internals for array_filter(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 8
+  order: 11
 ---
 
 ## `array_filter()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:211](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L211) (`lower_array_filter`)
+- **Signature**: [`src/builtins/array/array_filter.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_filter.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:221](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L221) (`lower_array_filter`)
 - **Function symbol**: `lower_array_filter()`
 
 
@@ -27,14 +27,18 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function array_filter(array $array, callable $callback, int $mode): array
+function array_filter(array $array, callable $callback = null, int $mode = 0): array
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes 1–3 arguments (2 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_filter.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_filter.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `array_filter()`](../../../php/builtins/array/array_filter.md)
-

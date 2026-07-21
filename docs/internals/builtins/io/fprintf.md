@@ -2,15 +2,15 @@
 title: "fprintf() — internals"
 description: "Compiler internals for fprintf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 150
+  order: 171
 ---
 
 ## `fprintf()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2641](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2641) (`lower_fprintf`)
+- **Signature**: [`src/builtins/io/fprintf.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fprintf.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2860](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2860) (`lower_fprintf`)
 - **Function symbol**: `lower_fprintf()`
 
 
@@ -34,7 +34,12 @@ function fprintf(resource $stream, string $format, ...$values): int
 - **Arity**: takes exactly 2 arguments.
 - **Variadic**: collects excess arguments into `$values`.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fprintf.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fprintf.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+- **Variadic**: collects excess arguments into `$values`.
+
 ## Cross-references
 
 - [User reference for `fprintf()`](../../../php/builtins/io/fprintf.md)
-

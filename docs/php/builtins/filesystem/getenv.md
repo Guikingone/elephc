@@ -1,23 +1,27 @@
 ---
 title: "getenv()"
-description: "Lowers `getenv(name)` through the target-aware environment lookup helper."
+description: "Gets the value of an environment variable."
 sidebar:
-  order: 103
+  order: 124
 ---
 
 ## getenv()
 
 ```php
-function getenv(string $name, bool $local_only): mixed
+function getenv(string $name): mixed
 ```
 
-Lowers `getenv(name)` through the target-aware environment lookup helper.
+Gets the value of an environment variable.
 
 **Parameters**:
 - `$name` (`string`)
-- `$local_only` (`bool`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/getenv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/getenv.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

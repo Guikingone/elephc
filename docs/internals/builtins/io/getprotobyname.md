@@ -2,15 +2,15 @@
 title: "getprotobyname() — internals"
 description: "Compiler internals for getprotobyname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 163
+  order: 184
 ---
 
 ## `getprotobyname()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3223](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3223) (`lower_getprotobyname`)
+- **Signature**: [`src/builtins/io/getprotobyname.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/getprotobyname.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3440](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3440) (`lower_getprotobyname`)
 - **Function symbol**: `lower_getprotobyname()`
 
 
@@ -33,7 +33,11 @@ function getprotobyname(string $protocol): mixed
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/network_env/getprotobyname.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/getprotobyname.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `getprotobyname()`](../../../php/builtins/io/getprotobyname.md)
-

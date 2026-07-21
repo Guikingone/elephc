@@ -2,15 +2,15 @@
 title: "ftell() — internals"
 description: "Compiler internals for ftell(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 157
+  order: 178
 ---
 
 ## `ftell()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2912](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2912) (`lower_ftell`)
+- **Signature**: [`src/builtins/io/ftell.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ftell.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3129](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3129) (`lower_ftell`)
 - **Function symbol**: `lower_ftell()`
 
 
@@ -33,7 +33,11 @@ function ftell(resource $stream): int
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/ftell.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/ftell.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `ftell()`](../../../php/builtins/io/ftell.md)
-

@@ -1,8 +1,8 @@
 ---
 title: "is_infinite()"
-description: "Lowers `is_infinite()` by comparing the normalized float against +/- infinity."
+description: "Checks whether a float is infinite."
 sidebar:
-  order: 235
+  order: 269
 ---
 
 ## is_infinite()
@@ -11,12 +11,17 @@ sidebar:
 function is_infinite(float $num): bool
 ```
 
-Lowers `is_infinite()` by comparing the normalized float against +/- infinity.
+Checks whether a float is infinite.
 
 **Parameters**:
 - `$num` (`float`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/is_infinite.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_infinite.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

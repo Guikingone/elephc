@@ -1,25 +1,27 @@
 ---
 title: "mkdir()"
-description: "Lowers `mkdir(path)` through the target-aware runtime helper."
+description: "Makes a directory."
 sidebar:
-  order: 117
+  order: 138
 ---
 
 ## mkdir()
 
 ```php
-function mkdir(string $directory, int $permissions, bool $recursive, bool $context): bool
+function mkdir(string $directory): bool
 ```
 
-Lowers `mkdir(path)` through the target-aware runtime helper.
+Makes a directory.
 
 **Parameters**:
 - `$directory` (`string`)
-- `$permissions` (`int`)
-- `$recursive` (`bool`)
-- `$context` (`bool`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/mkdir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/mkdir.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,8 @@
 ---
 title: "array_diff()"
-description: "Lowers `array_diff()` for two compatible indexed arrays with pointer-sized payload slots."
+description: "Computes the difference of arrays."
 sidebar:
-  order: 4
+  order: 6
 ---
 
 ## array_diff()
@@ -11,13 +11,18 @@ sidebar:
 function array_diff(array $array, ...$arrays): array
 ```
 
-Lowers `array_diff()` for two compatible indexed arrays with pointer-sized payload slots.
+Computes the difference of arrays.
 
 **Parameters**:
 - `$array` (`array`)
 - `...$arrays` — variadic: collects excess arguments into `$arrays`.
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_diff.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_diff.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

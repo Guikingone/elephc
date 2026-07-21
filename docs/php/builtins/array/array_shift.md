@@ -1,8 +1,8 @@
 ---
 title: "array_shift()"
-description: "Lowers `array_shift()` for indexed arrays by compacting slots and boxing `T|null` as Mixed."
+description: "Shifts an element off the beginning of array."
 sidebar:
-  order: 24
+  order: 36
 ---
 
 ## array_shift()
@@ -11,12 +11,17 @@ sidebar:
 function array_shift(array $array): mixed
 ```
 
-Lowers `array_shift()` for indexed arrays by compacting slots and boxing `T|null` as Mixed.
+Shifts an element off the beginning of array.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_shift.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_shift.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

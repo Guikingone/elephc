@@ -1,23 +1,27 @@
 ---
 title: "system()"
-description: "Lowers `system(command)` through libc `system()` and returns the legacy empty string result."
+description: "Executes an external program and displays the output."
 sidebar:
-  order: 300
+  order: 330
 ---
 
 ## system()
 
 ```php
-function system(string $command, int $result_code): string
+function system(string $command): string
 ```
 
-Lowers `system(command)` through libc `system()` and returns the legacy empty string result.
+Executes an external program and displays the output.
 
 **Parameters**:
 - `$command` (`string`)
-- `$result_code` (`int`), passed by reference
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/system.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/system.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

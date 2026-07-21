@@ -1,8 +1,8 @@
 ---
 title: "getservbyname()"
-description: "Lowers `getservbyname(service, protocol)` and boxes a missing entry as PHP `false`."
+description: "Gets port number associated with an Internet service and protocol."
 sidebar:
-  order: 165
+  order: 186
 ---
 
 ## getservbyname()
@@ -11,13 +11,18 @@ sidebar:
 function getservbyname(string $service, string $protocol): mixed
 ```
 
-Lowers `getservbyname(service, protocol)` and boxes a missing entry as PHP `false`.
+Gets port number associated with an Internet service and protocol.
 
 **Parameters**:
 - `$service` (`string`)
 - `$protocol` (`string`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/getservbyname.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/getservbyname.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

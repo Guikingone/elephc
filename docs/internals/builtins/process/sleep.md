@@ -2,15 +2,15 @@
 title: "sleep() — internals"
 description: "Compiler internals for sleep(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 302
+  order: 329
 ---
 
 ## `sleep()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:486](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L486) (`lower_sleep`)
+- **Signature**: [`src/builtins/system/sleep.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/sleep.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:473](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L473) (`lower_sleep`)
 - **Function symbol**: `lower_sleep()`
 
 
@@ -33,7 +33,11 @@ function sleep(int $seconds): int
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/sleep.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/sleep.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `sleep()`](../../../php/builtins/process/sleep.md)
-

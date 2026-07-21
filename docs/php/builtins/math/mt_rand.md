@@ -1,8 +1,8 @@
 ---
 title: "mt_rand()"
-description: "mt_rand() — math builtin supported by Elephc."
+description: "Generate a random value via the Mersenne Twister Random Number Generator."
 sidebar:
-  order: 242
+  order: 276
 ---
 
 ## mt_rand()
@@ -11,13 +11,18 @@ sidebar:
 function mt_rand(int $min, int $max): int
 ```
 
-`mt_rand()` is a math builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Generate a random value via the Mersenne Twister Random Number Generator.
 
 **Parameters**:
 - `$min` (`int`)
 - `$max` (`int`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/mt_rand.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/mt_rand.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
@@ -26,4 +31,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `mt_rand` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/mt_rand.md).
 

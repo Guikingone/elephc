@@ -15,6 +15,23 @@ use crate::types::{fibers, FunctionSig, PhpType, TypeEnv};
 
 use super::super::super::Checker;
 
+mod reflection;
+
+/// Compile-time selector accepted by `ReflectionParameter::__construct()`.
+enum ReflectionParameterSelector {
+    Name(String),
+    Position(i64),
+}
+
+/// Compile-time function or method target accepted by `ReflectionParameter::__construct()`.
+enum ReflectionParameterTarget {
+    Function(String),
+    Method {
+        class_name: String,
+        method_name: String,
+    },
+}
+
 impl Checker {
     /// Infers the type of a `new Class(...)` expression.
     ///
@@ -45,6 +62,10 @@ impl Checker {
             ));
         }
         if !self.classes.contains_key(class_name.as_str()) {
+            if self.eval_barrier_active {
+                self.infer_eval_barrier_dynamic_constructor_args(args, expr, env)?;
+                return Ok(PhpType::Mixed);
+            }
             // An unresolved class (not an enum/interface handled above, and unknown everywhere in
             // the closed world) is an absent optional dependency: `new AbsentClass(...)` produces
             // an opaque `PhpType::Mixed` value with a warning instead of erroring. This is only
@@ -93,7 +114,8 @@ impl Checker {
                         .map(String::as_str)
                         .unwrap_or(class_name.as_str());
                     if !self.can_access_member(declaring_class, visibility)
-                        && !self.can_construct_internal_iterator_from_builtin_get_iterator(&class_name)
+                        && !self
+                            .can_construct_internal_iterator_from_builtin_get_iterator(&class_name)
                     {
                         return Err(CompileError::new(
                             expr.span,
@@ -138,7 +160,14 @@ impl Checker {
                 for (i, arg) in normalized_args.iter().enumerate() {
                     let arg_ty = self.infer_type(arg, env)?;
                     if param_to_prop.get(i).is_some_and(|mapped| mapped.is_some()) {
-                        self.propagate_constructor_arg_type(class_name.as_str(), i, &arg_ty);
+                        let param_has_declared_type =
+                            declared_flags.get(i).copied().unwrap_or(false);
+                        self.propagate_constructor_arg_type(
+                            class_name.as_str(),
+                            i,
+                            &arg_ty,
+                            param_has_declared_type,
+                        );
                     }
                 }
                 return Ok(PhpType::Object(class_name));
@@ -161,10 +190,31 @@ impl Checker {
         for (i, arg) in args.iter().enumerate() {
             let arg_ty = self.infer_type(arg, env)?;
             if param_to_prop.get(i).is_some_and(|mapped| mapped.is_some()) {
-                self.propagate_constructor_arg_type(class_name.as_str(), i, &arg_ty);
+                self.propagate_constructor_arg_type(class_name.as_str(), i, &arg_ty, false);
             }
         }
         Ok(PhpType::Object(class_name))
+    }
+
+    /// Infers constructor arguments for a class that may have been declared by a prior eval call.
+    fn infer_eval_barrier_dynamic_constructor_args(
+        &mut self,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        if crate::types::call_args::has_named_args(args)
+            || args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+        {
+            return Err(CompileError::new(
+                expr.span,
+                "Cannot use named or spread arguments for eval-declared class construction",
+            ));
+        }
+        for arg in args {
+            self.infer_type(arg, env)?;
+        }
+        Ok(())
     }
 
     /// Records the PHAR bridge and decompression libraries needed by PHAR archive helpers.
@@ -182,16 +232,11 @@ impl Checker {
             && self.current_method.as_deref() == Some(get_iterator_key.as_str())
     }
 
-    /// Validates constructor arguments for reflection owner classes
-    /// (`ReflectionClass`, `ReflectionMethod`, `ReflectionProperty`).
+    /// Validates constructor arguments for reflection owner classes.
     ///
-    /// Extracts the reflected class/method/property from string literal args, then delegates to
-    /// `validate_reflection_class_attrs`, `validate_reflection_method_attrs`, or
-    /// `validate_reflection_property_attrs`. For `ReflectionClass` specifically, a non-literal
-    /// `string`-typed first argument is also accepted (routed to the EIR dynamic-name dispatcher,
-    /// see `crate::codegen_ir::lower_inst::objects::reflection`), in which case the
-    /// attribute-argument-support validation is skipped since the reflected class is not known
-    /// until runtime.
+    /// Extracts the reflected class/member metadata from literal arguments and
+    /// delegates to the focused ReflectionClass/Method/Property/Parameter
+    /// validation helpers.
     fn validate_reflection_owner_constructor(
         &mut self,
         class_name: &str,
@@ -199,6 +244,9 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<(), CompileError> {
+        if class_name == "ReflectionMethod" && args.len() == 1 {
+            return self.validate_reflection_method_constructor_from_method_name(args, expr, env);
+        }
         let sig = self
             .classes
             .get(class_name)
@@ -220,137 +268,473 @@ impl Checker {
             &format!("Constructor '{}::__construct'", class_name),
         )?;
 
+        if class_name == "ReflectionParameter" {
+            return self.validate_reflection_parameter_constructor(&normalized_args, expr, env);
+        }
         if class_name == "ReflectionFunction" {
-            let arg = normalized_args
-                .first()
-                .expect("ReflectionFunction constructor arity was validated");
-            return self.validate_reflection_function_constructor_arg(arg, expr, env);
+            return self.validate_reflection_function_constructor(&normalized_args, expr, env);
+        }
+        if class_name == "ReflectionObject" {
+            return Ok(());
         }
 
         let reflected_class =
             self.reflection_class_literal_arg(class_name, &normalized_args[0], env)?;
         match class_name {
-            // `reflected_class` is `None` exactly when `reflection_class_literal_arg` accepted a
-            // non-literal `string`-typed argument for `ReflectionClass` (dynamic-name
-            // construction, routed to the codegen dynamic dispatcher, see
-            // `crate::codegen_ir::lower_inst::objects::reflection`). The reflected class is not
-            // known at compile time, so the attribute-argument-support validation that only
-            // matters for `getAttributes()` is skipped here; codegen resolves the runtime class
-            // name and throws a catchable `\ReflectionException` for an unknown name, matching
-            // PHP.
-            "ReflectionClass" => match reflected_class {
-                Some(name) => self.validate_reflection_class_attrs(&name, expr),
-                None => Ok(()),
-            },
+            "ReflectionClass" => self.validate_reflection_class_attrs(&reflected_class, expr),
+            "ReflectionEnum" => self.validate_reflection_enum_attrs(&reflected_class, expr),
             "ReflectionMethod" => {
-                let method_name = self.reflection_member_name_arg(
+                let method_name = self.reflection_string_literal_arg(
                     class_name,
                     "method name",
                     normalized_args.get(1),
                     env,
                 )?;
-                // Either the class or the method name is a non-literal `Str` (routed to the EIR
-                // dynamic dispatcher, `crate::codegen_ir::lower_inst::objects::
-                // reflection_members::lower_reflection_method_new_dynamic`): the reflected member
-                // is not known at compile time, so the attribute-argument-support validation
-                // (which only matters for `getAttributes()`) is skipped, matching the
-                // `ReflectionClass` dynamic-name precedent. On a MISS at runtime, codegen throws a
-                // catchable `\ReflectionException`, matching PHP.
-                match (reflected_class, method_name) {
-                    (Some(reflected_class), Some(method_name)) => {
-                        self.validate_reflection_method_attrs(&reflected_class, &method_name, expr)
-                    }
-                    _ => Ok(()),
-                }
+                self.validate_reflection_method_attrs(&reflected_class, &method_name, expr)
             }
             "ReflectionProperty" => {
-                let property_name = self.reflection_member_name_arg(
+                let property_name = self.reflection_string_literal_arg(
                     class_name,
                     "property name",
                     normalized_args.get(1),
                     env,
                 )?;
-                match (reflected_class, property_name) {
-                    (Some(reflected_class), Some(property_name)) => {
-                        self.validate_reflection_property_attrs(&reflected_class, &property_name, expr)
-                    }
-                    _ => Ok(()),
-                }
+                self.validate_reflection_property_attrs(&reflected_class, &property_name, expr)
+            }
+            "ReflectionClassConstant" => {
+                let constant_name = self.reflection_string_literal_arg(
+                    class_name,
+                    "constant name",
+                    normalized_args.get(1),
+                    env,
+                )?;
+                self.validate_reflection_class_constant_attrs(
+                    &reflected_class,
+                    &constant_name,
+                    expr,
+                )
+            }
+            "ReflectionEnumUnitCase" => {
+                let case_name = self.reflection_string_literal_arg(
+                    class_name,
+                    "case name",
+                    normalized_args.get(1),
+                    env,
+                )?;
+                self.validate_reflection_enum_case_attrs(&reflected_class, &case_name, false, expr)
+            }
+            "ReflectionEnumBackedCase" => {
+                let case_name = self.reflection_string_literal_arg(
+                    class_name,
+                    "case name",
+                    normalized_args.get(1),
+                    env,
+                )?;
+                self.validate_reflection_enum_case_attrs(&reflected_class, &case_name, true, expr)
             }
             _ => Ok(()),
         }
     }
 
+    /// Validates deprecated `new ReflectionMethod("Class::method")` calls.
+    fn validate_reflection_method_constructor_from_method_name(
+        &mut self,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        let arg = match &args[0].kind {
+            ExprKind::NamedArg { name, value } if name == "class_name" => value.as_ref(),
+            ExprKind::NamedArg { name, value } if name == "objectOrMethod" => value.as_ref(),
+            ExprKind::NamedArg { name, .. } => {
+                return Err(CompileError::new(
+                    args[0].span,
+                    &format!(
+                        "Constructor 'ReflectionMethod::__construct' has no parameter ${}",
+                        name
+                    ),
+                ));
+            }
+            _ => &args[0],
+        };
+        let (class_name, method_name) = self.reflection_method_name_literal_arg(arg, env)?;
+        self.validate_reflection_method_attrs(&class_name, &method_name, expr)
+    }
+
+    /// Extracts a literal `ClassName::methodName` target for `ReflectionMethod`.
+    fn reflection_method_name_literal_arg(
+        &mut self,
+        arg: &Expr,
+        env: &TypeEnv,
+    ) -> Result<(String, String), CompileError> {
+        let arg_ty = self.infer_type(arg, env)?;
+        if !matches!(arg_ty.codegen_repr(), PhpType::Str) {
+            return Err(CompileError::new(
+                arg.span,
+                "ReflectionMethod::__construct() first argument must be a string method name",
+            ));
+        }
+        let ExprKind::StringLiteral(target) = &arg.kind else {
+            return Err(CompileError::new(
+                arg.span,
+                "ReflectionMethod::__construct() requires a string literal method name (dynamic lookup is not yet supported)",
+            ));
+        };
+        let Some((raw_class_name, method_name)) = target.rsplit_once("::") else {
+            return Err(CompileError::new(
+                arg.span,
+                "ReflectionMethod::__construct() one-argument form requires ClassName::method",
+            ));
+        };
+        if raw_class_name.is_empty() || method_name.is_empty() {
+            return Err(CompileError::new(
+                arg.span,
+                "ReflectionMethod::__construct() one-argument form requires ClassName::method",
+            ));
+        }
+        let class_name = self
+            .resolve_reflection_class_name(raw_class_name)
+            .map(str::to_string)
+            .ok_or_else(|| {
+                CompileError::new(
+                    arg.span,
+                    &format!(
+                        "ReflectionMethod::__construct(): undefined class '{}'",
+                        raw_class_name
+                    ),
+                )
+            })?;
+        Ok((class_name, method_name.to_string()))
+    }
+
+    /// Validates `new ReflectionFunction(function)` for supported static function metadata.
+    fn validate_reflection_function_constructor(
+        &mut self,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        let function_name = self.reflection_string_literal_arg(
+            "ReflectionFunction",
+            "function name",
+            args.first(),
+            env,
+        )?;
+        if self
+            .reflection_function_signature(&function_name)?
+            .is_some()
+        {
+            return self.validate_reflection_function_attrs(&function_name, expr);
+        }
+        Err(CompileError::new(
+            expr.span,
+            &format!(
+                "ReflectionFunction::__construct(): Function {}() does not exist",
+                function_name
+            ),
+        ))
+    }
+
+    /// Validates `new ReflectionParameter(target, param)`.
+    ///
+    /// Supported targets are statically known user function names, supported
+    /// callable-builtin function names, and class/interface/trait method arrays.
+    /// The parameter selector must be an integer position or string name known
+    /// at compile time.
+    fn validate_reflection_parameter_constructor(
+        &mut self,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        let target = self.reflection_parameter_target(args.first(), env)?;
+        let sig = match target {
+            ReflectionParameterTarget::Function(function_name) => self
+                .reflection_function_signature(&function_name)?
+                .ok_or_else(|| {
+                    CompileError::new(
+                        expr.span,
+                        &format!(
+                            "ReflectionParameter::__construct(): Function {}() does not exist",
+                            function_name
+                        ),
+                    )
+                })?,
+            ReflectionParameterTarget::Method {
+                class_name,
+                method_name,
+            } => self
+                .reflection_method_signature(&class_name, &method_name)
+                .ok_or_else(|| {
+                    CompileError::new(
+                        expr.span,
+                        &format!(
+                            "ReflectionParameter::__construct(): undefined method '{}::{}'",
+                            class_name, method_name
+                        ),
+                    )
+                })?,
+        };
+        let selector = self.reflection_parameter_selector_arg(args.get(1), env)?;
+        match selector {
+            ReflectionParameterSelector::Name(name) => {
+                if sig.params.iter().any(|(param_name, _)| param_name == &name) {
+                    Ok(())
+                } else {
+                    Err(CompileError::new(
+                        expr.span,
+                        "ReflectionParameter::__construct(): parameter specified by name could not be found",
+                    ))
+                }
+            }
+            ReflectionParameterSelector::Position(position) => {
+                if position >= 0 && (position as usize) < sig.params.len() {
+                    Ok(())
+                } else {
+                    Err(CompileError::new(
+                        expr.span,
+                        "ReflectionParameter::__construct(): parameter specified by offset could not be found",
+                    ))
+                }
+            }
+        }
+    }
+
+    /// Extracts the function or class-method target from a ReflectionParameter call.
+    fn reflection_parameter_target(
+        &mut self,
+        arg: Option<&Expr>,
+        env: &TypeEnv,
+    ) -> Result<ReflectionParameterTarget, CompileError> {
+        let arg = arg.expect("reflection parameter constructor arity was validated");
+        let arg_ty = self.infer_type(arg, env)?;
+        match arg_ty.codegen_repr() {
+            PhpType::Str => self
+                .reflection_string_literal_arg(
+                    "ReflectionParameter",
+                    "function name",
+                    Some(arg),
+                    env,
+                )
+                .map(ReflectionParameterTarget::Function),
+            PhpType::Array(_) | PhpType::Mixed => {
+                self.reflection_parameter_method_target(arg, env)
+            }
+            _ => Err(CompileError::new(
+                arg.span,
+                "ReflectionParameter::__construct() first argument must be a function name string or class-method array",
+            )),
+        }
+    }
+
+    /// Extracts the class and method names from the ReflectionParameter target array.
+    fn reflection_parameter_method_target(
+        &mut self,
+        arg: &Expr,
+        env: &TypeEnv,
+    ) -> Result<ReflectionParameterTarget, CompileError> {
+        let arg_ty = self.infer_type(arg, env)?;
+        if !matches!(arg_ty.codegen_repr(), PhpType::Array(_) | PhpType::Mixed) {
+            return Err(CompileError::new(
+                arg.span,
+                "ReflectionParameter::__construct() first argument must be a class-method array",
+            ));
+        }
+        let ExprKind::ArrayLiteral(items) = &arg.kind else {
+            return Err(CompileError::new(
+                arg.span,
+                "ReflectionParameter::__construct() requires a literal class-method array target",
+            ));
+        };
+        if items.len() != 2 {
+            return Err(CompileError::new(
+                arg.span,
+                "ReflectionParameter::__construct() expects array(class, method) as first argument",
+            ));
+        }
+        let class_name = self.reflection_parameter_owner_class_name(&items[0], env)?;
+        let method_name = self.reflection_string_literal_arg(
+            "ReflectionParameter",
+            "method name",
+            items.get(1),
+            env,
+        )?;
+        Ok(ReflectionParameterTarget::Method {
+            class_name,
+            method_name,
+        })
+    }
+
+    /// Resolves the class-like name from a class literal or statically known object target.
+    fn reflection_parameter_owner_class_name(
+        &mut self,
+        arg: &Expr,
+        env: &TypeEnv,
+    ) -> Result<String, CompileError> {
+        match &arg.kind {
+            ExprKind::StringLiteral(_) | ExprKind::ClassConstant { .. } => {
+                self.reflection_class_literal_arg("ReflectionParameter", arg, env)
+            }
+            _ => self.reflection_parameter_concrete_object_class_name(arg, env),
+        }
+    }
+
+    /// Resolves a statically known object expression to the reflected class name.
+    fn reflection_parameter_concrete_object_class_name(
+        &mut self,
+        arg: &Expr,
+        env: &TypeEnv,
+    ) -> Result<String, CompileError> {
+        let target_ty = self.infer_type(arg, env)?.codegen_repr();
+        let PhpType::Object(class_name) = target_ty else {
+            return Err(CompileError::new(
+                arg.span,
+                "ReflectionParameter::__construct() object target must have a concrete class type",
+            ));
+        };
+        if class_name.is_empty() || !self.classes.contains_key(class_name.as_str()) {
+            return Err(CompileError::new(
+                arg.span,
+                "ReflectionParameter::__construct() object target must have a concrete class type",
+            ));
+        }
+        Ok(class_name)
+    }
+
+    /// Returns the reflected signature for a user function or supported callable builtin.
+    fn reflection_function_signature(
+        &mut self,
+        function_name: &str,
+    ) -> Result<Option<FunctionSig>, CompileError> {
+        let lookup_name = function_name.trim_start_matches('\\');
+        let builtin_key = php_symbol_key(lookup_name);
+        if let Some(sig) = crate::types::first_class_callable_builtin_sig(&builtin_key) {
+            return Ok(Some(sig));
+        }
+        let canonical =
+            match self.canonical_function_name_folded(lookup_name) {
+                Some(canonical) => canonical,
+                None => return Ok(None),
+            };
+        if let Some(sig) = self.functions.get(&canonical).cloned() {
+            return Ok(Some(sig));
+        }
+        if self.function_variant_groups.contains_key(&canonical) {
+            self.ensure_function_variant_group_signature(&canonical, crate::span::Span::dummy())?;
+            return Ok(self.functions.get(&canonical).cloned());
+        }
+        if let Some(decl) = self.fn_decls.get(&canonical).cloned() {
+            let param_types = self.initial_function_param_types(&canonical, &decl)?;
+            self.resolve_function_signature(&canonical, &decl, param_types)?;
+            return Ok(self.functions.get(&canonical).cloned());
+        }
+        Ok(None)
+    }
+
+    /// Extracts the name or position selector for `ReflectionParameter`.
+    fn reflection_parameter_selector_arg(
+        &mut self,
+        arg: Option<&Expr>,
+        env: &TypeEnv,
+    ) -> Result<ReflectionParameterSelector, CompileError> {
+        let arg = arg.expect("reflection parameter constructor arity was validated");
+        let arg_ty = self.infer_type(arg, env)?;
+        if !matches!(arg_ty, PhpType::Str | PhpType::Int) {
+            return Err(CompileError::new(
+                arg.span,
+                "ReflectionParameter::__construct() second argument must be a string or int",
+            ));
+        }
+        match &arg.kind {
+            ExprKind::StringLiteral(name) => Ok(ReflectionParameterSelector::Name(name.clone())),
+            ExprKind::IntLiteral(position) => Ok(ReflectionParameterSelector::Position(*position)),
+            _ => Err(CompileError::new(
+                arg.span,
+                "ReflectionParameter::__construct() requires a literal parameter name or position",
+            )),
+        }
+    }
+
+    /// Returns the reflected method signature for class/interface/trait metadata.
+    fn reflection_method_signature(
+        &self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Option<FunctionSig> {
+        let method_key = php_symbol_key(method_name);
+        if let Some(class_info) = self.classes.get(class_name) {
+            return class_info
+                .methods
+                .get(&method_key)
+                .or_else(|| class_info.static_methods.get(&method_key))
+                .cloned();
+        }
+        if let Some(interface_info) = self.interfaces.get(class_name) {
+            return interface_info
+                .methods
+                .get(&method_key)
+                .or_else(|| interface_info.static_methods.get(&method_key))
+                .cloned();
+        }
+        if let Some(trait_methods) = self.declared_trait_methods.get(class_name) {
+            return trait_methods.get(&method_key).cloned();
+        }
+        None
+    }
+
     /// Extracts the class name argument from a reflection constructor call.
     ///
-    /// Accepts a string literal or `ClassName::class` constant; returns the resolved class name.
-    ///
-    /// For `ReflectionClass`/`ReflectionMethod`/`ReflectionProperty` — all three share PHP's real
-    /// `object|string` first-argument signature (php -n verified: `new ReflectionClass($obj)` /
-    /// `new ReflectionMethod($obj, 'm')` / `new ReflectionProperty($obj, 'p')` are all legal PHP,
-    /// and all THREE constructors weak-coerce a non-`object|string` SCALAR the SAME way: `new
-    /// ReflectionMethod(42, 'm')` throws `ReflectionException: Class "42" does not exist`, NOT a
-    /// `TypeError` — php -n verified there is no PHP-visible behavioral difference between the
-    /// three constructors for this argument) — ANY non-literal expression is accepted regardless
-    /// of its static type (`Str`, `Mixed`, `Union`, `Object`, or anything else a caller might
-    /// pass) and routes to the matching EIR dynamic dispatcher
-    /// (`crate::codegen_ir::lower_inst::objects::reflection::lower_reflection_class_new_dynamic`
-    /// for `ReflectionClass`, `crate::codegen_ir::lower_inst::objects::reflection_members::
-    /// lower_reflection_member_new_dynamic` for `ReflectionMethod`/`ReflectionProperty`), which
-    /// performs the ACTUAL runtime type determination this static checker cannot: unbox a
-    /// `Mixed`/`Union` operand's runtime tag, resolve an object operand's concrete runtime class,
-    /// weak-coerce a scalar/null tag to its `(string)` cast, and throw a real, catchable
-    /// `\TypeError` for a genuinely non-coercible runtime tag (php -n verified: `new
-    /// ReflectionMethod([1,2], 'm')` throws `TypeError: ReflectionMethod::__construct(): Argument
-    /// #1 ($objectOrMethod) must be of type object|string, array given`) — exactly mirroring how
-    /// PHP itself only rejects the wrong argument shape at RUNTIME, not at parse/compile time,
-    /// for these three constructors.
-    ///
-    /// `ReflectionFunction` is handled by a separate validator entirely (see
-    /// `validate_reflection_function_constructor_arg`) and never reaches this function. The
-    /// SEPARATE (member NAME) second argument to `ReflectionMethod`/`ReflectionProperty` is
-    /// validated by `reflection_member_name_arg`, not this function, and keeps requiring a
-    /// literal-or-non-literal `Str`-typed expression only (no `Mixed`/`Object`/weak-coercion
-    /// acceptance — php -n verified PHP does NOT weak-coerce the member-name argument).
+    /// Accepts a string literal or `ClassName::class` constant; returns the
+    /// resolved class name. Errors if the argument is not a string or if the
+    /// class is undefined.
     fn reflection_class_literal_arg(
         &mut self,
         reflection_type: &str,
         arg: &Expr,
         env: &TypeEnv,
-    ) -> Result<Option<String>, CompileError> {
+    ) -> Result<String, CompileError> {
         let arg_ty = self.infer_type(arg, env)?;
+        if let PhpType::Object(class_name) = arg_ty.codegen_repr() {
+            if reflection_type == "ReflectionClass"
+                && !class_name.is_empty()
+                && self.classes.contains_key(class_name.as_str())
+            {
+                return Ok(class_name);
+            }
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "{}::__construct() first argument must be a string class name",
+                    reflection_type
+                ),
+            ));
+        }
+        if !matches!(arg_ty.codegen_repr(), PhpType::Str) {
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "{}::__construct() first argument must be a string class name",
+                    reflection_type
+                ),
+            ));
+        }
         let raw_class_name = match &arg.kind {
-            ExprKind::StringLiteral(class_name) if matches!(arg_ty, PhpType::Str) => {
-                class_name.clone()
-            }
-            ExprKind::ClassConstant { receiver } if matches!(arg_ty, PhpType::Str) => {
+            ExprKind::StringLiteral(class_name) => class_name.clone(),
+            ExprKind::ClassConstant { receiver } => {
                 self.resolve_reflection_class_constant(receiver, arg.span)?
-            }
-            // php -n verified: `ReflectionMethod`/`ReflectionProperty`'s first argument has the
-            // EXACT SAME `object|string` weak-coercion semantics as `ReflectionClass`'s (int
-            // 42 → `ReflectionException: Class "42" does not exist`, `null` → `Class "" does not
-            // exist`, an `array` → a real `\TypeError`, …) — there is no PHP-visible behavioral
-            // difference between the three constructors for this argument, so ALL non-literal
-            // expressions route to the EIR dynamic dispatcher here regardless of static type
-            // (`crate::codegen_ir::lower_inst::objects::reflection_members::
-            // lower_reflection_member_new_dynamic`, which performs the actual runtime type
-            // determination exactly like `crate::codegen_ir::lower_inst::objects::reflection::
-            // lower_reflection_class_new_dynamic` does for `ReflectionClass`).
-            _ if matches!(reflection_type, "ReflectionClass" | "ReflectionMethod" | "ReflectionProperty") => {
-                return Ok(None)
             }
             _ => {
                 return Err(CompileError::new(
                     arg.span,
                     &format!(
-                        "{}::__construct() first argument must be a string class name",
+                        "{}::__construct() requires a string literal class name (dynamic lookup is not yet supported)",
                         reflection_type
                     ),
                 ));
             }
         };
         self.resolve_reflection_class_name(&raw_class_name)
-            .map(|name| Some(name.to_string()))
+            .map(str::to_string)
             .ok_or_else(|| {
                 CompileError::new(
                     arg.span,
@@ -397,284 +781,6 @@ impl Checker {
         }
     }
 
-    /// Extracts a method/property-name argument from a `ReflectionMethod`/`ReflectionProperty`
-    /// constructor call, ACCEPTING a non-literal `Str`-typed expression (unlike
-    /// `reflection_string_literal_arg`, which `ReflectionFunction` still uses unchanged): a
-    /// string literal resolves immediately (`Some(name)`, the existing literal-path behavior,
-    /// byte-for-byte unaffected); any other `Str`-typed expression returns `None`, signaling the
-    /// caller to route to the EIR dynamic two-string dispatcher
-    /// (`crate::codegen_ir::lower_inst::objects::reflection_members`) instead of erroring. A
-    /// non-`Str` argument is still a compile-time type error — this scope does not attempt PHP's
-    /// full weak-coercion behavior for the member-name argument.
-    fn reflection_member_name_arg(
-        &mut self,
-        reflection_type: &str,
-        label: &str,
-        arg: Option<&Expr>,
-        env: &TypeEnv,
-    ) -> Result<Option<String>, CompileError> {
-        let arg = arg.expect("reflection constructor arity was validated");
-        let arg_ty = self.infer_type(arg, env)?;
-        if !matches!(arg_ty, PhpType::Str) {
-            return Err(CompileError::new(
-                arg.span,
-                &format!(
-                    "{}::__construct() {} argument must be a string",
-                    reflection_type, label
-                ),
-            ));
-        }
-        match &arg.kind {
-            ExprKind::StringLiteral(value) => Ok(Some(value.clone())),
-            _ => Ok(None),
-        }
-    }
-
-    /// Validates the single constructor argument of `new ReflectionFunction($function)`
-    /// against PHP's real `Closure|string $function` signature.
-    ///
-    /// - A `Str`-typed argument keeps the EXISTING literal-only behavior (dynamic string
-    ///   lookup is not yet supported): `reflection_string_literal_arg` +
-    ///   `validate_reflection_function_target`.
-    /// - A first-class callable targeting a plain FREE FUNCTION (`target(...)`) is treated
-    ///   EXACTLY like passing that function's name as a string literal (php -n VERIFIED:
-    ///   `(new ReflectionFunction($fn(...)))->getName()` returns the real function name, not
-    ///   `"{closure}"` — PHP's FCC-created closures ARE fully named, unlike anonymous ones) —
-    ///   reuses the same existence validation. The EIR lowering
-    ///   (`crate::codegen_ir::lower_inst::objects::reflection::lower_reflection_function_new`)
-    ///   mirrors this by resolving the FCC operand's target name the same way a string literal
-    ///   operand is resolved.
-    /// - A closure LITERAL (`function (...) {...}`/`fn (...) => ...`) passed directly is
-    ///   accepted with no name validation (a literal always "exists"); num-params-related slots
-    ///   are backed from the closure's own declared params, but `getName`/`getShortName`/
-    ///   `getFileName` are gated to throw at runtime (see `builtin_reflection_guarded_method`
-    ///   in `crate::types::checker::builtin_types::reflection`) since PHP's real closure-name
-    ///   format cannot be soundly reproduced here (php -n VERIFIED PHP 8.5 format:
-    ///   `"{closure:FILE:LINE}"` / `"{closure:Class::method():LINE}"` — NOT the bare
-    ///   `"{closure}"` some older PHP versions used; the exact scope prefix even differs
-    ///   between top-level, free-function, and method contexts).
-    /// - Any OTHER Closure-shaped value (a `Closure`-typed variable/parameter/expression whose
-    ///   identity is not statically resolvable at this call site, e.g. `function f(Closure $c) {
-    ///   new ReflectionFunction($c); }`) is now ACCEPTED (M2 PART A): the runtime closure
-    ///   descriptor a `Closure`/`callable`-typed value ALWAYS points at
-    ///   (`crate::codegen::callable_descriptor`) already carries the exact same
-    ///   signature/name/invocation metadata this constructor bakes for a literal at compile
-    ///   time, so `crate::codegen_ir::lower_inst::objects::reflection::
-    ///   lower_reflection_function_new_dynamic` reads it at RUNTIME instead — with a tag check
-    ///   before touching it (JURY ADDENDUM item 3). A `Mixed`/`Union` value (e.g. a
-    ///   `?Closure`-typed local, or one widened to `mixed` by an unrelated branch-merge) is
-    ///   ALSO accepted for the SAME reason: the dynamic lowering unboxes it and dispatches on
-    ///   the runtime tag, throwing a catchable `\TypeError`/`\ReflectionException` for anything
-    ///   that isn't actually a callable descriptor at runtime — never a partial/wrong object.
-    /// - Anything ELSE STATICALLY KNOWN to be non-Closure/non-Mixed/non-Str (e.g. a statically
-    ///   `int`/`array`/`Object`-typed argument) is still a compile-time type error, mirroring
-    ///   PHP's real `TypeError` for this argument (php -n verified: `new
-    ///   ReflectionFunction([1,2])` throws `TypeError: ReflectionFunction::__construct():
-    ///   Argument #1 ($function) must be of type Closure|string, array given`).
-    fn validate_reflection_function_constructor_arg(
-        &mut self,
-        arg: &Expr,
-        expr: &Expr,
-        env: &TypeEnv,
-    ) -> Result<(), CompileError> {
-        let arg_ty = self.infer_type(arg, env)?;
-        if matches!(arg_ty, PhpType::Str) {
-            let function_name = self.reflection_string_literal_arg(
-                "ReflectionFunction",
-                "function name",
-                Some(arg),
-                env,
-            )?;
-            return self.validate_reflection_function_target(&function_name, expr);
-        }
-        if Self::type_is_closure_shaped(&arg_ty) {
-            if let ExprKind::FirstClassCallable(CallableTarget::Function(name)) = &arg.kind {
-                let resolved_name = self
-                    .canonical_function_name_folded(name.as_str())
-                    .unwrap_or_else(|| name.as_str().to_string());
-                return self.validate_reflection_function_target(&resolved_name, expr);
-            }
-            if matches!(arg.kind, ExprKind::Closure { .. }) {
-                return Ok(());
-            }
-            // A dynamically-typed Closure/callable value (not a literal or FCC resolvable at
-            // this call site) — accepted; see the doc comment above and
-            // `lower_reflection_function_new_dynamic`.
-            return Ok(());
-        }
-        if matches!(arg_ty, PhpType::Mixed | PhpType::Union(_)) {
-            // Genuinely unknown at compile time — the dynamic runtime path performs its own
-            // tag check and throws a catchable diagnostic for any non-callable payload.
-            return Ok(());
-        }
-        Err(CompileError::new(
-            arg.span,
-            &format!(
-                "ReflectionFunction::__construct(): Argument #1 ($function) must be of type Closure|string, got {:?}",
-                arg_ty
-            ),
-        ))
-    }
-
-    /// Returns true when `ty` statically guarantees a Closure-shaped value: either
-    /// `PhpType::Callable` (elephc's uniform static type for closure literals, first-class
-    /// callables, and any `Closure`/`callable`-hinted parameter — see
-    /// `crate::types::checker::type_compat::pointers::resolve_type_expr`, which collapses both
-    /// hint spellings to the same variant) or `PhpType::Object("Closure")` (produced by a few
-    /// other inference paths, e.g. some declared return/property type resolutions).
-    fn type_is_closure_shaped(ty: &PhpType) -> bool {
-        matches!(ty, PhpType::Callable)
-            || matches!(ty, PhpType::Object(name) if name.trim_start_matches('\\').eq_ignore_ascii_case("Closure"))
-    }
-
-    /// Validates that `new ReflectionFunction($name)` targets a known
-    /// user-defined function (matched case-insensitively, as PHP function names
-    /// are). Builtin functions are not yet reflectable.
-    fn validate_reflection_function_target(
-        &self,
-        function_name: &str,
-        expr: &Expr,
-    ) -> Result<(), CompileError> {
-        let key = crate::names::php_symbol_key(function_name.trim_start_matches('\\'));
-        let exists = self
-            .fn_decls
-            .keys()
-            .chain(self.functions.keys())
-            .any(|name| crate::names::php_symbol_key(name.trim_start_matches('\\')) == key);
-        if exists {
-            Ok(())
-        } else {
-            Err(CompileError::new(
-                expr.span,
-                &format!(
-                    "ReflectionFunction::__construct(): undefined function '{}'",
-                    function_name
-                ),
-            ))
-        }
-    }
-
-    /// Validates that a class's attributes do not have unsupported argument metadata.
-    ///
-    /// Returns `Ok` if the class has no attribute args or if all args are
-    /// supported. Used by `ReflectionClass` constructor validation.
-    fn validate_reflection_class_attrs(
-        &self,
-        class_name: &str,
-        expr: &Expr,
-    ) -> Result<(), CompileError> {
-        let Some(class_info) = self.classes.get(class_name) else {
-            return Err(CompileError::new(
-                expr.span,
-                &format!("ReflectionClass::__construct(): undefined class '{}'", class_name),
-            ));
-        };
-        if attributes_have_unsupported_args(&class_info.attribute_names, &class_info.attribute_args)
-        {
-            return Err(CompileError::new(
-                expr.span,
-                "ReflectionClass::getAttributes(): class has attribute argument metadata that is not supported yet",
-            ));
-        }
-        Ok(())
-    }
-
-    /// Validates that a method's attributes do not have unsupported argument metadata.
-    ///
-    /// Also checks that the method exists on the class. Used by
-    /// `ReflectionMethod` constructor validation.
-    fn validate_reflection_method_attrs(
-        &self,
-        class_name: &str,
-        method_name: &str,
-        expr: &Expr,
-    ) -> Result<(), CompileError> {
-        let Some(class_info) = self.classes.get(class_name) else {
-            return Err(CompileError::new(
-                expr.span,
-                &format!("ReflectionMethod::__construct(): undefined class '{}'", class_name),
-            ));
-        };
-        let method_key = php_symbol_key(method_name);
-        if !class_info.methods.contains_key(&method_key)
-            && !class_info.static_methods.contains_key(&method_key)
-        {
-            return Err(CompileError::new(
-                expr.span,
-                &format!(
-                    "ReflectionMethod::__construct(): undefined method '{}::{}'",
-                    class_name, method_name
-                ),
-            ));
-        }
-        let empty_names = Vec::new();
-        let empty_args = Vec::new();
-        let names = class_info
-            .method_attribute_names
-            .get(&method_key)
-            .unwrap_or(&empty_names);
-        let args = class_info
-            .method_attribute_args
-            .get(&method_key)
-            .unwrap_or(&empty_args);
-        if attributes_have_unsupported_args(names, args) {
-            return Err(CompileError::new(
-                expr.span,
-                "ReflectionMethod::getAttributes(): method has attribute argument metadata that is not supported yet",
-            ));
-        }
-        Ok(())
-    }
-
-    /// Validates that a property's attributes do not have unsupported argument metadata.
-    ///
-    /// Also checks that the property exists on the class (instance or static).
-    /// Used by `ReflectionProperty` constructor validation.
-    fn validate_reflection_property_attrs(
-        &self,
-        class_name: &str,
-        property_name: &str,
-        expr: &Expr,
-    ) -> Result<(), CompileError> {
-        let Some(class_info) = self.classes.get(class_name) else {
-            return Err(CompileError::new(
-                expr.span,
-                &format!("ReflectionProperty::__construct(): undefined class '{}'", class_name),
-            ));
-        };
-        if !class_info.properties.iter().any(|(name, _)| name == property_name)
-            && !class_info
-                .static_properties
-                .iter()
-                .any(|(name, _)| name == property_name)
-        {
-            return Err(CompileError::new(
-                expr.span,
-                &format!(
-                    "ReflectionProperty::__construct(): undefined property '{}::${}'",
-                    class_name, property_name
-                ),
-            ));
-        }
-        let empty_names = Vec::new();
-        let empty_args = Vec::new();
-        let names = class_info
-            .property_attribute_names
-            .get(property_name)
-            .unwrap_or(&empty_names);
-        let args = class_info
-            .property_attribute_args
-            .get(property_name)
-            .unwrap_or(&empty_args);
-        if attributes_have_unsupported_args(names, args) {
-            return Err(CompileError::new(
-                expr.span,
-                "ReflectionProperty::getAttributes(): property has attribute argument metadata that is not supported yet",
-            ));
-        }
-        Ok(())
-    }
-
     /// Resolves a static receiver to a class name for reflection class constant.
     ///
     /// `Named` returns the canonical name. `Self_`/`Static` require a class
@@ -686,10 +792,11 @@ impl Checker {
     ) -> Result<String, CompileError> {
         match receiver {
             StaticReceiver::Named(name) => Ok(name.as_canonical()),
-            StaticReceiver::Self_ | StaticReceiver::Static => self
-                .current_class
-                .clone()
-                .ok_or_else(|| CompileError::new(span, "Cannot use self::class outside a class context")),
+            StaticReceiver::Self_ | StaticReceiver::Static => {
+                self.current_class.clone().ok_or_else(|| {
+                    CompileError::new(span, "Cannot use self::class outside a class context")
+                })
+            }
             StaticReceiver::Parent => {
                 let current = self.current_class.as_ref().ok_or_else(|| {
                     CompileError::new(span, "Cannot use parent::class outside a class context")
@@ -698,10 +805,7 @@ impl Checker {
                     .get(current)
                     .and_then(|info| info.parent.clone())
                     .ok_or_else(|| {
-                        CompileError::new(
-                            span,
-                            &format!("Class '{}' has no parent class", current),
-                        )
+                        CompileError::new(span, &format!("Class '{}' has no parent class", current))
                     })
             }
         }
@@ -710,11 +814,13 @@ impl Checker {
     /// Looks up a class name by PHP case-insensitive symbol key.
     ///
     /// Strips leading backslashes and uses `php_symbol_key` for comparison.
-    /// Returns the canonical class name string if found.
+    /// Returns the canonical class-like name string if found.
     fn resolve_reflection_class_name<'a>(&'a self, class_name: &str) -> Option<&'a str> {
         let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
         self.classes
             .keys()
+            .chain(self.interfaces.keys())
+            .chain(self.declared_traits.iter())
             .find(|existing| php_symbol_key(existing) == class_key)
             .map(String::as_str)
     }
@@ -742,7 +848,10 @@ impl Checker {
             {
                 return Ok(());
             }
-            return Err(CompileError::new(callback.span, "Fiber callback must be callable"));
+            return Err(CompileError::new(
+                callback.span,
+                "Fiber callback must be callable",
+            ));
         };
 
         let visible_param_count = match &callback.kind {
@@ -768,11 +877,19 @@ impl Checker {
         }
 
         match &callback.kind {
-            ExprKind::StringLiteral(name) => self.resolve_fiber_string_callable_sig(name, callback.span, env),
-            ExprKind::ArrayLiteral(_) => self.resolve_fiber_callable_array_literal_sig(callback, env),
+            ExprKind::StringLiteral(name) => {
+                self.resolve_fiber_string_callable_sig(name, callback.span, env)
+            }
+            ExprKind::ArrayLiteral(_) => {
+                self.resolve_fiber_callable_array_literal_sig(callback, env)
+            }
             ExprKind::Variable(name) => {
                 if let Some(target) = self.callable_array_targets.get(name).cloned() {
-                    return self.resolve_fiber_callable_array_variable_sig(&target, callback.span, env);
+                    return self.resolve_fiber_callable_array_variable_sig(
+                        &target,
+                        callback.span,
+                        env,
+                    );
                 }
                 self.resolve_fiber_invokable_object_sig(callback, env)
             }
@@ -796,7 +913,9 @@ impl Checker {
                 receiver: StaticReceiver::Named(Name::from(class_name.to_string())),
                 method: method_name.to_string(),
             };
-            return self.resolve_first_class_callable_sig(&target, span, env).map(Some);
+            return self
+                .resolve_first_class_callable_sig(&target, span, env)
+                .map(Some);
         }
 
         let function_name = self
@@ -804,7 +923,8 @@ impl Checker {
             .or_else(|| crate::name_resolver::canonical_builtin_function_name(name))
             .unwrap_or_else(|| name.trim_start_matches('\\').to_string());
         let target = CallableTarget::Function(Name::from(function_name));
-        self.resolve_first_class_callable_sig(&target, span, env).map(Some)
+        self.resolve_first_class_callable_sig(&target, span, env)
+            .map(Some)
     }
 
     /// Resolves a literal callable array to a static-method or receiver-bound method signature.
@@ -827,7 +947,8 @@ impl Checker {
         span: crate::span::Span,
         env: &TypeEnv,
     ) -> Result<Option<FunctionSig>, CompileError> {
-        self.resolve_first_class_callable_sig(target, span, env).map(Some)
+        self.resolve_first_class_callable_sig(target, span, env)
+            .map(Some)
     }
 
     /// Resolves an invokable object callback signature for `$object` or `$this`.
@@ -890,9 +1011,9 @@ impl Checker {
             ExprKind::StringLiteral(class_name) => self
                 .resolve_fiber_callable_class_name(class_name)
                 .map(str::to_string),
-            ExprKind::ClassConstant { receiver } => Some(
-                self.resolve_fiber_callable_static_receiver_class(receiver, span)?,
-            ),
+            ExprKind::ClassConstant { receiver } => {
+                Some(self.resolve_fiber_callable_static_receiver_class(receiver, span)?)
+            }
             _ => None,
         };
         Ok(class_name.map(|class_name| StaticReceiver::Named(Name::from(class_name))))
@@ -924,10 +1045,7 @@ impl Checker {
                     .get(current)
                     .and_then(|class_info| class_info.parent.clone())
                     .ok_or_else(|| {
-                        CompileError::new(
-                            span,
-                            &format!("Class '{}' has no parent class", current),
-                        )
+                        CompileError::new(span, &format!("Class '{}' has no parent class", current))
                     })
             }
         }
@@ -1047,7 +1165,10 @@ impl Checker {
         let Some(sig) = self.functions.get_mut(name.as_str()) else {
             return Err(CompileError::new(
                 span,
-                &format!("Undefined function for CallbackFilterIterator callback: {}", name),
+                &format!(
+                    "Undefined function for CallbackFilterIterator callback: {}",
+                    name
+                ),
             ));
         };
         let callback_arg_types = [
@@ -1107,14 +1228,22 @@ fn fiber_callable_array_parts(expr: &Expr) -> Option<(&Expr, &str)> {
 }
 
 /// Returns `true` if `class_name` is a reflection owner class
-/// (`ReflectionClass`, `ReflectionMethod`, `ReflectionProperty`).
+/// (`ReflectionClass`, `ReflectionObject`, `ReflectionEnum`, `ReflectionMethod`, `ReflectionProperty`,
+/// `ReflectionParameter`, `ReflectionClassConstant`, `ReflectionEnumUnitCase`,
+/// `ReflectionEnumBackedCase`).
 fn is_reflection_owner_class(class_name: &str) -> bool {
     matches!(
         class_name,
         "ReflectionClass"
+            | "ReflectionObject"
+            | "ReflectionEnum"
+            | "ReflectionFunction"
             | "ReflectionMethod"
             | "ReflectionProperty"
-            | "ReflectionFunction"
+            | "ReflectionParameter"
+            | "ReflectionClassConstant"
+            | "ReflectionEnumUnitCase"
+            | "ReflectionEnumBackedCase"
     )
 }
 

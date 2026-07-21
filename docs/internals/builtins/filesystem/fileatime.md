@@ -2,15 +2,15 @@
 title: "fileatime() — internals"
 description: "Compiler internals for fileatime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 92
+  order: 113
 ---
 
 ## `fileatime()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4825](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4825) (`lower_fileatime`)
+- **Signature**: [`src/builtins/io/fileatime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fileatime.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5464](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5464) (`lower_fileatime`)
 - **Function symbol**: `lower_fileatime()`
 
 
@@ -36,7 +36,11 @@ function fileatime(string $filename): mixed
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fileatime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fileatime.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `fileatime()`](../../../php/builtins/filesystem/fileatime.md)
-

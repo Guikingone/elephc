@@ -2,15 +2,15 @@
 title: "file() — internals"
 description: "Compiler internals for file(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 144
+  order: 165
 ---
 
 ## `file()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3460](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3460) (`lower_file`)
+- **Signature**: [`src/builtins/io/file.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/file.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3681](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3681) (`lower_file`)
 - **Function symbol**: `lower_file()`
 
 
@@ -27,14 +27,18 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function file(string $filename, int $flags, mixed $context): array
+function file(string $filename): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 3 arguments.
+- **Arity**: takes exactly 1 argument.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/file.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/file.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 
 - [User reference for `file()`](../../../php/builtins/io/file.md)
-

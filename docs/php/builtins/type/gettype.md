@@ -1,8 +1,8 @@
 ---
 title: "gettype()"
-description: "Lowers `gettype(value)` for statically concrete PHP types."
+description: "Returns the type of a variable as a string."
 sidebar:
-  order: 416
+  order: 436
 ---
 
 ## gettype()
@@ -11,12 +11,17 @@ sidebar:
 function gettype(mixed $value): string
 ```
 
-Lowers `gettype(value)` for statically concrete PHP types.
+Returns the type of a variable as a string.
 
 **Parameters**:
 - `$value` (`mixed`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/gettype.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/gettype.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

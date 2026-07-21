@@ -923,6 +923,8 @@ fn test_class_exists_dynamic_autoload_arg_does_not_trigger_aot_autoload() {
     // dynamic flag as true. This no longer panics: `class_exists()` with a
     // non-literal autoload argument is accepted (mirrors `enum_exists()`), it
     // simply cannot autoload a class it was never told, at compile time, to load.
+    // class_exists with a variable second arg must not be guessed as an AOT
+    // autoload demand.
     let out = compile_and_run_files(
         &[
             (
@@ -935,12 +937,16 @@ fn test_class_exists_dynamic_autoload_arg_does_not_trigger_aot_autoload() {
             ),
             (
                 "main.php",
-                "<?php\n$autoload = true;\necho class_exists(\"App\\\\DynamicFlag\", $autoload) ? \"loaded\" : \"absent\";\n",
+                r#"<?php
+$autoload = true;
+echo class_exists("App\\DynamicFlag", $autoload) ? "exists" : "missing";
+"#,
             ),
         ],
         "main.php",
     );
-    assert_eq!(out, "absent");
+    assert_eq!(out, "missing");
+    assert_eq!(out, "missing");
 }
 
 /// Verifies interface exists literal triggers autoload.

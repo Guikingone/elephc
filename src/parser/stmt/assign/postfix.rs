@@ -9,7 +9,7 @@
 //! - Complex target lowering must not duplicate side effects while preserving PHP source evaluation order.
 
 use crate::errors::CompileError;
-use crate::lexer::Token;
+use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
@@ -26,7 +26,7 @@ use super::compound::{
 /// be replayed safely.
 /// Returns `Ok(None)` if the token range does not contain a postfix assignment pattern.
 pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Option<Stmt>, CompileError> {
@@ -169,7 +169,7 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
 /// parser instead.
 fn parse_postfix_ref_assign(
     lhs_expr: Expr,
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     append: bool,
     span: Span,
@@ -327,13 +327,46 @@ pub(crate) fn assignment_target_store_stmt(
     }
 }
 
+/// Parses discarded post-increment/decrement on a scoped (static class member) l-value target.
+/// Handles `A::$x++`, `static::$x--`, `parent::$y++`, etc. Returns `Ok(None)` when no
+/// postfix `++`/`--` is found at the top level of the statement.
+pub(in crate::parser::stmt) fn try_parse_scoped_postfix_incdec(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Option<Stmt>, CompileError> {
+    let start = *pos;
+    let Some((incdec_pos, is_increment)) = find_top_level_postfix_incdec(tokens, start) else {
+        return Ok(None);
+    };
+    if incdec_pos < start + 3 {
+        return Ok(None);
+    }
+
+    let lhs = &tokens[start..incdec_pos];
+    let mut lhs_pos = 0;
+    let lhs_expr = parse_expr(lhs, &mut lhs_pos)?;
+    if lhs_pos != lhs.len() {
+        return Err(CompileError::new(span, "Invalid increment target"));
+    }
+
+    if !matches!(lhs_expr.kind, ExprKind::StaticPropertyAccess { .. }) {
+        return Ok(None);
+    }
+
+    *pos = incdec_pos + 1;
+    expect_semicolon(tokens, pos)?;
+
+    lower_postfix_incdec_assignment(lhs_expr, is_increment, span).map(Some)
+}
+
 /// Parses discarded post-increment/decrement on a complex l-value target.
 ///
 /// For statement contexts the original expression result is unused, so `$a[0]++`
 /// can be lowered to the same read-modify-write shape as `$a[0] += 1`.
 /// Simple local `$x++` is left to the existing local-variable parser.
 pub(in crate::parser::stmt) fn try_parse_postfix_incdec(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Option<Stmt>, CompileError> {
@@ -389,7 +422,7 @@ pub(in crate::parser::stmt) fn try_parse_postfix_incdec(
 /// by a variable and a complex-target marker, so the caller falls back to
 /// `parse_incdec_stmt`.
 pub(in crate::parser::stmt) fn try_parse_prefix_incdec(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Option<Stmt>, CompileError> {
@@ -450,7 +483,7 @@ pub(in crate::parser::stmt) fn try_parse_prefix_incdec(
 /// to a temporary-variable sequence via `lower_effectful_static_assignment`.
 /// Returns `Ok(None)` when no scoped assignment pattern is found.
 pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Option<Stmt>, CompileError> {
@@ -593,7 +626,7 @@ fn parsed_lhs_is_assignable_target(expr: &Expr) -> bool {
 /// before the first `=` (e.g. `$c ? $a[0]`) as a standalone expression and hard-error on the
 /// incomplete ternary instead of falling back gracefully.
 fn find_top_level_assignment(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     start: usize,
 ) -> Option<(usize, AssignmentOperator)> {
     let mut paren_depth = 0usize;
@@ -637,7 +670,7 @@ fn find_top_level_assignment(
 /// `find_top_level_assignment` does: a `++`/`--` beyond the `?` belongs to one of the ternary's
 /// branches, and the whole statement must fall back to general expression parsing instead of being
 /// misread as a discarded postfix/prefix increment on a dangling prefix.
-fn find_top_level_postfix_incdec(tokens: &[(Token, Span)], start: usize) -> Option<(usize, bool)> {
+fn find_top_level_postfix_incdec(tokens: &[SpannedToken], start: usize) -> Option<(usize, bool)> {
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
     let mut brace_depth = 0usize;
@@ -858,6 +891,13 @@ fn lower_postfix_incdec_assignment(
             property,
             value,
         },
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            StmtKind::StaticPropertyAssign {
+                receiver,
+                property,
+                value,
+            }
+        }
         _ => return Err(CompileError::new(span, "Invalid increment target")),
     };
 

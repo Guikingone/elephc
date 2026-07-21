@@ -1,8 +1,8 @@
 ---
 title: "is_iterable()"
-description: "Lowers `is_iterable()` for concrete values and boxed Mixed payloads."
+description: "Checks whether a variable is iterable."
 sidebar:
-  order: 423
+  order: 443
 ---
 
 ## is_iterable()
@@ -11,12 +11,17 @@ sidebar:
 function is_iterable(mixed $value): bool
 ```
 
-Lowers `is_iterable()` for concrete values and boxed Mixed payloads.
+Checks whether a variable is iterable.
 
 **Parameters**:
 - `$value` (`mixed`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/is_iterable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_iterable.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

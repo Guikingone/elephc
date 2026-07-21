@@ -168,6 +168,57 @@ echo c();
     );
     assert_eq!(out, "7");
 }
+/// Verifies that a static variable declared without an initializer defaults to null.
+#[test]
+fn test_static_without_initializer_defaults_to_null() {
+    let out = compile_and_run(
+        r#"<?php
+function f() {
+    static $x;
+    var_dump($x);
+}
+f();
+f();
+"#,
+    );
+    assert_eq!(out, "NULL\nNULL\n");
+}
+
+/// Verifies that `static $x;` behaves identically to the explicit `static $x = null;` form.
+#[test]
+fn test_static_without_initializer_matches_explicit_null_form() {
+    let implicit = compile_and_run(
+        r#"<?php
+function counter() {
+    static $n;
+    if ($n === null) {
+        $n = 0;
+    }
+    $n++;
+    echo $n;
+}
+counter();
+counter();
+counter();
+"#,
+    );
+    let explicit = compile_and_run(
+        r#"<?php
+function counter() {
+    static $n = null;
+    if ($n === null) {
+        $n = 0;
+    }
+    $n++;
+    echo $n;
+}
+counter();
+counter();
+counter();
+"#,
+    );
+    assert_eq!(implicit, explicit);
+}
 
 /// Verifies that a static variable inside a closure links and persists across calls.
 #[test]
@@ -478,6 +529,34 @@ echo $x;
     assert_eq!(out, "15");
 }
 
+/// Verifies by-reference variadic function and method element assignments mutate caller variables.
+#[test]
+fn test_by_ref_variadic_function_and_method_element_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+function f(&...$items) {
+    $items[0] = $items[0] . "-f";
+    $items[1] = $items[1] . "-g";
+}
+class C {
+    public function m(&...$items) {
+        $items[0] = $items[0] . "-m";
+        $items[1] = $items[1] . "-n";
+    }
+}
+$a = "A";
+$b = "B";
+f($a, $b);
+echo $a . ":" . $b . "|";
+$c = "C";
+$d = "D";
+(new C())->m($c, $d);
+echo $c . ":" . $d;
+"#,
+    );
+    assert_eq!(out, "A-f:B-g|C-m:D-n");
+}
+
 // --- Variadic functions ---
 
 /// Verifies a variadic function collects exactly three positional arguments into the rest array.
@@ -712,6 +791,79 @@ echo count($c);
     assert_eq!(out, "3");
 }
 
+/// Regression for #354: spread of an associative array into a new array literal flattens its
+/// string-keyed entries instead of inserting the source as a single nested value.
+#[test]
+fn test_spread_assoc_array() {
+    let out = compile_and_run(r#"<?php
+$a = ['x' => 1];
+$b = [...$a];
+foreach ($b as $k => $v) { echo '[' . $k . ':' . $v . ']'; }
+"#);
+    assert_eq!(out, "[x:1]");
+}
+
+/// Regression for #354: spread reindexes integer-keyed source entries to fresh sequential keys
+/// (matching PHP) while preserving string keys.
+#[test]
+fn test_spread_mixed_keys() {
+    let out = compile_and_run(r#"<?php
+$a = [10 => 'a', 'x' => 'b'];
+$b = [...$a];
+foreach ($b as $k => $v) { echo '[' . $k . ':' . $v . ']'; }
+"#);
+    assert_eq!(out, "[0:a][x:b]");
+}
+
+/// Regression for #354: later spread operands overwrite earlier ones on string-key collision.
+#[test]
+fn test_spread_overwrite() {
+    let out = compile_and_run(r#"<?php
+$a = ['x' => 1, 'y' => 2];
+$b = ['y' => 3, 'z' => 4];
+$c = [...$a, ...$b];
+foreach ($c as $k => $v) { echo '[' . $k . ':' . $v . ']'; }
+"#);
+    assert_eq!(out, "[x:1][y:3][z:4]");
+}
+
+/// Regression for #354: spread of an indexed array into a new array literal stays on the indexed
+/// storage path and preserves sequential integer keys.
+#[test]
+fn test_spread_indexed_array() {
+    let out = compile_and_run(r#"<?php
+$a = [1, 2, 3];
+$b = [...$a];
+foreach ($b as $k => $v) { echo '[' . $k . ':' . $v . ']'; }
+"#);
+    assert_eq!(out, "[0:1][1:2][2:3]");
+}
+
+/// Regression for #354: a literal element before and after an associative spread continues the
+/// automatic integer key sequence across the reindexed spread entries.
+#[test]
+fn test_spread_literal_interleaved_with_assoc() {
+    let out = compile_and_run(r#"<?php
+$a = ['y' => 1];
+$b = ['w', ...$a, 'x'];
+foreach ($b as $k => $v) { echo '[' . $k . ':' . $v . ']'; }
+"#);
+    assert_eq!(out, "[0:w][y:1][1:x]");
+}
+
+/// Regression for #354: an indexed spread followed by an associative spread continues the
+/// reindex counter across operands.
+#[test]
+fn test_spread_indexed_then_assoc() {
+    let out = compile_and_run(r#"<?php
+$a = [10, 20];
+$b = ['x' => 1];
+$c = [...$a, ...$b];
+foreach ($c as $k => $v) { echo '[' . $k . ':' . $v . ']'; }
+"#);
+    assert_eq!(out, "[0:10][1:20][x:1]");
+}
+
 /// Verifies that a variadic function with a preceding regular parameter receives zero rest elements when called with exactly one argument.
 #[test]
 fn test_variadic_with_regular_and_no_extra() {
@@ -828,4 +980,52 @@ echo sum(4, 5, 6);
 "#,
     );
     assert_eq!(out, "15");
+}
+
+// --- First-class callables over registry builtins with variadic/optional signatures ---
+
+/// Verifies `var_dump(...)` as a first-class callable exposes the registry's variadic
+/// signature (`value, ...values`): the wrapper accepts multiple arguments and dumps
+/// each independently in source order.
+#[test]
+fn test_first_class_callable_var_dump_variadic() {
+    let out = compile_and_run(
+        r#"<?php
+$dump = var_dump(...);
+$dump(1, "a");
+"#,
+    );
+    assert_eq!(out, "int(1)\nstring(1) \"a\"\n");
+}
+
+/// Verifies `print_r(...)` as a first-class callable exposes the optional `$return`
+/// flag from the registry signature. Through the wrapper the flag is a runtime
+/// parameter, so the call takes the runtime-selected mode path and returns the
+/// rendered string (boxed Mixed) without echoing.
+#[test]
+fn test_first_class_callable_print_r_return_flag() {
+    let out = compile_and_run(
+        r#"<?php
+$render = print_r(...);
+$r = $render("hi", true);
+echo "|$r";
+"#,
+    );
+    assert_eq!(out, "|hi");
+}
+
+/// Verifies `print_r(...)` as a first-class callable defaults the `$return` flag to
+/// `false` when called with one argument: the value is echoed and the wrapper
+/// returns true.
+#[test]
+fn test_first_class_callable_print_r_echo_default() {
+    let out = compile_and_run(
+        r#"<?php
+$render = print_r(...);
+$ok = $render(42);
+echo "|";
+echo $ok ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "42|yes");
 }

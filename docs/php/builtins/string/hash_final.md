@@ -1,23 +1,28 @@
 ---
 title: "hash_final()"
-description: "Lowers `hash_final(context, binary?)` through the incremental hash finalizer."
+description: "Finalizes an incremental hash and returns the digest string."
 sidebar:
-  order: 346
+  order: 373
 ---
 
 ## hash_final()
 
 ```php
-function hash_final(resource $context, bool $binary): string
+function hash_final(resource $context, bool $binary = false): string
 ```
 
-Lowers `hash_final(context, binary?)` through the incremental hash finalizer.
+Finalizes an incremental hash and returns the digest string.
 
 **Parameters**:
 - `$context` (`resource`)
-- `$binary` (`bool`), optional
+- `$binary` (`bool`), default `false`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/hash_final.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_final.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

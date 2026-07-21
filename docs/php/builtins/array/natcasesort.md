@@ -1,8 +1,8 @@
 ---
 title: "natcasesort()"
-description: "Lowers `natcasesort()` for indexed integer arrays through the case-insensitive wrapper."
+description: "Sorts an array using a case-insensitive natural order algorithm."
 sidebar:
-  order: 38
+  order: 55
 ---
 
 ## natcasesort()
@@ -11,12 +11,17 @@ sidebar:
 function natcasesort(array $array): bool
 ```
 
-Lowers `natcasesort()` for indexed integer arrays through the case-insensitive wrapper.
+Sorts an array using a case-insensitive natural order algorithm.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/natcasesort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/natcasesort.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

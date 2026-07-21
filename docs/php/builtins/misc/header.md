@@ -1,24 +1,29 @@
 ---
 title: "header()"
-description: "Lowers `header($line[, $replace[, $code]])` to `__rt_header`, materializing the"
+description: "Sends a raw HTTP header."
 sidebar:
-  order: 264
+  order: 292
 ---
 
 ## header()
 
 ```php
-function header(mixed $header, mixed $replace, mixed $response_code): void
+function header(string $header, bool $replace = true, int $response_code = 0): void
 ```
 
-Lowers `header($line[, $replace[, $code]])` to `__rt_header`, materializing the
+Sends a raw HTTP header.
 
 **Parameters**:
-- `$header` (`mixed`)
-- `$replace` (`mixed`), optional
-- `$response_code` (`mixed`), optional
+- `$header` (`string`)
+- `$replace` (`bool`), default `true`, optional
+- `$response_code` (`int`), default `0`, optional
 
 **Returns**: `void`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/header.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/header.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,8 @@
 ---
 title: "getcwd()"
-description: "Lowers `getcwd()` through the target-aware runtime helper."
+description: "Gets the current working directory."
 sidebar:
-  order: 102
+  order: 123
 ---
 
 ## getcwd()
@@ -11,11 +11,16 @@ sidebar:
 function getcwd(): string
 ```
 
-Lowers `getcwd()` through the target-aware runtime helper.
+Gets the current working directory.
 
 **Parameters**: none.
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/getcwd.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/getcwd.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

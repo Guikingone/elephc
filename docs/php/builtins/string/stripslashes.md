@@ -1,8 +1,8 @@
 ---
 title: "stripslashes()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Removes backslashes from a string previously escaped by addslashes."
 sidebar:
-  order: 387
+  order: 410
 ---
 
 ## stripslashes()
@@ -11,12 +11,17 @@ sidebar:
 function stripslashes(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Removes backslashes from a string previously escaped by addslashes.
 
 **Parameters**:
 - `$string` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/stripslashes.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/stripslashes.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

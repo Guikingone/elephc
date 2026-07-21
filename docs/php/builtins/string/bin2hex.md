@@ -1,8 +1,8 @@
 ---
 title: "bin2hex()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Converts binary data into its hexadecimal string representation."
 sidebar:
-  order: 328
+  order: 359
 ---
 
 ## bin2hex()
@@ -11,12 +11,17 @@ sidebar:
 function bin2hex(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Converts binary data into its hexadecimal string representation.
 
 **Parameters**:
 - `$string` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/bin2hex.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/bin2hex.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

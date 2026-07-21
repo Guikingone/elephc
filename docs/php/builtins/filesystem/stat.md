@@ -1,8 +1,8 @@
 ---
 title: "stat()"
-description: "Lowers `stat(path)` and boxes the runtime stat array or PHP false result."
+description: "Gives information about a file."
 sidebar:
-  order: 128
+  order: 149
 ---
 
 ## stat()
@@ -11,12 +11,17 @@ sidebar:
 function stat(string $filename): mixed
 ```
 
-Lowers `stat(path)` and boxes the runtime stat array or PHP false result.
+Gives information about a file.
 
 **Parameters**:
 - `$filename` (`string`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stat.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stat.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

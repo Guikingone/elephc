@@ -1,8 +1,8 @@
 ---
 title: "is_bool()"
-description: "is_bool() — type builtin supported by Elephc."
+description: "Checks whether a variable is a boolean."
 sidebar:
-  order: 419
+  order: 439
 ---
 
 ## is_bool()
@@ -11,12 +11,17 @@ sidebar:
 function is_bool(mixed $value): bool
 ```
 
-`is_bool()` is a type builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Checks whether a variable is a boolean.
 
 **Parameters**:
 - `$value` (`mixed`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/is_bool.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_bool.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
@@ -25,4 +30,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `is_bool` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/is_bool.md).
 

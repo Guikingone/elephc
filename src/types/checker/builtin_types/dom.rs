@@ -136,6 +136,8 @@ fn method(
         body,
         span: dummy(),
         attributes: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic_by_ref: false,
     }
 }
 
@@ -157,6 +159,7 @@ fn property(name: &str, type_expr: TypeExpr, default: Option<Expr>) -> ClassProp
         default,
         span: dummy(),
         attributes: Vec::new(),
+        is_promoted: false,
     }
 }
 
@@ -190,6 +193,8 @@ fn builtin_dom_node() -> FlattenedClass {
         attributes: Vec::new(),
         constants: Vec::new(),
         used_traits: Vec::new(),
+        span: crate::span::Span::dummy(),
+        trait_aliases: Vec::new(),
     }
 }
 
@@ -260,6 +265,8 @@ fn builtin_dom_document() -> FlattenedClass {
         attributes: Vec::new(),
         constants: Vec::new(),
         used_traits: Vec::new(),
+        span: crate::span::Span::dummy(),
+        trait_aliases: Vec::new(),
     }
 }
 
@@ -288,6 +295,8 @@ fn builtin_dom_element() -> FlattenedClass {
         attributes: Vec::new(),
         constants: Vec::new(),
         used_traits: Vec::new(),
+        span: crate::span::Span::dummy(),
+        trait_aliases: Vec::new(),
     }
 }
 
@@ -307,6 +316,8 @@ fn builtin_dom_text() -> FlattenedClass {
         attributes: Vec::new(),
         constants: Vec::new(),
         used_traits: Vec::new(),
+        span: crate::span::Span::dummy(),
+        trait_aliases: Vec::new(),
     }
 }
 
@@ -340,6 +351,8 @@ fn builtin_dom_node_list() -> FlattenedClass {
         attributes: Vec::new(),
         constants: Vec::new(),
         used_traits: Vec::new(),
+        span: crate::span::Span::dummy(),
+        trait_aliases: Vec::new(),
     }
 }
 

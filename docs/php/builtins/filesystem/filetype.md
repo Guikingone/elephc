@@ -1,8 +1,8 @@
 ---
 title: "filetype()"
-description: "Lowers `filetype(path)` and boxes the runtime string-or-false result."
+description: "Gets file type."
 sidebar:
-  order: 100
+  order: 121
 ---
 
 ## filetype()
@@ -11,12 +11,17 @@ sidebar:
 function filetype(string $filename): mixed
 ```
 
-Lowers `filetype(path)` and boxes the runtime string-or-false result.
+Gets file type.
 
 **Parameters**:
 - `$filename` (`string`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/filetype.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/filetype.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,22 +1,27 @@
 ---
 title: "getdate()"
-description: "Lowers `getdate([$timestamp])` through the shared decomposition runtime helper."
+description: "Returns date/time information."
 sidebar:
-  order: 72
+  order: 93
 ---
 
 ## getdate()
 
 ```php
-function getdate(int $timestamp): array
+function getdate(int $timestamp = null): array
 ```
 
-Lowers `getdate([$timestamp])` through the shared decomposition runtime helper.
+Returns date/time information.
 
 **Parameters**:
-- `$timestamp` (`int`), optional
+- `$timestamp` (`int`), default `null`, optional
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/getdate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/getdate.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

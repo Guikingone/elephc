@@ -1,8 +1,8 @@
 ---
 title: "mktime()"
-description: "Lowers `mktime(hour, minute, second, month, day, year)` through the runtime helper."
+description: "Returns the Unix timestamp for a date."
 sidebar:
-  order: 78
+  order: 99
 ---
 
 ## mktime()
@@ -11,7 +11,7 @@ sidebar:
 function mktime(int $hour, int $minute, int $second, int $month, int $day, int $year): int
 ```
 
-Lowers `mktime(hour, minute, second, month, day, year)` through the runtime helper.
+Returns the Unix timestamp for a date.
 
 **Parameters**:
 - `$hour` (`int`)
@@ -22,6 +22,11 @@ Lowers `mktime(hour, minute, second, month, day, year)` through the runtime help
 - `$year` (`int`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/mktime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/mktime.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,23 +1,28 @@
 ---
 title: "gzuncompress()"
-description: "Lowers `gzuncompress(data, max_length?)` and boxes zlib failures as PHP false."
+description: "Uncompress a compressed string."
 sidebar:
-  order: 341
+  order: 368
 ---
 
 ## gzuncompress()
 
 ```php
-function gzuncompress(string $data, int $max_length): string
+function gzuncompress(string $data, int $max_length = 0): mixed
 ```
 
-Lowers `gzuncompress(data, max_length?)` and boxes zlib failures as PHP false.
+Uncompress a compressed string.
 
 **Parameters**:
 - `$data` (`string`)
-- `$max_length` (`int`), optional
+- `$max_length` (`int`), default `0`, optional
 
-**Returns**: `string`
+**Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/gzuncompress.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/gzuncompress.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,8 @@
 ---
 title: "is_resource()"
-description: "Lowers `is_resource(value)` for static resources and boxed Mixed resource cells."
+description: "Checks whether a variable is a resource."
 sidebar:
-  order: 427
+  order: 447
 ---
 
 ## is_resource()
@@ -11,12 +11,17 @@ sidebar:
 function is_resource(mixed $value): bool
 ```
 
-Lowers `is_resource(value)` for static resources and boxed Mixed resource cells.
+Checks whether a variable is a resource.
 
 **Parameters**:
 - `$value` (`mixed`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/is_resource.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_resource.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

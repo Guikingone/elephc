@@ -1,22 +1,27 @@
 ---
 title: "hrtime()"
-description: "Lowers `hrtime([$as_number])` through the monotonic-clock runtime helper."
+description: "Returns the current high-resolution time."
 sidebar:
-  order: 75
+  order: 96
 ---
 
 ## hrtime()
 
 ```php
-function hrtime(bool $as_number): mixed
+function hrtime(bool $as_number = false): mixed
 ```
 
-Lowers `hrtime([$as_number])` through the monotonic-clock runtime helper.
+Returns the current high-resolution time.
 
 **Parameters**:
-- `$as_number` (`bool`), optional
+- `$as_number` (`bool`), default `false`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/hrtime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/hrtime.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,8 @@
 ---
 title: "readlink()"
-description: "Lowers `readlink(path)` and boxes the owned runtime string-or-false result."
+description: "Returns the target of a symbolic link."
 sidebar:
-  order: 121
+  order: 142
 ---
 
 ## readlink()
@@ -11,12 +11,17 @@ sidebar:
 function readlink(string $path): mixed
 ```
 
-Lowers `readlink(path)` and boxes the owned runtime string-or-false result.
+Returns the target of a symbolic link.
 
 **Parameters**:
 - `$path` (`string`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/readlink.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/readlink.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

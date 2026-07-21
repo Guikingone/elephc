@@ -1,25 +1,30 @@
 ---
 title: "str_pad()"
-description: "Lowers `str_pad(string, length, pad_string?, pad_type?)` through the shared runtime helper."
+description: "Pads a string to a certain length with another string."
 sidebar:
-  order: 379
+  order: 403
 ---
 
 ## str_pad()
 
 ```php
-function str_pad(string $string, int $length, string $pad_string, int $pad_type): string
+function str_pad(string $string, int $length, string $pad_string = ' ', int $pad_type = 1): string
 ```
 
-Lowers `str_pad(string, length, pad_string?, pad_type?)` through the shared runtime helper.
+Pads a string to a certain length with another string.
 
 **Parameters**:
 - `$string` (`string`)
 - `$length` (`int`)
-- `$pad_string` (`string`), optional
-- `$pad_type` (`int`), optional
+- `$pad_string` (`string`), default `' '`, optional
+- `$pad_type` (`int`), default `1`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/str_pad.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_pad.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

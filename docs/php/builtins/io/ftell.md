@@ -1,8 +1,8 @@
 ---
 title: "ftell()"
-description: "Lowers `ftell(stream)` as `lseek(fd, 0, SEEK_CUR)`."
+description: "Returns the current position of the file read/write pointer."
 sidebar:
-  order: 157
+  order: 178
 ---
 
 ## ftell()
@@ -11,12 +11,17 @@ sidebar:
 function ftell(resource $stream): int
 ```
 
-Lowers `ftell(stream)` as `lseek(fd, 0, SEEK_CUR)`.
+Returns the current position of the file read/write pointer.
 
 **Parameters**:
 - `$stream` (`resource`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/ftell.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/ftell.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,25 +1,28 @@
 ---
 title: "file_put_contents()"
-description: "Lowers `file_put_contents(path, data)` through the target-aware runtime writer."
+description: "Writes data to a file."
 sidebar:
-  order: 146
+  order: 167
 ---
 
 ## file_put_contents()
 
 ```php
-function file_put_contents(string $filename, mixed $data, int $flags = 0, mixed $context = null): int
+function file_put_contents(string $filename, string $data): int
 ```
 
-Lowers `file_put_contents(path, data)` through the target-aware runtime writer.
+Writes data to a file.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$data` (`mixed`)
-- `$flags` (`int`), default `0`, optional
-- `$context` (`mixed`), default `null`, optional
+- `$data` (`string`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/file_put_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/file_put_contents.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,8 @@
 ---
 title: "rawurlencode()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "URL-encodes a string using RFC 3986 percent-encoding (no '+' for spaces)."
 sidebar:
-  order: 371
+  order: 395
 ---
 
 ## rawurlencode()
@@ -11,12 +11,17 @@ sidebar:
 function rawurlencode(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+URL-encodes a string using RFC 3986 percent-encoding (no '+' for spaces).
 
 **Parameters**:
 - `$string` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/rawurlencode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/rawurlencode.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

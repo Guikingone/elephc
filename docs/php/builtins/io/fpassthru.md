@@ -1,8 +1,8 @@
 ---
 title: "fpassthru()"
-description: "Lowers `fpassthru(stream)` through the remaining-bytes stream runtime helper."
+description: "Output all remaining data on a file pointer."
 sidebar:
-  order: 149
+  order: 170
 ---
 
 ## fpassthru()
@@ -11,12 +11,17 @@ sidebar:
 function fpassthru(resource $stream): int
 ```
 
-Lowers `fpassthru(stream)` through the remaining-bytes stream runtime helper.
+Output all remaining data on a file pointer.
 
 **Parameters**:
 - `$stream` (`resource`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fpassthru.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fpassthru.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

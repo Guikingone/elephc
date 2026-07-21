@@ -9,12 +9,15 @@
 //! - Keep startup thin so CLI validation and pipeline behavior stay in dedicated modules.
 
 mod autoload;
+mod builtins;
 mod cli;
 mod codegen;
-mod codegen_ir;
+mod codegen_support;
 mod conditional;
 mod errors;
+mod eval_aot;
 mod exports;
+mod image_prelude;
 mod intrinsics;
 #[allow(dead_code, unused_imports)]
 mod ir;
@@ -22,12 +25,11 @@ mod ir;
 mod ir_lower;
 #[allow(dead_code, unused_imports)]
 mod ir_passes;
-mod linker;
 mod lexer;
+mod linker;
 mod list_id_prelude;
 mod magic_constants;
 mod name_resolver;
-mod image_prelude;
 mod names;
 mod optimize;
 mod parser;
@@ -36,8 +38,10 @@ mod pipeline;
 mod resolver;
 mod runtime_cache;
 mod shutdown_prelude;
+mod debug_info;
 mod source_map;
 mod span;
+mod strict_php;
 mod string_bytes;
 mod superglobals;
 mod termination;

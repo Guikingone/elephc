@@ -2,15 +2,15 @@
 title: "md5() — internals"
 description: "Compiler internals for md5(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 365
+  order: 389
 ---
 
 ## `md5()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:472](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L472) (`lower_md5`)
+- **Signature**: [`src/builtins/string/md5.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/md5.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:417](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L417) (`lower_md5`)
 - **Function symbol**: `lower_md5()`
 
 
@@ -28,14 +28,18 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function md5(string $string, bool $binary): string
+function md5(string $string, bool $binary = false): string
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/md5.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/md5.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `md5()`](../../../php/builtins/string/md5.md)
-

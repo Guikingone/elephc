@@ -21,13 +21,27 @@ use super::{
     branch_to, lower_array_access_from_value, lower_boxed_null,
     lower_dynamic_property_get_from_value, lower_expr, lower_expr_call_from_value,
     lower_method_call_with_receiver, lower_property_get_from_value, store_value_into_temp,
-    value_is_definitely_null, value_is_nullable,
+    take_owned_temp, value_is_definitely_null, value_is_nullable,
 };
 
 /// Lowers `expr` when it is a postfix chain containing `?->`.
 pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Option<LoweredValue> {
+    lower_with_missing_warning(ctx, expr, true)
+}
+
+/// Lowers a nullsafe postfix chain while configuring native array-miss warnings.
+pub(super) fn lower_with_missing_warning(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+    warn_on_missing: bool,
+) -> Option<LoweredValue> {
     let chain = flatten_nullsafe_postfix_chain(expr)?;
-    Some(lower_nullsafe_postfix_chain(ctx, chain, expr))
+    Some(lower_nullsafe_postfix_chain(
+        ctx,
+        chain,
+        expr,
+        warn_on_missing,
+    ))
 }
 
 /// Flattened left-to-right postfix chain rooted at a base expression.
@@ -54,6 +68,12 @@ enum PostfixSegment<'a> {
         args: &'a [Expr],
         nullsafe: bool,
     },
+    DynamicMethod {
+        expr: &'a Expr,
+        method: &'a Expr,
+        args: &'a [Expr],
+        nullsafe: bool,
+    },
     Array {
         expr: &'a Expr,
         index: &'a Expr,
@@ -76,6 +96,9 @@ impl PostfixSegment<'_> {
                 nullsafe: true,
                 ..
             } | PostfixSegment::Method {
+                nullsafe: true,
+                ..
+            } | PostfixSegment::DynamicMethod {
                 nullsafe: true,
                 ..
             }
@@ -148,6 +171,19 @@ fn flatten_nullsafe_postfix_chain(expr: &Expr) -> Option<PostfixChain<'_>> {
                 });
                 base = object;
             }
+            ExprKind::NullsafeDynamicMethodCall {
+                object,
+                method,
+                args,
+            } => {
+                segments.push(PostfixSegment::DynamicMethod {
+                    expr: base,
+                    method,
+                    args,
+                    nullsafe: true,
+                });
+                base = object;
+            }
             ExprKind::ArrayAccess { array, index } => {
                 segments.push(PostfixSegment::Array { expr: base, index });
                 base = array;
@@ -173,9 +209,10 @@ fn lower_nullsafe_postfix_chain(
     ctx: &mut LoweringContext<'_, '_>,
     chain: PostfixChain<'_>,
     expr: &Expr,
+    warn_on_missing: bool,
 ) -> LoweredValue {
     let result_type = PhpType::Mixed;
-    let temp_name = ctx.declare_hidden_temp(result_type.clone());
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let null_block = ctx.builder.create_named_block("nullsafe.chain.null", Vec::new());
     let done = ctx.builder.create_named_block("nullsafe.chain.done", Vec::new());
     let mut current = Some(lower_expr(ctx, chain.base));
@@ -187,7 +224,13 @@ fn lower_nullsafe_postfix_chain(
         if ctx.builder.insertion_block_is_terminated() {
             break;
         }
-        current = lower_nullsafe_postfix_segment(ctx, value, segment, null_block);
+        current = lower_nullsafe_postfix_segment(
+            ctx,
+            value,
+            segment,
+            null_block,
+            warn_on_missing,
+        );
     }
 
     if let Some(value) = current {
@@ -203,7 +246,7 @@ fn lower_nullsafe_postfix_chain(
     branch_to(ctx, done);
 
     ctx.builder.position_at_end(done);
-    ctx.load_local(&temp_name, Some(expr.span))
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Lowers one segment of an already flattened nullsafe postfix chain.
@@ -212,6 +255,7 @@ fn lower_nullsafe_postfix_segment(
     current: LoweredValue,
     segment: PostfixSegment<'_>,
     null_block: BlockId,
+    warn_on_missing: bool,
 ) -> Option<LoweredValue> {
     match segment {
         PostfixSegment::Property {
@@ -262,8 +306,27 @@ fn lower_nullsafe_postfix_segment(
                 expr,
             ))
         }
+        PostfixSegment::DynamicMethod {
+            expr,
+            method,
+            args,
+            nullsafe,
+        } => {
+            if nullsafe && !guard_nullsafe_chain_receiver(ctx, current, null_block, expr) {
+                return None;
+            }
+            Some(super::lower_dynamic_method_call_with_receiver(
+                ctx, current, method, args, expr,
+            ))
+        }
         PostfixSegment::Array { expr, index } => {
-            Some(lower_array_access_from_value(ctx, current, index, expr))
+            Some(lower_array_access_from_value(
+                ctx,
+                current,
+                index,
+                expr,
+                warn_on_missing,
+            ))
         }
         PostfixSegment::ExprCall { expr, args } => {
             Some(lower_expr_call_from_value(ctx, current, args, expr))
@@ -309,13 +372,21 @@ fn guard_nullsafe_chain_receiver(
         Some(expr.span),
     );
     let continue_block = ctx.builder.create_named_block("nullsafe.chain.cont", Vec::new());
+    let cleanup_block = ctx
+        .value_is_owning_temporary(current)
+        .then(|| ctx.builder.create_named_block("nullsafe.chain.cleanup", Vec::new()));
     ctx.builder.terminate(Terminator::CondBr {
         cond: is_null.value,
-        then_target: null_block,
+        then_target: cleanup_block.unwrap_or(null_block),
         then_args: Vec::new(),
         else_target: continue_block,
         else_args: Vec::new(),
     });
+    if let Some(cleanup_block) = cleanup_block {
+        ctx.builder.position_at_end(cleanup_block);
+        crate::ir_lower::ownership::release_if_owned(ctx, current, Some(expr.span));
+        branch_to(ctx, null_block);
+    }
     ctx.builder.position_at_end(continue_block);
     true
 }

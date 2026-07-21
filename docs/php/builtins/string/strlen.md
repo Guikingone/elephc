@@ -1,8 +1,8 @@
 ---
 title: "strlen()"
-description: "Lowers `strlen()` by coercing string-like values and returning the byte length."
+description: "Returns the length of a string."
 sidebar:
-  order: 388
+  order: 411
 ---
 
 ## strlen()
@@ -11,12 +11,17 @@ sidebar:
 function strlen(string $string): int
 ```
 
-Lowers `strlen()` by coercing string-like values and returning the byte length.
+Returns the length of a string.
 
 **Parameters**:
 - `$string` (`string`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/strlen.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strlen.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

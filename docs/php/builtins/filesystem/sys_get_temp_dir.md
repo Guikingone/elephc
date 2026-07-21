@@ -1,8 +1,8 @@
 ---
 title: "sys_get_temp_dir()"
-description: "Lowers `sys_get_temp_dir()` as the project's hardcoded `/tmp` string."
+description: "Returns the directory path used for temporary files."
 sidebar:
-  order: 130
+  order: 151
 ---
 
 ## sys_get_temp_dir()
@@ -11,11 +11,16 @@ sidebar:
 function sys_get_temp_dir(): string
 ```
 
-Lowers `sys_get_temp_dir()` as the project's hardcoded `/tmp` string.
+Returns the directory path used for temporary files.
 
 **Parameters**: none.
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/sys_get_temp_dir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/sys_get_temp_dir.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

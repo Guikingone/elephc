@@ -1,8 +1,8 @@
 ---
 title: "chr()"
-description: "Lowers `chr()` by converting an integer code point into a one-byte string."
+description: "Returns a one-character string from the given byte code point."
 sidebar:
-  order: 331
+  order: 361
 ---
 
 ## chr()
@@ -11,12 +11,17 @@ sidebar:
 function chr(int $codepoint): string
 ```
 
-Lowers `chr()` by converting an integer code point into a one-byte string.
+Returns a one-character string from the given byte code point.
 
 **Parameters**:
 - `$codepoint` (`int`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/chr.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/chr.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

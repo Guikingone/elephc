@@ -1,8 +1,8 @@
 ---
 title: "stream_socket_pair()"
-description: "Lowers `stream_socket_pair(domain, type, protocol)` and boxes `array|false`."
+description: "Creates a pair of connected, indistinguishable socket streams."
 sidebar:
-  order: 203
+  order: 237
 ---
 
 ## stream_socket_pair()
@@ -11,7 +11,7 @@ sidebar:
 function stream_socket_pair(int $domain, int $type, int $protocol): mixed
 ```
 
-Lowers `stream_socket_pair(domain, type, protocol)` and boxes `array|false`.
+Creates a pair of connected, indistinguishable socket streams.
 
 **Parameters**:
 - `$domain` (`int`)
@@ -19,6 +19,11 @@ Lowers `stream_socket_pair(domain, type, protocol)` and boxes `array|false`.
 - `$protocol` (`int`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_pair.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_pair.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

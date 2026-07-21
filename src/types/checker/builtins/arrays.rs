@@ -184,16 +184,7 @@ pub(super) fn check_builtin(
                 return Err(CompileError::new(span, "isset() takes at least 1 argument"));
             }
             for arg in args {
-                // `isset($obj->prop)` on an undeclared property dispatches to
-                // `__isset`; the helper infers the receiver but skips the bare
-                // property access that would otherwise reject the property.
-                if checker
-                    .isset_unset_property_magic_class(arg, "__isset", env)?
-                    .is_some()
-                {
-                    continue;
-                }
-                checker.infer_type(arg, env)?;
+                check_isset_arg(checker, arg, env)?;
             }
             Ok(Some(PhpType::Bool))
         }
@@ -818,4 +809,40 @@ pub(crate) fn array_arg_is_gradually_acceptable(ty: &PhpType) -> bool {
             .any(|member| matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })),
         _ => false,
     }
+}
+
+/// Type-checks one `isset()` operand while preserving PHP's non-reading property semantics.
+fn check_isset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(), CompileError> {
+    if let ExprKind::PropertyAccess { object, .. }
+    | ExprKind::NullsafePropertyAccess { object, .. } = &arg.kind
+    {
+        let object_ty = checker.infer_type(object, env)?;
+        if isset_object_receiver_type(checker, &object_ty) {
+            return Ok(());
+        }
+    }
+    checker.infer_type(arg, env).map(|_| ())
+}
+
+/// Returns true when `isset($object->property)` can be checked without reading the property.
+fn isset_object_receiver_type(checker: &Checker, ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(_) | PhpType::Mixed => true,
+        PhpType::Union(members) => {
+            checker.union_single_object_class(ty).is_some()
+                || members.iter().any(|member| matches!(member, PhpType::Mixed))
+        }
+        _ => false,
+    }
+}
+
+/// Returns `true` if a `PhpType` is a countable array type for Union membership checks.
+///
+/// Used by `crate::builtins::array::count` to test whether every branch of a Union type
+/// is countable, in which case `count()` returns `Int` for the whole union.
+pub(crate) fn union_member_is_countable_array(ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+    )
 }

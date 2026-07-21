@@ -2,7 +2,7 @@
 title: "Linking, heap, and conditional compilation"
 description: "Linking native libraries and frameworks for FFI, sizing the runtime heap, and defining compile-time symbols for ifdef branches."
 sidebar:
-  order: 7
+  order: 8
 ---
 
 These flags control how the binary is linked, how much heap the program gets, and
@@ -45,6 +45,46 @@ elephc app.php --framework Cocoa --framework Metal
 automatically; the flags above are for libraries not already named in the source.
 See [FFI & Extern](../beyond-php/extern.md).
 
+## Bridge crates and `--with-CRATE`
+
+Some optional features are implemented as Rust *bridge crates* (`staticlib`
+archives) that elephc links into the program: `pdo` (database access), `tls`
+(`https://`/`ftps://` streams), `crypto` (the `hash()`/`md5()`/`sha1()` family),
+`phar` (Phar archives), `tz` (timezone introspection), `image` (GD/Imagick image
+processing), `eval` (the Magician interpreter fallback for dynamic `eval()`),
+and `web` (the `--web` server).
+
+By default a bridge is linked **only when the program uses it** — using a hash
+function pulls in `crypto`, opening an `https://` stream pulls in `tls`,
+referencing `PDO` pulls in `pdo`, and so on. An `eval()` call pulls in Magician
+only when it needs runtime parsing: eligible literal fragments can be parsed at
+compile time and lowered to native EIR without the interpreter bridge. Programs
+that do not need a feature never link its crate, so binaries stay small.
+
+`--with-CRATE` force-enables a bridge regardless of that auto-detection. It
+force-links the staticlib (whole-archived, so it is retained even if no symbol
+references it) and, for crates whose PHP surface comes from an injected prelude
+(`pdo`, `tz`, `image`), force-injects that prelude so the classes/functions are
+available. This is useful when a program reaches a feature through indirection
+that detection cannot see. The flag is repeatable:
+
+```bash
+elephc app.php --with-pdo
+elephc app.php --with-crypto --with-tls
+elephc app.php --with-eval
+```
+
+`--with-eval` force-links `elephc_magician`; it does not enable new syntax or
+change which fragments are eligible for AOT lowering. Normal eval usage is
+detected automatically. See [Eval](../php/eval.md) for language semantics and
+[Eval Runtime Architecture](../internals/eval-runtime.md) for the AOT/fallback
+decision and scope ABI.
+
+`--with-web` is an alias for [`--web`](../beyond-php/web.md) (the full server
+mode, which owns the program entry point). An unknown crate name is rejected with
+the list of valid crates. Forcing a crate increases binary size, since the whole
+archive is included.
+
 ## Heap size
 
 The compiled program uses a fixed-size runtime heap, **8 MB** by default. Programs
@@ -61,6 +101,25 @@ elephc --heap-size=16777216 heavy.php   # 16 MB
 If a program exhausts its heap it aborts with a fatal "heap memory exhausted"
 error; raising `--heap-size` is the fix. See [Memory Model](../internals/memory-model.md).
 
+## Runtime dead stripping
+
+The compiler ships a single runtime with helpers for every supported builtin, but
+a given program only uses a few of them. When linking an **executable**, the
+linker keeps only the runtime helpers reachable from the program and drops the
+rest, so a small program does not carry the whole runtime. This is automatic —
+there is no flag — and never changes behavior, only binary size.
+
+It works the same on every supported target, using each platform's native
+mechanism:
+
+- **Linux** emits each runtime helper into its own section and links with
+  `--gc-sections`.
+- **macOS** emits the runtime object with `.subsections_via_symbols` so each
+  helper is a separately collectable atom, and links with `-dead_strip`.
+
+Shared libraries (`--emit cdylib`) keep the full runtime, since any exported
+symbol may be reached by a host the linker cannot see.
+
 ## Conditional compilation
 
 elephc supports compile-time feature branches with `ifdef`. Symbols are defined
@@ -69,7 +128,9 @@ generation, so unused branches are never compiled.
 
 ### `--define` / `--define=`
 
-Defines a compile-time symbol. Repeatable.
+Defines a compile-time symbol. Repeatable. Cannot be combined with
+[`--strict-php`](cli-reference.md#strict-php-mode), which rejects the `ifdef`
+extension outright.
 
 ```bash
 elephc --define DEBUG app.php

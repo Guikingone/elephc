@@ -9,12 +9,13 @@
 //! - Runtime helper bodies remain outside EIR; modules reference runtime
 //!   features and metadata needed to select/link helpers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::Target;
 use crate::codegen::RuntimeFeatures;
 use crate::ir::function::{Function, FunctionId};
 use crate::ir::types::IrType;
+use crate::parser::ast::{ExprKind, Visibility};
 use crate::types::{
     ClassInfo, EnumInfo, ExternClassInfo, FunctionSig, InterfaceInfo, PackedClassInfo, PhpType,
 };
@@ -55,10 +56,21 @@ pub enum ConstScalar {
     Null,
 }
 
+/// Method metadata retained for standalone trait reflection.
+#[derive(Debug, Clone)]
+pub struct TraitMethodInfo {
+    pub signature: FunctionSig,
+    pub visibility: Visibility,
+    pub is_static: bool,
+    pub is_final: bool,
+    pub is_abstract: bool,
+}
+
 /// Complete EIR module for one compile target.
 #[derive(Debug, Clone)]
 pub struct Module {
     pub target: Target,
+    pub source_path: Option<String>,
     pub functions: Vec<Function>,
     pub class_methods: Vec<Function>,
     pub closures: Vec<Function>,
@@ -76,13 +88,26 @@ pub struct Module {
     pub declared_class_names: Vec<String>,
     pub declared_interface_names: Vec<String>,
     pub declared_trait_names: Vec<String>,
+    pub declared_trait_source_lines: HashMap<String, u32>,
     pub declared_trait_uses: HashMap<String, Vec<String>>,
+    pub declared_trait_method_names: HashMap<String, Vec<String>>,
+    pub declared_trait_methods: HashMap<String, HashMap<String, TraitMethodInfo>>,
+    pub declared_trait_property_names: HashMap<String, Vec<String>>,
+    pub declared_trait_constant_names: HashMap<String, Vec<String>>,
+    pub declared_trait_constants: HashMap<String, HashMap<String, crate::parser::ast::Expr>>,
+    pub declared_trait_constant_types:
+        HashMap<String, HashMap<String, crate::parser::ast::TypeExpr>>,
+    pub declared_trait_constant_visibilities: HashMap<String, HashMap<String, Visibility>>,
+    pub declared_trait_final_constants: HashMap<String, HashSet<String>>,
+    /// Prescanned global constant values used by EIR lowering and eval metadata registration.
+    pub global_constants: HashMap<String, (ExprKind, PhpType)>,
     pub class_infos: HashMap<String, ClassInfo>,
     pub interface_infos: HashMap<String, InterfaceInfo>,
     pub enum_infos: HashMap<String, EnumInfo>,
     pub extern_class_infos: HashMap<String, ExternClassInfo>,
     pub packed_class_infos: HashMap<String, PackedClassInfo>,
     pub packed_layouts: PackedLayoutTable,
+    pub extern_globals: HashMap<String, PhpType>,
     pub required_runtime_features: RuntimeFeatures,
     /// Closed-world constant registry (canonical FQN, no leading `\`, sorted by
     /// name bytes) materialized for runtime `defined()`/`constant()` lookups when
@@ -91,13 +116,21 @@ pub struct Module {
     /// Case-folded class/enum name -> declaring source file, snapshotted from the entry file's
     /// own top-level declarations before include/autoload merging (see
     /// `crate::pipeline::scan_reflection_source_files`). Backs `ReflectionClass::getFileName()`
-    /// (`crate::codegen_ir::lower_inst::objects::reflection`); a class not covered by this
+    /// (`crate::codegen::lower_inst::objects::reflection`); a class not covered by this
     /// snapshot (declared in an included/autoloaded file, or an ambiguous duplicate name) is
     /// simply absent, and `getFileName()` reports PHP's `false` for it.
     pub class_source_files: HashMap<String, String>,
     /// Same as `class_source_files`, for free-function declarations. Backs
     /// `ReflectionFunction::getFileName()`.
     pub function_source_files: HashMap<String, String>,
+    /// True when this module is being lowered for a `--web` compile. Threaded
+    /// down from the CLI flag (`CliConfig.web`, mirroring what
+    /// `codegen_ir::block_emit::emit_module` receives) so lowering can gate
+    /// request-superglobal (`$_SERVER`/`$_SESSION`/…) type seeding: only
+    /// `--web` builds pre-initialize the shared `_eir_global_*` storage for
+    /// those names, so a non-web read/write must not assume a live Hash
+    /// pointer is already there.
+    pub web: bool,
 }
 
 impl Module {
@@ -105,6 +138,7 @@ impl Module {
     pub fn new(target: Target) -> Self {
         Self {
             target,
+            source_path: None,
             functions: Vec::new(),
             class_methods: Vec::new(),
             closures: Vec::new(),
@@ -122,17 +156,29 @@ impl Module {
             declared_class_names: Vec::new(),
             declared_interface_names: Vec::new(),
             declared_trait_names: Vec::new(),
+            declared_trait_source_lines: HashMap::new(),
             declared_trait_uses: HashMap::new(),
+            declared_trait_method_names: HashMap::new(),
+            declared_trait_methods: HashMap::new(),
+            declared_trait_property_names: HashMap::new(),
+            declared_trait_constant_names: HashMap::new(),
+            declared_trait_constants: HashMap::new(),
+            declared_trait_constant_types: HashMap::new(),
+            declared_trait_constant_visibilities: HashMap::new(),
+            declared_trait_final_constants: HashMap::new(),
+            global_constants: HashMap::new(),
             class_infos: HashMap::new(),
             interface_infos: HashMap::new(),
             enum_infos: HashMap::new(),
             extern_class_infos: HashMap::new(),
             packed_class_infos: HashMap::new(),
             packed_layouts: PackedLayoutTable::default(),
+            extern_globals: HashMap::new(),
             required_runtime_features: RuntimeFeatures::none(),
             const_registry: Vec::new(),
             class_source_files: HashMap::new(),
             function_source_files: HashMap::new(),
+            web: false,
         }
     }
 

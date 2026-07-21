@@ -2,15 +2,15 @@
 title: "is_infinite() — internals"
 description: "Compiler internals for is_infinite(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 235
+  order: 269
 ---
 
 ## `is_infinite()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math.rs`:132](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math.rs#L132) (`lower_is_infinite`)
+- **Signature**: [`src/builtins/types/is_infinite.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_infinite.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math.rs`:132](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math.rs#L132) (`lower_is_infinite`)
 - **Function symbol**: `lower_is_infinite()`
 
 
@@ -32,7 +32,11 @@ function is_infinite(float $num): bool
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/is_infinite.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_infinite.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `is_infinite()`](../../../php/builtins/math/is_infinite.md)
-

@@ -1,8 +1,8 @@
 ---
 title: "strtolower()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Converts a string to lowercase."
 sidebar:
-  order: 395
+  order: 416
 ---
 
 ## strtolower()
@@ -11,12 +11,17 @@ sidebar:
 function strtolower(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Converts a string to lowercase.
 
 **Parameters**:
 - `$string` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/strtolower.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strtolower.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

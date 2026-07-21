@@ -1,25 +1,30 @@
 ---
 title: "hash_hmac()"
-description: "Lowers `hash_hmac(algo, data, key, binary?)` through the shared HMAC runtime dispatcher."
+description: "Generates a keyed hash value using the HMAC method."
 sidebar:
-  order: 347
+  order: 374
 ---
 
 ## hash_hmac()
 
 ```php
-function hash_hmac(string $algo, string $data, string $key, bool $binary): string
+function hash_hmac(string $algo, string $data, string $key, bool $binary = false): string
 ```
 
-Lowers `hash_hmac(algo, data, key, binary?)` through the shared HMAC runtime dispatcher.
+Generates a keyed hash value using the HMAC method.
 
 **Parameters**:
 - `$algo` (`string`)
 - `$data` (`string`)
 - `$key` (`string`)
-- `$binary` (`bool`), optional
+- `$binary` (`bool`), default `false`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/hash_hmac.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_hmac.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

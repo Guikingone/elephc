@@ -2,15 +2,15 @@
 title: "basename() — internals"
 description: "Compiler internals for basename(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 81
+  order: 102
 ---
 
 ## `basename()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3893](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3893) (`lower_basename`)
+- **Signature**: [`src/builtins/io/basename.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/basename.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4532](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4532) (`lower_basename`)
 - **Function symbol**: `lower_basename()`
 
 
@@ -25,14 +25,18 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function basename(string $path, string $suffix): string
+function basename(string $path, string $suffix = ''): string
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/basename.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/basename.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `basename()`](../../../php/builtins/filesystem/basename.md)
-

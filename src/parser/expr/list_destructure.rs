@@ -21,6 +21,7 @@
 //!   re-evaluation) apply unchanged.
 
 use crate::errors::CompileError;
+use crate::lexer::token::SpannedToken;
 use crate::lexer::Token;
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::span::Span;
@@ -41,10 +42,10 @@ const ASSIGN_RHS_BP: u8 = 6;
 /// the prelude-desugared expression; malformed patterns propagate the statement parser's
 /// loud diagnostics (invalid target, mixed keyed/unkeyed, empty list).
 pub(super) fn try_parse_bracket_destructure_expr(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<Option<Expr>, CompileError> {
-    let span = tokens[*pos].1;
+    let span = tokens[*pos].1.span;
     let Some(close) = find_matching_delimiter(tokens, *pos, &Token::LBracket, &Token::RBracket)
     else {
         return Ok(None);
@@ -79,10 +80,10 @@ pub(super) fn try_parse_bracket_destructure_expr(
 /// `ExprKind::ListUnpack` (the same node the bracket form yields); other patterns take the
 /// prelude desugar.
 pub(super) fn try_parse_list_construct_destructure_expr(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<Option<Expr>, CompileError> {
-    let span = tokens[*pos].1;
+    let span = tokens[*pos].1.span;
     let Some(close) =
         find_matching_delimiter(tokens, *pos + 1, &Token::LParen, &Token::RParen)
     else {
@@ -116,7 +117,7 @@ pub(super) fn try_parse_list_construct_destructure_expr(
 /// standard assignment right binding power. The `=` is guaranteed by the caller's lookahead;
 /// the check remains as a defensive diagnostic.
 fn parse_destructure_rhs(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Expr, CompileError> {
@@ -164,7 +165,7 @@ fn destructure_temp_name(span: Span) -> String {
 /// `open_pos`, tracking nesting depth. Returns the index of the matching close token, or
 /// `None` if the delimiters never balance before the token stream ends.
 fn find_matching_delimiter(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     open_pos: usize,
     open: &Token,
     close: &Token,

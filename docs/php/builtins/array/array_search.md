@@ -1,24 +1,29 @@
 ---
 title: "array_search()"
-description: "Lowers `array_search(needle, haystack[, strict])` for indexed arrays."
+description: "Searches the array for a given value and returns the first corresponding key if successful."
 sidebar:
-  order: 23
+  order: 35
 ---
 
 ## array_search()
 
 ```php
-function array_search(mixed $needle, array $haystack, bool $strict): mixed
+function array_search(mixed $needle, array $haystack, bool $strict = false): mixed
 ```
 
-Lowers `array_search(needle, haystack[, strict])` for indexed arrays.
+Searches the array for a given value and returns the first corresponding key if successful.
 
 **Parameters**:
 - `$needle` (`mixed`)
 - `$haystack` (`array`)
-- `$strict` (`bool`), optional
+- `$strict` (`bool`), default `false`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_search.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_search.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

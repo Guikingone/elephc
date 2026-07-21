@@ -1,23 +1,28 @@
 ---
 title: "gzinflate()"
-description: "Lowers `gzinflate(data, max_length?)` and boxes zlib failures as PHP false."
+description: "Inflate a deflated string."
 sidebar:
-  order: 340
+  order: 367
 ---
 
 ## gzinflate()
 
 ```php
-function gzinflate(string $data, int $max_length): string
+function gzinflate(string $data, int $max_length = 0): mixed
 ```
 
-Lowers `gzinflate(data, max_length?)` and boxes zlib failures as PHP false.
+Inflate a deflated string.
 
 **Parameters**:
 - `$data` (`string`)
-- `$max_length` (`int`), optional
+- `$max_length` (`int`), default `0`, optional
 
-**Returns**: `string`
+**Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/gzinflate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/gzinflate.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

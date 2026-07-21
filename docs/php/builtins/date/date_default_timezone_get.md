@@ -1,8 +1,8 @@
 ---
 title: "date_default_timezone_get()"
-description: "Lowers `date_default_timezone_get()` through the shared runtime helper."
+description: "Gets the default timezone."
 sidebar:
-  order: 70
+  order: 91
 ---
 
 ## date_default_timezone_get()
@@ -11,11 +11,16 @@ sidebar:
 function date_default_timezone_get(): string
 ```
 
-Lowers `date_default_timezone_get()` through the shared runtime helper.
+Gets the default timezone.
 
 **Parameters**: none.
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/date_default_timezone_get.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/date_default_timezone_get.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

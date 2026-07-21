@@ -1,8 +1,8 @@
 ---
 title: "putenv()"
-description: "Lowers `putenv(assignment)` by copying the environment string into persistent heap storage."
+description: "Sets an environment variable."
 sidebar:
-  order: 119
+  order: 140
 ---
 
 ## putenv()
@@ -11,12 +11,17 @@ sidebar:
 function putenv(string $assignment): bool
 ```
 
-Lowers `putenv(assignment)` by copying the environment string into persistent heap storage.
+Sets an environment variable.
 
 **Parameters**:
 - `$assignment` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/putenv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/putenv.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

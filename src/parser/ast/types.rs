@@ -16,6 +16,8 @@ pub enum TypeExpr {
     Int,
     Float,
     Bool,
+    /// PHP's literal `false` type, kept distinct from `bool` for flow narrowing.
+    False,
     Str,
     Void,
     Never,
@@ -33,17 +35,15 @@ pub enum TypeExpr {
 }
 
 impl TypeExpr {
-    /// Returns true when `self` is PHP's late-bound `static` at the top level, including inside a
-    /// nullable (`?static`) or a top-level union member (`static|X`). Used to record late-static
-    /// return types before they are collapsed to the declaring class by
-    /// `substitute_relative_class_types`. Deep nesting (`array<static>`, `A&static`) is intentionally
-    /// not covered — it is out of scope for late-static-binding recovery.
-    pub fn is_or_contains_top_level_static(&self) -> bool {
+    /// Returns whether this type expression contains PHP's late-bound `static` class type.
+    pub fn contains_late_static(&self) -> bool {
         match self {
             TypeExpr::Named(name) => name.as_str().eq_ignore_ascii_case("static"),
-            TypeExpr::Nullable(inner) => inner.is_or_contains_top_level_static(),
-            TypeExpr::Union(members) => {
-                members.iter().any(|m| m.is_or_contains_top_level_static())
+            TypeExpr::Nullable(inner) | TypeExpr::Array(inner) | TypeExpr::Buffer(inner) => {
+                inner.contains_late_static()
+            }
+            TypeExpr::Union(members) | TypeExpr::Intersection(members) => {
+                members.iter().any(TypeExpr::contains_late_static)
             }
             _ => false,
         }
@@ -91,6 +91,54 @@ impl TypeExpr {
             )),
             TypeExpr::Buffer(inner) => TypeExpr::Buffer(Box::new(
                 inner.substitute_relative_class_types(self_class, parent_class),
+            )),
+            other => other.clone(),
+        }
+    }
+
+    /// Resolves relative class types in a method return while preserving late-bound `static`.
+    ///
+    /// `self` and `parent` are lexical declaration types and can be replaced immediately.
+    /// `static` must remain symbolic until a call site supplies the receiver type.
+    pub fn substitute_method_return_relative_types(
+        &self,
+        self_class: &str,
+        parent_class: Option<&str>,
+    ) -> TypeExpr {
+        match self {
+            TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("static") => self.clone(),
+            TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("self") => {
+                TypeExpr::Named(Name::unqualified(self_class))
+            }
+            TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("parent") => {
+                parent_class
+                    .map(|parent| TypeExpr::Named(Name::unqualified(parent)))
+                    .unwrap_or_else(|| self.clone())
+            }
+            TypeExpr::Nullable(inner) => TypeExpr::Nullable(Box::new(
+                inner.substitute_method_return_relative_types(self_class, parent_class),
+            )),
+            TypeExpr::Union(members) => TypeExpr::Union(
+                members
+                    .iter()
+                    .map(|member| {
+                        member.substitute_method_return_relative_types(self_class, parent_class)
+                    })
+                    .collect(),
+            ),
+            TypeExpr::Intersection(members) => TypeExpr::Intersection(
+                members
+                    .iter()
+                    .map(|member| {
+                        member.substitute_method_return_relative_types(self_class, parent_class)
+                    })
+                    .collect(),
+            ),
+            TypeExpr::Array(inner) => TypeExpr::Array(Box::new(
+                inner.substitute_method_return_relative_types(self_class, parent_class),
+            )),
+            TypeExpr::Buffer(inner) => TypeExpr::Buffer(Box::new(
+                inner.substitute_method_return_relative_types(self_class, parent_class),
             )),
             other => other.clone(),
         }

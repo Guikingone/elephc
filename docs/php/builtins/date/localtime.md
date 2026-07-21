@@ -1,23 +1,28 @@
 ---
 title: "localtime()"
-description: "Lowers `localtime([$timestamp[, $associative]])` through the shared decomposition runtime helper."
+description: "Returns the local time."
 sidebar:
-  order: 76
+  order: 97
 ---
 
 ## localtime()
 
 ```php
-function localtime(int $timestamp, bool $associative): array
+function localtime(int $timestamp = -1, bool $associative = false): array
 ```
 
-Lowers `localtime([$timestamp[, $associative]])` through the shared decomposition runtime helper.
+Returns the local time.
 
 **Parameters**:
-- `$timestamp` (`int`), optional
-- `$associative` (`bool`), optional
+- `$timestamp` (`int`), default `-1`, optional
+- `$associative` (`bool`), default `false`, optional
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/localtime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/localtime.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

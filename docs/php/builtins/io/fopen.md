@@ -1,25 +1,30 @@
 ---
 title: "fopen()"
-description: "Lowers `fopen(filename, mode)` and boxes stream resources or PHP false."
+description: "Opens file or URL."
 sidebar:
-  order: 148
+  order: 169
 ---
 
 ## fopen()
 
 ```php
-function fopen(string $filename, string $mode, bool $use_include_path, mixed $context): mixed
+function fopen(string $filename, string $mode, bool $use_include_path = false, mixed $context = null): mixed
 ```
 
-Lowers `fopen(filename, mode)` and boxes stream resources or PHP false.
+Opens file or URL.
 
 **Parameters**:
 - `$filename` (`string`)
 - `$mode` (`string`)
-- `$use_include_path` (`bool`), optional
-- `$context` (`mixed`), optional
+- `$use_include_path` (`bool`), default `false`, optional
+- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fopen.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fopen.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

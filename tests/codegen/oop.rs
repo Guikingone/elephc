@@ -53,3 +53,11 @@ mod datetime;
 mod cloning;
 #[path = "oop/dom.rs"]
 mod dom;
+#[path = "oop/reflection_properties.rs"]
+mod reflection_properties;
+#[path = "oop/reflection_functions.rs"]
+mod reflection_functions;
+#[path = "oop/reflection_methods.rs"]
+mod reflection_methods;
+#[path = "oop/reflection_construction.rs"]
+mod reflection_construction;

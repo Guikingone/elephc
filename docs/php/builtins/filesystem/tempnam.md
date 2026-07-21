@@ -1,8 +1,8 @@
 ---
 title: "tempnam()"
-description: "Lowers `tempnam(directory, prefix)` through the target-aware runtime helper."
+description: "Creates a file with a unique filename."
 sidebar:
-  order: 131
+  order: 152
 ---
 
 ## tempnam()
@@ -11,13 +11,18 @@ sidebar:
 function tempnam(string $directory, string $prefix): string
 ```
 
-Lowers `tempnam(directory, prefix)` through the target-aware runtime helper.
+Creates a file with a unique filename.
 
 **Parameters**:
 - `$directory` (`string`)
 - `$prefix` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/tempnam.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/tempnam.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

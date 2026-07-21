@@ -1,8 +1,8 @@
 ---
 title: "random_int()"
-description: "Lowers `random_int()` over an inclusive integer range."
+description: "Get a cryptographically secure, uniformly selected integer."
 sidebar:
-  order: 247
+  order: 281
 ---
 
 ## random_int()
@@ -11,13 +11,18 @@ sidebar:
 function random_int(int $min, int $max): int
 ```
 
-Lowers `random_int()` over an inclusive integer range.
+Get a cryptographically secure, uniformly selected integer.
 
 **Parameters**:
 - `$min` (`int`)
 - `$max` (`int`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/random_int.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/random_int.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

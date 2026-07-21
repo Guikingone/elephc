@@ -1,23 +1,28 @@
 ---
 title: "iterator_to_array()"
-description: "Lowers `iterator_to_array()` over arrays, `iterable`, and Traversable objects."
+description: "Copy the iterator into an array."
 sidebar:
-  order: 309
+  order: 340
 ---
 
 ## iterator_to_array()
 
 ```php
-function iterator_to_array(traversable $iterator, bool $preserve_keys): array
+function iterator_to_array(traversable $iterator, bool $preserve_keys = true): array
 ```
 
-Lowers `iterator_to_array()` over arrays, `iterable`, and Traversable objects.
+Copy the iterator into an array.
 
 **Parameters**:
 - `$iterator` (`traversable`)
-- `$preserve_keys` (`bool`), optional
+- `$preserve_keys` (`bool`), default `true`, optional
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/iterator_to_array.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/iterator_to_array.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

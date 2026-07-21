@@ -2,15 +2,15 @@
 title: "gzuncompress() — internals"
 description: "Compiler internals for gzuncompress(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 344
+  order: 368
 ---
 
 ## `gzuncompress()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:574](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L574) (`lower_gzuncompress`)
+- **Signature**: [`src/builtins/string/gzuncompress.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/gzuncompress.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:519](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L519) (`lower_gzuncompress`)
 - **Function symbol**: `lower_gzuncompress()`
 
 
@@ -26,14 +26,18 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function gzuncompress(string $data, int $max_length): string
+function gzuncompress(string $data, int $max_length = 0): mixed
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/gzuncompress.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/gzuncompress.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `gzuncompress()`](../../../php/builtins/string/gzuncompress.md)
-

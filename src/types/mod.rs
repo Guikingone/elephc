@@ -46,6 +46,8 @@ pub(crate) mod url_constants;
 pub(crate) mod tokenizer_constants;
 /// `ext/dom` node-kind integer constants (XML_DOCUMENT_TYPE_NODE).
 pub(crate) mod xml_constants;
+/// `ENT_*` HTML-escaping flag constants shared by checker and codegen.
+pub(crate) mod ent_constants;
 /// C FFI type mapping utilities.
 mod ffi;
 /// JSON literal constant type inference.
@@ -54,10 +56,14 @@ pub(crate) mod json_constants;
 mod model;
 /// Preg/PCRE flag constants shared by checker and codegen.
 pub(crate) mod preg_constants;
+/// Return-to-argument storage alias summaries used by ownership lowering.
+mod return_alias;
 /// Type checker result types and the `check` entry point.
 mod result;
 /// Class, interface, enum, and FFI schema definitions.
 mod schema;
+/// `ext/session` integer constants (`PHP_SESSION_*`).
+pub(crate) mod session_constants;
 /// Function signature representation and builtin signature helpers.
 mod signatures;
 pub(crate) mod stream_constants;
@@ -71,15 +77,21 @@ pub(crate) use array_keys::{
 };
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};
-pub use result::{check_with_target, CheckResult};
+pub(crate) use return_alias::{
+    collect_return_alias_summaries, ReturnAliasSummaries, ReturnArgAlias,
+};
+pub use result::{check_with_target, CheckResult, ThrowAccessInfo, ThrowAccessKind};
 pub use schema::{
     AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo,
     ExternClassInfo, ExternFieldInfo, ExternFunctionSig, InterfaceInfo, PackedClassInfo,
     PackedFieldInfo, PropertyHookContract,
 };
+pub(crate) use schema::{collect_attribute_args, collect_attribute_names};
 pub(crate) use signatures::{
     builtin_call_sig, callable_wrapper_sig, first_class_callable_builtin_sig,
 };
+#[cfg(test)]
+pub(crate) use signatures::legacy_builtin_call_sig;
 pub use signatures::FunctionSig;
 
 /// Type checks the program after name resolution. Returns `CheckResult` with type

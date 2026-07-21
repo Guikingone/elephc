@@ -150,6 +150,11 @@ fn expr_refs_ve(expr: &Expr) -> bool {
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_refs_ve(object) || args.iter().any(expr_refs_ve)
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => expr_refs_ve(object) || expr_refs_ve(method) || args.iter().any(expr_refs_ve),
         ExprKind::StaticMethodCall { args, .. } => args.iter().any(expr_refs_ve),
         ExprKind::FirstClassCallable(target) => callable_target_refs_ve(target),
 
@@ -161,10 +166,10 @@ fn expr_refs_ve(expr: &Expr) -> bool {
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
-        | ExprKind::Clone(inner)
         | ExprKind::YieldFrom(inner) => expr_refs_ve(inner),
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ShortTernary { value, default } => {
@@ -233,6 +238,7 @@ fn expr_refs_ve(expr: &Expr) -> bool {
         // `$obj::CONST` — recurse into the evaluated object expression.
         ExprKind::DynamicClassConstantAccess { object, .. } => expr_refs_ve(object),
         ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_refs_ve(property),
+        ExprKind::ObjectClassName { object } => expr_refs_ve(object),
         ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_refs_ve),
         ExprKind::Yield { key, value } => {
             key.as_deref().is_some_and(expr_refs_ve)

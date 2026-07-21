@@ -1,23 +1,28 @@
 ---
 title: "min()"
-description: "Lowers numeric `min()` and `max()` over concrete integer-like or float operands."
+description: "Find lowest value."
 sidebar:
-  order: 241
+  order: 275
 ---
 
 ## min()
 
 ```php
-function min(mixed $value, ...$values): float
+function min(mixed $value, ...$values): mixed
 ```
 
-Lowers numeric `min()` and `max()` over concrete integer-like or float operands.
+Find lowest value.
 
 **Parameters**:
 - `$value` (`mixed`)
 - `...$values` — variadic: collects excess arguments into `$values`.
 
-**Returns**: `float`
+**Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/min.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/min.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

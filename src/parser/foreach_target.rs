@@ -17,6 +17,7 @@
 //!   prepend the desugared stores in value-then-key order ahead of the user body.
 
 use crate::errors::CompileError;
+use crate::lexer::token::SpannedToken;
 use crate::lexer::Token;
 use crate::parser::ast::{Expr, ExprKind, Stmt};
 use crate::parser::expr::parse_expr;
@@ -45,7 +46,7 @@ pub(crate) enum ForeachBinding {
 /// that parse to a non-writable shape — fails with `expected_variable_msg`, the same
 /// diagnostic the parser produced before lvalue targets were supported.
 pub(crate) fn parse_foreach_binding(
-    tokens: &[(Token, Span)],
+    tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
     expected_variable_msg: &str,

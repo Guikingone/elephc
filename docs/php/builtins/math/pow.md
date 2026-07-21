@@ -1,8 +1,8 @@
 ---
 title: "pow()"
-description: "Lowers `pow()` for concrete integer-like and floating operands."
+description: "Exponential expression."
 sidebar:
-  order: 244
+  order: 278
 ---
 
 ## pow()
@@ -11,13 +11,18 @@ sidebar:
 function pow(float $num, float $exponent): float
 ```
 
-Lowers `pow()` for concrete integer-like and floating operands.
+Exponential expression.
 
 **Parameters**:
 - `$num` (`float`)
 - `$exponent` (`float`)
 
 **Returns**: `float`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/pow.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/pow.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

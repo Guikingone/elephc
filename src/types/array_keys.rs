@@ -34,8 +34,11 @@ pub(crate) fn normalized_array_key_type(expr: &Expr, raw_ty: PhpType) -> PhpType
                 PhpType::Str
             }
         }
+        // PHP normalizes a null array key to the empty string "", so it is a
+        // string key (never an integer key), and forces associative storage.
+        ExprKind::Null => PhpType::Str,
         _ => match raw_ty {
-            PhpType::Int | PhpType::Bool | PhpType::Float => PhpType::Int,
+            PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float => PhpType::Int,
             PhpType::Str => PhpType::Mixed,
             other => other,
         },
@@ -58,6 +61,9 @@ pub(crate) fn static_array_key_forces_hash_storage(expr: &Expr) -> bool {
         ExprKind::BoolLiteral(value) => *value,
         ExprKind::FloatLiteral(value) => (*value as i64) != 0,
         ExprKind::StringLiteral(value) => is_php_integer_array_key(value) && value != "0",
+        // Null normalizes to the empty string "", a non-integer string key, so
+        // it forces associative hash storage like any other string key.
+        ExprKind::Null => true,
         _ => false,
     }
 }
@@ -85,7 +91,7 @@ pub(crate) fn merge_array_key_types(left: PhpType, right: PhpType) -> PhpType {
 /// Returns the key type for an array element when the key expression is absent.
 pub(crate) fn array_key_type_from_value_type(raw_ty: PhpType) -> PhpType {
     match raw_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Float => PhpType::Int,
+        PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float => PhpType::Int,
         PhpType::Str => PhpType::Mixed,
         other => other,
     }

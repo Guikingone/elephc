@@ -227,7 +227,8 @@ expect_builtin_arity_error!(
     "hex2bin() takes exactly 1 argument"
 );
 
-// Tests htmlentities() arity error when called with no arguments (PHP allows 1–4).
+// Tests htmlentities() arity error when called with no arguments. htmlentities()
+// accepts optional `$flags` and `$encoding` arguments, so the message reports 1 to 3 args.
 expect_builtin_arity_error!(
     test_error_htmlentities_wrong_args,
     "<?php htmlentities();",

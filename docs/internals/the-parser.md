@@ -73,7 +73,7 @@ Things that have a value:
 | `ShortTernary { value, default }` | `$a ?: $fallback` | PHP short ternary / Elvis form. Codegen evaluates `value` once, returns it if truthy, otherwise returns `default`. |
 | `ErrorSuppress(Expr)` | `@file_get_contents("missing.txt")` | PHP error-control prefix expression. Codegen wraps the operand in a runtime warning-suppression scope. |
 | `Cast { target, expr }` | `(int)$x` | |
-| `Closure { params, variadic, variadic_type, return_type, body, is_arrow, is_static, captures, capture_refs }` | `function(int $x = 1) use ($y, &$z): string { ... }`, `fn(int $x): int => $x * 2`, or `static function(): int { ... }` | Anonymous function / arrow function. Params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` - name, declared type, default, is_ref. `variadic` is an optional parameter name and `variadic_type` its optional declared element type (`int ...$xs`). `return_type` stores the optional declared closure / arrow return `TypeExpr`. `captures` stores by-value captures and `capture_refs` stores `use (&$var)` captures. Arrow functions are still represented as `Closure`, parse with `is_arrow = true`, and do not carry explicit `use (...)` captures in the AST. `is_static` is set when the closure is prefixed with the `static` keyword (PHP `static function () {}` / `static fn () => ...`); the type checker rejects any reference to `$this` inside a static closure. |
+| `Closure { params, variadic, variadic_type, return_type, body, is_arrow, is_static, by_ref_return, captures, capture_refs }` | `function(int $x = 1) use ($y, &$z): string { ... }`, `fn(int $x): int => $x * 2`, or `static function(): int { ... }` | Anonymous function / arrow function. Params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` - name, declared type, default, is_ref. `variadic` is an optional parameter name and `variadic_type` its optional declared element type (`int ...$xs`). `return_type` stores the optional declared closure / arrow return `TypeExpr`. `captures` stores by-value captures and `capture_refs` stores `use (&$var)` captures. Arrow functions are still represented as `Closure`, parse with `is_arrow = true`, and do not carry explicit `use (...)` captures in the AST. `is_static` is set when the closure is prefixed with the `static` keyword (PHP `static function () {}` / `static fn () => ...`); the type checker rejects any reference to `$this` inside a static closure. `by_ref_return` is set when the closure is declared `fn &()` / `function &()`, so it returns a reference (alias) to the returned lvalue rather than a copy. |
 | `NamedArg { name, value }` | `foo(name: "Alice")` | Named call argument. The parser preserves source order; later phases validate names against the declared parameter list and normalize known-signature calls for ABI lowering. |
 | `ClosureCall { var, args }` | `$fn(1, 2)` | Calling a closure stored in a variable |
 | `ExprCall { callee, args }` | `$arr[0](1, 2)` | Calling the result of an expression (e.g., array access returning a callable) |
@@ -98,6 +98,7 @@ Things that have a value:
 | `BufferNew { element_type, len }` | `buffer_new<int>(256)` | Compiler extension for contiguous hot-path buffers |
 | `MagicConstant(MagicConstant)` | `__DIR__`, `__CLASS__` | Parsed from case-insensitive magic-constant tokens. `__LINE__` is lowered immediately to `IntLiteral`; the remaining magic constants are lowered by `src/magic_constants.rs` before type checking. |
 | `ClassConstant { receiver }` | `MyClass::class`, `\App\C::class`, `self::class`, `parent::class`, `static::class` | The PHP `::class` reflection literal. Codegen lowers it to a string literal carrying the fully-qualified class name. `static::class` follows late static binding. |
+| `ObjectClassName { object }` | `$object::class`, `make_object()::class` | Runtime `::class` lookup for an object-valued expression. The object expression remains structural so later passes evaluate it once and read its concrete runtime class. |
 | `ScopedConstantAccess { receiver, name }` | `MyClass::LIMIT`, `self::DEFAULT_SIZE` | User-declared class constant access through `::`; later phases resolve the receiver and constant metadata. |
 
 ### Statements (`Stmt`)
@@ -110,7 +111,7 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 |---|---|
 | `Echo(Expr)` | `echo $x;`; multi-argument `echo $a, $b;` lowers to a `Synthetic` sequence of `Echo` statements |
 | `Assign { name, value }` | `$x = 42;` |
-| `RefAssign { target, source }` | `$y =& $x;` — reference aliasing where both target and source are plain variables |
+| `RefAssign { target, source }` | `$y =& $x;`, `$y =& $obj->prop;`, `$y =& $arr[$k];` — reference aliasing where `target` is a plain variable name and `source` is the aliased lvalue: a plain variable, a property access, an array element, or a call to a by-reference-returning callee |
 | `If { condition, then_body, elseif_clauses, else_body }` | `if (...) { } elseif (...) { } else { }` |
 | `While { condition, body }` | `while (...) { }` |
 | `DoWhile { body, condition }` | `do { } while (...);` |
@@ -121,7 +122,7 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 | `NestedArrayAssign { target, value }` | `$arr[0][1] = 5;`, `$obj->items[0] = 5;` |
 | `ArrayPush { array, value }` | `$arr[] = 5;` |
 | `TypedAssign { type_expr, name, value }` | `int $x = 42;`, `buffer<int> $xs = buffer_new<int>(8);` |
-| `FunctionDecl { name, params, variadic, return_type, body }` | `function foo(int $a, &$b, string $c = "x"): string { }` — params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` where the tuple stores name, declared type, default value, and `is_ref` (pass by reference). `variadic` is `Option<String>` for variadic parameters (`...$args`) and `return_type` is an optional declared `TypeExpr` |
+| `FunctionDecl { name, params, variadic, variadic_type, return_type, by_ref_return, body }` | `function foo(int $a, &$b, string $c = "x"): string { }`, `function &ref(): int { ... }` — params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` where the tuple stores name, declared type, default value, and `is_ref` (pass by reference). `variadic` is `Option<String>` for variadic parameters (`...$args`), `variadic_type` is the optional declared element type on that variadic (`int ...$xs`), `return_type` is an optional declared `TypeExpr`, and `by_ref_return` is `true` when declared `function &f()` so calls return a reference (alias) to the returned lvalue rather than a copy |
 | `FunctionVariantGroup { name, variants }` | Internal resolver metadata for include-loaded hidden function implementations behind one public name |
 | `FunctionVariantMark { name, variant }` | Internal include-body marker that activates the hidden function variant loaded at that runtime include point |
 | `Return(Option<Expr>)` | `return $x;` or `return;` |
@@ -230,12 +231,12 @@ forms such as `?T|U` and normalize accepted declarations.
 | Type | Fields | Description |
 |---|---|---|
 | `Visibility` | `Public`, `Protected`, `Private` | Enum for property/method visibility |
-| `Attribute` | `name`, `args`, `span` | A PHP 8 attribute entry from a `#[...]` group. The parser validates names and optional argument expressions. Class, method, and property names plus supported literal args feed `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported Reflection `getAttributes()` APIs; parameter reflection is not implemented yet. |
+| `Attribute` | `name`, `args`, `span` | A PHP 8 attribute entry from a `#[...]` group. The parser validates names and optional argument expressions. Class, method, property, and method-parameter names plus supported literal args feed `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported Reflection `getAttributes()` APIs. Method parameter names, positions, optional/variadic/by-reference flags, declared-type presence, and method-parameter attributes feed the supported `ReflectionMethod::getParameters()` / `ReflectionParameter` slice. |
 | `AttributeGroup` | `attributes`, `span` | One bracketed attribute group. Declaration sites can carry one or more groups. |
 | `EnumCaseDecl` | `name`, `value`, `span`, `attributes` | A backed or unit enum case declaration, with declaration-level attributes preserved in the AST. |
 | `ClassConst` | `name`, `visibility`, `is_final`, `value`, `span`, `attributes` | A class, interface, or trait constant declaration. |
 | `ClassProperty` | `name`, `visibility`, `type_expr`, `hooks`, `readonly`, `is_final`, `is_static`, `is_abstract`, `by_ref`, `default`, `span`, `attributes` | A property declaration inside a class, trait, or interface, optionally carrying a parsed property type declaration, hook contract, static-property marker, by-reference promotion marker, or declaration-level attributes |
-| `ClassMethod` | `name`, `visibility`, `is_static`, `is_abstract`, `is_final`, `has_body`, `params`, `variadic`, `return_type`, `body`, `span`, `attributes` | A method declaration inside a class, trait, or interface |
+| `ClassMethod` | `name`, `visibility`, `is_static`, `is_abstract`, `is_final`, `has_body`, `params`, `param_attributes`, `variadic`, `return_type`, `body`, `span`, `attributes` | A method declaration inside a class, trait, or interface, including source-order parameter attribute groups |
 | `CatchClause` | `exception_types`, `variable`, `body` | A catch arm. `exception_types` supports both single-type and PHP-style multi-catch (`TypeA | TypeB`), and `variable` is optional for PHP 8-style `catch (Exception)` |
 | `StaticReceiver` | `Named(Name)`, `Self_`, `Static`, `Parent` | Left-hand side of `ClassName::method()`, `self::method()`, `static::method()`, and `parent::method()` |
 | `TraitUse` | `trait_names`, `adaptations`, `span` | A `use TraitA, TraitB { ... }` clause inside a class or trait body |
@@ -391,6 +392,7 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `new` + `$var` + `(` | Parse dynamic object instantiation → `NewDynamic` (class named by a runtime variable) |
 | `new` + `self` / `static` / `parent` + `(` | Parse scoped object instantiation → `NewScopedObject` |
 | `<receiver>::class` | Parse `MyClass::class`, `\App\C::class`, `self::class`, `parent::class`, `static::class` → `ClassConstant` |
+| `<object-expression>::class` | Parse `$object::class`, `make_object()::class` → `ObjectClassName` |
 | `$this` | Return `This` node |
 | `...` + expr | Parse spread/unpack → `Spread` |
 | `ptr_cast` + `<Type>` + `(` | Parse pointer cast syntax → `PtrCast` |

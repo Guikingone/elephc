@@ -1,25 +1,29 @@
 ---
 title: "hash()"
-description: "Lowers `hash(algo, data, binary?)` through the shared runtime digest dispatcher."
+description: "Generates a hash value using the given algorithm."
 sidebar:
-  order: 342
+  order: 369
 ---
 
 ## hash()
 
 ```php
-function hash(string $algo, string $data, bool $binary = false, array $options = []): string
+function hash(string $algo, string $data, bool $binary = false): string
 ```
 
-Lowers `hash(algo, data, binary?)` through the shared runtime digest dispatcher.
+Generates a hash value using the given algorithm.
 
 **Parameters**:
 - `$algo` (`string`)
 - `$data` (`string`)
 - `$binary` (`bool`), default `false`, optional
-- `$options` (`array`), default `[]`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/hash.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

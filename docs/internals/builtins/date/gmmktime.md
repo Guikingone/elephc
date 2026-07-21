@@ -2,15 +2,15 @@
 title: "gmmktime() — internals"
 description: "Compiler internals for gmmktime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 74
+  order: 95
 ---
 
 ## `gmmktime()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:151](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L151) (`lower_gmmktime`)
+- **Signature**: [`src/builtins/system/gmmktime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/gmmktime.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:151](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L151) (`lower_gmmktime`)
 - **Function symbol**: `lower_gmmktime()`
 
 
@@ -37,7 +37,11 @@ function gmmktime(int $hour, int $minute, int $second, int $month, int $day, int
 
 - **Arity**: takes exactly 6 arguments.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/gmmktime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/gmmktime.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `gmmktime()`](../../../php/builtins/date/gmmktime.md)
-

@@ -1,8 +1,8 @@
 ---
 title: "hash_copy()"
-description: "Lowers `hash_copy(context)` through the incremental hash clone helper."
+description: "Copies the state of an incremental hashing context."
 sidebar:
-  order: 344
+  order: 371
 ---
 
 ## hash_copy()
@@ -11,12 +11,17 @@ sidebar:
 function hash_copy(resource $context): mixed
 ```
 
-Lowers `hash_copy(context)` through the incremental hash clone helper.
+Copies the state of an incremental hashing context.
 
 **Parameters**:
 - `$context` (`resource`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/hash_copy.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_copy.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

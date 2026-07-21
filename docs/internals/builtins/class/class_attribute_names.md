@@ -2,15 +2,15 @@
 title: "class_attribute_names() — internals"
 description: "Compiler internals for class_attribute_names(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 51
+  order: 68
 ---
 
 ## `class_attribute_names()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/attributes.rs`:36](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/attributes.rs#L36) (`lower_class_attribute_names`)
+- **Signature**: [`src/builtins/system/class_attribute_names.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/class_attribute_names.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/attributes.rs`:45](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/attributes.rs#L45) (`lower_class_attribute_names`)
 - **Function symbol**: `lower_class_attribute_names()`
 
 
@@ -32,7 +32,11 @@ function class_attribute_names(string $class_name): array
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/class_attribute_names.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/class_attribute_names.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `class_attribute_names()`](../../../php/builtins/class/class_attribute_names.md)
-

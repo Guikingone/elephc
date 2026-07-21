@@ -1,8 +1,8 @@
 ---
 title: "strcmp()"
-description: "Lowers a two-argument string builtin that directly delegates to a runtime helper."
+description: "Binary safe string comparison. Returns negative, zero, or positive."
 sidebar:
-  order: 385
+  order: 409
 ---
 
 ## strcmp()
@@ -11,13 +11,18 @@ sidebar:
 function strcmp(string $string1, string $string2): int
 ```
 
-Lowers a two-argument string builtin that directly delegates to a runtime helper.
+Binary safe string comparison. Returns negative, zero, or positive.
 
 **Parameters**:
 - `$string1` (`string`)
 - `$string2` (`string`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/strcmp.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strcmp.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

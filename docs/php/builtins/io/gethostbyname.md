@@ -1,8 +1,8 @@
 ---
 title: "gethostbyname()"
-description: "Lowers `gethostbyname(hostname)` through the shared runtime resolver."
+description: "Gets the IPv4 address corresponding to the given Internet host name."
 sidebar:
-  order: 161
+  order: 182
 ---
 
 ## gethostbyname()
@@ -11,12 +11,17 @@ sidebar:
 function gethostbyname(string $hostname): string
 ```
 
-Lowers `gethostbyname(hostname)` through the shared runtime resolver.
+Gets the IPv4 address corresponding to the given Internet host name.
 
 **Parameters**:
 - `$hostname` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/gethostbyname.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/gethostbyname.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

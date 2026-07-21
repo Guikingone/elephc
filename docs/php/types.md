@@ -20,7 +20,7 @@ sidebar:
 | `iterable`       | Yes              | PHP pseudo-type for `array \| Traversable`. Supports indexed arrays, associative arrays, `Iterator`, and `IteratorAggregate`; runtime operations (`foreach`, `echo`, `gettype()`, `var_dump()`, `===`, casts, `is_iterable()`) dispatch on heap-kind, value-type, or interface metadata as needed. |
 | `resource`       | Inferred only    | File handles and standard streams are modeled separately from integers. `fopen()` returns `resource\|false`, and `STDIN`, `STDOUT`, and `STDERR` are stream resources. PHP does not allow `resource` as a type declaration, so elephc does not accept `resource` annotations. |
 | `callable`       | Yes              | Closures, arrow functions, first-class callables, and FFI callback parameters.                                         |
-| `object`         | Yes              | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)`                                                    |
+| `object`         | Yes              | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)`; the generic `object` type hint accepts any class, interface, or enum object. |
 | `enum`           | Yes              | Pure and backed enums. Cases are singletons. Backed enums support `->value`, `::from()`, `::tryFrom()`, `::cases()`.   |
 | `int|string`     | Yes              | Union type — variable accepts any of the listed types. Lowered to Mixed at runtime.                                    |
 | `?int`           | Yes              | Nullable shorthand — sugar for `int|null`. The explicit `T|null` form (e.g. `A|null`) is also accepted.                |
@@ -79,30 +79,6 @@ The internal `PhpType` model also includes `TaggedScalar`, which is not PHP
 syntax and cannot be written in source code. Codegen uses it only for the
 default tagged null representation of `int|null` values, storing an inline
 `{payload, tag}` pair instead of a heap-boxed `mixed` cell.
-
-### DNF (disjunctive normal form) types
-
-A DNF type (PHP 8.2) combines intersection and union by using a **parenthesized intersection group as a member of a union**. elephc accepts it in property, parameter, and return positions:
-
-```php
-<?php
-class NodeBuilder {
-    // property: either a value that is both NodeDefinition AND ParentNodeDefinitionInterface, or null
-    protected (NodeDefinition&ParentNodeDefinitionInterface)|null $parent = null;
-}
-
-function g((A&B)|null $x): string {   // parameter
-    return $x === null ? "null" : "obj";
-}
-
-function h(): (A&B)|null {             // return type
-    return null;
-}
-```
-
-Multiple groups may appear in one union (`(A&B)|(C&D)`). Each parenthesized group must contain a real intersection: a single-type group such as `(A)|B` is a parse error, matching PHP. The nullable shorthand may not be combined with a DNF group either — write `(A&B)|null`, not `?(A&B)`, which PHP also rejects.
-
-`(A&B)|null` is stored as the nullable intersection `?(A&B)`, sharing the same canonical `T|null` → `?T` folding used by every other union. As with a bare intersection, the value is typed as the intersection's **first** listed member for member access and argument compatibility; full structural intersection resolution is planned.
 
 ### Never
 
@@ -200,23 +176,12 @@ $f = (float)42;      // 42.0
 $s = (string)42;     // "42"
 $b = (bool)0;        // false
 $a = (array)42;      // [42]
-$o = (object)["a" => 1];   // stdClass with property $o->a === 1
 ```
 
 Cast names and aliases are case-insensitive, matching PHP. For example,
 `(INT)`, `(Integer)`, and `(integer)` are equivalent.
 
 Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
-
-The `(object)` cast converts a value to a `stdClass`:
-
-- An **array** becomes a `stdClass` whose properties are the array entries.
-  String keys become property names; integer keys become the integer rendered as
-  a string (`(object)[10, 20]` has properties `0` and `1`).
-- A **scalar** (`int`, `float`, `string`, `bool`) is wrapped in a single
-  `scalar` property: `(object)5` yields `$o->scalar === 5`.
-- **`null`** becomes an empty `stdClass`, identical to `new stdClass()`.
-- An **object** is returned unchanged (the same instance, not a copy).
 
 ### Type functions
 
@@ -242,7 +207,6 @@ The `(object)` cast converts a value to a `stdClass`:
 | `floatval()`    | `floatval($val): float`      | Convert to float               |
 | `intval()`      | `intval($val): int`          | Converts to integer            |
 | `gettype()`     | `gettype($val): string`      | Returns type name              |
-| `get_debug_type()` | `get_debug_type($val): string` | Short type name (`int`/`float`/`string`/`bool`/`null`/`array`) or the object's class name |
 | `empty()`       | `empty($val): bool`          | Returns true if value is falsy |
 | `unset()`       | `unset($var, ...$vars): void` | Sets one or more variables to null |
 | `settype()`     | `settype($var, $type): bool` | Changes variable type in place |
@@ -269,16 +233,22 @@ Narrowing applies to function and method parameters. A parameter whose call site
 ### Known incompatibilities with PHP
 
 - `$argv[0]` returns the compiled binary path, not the `.php` file path.
-- Integer `+`, `-`, and `*` overflow promotes to `float` only for **constant-folded** arithmetic (compile-time-constant operands), matching PHP. At **runtime**, `int op int` has the static type `int`, so an overflowing operation does **not** promote to `float`: the result is clamped toward the 64-bit integer boundary and `is_float()` stays `false`, whereas PHP returns a `float`. Promoting at runtime would require boxing every arithmetic result, which elephc's unboxed scalar representation avoids. For the same reason, `intval()`/`(int)` of an integer-valued string near the 64-bit boundary (e.g. `intval("9223372036854775807")`) is lossy.
+- Integer `+`, `-`, and `*` overflow promotes to `float` for both constant-folded and runtime arithmetic, matching PHP on 64-bit builds. `intval()`/`(int)` of an integer-valued string near the 64-bit boundary (e.g. `intval("9223372036854775807")`) is still lossy at the string-conversion boundary.
 - Converting an array to a string (via `.` concatenation, `echo`, or string interpolation) yields the literal `"Array"`, matching PHP's value, but elephc does not emit PHP's `E_WARNING` "Array to string conversion".
 - Scalar loose comparison (`==`, `!=`) follows PHP-style bool truthiness, null-vs-empty-string, numeric-string, non-numeric string byte-comparison, and numeric `int`-vs-`float` rules for constant-folded literals and non-folded runtime scalar operands. One known gap: when an **untyped (`mixed`) operand holds a `float`** at runtime — e.g. `switch ($x)` over an untyped `$x = 1.5`, or `$x == 1` — the value is truncated to `int` before comparing, so `1.5` wrongly compares equal to `1`. Statically-typed `float` operands compare correctly; only untyped float-bearing values are affected.
 - `??=` is checked against typed assignment storage for variables, object properties, static properties, and non-append array elements. For concrete local variable types, the fallback must keep the same type or be a literal `null`.
 - Plain array numeric casts (`(int)$array`, `(float)$array`) follow elephc's existing array cast semantics (return the element count rather than PHP's `0`/`1`). Direct `iterable` numeric casts use PHP's empty/non-empty `0`/`1` semantics.
-- The `(array)` cast of a `mixed` value produces an int-indexed `array<mixed>`: `null` becomes `[]`, a scalar becomes `[value]`, and an indexed array is rebuilt with the same integer keys. Because the result type cannot carry string keys, casting a value that holds an **associative array or an object** (where PHP keeps the string keys / property names) is not supported and reports a runtime fatal instead of silently dropping keys.
 - `__destruct` runs when an object's refcount reaches zero (scope exit, reassignment, `unset`, program end), matching PHP's timing, but **object resurrection is not supported**: re-storing `$this` so the object would outlive the destructor does not keep it alive — the object is still freed once `__destruct` returns.
-- Under the legacy `--null-repr=sentinel` opt-out, the integer `9223372036854775806` (`PHP_INT_MAX - 1`) collides with elephc's internal null marker in unboxed scalar slots and is misread as `null` by `echo`, `var_dump()`, `is_null()`, `??`, and related null checks. The default tagged null representation does not have this collision: the full 64-bit integer range round-trips.
-- Variable variables (`$$name`, `${$expr}`) are not supported. elephc allocates each local to a fixed compile-time stack slot and keeps no per-frame variable-name table, so a variable whose name is computed at runtime cannot be resolved. Use an array keyed by the dynamic name instead.
-- A `__toString()` method that throws is **not catchable** when invoked implicitly through `echo $obj;` or an explicit `(string)$obj` cast — the exception currently escapes as an uncaught fatal instead of propagating through an enclosing `try`/`catch`. Calling `$obj->__toString()` directly throws and is caught normally; only the implicit echo/cast coercion path has this gap. This affects any class with a throwing `__toString()` (a `Reflector`-implementing `ReflectionClass`/`ReflectionMethod`/`ReflectionProperty`/`ReflectionFunction`/`ReflectionParameter` among them — see the Reflection API section above).
+- Under the compatibility `--null-repr=sentinel` opt-out, the integer `9223372036854775806` (`PHP_INT_MAX - 1`) collides with elephc's internal null marker in unboxed scalar slots and is misread as `null` by `echo`, `var_dump()`, `is_null()`, `??`, and related null checks. The default tagged null representation does not have this collision: the full 64-bit integer range round-trips.
+- `match` (and ternary) arms whose types share one runtime representation merge to it instead of each arm keeping its own type: an `int` arm together with a `bool` arm collapses to one representation (`match($n) { 1 => 42, default => true }` yields `bool(true)` where PHP keeps `int(42)`), and two indexed-array arms with different element types merge to one element type (`match($n) { 1 => [1, 2], default => ["a", "b"] }` reads the int-array arm's elements through the string-array type). Arms of otherwise distinct types — object, array, string, int, float, `null` — each keep their own runtime type, matching PHP.
+- Variable variables (`$$name`, `${$expr}`) are not supported yet. Native AOT
+  locals use fixed compile-time stack slots; supporting a runtime-computed name
+  will require routing the access through Magician's materialized named scope
+  and synchronizing the affected native locals. Use an array keyed by the
+  dynamic name in portable elephc code for now.
+- Reference aliases to array elements (`$b =& $a[0]`) are limited to **indexed arrays with integer indices**; associative arrays (`$b =& $a['key']`) are rejected at compile time. Referencing an out-of-range index binds the alias to a null cell instead of creating the element (PHP autovivifies it as `null`), and the alias points into the array's storage, so it is only valid while the array is alive and not reallocated by growth.
+- `print_r($value, true)` captures into a fixed 64 KiB buffer: rendered output longer than 65536 bytes is truncated at the cap (PHP returns the full string). Echo mode (`print_r($value)`) is unaffected.
+- `serialize()`/`unserialize()` cover scalars, arrays, and objects (including the `__serialize`/`__unserialize`/`__sleep`/`__wakeup` magic methods and `r:`/`R:` object back-references) byte-for-byte compatibly with PHP. Remaining gaps: a cyclic reference inside an object's own properties resolves to `null` on `unserialize()` (serialization handles cycles), the deprecated `Serializable` interface (`C:` wire form) is unsupported, writing a property of an unserialized object held in a `Mixed` does not persist (a separate `Mixed` property-write limitation), and `unserialize()` does not emit PHP's `E_WARNING` / `E_NOTICE` on malformed input — it just returns `false`.
 
 ### Filesystem functions not implemented
 

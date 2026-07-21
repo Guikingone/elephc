@@ -1,8 +1,8 @@
 ---
 title: "stream_set_chunk_size()"
-description: "Lowers `stream_set_chunk_size(stream, size)` and returns the previous size."
+description: "Sets the read chunk size on a stream."
 sidebar:
-  order: 195
+  order: 229
 ---
 
 ## stream_set_chunk_size()
@@ -11,13 +11,18 @@ sidebar:
 function stream_set_chunk_size(resource $stream, int $size): int
 ```
 
-Lowers `stream_set_chunk_size(stream, size)` and returns the previous size.
+Sets the read chunk size on a stream.
 
 **Parameters**:
 - `$stream` (`resource`)
 - `$size` (`int`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_chunk_size.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_chunk_size.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,22 +1,27 @@
 ---
 title: "http_response_code()"
-description: "Lowers `http_response_code([$code])` to `__rt_http_response_code`. The code (or"
+description: "Gets or sets the HTTP response code."
 sidebar:
-  order: 265
+  order: 293
 ---
 
 ## http_response_code()
 
 ```php
-function http_response_code(mixed $response_code): int
+function http_response_code(int $response_code = 0): int
 ```
 
-Lowers `http_response_code([$code])` to `__rt_http_response_code`. The code (or
+Gets or sets the HTTP response code.
 
 **Parameters**:
-- `$response_code` (`mixed`), optional
+- `$response_code` (`int`), default `0`, optional
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/http_response_code.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/http_response_code.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

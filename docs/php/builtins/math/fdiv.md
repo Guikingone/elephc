@@ -1,8 +1,8 @@
 ---
 title: "fdiv()"
-description: "Lowers `fdiv()` for concrete integer-like and floating operands."
+description: "Divides two numbers, according to IEEE 754."
 sidebar:
-  order: 229
+  order: 263
 ---
 
 ## fdiv()
@@ -11,13 +11,18 @@ sidebar:
 function fdiv(float $num1, float $num2): float
 ```
 
-Lowers `fdiv()` for concrete integer-like and floating operands.
+Divides two numbers, according to IEEE 754.
 
 **Parameters**:
 - `$num1` (`float`)
 - `$num2` (`float`)
 
 **Returns**: `float`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/fdiv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/fdiv.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

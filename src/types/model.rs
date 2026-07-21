@@ -20,6 +20,8 @@ pub enum PhpType {
     Float,
     Str,
     Bool,
+    /// The PHP literal `false` subtype. Runtime representation is identical to `Bool`.
+    False,
     Void,
     Never,
     Iterable,
@@ -64,10 +66,40 @@ impl PhpType {
         }
     }
 
+    /// Returns true when a null property default must be materialized into a slot of
+    /// this type (and the literal-default emitters support doing so).
+    ///
+    /// `Void`, nullable unions, `Mixed`, and object slots encode null distinctly, so the
+    /// default write is required and supported. Every other slot either has no null
+    /// encoding (plain scalars, strings, arrays — those slots are always overwritten
+    /// before an observable read when refinement rebound them) or reads zero-initialized
+    /// storage as null already (callable/pointer-shaped slots), so the null default is
+    /// skipped for them.
+    pub fn null_property_default_required(&self) -> bool {
+        match self {
+            PhpType::Void | PhpType::Mixed | PhpType::TaggedScalar | PhpType::Object(_) => true,
+            PhpType::Union(members) => members.iter().any(|member| matches!(member, PhpType::Void)),
+            PhpType::Int
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Never
+            | PhpType::Iterable
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Buffer(_)
+            | PhpType::Callable
+            | PhpType::Packed(_)
+            | PhpType::Pointer(_)
+            | PhpType::Resource(_) => false,
+        }
+    }
+
     /// Size in bytes on the stack.
     pub fn stack_size(&self) -> usize {
         match self {
-            PhpType::Bool => 8,
+            PhpType::Bool | PhpType::False => 8,
             PhpType::Int => 8,
             PhpType::Float => 8,
             PhpType::Str => 16,
@@ -91,7 +123,7 @@ impl PhpType {
     /// Number of registers used to pass this type as an argument.
     pub fn register_count(&self) -> usize {
         match self {
-            PhpType::Bool => 1,
+            PhpType::Bool | PhpType::False => 1,
             PhpType::Int => 1,
             PhpType::Float => 1,
             PhpType::Str => 2,
@@ -142,9 +174,64 @@ impl PhpType {
                 PhpType::TaggedScalar
             }
             PhpType::Union(_) => PhpType::Mixed,
+            PhpType::False => PhpType::Bool,
             PhpType::Resource(_) => PhpType::Int,
             PhpType::Never => PhpType::Void, // never should not be materialized; fallback to void sentinel
             _ => self.clone(),
+        }
+    }
+
+    /// Returns true if this is an indexed array of a scalar (int/float/bool) element type.
+    ///
+    /// The hash-based builtins accept such indexed inputs by converting them to integer-keyed
+    /// hashes; scalar elements are copied by value, so the converted temporaries are safe to
+    /// free. String/heap element indexed inputs are a follow-up (they hit x86-specific converter
+    /// and clone-shallow issues), so the checker restricts indexed inputs to scalar elements.
+    pub fn is_scalar_indexed_array(&self) -> bool {
+        matches!(
+            self,
+            PhpType::Array(elem)
+                if matches!(**elem, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False)
+        )
+    }
+
+    /// Returns the hash key type this array type contributes: `Int` for an indexed array,
+    /// the declared key for an associative array, `Int` otherwise.
+    pub fn hash_key_type(&self) -> PhpType {
+        match self {
+            PhpType::Array(_) => PhpType::Int,
+            PhpType::AssocArray { key, .. } => (**key).clone(),
+            _ => PhpType::Int,
+        }
+    }
+
+    /// Returns the hash value type this array type contributes: the element type for an indexed
+    /// array, the declared value for an associative array, `Mixed` otherwise.
+    pub fn hash_value_type(&self) -> PhpType {
+        match self {
+            PhpType::Array(elem) => (**elem).clone(),
+            PhpType::AssocArray { value, .. } => (**value).clone(),
+            _ => PhpType::Mixed,
+        }
+    }
+
+    /// Widens two types to a common type: the type itself when both agree, else `Mixed`.
+    pub fn widen(a: PhpType, b: PhpType) -> PhpType {
+        if a == b {
+            a
+        } else {
+            PhpType::Mixed
+        }
+    }
+
+    /// Computes the result hash type for a two-input hash builtin (the `array_replace` /
+    /// `array_diff_assoc` family). The key and value each widen to `Mixed` when the two inputs
+    /// disagree, so a `foreach` over the result performs the correct runtime key/value dispatch
+    /// when an indexed input is mixed with a string-keyed associative input.
+    pub fn two_input_hash_result(t1: &PhpType, t2: &PhpType) -> PhpType {
+        PhpType::AssocArray {
+            key: Box::new(PhpType::widen(t1.hash_key_type(), t2.hash_key_type())),
+            value: Box::new(PhpType::widen(t1.hash_value_type(), t2.hash_value_type())),
         }
     }
 }
@@ -172,6 +259,7 @@ impl fmt::Display for PhpType {
             PhpType::Float => write!(f, "float"),
             PhpType::Str => write!(f, "string"),
             PhpType::Bool => write!(f, "bool"),
+            PhpType::False => write!(f, "false"),
             PhpType::Void => write!(f, "null"),
             PhpType::Never => write!(f, "never"),
             PhpType::Iterable => write!(f, "iterable"),

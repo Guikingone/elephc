@@ -1,8 +1,8 @@
 ---
 title: "stream_set_write_buffer()"
-description: "Lowers stream read/write buffer setters as successful no-ops."
+description: "Sets the write file buffering on a stream."
 sidebar:
-  order: 198
+  order: 232
 ---
 
 ## stream_set_write_buffer()
@@ -11,13 +11,18 @@ sidebar:
 function stream_set_write_buffer(resource $stream, int $size): int
 ```
 
-Lowers stream read/write buffer setters as successful no-ops.
+Sets the write file buffering on a stream.
 
 **Parameters**:
 - `$stream` (`resource`)
 - `$size` (`int`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_write_buffer.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_write_buffer.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

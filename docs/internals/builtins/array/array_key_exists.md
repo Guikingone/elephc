@@ -2,15 +2,15 @@
 title: "array_key_exists() — internals"
 description: "Compiler internals for array_key_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 12
+  order: 18
 ---
 
 ## `array_key_exists()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays/key_exists.rs`:22](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays/key_exists.rs#L22) (`lower_array_key_exists`)
+- **Signature**: [`src/builtins/array/array_key_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_key_exists.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays/key_exists.rs`:22](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays/key_exists.rs#L22) (`lower_array_key_exists`)
 - **Function symbol**: `lower_array_key_exists()`
 
 
@@ -20,7 +20,8 @@ sidebar:
 
 ## Runtime helpers
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+The following runtime helpers are referenced:
+- `__rt_hash_get`
 
 ## Signature summary
 
@@ -32,7 +33,11 @@ function array_key_exists(string $key, array $array): bool
 
 - **Arity**: takes exactly 2 arguments.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_key_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_key_exists.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `array_key_exists()`](../../../php/builtins/array/array_key_exists.md)
-

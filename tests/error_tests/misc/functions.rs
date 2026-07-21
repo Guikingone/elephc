@@ -48,6 +48,15 @@ fn test_error_first_class_callable_rejects_unsupported_builtin() {
     );
 }
 
+/// Verifies `eval` remains a language construct and is rejected as a first-class callable.
+#[test]
+fn test_error_eval_first_class_callable_is_rejected() {
+    expect_error(
+        "<?php $f = eval(...);",
+        "does not support builtin 'eval' yet",
+    );
+}
+
 /// Verifies that a by-reference parameter on a first-class callable must be passed a
 /// variable at the call site; passing a literal produces an error.
 #[test]
@@ -116,6 +125,45 @@ fn test_error_function_typed_param_rejects_wrong_argument() {
     expect_error(
         "<?php function foo(int $x) { echo $x; } foo(\"hello\");",
         "Function 'foo' parameter $x expects Int, got Str",
+    );
+}
+
+/// Verifies the generic `object` parameter type rejects integer arguments.
+#[test]
+fn test_error_generic_object_parameter_rejects_int() {
+    expect_error(
+        "<?php function require_object(object $value): void {} require_object(1);",
+        "expects Object(\"\"), got Int",
+    );
+}
+
+/// Verifies the generic `object` parameter type rejects string arguments.
+#[test]
+fn test_error_generic_object_parameter_rejects_string() {
+    expect_error(
+        "<?php function require_object(object $value): void {} require_object(\"no\");",
+        "expects Object(\"\"), got Str",
+    );
+}
+
+/// Verifies the generic `object` parameter type rejects array arguments.
+#[test]
+fn test_error_generic_object_parameter_rejects_array() {
+    expect_error(
+        "<?php function require_object(object $value): void {} require_object([]);",
+        "expects Object(\"\"), got Array",
+    );
+}
+
+/// Verifies an unqualified `Closure` hint inside a namespace remains namespace-relative
+/// instead of silently referring to PHP's global `\Closure` class. The unresolved
+/// namespace-relative name degrades through the absent-class tolerance (a warning naming
+/// `App\Closure`), proving it was not rewritten to the global class.
+#[test]
+fn test_error_namespaced_unqualified_closure_does_not_resolve_globally() {
+    expect_warning(
+        "<?php namespace App; function consume(Closure $callback): void {}",
+        "unknown class 'App\\Closure' treated as an absent optional dependency",
     );
 }
 
@@ -532,5 +580,36 @@ fn test_error_int_function_returning_string_still_reports_got_str() {
     expect_error(
         "<?php function foo(): int { return 'x'; }",
         "Function 'foo' return type expects Int, got Str",
+    );
+}
+
+/// Verifies that `isset($this->prop)` in a static closure is still rejected
+/// because `$this->prop` is a real property access, not a bare existence probe
+/// (issue #359 regression guard).
+#[test]
+fn test_error_static_closure_isset_this_property_still_rejected() {
+    expect_error(
+        "<?php $f = static function(): bool { return isset($this->prop); };",
+        "Cannot use $this inside a static closure",
+    );
+}
+
+/// Verifies that a by-value self-capture (`use($f)`) is still rejected as
+/// undefined because the variable is not yet assigned (issue #382 guard).
+#[test]
+fn test_error_by_value_self_capture_still_undefined() {
+    expect_error(
+        "<?php $f = function() use($f) { return $f; };",
+        "Undefined variable in use()",
+    );
+}
+
+/// Verifies that a by-ref capture of a variable that is NOT the assignment
+/// target is still rejected as undefined (issue #382 guard).
+#[test]
+fn test_error_by_ref_capture_not_assignment_target_still_undefined() {
+    expect_error(
+        "<?php $g = function() use(&$h) { return $h; };",
+        "Undefined variable in use()",
     );
 }

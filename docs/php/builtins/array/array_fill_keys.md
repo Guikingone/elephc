@@ -1,8 +1,8 @@
 ---
 title: "array_fill_keys()"
-description: "Lowers `array_fill_keys()` through the legacy hash-building runtime helpers."
+description: "Fill an array with values, specifying keys."
 sidebar:
-  order: 7
+  order: 10
 ---
 
 ## array_fill_keys()
@@ -11,13 +11,18 @@ sidebar:
 function array_fill_keys(array $keys, mixed $value): array
 ```
 
-Lowers `array_fill_keys()` through the legacy hash-building runtime helpers.
+Fill an array with values, specifying keys.
 
 **Parameters**:
 - `$keys` (`array`)
 - `$value` (`mixed`)
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_fill_keys.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_fill_keys.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

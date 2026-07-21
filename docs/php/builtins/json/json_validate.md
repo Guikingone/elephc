@@ -1,24 +1,29 @@
 ---
 title: "json_validate()"
-description: "Lowers `json_validate(json, depth?, flags?)` into the shared validator runtime."
+description: "Checks if a string contains valid JSON."
 sidebar:
-  order: 217
+  order: 251
 ---
 
 ## json_validate()
 
 ```php
-function json_validate(string $json, int $depth, int $flags): bool
+function json_validate(string $json, int $depth = 512, int $flags = 0): bool
 ```
 
-Lowers `json_validate(json, depth?, flags?)` into the shared validator runtime.
+Checks if a string contains valid JSON.
 
 **Parameters**:
 - `$json` (`string`)
-- `$depth` (`int`), optional
-- `$flags` (`int`), optional
+- `$depth` (`int`), default `512`, optional
+- `$flags` (`int`), default `0`, optional
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/json/json_validate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/json/json_validate.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

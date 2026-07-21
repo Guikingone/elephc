@@ -1,8 +1,8 @@
 ---
 title: "stream_filter_register()"
-description: "Lowers `stream_filter_register(filter_name, class)` into the user-filter registry helper."
+description: "Registers a user-defined stream filter."
 sidebar:
-  order: 182
+  order: 216
 ---
 
 ## stream_filter_register()
@@ -11,13 +11,18 @@ sidebar:
 function stream_filter_register(string $filter_name, string $class): bool
 ```
 
-Lowers `stream_filter_register(filter_name, class)` into the user-filter registry helper.
+Registers a user-defined stream filter.
 
 **Parameters**:
 - `$filter_name` (`string`)
 - `$class` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_filter_register.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_filter_register.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

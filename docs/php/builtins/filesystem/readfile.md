@@ -1,24 +1,27 @@
 ---
 title: "readfile()"
-description: "Lowers `readfile(path)` and boxes the runtime byte-count-or-false result."
+description: "Outputs a file."
 sidebar:
-  order: 120
+  order: 141
 ---
 
 ## readfile()
 
 ```php
-function readfile(string $filename, bool $use_include_path, mixed $context): mixed
+function readfile(string $filename): mixed
 ```
 
-Lowers `readfile(path)` and boxes the runtime byte-count-or-false result.
+Outputs a file.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$use_include_path` (`bool`)
-- `$context` (`mixed`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/readfile.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/readfile.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

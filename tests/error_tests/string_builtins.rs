@@ -54,14 +54,62 @@ expect_builtin_arity_error!(
 expect_builtin_arity_error!(
     test_error_base64_decode_wrong_args,
     "<?php base64_decode();",
-    "base64_decode() expects 1 or 2 arguments"
+    "base64_decode() takes 1 or 2 arguments"
 );
 
 expect_builtin_arity_error!(
     test_error_base64_decode_too_many_args,
     "<?php base64_decode(\"aGk=\", true, 1);",
-    "base64_decode() expects 1 or 2 arguments"
+    "base64_decode() takes 1 or 2 arguments"
 );
+
+expect_builtin_arity_error!(
+    test_error_mb_ereg_match_wrong_args,
+    "<?php mb_ereg_match('ab');",
+    "mb_ereg_match() takes 2 or 3 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_mb_strlen_wrong_args,
+    "<?php mb_strlen();",
+    "mb_strlen() takes 1 or 2 arguments"
+);
+
+/// Verifies that `mb_strlen()` rejects a statically non-string value argument.
+#[test]
+fn test_error_mb_strlen_string_type() {
+    expect_error(
+        "<?php mb_strlen([1, 2]);",
+        "mb_strlen() string argument must be string",
+    );
+}
+
+/// Verifies that `mb_strlen()` accepts only string or null encoding arguments.
+#[test]
+fn test_error_mb_strlen_encoding_type() {
+    expect_error(
+        "<?php mb_strlen('abc', 123);",
+        "mb_strlen() encoding argument must be string or null",
+    );
+}
+
+/// Verifies that `mb_ereg_match()` rejects a non-string pattern.
+#[test]
+fn test_error_mb_ereg_match_pattern_type() {
+    expect_error(
+        "<?php mb_ereg_match(123, 'abc');",
+        "mb_ereg_match() pattern argument must be string",
+    );
+}
+
+/// Verifies that `mb_ereg_match()` rejects non-string, non-null options.
+#[test]
+fn test_error_mb_ereg_match_options_type() {
+    expect_error(
+        "<?php mb_ereg_match('ab', 'abc', 1);",
+        "mb_ereg_match() options argument must be string or null",
+    );
+}
 
 /// Verifies that `grapheme_strrev()` with no arguments produces the correct arity error.
 #[test]
@@ -193,21 +241,17 @@ fn test_error_substr_count_too_many_args() {
     );
 }
 
-/// Verifies the gradual-typing boundary model accepts returning `strpos()` (typed `Int|Bool`)
-/// from an `: int` function: `Bool` is PHP-coercible to `int` (weak mode coerces `false` to `0`),
-/// so the union flows into the scalar return with a runtime boundary guard instead of erroring.
+/// Verifies returning `strpos()` (typed `Int|False`) from an `: int` function is rejected:
+/// the `false` miss marker must be handled before the scalar return boundary.
 #[test]
-fn test_strpos_false_return_into_int_return_type_accepted() {
-    assert!(
-        check_source(
-            r#"<?php
+fn test_error_strpos_false_return_into_int_return_type() {
+    expect_error(
+        r#"<?php
 function pos(): int {
     return strpos("abc", "z");
 }
-"#
-        )
-        .is_ok(),
-        "Int|Bool should flow into an int return under gradual typing (bool coerces to int)",
+"#,
+        "Function 'pos' return type expects Int, got Union([Int, False])",
     );
 }
 
@@ -223,13 +267,13 @@ fn test_error_str_replace_wrong_args() {
 /// Verifies that `sprintf()` with no arguments produces the correct arity error.
 #[test]
 fn test_error_sprintf_no_args() {
-    expect_error("<?php sprintf();", "sprintf() requires at least 1 argument");
+    expect_error("<?php sprintf();", "sprintf() takes at least 1 argument");
 }
 
 /// Verifies that `printf()` with no arguments produces the correct arity error.
 #[test]
 fn test_error_printf_no_args() {
-    expect_error("<?php printf();", "printf() requires at least 1 argument");
+    expect_error("<?php printf();", "printf() takes at least 1 argument");
 }
 
 /// Verifies that `ord()` with no arguments produces the correct arity error.
@@ -240,6 +284,21 @@ fn test_error_ord_wrong_args() {
 
 /// Verifies that `explode()` with only one argument produces the correct arity
 /// error. `explode` accepts 2 or 3 arguments (the trailing `$limit` is optional).
+/// Verifies that a pure-data registry builtin (`ord`) infers argument types so that
+/// an undefined variable passed as an argument produces the correct diagnostic.
+///
+/// This is a regression test for Fix B: before the fix, the registry-first dispatch
+/// branch skipped `infer_type` for builtins with no check hook, so undefined-variable
+/// errors were silently dropped.
+#[test]
+fn test_error_ord_undefined_variable_arg() {
+    expect_error(
+        "<?php ord($undeclared);",
+        "Undefined variable: $undeclared",
+    );
+}
+
+/// Verifies that `explode()` with only one argument produces the correct arity error.
 #[test]
 fn test_error_explode_wrong_args() {
     expect_error("<?php explode(\",\");", "explode() takes 2 or 3 arguments");
@@ -274,6 +333,9 @@ fn test_error_sha1_wrong_args() {
 
 /// Verifies that `htmlspecialchars()` with no arguments produces the correct arity
 /// error (PHP allows 1–4).
+/// Verifies that `htmlspecialchars()` with no arguments produces the correct arity error.
+/// htmlspecialchars() accepts optional `$flags` and `$encoding` arguments, so the message
+/// reports 1 to 3 args.
 #[test]
 fn test_error_htmlspecialchars_wrong_args() {
     expect_error(
@@ -287,7 +349,7 @@ fn test_error_htmlspecialchars_wrong_args() {
 fn test_error_htmlspecialchars_too_many_args() {
     expect_error(
         r#"<?php htmlspecialchars("x", 3, "UTF-8", true, 1);"#,
-        "htmlspecialchars() takes 1 to 4 arguments",
+        "htmlspecialchars() takes 1 to 3 arguments",
     );
 }
 
@@ -408,25 +470,25 @@ fn test_error_inet_pton_wrong_args() {
 /// Verifies the invalid-call diagnostic for error gzcompress wrong args.
 #[test]
 fn test_error_gzcompress_wrong_args() {
-    expect_error("<?php gzcompress();", "gzcompress() expects 1 or 2 arguments");
+    expect_error("<?php gzcompress();", "gzcompress() takes 1 or 2 arguments");
 }
 
 /// Verifies the invalid-call diagnostic for error gzuncompress wrong args.
 #[test]
 fn test_error_gzuncompress_wrong_args() {
-    expect_error("<?php gzuncompress();", "gzuncompress() expects 1 or 2 arguments");
+    expect_error("<?php gzuncompress();", "gzuncompress() takes 1 or 2 arguments");
 }
 
 /// Verifies the invalid-call diagnostic for error gzdeflate wrong args.
 #[test]
 fn test_error_gzdeflate_wrong_args() {
-    expect_error("<?php gzdeflate();", "gzdeflate() expects 1 or 2 arguments");
+    expect_error("<?php gzdeflate();", "gzdeflate() takes 1 or 2 arguments");
 }
 
 /// Verifies the invalid-call diagnostic for error gzinflate wrong args.
 #[test]
 fn test_error_gzinflate_wrong_args() {
-    expect_error("<?php gzinflate();", "gzinflate() expects 1 or 2 arguments");
+    expect_error("<?php gzinflate();", "gzinflate() takes 1 or 2 arguments");
 }
 
 /// Verifies the invalid-call diagnostic for error vsprintf wrong args.

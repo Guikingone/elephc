@@ -2,15 +2,15 @@
 title: "gethostname() — internals"
 description: "Compiler internals for gethostname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 162
+  order: 183
 ---
 
 ## `gethostname()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3188](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3188) (`lower_gethostname`)
+- **Signature**: [`src/builtins/io/gethostname.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/gethostname.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3405](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3405) (`lower_gethostname`)
 - **Function symbol**: `lower_gethostname()`
 
 
@@ -35,7 +35,11 @@ function gethostname(): string
 
 - **Arity**: takes no arguments.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/network_env/gethostname.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/gethostname.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `gethostname()`](../../../php/builtins/io/gethostname.md)
-

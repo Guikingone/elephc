@@ -1,25 +1,30 @@
 ---
 title: "stream_copy_to_stream()"
-description: "Lowers `stream_copy_to_stream(from, to, length?, offset?)` through wrapper-aware read/write loops."
+description: "Copies data from one stream to another."
 sidebar:
-  order: 181
+  order: 215
 ---
 
 ## stream_copy_to_stream()
 
 ```php
-function stream_copy_to_stream(resource $from, resource $to, int $length, int $offset): mixed
+function stream_copy_to_stream(resource $from, resource $to, int $length = null, int $offset = -1): mixed
 ```
 
-Lowers `stream_copy_to_stream(from, to, length?, offset?)` through wrapper-aware read/write loops.
+Copies data from one stream to another.
 
 **Parameters**:
 - `$from` (`resource`)
 - `$to` (`resource`)
-- `$length` (`int`), optional
-- `$offset` (`int`), optional
+- `$length` (`int`), default `null`, optional
+- `$offset` (`int`), default `-1`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_copy_to_stream.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_copy_to_stream.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

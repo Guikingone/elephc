@@ -1,8 +1,8 @@
 ---
 title: "stream_set_blocking()"
-description: "Lowers `stream_set_blocking(stream, enable)`."
+description: "Sets blocking/non-blocking mode on a stream."
 sidebar:
-  order: 194
+  order: 228
 ---
 
 ## stream_set_blocking()
@@ -11,13 +11,18 @@ sidebar:
 function stream_set_blocking(resource $stream, bool $enable): bool
 ```
 
-Lowers `stream_set_blocking(stream, enable)`.
+Sets blocking/non-blocking mode on a stream.
 
 **Parameters**:
 - `$stream` (`resource`)
 - `$enable` (`bool`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_blocking.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_blocking.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

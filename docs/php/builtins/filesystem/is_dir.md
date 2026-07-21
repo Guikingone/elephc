@@ -1,8 +1,8 @@
 ---
 title: "is_dir()"
-description: "Lowers `is_dir(path)` through the target-aware runtime stat helper."
+description: "Tells whether the filename is a directory."
 sidebar:
-  order: 105
+  order: 126
 ---
 
 ## is_dir()
@@ -11,12 +11,17 @@ sidebar:
 function is_dir(string $filename): bool
 ```
 
-Lowers `is_dir(path)` through the target-aware runtime stat helper.
+Tells whether the filename is a directory.
 
 **Parameters**:
 - `$filename` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/is_dir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/is_dir.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

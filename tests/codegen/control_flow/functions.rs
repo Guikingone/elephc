@@ -113,3 +113,106 @@ fn test_function_no_args() {
 }
 
 // --- Logical operators ---
+
+/// EC-8 (#491): `if ($x === false) { throw; } return $x;` narrows an `int|false` value to `int`
+/// after the divergent guard, so the `: int` return matches. Byte-parity vs PHP 8.5.
+#[test]
+fn test_strict_false_guard_narrowing() {
+    let out = compile_and_run(
+        "<?php final class G { public static function requireInt(int|false $v): int { if ($v === false) { throw new \\RuntimeException('no'); } return $v; } } echo G::requireInt(42), ':', G::requireInt(7);",
+    );
+    assert_eq!(out, "42:7");
+}
+
+/// EC-8 (#491): `if ($x === null) { throw; } return $x;` narrows a nullable value to non-null
+/// after the divergent guard (elephc models `?T`'s null as Void), so `?string`→string and
+/// `?self`→self. Byte-parity vs PHP 8.5.
+#[test]
+fn test_strict_null_guard_narrowing() {
+    let out = compile_and_run(
+        "<?php function req(?string $x): string { if ($x === null) { throw new \\Exception('no'); } return $x; } echo req('hi');",
+    );
+    assert_eq!(out, "hi");
+}
+
+/// EC-8 (#491): `$this->prop instanceof X ? ... : <uses $this->prop>` narrows the PROPERTY in the
+/// ternary else-branch (Message|string → string), so `new Message($this->prop)` type-checks.
+/// Byte-parity vs PHP 8.5. Exercises property-access flow-narrowing across ternary branches.
+#[test]
+fn test_property_instanceof_ternary_narrowing() {
+    let out = compile_and_run(
+        "<?php final class Message { public function __construct(public string $key) {} } final class V { public function __construct(private Message|string $raw) {} public function msg(): Message { return $this->raw instanceof Message ? $this->raw : new Message($this->raw); } } echo (new V('hi'))->msg()->key, ':', (new V(new Message('k')))->msg()->key;",
+    );
+    assert_eq!(out, "hi:k");
+}
+
+/// EC-8 (#491): `if (is_null($x)) { throw; }` narrows ?int → int on the fall-through path — the
+/// same complement-stripping as `$x === null` (ward-schema ColumnNode::assertDecimalPrecision).
+/// Byte-parity vs PHP 8.5.
+#[test]
+fn test_is_null_guard_narrowing() {
+    let out = compile_and_run(
+        "<?php function f(?int $p): int { if (is_null($p)) { throw new \\InvalidArgumentException('null'); } if ($p <= 0) { throw new \\InvalidArgumentException('non-positive'); } return $p; } echo f(5);",
+    );
+    assert_eq!(out, "5");
+}
+
+/// EC-8 (#491): a negated-instanceof throw-guard on a PROPERTY narrows it for the statements
+/// after the `if` (ward-forms StoreResult::ref pattern: `?StoredFileRef` → StoredFileRef on the
+/// fall-through return). Byte-parity vs PHP 8.5.
+#[test]
+fn test_property_throw_guard_narrowing() {
+    let out = compile_and_run(
+        "<?php final class W { public function __construct(public string $v) {} } final class R { public function __construct(private ?W $w) {} public function ref(): W { if (!$this->w instanceof W) { throw new \\LogicException('rejected'); } return $this->w; } } echo (new R(new W('x')))->ref()->v;",
+    );
+    assert_eq!(out, "x");
+}
+
+/// Verifies boxed `mixed` values can cross scalar boundaries handled by the runtime cast funnels.
+#[test]
+fn test_mixed_value_into_typed_boundary() {
+    let out = compile_and_run(
+        "<?php function takesStr(string $s): string { return strtoupper($s); } function relay(mixed $m): string { return takesStr($m); } function giveInt(mixed $m): int { return $m; } echo relay('hi'), ':', giveInt(42);",
+    );
+    assert_eq!(out, "HI:42");
+}
+
+/// Verifies `fseek()` has PHP's plain integer result type and can cross an `int` boundary.
+#[test]
+fn test_fseek_int_result_into_typed_param() {
+    let out = compile_and_run(
+        "<?php function requireZero(int $value, string $message): int { if ($value !== 0) { throw new \\RuntimeException($message); } return $value; } function main(): void { $f = fopen('php://temp', 'r+b'); fwrite($f, 'abcdef'); $r = requireZero(fseek($f, 2), 'seek failed'); echo $r, ':', fread($f, 3); } main();",
+    );
+    assert_eq!(out, "0:cde");
+}
+
+/// Verifies a boxed associative-array element can cross supported scalar call boundaries.
+#[test]
+fn test_mixed_assoc_element_into_scalar_typed_params() {
+    let out = compile_and_run(
+        "<?php function firstMode(string $mode, array $allowed): bool { return in_array($mode, $allowed); } function main(): void { $meta = ['mode' => 'r+', 'seekable' => true]; $mode = $meta['mode']; $ok = firstMode($mode, ['r+', 'w+']) ? 'ok' : 'no'; echo $ok, ':', strtoupper($mode); } main();",
+    );
+    assert_eq!(out, "ok:R+");
+}
+
+/// A typed comparator over an `array`-hinted parameter keeps its declared parameter contract —
+/// usort checks the closure against its own declarations (via the element-type binding)
+/// instead of a fabricated Int placeholder. Byte-parity vs PHP 8.5.
+#[test]
+fn test_typed_callback_over_array_hinted_param() {
+    let out = compile_and_run(
+        "<?php final class Box { public function __construct(public int $n) {} } function sorted(array $items): string { usort($items, static fn (Box $a, Box $b): int => $a->n <=> $b->n); $out = ''; foreach ($items as $b) { $out .= $b->n; } return $out; } function main(): void { echo sorted([new Box(3), new Box(1), new Box(2)]); } main();",
+    );
+    assert_eq!(out, "123");
+}
+
+/// foreach KEYS over an unknown-element array (an `array`-hinted param — elements known only
+/// to phpdoc) are Mixed, not Int: the value may be associative at runtime (header-map shape
+/// with string keys into a `string $name` parameter). Byte-parity vs PHP 8.5.
+#[test]
+fn test_foreach_key_over_unknown_element_array() {
+    let out = compile_and_run(
+        "<?php final class H { private array $headers = []; public function setHeader(string $name, string $value): void { $this->headers[$name] = $value; } public function all(array $headers): string { $out = ''; foreach ($headers as $name => $value) { $this->setHeader($name, $value); $out .= $name . '=' . $value . ';'; } return $out; } } function main(): void { echo (new H())->all(['a' => '1', 'b' => '2']); } main();",
+    );
+    assert_eq!(out, "a=1;b=2;");
+}

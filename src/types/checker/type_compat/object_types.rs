@@ -35,43 +35,6 @@ impl Checker {
         }
     }
 
-    /// Checks whether `receiver` can access a member with the given visibility declared in
-    /// `declaring_class`, additionally consulting an active `Closure::bind`/`bindTo` scope
-    /// rebind (`Checker::bound_scope_context`) when the normal `can_access_member` check fails.
-    ///
-    /// The bound-scope override applies ONLY when `receiver` is exactly `ExprKind::Variable(name)`
-    /// naming one of the active rebind's `eligible_params` (JURY ADDENDUM #2: "->prop writes/reads
-    /// allowed only on PARAMETERS whose declared type equals (or is a subclass of) the rebound
-    /// scope class") — never for a computed expression, a captured variable, or `$this` (which the
-    /// lexical gate that populates `bound_scope_context` already proved absent from the body).
-    pub(crate) fn can_access_property(
-        &self,
-        receiver: &Expr,
-        declaring_class: &str,
-        visibility: &Visibility,
-    ) -> bool {
-        if self.can_access_member(declaring_class, visibility) {
-            return true;
-        }
-        let Some(context) = self.bound_scope_context.as_ref() else {
-            return false;
-        };
-        let crate::parser::ast::ExprKind::Variable(name) = &receiver.kind else {
-            return false;
-        };
-        if !context.eligible_params.contains(name) {
-            return false;
-        }
-        match visibility {
-            Visibility::Public => true,
-            Visibility::Protected => {
-                context.scope_class == declaring_class
-                    || self.is_subclass_of(&context.scope_class, declaring_class)
-            }
-            Visibility::Private => context.scope_class == declaring_class,
-        }
-    }
-
     /// Returns the string label ("public", "protected", "private") for a visibility level.
     pub(crate) fn visibility_label(visibility: &Visibility) -> &'static str {
         match visibility {
@@ -275,7 +238,16 @@ impl Checker {
                     ));
                 }
                 let arg_ty = self.infer_type(&args[0], env)?;
-                if !self.type_accepts(backing_ty, &arg_ty) {
+                // PHP's int-backed enum `from()`/`tryFrom()` accepts a numeric string and
+                // coerces it to the integer backing value at runtime: a numeric string with
+                // no matching case throws `ValueError`, a non-numeric string throws
+                // `TypeError`. A `Mixed`/dynamic argument (e.g. a `foreach` value or untyped
+                // parameter) coerces on its runtime tag. Accept these here and defer the
+                // coercion and error to codegen instead of rejecting at compile time
+                // (issues #349, #449).
+                let accepts_runtime_coercion = matches!(backing_ty, PhpType::Int)
+                    && matches!(arg_ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_));
+                if !accepts_runtime_coercion && !self.type_accepts(backing_ty, &arg_ty) {
                     return Err(CompileError::new(
                         span,
                         &format!(
@@ -310,33 +282,6 @@ impl Checker {
                 ))
             }
         }
-    }
-
-    /// Returns true if the declared return `expected` (possibly nullable/union) contains at
-    /// least one `Object(D)` arm where `actual` (a concrete `Object(B)`) is a proper ANCESTOR
-    /// of `D` — i.e. `D` is a subclass of `B`, or `D` implements `B` as an interface. This is
-    /// the "checked downcast on return" relaxation: PHP allows a function to declare a return
-    /// type narrower than a value it's statically only known to be a supertype of, deferring
-    /// the real check to a runtime `instanceof` guard. `crate::ir_lower::stmt::return_type_guard`
-    /// mirrors this exact predicate over its own class-hierarchy metadata to decide whether to
-    /// emit that guard, so the two MUST stay in lock-step: this only widens acceptance, it never
-    /// substitutes for the runtime check.
-    ///
-    /// Only meant to be tried as a fallback AFTER normal covariant acceptance
-    /// (`require_compatible_arg_type`) has already failed for this `(expected, actual)` pair —
-    /// it does not special-case an `actual` that already satisfies `expected` normally.
-    pub(crate) fn object_return_downcast_guardable(&self, expected: &PhpType, actual: &PhpType) -> bool {
-        let PhpType::Object(actual_name) = actual else {
-            return false;
-        };
-        flatten_type_arms(expected).into_iter().any(|arm| match arm {
-            PhpType::Object(declared_name) => {
-                declared_name != *actual_name
-                    && (self.is_subclass_of(&declared_name, actual_name)
-                        || self.object_type_implements_interface(&declared_name, actual_name))
-            }
-            _ => false,
-        })
     }
 
     /// Finds the most specific common object type between `left` and `right` class names.
@@ -393,18 +338,12 @@ impl Checker {
     /// parameter and property slot for all classes that share an inherited property from
     /// `declaring_class`. Used to sharpen types across an inheritance hierarchy after
     /// constructor argument type inference.
-    ///
-    /// The constructor-parameter refinement is resolved per target class: for each class
-    /// that shares the inherited property, the parameter index is looked up in that class's
-    /// own `constructor_param_to_prop` (never the instantiated class's `param_index`) and the
-    /// refinement is gated on that signature's own `declared_params`. A reordering subclass
-    /// that does not promote the shared property in its own constructor is therefore skipped
-    /// and never has an unrelated parameter overwritten.
     pub(crate) fn propagate_constructor_arg_type(
         &mut self,
         instantiated_class: &str,
         param_index: usize,
         arg_ty: &PhpType,
+        param_has_declared_type: bool,
     ) {
         let Some((prop_name, declaring_class)) =
             self.classes.get(instantiated_class).and_then(|class_info| {
@@ -435,46 +374,23 @@ impl Checker {
                 continue;
             }
 
-            let property_has_declared_type = class_info.declared_properties.contains(&prop_name);
+            let property_has_declared_type = class_info.visible_property_is_declared(&prop_name);
             if !property_has_declared_type {
-                if let Some(prop) = class_info
-                    .properties
-                    .iter_mut()
-                    .find(|(name, _)| name == &prop_name)
-                {
-                    prop.1 = arg_ty.clone();
+                if let Some(slot) = class_info.visible_property_index(&prop_name) {
+                    if let Some(prop) = class_info.properties.get_mut(slot) {
+                        prop.1 = arg_ty.clone();
+                    }
                 }
             }
 
-            // Resolve the constructor parameter index in THIS class's own promoted-property
-            // map, not the instantiated class's `param_index`. A subclass may reorder or omit
-            // the shared property in its own constructor, so the instantiated class's index is
-            // only valid for that class. Compute the index before borrowing `methods` mutably
-            // so the immutable borrow of `constructor_param_to_prop` is released first.
-            let target_idx = class_info
-                .constructor_param_to_prop
-                .iter()
-                .position(|mapped| mapped.as_deref() == Some(prop_name.as_str()));
-            if let Some(idx) = target_idx {
+            if !param_has_declared_type {
                 if let Some(sig) = class_info.methods.get_mut("__construct") {
-                    let is_declared = sig.declared_params.get(idx).copied().unwrap_or(false);
-                    if !is_declared {
-                        if let Some((_, param_ty)) = sig.params.get_mut(idx) {
-                            *param_ty = arg_ty.clone();
-                        }
+                    if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
+                        *param_ty = arg_ty.clone();
                     }
                 }
             }
         }
-    }
-}
-
-/// Flattens a possibly-nested `Union` into its member arms; a non-union type is a single arm.
-/// Shared by `Checker::object_return_downcast_guardable` and its `ir_lower` mirror.
-pub(crate) fn flatten_type_arms(ty: &PhpType) -> Vec<PhpType> {
-    match ty {
-        PhpType::Union(members) => members.iter().flat_map(flatten_type_arms).collect(),
-        other => vec![other.clone()],
     }
 }
 
@@ -494,5 +410,82 @@ pub(crate) fn type_is_gradual_object_family(ty: &PhpType) -> bool {
             .iter()
             .any(|member| matches!(member, PhpType::Object(_) | PhpType::Mixed)),
         _ => false,
+    }
+}
+
+impl Checker {
+        /// Returns true if the declared return `expected` (possibly nullable/union) contains at
+        /// least one `Object(D)` arm where `actual` (a concrete `Object(B)`) is a proper ANCESTOR
+        /// of `D` — i.e. `D` is a subclass of `B`, or `D` implements `B` as an interface. This is
+        /// the "checked downcast on return" relaxation: PHP allows a function to declare a return
+        /// type narrower than a value it's statically only known to be a supertype of, deferring
+        /// the real check to a runtime `instanceof` guard. `crate::ir_lower::stmt::return_type_guard`
+        /// mirrors this exact predicate over its own class-hierarchy metadata to decide whether to
+        /// emit that guard, so the two MUST stay in lock-step: this only widens acceptance, it never
+        /// substitutes for the runtime check.
+        ///
+        /// Only meant to be tried as a fallback AFTER normal covariant acceptance
+        /// (`require_compatible_arg_type`) has already failed for this `(expected, actual)` pair —
+        /// it does not special-case an `actual` that already satisfies `expected` normally.
+        pub(crate) fn object_return_downcast_guardable(&self, expected: &PhpType, actual: &PhpType) -> bool {
+            let PhpType::Object(actual_name) = actual else {
+                return false;
+            };
+            flatten_type_arms(expected).into_iter().any(|arm| match arm {
+                PhpType::Object(declared_name) => {
+                    declared_name != *actual_name
+                        && (self.is_subclass_of(&declared_name, actual_name)
+                            || self.object_type_implements_interface(&declared_name, actual_name))
+                }
+                _ => false,
+            })
+        }
+}
+
+impl Checker {
+        /// Checks whether `receiver` can access a member with the given visibility declared in
+        /// `declaring_class`, additionally consulting an active `Closure::bind`/`bindTo` scope
+        /// rebind (`Checker::bound_scope_context`) when the normal `can_access_member` check fails.
+        ///
+        /// The bound-scope override applies ONLY when `receiver` is exactly `ExprKind::Variable(name)`
+        /// naming one of the active rebind's `eligible_params` (JURY ADDENDUM #2: "->prop writes/reads
+        /// allowed only on PARAMETERS whose declared type equals (or is a subclass of) the rebound
+        /// scope class") — never for a computed expression, a captured variable, or `$this` (which the
+        /// lexical gate that populates `bound_scope_context` already proved absent from the body).
+        pub(crate) fn can_access_property(
+            &self,
+            receiver: &Expr,
+            declaring_class: &str,
+            visibility: &Visibility,
+        ) -> bool {
+            if self.can_access_member(declaring_class, visibility) {
+                return true;
+            }
+            let Some(context) = self.bound_scope_context.as_ref() else {
+                return false;
+            };
+            let crate::parser::ast::ExprKind::Variable(name) = &receiver.kind else {
+                return false;
+            };
+            if !context.eligible_params.contains(name) {
+                return false;
+            }
+            match visibility {
+                Visibility::Public => true,
+                Visibility::Protected => {
+                    context.scope_class == declaring_class
+                        || self.is_subclass_of(&context.scope_class, declaring_class)
+                }
+                Visibility::Private => context.scope_class == declaring_class,
+            }
+        }
+}
+
+/// Flattens a possibly-nested `Union` into its member arms; a non-union type is a single arm.
+/// Shared by `Checker::object_return_downcast_guardable` and its `ir_lower` mirror.
+pub(crate) fn flatten_type_arms(ty: &PhpType) -> Vec<PhpType> {
+    match ty {
+        PhpType::Union(members) => members.iter().flat_map(flatten_type_arms).collect(),
+        other => vec![other.clone()],
     }
 }

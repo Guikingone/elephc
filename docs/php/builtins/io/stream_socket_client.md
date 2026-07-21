@@ -1,26 +1,27 @@
 ---
 title: "stream_socket_client()"
-description: "Lowers `stream_socket_client(address)` and records the connected host for TLS defaults."
+description: "Open Internet or Unix domain socket connection."
 sidebar:
-  order: 200
+  order: 234
 ---
 
 ## stream_socket_client()
 
 ```php
-function stream_socket_client(string $address, int $error_code, int $error_message, string $timeout, float $flags): mixed
+function stream_socket_client(string $address): mixed
 ```
 
-Lowers `stream_socket_client(address)` and records the connected host for TLS defaults.
+Open Internet or Unix domain socket connection.
 
 **Parameters**:
 - `$address` (`string`)
-- `$error_code` (`int`), passed by reference
-- `$error_message` (`int`), passed by reference
-- `$timeout` (`string`)
-- `$flags` (`float`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_client.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_client.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

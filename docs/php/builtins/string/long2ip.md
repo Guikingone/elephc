@@ -1,8 +1,8 @@
 ---
 title: "long2ip()"
-description: "Lowers `long2ip(value)` through the IPv4 formatting runtime helper."
+description: "Converts an IPv4 address from long integer to dotted string notation."
 sidebar:
-  order: 360
+  order: 386
 ---
 
 ## long2ip()
@@ -11,12 +11,17 @@ sidebar:
 function long2ip(int $ip): string
 ```
 
-Lowers `long2ip(value)` through the IPv4 formatting runtime helper.
+Converts an IPv4 address from long integer to dotted string notation.
 
 **Parameters**:
 - `$ip` (`int`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/long2ip.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/long2ip.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

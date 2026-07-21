@@ -1,8 +1,8 @@
 ---
 title: "rewind()"
-description: "Lowers `rewind(stream)` as `lseek(fd, 0, SEEK_SET)` and clears EOF state on success."
+description: "Rewind the position of a file pointer."
 sidebar:
-  order: 170
+  order: 204
 ---
 
 ## rewind()
@@ -11,12 +11,17 @@ sidebar:
 function rewind(resource $stream): bool
 ```
 
-Lowers `rewind(stream)` as `lseek(fd, 0, SEEK_SET)` and clears EOF state on success.
+Rewind the position of a file pointer.
 
 **Parameters**:
 - `$stream` (`resource`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/rewind.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/rewind.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

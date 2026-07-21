@@ -2,25 +2,21 @@
 title: "str_replace() — internals"
 description: "Compiler internals for str_replace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 384
+  order: 405
 ---
 
 ## `str_replace()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:968](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L968) (`lower_string_replace`)
+- **Signature**: [`src/builtins/string/str_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_replace.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:842](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L842) (`lower_string_replace`)
 - **Function symbol**: `lower_string_replace()`
 
 
 ### Lowering notes
 
-- Lowers `str_replace()`/`str_ireplace()` with three operands.
-- Handles the common all-string form directly, and the PHP array-`$search` form (with an array or
-- single-string `$replace`) against a string `$subject` through the `__rt_*_array` runtime helpers.
-- Array operands must currently be indexed `Array(Str)` (string slots); other array shapes return a
-- clear unsupported error rather than miscompiling.
+- Lowers `str_replace()`/`str_ireplace()` with three string operands.
 
 ## Runtime helpers
 
@@ -29,15 +25,18 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function str_replace(string $search, string $replace, string $subject, int $count): mixed
+function str_replace(string $search, string $replace, string $subject, int $count = null): string
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes 3–4 arguments (1 optional).
-- **By-reference parameters**: `$count`.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/str_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_replace.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 
 - [User reference for `str_replace()`](../../../php/builtins/string/str_replace.md)
-

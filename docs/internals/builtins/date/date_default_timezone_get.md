@@ -2,15 +2,15 @@
 title: "date_default_timezone_get() — internals"
 description: "Compiler internals for date_default_timezone_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 70
+  order: 91
 ---
 
 ## `date_default_timezone_get()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:70](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L70) (`lower_date_default_timezone_get`)
+- **Signature**: [`src/builtins/system/date_default_timezone_get.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/date_default_timezone_get.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:70](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L70) (`lower_date_default_timezone_get`)
 - **Function symbol**: `lower_date_default_timezone_get()`
 
 
@@ -36,7 +36,11 @@ function date_default_timezone_get(): string
 
 - **Arity**: takes no arguments.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/date_default_timezone_get.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/date_default_timezone_get.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `date_default_timezone_get()`](../../../php/builtins/date/date_default_timezone_get.md)
-

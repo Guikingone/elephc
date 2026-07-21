@@ -1,8 +1,8 @@
 ---
 title: "usort()"
-description: "Lowers `usort()` for indexed integer arrays with a static user comparator."
+description: "Sorts an array by values using a user-defined comparison function."
 sidebar:
-  order: 46
+  order: 63
 ---
 
 ## usort()
@@ -11,13 +11,18 @@ sidebar:
 function usort(array $array, callable $callback): bool
 ```
 
-Lowers `usort()` for indexed integer arrays with a static user comparator.
+Sorts an array by values using a user-defined comparison function.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
 - `$callback` (`callable`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/usort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/usort.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

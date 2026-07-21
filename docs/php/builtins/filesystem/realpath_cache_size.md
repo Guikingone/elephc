@@ -1,8 +1,8 @@
 ---
 title: "realpath_cache_size()"
-description: "Lowers `realpath_cache_size()` to zero because elephc has no realpath cache."
+description: "Returns the amount of memory used by the realpath cache."
 sidebar:
-  order: 124
+  order: 145
 ---
 
 ## realpath_cache_size()
@@ -11,11 +11,16 @@ sidebar:
 function realpath_cache_size(): int
 ```
 
-Lowers `realpath_cache_size()` to zero because elephc has no realpath cache.
+Returns the amount of memory used by the realpath cache.
 
 **Parameters**: none.
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/realpath_cache_size.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/realpath_cache_size.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

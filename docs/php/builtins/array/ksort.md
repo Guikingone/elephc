@@ -1,23 +1,27 @@
 ---
 title: "ksort()"
-description: "Lowers `ksort()` through the legacy key-sort helper surface."
+description: "Sorts an array by key in ascending order."
 sidebar:
-  order: 37
+  order: 54
 ---
 
 ## ksort()
 
 ```php
-function ksort(array $array, int $flags): bool
+function ksort(array $array): bool
 ```
 
-Lowers `ksort()` through the legacy key-sort helper surface.
+Sorts an array by key in ascending order.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
-- `$flags` (`int`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/ksort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/ksort.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

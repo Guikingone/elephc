@@ -1,8 +1,8 @@
 ---
 title: "array_combine()"
-description: "Lowers `array_combine()` through the legacy hash-building runtime helpers."
+description: "Creates an array by using one array for keys and another for values."
 sidebar:
-  order: 3
+  order: 5
 ---
 
 ## array_combine()
@@ -11,13 +11,18 @@ sidebar:
 function array_combine(array $keys, array $values): array
 ```
 
-Lowers `array_combine()` through the legacy hash-building runtime helpers.
+Creates an array by using one array for keys and another for values.
 
 **Parameters**:
 - `$keys` (`array`)
 - `$values` (`array`)
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_combine.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_combine.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

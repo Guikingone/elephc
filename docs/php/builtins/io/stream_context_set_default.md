@@ -1,8 +1,8 @@
 ---
 title: "stream_context_set_default()"
-description: "Lowers `stream_context_set_default(options)`."
+description: "Sets the default stream context."
 sidebar:
-  order: 178
+  order: 212
 ---
 
 ## stream_context_set_default()
@@ -11,12 +11,17 @@ sidebar:
 function stream_context_set_default(array $options): mixed
 ```
 
-Lowers `stream_context_set_default(options)`.
+Sets the default stream context.
 
 **Parameters**:
 - `$options` (`array`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_set_default.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_set_default.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

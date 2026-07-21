@@ -1,8 +1,8 @@
 ---
 title: "spl_classes()"
-description: "Lowers `spl_classes()` to the static compiler-shipped SPL/core type snapshot."
+description: "Return available SPL classes."
 sidebar:
-  order: 316
+  order: 347
 ---
 
 ## spl_classes()
@@ -11,11 +11,16 @@ sidebar:
 function spl_classes(): array
 ```
 
-Lowers `spl_classes()` to the static compiler-shipped SPL/core type snapshot.
+Return available SPL classes.
 
 **Parameters**: none.
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/spl_classes.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/spl_classes.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

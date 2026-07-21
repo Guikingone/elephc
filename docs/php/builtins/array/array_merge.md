@@ -1,8 +1,8 @@
 ---
 title: "array_merge()"
-description: "Lowers `array_merge()` for two compatible indexed arrays with 8-byte payload slots."
+description: "Merges the elements of two arrays."
 sidebar:
-  order: 15
+  order: 23
 ---
 
 ## array_merge()
@@ -11,12 +11,17 @@ sidebar:
 function array_merge(...$arrays): array
 ```
 
-Lowers `array_merge()` for two compatible indexed arrays with 8-byte payload slots.
+Merges the elements of two arrays.
 
 **Parameters**:
 - `...$arrays` — variadic: collects excess arguments into `$arrays`.
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_merge.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_merge.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

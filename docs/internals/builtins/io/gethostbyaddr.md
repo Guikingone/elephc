@@ -2,15 +2,15 @@
 title: "gethostbyaddr() — internals"
 description: "Compiler internals for gethostbyaddr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 160
+  order: 181
 ---
 
 ## `gethostbyaddr()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3210](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3210) (`lower_gethostbyaddr`)
+- **Signature**: [`src/builtins/io/gethostbyaddr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/gethostbyaddr.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3427](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3427) (`lower_gethostbyaddr`)
 - **Function symbol**: `lower_gethostbyaddr()`
 
 
@@ -34,7 +34,11 @@ function gethostbyaddr(string $ip): mixed
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/network_env/gethostbyaddr.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/gethostbyaddr.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `gethostbyaddr()`](../../../php/builtins/io/gethostbyaddr.md)
-

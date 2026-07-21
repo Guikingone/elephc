@@ -1,8 +1,8 @@
 ---
 title: "rad2deg()"
-description: "Lowers `rad2deg()` by multiplying with `180 / PI`."
+description: "Converts a radian value to degrees."
 sidebar:
-  order: 245
+  order: 279
 ---
 
 ## rad2deg()
@@ -11,12 +11,17 @@ sidebar:
 function rad2deg(float $num): float
 ```
 
-Lowers `rad2deg()` by multiplying with `180 / PI`.
+Converts a radian value to degrees.
 
 **Parameters**:
 - `$num` (`float`)
 
 **Returns**: `float`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/rad2deg.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/rad2deg.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

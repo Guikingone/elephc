@@ -9,7 +9,7 @@
 //! - Rules here define accepted programs, so PHP covariance, inheritance, and extension-specific constraints must stay explicit.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, TypeExpr};
+use crate::parser::ast::{Expr, ExprKind, TypeExpr};
 use crate::types::{callable_wrapper_sig, ClassInfo, FunctionSig, PhpType};
 
 use super::super::inference::syntactic::infer_expr_type_syntactic;
@@ -60,7 +60,48 @@ impl Checker {
                 "never can only be used as a standalone return type",
             ));
         }
+        if type_expr.contains_late_static() {
+            if let Some(current_class) = self.current_class.as_deref() {
+                let parent = self
+                    .classes
+                    .get(current_class)
+                    .and_then(|class_info| class_info.parent.as_deref());
+                let resolved =
+                    type_expr.substitute_relative_class_types(current_class, parent);
+                return self.resolve_type_expr(&resolved, span);
+            }
+        }
         self.resolve_type_expr(type_expr, span)
+    }
+
+    /// Resolves a method return contract to its declaring type for schema and ABI metadata.
+    ///
+    /// The parsed `static` marker remains on the method declaration for call-site refinement;
+    /// this nominal type is the concrete declaring class or interface used for compatibility.
+    pub(crate) fn resolve_method_return_type_hint(
+        &self,
+        type_expr: &TypeExpr,
+        declaring_type: &str,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<PhpType, CompileError> {
+        let nominal = type_expr.substitute_relative_class_types(declaring_type, None);
+        self.resolve_declared_return_type_hint(&nominal, span, context)
+    }
+
+    /// Resolves preserved late-static return syntax against a concrete call-site receiver.
+    pub(crate) fn resolve_late_static_return_type_hint(
+        &self,
+        type_expr: &TypeExpr,
+        receiver_type: &str,
+        span: crate::span::Span,
+    ) -> Result<PhpType, CompileError> {
+        let parent = self
+            .classes
+            .get(receiver_type)
+            .and_then(|class_info| class_info.parent.as_deref());
+        let bound = type_expr.substitute_relative_class_types(receiver_type, parent);
+        self.resolve_declared_return_type_hint(&bound, span, "Late-static method return")
     }
 
     /// Resolves a local variable type hint from a `TypeExpr` to a `PhpType`, rejecting
@@ -82,13 +123,7 @@ impl Checker {
     }
 
     /// Resolves a property type hint from a `TypeExpr` to a `PhpType`, rejecting
-    /// `void` and `never`.
-    ///
-    /// Note: unlike parameters/returns, `callable` is intentionally accepted here. PHP forbids
-    /// the bare `callable` pseudo-type as a property type but allows `\Closure` (a real class).
-    /// elephc models the `\Closure` type hint as `PhpType::Callable`, and post-resolution we
-    /// cannot distinguish a `\Closure`-origin `Callable` from a bare-`callable` one, so property
-    /// types accept `Callable` as a permissive superset of PHP's rule.
+    /// `void`, `never`, and the `callable` pseudo-type while allowing the `Closure` class.
     pub(crate) fn resolve_declared_property_type_hint(
         &self,
         type_expr: &TypeExpr,
@@ -108,7 +143,29 @@ impl Checker {
                 &format!("{} cannot use type never", context),
             ));
         }
+        if Self::type_expr_contains_callable_pseudo_type(type_expr) {
+            return Err(CompileError::new(
+                span,
+                &format!("{} cannot use type callable", context),
+            ));
+        }
         Ok(ty)
+    }
+
+    /// Returns true if `type_expr` contains PHP's forbidden property pseudo-type `callable`.
+    /// The `Closure` class resolves to the same internal callable representation but remains a
+    /// valid property declaration, including inside nullable and union types.
+    fn type_expr_contains_callable_pseudo_type(type_expr: &TypeExpr) -> bool {
+        match type_expr {
+            TypeExpr::Named(name) => name.as_str().eq_ignore_ascii_case("callable"),
+            TypeExpr::Array(inner) | TypeExpr::Nullable(inner) | TypeExpr::Buffer(inner) => {
+                Self::type_expr_contains_callable_pseudo_type(inner)
+            }
+            TypeExpr::Union(members) | TypeExpr::Intersection(members) => members
+                .iter()
+                .any(Self::type_expr_contains_callable_pseudo_type),
+            _ => false,
+        }
     }
 
     /// Returns true if `ty` is or contains a `PhpType::Never` anywhere in its structure.
@@ -161,18 +218,6 @@ impl Checker {
         Ok(())
     }
 
-    /// Returns true when a by-reference parameter needs boxed/nullable storage that the
-    /// caller variable's current type cannot provide. Passing a variable by reference is an
-    /// alias assignment: the callee may write any value the by-reference parameter permits,
-    /// so when the parameter is `mixed`/union/nullable and the caller variable is a plain
-    /// concrete scalar, the caller slot must be promoted to boxed storage before the call.
-    pub(crate) fn by_ref_param_needs_storage_promotion(
-        &self,
-        param_ty: &PhpType,
-        var_ty: &PhpType,
-    ) -> bool {
-        requires_by_ref_boxed_storage(param_ty) && !supports_by_ref_boxed_storage(var_ty)
-    }
 
     /// Validates that a default value expression is compatible with the declared type it is
     /// being assigned to. Checks using `require_compatible_arg_type`.
@@ -190,11 +235,71 @@ impl Checker {
         Ok(())
     }
 
-    /// Builds the initial parameter type list for a function declaration, resolving type hints,
-    /// validating defaults, and inferring types for untyped parameters. Adds variadic parameter
-    /// type as `PhpType::Array(Int)` if the function is variadic.
-    pub(crate) fn initial_function_param_types(
+    /// Semantically resolves a declaration default when it is a scoped constant access, then
+    /// validates the resolved type against the declared type. Other defaults keep the syntactic
+    /// validation used by declarations that do not depend on completed class-like metadata.
+    pub(crate) fn validate_resolved_declared_default_type(
+        &mut self,
+        expected_ty: &PhpType,
+        default_expr: Option<&Expr>,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        let Some(default_expr) = default_expr else {
+            return Ok(());
+        };
+        let default_ty = match &default_expr.kind {
+            ExprKind::ScopedConstantAccess { receiver, name } => {
+                self.infer_scoped_constant_access(receiver, name, default_expr)?
+            }
+            _ => infer_expr_type_syntactic(default_expr),
+        };
+        self.require_compatible_arg_type(expected_ty, &default_ty, span, context)
+    }
+
+    /// Validates a declaration default while class-like schema metadata is still being built.
+    /// Object-to-object checks are deferred because inheritance and interface relationships are
+    /// incomplete during this phase; every other type pair is validated immediately.
+    pub(crate) fn validate_schema_declared_default_type(
         &self,
+        expected_ty: &PhpType,
+        default_expr: Option<&Expr>,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        if let Some(default_expr) = default_expr {
+            let default_ty = infer_expr_type_syntactic(default_expr);
+            if matches!(expected_ty, PhpType::Object(_)) && matches!(default_ty, PhpType::Object(_))
+            {
+                return Ok(());
+            }
+        }
+        self.validate_declared_default_type(expected_ty, default_expr, span, context)
+    }
+
+    /// Validates a method parameter default while class-like schemas are being built.
+    /// Direct scoped constant accesses are deferred until enum cases and class/interface
+    /// constants are available; other defaults use the existing schema-time validation.
+    pub(crate) fn validate_schema_parameter_default_type(
+        &self,
+        expected_ty: &PhpType,
+        default_expr: Option<&Expr>,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        if default_expr.is_some_and(|default| {
+            matches!(default.kind, ExprKind::ScopedConstantAccess { .. })
+        }) {
+            return Ok(());
+        }
+        self.validate_schema_declared_default_type(expected_ty, default_expr, span, context)
+    }
+
+    /// Builds the initial parameter type list for a function declaration, resolving type hints,
+    /// validating defaults, and inferring types for untyped parameters. Adds a variadic parameter
+    /// array type, using the declared element type for typed variadics.
+    pub(crate) fn initial_function_param_types(
+        &mut self,
         name: &str,
         decl: &FnDecl,
     ) -> Result<Vec<(String, PhpType)>, CompileError> {
@@ -206,7 +311,7 @@ impl Checker {
                     decl.span,
                     &format!("Function '{}' parameter ${}", name, param_name),
                 )?;
-                self.validate_declared_default_type(
+                self.validate_resolved_declared_default_type(
                     &declared_ty,
                     decl.defaults.get(idx).and_then(|d| d.as_ref()),
                     decl.span,
@@ -220,10 +325,18 @@ impl Checker {
             }
         }
         if let Some(variadic_name) = decl.variadic.as_ref() {
-            param_types.push((
-                variadic_name.clone(),
-                PhpType::Array(Box::new(PhpType::Int)),
-            ));
+            let elem_ty = if decl.variadic_by_ref {
+                PhpType::Mixed
+            } else if let Some(type_ann) = decl.variadic_type.as_ref() {
+                self.resolve_declared_param_type_hint(
+                    type_ann,
+                    decl.span,
+                    &format!("Function '{}' variadic parameter ${}", name, variadic_name),
+                )?
+            } else {
+                PhpType::Int
+            };
+            param_types.push((variadic_name.clone(), PhpType::Array(Box::new(elem_ty))));
         }
         Ok(param_types)
     }
@@ -288,7 +401,7 @@ impl Checker {
         let saved_globals = self.active_globals.clone();
         let saved_statics = self.active_statics.clone();
         let saved_foreach_keys = self.foreach_key_locals.clone();
-        let saved_declared_typed_locals = self.declared_typed_locals.clone();
+        let saved_eval_barrier_active = self.eval_barrier_active;
         let saved_break_continue_depth = self.break_continue_depth;
         let saved_finally_break_continue_bases = self.finally_break_continue_bases.clone();
         let saved_in_callable_body = self.in_callable_body;
@@ -300,7 +413,7 @@ impl Checker {
         self.active_globals.clear();
         self.active_statics.clear();
         self.foreach_key_locals.clear();
-        self.declared_typed_locals.clear();
+        self.eval_barrier_active = false;
         self.break_continue_depth = 0;
         self.finally_break_continue_bases.clear();
         self.in_callable_body = true;
@@ -312,7 +425,7 @@ impl Checker {
         self.active_globals = saved_globals;
         self.active_statics = saved_statics;
         self.foreach_key_locals = saved_foreach_keys;
-        self.declared_typed_locals = saved_declared_typed_locals;
+        self.eval_barrier_active = saved_eval_barrier_active;
         self.break_continue_depth = saved_break_continue_depth;
         self.finally_break_continue_bases = saved_finally_break_continue_bases;
         self.in_callable_body = saved_in_callable_body;
@@ -329,4 +442,22 @@ fn requires_by_ref_boxed_storage(ty: &PhpType) -> bool {
 /// Returns true when an argument variable's storage can accept boxed or nullable writebacks.
 fn supports_by_ref_boxed_storage(ty: &PhpType) -> bool {
     matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar)
+}
+
+impl Checker {
+        /// Returns true when a by-reference parameter needs boxed/nullable storage that the
+        /// caller variable's current type cannot provide. Passing a variable by reference is an
+        /// alias assignment: the callee may write any value the by-reference parameter permits,
+        /// so when the parameter is `mixed`/union/nullable and the caller variable is a plain
+        /// concrete scalar, the caller slot must be promoted to boxed storage before the call.
+        // Retained for the checker unit tests and pending re-integration after the
+        // origin/main merge; not reachable from the production checker paths yet.
+        #[allow(dead_code)]
+        pub(crate) fn by_ref_param_needs_storage_promotion(
+            &self,
+            param_ty: &PhpType,
+            var_ty: &PhpType,
+        ) -> bool {
+            requires_by_ref_boxed_storage(param_ty) && !supports_by_ref_boxed_storage(var_ty)
+        }
 }

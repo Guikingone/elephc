@@ -1,8 +1,8 @@
 ---
 title: "vfprintf()"
-description: "Lowers `vfprintf(stream, format, values)` through `__rt_vsprintf` then fwrite."
+description: "Write a formatted string to a stream."
 sidebar:
-  order: 212
+  order: 246
 ---
 
 ## vfprintf()
@@ -11,7 +11,7 @@ sidebar:
 function vfprintf(resource $stream, string $format, array $values): int
 ```
 
-Lowers `vfprintf(stream, format, values)` through `__rt_vsprintf` then fwrite.
+Write a formatted string to a stream.
 
 **Parameters**:
 - `$stream` (`resource`)
@@ -19,6 +19,11 @@ Lowers `vfprintf(stream, format, values)` through `__rt_vsprintf` then fwrite.
 - `$values` (`array`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/vfprintf.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/vfprintf.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

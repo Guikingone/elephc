@@ -1,24 +1,29 @@
 ---
 title: "array_filter()"
-description: "Lowers `array_filter()` for static and first-class callbacks through the runtime helper."
+description: "Filters elements of an array using a callback function."
 sidebar:
-  order: 8
+  order: 11
 ---
 
 ## array_filter()
 
 ```php
-function array_filter(array $array, callable $callback, int $mode): array
+function array_filter(array $array, callable $callback = null, int $mode = 0): array
 ```
 
-Lowers `array_filter()` for static and first-class callbacks through the runtime helper.
+Filters elements of an array using a callback function.
 
 **Parameters**:
 - `$array` (`array`)
-- `$callback` (`callable`), optional
-- `$mode` (`int`), optional
+- `$callback` (`callable`), default `null`, optional
+- `$mode` (`int`), default `0`, optional
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_filter.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_filter.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

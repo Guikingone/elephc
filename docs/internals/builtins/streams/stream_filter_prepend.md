@@ -2,17 +2,21 @@
 title: "stream_filter_prepend() — internals"
 description: "Compiler internals for stream_filter_prepend(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 327
+  order: 355
 ---
 
 ## `stream_filter_prepend()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/io/stream_filter_prepend.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_filter_prepend.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1548](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1548) (`lower_stream_filter_attach`)
+- **Function symbol**: `lower_stream_filter_attach()`
 
+
+### Lowering notes
+
+- Lowers `stream_filter_append` and `stream_filter_prepend`.
 
 ## Runtime helpers
 
@@ -21,14 +25,18 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function stream_filter_prepend(resource $stream, string $filter_name, int $mode, mixed $params): mixed
+function stream_filter_prepend(resource $stream, string $filtername, int $read_write = 3, mixed $params = null): mixed
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes 2–4 arguments (2 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_filter_prepend.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_filter_prepend.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `stream_filter_prepend()`](../../../php/builtins/streams/stream_filter_prepend.md)
-

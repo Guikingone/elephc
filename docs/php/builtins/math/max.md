@@ -1,23 +1,28 @@
 ---
 title: "max()"
-description: "Lowers numeric `min()` and `max()` over concrete integer-like or float operands."
+description: "Find highest value."
 sidebar:
-  order: 240
+  order: 274
 ---
 
 ## max()
 
 ```php
-function max(mixed $value, ...$values): float
+function max(mixed $value, ...$values): mixed
 ```
 
-Lowers numeric `min()` and `max()` over concrete integer-like or float operands.
+Find highest value.
 
 **Parameters**:
 - `$value` (`mixed`)
 - `...$values` — variadic: collects excess arguments into `$values`.
 
-**Returns**: `float`
+**Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/max.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/max.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -11,7 +11,7 @@
 //!
 //! Key details:
 //! - Backs `ReflectionClass`/`ReflectionFunction`/`ReflectionMethod`/`ReflectionProperty::
-//!   getFileName()` (see `crate::codegen_ir::lower_inst::objects::reflection` for the EIR
+//!   getFileName()` (see `crate::codegen::lower_inst::objects::reflection` for the EIR
 //!   bakers, and `crate::types::checker::builtin_types::reflection` for the shell bodies).
 //! - A name declared more than once while scanning (e.g. two same-named classes under different
 //!   `namespace` blocks in one file) is dropped from its map entirely rather than risk baking

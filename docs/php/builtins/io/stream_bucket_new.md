@@ -1,8 +1,8 @@
 ---
 title: "stream_bucket_new()"
-description: "Lowers `stream_bucket_new(stream, data)` into a stdClass-backed bucket object."
+description: "Creates a new bucket for use in a stream filter."
 sidebar:
-  order: 173
+  order: 207
 ---
 
 ## stream_bucket_new()
@@ -11,13 +11,18 @@ sidebar:
 function stream_bucket_new(resource $stream, string $buffer): mixed
 ```
 
-Lowers `stream_bucket_new(stream, data)` into a stdClass-backed bucket object.
+Creates a new bucket for use in a stream filter.
 
 **Parameters**:
 - `$stream` (`resource`)
 - `$buffer` (`string`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_bucket_new.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_bucket_new.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

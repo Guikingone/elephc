@@ -2,15 +2,15 @@
 title: "crc32() — internals"
 description: "Compiler internals for crc32(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 335
+  order: 362
 ---
 
 ## `crc32()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:465](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L465) (`lower_crc32`)
+- **Signature**: [`src/builtins/string/crc32.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/crc32.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:365](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L365) (`lower_crc32`)
 - **Function symbol**: `lower_crc32()`
 
 
@@ -22,9 +22,7 @@ sidebar:
 
 The following runtime helpers are referenced:
 - `__rt_crc32`
-- `__rt_hash`
-- `__rt_md5`
-- `__rt_sha1`
+- `__rt_mb_strlen`
 
 ## Signature summary
 
@@ -36,7 +34,11 @@ function crc32(string $string): int
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/crc32.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/crc32.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `crc32()`](../../../php/builtins/string/crc32.md)
-

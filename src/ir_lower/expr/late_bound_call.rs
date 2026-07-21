@@ -16,7 +16,7 @@
 //! - Reuses the exact same EIR shape a source-level `throw new \Error("...")` produces:
 //!   `Op::ObjectNew` (via `super::lower_expr` on a synthetic `NewObject` AST node, so the
 //!   "Error" builtin-Throwable-payload codegen path in
-//!   `crate::codegen_ir::lower_inst::objects::lower_builtin_throwable_new` handles allocation on
+//!   `crate::codegen::lower_inst::objects::lower_builtin_throwable_new` handles allocation on
 //!   both targets unchanged) followed by `Op::ThrowException`, mirroring
 //!   `crate::ir_lower::expr::mod::lower_throw_expr` (the lowering for PHP 8's `throw` expression)
 //!   exactly, including its `lower_null` placeholder result — this call site's IR value is never

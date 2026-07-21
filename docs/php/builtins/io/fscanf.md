@@ -1,8 +1,8 @@
 ---
 title: "fscanf()"
-description: "Lowers `fscanf(stream, format)` through `__rt_fgets` and `__rt_sscanf`."
+description: "Parses input from a file according to a format."
 sidebar:
-  order: 153
+  order: 174
 ---
 
 ## fscanf()
@@ -11,7 +11,7 @@ sidebar:
 function fscanf(resource $stream, string $format, ...$vars): array
 ```
 
-Lowers `fscanf(stream, format)` through `__rt_fgets` and `__rt_sscanf`.
+Parses input from a file according to a format.
 
 **Parameters**:
 - `$stream` (`resource`)
@@ -19,6 +19,11 @@ Lowers `fscanf(stream, format)` through `__rt_fgets` and `__rt_sscanf`.
 - `...$vars` — variadic: collects excess arguments into `$vars`.
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fscanf.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fscanf.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

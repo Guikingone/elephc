@@ -59,6 +59,7 @@ impl Checker {
             crate::parser::ast::TypeExpr::Int => Ok(PhpType::Int),
             crate::parser::ast::TypeExpr::Float => Ok(PhpType::Float),
             crate::parser::ast::TypeExpr::Bool => Ok(PhpType::Bool),
+            crate::parser::ast::TypeExpr::False => Ok(PhpType::False),
             crate::parser::ast::TypeExpr::Str => Ok(PhpType::Str),
             crate::parser::ast::TypeExpr::Void => Ok(PhpType::Void),
             crate::parser::ast::TypeExpr::Never => Ok(PhpType::Never),
@@ -116,14 +117,14 @@ impl Checker {
                     "string" => Ok(PhpType::Str),
                     "mixed" => Ok(PhpType::Mixed),
                     "callable" => Ok(PhpType::Callable),
+                    "closure" => Ok(PhpType::Callable),
+                    "object" => Ok(PhpType::Object(String::new())),
                     "void" => Ok(PhpType::Void),
                     "array" => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
                     // `object` is PHP's any-instance pseudo-type, modeled as Mixed for now
                     // (gradual; a precise any-object type is a follow-up). `\Closure` as a
                     // type hint is modeled as Callable since closure values are already
                     // Callable (nominal Closure with its methods is a follow-up).
-                    "object" => Ok(PhpType::Mixed),
-                    "closure" => Ok(PhpType::Callable),
                     // Relative class types only survive to this point when used outside a class
                     // body; inside a class they are rewritten to the enclosing class beforehand.
                     relative @ ("self" | "static" | "parent") => Err(CompileError::new(
@@ -198,7 +199,10 @@ impl Checker {
     }
 
     /// Validates that `ty` is a valid word-pointer value for `ptr_set()`: must be `Int`,
-    /// `Bool`, `Void`, or `Pointer`. Emits a specific error otherwise.
+    /// `Bool`, `Void`, `Pointer`, or boxed runtime `Mixed`.
+    ///
+    /// Checked integer arithmetic is typed as `Mixed` because it may overflow to a float,
+    /// but pointer word writes still need to accept the non-overflowing int payload path.
     pub(crate) fn ensure_word_pointer_value(
         &self,
         ty: &PhpType,
@@ -206,7 +210,12 @@ impl Checker {
     ) -> Result<(), CompileError> {
         if matches!(
             ty,
-            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Pointer(_)
+            PhpType::Int
+                | PhpType::Bool
+                | PhpType::Void
+                | PhpType::Pointer(_)
+                | PhpType::Mixed
+                | PhpType::Union(_)
         ) {
             Ok(())
         } else {

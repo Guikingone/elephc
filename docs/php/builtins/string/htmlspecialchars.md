@@ -1,25 +1,29 @@
 ---
 title: "htmlspecialchars()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Converts the HTML special characters in a string into their entities."
 sidebar:
-  order: 354
+  order: 380
 ---
 
 ## htmlspecialchars()
 
 ```php
-function htmlspecialchars(string $string, int $flags, string $encoding, bool $double_encode): string
+function htmlspecialchars(string $string, int $flags = 11, string $encoding = 'UTF-8'): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Converts the HTML special characters in a string into their entities.
 
 **Parameters**:
 - `$string` (`string`)
-- `$flags` (`int`)
-- `$encoding` (`string`)
-- `$double_encode` (`bool`)
+- `$flags` (`int`), default `11`, optional
+- `$encoding` (`string`), default `'UTF-8'`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/htmlspecialchars.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/htmlspecialchars.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

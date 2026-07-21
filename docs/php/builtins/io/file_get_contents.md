@@ -1,26 +1,27 @@
 ---
 title: "file_get_contents()"
-description: "Lowers `file_get_contents(path)` and boxes the runtime string-or-false result."
+description: "Reads an entire file into a string."
 sidebar:
-  order: 145
+  order: 166
 ---
 
 ## file_get_contents()
 
 ```php
-function file_get_contents(string $filename, bool $use_include_path, mixed $context, int $offset, int $length): mixed
+function file_get_contents(string $filename): mixed
 ```
 
-Lowers `file_get_contents(path)` and boxes the runtime string-or-false result.
+Reads an entire file into a string.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$use_include_path` (`bool`)
-- `$context` (`mixed`)
-- `$offset` (`int`)
-- `$length` (`int`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/file_get_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/file_get_contents.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,8 @@
 ---
 title: "iterator_count()"
-description: "Lowers `iterator_count()` over arrays, `iterable`, and Traversable objects."
+description: "Count the elements in an iterator."
 sidebar:
-  order: 308
+  order: 339
 ---
 
 ## iterator_count()
@@ -11,12 +11,17 @@ sidebar:
 function iterator_count(traversable $iterator): int
 ```
 
-Lowers `iterator_count()` over arrays, `iterable`, and Traversable objects.
+Count the elements in an iterator.
 
 **Parameters**:
 - `$iterator` (`traversable`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/iterator_count.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/iterator_count.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

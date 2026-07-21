@@ -1,22 +1,27 @@
 ---
 title: "stream_context_get_options()"
-description: "Lowers `stream_context_get_options(context)`."
+description: "Retrieves options for the specified stream context."
 sidebar:
-  order: 176
+  order: 210
 ---
 
 ## stream_context_get_options()
 
 ```php
-function stream_context_get_options(resource $stream_or_context): array
+function stream_context_get_options(resource $context): array
 ```
 
-Lowers `stream_context_get_options(context)`.
+Retrieves options for the specified stream context.
 
 **Parameters**:
-- `$stream_or_context` (`resource`)
+- `$context` (`resource`)
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_get_options.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_get_options.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

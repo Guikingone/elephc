@@ -1,8 +1,8 @@
 ---
 title: "getprotobynumber()"
-description: "Lowers `getprotobynumber(number)` and boxes a missing entry as PHP `false`."
+description: "Gets the protocol name associated with the given protocol number."
 sidebar:
-  order: 164
+  order: 185
 ---
 
 ## getprotobynumber()
@@ -11,12 +11,17 @@ sidebar:
 function getprotobynumber(int $protocol): mixed
 ```
 
-Lowers `getprotobynumber(number)` and boxes a missing entry as PHP `false`.
+Gets the protocol name associated with the given protocol number.
 
 **Parameters**:
 - `$protocol` (`int`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/getprotobynumber.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/getprotobynumber.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

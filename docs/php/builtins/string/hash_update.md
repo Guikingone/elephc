@@ -1,8 +1,8 @@
 ---
 title: "hash_update()"
-description: "Lowers `hash_update(context, data)` through the incremental hash runtime helper."
+description: "Pumps data into an active incremental hashing context."
 sidebar:
-  order: 349
+  order: 376
 ---
 
 ## hash_update()
@@ -11,13 +11,18 @@ sidebar:
 function hash_update(resource $context, string $data): bool
 ```
 
-Lowers `hash_update(context, data)` through the incremental hash runtime helper.
+Pumps data into an active incremental hashing context.
 
 **Parameters**:
 - `$context` (`resource`)
 - `$data` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/hash_update.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_update.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

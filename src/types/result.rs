@@ -14,11 +14,43 @@ use std::collections::{HashMap, HashSet};
 use crate::codegen::platform::{Platform, Target};
 use crate::errors::{CompileError, CompileWarning};
 use crate::parser::ast::Program;
+use crate::span::Span;
 
 use super::{
-    checker, ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo,
-    PackedClassInfo, PhpType, TypeEnv,
+    checker, AttrArgEntry, ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig,
+    InterfaceInfo, PackedClassInfo, PhpType, ReturnAliasSummaries, TypeEnv,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Describes a statically-known access violation that PHP raises as a catchable
+/// `Error` at runtime instead of a compile-time rejection.
+pub struct ThrowAccessInfo {
+    /// Source span of the offending call/assignment, used as the lookup key.
+    pub span: Span,
+    /// The kind of violation, selecting the PHP error message template.
+    pub kind: ThrowAccessKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Categorizes statically-decided access violations lowered to runtime `Error` throws.
+pub enum ThrowAccessKind {
+    /// A private/protected method call from an inaccessible scope.
+    PrivateMethod {
+        /// Visibility label (`private` or `protected`).
+        visibility: String,
+        /// Class holding the method (e.g. `C`).
+        class_name: String,
+        /// Method name without the trailing parentheses (e.g. `secret`).
+        method: String,
+    },
+    /// A write to a readonly property outside its declaring constructor.
+    ReadonlyProperty {
+        /// Class holding the property (e.g. `Box`).
+        class_name: String,
+        /// Property name without the leading `$` (e.g. `x`).
+        property: String,
+    },
+}
 
 #[derive(Debug)]
 /// Aggregate result of type checking, carrying type environments, declarations,
@@ -27,8 +59,14 @@ use super::{
 pub struct CheckResult {
     pub global_env: TypeEnv,
     pub functions: HashMap<String, FunctionSig>,
+    pub function_attribute_names: HashMap<String, Vec<String>>,
+    pub function_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgEntry>>>>,
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
+    /// Proven return-to-parameter storage aliases for source-declared callables.
+    pub(crate) return_alias_summaries: ReturnAliasSummaries,
+    #[allow(dead_code)]
     pub callable_return_sigs: HashMap<String, FunctionSig>,
+    #[allow(dead_code)]
     pub callable_array_return_sigs: HashMap<String, FunctionSig>,
     pub interfaces: HashMap<String, InterfaceInfo>,
     pub classes: HashMap<String, ClassInfo>,
@@ -43,6 +81,9 @@ pub struct CheckResult {
     /// `func_get_args()`, or `func_get_arg()` at their own scope. See
     /// `crate::types::checker::func_args_scan`.
     pub func_args_functions: HashSet<String>,
+    /// Statically-decided access violations lowered to runtime `Error` throws,
+    /// keyed by the source span of the offending call/assignment.
+    pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
 }
 
 /// Runs type checking using the host platform (auto-detected from the build environment).
@@ -87,5 +128,38 @@ mod tests {
         let mac = check_with_target(&program, Target::new(Platform::MacOS, Arch::AArch64))
             .expect("mac type check failed");
         assert_eq!(mac.required_libraries, vec!["elephc_crypto"]);
+    }
+
+    /// Verifies enum class metadata preserves flattened trait relation data for runtime reflection.
+    #[test]
+    fn test_enum_class_info_preserves_trait_metadata() {
+        let program = parse_program(
+            r#"<?php
+trait EnumMetaTrait {
+    public function original() {}
+}
+enum EnumMetaTarget {
+    use EnumMetaTrait {
+        original as aliasOriginal;
+    }
+    case Ready;
+}
+"#,
+        );
+
+        let result = check(&program).expect("type check failed");
+        let enum_class = result
+            .classes
+            .get("EnumMetaTarget")
+            .expect("missing enum class metadata");
+
+        assert_eq!(enum_class.used_traits, vec!["EnumMetaTrait"]);
+        assert_eq!(
+            enum_class.trait_aliases,
+            vec![(
+                "aliasOriginal".to_string(),
+                "EnumMetaTrait::original".to_string()
+            )]
+        );
     }
 }

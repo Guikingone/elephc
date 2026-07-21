@@ -341,6 +341,20 @@ impl HoistCtx<'_> {
     fn hoist_expr(&mut self, expr: Expr) -> Result<Expr, CompileError> {
         let span = expr.span;
         let kind = match expr.kind {
+            // Main-side dynamic call/class-name forms: hoist include-bearing children.
+            ExprKind::NullsafeDynamicMethodCall { object, method, args } => {
+                ExprKind::NullsafeDynamicMethodCall {
+                    object: Box::new(self.hoist_expr(*object)?),
+                    method: Box::new(self.hoist_expr(*method)?),
+                    args: args
+                        .into_iter()
+                        .map(|arg| self.hoist_expr(arg))
+                        .collect::<Result<Vec<_>, _>>()?,
+                }
+            }
+            ExprKind::ObjectClassName { object } => ExprKind::ObjectClassName {
+                object: Box::new(self.hoist_expr(*object)?),
+            },
             ExprKind::IncludeValue {
                 path,
                 once,

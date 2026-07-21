@@ -1,8 +1,8 @@
 ---
 title: "disk_total_space()"
-description: "Lowers `disk_total_space(path)` through the shared disk-space runtime helper."
+description: "Returns the total size of a filesystem or disk partition."
 sidebar:
-  order: 90
+  order: 111
 ---
 
 ## disk_total_space()
@@ -11,12 +11,17 @@ sidebar:
 function disk_total_space(string $directory): float
 ```
 
-Lowers `disk_total_space(path)` through the shared disk-space runtime helper.
+Returns the total size of a filesystem or disk partition.
 
 **Parameters**:
 - `$directory` (`string`)
 
 **Returns**: `float`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/disk_total_space.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/disk_total_space.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

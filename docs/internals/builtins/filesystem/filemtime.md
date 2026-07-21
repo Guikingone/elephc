@@ -2,15 +2,15 @@
 title: "filemtime() — internals"
 description: "Compiler internals for filemtime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 96
+  order: 117
 ---
 
 ## `filemtime()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4789](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4789) (`lower_filemtime`)
+- **Signature**: [`src/builtins/io/filemtime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/filemtime.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5428](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5428) (`lower_filemtime`)
 - **Function symbol**: `lower_filemtime()`
 
 
@@ -37,7 +37,11 @@ function filemtime(string $filename): int
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/filemtime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/filemtime.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `filemtime()`](../../../php/builtins/filesystem/filemtime.md)
-

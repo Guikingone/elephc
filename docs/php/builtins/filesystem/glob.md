@@ -1,23 +1,27 @@
 ---
 title: "glob()"
-description: "Lowers `glob(pattern)` through the target-aware runtime glob expansion helper."
+description: "Finds pathnames matching a pattern."
 sidebar:
-  order: 104
+  order: 125
 ---
 
 ## glob()
 
 ```php
-function glob(string $pattern, int $flags): array
+function glob(string $pattern): array
 ```
 
-Lowers `glob(pattern)` through the target-aware runtime glob expansion helper.
+Finds pathnames matching a pattern.
 
 **Parameters**:
 - `$pattern` (`string`)
-- `$flags` (`int`)
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/glob.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/glob.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

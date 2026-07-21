@@ -2,15 +2,15 @@
 title: "ctype_alnum() — internals"
 description: "Compiler internals for ctype_alnum(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 412
+  order: 429
 ---
 
 ## `ctype_alnum()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/ctype.rs`:30](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/ctype.rs#L30) (`lower_ctype_alnum`)
+- **Signature**: [`src/builtins/string/ctype_alnum.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ctype_alnum.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/ctype.rs`:30](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/ctype.rs#L30) (`lower_ctype_alnum`)
 - **Function symbol**: `lower_ctype_alnum()`
 
 
@@ -32,7 +32,11 @@ function ctype_alnum(string $text): bool
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/ctype_alnum.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/ctype_alnum.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `ctype_alnum()`](../../../php/builtins/type/ctype_alnum.md)
-

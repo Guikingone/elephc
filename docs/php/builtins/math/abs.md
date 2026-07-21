@@ -1,8 +1,8 @@
 ---
 title: "abs()"
-description: "Lowers `abs()` for concrete integer-like and floating operands."
+description: "Absolute value."
 sidebar:
-  order: 218
+  order: 252
 ---
 
 ## abs()
@@ -11,12 +11,17 @@ sidebar:
 function abs(int $num): mixed
 ```
 
-Lowers `abs()` for concrete integer-like and floating operands.
+Absolute value.
 
 **Parameters**:
 - `$num` (`int`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/abs.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/abs.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

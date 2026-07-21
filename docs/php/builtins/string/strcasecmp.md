@@ -1,8 +1,8 @@
 ---
 title: "strcasecmp()"
-description: "strcasecmp() — string builtin supported by Elephc."
+description: "Binary safe case-insensitive string comparison. Returns negative, zero, or positive."
 sidebar:
-  order: 384
+  order: 408
 ---
 
 ## strcasecmp()
@@ -11,13 +11,18 @@ sidebar:
 function strcasecmp(string $string1, string $string2): int
 ```
 
-`strcasecmp()` is a string builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Binary safe case-insensitive string comparison. Returns negative, zero, or positive.
 
 **Parameters**:
 - `$string1` (`string`)
 - `$string2` (`string`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/strcasecmp.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strcasecmp.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
@@ -26,4 +31,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `strcasecmp` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/strcasecmp.md).
 

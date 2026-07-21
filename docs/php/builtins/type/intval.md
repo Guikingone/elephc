@@ -1,23 +1,27 @@
 ---
 title: "intval()"
-description: "Lowers `intval()` for concrete scalar operands."
+description: "Returns the integer value of a variable."
 sidebar:
-  order: 417
+  order: 437
 ---
 
 ## intval()
 
 ```php
-function intval(mixed $value, int $base): int
+function intval(mixed $value): int
 ```
 
-Lowers `intval()` for concrete scalar operands.
+Returns the integer value of a variable.
 
 **Parameters**:
 - `$value` (`mixed`)
-- `$base` (`int`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/intval.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/intval.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

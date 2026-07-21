@@ -2,15 +2,15 @@
 title: "feof() — internals"
 description: "Compiler internals for feof(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 139
+  order: 160
 ---
 
 ## `feof()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2900](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2900) (`lower_feof`)
+- **Signature**: [`src/builtins/io/feof.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/feof.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3117](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3117) (`lower_feof`)
 - **Function symbol**: `lower_feof()`
 
 
@@ -34,7 +34,11 @@ function feof(resource $stream): bool
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/feof.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/feof.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `feof()`](../../../php/builtins/io/feof.md)
-

@@ -1,8 +1,8 @@
 ---
 title: "stream_get_filters()"
-description: "Lowers `stream_get_filters()` to the static built-in filter list."
+description: "Retrieves list of registered filters."
 sidebar:
-  order: 185
+  order: 219
 ---
 
 ## stream_get_filters()
@@ -11,11 +11,16 @@ sidebar:
 function stream_get_filters(): array
 ```
 
-Lowers `stream_get_filters()` to the static built-in filter list.
+Retrieves list of registered filters.
 
 **Parameters**: none.
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/stream_get_filters.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/stream_get_filters.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

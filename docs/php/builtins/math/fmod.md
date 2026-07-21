@@ -1,8 +1,8 @@
 ---
 title: "fmod()"
-description: "Lowers `fmod()` for concrete integer-like and floating operands."
+description: "Returns the floating point remainder of the division of the arguments."
 sidebar:
-  order: 231
+  order: 265
 ---
 
 ## fmod()
@@ -11,13 +11,18 @@ sidebar:
 function fmod(float $num1, float $num2): float
 ```
 
-Lowers `fmod()` for concrete integer-like and floating operands.
+Returns the floating point remainder of the division of the arguments.
 
 **Parameters**:
 - `$num1` (`float`)
 - `$num2` (`float`)
 
 **Returns**: `float`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/fmod.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/fmod.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

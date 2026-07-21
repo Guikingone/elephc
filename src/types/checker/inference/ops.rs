@@ -63,8 +63,14 @@ impl Checker {
                     Ok(PhpType::Mixed)
                 } else if lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
-                } else {
+                } else if let Some(literal_ty) =
+                    checked_literal_int_arithmetic_type(op, left, right)
+                {
+                    Ok(literal_ty)
+                } else if int_arithmetic_identity_is_always_int(op, left, right) {
                     Ok(PhpType::Int)
+                } else {
+                    Ok(PhpType::Mixed)
                 }
             }
             BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
@@ -79,10 +85,18 @@ impl Checker {
                 // Division always returns float (PHP compat: 10/3 → 3.333...)
                 if *op == BinOp::Div || lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
-                } else if matches!(op, BinOp::Sub | BinOp::Mul)
-                    && (uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt))
-                {
-                    Ok(PhpType::Mixed)
+                } else if matches!(op, BinOp::Sub | BinOp::Mul) {
+                    if uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt) {
+                        Ok(PhpType::Mixed)
+                    } else if let Some(literal_ty) =
+                        checked_literal_int_arithmetic_type(op, left, right)
+                    {
+                        Ok(literal_ty)
+                    } else if int_arithmetic_identity_is_always_int(op, left, right) {
+                        Ok(PhpType::Int)
+                    } else {
+                        Ok(PhpType::Mixed)
+                    }
                 } else {
                     Ok(PhpType::Int)
                 }
@@ -98,14 +112,14 @@ impl Checker {
                 Ok(PhpType::Bool)
             }
             BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
-                let ordered_ok = is_ordered_comparable_operand_type(self, &lt)
-                    && is_ordered_comparable_operand_type(self, &rt);
+                let numeric_ok =
+                    is_numeric_operand_type(self, &lt) && is_numeric_operand_type(self, &rt);
                 let datetime_ok =
                     is_datetime_family_object(&lt) && is_datetime_family_object(&rt);
-                if !ordered_ok && !datetime_ok {
+                if !numeric_ok && !datetime_ok {
                     return Err(CompileError::new(
                         expr.span,
-                        "Comparison operators require numeric or string operands",
+                        "Comparison operators require numeric operands",
                     ));
                 }
                 Ok(PhpType::Bool)
@@ -117,15 +131,6 @@ impl Checker {
             BinOp::Concat => Ok(PhpType::Str),
             BinOp::And | BinOp::Or | BinOp::Xor => Ok(PhpType::Bool),
             BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight => {
-                // PHP string bitwise: when BOTH operands are strings, `&`/`|`/`^` operate
-                // bytewise and produce a string (`<<`/`>>` are never string operators, and a
-                // string opposite an int is integer bitwise with string→int coercion).
-                if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor)
-                    && lt == PhpType::Str
-                    && rt == PhpType::Str
-                {
-                    return Ok(PhpType::Str);
-                }
                 let lt_ok = is_integer_operand_type(self, &lt);
                 let rt_ok = is_integer_operand_type(self, &rt);
                 if !lt_ok || !rt_ok {
@@ -137,14 +142,14 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             BinOp::Spaceship => {
-                let ordered_ok = is_ordered_comparable_operand_type(self, &lt)
-                    && is_ordered_comparable_operand_type(self, &rt);
+                let numeric_ok =
+                    is_numeric_operand_type(self, &lt) && is_numeric_operand_type(self, &rt);
                 let datetime_ok =
                     is_datetime_family_object(&lt) && is_datetime_family_object(&rt);
-                if !ordered_ok && !datetime_ok {
+                if !numeric_ok && !datetime_ok {
                     return Err(CompileError::new(
                         expr.span,
-                        "Spaceship operator requires numeric or string operands",
+                        "Spaceship operator requires numeric operands",
                     ));
                 }
                 Ok(PhpType::Int)
@@ -230,23 +235,6 @@ impl Checker {
                     value: Box::new(value),
                 })
             }
-            // Gradual typing: one operand is a concrete array and the other is a
-            // `Mixed` / union-containing-array value. PHP's `+` requires both sides
-            // to be arrays at runtime (an array `+` non-array is a fatal), so a `+`
-            // with a concrete-array operand is unambiguously an array union. The
-            // boxed operand is unboxed and asserted to be an array at the EIR
-            // boundary, then unioned; the result element/key shape is unknown, so it
-            // widens to `array<mixed, mixed>`. A concretely non-array opposite a
-            // concrete array still falls through to the error below.
-            (lt, rt)
-                if (is_array_like_type(lt) && type_may_be_array(rt))
-                    || (type_may_be_array(lt) && is_array_like_type(rt)) =>
-            {
-                Ok(PhpType::AssocArray {
-                    key: Box::new(PhpType::Mixed),
-                    value: Box::new(PhpType::Mixed),
-                })
-            }
             _ => Err(CompileError::new(
                 expr.span,
                 "Array union requires both operands to be arrays",
@@ -322,6 +310,7 @@ impl Checker {
         &mut self,
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         variadic: &Option<String>,
+        variadic_by_ref: bool,
         return_type: &Option<TypeExpr>,
         body: &[Stmt],
         captures: &[String],
@@ -332,6 +321,7 @@ impl Checker {
         self.infer_closure_type_with_param_hints(
             params,
             variadic,
+            variadic_by_ref,
             return_type,
             body,
             captures,
@@ -354,6 +344,7 @@ impl Checker {
         &mut self,
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         variadic: &Option<String>,
+        variadic_by_ref: bool,
         return_type: &Option<TypeExpr>,
         body: &[Stmt],
         captures: &[String],
@@ -365,6 +356,7 @@ impl Checker {
         let mut closure_sig = self.prepare_closure_signature_context_with_param_hints(
             params,
             variadic,
+            variadic_by_ref,
             captures,
             expr.span,
             env,
@@ -375,6 +367,11 @@ impl Checker {
             .filter(|(_, _, _, is_ref)| *is_ref)
             .map(|(name, _, _, _)| name.clone())
             .collect();
+        if variadic_by_ref {
+            if let Some(name) = variadic {
+                closure_ref_params.push(name.clone());
+            }
+        }
         closure_ref_params.extend(capture_refs.iter().cloned());
         // Inside a closure body, `$this` is permitted even with no enclosing
         // class method: the closure may be bound to an object later. Track the
@@ -440,18 +437,6 @@ impl Checker {
                         env,
                     );
                 }
-            }
-            if self.type_is_callably_acceptable(&var_ty) {
-                // The receiver could be callable at runtime (Mixed, a union
-                // containing Callable, a Closure, an invokable object, ...).
-                // With no statically-known signature, the call returns Mixed.
-                // (If a known callable signature was registered for `var`, the
-                // earlier `callable_sigs.get(var)` path below already handled
-                // it; this residual path only catches acceptable-but-unknown.)
-                for arg in args {
-                    self.infer_type(arg, env)?;
-                }
-                return Ok(PhpType::Mixed);
             }
             return Err(CompileError::new(
                 expr.span,
@@ -576,7 +561,7 @@ impl Checker {
         }
         let nullable_callable =
             Self::is_nullable_callable_from_nullsafe_chain(callee, &callee_ty);
-        if !self.type_is_callably_acceptable(&callee_ty) && !nullable_callable {
+        if callee_ty != PhpType::Callable && !nullable_callable {
             return Err(CompileError::new(
                 expr.span,
                 &format!(
@@ -911,37 +896,6 @@ impl Checker {
         }
     }
 
-    /// Returns true if `ty` could be a callable value under PHP's gradual
-    /// calling rules: a `Closure`, an object with `__invoke`, a function-name
-    /// `string`, `Callable` itself, `Mixed`, or a union containing any of
-    /// those. Used to accept call sites whose receiver is not exactly
-    /// `Callable` but could be callable at runtime, mirroring the gradual
-    /// acceptance of `Mixed`/union for indexing and arithmetic. Returns false
-    /// for concretely non-callable types (Int, Bool, plain object without
-    /// `__invoke`, non-callable array shapes, Void, Null, Resource).
-    pub(crate) fn type_is_callably_acceptable(&self, ty: &PhpType) -> bool {
-        match ty {
-            PhpType::Callable | PhpType::Mixed | PhpType::Str => true,
-            PhpType::Object(class_name) => {
-                // Closure is always invokable in PHP, even though it has no
-                // user-class entry in `self.classes` with an `__invoke` method.
-                if php_symbol_key(class_name.trim_start_matches('\\')) == "closure" {
-                    return true;
-                }
-                self.classes
-                    .get(class_name)
-                    .is_some_and(|ci| ci.methods.contains_key("__invoke"))
-            }
-            PhpType::Union(members) => {
-                members.iter().any(|m| self.type_is_callably_acceptable(m))
-            }
-            // Int, Bool, Float, Array, AssocArray, Void, Null, Resource, etc.
-            // are not callable. (PHP's callable-array [object, method] form is
-            // not represented by a plain Array type here and is out of scope.)
-            _ => false,
-        }
-    }
-
     /// Wraps `ret_ty` in a nullable union if the callable result is nullable
     /// (e.g., from a nullsafe chain). Otherwise returns `ret_ty` unchanged.
     fn nullable_callable_result(&self, ret_ty: PhpType, nullable_callable: bool) -> PhpType {
@@ -1236,7 +1190,8 @@ fn expr_contains_nullsafe_member(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::NullsafePropertyAccess { .. }
         | ExprKind::NullsafeDynamicPropertyAccess { .. }
-        | ExprKind::NullsafeMethodCall { .. } => true,
+        | ExprKind::NullsafeMethodCall { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. } => true,
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::DynamicPropertyAccess { object, .. }
         | ExprKind::MethodCall { object, .. } => expr_contains_nullsafe_member(object),
@@ -1251,46 +1206,20 @@ fn is_array_like_type(ty: &PhpType) -> bool {
     matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
 }
 
-/// Returns `true` if a value of `ty` may hold an array at runtime under the gradual-typing
-/// boundary: a concrete array, the `Mixed` top type, or a union with at least one array
-/// member. Used by `+` (array union) to accept a boxed operand opposite a concrete array.
-fn type_may_be_array(ty: &PhpType) -> bool {
-    match ty {
-        PhpType::Mixed => true,
-        PhpType::Array(_) | PhpType::AssocArray { .. } => true,
-        PhpType::Union(members) => members.iter().any(is_array_like_type),
-        _ => false,
-    }
-}
-
 /// Returns `true` if `ty` is a valid operand type for numeric binary operators
 /// (addition, subtraction, multiplication, division, modulo, comparison, spaceship).
-///
-/// Numeric operands include `Int`, `Float`, `Bool`, `Void` (null coerces to `0`), and the
-/// gradual `Mixed` top type. A `Union` is accepted when *every* member is itself a numeric
-/// operand or a `Str` (PHP coerces numeric strings, and the runtime dispatches boxed
-/// operands through `__rt_php_*`), so gradual unions such as `int|float`, `?float`
-/// (`float|null`), and `int|string` are all accepted. A union carrying a proven
-/// non-numeric member (array, object, callable) stays rejected, matching PHP's fatal on
-/// array/object arithmetic.
+/// Numeric operands include `Int`, `Float`, `Bool`, `Void`, `Mixed`, or a union
+/// with mixed integer dispatch behavior.
 fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
-    match ty {
-        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::Mixed => true,
-        PhpType::Union(members) => members
-            .iter()
-            .all(|member| is_numeric_operand_type(checker, member) || *member == PhpType::Str),
-        _ => false,
-    }
-}
-
-/// Returns `true` if `ty` is a valid operand type for the relational/spaceship operators
-/// (`<`, `<=`, `>`, `>=`, `<=>`). This accepts every numeric operand type plus `Str`: PHP
-/// orders strings (numeric strings numerically, otherwise lexicographically), and the EIR
-/// backend lowers string/`Mixed` ordered comparisons through `__rt_php_compare`. Array,
-/// associative-array, and object operands remain rejected here (PHP's array/object ordering
-/// is intentionally unsupported); concrete `DateTime` family ordering is handled separately.
-fn is_ordered_comparable_operand_type(checker: &Checker, ty: &PhpType) -> bool {
-    is_numeric_operand_type(checker, ty) || *ty == PhpType::Str
+    matches!(
+        ty,
+        PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Void
+            | PhpType::Mixed
+    ) || checker.is_union_with_mixed_int_dispatch(ty)
 }
 
 /// Returns `true` if `ty` is a concrete `DateTime`/`DateTimeImmutable` object, the family PHP orders
@@ -1309,7 +1238,7 @@ fn is_datetime_family_object(ty: &PhpType) -> bool {
 fn is_integer_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     matches!(
         ty,
-        PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Mixed
+        PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void | PhpType::Mixed
     ) || checker.is_union_with_mixed_int_dispatch(ty)
 }
 
@@ -1317,6 +1246,52 @@ fn is_integer_operand_type(checker: &Checker, ty: &PhpType) -> bool {
 /// cannot be narrowed to a single concrete numeric type at compile time.
 fn uses_mixed_numeric_dispatch(ty: &PhpType) -> bool {
     matches!(ty, PhpType::Mixed | PhpType::Union(_))
+}
+
+/// Returns the exact result type for literal-only checked integer arithmetic.
+fn checked_literal_int_arithmetic_type(op: &BinOp, left: &Expr, right: &Expr) -> Option<PhpType> {
+    let lhs = int_literal_value(left)?;
+    let rhs = int_literal_value(right)?;
+    let fits = match op {
+        BinOp::Add => lhs.checked_add(rhs).is_some(),
+        BinOp::Sub => lhs.checked_sub(rhs).is_some(),
+        BinOp::Mul => lhs.checked_mul(rhs).is_some(),
+        _ => return None,
+    };
+    Some(if fits { PhpType::Int } else { PhpType::Float })
+}
+
+/// Returns `true` when an integer arithmetic expression cannot overflow.
+fn int_arithmetic_identity_is_always_int(op: &BinOp, left: &Expr, right: &Expr) -> bool {
+    match op {
+        BinOp::Add => is_zero_int_literal(left) || is_zero_int_literal(right),
+        BinOp::Sub => is_zero_int_literal(right),
+        BinOp::Mul => {
+            is_zero_int_literal(left)
+                || is_zero_int_literal(right)
+                || is_one_int_literal(left)
+                || is_one_int_literal(right)
+        }
+        _ => false,
+    }
+}
+
+/// Extracts an integer literal value from a literal expression.
+fn int_literal_value(expr: &Expr) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        _ => None,
+    }
+}
+
+/// Returns `true` for the literal integer zero.
+fn is_zero_int_literal(expr: &Expr) -> bool {
+    matches!(&expr.kind, ExprKind::IntLiteral(0))
+}
+
+/// Returns `true` for the literal integer one.
+fn is_one_int_literal(expr: &Expr) -> bool {
+    matches!(&expr.kind, ExprKind::IntLiteral(1))
 }
 
 /// Returns `true` if `expr` is an empty array literal (`[]`).

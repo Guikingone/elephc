@@ -2,15 +2,15 @@
 title: "natcasesort() — internals"
 description: "Compiler internals for natcasesort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 38
+  order: 55
 ---
 
 ## `natcasesort()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1111](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1111) (`lower_natcasesort`)
+- **Signature**: [`src/builtins/array/natcasesort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/natcasesort.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1114](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1114) (`lower_natcasesort`)
 - **Function symbol**: `lower_natcasesort()`
 
 
@@ -34,7 +34,12 @@ function natcasesort(array $array): bool
 - **Arity**: takes exactly 1 argument.
 - **By-reference parameters**: `$array`.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/natcasesort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/natcasesort.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
+- **By-reference parameters**: `$array`.
+
 ## Cross-references
 
 - [User reference for `natcasesort()`](../../../php/builtins/array/natcasesort.md)
-

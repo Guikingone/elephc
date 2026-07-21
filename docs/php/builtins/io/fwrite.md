@@ -1,24 +1,28 @@
 ---
 title: "fwrite()"
-description: "Lowers `fwrite(stream, data)` and returns the number of bytes written."
+description: "Binary-safe file write."
 sidebar:
-  order: 159
+  order: 180
 ---
 
 ## fwrite()
 
 ```php
-function fwrite(resource $stream, string $data, int $length): int
+function fwrite(resource $stream, string $data): int
 ```
 
-Lowers `fwrite(stream, data)` and returns the number of bytes written.
+Binary-safe file write.
 
 **Parameters**:
 - `$stream` (`resource`)
 - `$data` (`string`)
-- `$length` (`int`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fwrite.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fwrite.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

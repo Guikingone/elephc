@@ -1,8 +1,8 @@
 ---
 title: "exp()"
-description: "exp() — math builtin supported by Elephc."
+description: "Returns e raised to the power of a number."
 sidebar:
-  order: 228
+  order: 262
 ---
 
 ## exp()
@@ -11,12 +11,17 @@ sidebar:
 function exp(float $num): float
 ```
 
-`exp()` is a math builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Returns e raised to the power of a number.
 
 **Parameters**:
 - `$num` (`float`)
 
 **Returns**: `float`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/exp.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/exp.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
@@ -25,4 +30,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `exp` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/exp.md).
 

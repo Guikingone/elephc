@@ -32,11 +32,6 @@ const SPL_EXCEPTION_HIERARCHY: &[(&str, &str)] = &[
     ("RangeException", "RuntimeException"),
     ("UnderflowException", "RuntimeException"),
     ("UnexpectedValueException", "RuntimeException"),
-    // Not an SPL exception (it lives in ext/reflection), but it is a real-PHP
-    // marker subclass of `Exception` with no extra members (php -n verified:
-    // `class ReflectionException extends Exception {}`), so it fits the same
-    // minimal injection mechanism used here instead of a dedicated pass.
-    ("ReflectionException", "Exception"),
 ];
 
 /// Injects SPL exception class declarations into the checker metadata.
@@ -80,6 +75,7 @@ pub(crate) fn inject_builtin_spl_exceptions(
             (*name).to_string(),
             FlattenedClass {
                 name: (*name).to_string(),
+                span: crate::span::Span::dummy(),
                 extends: Some((*parent).to_string()),
                 implements: Vec::new(),
                 is_abstract: false,
@@ -90,6 +86,7 @@ pub(crate) fn inject_builtin_spl_exceptions(
                 attributes: Vec::new(),
                 constants: Vec::new(),
                 used_traits: Vec::new(),
+                trait_aliases: Vec::new(),
             },
         );
     }

@@ -18,21 +18,17 @@ fn test_error_file_get_contents_wrong_args() {
     );
 }
 
-/// Verifies the gradual-typing boundary model accepts returning `file_get_contents()` (typed
-/// `Str|Bool`) from a `: string` function: `Bool` is PHP-coercible to `string` (weak mode coerces
-/// `false` to `""`), so the union flows into the scalar return with a runtime boundary guard.
+/// Verifies returning `file_get_contents()` (typed `Str|False`) from a `: string` function is
+/// rejected: the `false` failure marker must be handled before the scalar return boundary.
 #[test]
-fn test_file_get_contents_false_return_into_string_return_type_accepted() {
-    assert!(
-        check_source(
-            r#"<?php
+fn test_error_file_get_contents_false_return_into_string_return_type() {
+    expect_error(
+        r#"<?php
 function read_file(): string {
     return file_get_contents("missing.txt");
 }
-"#
-        )
-        .is_ok(),
-        "Str|Bool should flow into a string return under gradual typing (bool coerces to string)",
+"#,
+        "Function 'read_file' return type expects Str, got Union([Str, False])",
     );
 }
 
@@ -55,17 +51,14 @@ fn test_error_readfile_wrong_args() {
 /// from an `: int` function: `Bool` is PHP-coercible to `int` (weak mode coerces `false` to `0`),
 /// so the union flows into the scalar return with a runtime boundary guard instead of erroring.
 #[test]
-fn test_readfile_false_return_into_int_return_type_accepted() {
-    assert!(
-        check_source(
-            r#"<?php
+fn test_error_readfile_false_return_into_int_return_type() {
+    expect_error(
+        r#"<?php
 function dump_file(): int {
     return readfile("missing.txt");
 }
-"#
-        )
-        .is_ok(),
-        "Int|Bool should flow into an int return under gradual typing (bool coerces to int)",
+"#,
+        "Function 'dump_file' return type expects Int, got Union([Int, False])",
     );
 }
 

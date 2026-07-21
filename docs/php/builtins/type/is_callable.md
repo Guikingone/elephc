@@ -1,24 +1,27 @@
 ---
 title: "is_callable()"
-description: "Lowers `is_callable(value)` through static lookup or runtime callable-shape helpers."
+description: "Checks whether a variable can be called as a function."
 sidebar:
-  order: 420
+  order: 440
 ---
 
 ## is_callable()
 
 ```php
-function is_callable(mixed $value, bool $syntax_only = false, string $callable_name = null): bool
+function is_callable(mixed $value): bool
 ```
 
-Lowers `is_callable(value)` through static lookup or runtime callable-shape helpers.
+Checks whether a variable can be called as a function.
 
 **Parameters**:
 - `$value` (`mixed`)
-- `$syntax_only` (`bool`), default `false`, optional
-- `$callable_name` (`string`), passed by reference, default `null`, optional
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/is_callable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/is_callable.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

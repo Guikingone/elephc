@@ -17,7 +17,8 @@ use crate::types::PhpType;
 use super::super::super::{infer_expr_type_syntactic, Checker};
 use super::super::validation::visibility_rank;
 use super::super::interfaces::{build_property_contract, merge_property_contract};
-use super::state::{collect_attribute_args, collect_attribute_names, ClassBuildState};
+use super::state::ClassBuildState;
+use super::{collect_attribute_args, collect_attribute_names};
 
 /// Applies property schema validation and metadata for all static and instance
 /// properties declared in `class`. Static properties are validated for PHP
@@ -43,7 +44,8 @@ pub(super) fn apply_properties(
 /// Validates a static property declaration against PHP inheritance rules and
 /// records it in `state`. Rejects by-reference static properties, final private
 /// combinations, and property type/redeclare conflicts. Computes the property
-/// type from the declared hint, the default value, or defaults to `PhpType::Int`.
+/// type from the declared hint, the default value, or defaults to `PhpType::Void`
+/// (an untyped property with no default implicitly holds null).
 /// Updates `state.static_prop_types`, `state.static_property_declaring_classes`,
 /// `state.final_static_properties`, and attribute maps.
 fn apply_static_property(
@@ -94,7 +96,7 @@ fn apply_static_property(
     }
 
     let ty = if let Some(declared_ty) = declared_ty {
-        checker.validate_declared_default_type(
+        checker.validate_schema_declared_default_type(
             &declared_ty,
             prop.default.as_ref(),
             prop.span,
@@ -104,10 +106,10 @@ fn apply_static_property(
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
         state.declared_static_properties.remove(&prop.name);
-        infer_expr_type_syntactic(default)
+        infer_untyped_property_default_type(default)
     } else {
         state.declared_static_properties.remove(&prop.name);
-        PhpType::Int
+        PhpType::Void
     };
 
     if let Some(slot) = state
@@ -116,10 +118,10 @@ fn apply_static_property(
         .position(|(name, _)| name == &prop.name)
     {
         state.static_prop_types[slot] = (prop.name.clone(), ty);
-        state.static_defaults[slot] = prop.default.clone();
+        state.static_defaults[slot] = untyped_property_schema_default(prop);
     } else {
         state.static_prop_types.push((prop.name.clone(), ty));
-        state.static_defaults.push(prop.default.clone());
+        state.static_defaults.push(untyped_property_schema_default(prop));
     }
     state
         .static_property_declaring_classes
@@ -247,19 +249,21 @@ fn apply_instance_property(
         );
     }
 
+    let mut is_declared_slot = false;
     let ty = if let Some(declared_ty) = resolve_property_declared_type(checker, &class.name, prop)? {
-        checker.validate_declared_default_type(
+        checker.validate_schema_declared_default_type(
             &declared_ty,
             prop.default.as_ref(),
             prop.span,
             &format!("Property {}::${} default", class.name, prop.name),
         )?;
         state.declared_properties.insert(prop.name.clone());
+        is_declared_slot = true;
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
-        infer_expr_type_syntactic(default)
+        infer_untyped_property_default_type(default)
     } else {
-        PhpType::Int
+        PhpType::Void
     };
 
     let slot_index = state.prop_types.len();
@@ -270,13 +274,15 @@ fn apply_instance_property(
     state
         .property_declaring_classes
         .insert(prop.name.clone(), class.name.clone());
+    state.property_declared_slots.push(is_declared_slot);
+    state.property_reference_slots.push(prop.by_ref);
     state
         .property_attribute_names
         .insert(prop.name.clone(), collect_attribute_names(&prop.attributes));
     state
         .property_attribute_args
         .insert(prop.name.clone(), collect_attribute_args(&prop.attributes));
-    state.defaults.push(prop.default.clone());
+    state.defaults.push(untyped_property_schema_default(prop));
     state
         .property_visibilities
         .insert(prop.name.clone(), prop.visibility.clone());
@@ -291,6 +297,11 @@ fn apply_instance_property(
     }
     if prop.by_ref {
         state.reference_properties.insert(prop.name.clone());
+    }
+    if prop.is_promoted {
+        state.promoted_properties.insert(prop.name.clone());
+    } else {
+        state.promoted_properties.remove(&prop.name);
     }
     // Fresh declarations only ever add to `abstract_properties`. Concrete
     // declarations of a brand-new property never appear there in the first
@@ -323,19 +334,13 @@ fn apply_instance_property_redeclaration(
     prop: &ClassProperty,
     parent_declaring_class: &str,
 ) -> Result<(), CompileError> {
-    // PHP does not inherit private properties: a child that reuses the name of a
-    // PRIVATE ancestor property is declaring a brand-new, independent property, not
-    // overriding one. Handle it as a fresh own declaration so the child may freely
-    // choose its own visibility, type, readonly/by-ref, and abstractness — none of the
-    // override constraints (final, visibility reduction, type invariance, readonly/ref
-    // toggling) apply to a property the child does not actually inherit.
     let inherited_visibility = state
         .property_visibilities
         .get(&prop.name)
         .cloned()
         .unwrap_or(Visibility::Public);
     if inherited_visibility == Visibility::Private {
-        return redeclare_private_shadow_as_own_property(state, class, checker, prop);
+        return apply_private_parent_property_shadowing(state, class, checker, prop);
     }
     if state.final_properties.contains(&prop.name) {
         return Err(CompileError::new(
@@ -347,17 +352,18 @@ fn apply_instance_property_redeclaration(
         ));
     }
     let declared_ty = resolve_property_declared_type(checker, &class.name, prop)?;
-        validate_instance_property_override(
-            state,
-            class,
-            checker,
-            prop,
-            declared_ty.as_ref(),
-            parent_declaring_class,
+    validate_instance_property_override(
+        state,
+        class,
+        checker,
+        prop,
+        declared_ty.as_ref(),
+        parent_declaring_class,
     )?;
 
+    let is_declared_slot = declared_ty.is_some();
     let ty = if let Some(declared_ty) = declared_ty {
-        checker.validate_declared_default_type(
+        checker.validate_schema_declared_default_type(
             &declared_ty,
             prop.default.as_ref(),
             prop.span,
@@ -366,14 +372,20 @@ fn apply_instance_property_redeclaration(
         state.declared_properties.insert(prop.name.clone());
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
-        infer_expr_type_syntactic(default)
+        infer_untyped_property_default_type(default)
     } else {
-        PhpType::Int
+        PhpType::Void
     };
 
     let slot = find_instance_property_slot(state, &prop.name);
     state.prop_types[slot] = (prop.name.clone(), ty);
-    state.defaults[slot] = prop.default.clone();
+    state.defaults[slot] = untyped_property_schema_default(prop);
+    if let Some(slot_declared) = state.property_declared_slots.get_mut(slot) {
+        *slot_declared = is_declared_slot;
+    }
+    if let Some(slot_reference) = state.property_reference_slots.get_mut(slot) {
+        *slot_reference = prop.by_ref;
+    }
     state
         .property_declaring_classes
         .insert(prop.name.clone(), class.name.clone());
@@ -411,34 +423,25 @@ fn apply_instance_property_redeclaration(
     if prop.by_ref {
         state.reference_properties.insert(prop.name.clone());
     }
+    if prop.is_promoted {
+        state.promoted_properties.insert(prop.name.clone());
+    } else {
+        state.promoted_properties.remove(&prop.name);
+    }
     Ok(())
 }
 
-/// Handles a child redeclaration of a property whose name collides only with a
-/// PRIVATE ancestor property. PHP does not inherit private properties, so the child's
-/// declaration is a fresh, independent property (its own type, visibility, default,
-/// readonly/by-ref, and abstractness) rather than an override. The child takes over the
-/// existing by-name slot and all inherited attribute sets are reset to reflect ownership
-/// by `class`, matching the fresh-declaration path in `apply_instance_property`.
-///
-/// NOTE: The class layout keys property storage strictly by name (see
-/// `state.property_offsets`/`ClassInfo::property_offsets`), with no declaring-class
-/// disambiguation. This handler therefore lets the shadowing child property own the
-/// single by-name slot, so it currently ALIASES the ancestor's private slot at runtime
-/// rather than getting separate storage. This is a type-check-only unblock; giving the
-/// ancestor-private and child-own properties distinct storage (disambiguated by declaring
-/// class, threaded through every property-access site in codegen) is a deferred codegen
-/// follow-up. A reachable class that reads its ancestor's private property through a
-/// parent method while the child writes its own same-named property could observe the
-/// alias. The Symfony classes that hit this (`SymfonyStyle`, `CompletionInput`) are
-/// runtime-dead for the current console probe, so type-check correctness is what matters.
-fn redeclare_private_shadow_as_own_property(
+/// Records a child property with the same name as a private parent property as a
+/// fresh physical slot, matching PHP's private-property shadowing semantics.
+fn apply_private_parent_property_shadowing(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
     checker: &Checker,
     prop: &ClassProperty,
 ) -> Result<(), CompileError> {
-    let ty = if let Some(declared_ty) = resolve_property_declared_type(checker, &class.name, prop)? {
+    let declared_ty = resolve_property_declared_type(checker, &class.name, prop)?;
+    let is_declared_slot = declared_ty.is_some();
+    let ty = if let Some(declared_ty) = declared_ty {
         checker.validate_declared_default_type(
             &declared_ty,
             prop.default.as_ref(),
@@ -448,18 +451,21 @@ fn redeclare_private_shadow_as_own_property(
         state.declared_properties.insert(prop.name.clone());
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
-        // Fresh untyped own property: the ancestor's private declared-type flag must not
-        // leak onto the child's slot, so clear any inherited entry.
         state.declared_properties.remove(&prop.name);
         infer_expr_type_syntactic(default)
     } else {
         state.declared_properties.remove(&prop.name);
-        PhpType::Int
+        PhpType::Void
     };
 
-    let slot = find_instance_property_slot(state, &prop.name);
-    state.prop_types[slot] = (prop.name.clone(), ty);
-    state.defaults[slot] = prop.default.clone();
+    let slot_index = state.prop_types.len();
+    state.prop_types.push((prop.name.clone(), ty));
+    state
+        .property_offsets
+        .insert(prop.name.clone(), 8 + slot_index * 16);
+    state.defaults.push(untyped_property_schema_default(prop));
+    state.property_declared_slots.push(is_declared_slot);
+    state.property_reference_slots.push(prop.by_ref);
     state
         .property_declaring_classes
         .insert(prop.name.clone(), class.name.clone());
@@ -473,8 +479,18 @@ fn redeclare_private_shadow_as_own_property(
         .property_visibilities
         .insert(prop.name.clone(), prop.visibility.clone());
     apply_set_visibility(state, prop);
-    // Reset every inherited attribute flag for this name so the child's fresh
-    // declaration fully governs the slot, exactly as a brand-new property would.
+    replace_active_property_flags(state, class, checker, prop)?;
+    Ok(())
+}
+
+/// Replaces the name-keyed flags for the property currently visible from this
+/// class after private-parent shadowing creates a fresh child slot.
+fn replace_active_property_flags(
+    state: &mut ClassBuildState,
+    class: &FlattenedClass,
+    checker: &Checker,
+    prop: &ClassProperty,
+) -> Result<(), CompileError> {
     if prop.is_final {
         state.final_properties.insert(prop.name.clone());
     } else {
@@ -490,6 +506,11 @@ fn redeclare_private_shadow_as_own_property(
     } else {
         state.reference_properties.remove(&prop.name);
     }
+    if prop.is_promoted {
+        state.promoted_properties.insert(prop.name.clone());
+    } else {
+        state.promoted_properties.remove(&prop.name);
+    }
     if prop.is_abstract {
         state.abstract_properties.insert(prop.name.clone());
         let contract = build_property_contract(checker, &class.name, prop)?;
@@ -502,6 +523,7 @@ fn redeclare_private_shadow_as_own_property(
     }
     Ok(())
 }
+
 
 /// Validates an instance property override against PHP inheritance rules:
 /// visibility reduction, final override attempts, readonly removal, by-reference
@@ -525,14 +547,6 @@ fn validate_instance_property_override(
         .get(&prop.name)
         .cloned()
         .unwrap_or(Visibility::Public);
-    if inherited_visibility == Visibility::Private {
-        // PHP does not inherit private properties, so a same-named child property is a
-        // brand-new, independent property rather than an override; it may freely choose
-        // its own visibility and type. The fresh-own reset happens in
-        // `redeclare_private_shadow_as_own_property`; return Ok here so the override
-        // visibility/type-invariance checks below never apply to a private parent.
-        return Ok(());
-    }
     if visibility_rank(&prop.visibility) < visibility_rank(&inherited_visibility) {
         return Err(CompileError::new(
             prop.span,
@@ -684,10 +698,10 @@ fn inherited_static_property_type(state: &ClassBuildState, property: &str) -> Ph
 /// parent's resolved types in `state.prop_types`. Returns `PhpType::Int`
 /// if the property is not found, matching the undeclared-property default.
 fn inherited_instance_property_type(state: &ClassBuildState, property: &str) -> PhpType {
+    let slot = find_instance_property_slot(state, property);
     state
         .prop_types
-        .iter()
-        .find(|(name, _)| name == property)
+        .get(slot)
         .map(|(_, ty)| ty.clone())
         .unwrap_or(PhpType::Int)
 }
@@ -696,10 +710,20 @@ fn inherited_instance_property_type(state: &ClassBuildState, property: &str) -> 
 /// Panics if the property is not found; the caller is responsible for ensuring
 /// the property exists via prior checks on `state.property_declaring_classes`.
 fn find_instance_property_slot(state: &ClassBuildState, name: &str) -> usize {
+    if let Some(index) = state
+        .property_offsets
+        .get(name)
+        .and_then(|offset| offset.checked_sub(8))
+        .filter(|payload_offset| payload_offset % 16 == 0)
+        .map(|payload_offset| payload_offset / 16)
+        .filter(|index| *index < state.prop_types.len())
+    {
+        return index;
+    }
     state
         .prop_types
         .iter()
-        .position(|(prop_name, _)| prop_name == name)
+        .rposition(|(prop_name, _)| prop_name == name)
         .expect("redeclaration path: property must exist in prop_types when declaring_classes has it")
 }
 
@@ -782,10 +806,57 @@ fn php_property_types_invariant(parent: &PhpType, child: &PhpType) -> bool {
 fn refine_declared_array_type_from_default(declared_ty: PhpType, default: Option<&Expr>) -> PhpType {
     if let (PhpType::Array(_), Some(default)) = (&declared_ty, default) {
         if matches!(default.kind, ExprKind::ArrayLiteralAssoc(_)) {
-            return infer_expr_type_syntactic(default);
+            return infer_untyped_property_default_type(default);
         }
     }
     declared_ty
+}
+
+/// Infers storage for an untyped property default while widening the literal `false` subtype.
+/// Mutable untyped properties initialized with `false` must continue accepting later boolean
+/// writes; explicit `false` property declarations retain their narrower contract.
+fn infer_untyped_property_default_type(default: &Expr) -> PhpType {
+    widen_false_literal_storage_type(infer_expr_type_syntactic(default))
+}
+
+/// PHP treats a plain untyped property with no explicit default as `= null`: the slot
+/// implicitly holds null until first written, and `ReflectionProperty` reports a null
+/// default. Synthesizes that implicit `= null` so propinit, inline construction, and
+/// reflection emit the same default an explicit `= null` would. Promoted, abstract,
+/// by-ref, and hooked properties keep their parsed (absent) default: their
+/// initialization flows through constructors or accessors instead of propinit.
+fn untyped_property_schema_default(prop: &ClassProperty) -> Option<Expr> {
+    if prop.type_expr.is_none()
+        && prop.default.is_none()
+        && !prop.is_promoted
+        && !prop.is_abstract
+        && !prop.by_ref
+        && !prop.hooks.get
+        && !prop.hooks.set
+    {
+        Some(Expr::new(ExprKind::Null, prop.span))
+    } else {
+        prop.default.clone()
+    }
+}
+
+/// Recursively widens literal `false` members to `bool` for mutable property storage shapes.
+fn widen_false_literal_storage_type(ty: PhpType) -> PhpType {
+    match ty {
+        PhpType::False => PhpType::Bool,
+        PhpType::Array(element) => PhpType::Array(Box::new(widen_false_literal_storage_type(*element))),
+        PhpType::AssocArray { key, value } => PhpType::AssocArray {
+            key: Box::new(widen_false_literal_storage_type(*key)),
+            value: Box::new(widen_false_literal_storage_type(*value)),
+        },
+        PhpType::Union(members) => PhpType::Union(
+            members
+                .into_iter()
+                .map(widen_false_literal_storage_type)
+                .collect(),
+        ),
+        other => other,
+    }
 }
 
 /// Resolves the declared type for a property from its `type_expr` using

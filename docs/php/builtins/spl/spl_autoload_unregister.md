@@ -1,8 +1,8 @@
 ---
 title: "spl_autoload_unregister()"
-description: "Lowers autoload registration stubs by preserving arg effects and returning true."
+description: "Unregister given function as __autoload() implementation."
 sidebar:
-  order: 315
+  order: 346
 ---
 
 ## spl_autoload_unregister()
@@ -11,12 +11,17 @@ sidebar:
 function spl_autoload_unregister(callable $callback): bool
 ```
 
-Lowers autoload registration stubs by preserving arg effects and returning true.
+Unregister given function as __autoload() implementation.
 
 **Parameters**:
 - `$callback` (`callable`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload_unregister.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload_unregister.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

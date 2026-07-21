@@ -8,12 +8,10 @@
 //! Key details:
 //! - Declaration metadata must align with name resolution, inheritance flattening, and runtime/codegen expectations.
 
-use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{Attribute, ClassMethod, Expr, ExprKind, StmtKind, Visibility};
-use crate::types::traits::FlattenedClass;
+use crate::parser::ast::{Attribute, ClassMethod, Expr, ExprKind, StmtKind, TypeExpr, Visibility};
 use crate::types::{FunctionSig, PhpType};
 
 use super::super::Checker;
@@ -28,11 +26,30 @@ use super::super::Checker;
 pub(crate) fn build_method_sig(
     checker: &Checker,
     method: &ClassMethod,
+    declaring_type: &str,
 ) -> Result<FunctionSig, CompileError> {
+    let method_key = php_symbol_key(&method.name);
     let params: Vec<(String, PhpType)> = method
         .params
         .iter()
-        .map(|(n, type_ann, _, _)| {
+        .enumerate()
+        .map(|(i, (n, type_ann, _, _))| {
+            // PHP's __unserialize($data) always receives the associative array
+            // produced by __serialize(). A bare `array` hint resolves to an indexed
+            // Array(Mixed) (rejecting $data['key']); type the first parameter as a
+            // string/int-keyed assoc array so both the ABI and the body agree.
+            // Scoped to user-defined methods (real span): synthetic SPL __unserialize
+            // bodies are written for an indexed `array` and are called directly with
+            // one (e.g. SplDoublyLinkedList), so they must keep Array(Mixed).
+            if method_key == "__unserialize" && i == 0 && method.span.line != 0 {
+                return Ok((
+                    n.clone(),
+                    PhpType::AssocArray {
+                        key: Box::new(PhpType::Mixed),
+                        value: Box::new(PhpType::Mixed),
+                    },
+                ));
+            }
             let ty = match type_ann {
                 Some(type_ann) => checker.resolve_declared_param_type_hint(
                     type_ann,
@@ -45,12 +62,12 @@ pub(crate) fn build_method_sig(
         })
         .collect::<Result<Vec<_>, CompileError>>()?;
     let defaults: Vec<Option<Expr>> = method.params.iter().map(|(_, _, d, _)| d.clone()).collect();
-    let ref_params: Vec<bool> = method.params.iter().map(|(_, _, _, r)| *r).collect();
+    let mut ref_params: Vec<bool> = method.params.iter().map(|(_, _, _, r)| *r).collect();
     for ((param_name, type_ann, default, _), (_, resolved_ty)) in
         method.params.iter().zip(params.iter())
     {
         if type_ann.is_some() {
-            checker.validate_declared_default_type(
+            checker.validate_schema_parameter_default_type(
                 resolved_ty,
                 default.as_ref(),
                 method.span,
@@ -58,26 +75,27 @@ pub(crate) fn build_method_sig(
             )?;
         }
     }
-    let return_type = if super::super::yield_validation::body_contains_yield(&method.body) {
-        // A generator method (body contains `yield`/`yield from`) returns a `Generator`
-        // object regardless of the declared `iterable`/`Generator`/`Traversable` hint.
-        // Seed `Generator` here so a RECURSIVE call to this method (resolved from this
-        // signature before the method pass runs) sees the correct type. The declared
-        // hint's Generator-acceptance is validated by the method pass
-        // (`update_method_return_type`); here we only seed the runtime shape.
-        PhpType::Object("Generator".to_string())
-    } else {
-        match method.return_type.as_ref() {
-            Some(type_ann) => checker.resolve_declared_return_type_hint(
-                type_ann,
-                method.span,
-                &format!("Method '{}'", method.name),
-            )?,
-            None => super::super::infer_return_type_syntactic(&method.body),
-        }
+    let return_type = match method.return_type.as_ref() {
+        Some(type_ann) => checker.resolve_method_return_type_hint(
+            type_ann,
+            declaring_type,
+            method.span,
+            &format!("Method '{}'", method.name),
+        )?,
+        None => super::super::infer_return_type_syntactic(&method.body),
     };
+    if method.variadic.is_some() {
+        ref_params.push(method.variadic_by_ref);
+    }
     let mut sig = Checker::callable_wrapper_sig(&FunctionSig {
         params,
+        param_type_exprs: method
+            .params
+            .iter()
+            .map(|(_, type_ann, _, _)| type_ann.clone())
+            .chain(method.variadic.iter().map(|_| method.variadic_type.clone()))
+            .collect(),
+        param_attributes: method.param_attributes.clone(),
         defaults,
         return_type,
         declared_return: method.return_type.is_some(),
@@ -87,7 +105,12 @@ pub(crate) fn build_method_sig(
             .params
             .iter()
             .map(|(_, type_ann, _, _)| type_ann.is_some())
-            .chain(method.variadic.iter().map(|_| method.variadic_type.is_some()))
+            .chain(
+                method
+                    .variadic
+                    .iter()
+                    .map(|_| method.variadic_type.is_some()),
+            )
             .collect(),
         variadic: method.variadic.clone(),
         deprecation: extract_deprecation(&method.attributes),
@@ -95,17 +118,19 @@ pub(crate) fn build_method_sig(
     // A declared element type on the variadic (`int ...$xs`) constrains every collected argument.
     // `callable_wrapper_sig` defaults the variadic container to `array<mixed>`; refine it to the
     // declared element type so call validation enforces it.
-    if let Some(variadic_type) = &method.variadic_type {
-        let elem_ty = checker.resolve_declared_param_type_hint(
-            variadic_type,
-            method.span,
-            &format!(
-                "Method variadic parameter ${}",
-                method.variadic.as_deref().unwrap_or_default()
-            ),
-        )?;
-        if let Some((_, ty)) = sig.params.last_mut() {
-            *ty = PhpType::Array(Box::new(elem_ty));
+    if !method.variadic_by_ref {
+        if let Some(variadic_type) = &method.variadic_type {
+            let elem_ty = checker.resolve_declared_param_type_hint(
+                variadic_type,
+                method.span,
+                &format!(
+                    "Method variadic parameter ${}",
+                    method.variadic.as_deref().unwrap_or_default()
+                ),
+            )?;
+            if let Some((_, ty)) = sig.params.last_mut() {
+                *ty = PhpType::Array(Box::new(elem_ty));
+            }
         }
     }
     Ok(sig)
@@ -115,9 +140,7 @@ pub(crate) fn build_method_sig(
 /// marker, with `reason` set to the attribute's first string argument (or an
 /// empty string if absent). Match is case-insensitive on the last segment of
 /// the attribute name.
-pub(crate) fn extract_deprecation(
-    groups: &[crate::parser::ast::AttributeGroup],
-) -> Option<String> {
+pub(crate) fn extract_deprecation(groups: &[crate::parser::ast::AttributeGroup]) -> Option<String> {
     for group in groups {
         for attr in &group.attributes {
             if !matches_global_builtin_attribute(attr, "Deprecated") {
@@ -353,105 +376,34 @@ pub(crate) fn declared_return_type_compatible(
     matches!(actual, PhpType::Never) || checker.type_accepts(expected, actual)
 }
 
-/// Returns `true` when `child` is the same type as `ancestor`, or a subtype of it —
-/// i.e. `child` transitively `extends`/`implements` `ancestor`.
+/// Checks a preserved late-static parent/interface return against a child declaration.
 ///
-/// The subtype relationship is resolved **order-independently** from the complete
-/// `class_map` (every class's `extends`/`implements` is known before any class body is
-/// built) together with the already-fully-built interface table on `checker` (all
-/// interfaces are built before any class). This matters because class-override
-/// validation runs mid-schema-build, when a return type's class may not yet be
-/// registered in `checker.classes`; walking only `checker.classes` (as `is_subclass_of`
-/// does) would falsely reject legal covariant returns. Interface-to-interface edges
-/// defer to `checker.interface_extends_interface`. A name absent from both `class_map`
-/// and the interface table (e.g. a builtin class not registered in `class_map`) falls
-/// back to the partially-built `checker` tables. Cycles are guarded with a visited set,
-/// and an unknown/unrelated `child` is treated conservatively (returns `false`).
-fn class_map_is_subtype(
-    child: &str,
-    ancestor: &str,
-    class_map: &HashMap<String, FlattenedClass>,
+/// A concrete class name cannot replace `static`: that would become unsound for further
+/// subclasses. `never` remains a valid covariant narrowing, while compound returns are
+/// compared after binding only their `static` members to the current receiver.
+pub(crate) fn late_static_return_compatible(
     checker: &Checker,
-) -> bool {
-    if child == ancestor {
-        return true;
+    expected: Option<&TypeExpr>,
+    actual: Option<&TypeExpr>,
+    actual_resolved: &PhpType,
+    receiver_type: &str,
+    span: crate::span::Span,
+) -> Result<Option<bool>, CompileError> {
+    let Some(expected) = expected else {
+        return Ok(None);
+    };
+    if matches!(actual_resolved, PhpType::Never) {
+        return Ok(Some(true));
     }
-    let mut visited: HashSet<String> = HashSet::new();
-    let mut queue: Vec<String> = vec![child.to_string()];
-    while let Some(current) = queue.pop() {
-        if current == ancestor {
-            return true;
-        }
-        if !visited.insert(current.clone()) {
-            continue;
-        }
-        // Interface chains are fully resolved before any class is built, so honor an
-        // interface-extends-interface edge (also true when `current` == `ancestor`).
-        if checker.interfaces.contains_key(&current)
-            && checker.interface_extends_interface(&current, ancestor)
-        {
-            return true;
-        }
-        if let Some(flat) = class_map.get(&current) {
-            if let Some(parent) = &flat.extends {
-                queue.push(parent.clone());
-            }
-            for interface_name in &flat.implements {
-                if interface_name == ancestor
-                    || checker.interface_extends_interface(interface_name, ancestor)
-                {
-                    return true;
-                }
-                queue.push(interface_name.clone());
-            }
-        } else if checker.is_subclass_of(&current, ancestor)
-            || checker.object_type_implements_interface(&current, ancestor)
-        {
-            // `current` is not a user-declared class in `class_map` (e.g. a builtin class
-            // or interface already registered): consult the built `checker` tables.
-            return true;
-        }
-    }
-    false
-}
-
-/// Returns `true` when a child override's declared return type `actual` is a legal
-/// **covariant** refinement of the parent's declared return type `expected` (PHP 7.4+).
-///
-/// Covariance means `actual` is the same as, or a subtype of, `expected`; a return type
-/// may be narrowed but never widened. This accepts everything
-/// `declared_return_type_compatible` already allows (exact match, `type_accepts`,
-/// `Never`) and additionally accepts an object/interface `actual` that is a subtype of
-/// `expected` per `class_map_is_subtype` (resolved order-independently so a not-yet-built
-/// return-type class is not falsely rejected), plus nullable/union returns where every
-/// `actual` member is covariant into some `expected` member. An `actual` that is a
-/// supertype of, or unrelated to, `expected` is NOT accepted, so genuine
-/// contravariant/incompatible returns keep erroring (return types are covariant, not
-/// contravariant).
-pub(crate) fn covariant_return_compatible(
-    checker: &Checker,
-    class_map: &HashMap<String, FlattenedClass>,
-    expected: &PhpType,
-    actual: &PhpType,
-) -> bool {
-    if declared_return_type_compatible(checker, expected, actual) {
-        return true;
-    }
-    match (expected, actual) {
-        (PhpType::Object(expected_name), PhpType::Object(actual_name)) => {
-            class_map_is_subtype(actual_name, expected_name, class_map, checker)
-        }
-        // Nullable/union return: every child member must be covariant into the parent
-        // union, which also enforces child nullability ⊆ parent nullability (a child
-        // `null` member with no matching parent member is rejected below).
-        (PhpType::Union(_), PhpType::Union(actual_members)) => actual_members
-            .iter()
-            .all(|member| covariant_return_compatible(checker, class_map, expected, member)),
-        (PhpType::Union(expected_members), _) => expected_members
-            .iter()
-            .any(|member| covariant_return_compatible(checker, class_map, member, actual)),
-        _ => false,
-    }
+    let Some(actual) = actual.filter(|return_type| return_type.contains_late_static()) else {
+        return Ok(Some(false));
+    };
+    let expected =
+        checker.resolve_late_static_return_type_hint(expected, receiver_type, span)?;
+    let actual = checker.resolve_late_static_return_type_hint(actual, receiver_type, span)?;
+    Ok(Some(declared_return_type_compatible(
+        checker, &expected, &actual,
+    )))
 }
 
 /// Validates that `method` can override `parent_sig` in class `class_name`.
@@ -460,14 +412,15 @@ pub(crate) fn covariant_return_compatible(
 /// return type when the parent has one or make it incompatible.
 pub(crate) fn validate_override_signature(
     checker: &Checker,
-    class_map: &HashMap<String, FlattenedClass>,
-    class_name: &str,
+    class: &crate::types::traits::FlattenedClass,
     method: &ClassMethod,
     parent_sig: &FunctionSig,
+    parent_late_static_return: Option<&TypeExpr>,
     is_static: bool,
 ) -> Result<(), CompileError> {
     let kind = if is_static { "static method" } else { "method" };
-    let child_sig = build_method_sig(checker, method)?;
+    let class_name = class.name.as_str();
+    let child_sig = build_method_sig(checker, method, class_name)?;
     if php_symbol_key(&method.name) == "__construct" {
         return Ok(());
     }
@@ -489,14 +442,29 @@ pub(crate) fn validate_override_signature(
             ),
         ));
     }
-    if parent_sig.declared_return
-        && !covariant_return_compatible(
+    let late_static_compatible = late_static_return_compatible(
+        checker,
+        parent_late_static_return,
+        method.return_type.as_ref(),
+        &child_sig.return_type,
+        class_name,
+        method.span,
+    )?;
+    let return_compatible = late_static_compatible.unwrap_or_else(|| {
+        declared_return_type_compatible(
             checker,
-            class_map,
             &parent_sig.return_type,
             &child_sig.return_type,
+        ) || covariant_self_return_compatible(
+            checker,
+            class_name,
+            class.extends.as_deref(),
+            &class.implements,
+            parent_sig,
+            &child_sig,
         )
-    {
+    });
+    if parent_sig.declared_return && !return_compatible {
         return Err(CompileError::new(
             method.span,
             &format!(
@@ -506,4 +474,41 @@ pub(crate) fn validate_override_signature(
         ));
     }
     Ok(())
+}
+
+/// Returns true when a child method may return the child class itself against a wider parent return.
+///
+/// Covers PHP covariant returns (`parent::w(): Base` overridden as `w(): static` / `w(): Child`)
+/// while the child is mid-construction — `type_accepts` cannot see the subclass edge yet because
+/// `checker.classes` lacks the child, but the parent class is already registered.
+fn covariant_self_return_compatible(
+    checker: &Checker,
+    class_name: &str,
+    extends: Option<&str>,
+    implements: &[String],
+    parent_sig: &FunctionSig,
+    child_sig: &FunctionSig,
+) -> bool {
+    match (&parent_sig.return_type, &child_sig.return_type) {
+        (PhpType::Object(expected_name), PhpType::Object(actual_name))
+            if actual_name == class_name =>
+        {
+            if expected_name == class_name {
+                return true;
+            }
+            if let Some(parent) = extends {
+                if parent == expected_name
+                    || checker.is_subclass_of(parent, expected_name)
+                    || checker.class_implements_interface(parent, expected_name)
+                {
+                    return true;
+                }
+            }
+            implements.iter().any(|iface| {
+                iface == expected_name
+                    || checker.interface_extends_interface(iface, expected_name)
+            })
+        }
+        _ => false,
+    }
 }

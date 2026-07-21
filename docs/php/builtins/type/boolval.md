@@ -1,8 +1,8 @@
 ---
 title: "boolval()"
-description: "Lowers `boolval()` using the same concrete scalar PHP truthiness rules as `IsTruthy`."
+description: "Returns the boolean value of a variable."
 sidebar:
-  order: 408
+  order: 428
 ---
 
 ## boolval()
@@ -11,12 +11,17 @@ sidebar:
 function boolval(mixed $value): bool
 ```
 
-Lowers `boolval()` using the same concrete scalar PHP truthiness rules as `IsTruthy`.
+Returns the boolean value of a variable.
 
 **Parameters**:
 - `$value` (`mixed`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/boolval.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/boolval.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

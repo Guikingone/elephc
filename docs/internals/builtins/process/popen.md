@@ -2,15 +2,15 @@
 title: "popen() — internals"
 description: "Compiler internals for popen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 299
+  order: 326
 ---
 
 ## `popen()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3379](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3379) (`lower_popen`)
+- **Signature**: [`src/builtins/io/popen.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/popen.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3598](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3598) (`lower_popen`)
 - **Function symbol**: `lower_popen()`
 
 
@@ -33,7 +33,11 @@ function popen(string $command, string $mode): mixed
 
 - **Arity**: takes exactly 2 arguments.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/popen.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/popen.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `popen()`](../../../php/builtins/process/popen.md)
-

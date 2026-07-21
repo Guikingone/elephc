@@ -1,24 +1,27 @@
 ---
 title: "scandir()"
-description: "Lowers `scandir(path)` through the target-aware runtime directory listing helper."
+description: "Lists files and directories inside the specified path."
 sidebar:
-  order: 127
+  order: 148
 ---
 
 ## scandir()
 
 ```php
-function scandir(string $directory, int $sorting_order, mixed $context): array
+function scandir(string $directory): array
 ```
 
-Lowers `scandir(path)` through the target-aware runtime directory listing helper.
+Lists files and directories inside the specified path.
 
 **Parameters**:
 - `$directory` (`string`)
-- `$sorting_order` (`int`)
-- `$context` (`mixed`)
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/scandir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/scandir.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

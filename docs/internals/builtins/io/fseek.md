@@ -2,15 +2,15 @@
 title: "fseek() — internals"
 description: "Compiler internals for fseek(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 154
+  order: 175
 ---
 
 ## `fseek()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2951](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2951) (`lower_fseek`)
+- **Signature**: [`src/builtins/io/fseek.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fseek.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3168](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3168) (`lower_fseek`)
 - **Function symbol**: `lower_fseek()`
 
 
@@ -25,14 +25,18 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function fseek(resource $stream, int $offset, int $whence): int
+function fseek(resource $stream, int $offset, int $whence = 0): int
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes 2–3 arguments (1 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fseek.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fseek.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `fseek()`](../../../php/builtins/io/fseek.md)
-

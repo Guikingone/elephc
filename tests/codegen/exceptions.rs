@@ -62,6 +62,32 @@ fn test_builtin_exception_message_api() {
     assert_eq!(out, "boom:boom");
 }
 
+/// Verifies `getMessage()` returns a caller-owned string without consuming the
+/// builtin Throwable payload used by later reads and `__toString()`.
+#[test]
+fn test_builtin_exception_get_message_does_not_consume_payload() {
+    let out = compile_and_run(
+        "<?php $e = new Exception(\"boom\"); echo $e->getMessage(); echo \":\"; echo $e->getMessage(); echo \":\"; echo $e->__toString();",
+    );
+    assert_eq!(out, "boom:boom:boom");
+}
+
+/// Checks that Exception messages built from temporary string results survive the throw.
+#[test]
+fn test_builtin_exception_message_persists_concatenated_temporary() {
+    let out = compile_and_run(
+        r#"<?php
+$name = "dynamic";
+try {
+    throw new Exception($name . " boom");
+} catch (Exception $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "dynamic boom");
+}
+
 /// Verifies builtin throwable catches exception.
 #[test]
 fn test_builtin_throwable_catches_exception() {
@@ -75,8 +101,7 @@ fn test_builtin_throwable_catches_exception() {
 #[test]
 fn test_builtin_throwable_catches_error() {
     // Throwable (the root interface) catches a builtin Error.
-    let out =
-        compile_and_run("<?php try { throw new Error(); } catch (Throwable $e) { echo 13; }");
+    let out = compile_and_run("<?php try { throw new Error(); } catch (Throwable $e) { echo 13; }");
     assert_eq!(out, "13");
 }
 
@@ -555,4 +580,176 @@ echo $b->run("hello");
 "#,
     );
     assert_eq!(out, "box:5");
+}
+/// Verifies that a private method call from an inaccessible scope raises a
+/// catchable `Error` at runtime (issue #383). PHP prints `err`, not `no`.
+#[test]
+fn test_private_method_access_is_catchable_error() {
+    let out = compile_and_run(
+        "<?php class C { private function secret() {} } $c = new C(); try { $c->secret(); echo 'no'; } catch (Error $e) { echo 'err'; }",
+    );
+    assert_eq!(out, "err");
+}
+
+/// Verifies that a protected method call from an inaccessible scope raises a
+/// catchable `Error` at runtime (issue #383).
+#[test]
+fn test_protected_method_access_is_catchable_error() {
+    let out = compile_and_run(
+        "<?php class C { protected function secret() {} } $c = new C(); try { $c->secret(); echo 'no'; } catch (Error $e) { echo 'err'; }",
+    );
+    assert_eq!(out, "err");
+}
+
+/// Verifies that a readonly property write outside the declaring constructor
+/// raises a catchable `Error` at runtime (issue #383). PHP prints `err`.
+#[test]
+fn test_readonly_property_write_is_catchable_error() {
+    let out = compile_and_run(
+        "<?php class Box { public readonly int $x; public function __construct() { $this->x = 1; } } try { $b = new Box(); $b->x = 2; echo 'no'; } catch (Error $e) { echo 'err'; }",
+    );
+    assert_eq!(out, "err");
+}
+
+/// Verifies that a readonly class's implicitly-readonly property write outside
+/// the constructor raises a catchable `Error` at runtime (issue #383).
+#[test]
+fn test_readonly_class_property_write_is_catchable_error() {
+    let out = compile_and_run(
+        "<?php readonly class User { public int $id; public function __construct($id) { $this->id = $id; } } try { $u = new User(1); $u->id = 2; echo 'no'; } catch (Error $e) { echo 'err'; }",
+    );
+    assert_eq!(out, "err");
+}
+
+/// Verifies that an uncaught private method call produces a fatal exit (issue #383).
+#[test]
+fn test_private_method_access_uncaught_is_fatal() {
+    let output = compile_and_run_capture(
+        "<?php class C { private function secret() {} } $c = new C(); $c->secret();",
+    );
+    assert!(!output.success, "expected a fatal exit");
+    assert!(
+        output.stderr.contains("Fatal error: uncaught exception"),
+        "expected a fatal diagnostic on stderr, got: {}",
+        output.stderr
+    );
+}
+
+/// Verifies that an uncaught readonly property write produces a fatal exit (issue #383).
+#[test]
+fn test_readonly_property_write_uncaught_is_fatal() {
+    let output = compile_and_run_capture(
+        "<?php class Box { public readonly int $x; public function __construct() { $this->x = 1; } } $b = new Box(); $b->x = 2;",
+    );
+    assert!(!output.success, "expected a fatal exit");
+    assert!(
+        output.stderr.contains("Fatal error: uncaught exception"),
+        "expected a fatal diagnostic on stderr, got: {}",
+        output.stderr
+    );
+}
+
+/// Verifies that `getMessage()` on a caught private-method `Error` returns the
+/// PHP error message (issue #383).
+#[test]
+fn test_private_method_access_error_message() {
+    let out = compile_and_run(
+        "<?php class C { private function secret() {} } $c = new C(); try { $c->secret(); } catch (Error $e) { echo $e->getMessage(); }",
+    );
+    assert_eq!(out, "Call to private method C::secret() from global scope");
+}
+
+/// Regression: private-method access must evaluate the receiver expression
+/// before raising the catchable `Error`, matching PHP's observable side effects.
+#[test]
+fn test_private_method_access_evaluates_receiver_before_error() {
+    let out = compile_and_run(
+        r#"<?php
+class C { private function secret() {} }
+function make_c() {
+    echo "make|";
+    return new C();
+}
+try { make_c()->secret(); echo "no"; } catch (Error $e) { echo "err"; }
+"#,
+    );
+    assert_eq!(out, "make|err");
+}
+
+/// Verifies that `getMessage()` on a caught readonly-write `Error` returns the
+/// PHP error message (issue #383).
+#[test]
+fn test_readonly_property_write_error_message() {
+    let out = compile_and_run(
+        "<?php class Box { public readonly int $x; public function __construct() { $this->x = 1; } } try { $b = new Box(); $b->x = 2; } catch (Error $e) { echo $e->getMessage(); }",
+    );
+    assert_eq!(out, "Cannot modify readonly property Box::$x");
+}
+
+/// Regression: readonly-property writes must evaluate the right-hand side
+/// before raising the catchable `Error`, matching PHP's observable side effects.
+#[test]
+fn test_readonly_property_write_evaluates_rhs_before_error() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public readonly int $x;
+    public function __construct() { $this->x = 1; }
+}
+function side() {
+    echo "side|";
+    return 2;
+}
+$b = new Box();
+try { $b->x = side(); echo "no"; } catch (Error $e) { echo "err|"; }
+echo $b->x;
+"#,
+    );
+    assert_eq!(out, "side|err|1");
+}
+
+/// Verifies that calling a protected method from outside the class hierarchy
+/// raises a catchable `Error` at runtime (issue #383).
+#[test]
+fn test_protected_method_access_outside_class_is_catchable_error() {
+    let out = compile_and_run(
+        "<?php class Secret { protected function hidden() { return 7; } } $s = new Secret(); try { echo $s->hidden(); echo 'no'; } catch (Error $e) { echo 'err'; }",
+    );
+    assert_eq!(out, "err");
+}
+
+/// Verifies that calling a protected trait method from outside the class
+/// hierarchy raises a catchable `Error` at runtime (issue #383).
+#[test]
+fn test_protected_trait_method_access_is_catchable_error() {
+    let out = compile_and_run(
+        r#"<?php
+trait A { public function foo() { return 1; } }
+class C { use A { A::foo as protected; } }
+$c = new C();
+try { echo $c->foo(); echo 'no'; } catch (Error $e) { echo 'err'; }
+"#,
+    );
+    assert_eq!(out, "err");
+}
+
+/// The builtin exception constructors accept PHP's third `$previous` parameter (positional or
+/// the `previous:` named argument), store it on the Throwable payload, and expose it through
+/// `getPrevious()`. Byte-parity vs PHP 8.5 for message/code/`getPrevious()` round-trips.
+#[test]
+fn test_exception_constructor_accepts_previous() {
+    let out = compile_and_run(
+        "<?php function f(): string { try { try { throw new \\ValueError('inner'); } catch (\\ValueError $e) { throw new \\InvalidArgumentException('outer: ' . $e->getMessage(), $e->getCode(), previous: $e); } } catch (\\InvalidArgumentException $x) { $prev = $x->getPrevious(); return $x->getMessage() . '/' . $x->getCode() . '/' . ($prev === null ? 'none' : $prev->getMessage()); } } echo f();",
+    );
+    assert_eq!(out, "outer: inner/0/inner");
+}
+
+/// `getPrevious()` returns `?Throwable`; method calls on that nullable interface type must use
+/// compact Throwable intrinsics (the interface vtable slots stay empty for builtins).
+#[test]
+fn test_nullable_throwable_get_message_via_previous() {
+    let out = compile_and_run(
+        "<?php function show(?Throwable $t): string { return $t === null ? 'null' : $t->getMessage(); } $inner = new ValueError('inner'); $outer = new Exception('outer', 0, $inner); echo show($outer->getPrevious());",
+    );
+    assert_eq!(out, "inner");
 }

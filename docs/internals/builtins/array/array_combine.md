@@ -2,21 +2,21 @@
 title: "array_combine() — internals"
 description: "Compiler internals for array_combine(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 3
+  order: 5
 ---
 
 ## `array_combine()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:152](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L152) (`lower_array_combine`)
+- **Signature**: [`src/builtins/array/array_combine.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_combine.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:160](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L160) (`lower_array_combine`)
 - **Function symbol**: `lower_array_combine()`
 
 
 ### Lowering notes
 
-- Lowers `array_combine()` through the legacy hash-building runtime helpers.
+- Lowers `array_combine()` through the hash-building runtime helpers.
 
 ## Runtime helpers
 
@@ -32,7 +32,11 @@ function array_combine(array $keys, array $values): array
 
 - **Arity**: takes exactly 2 arguments.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_combine.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_combine.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `array_combine()`](../../../php/builtins/array/array_combine.md)
-

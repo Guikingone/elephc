@@ -12,7 +12,7 @@ use super::*;
 /// Verifies var_dump() produces correct error when called with no arguments.
 #[test]
 fn test_error_var_dump_wrong_args() {
-    expect_error("<?php var_dump();", "var_dump() takes exactly 1 argument");
+    expect_error("<?php var_dump();", "var_dump() takes at least 1 argument");
 }
 
 /// Verifies print_r() produces correct error when called with no arguments.
@@ -172,19 +172,17 @@ fn test_error_tmpfile_rejects_nonempty_static_spread() {
 
 /// Verifies the gradual-typing boundary model accepts returning `fgetc()` (typed `Str|Bool`) from
 /// a `: string` function: `Bool` is PHP-coercible to `string` (weak mode coerces `false` to `""`),
-/// so the union flows into the scalar return with a runtime boundary guard instead of erroring.
+/// Verifies returning `fgetc()` (typed `Str|False`) from a `: string` function is rejected:
+/// the `false` EOF marker must be handled before the scalar return boundary.
 #[test]
-fn test_fgetc_false_return_into_string_return_type_accepted() {
-    assert!(
-        check_source(
-            r#"<?php
+fn test_error_fgetc_false_return_into_string_return_type() {
+    expect_error(
+        r#"<?php
 function read_char(): string {
     return fgetc(STDIN);
 }
-"#
-        )
-        .is_ok(),
-        "Str|Bool should flow into a string return under gradual typing (bool coerces to string)",
+"#,
+        "Function 'read_char' return type expects Str, got Union([Str, False])",
     );
 }
 
@@ -630,6 +628,51 @@ fn test_error_stream_filter_append_wrong_args() {
     expect_error(
         "<?php stream_filter_append(STDIN, \"string.rot13\", STREAM_FILTER_ALL, 6, 7);",
         "stream_filter_append() takes 2 to 4 arguments",
+    );
+}
+
+/// Verifies the arity diagnostic for `stream_filter_prepend()` (2 to 4 args), mirroring append.
+#[test]
+fn test_error_stream_filter_prepend_wrong_args() {
+    expect_error(
+        "<?php stream_filter_prepend(STDIN);",
+        "stream_filter_prepend() takes 2 to 4 arguments",
+    );
+}
+
+/// Verifies the arity diagnostic for `stream_set_chunk_size()` (exactly 2 args).
+#[test]
+fn test_error_stream_set_chunk_size_wrong_args() {
+    expect_error(
+        "<?php stream_set_chunk_size(STDIN);",
+        "stream_set_chunk_size() takes exactly 2 arguments",
+    );
+}
+
+/// Verifies the arity diagnostic for `stream_set_read_buffer()` (exactly 2 args).
+#[test]
+fn test_error_stream_set_read_buffer_wrong_args() {
+    expect_error(
+        "<?php stream_set_read_buffer(STDIN);",
+        "stream_set_read_buffer() takes exactly 2 arguments",
+    );
+}
+
+/// Verifies the arity diagnostic for `stream_set_write_buffer()` (exactly 2 args).
+#[test]
+fn test_error_stream_set_write_buffer_wrong_args() {
+    expect_error(
+        "<?php stream_set_write_buffer(STDIN);",
+        "stream_set_write_buffer() takes exactly 2 arguments",
+    );
+}
+
+/// Verifies the arity diagnostic for `stream_bucket_prepend()` (exactly 2 args), mirroring append.
+#[test]
+fn test_error_stream_bucket_prepend_wrong_args() {
+    expect_error(
+        "<?php stream_bucket_prepend(1);",
+        "stream_bucket_prepend() takes exactly 2 arguments",
     );
 }
 

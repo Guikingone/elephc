@@ -1,8 +1,8 @@
 ---
 title: "get_resource_type()"
-description: "Lowers `get_resource_type(resource)` to elephc's current resource type label."
+description: "Returns the type of a resource."
 sidebar:
-  order: 415
+  order: 435
 ---
 
 ## get_resource_type()
@@ -11,12 +11,17 @@ sidebar:
 function get_resource_type(resource $resource): string
 ```
 
-Lowers `get_resource_type(resource)` to elephc's current resource type label.
+Returns the type of a resource.
 
 **Parameters**:
 - `$resource` (`resource`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/get_resource_type.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_resource_type.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

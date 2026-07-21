@@ -1,8 +1,8 @@
 ---
 title: "lcfirst()"
-description: "Lowers `lcfirst()` by copying the string and lowercasing the first ASCII byte."
+description: "Lowercases the first character of a string."
 sidebar:
-  order: 359
+  order: 385
 ---
 
 ## lcfirst()
@@ -11,12 +11,17 @@ sidebar:
 function lcfirst(string $string): string
 ```
 
-Lowers `lcfirst()` by copying the string and lowercasing the first ASCII byte.
+Lowercases the first character of a string.
 
 **Parameters**:
 - `$string` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/lcfirst.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/lcfirst.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

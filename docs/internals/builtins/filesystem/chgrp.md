@@ -2,15 +2,15 @@
 title: "chgrp() — internals"
 description: "Compiler internals for chgrp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 83
+  order: 104
 ---
 
 ## `chgrp()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3835](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3835) (`lower_chgrp`)
+- **Signature**: [`src/builtins/io/chgrp.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/chgrp.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4474](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4474) (`lower_chgrp`)
 - **Function symbol**: `lower_chgrp()`
 
 
@@ -26,14 +26,18 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function chgrp(string $filename, int $group): bool
+function chgrp(string $filename, string $group): bool
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/chgrp.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/chgrp.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `chgrp()`](../../../php/builtins/filesystem/chgrp.md)
-

@@ -1,25 +1,30 @@
 ---
 title: "stream_socket_sendto()"
-description: "Lowers `stream_socket_sendto(socket, data, flags?, address?)` and boxes `int|false`."
+description: "Sends a message to a socket, whether it is connected or not."
 sidebar:
-  order: 205
+  order: 239
 ---
 
 ## stream_socket_sendto()
 
 ```php
-function stream_socket_sendto(resource $socket, string $data, int $flags, string $address): mixed
+function stream_socket_sendto(resource $socket, string $data, int $flags = 0, string $address = ''): mixed
 ```
 
-Lowers `stream_socket_sendto(socket, data, flags?, address?)` and boxes `int|false`.
+Sends a message to a socket, whether it is connected or not.
 
 **Parameters**:
 - `$socket` (`resource`)
 - `$data` (`string`)
-- `$flags` (`int`), optional
-- `$address` (`string`), optional
+- `$flags` (`int`), default `0`, optional
+- `$address` (`string`), default `''`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_sendto.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_sendto.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

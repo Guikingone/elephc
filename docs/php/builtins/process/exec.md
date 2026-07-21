@@ -1,24 +1,27 @@
 ---
 title: "exec()"
-description: "Lowers `exec(command)` by capturing shell stdout through the shared runtime helper."
+description: "Executes an external program and returns the last line of output."
 sidebar:
-  order: 292
+  order: 322
 ---
 
 ## exec()
 
 ```php
-function exec(string $command, array $output, int $result_code): string
+function exec(string $command): string
 ```
 
-Lowers `exec(command)` by capturing shell stdout through the shared runtime helper.
+Executes an external program and returns the last line of output.
 
 **Parameters**:
 - `$command` (`string`)
-- `$output` (`array`), passed by reference
-- `$result_code` (`int`), passed by reference
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/exec.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/exec.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

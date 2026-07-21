@@ -8,7 +8,10 @@
 //!
 //! Key details:
 //! - `SUPPORTED_BUILTIN_FUNCTIONS` is the source of truth for PHP-visible builtin names.
-//! - `INTERNAL_BUILTIN_FUNCTIONS` exists only for compiler-generated synthetic bodies.
+//! - `INTERNAL_BUILTIN_FUNCTIONS` is now an empty placeholder; internal builtins are
+//!   registered via `internal: true` in `src/builtins/` and recognized through the registry.
+//! - `LANGUAGE_CONSTRUCT_FUNCTIONS` participates in call resolution but stays
+//!   hidden from `function_exists()` and first-class callable surfaces.
 
 const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "__elephc_gmmktime_raw",
@@ -66,16 +69,6 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "basename",
     "bin2hex",
     "bindec",
-    "gzcompress",
-    "gzdeflate",
-    "gzinflate",
-    "gzuncompress",
-    "long2ip",
-    "ip2long",
-    "inet_ntop",
-    "inet_pton",
-    "disk_free_space",
-    "disk_total_space",
     "boolval",
     "buffer_free",
     "buffer_len",
@@ -83,90 +76,14 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "call_user_func",
     "call_user_func_array",
     "ceil",
+    "chdir",
+    "checkdate",
     "chgrp",
     "chmod",
     "chop",
     "chown",
-    "chdir",
-    "checkdate",
     "chr",
-    "clearstatcache",
     "clamp",
-    "cli_set_process_title",
-    "connection_aborted",
-    "constant",
-    "copy",
-    "cos",
-    "cosh",
-    "count",
-    "crc32",
-    "current",
-    "ctype_alnum",
-    "ctype_alpha",
-    "ctype_digit",
-    "ctype_space",
-    "ctype_upper",
-    "date",
-    "date_default_timezone_get",
-    "date_default_timezone_set",
-    "define",
-    "defined",
-    "decbin",
-    "dechex",
-    "decoct",
-    "deg2rad",
-    "die",
-    "dirname",
-    "empty",
-    "end",
-    "error_get_last",
-    "error_log",
-    "error_reporting",
-    "escapeshellarg",
-    "exec",
-    "exit",
-    "exp",
-    "explode",
-    "fclose",
-    "fdatasync",
-    "fdiv",
-    "feof",
-    "fflush",
-    "fgetc",
-    "fgetcsv",
-    "fgets",
-    "fscanf",
-    "flock",
-    "flush",
-    "file",
-    "fileatime",
-    "filectime",
-    "file_exists",
-    "filegroup",
-    "file_get_contents",
-    "fileinode",
-    "file_put_contents",
-    "fileowner",
-    "fileperms",
-    "filetype",
-    "filemtime",
-    "filesize",
-    "filter_var",
-    "floatval",
-    "floor",
-    "fnmatch",
-    "fmod",
-    "fopen",
-    "fpassthru",
-    "fprintf",
-    "fputcsv",
-    "fread",
-    "readfile",
-    "fstat",
-    "fseek",
-    "fsync",
-    "ftell",
-    "ftruncate",
     "class_alias",
     "class_attribute_args",
     "class_attribute_names",
@@ -175,12 +92,92 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "class_implements",
     "class_parents",
     "class_uses",
+    "clearstatcache",
+    "cli_set_process_title",
+    "closedir",
+    "connection_aborted",
+    "constant",
+    "copy",
+    "cos",
+    "cosh",
+    "count",
+    "crc32",
+    "ctype_alnum",
+    "ctype_alpha",
+    "ctype_digit",
+    "ctype_space",
+    "ctype_upper",
+    "current",
+    "date",
+    "date_default_timezone_get",
+    "date_default_timezone_set",
+    "decbin",
+    "dechex",
+    "decoct",
+    "define",
+    "defined",
+    "deg2rad",
+    "die",
+    "dirname",
+    "disk_free_space",
+    "disk_total_space",
+    "empty",
+    "end",
     "enum_exists",
+    "error_get_last",
+    "error_log",
+    "error_reporting",
+    "escapeshellarg",
+    "exec",
+    "exit",
+    "exp",
+    "explode",
     "extension_loaded",
+    "fclose",
+    "fdatasync",
+    "fdiv",
+    "feof",
+    "fflush",
+    "fgetc",
+    "fgetcsv",
+    "fgets",
+    "file",
+    "file_exists",
+    "file_get_contents",
+    "file_put_contents",
+    "fileatime",
+    "filectime",
+    "filegroup",
+    "fileinode",
+    "filemtime",
+    "fileowner",
+    "fileperms",
+    "filesize",
+    "filetype",
+    "filter_var",
+    "floatval",
+    "flock",
+    "floor",
+    "flush",
+    "fmod",
+    "fnmatch",
+    "fopen",
+    "fpassthru",
+    "fprintf",
+    "fputcsv",
+    "fread",
+    "fscanf",
+    "fseek",
+    "fsockopen",
+    "fstat",
+    "fsync",
+    "ftell",
+    "ftruncate",
     "func_get_arg",
     "func_get_args",
     "func_num_args",
     "function_exists",
+    "fwrite",
     "gc_collect_cycles",
     "gc_disable",
     "gc_enable",
@@ -189,21 +186,25 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "get_cfg_var",
     "get_class",
     "get_class_methods",
-    "get_parent_class",
     "get_debug_type",
-    "get_resource_id",
-    "get_resource_type",
     "get_declared_classes",
     "get_declared_interfaces",
     "get_declared_traits",
-    "interface_exists",
-    "trait_exists",
-    "fwrite",
     "get_defined_constants",
+    "get_parent_class",
+    "get_resource_id",
+    "get_resource_type",
     "getcwd",
     "getdate",
     "getenv",
+    "gethostbyaddr",
+    "gethostbyname",
+    "gethostname",
     "getmypid",
+    "getprotobyname",
+    "getprotobynumber",
+    "getservbyname",
+    "getservbyport",
     "gettype",
     "glob",
     "gmdate",
@@ -217,6 +218,10 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "grapheme_strripos",
     "grapheme_strrpos",
     "grapheme_substr",
+    "gzcompress",
+    "gzdeflate",
+    "gzinflate",
+    "gzuncompress",
     "hash",
     "hash_algos",
     "hash_copy",
@@ -247,39 +252,47 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "ignore_user_abort",
     "implode",
     "in_array",
+    "inet_ntop",
+    "inet_pton",
     "ini_get",
     "ini_set",
     "intdiv",
+    "interface_exists",
     "intval",
-    "iterator_apply",
-    "iterator_count",
-    "iterator_to_array",
+    "ip2long",
+    "is_a",
+    "is_array",
     "is_bool",
     "is_callable",
     "is_countable",
     "is_dir",
+    "is_double",
     "is_executable",
     "is_file",
-    "is_a",
-    "is_array",
-    "is_object",
-    "is_scalar",
     "is_finite",
     "is_float",
-    "is_subclass_of",
     "is_infinite",
     "is_int",
+    "is_integer",
     "is_iterable",
+    "is_link",
+    "is_long",
     "is_nan",
     "is_null",
     "is_numeric",
-    "is_resource",
+    "is_object",
     "is_readable",
+    "is_real",
+    "is_resource",
+    "is_scalar",
     "is_string",
-    "is_link",
-    "is_writeable",
+    "is_subclass_of",
     "is_writable",
+    "is_writeable",
     "isset",
+    "iterator_apply",
+    "iterator_count",
+    "iterator_to_array",
     "json_decode",
     "json_encode",
     "json_last_error",
@@ -289,18 +302,19 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "krsort",
     "ksort",
     "lcfirst",
+    "lchgrp",
+    "lchown",
     "levenshtein",
     "libxml_clear_errors",
     "libxml_get_errors",
     "libxml_use_internal_errors",
     "link",
     "linkinfo",
-    "lchgrp",
-    "lchown",
     "localtime",
     "log",
     "log10",
     "log2",
+    "long2ip",
     "lstat",
     "ltrim",
     "max",
@@ -343,19 +357,23 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "ob_get_status",
     "ob_start",
     "octdec",
+    "opendir",
     "ord",
     "pack",
     "parse_str",
     "parse_url",
     "passthru",
     "pathinfo",
+    "pclose",
     "pcntl_alarm",
     "pcntl_async_signals",
     "pcntl_signal",
     "pcntl_signal_get_handler",
+    "pfsockopen",
     "php_uname",
     "phpversion",
     "pi",
+    "popen",
     "posix_kill",
     "pow",
     "preg_grep",
@@ -364,13 +382,14 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "preg_match",
     "preg_match_all",
     "preg_quote",
-    "preg_replace_callback",
     "preg_replace",
+    "preg_replace_callback",
     "preg_split",
     "print_r",
     "printf",
     "proc_close",
     "proc_open",
+    "property_exists",
     "ptr",
     "ptr_get",
     "ptr_is_null",
@@ -394,6 +413,8 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "range",
     "rawurldecode",
     "rawurlencode",
+    "readdir",
+    "readfile",
     "readline",
     "readlink",
     "realpath",
@@ -404,6 +425,7 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "restore_error_handler",
     "restore_exception_handler",
     "rewind",
+    "rewinddir",
     "rmdir",
     "round",
     "rsort",
@@ -424,6 +446,9 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "shell_exec",
     "shuffle",
     "sin",
+    "sinh",
+    "sleep",
+    "sort",
     "spl_autoload",
     "spl_autoload_call",
     "spl_autoload_extensions",
@@ -433,9 +458,6 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "spl_classes",
     "spl_object_hash",
     "spl_object_id",
-    "sinh",
-    "sleep",
-    "sort",
     "sprintf",
     "sqrt",
     "sscanf",
@@ -452,6 +474,50 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "strcasecmp",
     "strcmp",
     "strcspn",
+    "stream_bucket_append",
+    "stream_bucket_make_writeable",
+    "stream_bucket_new",
+    "stream_bucket_prepend",
+    "stream_context_create",
+    "stream_context_get_default",
+    "stream_context_get_options",
+    "stream_context_get_params",
+    "stream_context_set_default",
+    "stream_context_set_option",
+    "stream_context_set_params",
+    "stream_copy_to_stream",
+    "stream_filter_append",
+    "stream_filter_prepend",
+    "stream_filter_register",
+    "stream_filter_remove",
+    "stream_get_contents",
+    "stream_get_filters",
+    "stream_get_line",
+    "stream_get_meta_data",
+    "stream_get_transports",
+    "stream_get_wrappers",
+    "stream_is_local",
+    "stream_isatty",
+    "stream_resolve_include_path",
+    "stream_select",
+    "stream_set_blocking",
+    "stream_set_chunk_size",
+    "stream_set_read_buffer",
+    "stream_set_timeout",
+    "stream_set_write_buffer",
+    "stream_socket_accept",
+    "stream_socket_client",
+    "stream_socket_enable_crypto",
+    "stream_socket_get_name",
+    "stream_socket_pair",
+    "stream_socket_recvfrom",
+    "stream_socket_sendto",
+    "stream_socket_server",
+    "stream_socket_shutdown",
+    "stream_supports_lock",
+    "stream_wrapper_register",
+    "stream_wrapper_restore",
+    "stream_wrapper_unregister",
     "strip_tags",
     "stripcslashes",
     "stripos",
@@ -478,8 +544,8 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "substr_compare",
     "substr_count",
     "substr_replace",
-    "sys_get_temp_dir",
     "symlink",
+    "sys_get_temp_dir",
     "system",
     "tan",
     "tanh",
@@ -487,65 +553,7 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "time",
     "tmpfile",
     "touch",
-    "stream_isatty",
-    "stream_socket_server",
-    "stream_socket_client",
-    "stream_socket_accept",
-    "fsockopen",
-    "pfsockopen",
-    "stream_wrapper_register",
-    "stream_wrapper_unregister",
-    "stream_wrapper_restore",
-    "stream_socket_enable_crypto",
-    "stream_context_create",
-    "stream_context_get_default",
-    "stream_context_set_default",
-    "stream_context_set_option",
-    "stream_context_set_params",
-    "stream_context_get_options",
-    "stream_context_get_params",
-    "stream_resolve_include_path",
-    "stream_filter_register",
-    "stream_bucket_make_writeable",
-    "stream_bucket_new",
-    "stream_bucket_append",
-    "stream_bucket_prepend",
-    "stream_set_chunk_size",
-    "stream_set_read_buffer",
-    "stream_set_write_buffer",
-    "stream_get_contents",
-    "stream_get_line",
-    "stream_get_meta_data",
-    "stream_set_blocking",
-    "stream_set_timeout",
-    "stream_select",
-    "stream_socket_shutdown",
-    "stream_socket_sendto",
-    "stream_socket_recvfrom",
-    "stream_socket_get_name",
-    "stream_socket_pair",
-    "popen",
-    "pclose",
-    "opendir",
-    "readdir",
-    "closedir",
-    "rewinddir",
-    "gethostname",
-    "gethostbyname",
-    "gethostbyaddr",
-    "getprotobyname",
-    "getprotobynumber",
-    "getservbyname",
-    "getservbyport",
-    "stream_copy_to_stream",
-    "stream_is_local",
-    "stream_supports_lock",
-    "stream_get_transports",
-    "stream_get_wrappers",
-    "stream_get_filters",
-    "stream_filter_append",
-    "stream_filter_prepend",
-    "stream_filter_remove",
+    "trait_exists",
     "trigger_deprecation",
     "trigger_error",
     "trim",
@@ -570,38 +578,248 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "wordwrap",
 ];
 
-const INTERNAL_BUILTIN_FUNCTIONS: &[&str] = &[
-    "__elephc_phar_list_entries",
-    "__elephc_phar_set_compression",
-];
+// All former entries migrated to `src/builtins/io/__elephc_phar_*.rs` with `internal: true`
+// (io batch C2). Name recognition now flows through `registry::is_supported` inside
+// `canonical_builtin_function_name`. The slice is kept as an empty placeholder so that
+// `is_supported_builtin_function_exact` compiles unchanged.
+const INTERNAL_BUILTIN_FUNCTIONS: &[&str] = &[];
 
-/// Checks if the exact (lowercase) name is in the PHP-visible or internal builtin lists.
+const LANGUAGE_CONSTRUCT_FUNCTIONS: &[&str] = &["eval"];
+
+/// Checks if the exact (lowercase) name is in any callable-resolution builtin list.
 /// Does not perform case folding; use `is_supported_builtin_function` for case-insensitive lookup.
 fn is_supported_builtin_function_exact(name: &str) -> bool {
-    SUPPORTED_BUILTIN_FUNCTIONS.contains(&name) || INTERNAL_BUILTIN_FUNCTIONS.contains(&name)
+    SUPPORTED_BUILTIN_FUNCTIONS.contains(&name)
+        || INTERNAL_BUILTIN_FUNCTIONS.contains(&name)
+        || LANGUAGE_CONSTRUCT_FUNCTIONS.contains(&name)
 }
 
-/// Returns the static slice of PHP-visible supported builtin function names.
-/// Used by callers that must enumerate only the public builtin surface.
-pub(crate) fn supported_builtin_function_names() -> &'static [&'static str] {
-    SUPPORTED_BUILTIN_FUNCTIONS
+/// Returns true when `--strict-php` hides the (lowercase) name from user programs.
+///
+/// Extension builtins have no PHP equivalent, so strict mode makes them behave
+/// as if they did not exist: calls fall through to user-function resolution and
+/// the standard undefined-function diagnostics, redeclaration checks accept user
+/// functions with these names, and `function_exists()` reports `false`.
+/// `internal: true` builtins are never hidden — injected compiler preludes call
+/// them and they are already invisible to user programs. `buffer_new` is the one
+/// catalog-name-only extension (its call form is dedicated syntax).
+pub(crate) fn strict_php_hidden_builtin(canonical: &str) -> bool {
+    if !crate::strict_php::is_enabled() {
+        return false;
+    }
+    if canonical == "buffer_new" {
+        return true;
+    }
+    crate::builtins::registry::lookup(canonical)
+        .map(|def| def.spec.extension && !def.spec.internal)
+        .unwrap_or(false)
+}
+
+/// Returns the union of PHP-visible builtin names from the legacy static list
+/// and the builtin registry, WITHOUT the strict-PHP filter.
+///
+/// This is the raw catalog snapshot for metadata consumers (parity gates, docs
+/// exporters) that memoize the result and must be independent of the thread's
+/// strict-mode state. Compilation surfaces use `supported_builtin_function_names`.
+pub(crate) fn all_supported_builtin_function_names() -> Vec<&'static str> {
+    let mut result: Vec<&'static str> = SUPPORTED_BUILTIN_FUNCTIONS.to_vec();
+    for name in crate::builtins::registry::names() {
+        let def = match crate::builtins::registry::lookup(name) {
+            Some(d) => d,
+            None => continue,
+        };
+        if def.spec.internal {
+            continue;
+        }
+        // De-duplicate: skip names already present in the legacy list.
+        let lower = name.to_ascii_lowercase();
+        if !SUPPORTED_BUILTIN_FUNCTIONS.contains(&lower.as_str()) {
+            result.push(def.name);
+        }
+    }
+    result
+}
+
+/// Returns the union of PHP-visible supported builtin function names from the
+/// legacy static list and the builtin registry.
+///
+/// Registry entries flagged as `internal` are excluded, mirroring the semantics
+/// of `is_php_visible_builtin_function`. Names present in both sources appear
+/// exactly once. With an empty registry this returns the legacy list unchanged,
+/// so behavior is preserved while the registry is empty. Under `--strict-php`,
+/// extension builtins are excluded entirely.
+pub(crate) fn supported_builtin_function_names() -> Vec<&'static str> {
+    all_supported_builtin_function_names()
+        .into_iter()
+        .filter(|name| !strict_php_hidden_builtin(&name.to_ascii_lowercase()))
+        .collect()
 }
 
 /// Converts a function name to lowercase and returns it if it is a supported builtin.
-/// Returns `None` if the name is not in the catalog. Implements PHP's case-insensitive builtin lookup.
+///
+/// Returns `None` if the name is not in either the legacy catalog or the builtin
+/// registry, or if `--strict-php` hides it (extension builtins). Implements PHP's
+/// case-insensitive builtin lookup. The legacy static list is consulted first;
+/// the registry is the fallback.
 pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
     let canonical = name.to_ascii_lowercase();
-    is_supported_builtin_function_exact(&canonical).then_some(canonical)
+    if strict_php_hidden_builtin(&canonical) {
+        return None;
+    }
+    if is_supported_builtin_function_exact(&canonical)
+        || crate::builtins::registry::is_supported(&canonical)
+    {
+        Some(canonical)
+    } else {
+        None
+    }
 }
 
-/// Returns true only for PHP-visible builtin functions.
+/// Returns true only for PHP-visible builtin functions (non-internal builtins).
+///
+/// Checks both the legacy static list and the builtin registry. Registry entries
+/// flagged as `internal` are excluded from the PHP-visible set, and `--strict-php`
+/// additionally excludes extension builtins.
 pub(crate) fn is_php_visible_builtin_function(name: &str) -> bool {
     let canonical = name.to_ascii_lowercase();
+    if strict_php_hidden_builtin(&canonical) {
+        return false;
+    }
     SUPPORTED_BUILTIN_FUNCTIONS.contains(&canonical.as_str())
+        || crate::builtins::registry::lookup(&canonical)
+            .map(|def| !def.spec.internal)
+            .unwrap_or(false)
 }
 
 /// Returns `true` if the name is a supported builtin function (case-insensitive).
 /// Delegates to `canonical_builtin_function_name` and checks for `Some`.
 pub(crate) fn is_supported_builtin_function(name: &str) -> bool {
     canonical_builtin_function_name(name).is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::builtin;
+
+    /// No-op lowering hook for test probe; does nothing and succeeds.
+    fn noop_lower(
+        _c: &mut crate::codegen::context::FunctionContext,
+        _i: &crate::ir::Instruction,
+    ) -> Result<(), crate::codegen::CodegenIrError> {
+        Ok(())
+    }
+
+    // Register a PHP-visible (non-internal) probe to exercise the catalog API.
+    // This verifies that `supported_builtin_function_names` and the catalog
+    // lookup functions include registry entries with `internal: false`.
+    builtin! {
+        name: "__catalog_probe_visible",
+        area: Internal,
+        params: [x: Int],
+        returns: Bool,
+        lower: noop_lower,
+        summary: "catalog probe for PHP-visibility test",
+        internal: false,
+    }
+
+    /// Verifies that a `builtin!`-registered probe with `internal: false` is reported
+    /// as supported by the catalog's `is_supported_builtin_function` and
+    /// `canonical_builtin_function_name` surfaces.
+    #[test]
+    fn catalog_reports_registered_visible_probe_as_supported() {
+        assert!(
+            is_supported_builtin_function("__catalog_probe_visible"),
+            "catalog must report a non-internal registered builtin as supported"
+        );
+        let canonical = canonical_builtin_function_name("__catalog_probe_visible");
+        assert_eq!(
+            canonical,
+            Some("__catalog_probe_visible".to_string()),
+            "catalog must canonicalize a non-internal registered builtin"
+        );
+    }
+
+    /// Verifies that a non-internal registered probe appears in `supported_builtin_function_names`.
+    #[test]
+    fn supported_builtin_function_names_includes_registered_visible_probe() {
+        let names = supported_builtin_function_names();
+        assert!(
+            names.contains(&"__catalog_probe_visible"),
+            "supported_builtin_function_names must include non-internal registry entries"
+        );
+    }
+
+    /// Verifies strict mode hides extension builtins from every catalog surface:
+    /// canonical lookup, PHP-visibility, the supported-name set, and the
+    /// `buffer_new` catalog-name-only entry. Strict state is thread-local (and
+    /// guard-restored on panic), so this cannot affect parallel tests.
+    #[test]
+    fn strict_mode_hides_extension_builtins_from_catalog() {
+        let _guard = crate::strict_php::scoped_enable();
+        assert!(
+            canonical_builtin_function_name("ptr_get").is_none(),
+            "strict must hide ptr_get"
+        );
+        assert!(
+            !is_php_visible_builtin_function("ptr_get"),
+            "strict must hide ptr_get from PHP visibility"
+        );
+        assert!(
+            canonical_builtin_function_name("buffer_new").is_none(),
+            "strict must hide buffer_new"
+        );
+        assert!(
+            !is_php_visible_builtin_function("buffer_new"),
+            "strict must hide buffer_new from PHP visibility"
+        );
+        let names = supported_builtin_function_names();
+        assert!(
+            !names.contains(&"ptr_get") && !names.contains(&"buffer_new"),
+            "strict must drop extension names from the supported set"
+        );
+    }
+
+    /// Verifies strict mode keeps genuine PHP builtins and internal prelude
+    /// aliases resolvable: hiding either would break normal programs or
+    /// compiler-injected prelude code.
+    #[test]
+    fn strict_mode_keeps_php_builtins_and_internal_aliases() {
+        let _guard = crate::strict_php::scoped_enable();
+        assert_eq!(
+            canonical_builtin_function_name("strlen"),
+            Some("strlen".to_string())
+        );
+        assert_eq!(
+            canonical_builtin_function_name("is_real"),
+            Some("is_real".to_string()),
+            "is_real is treated as PHP for strict purposes"
+        );
+        assert!(
+            canonical_builtin_function_name("__elephc_ptr_read_string").is_some(),
+            "internal prelude aliases must stay resolvable in strict mode"
+        );
+    }
+
+    /// Verifies the unfiltered name set ignores strict mode entirely: metadata
+    /// consumers (parity gates, docs exporters) memoize this snapshot and must
+    /// never observe a strict-filtered view.
+    #[test]
+    fn unfiltered_name_set_ignores_strict_mode() {
+        let _guard = crate::strict_php::scoped_enable();
+        let names = all_supported_builtin_function_names();
+        assert!(names.contains(&"ptr_get"));
+        assert!(names.contains(&"buffer_new"));
+        assert!(names.contains(&"strlen"));
+    }
+
+    /// Verifies extension builtins remain fully visible without strict mode, so
+    /// the filter cannot regress the default compilation mode.
+    #[test]
+    fn non_strict_keeps_extension_builtins_visible() {
+        assert!(canonical_builtin_function_name("ptr_get").is_some());
+        assert!(is_php_visible_builtin_function("ptr_get"));
+        assert!(canonical_builtin_function_name("buffer_new").is_some());
+        assert!(supported_builtin_function_names().contains(&"buffer_new"));
+    }
 }

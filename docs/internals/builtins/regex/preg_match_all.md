@@ -2,15 +2,15 @@
 title: "preg_match_all() — internals"
 description: "Compiler internals for preg_match_all(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 306
+  order: 334
 ---
 
 ## `preg_match_all()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/regex.rs`:57](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/regex.rs#L57) (`lower_preg_match_all`)
+- **Signature**: [`src/builtins/system/preg_match_all.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_match_all.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/regex.rs`:66](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/regex.rs#L66) (`lower_preg_match_all`)
 - **Function symbol**: `lower_preg_match_all()`
 
 
@@ -22,19 +22,24 @@ sidebar:
 
 The following runtime helpers are referenced:
 - `__rt_preg_match_all`
+- `__rt_preg_replace`
 
 ## Signature summary
 
 ```php
-function preg_match_all(string $pattern, string $subject, array $matches): int
+function preg_match_all(string $pattern, string $subject): int
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 3 arguments.
+- **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/regex/preg_match_all.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_match_all.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 - **By-reference parameters**: `$matches`.
 
 ## Cross-references
 
 - [User reference for `preg_match_all()`](../../../php/builtins/regex/preg_match_all.md)
-

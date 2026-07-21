@@ -1,22 +1,27 @@
 ---
 title: "readline()"
-description: "Lowers `readline(prompt?)` by optionally writing a prompt and reading stdin."
+description: "Reads a line from the user's terminal."
 sidebar:
-  order: 297
+  order: 327
 ---
 
 ## readline()
 
 ```php
-function readline(string $prompt): mixed
+function readline(string $prompt = null): mixed
 ```
 
-Lowers `readline(prompt?)` by optionally writing a prompt and reading stdin.
+Reads a line from the user's terminal.
 
 **Parameters**:
-- `$prompt` (`string`), optional
+- `$prompt` (`string`), default `null`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/readline.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/readline.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

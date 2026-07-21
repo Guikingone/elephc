@@ -1,8 +1,8 @@
 ---
 title: "str_repeat()"
-description: "Lowers `str_repeat(string, times)` through the shared runtime helper."
+description: "Repeats a string a given number of times."
 sidebar:
-  order: 380
+  order: 404
 ---
 
 ## str_repeat()
@@ -11,13 +11,18 @@ sidebar:
 function str_repeat(string $string, int $times): string
 ```
 
-Lowers `str_repeat(string, times)` through the shared runtime helper.
+Repeats a string a given number of times.
 
 **Parameters**:
 - `$string` (`string`)
 - `$times` (`int`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/str_repeat.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_repeat.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

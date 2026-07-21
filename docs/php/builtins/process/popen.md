@@ -1,8 +1,8 @@
 ---
 title: "popen()"
-description: "Lowers `popen(command, mode)` and boxes the process pipe as `resource|false`."
+description: "Opens process file pointer."
 sidebar:
-  order: 296
+  order: 326
 ---
 
 ## popen()
@@ -11,13 +11,18 @@ sidebar:
 function popen(string $command, string $mode): mixed
 ```
 
-Lowers `popen(command, mode)` and boxes the process pipe as `resource|false`.
+Opens process file pointer.
 
 **Parameters**:
 - `$command` (`string`)
 - `$mode` (`string`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/popen.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/popen.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,8 @@
 ---
 title: "checkdate()"
-description: "Lowers `checkdate(month, day, year)` through the shared Gregorian-validation runtime helper."
+description: "Validates a Gregorian date."
 sidebar:
-  order: 68
+  order: 89
 ---
 
 ## checkdate()
@@ -11,7 +11,7 @@ sidebar:
 function checkdate(int $month, int $day, int $year): bool
 ```
 
-Lowers `checkdate(month, day, year)` through the shared Gregorian-validation runtime helper.
+Validates a Gregorian date.
 
 **Parameters**:
 - `$month` (`int`)
@@ -19,6 +19,11 @@ Lowers `checkdate(month, day, year)` through the shared Gregorian-validation run
 - `$year` (`int`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/checkdate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/checkdate.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

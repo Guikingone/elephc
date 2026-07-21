@@ -2,15 +2,15 @@
 title: "stream_filter_register() — internals"
 description: "Compiler internals for stream_filter_register(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 182
+  order: 216
 ---
 
 ## `stream_filter_register()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:1408](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L1408) (`lower_stream_filter_register`)
+- **Signature**: [`src/builtins/io/stream_filter_register.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_filter_register.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:1519](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L1519) (`lower_stream_filter_register`)
 - **Function symbol**: `lower_stream_filter_register()`
 
 
@@ -33,7 +33,11 @@ function stream_filter_register(string $filter_name, string $class): bool
 
 - **Arity**: takes exactly 2 arguments.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_filter_register.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_filter_register.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `stream_filter_register()`](../../../php/builtins/io/stream_filter_register.md)
-

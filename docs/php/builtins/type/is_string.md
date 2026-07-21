@@ -1,8 +1,8 @@
 ---
 title: "is_string()"
-description: "is_string() — type builtin supported by Elephc."
+description: "Checks whether a variable is a string."
 sidebar:
-  order: 429
+  order: 449
 ---
 
 ## is_string()
@@ -11,12 +11,17 @@ sidebar:
 function is_string(mixed $value): bool
 ```
 
-`is_string()` is a type builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Checks whether a variable is a string.
 
 **Parameters**:
 - `$value` (`mixed`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/is_string.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_string.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
@@ -25,4 +30,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `is_string` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/is_string.md).
 

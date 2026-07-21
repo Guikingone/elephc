@@ -343,6 +343,15 @@ class Registry {
 $key = "name";
 Registry::$items[$key] = 1;
 echo Registry::$items["name"];
+}
+/// Tests post-increment `A::$x++` on a static property (regression for #372).
+#[test]
+fn test_static_property_post_increment() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public static $x = 0; }
+A::$x++;
+echo A::$x;
 "#,
     );
     assert_eq!(out, "1");
@@ -510,4 +519,122 @@ echo count(Bag::$items);
 "#,
     );
     assert_eq!(out, "zb2");
+}
+/// Tests pre-increment `++A::$x` on a static property (regression for #372).
+#[test]
+fn test_static_property_pre_increment() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public static $x = 0; }
+++A::$x;
+echo A::$x;
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// Tests post-decrement and pre-decrement `--A::$x` / `A::$x--` on a static property.
+#[test]
+fn test_static_property_decrement() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public static $x = 5; }
+A::$x--;
+echo A::$x;
+echo "\n";
+--A::$x;
+echo A::$x;
+"#,
+    );
+    assert_eq!(out, "4\n3");
+}
+
+/// Tests `self::$x++` and `++self::$x` inside a static method.
+#[test]
+fn test_static_property_self_increment_in_method() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    public static $x = 0;
+    public static function inc(): void {
+        self::$x++;
+        ++self::$x;
+    }
+}
+A::inc();
+echo A::$x;
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// Tests `static::$x++` and `++static::$x` inside a static method use late-static storage.
+#[test]
+fn test_static_property_static_increment_in_method() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    public static $x = 0;
+    public static function inc(): void {
+        static::$x++;
+        ++static::$x;
+    }
+}
+A::inc();
+echo A::$x;
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// Tests `parent::$x++` and `++parent::$x` inside a child static method.
+#[test]
+fn test_static_property_parent_increment_in_method() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public static $x = 0; }
+class B extends A {
+    public static function inc(): void {
+        parent::$x++;
+        ++parent::$x;
+    }
+}
+B::inc();
+echo A::$x;
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// Regression: storing a *borrowed* object (an interface-typed parameter) into a
+/// `static` class property, then reading it back in a different scope and
+/// dispatching methods on it must work. The store consumes (moves) its operand,
+/// so a borrowed value must be acquired first; without the acquire the property
+/// dangled once the caller released the borrow, and the later dispatch crashed
+/// with a fatal "Call to a member function ... on null". Also exercises multiple
+/// method calls plus a cross-interface `instanceof` downcast to confirm the
+/// class tag survives every load (not just the first).
+#[test]
+fn test_static_property_holds_borrowed_object_for_later_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+interface Store { public function get(): string; }
+interface Named { public function name(): string; }
+class Holder { public static ?Store $s = null; }
+class Impl implements Store, Named {
+    public function get(): string { return "V"; }
+    public function name(): string { return "N"; }
+}
+function register(?Store $x): void { Holder::$s = $x; }
+register(new Impl());
+$o = Holder::$s;
+if ($o !== null) {
+    echo $o->get();
+    echo $o->get();
+    if ($o instanceof Named) { echo $o->name(); }
+    echo $o->get();
+}
+"#,
+    );
+    assert_eq!(out, "VVNV");
 }

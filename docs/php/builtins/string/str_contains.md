@@ -1,8 +1,8 @@
 ---
 title: "str_contains()"
-description: "Lowers `str_contains()` through `strpos()` and converts found positions to bool."
+description: "Determines if a string contains a given substring."
 sidebar:
-  order: 376
+  order: 400
 ---
 
 ## str_contains()
@@ -11,13 +11,18 @@ sidebar:
 function str_contains(string $haystack, string $needle): bool
 ```
 
-Lowers `str_contains()` through `strpos()` and converts found positions to bool.
+Determines if a string contains a given substring.
 
 **Parameters**:
 - `$haystack` (`string`)
 - `$needle` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/str_contains.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_contains.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

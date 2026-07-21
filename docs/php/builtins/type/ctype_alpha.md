@@ -1,8 +1,8 @@
 ---
 title: "ctype_alpha()"
-description: "Lowers `ctype_alpha(string)` by checking every byte against ASCII alpha ranges."
+description: "Checks if all characters in the string are alphabetic."
 sidebar:
-  order: 410
+  order: 430
 ---
 
 ## ctype_alpha()
@@ -11,12 +11,17 @@ sidebar:
 function ctype_alpha(string $text): bool
 ```
 
-Lowers `ctype_alpha(string)` by checking every byte against ASCII alpha ranges.
+Checks if all characters in the string are alphabetic.
 
 **Parameters**:
 - `$text` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/ctype_alpha.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/ctype_alpha.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

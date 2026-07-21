@@ -1,24 +1,28 @@
 ---
 title: "copy()"
-description: "Lowers `copy(source, dest)` through the target-aware runtime helper."
+description: "Copies a file."
 sidebar:
-  order: 87
+  order: 108
 ---
 
 ## copy()
 
 ```php
-function copy(string $from, string $to, mixed $context): bool
+function copy(string $from, string $to): bool
 ```
 
-Lowers `copy(source, dest)` through the target-aware runtime helper.
+Copies a file.
 
 **Parameters**:
 - `$from` (`string`)
 - `$to` (`string`)
-- `$context` (`mixed`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/copy.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/copy.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

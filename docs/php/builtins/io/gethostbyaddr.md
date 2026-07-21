@@ -1,8 +1,8 @@
 ---
 title: "gethostbyaddr()"
-description: "Lowers `gethostbyaddr(address)` and boxes malformed addresses as PHP `false`."
+description: "Gets the Internet host name corresponding to a given IP address."
 sidebar:
-  order: 160
+  order: 181
 ---
 
 ## gethostbyaddr()
@@ -11,12 +11,17 @@ sidebar:
 function gethostbyaddr(string $ip): mixed
 ```
 
-Lowers `gethostbyaddr(address)` and boxes malformed addresses as PHP `false`.
+Gets the Internet host name corresponding to a given IP address.
 
 **Parameters**:
 - `$ip` (`string`)
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/gethostbyaddr.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/gethostbyaddr.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,8 @@
 ---
 title: "fflush()"
-description: "Lowers `fflush(stream)` through the shared fd flush runtime helper."
+description: "Flushes the output to a file."
 sidebar:
-  order: 140
+  order: 161
 ---
 
 ## fflush()
@@ -11,12 +11,17 @@ sidebar:
 function fflush(resource $stream): bool
 ```
 
-Lowers `fflush(stream)` through the shared fd flush runtime helper.
+Flushes the output to a file.
 
 **Parameters**:
 - `$stream` (`resource`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fflush.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fflush.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

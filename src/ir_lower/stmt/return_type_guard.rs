@@ -18,7 +18,7 @@
 //!   redundant-but-harmless guard, or under-guard a value the checker had no business accepting
 //!   — the "proven safe" fast path is intentionally the exact same walk, so it can only ever add
 //!   a safety net, never remove one).
-//! - The runtime message is built entirely in `crate::codegen_ir::lower_inst::objects::
+//! - The runtime message is built entirely in `crate::codegen::lower_inst::objects::
 //!   return_type_guard`; only the compile-time prefix (function name + declared type, in PHP's
 //!   own type-declaration syntax) is precomputed here and interned as `Op::ThrowCheckedReturnTypeError`'s
 //!   immediate.

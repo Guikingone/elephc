@@ -10,7 +10,6 @@
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
-use crate::types::checker::stmt_check::narrowing::member_path_key;
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::Checker;
@@ -28,12 +27,10 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
-        // Member-path narrowing overlay (WIN B): inside a `$this->prop instanceof X ? … : …`
-        // then-branch, the receiver was narrowed to `X` under a synthetic access-path key.
-        // Consult it first so `$this->prop->methodOnX()` resolves against the narrowed
-        // subtype. The overlay is only ever present in the ternary's cloned, discarded
-        // then-env (see the Ternary arms), so it never leaks past that sub-expression.
-        if let Some(key) = member_path_key(object, property) {
+        // Flow-narrowing: a ternary like `$var->prop instanceof X ? ... : ...` records the
+        // narrowed type of a simple property access under a synthetic env key (see
+        // `branch_guard_narrowing`). Consult it first so a guarded branch sees the narrowed type.
+        if let Some(key) = Self::narrowed_property_env_key(object, property) {
             if let Some(narrowed) = env.get(&key) {
                 return Ok(narrowed.clone());
             }
@@ -113,36 +110,6 @@ impl Checker {
             expr.span,
             "Property access requires an object or typed pointer",
         ))
-    }
-
-    /// Returns the class whose `magic` method (`__isset` or `__unset`) should
-    /// handle `isset($obj->prop)` / `unset($obj->prop)`: that is, when `$obj` is
-    /// an object whose class declares `magic` and `prop` is not a declared
-    /// property. Infers (and type-checks) the receiver object as a side effect,
-    /// so callers can skip inferring the bare property access — which would
-    /// otherwise reject the undeclared property before the magic call is reached.
-    pub(crate) fn isset_unset_property_magic_class(
-        &mut self,
-        arg: &Expr,
-        magic: &str,
-        env: &TypeEnv,
-    ) -> Result<Option<String>, CompileError> {
-        let (object, property) = match &arg.kind {
-            ExprKind::PropertyAccess { object, property }
-            | ExprKind::NullsafePropertyAccess { object, property } => (object.as_ref(), property),
-            _ => return Ok(None),
-        };
-        let PhpType::Object(class_name) = self.infer_type(object, env)? else {
-            return Ok(None);
-        };
-        let normalized = class_name.trim_start_matches('\\').to_string();
-        let Some(class_info) = self.classes.get(&normalized) else {
-            return Ok(None);
-        };
-        if class_info.properties.iter().any(|(name, _)| name == property) {
-            return Ok(None);
-        }
-        Ok(class_info.methods.contains_key(magic).then_some(normalized))
     }
 
     /// Infers the type of a nullsafe property access expression (`$obj?->prop`).
@@ -291,7 +258,7 @@ impl Checker {
             {
                 return Ok(ty);
             }
-            if let Some((_, ty)) = class_info.properties.iter().find(|(n, _)| n == property) {
+            if let Some((_, (_, ty))) = class_info.visible_property(property) {
                 return Ok(ty.clone());
             }
             if let Some(sig) = class_info.methods.get("__get") {
@@ -446,6 +413,9 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         let class_name = self.resolve_static_property_receiver(receiver, expr)?;
         let Some(class_info) = self.classes.get(&class_name) else {
+            if self.eval_barrier_active && matches!(receiver, StaticReceiver::Named(_)) {
+                return Ok(PhpType::Mixed);
+            }
             // Static property access on a class that is unknown everywhere in the closed world is
             // an absent optional dependency: degrade to `Mixed` with a warning instead of erroring.
             if !self.class_like_exists(&class_name) {

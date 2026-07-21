@@ -1,8 +1,8 @@
 ---
 title: "printf()"
-description: "Lowers `printf(format, values...)` as `sprintf()` followed by stdout emission."
+description: "Outputs a formatted string."
 sidebar:
-  order: 369
+  order: 393
 ---
 
 ## printf()
@@ -11,13 +11,18 @@ sidebar:
 function printf(string $format, ...$values): int
 ```
 
-Lowers `printf(format, values...)` as `sprintf()` followed by stdout emission.
+Outputs a formatted string.
 
 **Parameters**:
 - `$format` (`string`)
 - `...$values` — variadic: collects excess arguments into `$values`.
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/formatting/printf.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/formatting/printf.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

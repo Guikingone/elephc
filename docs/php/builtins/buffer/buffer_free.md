@@ -1,22 +1,28 @@
 ---
 title: "buffer_free()"
-description: "Lowers `buffer_free()` through the direct buffer opcode helper."
+description: "Frees a buffer<T> and nulls the local variable that held it."
 sidebar:
-  order: 47
+  order: 64
 ---
 
 ## buffer_free()
 
 ```php
-function buffer_free(buffer $buffer): mixed
+function buffer_free(buffer $buffer): void
 ```
 
-Lowers `buffer_free()` through the direct buffer opcode helper.
+Frees a buffer<T> and nulls the local variable that held it.
 
 **Parameters**:
 - `$buffer` (`buffer`)
 
-**Returns**: `mixed`
+**Returns**: `void`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_free.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_free.rs)).
+- **Strict PHP mode**: hidden — this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

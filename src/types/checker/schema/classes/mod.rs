@@ -25,6 +25,8 @@ use super::super::Checker;
 use super::validation::build_constructor_param_map;
 use state::ClassBuildState;
 
+pub(super) use crate::types::{collect_attribute_args, collect_attribute_names};
+
 /// Recursively builds and registers `ClassInfo` for `class_name` and its inheritance chain.
 ///
 /// Uses the shared `building` set to detect circular inheritance: `class_name` is inserted before
@@ -94,6 +96,7 @@ fn build_class_info_body(
     properties::apply_properties(&mut state, &class, checker)?;
     methods::apply_methods(&mut state, &class, class_map, checker)?;
     interfaces::collect_interfaces(&mut state, &class, class_map, checker)?;
+    validate_final_constant_constraints(&class, parent_info.as_ref(), &state, checker)?;
     interfaces::validate_interface_contracts(
         &mut state,
         &class,
@@ -104,8 +107,7 @@ fn build_class_info_body(
     )?;
     interfaces::ensure_concrete_class_implements_abstracts(&state, &class)?;
 
-    let constructor_param_to_prop =
-        constructor_param_to_prop_for(&class, parent_info.as_ref());
+    let constructor_param_to_prop = constructor_param_to_prop_for(&class, parent_info.as_ref());
     let class_info = state.into_class_info(*next_class_id, &class, constructor_param_to_prop)?;
     checker.classes.insert(class.name.clone(), class_info);
     *next_class_id += 1;
@@ -192,7 +194,10 @@ fn validate_parent_constraints(
     if parent.is_final {
         return Err(CompileError::new(
             crate::span::Span::dummy(),
-            &format!("Class {} cannot extend final class {}", class.name, parent_name),
+            &format!(
+                "Class {} cannot extend final class {}",
+                class.name, parent_name
+            ),
         ));
     }
     if class.is_readonly_class != parent.is_readonly_class {
@@ -205,6 +210,50 @@ fn validate_parent_constraints(
             crate::span::Span::dummy(),
             &format!("{}: {} extends {}", relation, class.name, parent_name),
         ));
+    }
+    Ok(())
+}
+
+/// Validates PHP final class-constant inheritance constraints for one class.
+fn validate_final_constant_constraints(
+    class: &FlattenedClass,
+    parent_info: Option<&ClassInfo>,
+    state: &ClassBuildState,
+    checker: &Checker,
+) -> Result<(), CompileError> {
+    for constant in &class.constants {
+        if constant.is_final && constant.visibility == crate::parser::ast::Visibility::Private {
+            return Err(CompileError::new(
+                constant.span,
+                &format!(
+                    "Private constant {}::{} cannot be final",
+                    class.name, constant.name
+                ),
+            ));
+        }
+        if parent_info.is_some_and(|parent| parent.final_constants.contains(&constant.name)) {
+            return Err(CompileError::new(
+                constant.span,
+                &format!(
+                    "{}::{} cannot override final constant",
+                    class.name, constant.name
+                ),
+            ));
+        }
+        for interface_name in &state.interfaces {
+            let Some(interface_info) = checker.interfaces.get(interface_name) else {
+                continue;
+            };
+            if interface_info.final_constants.contains(&constant.name) {
+                return Err(CompileError::new(
+                    constant.span,
+                    &format!(
+                        "{}::{} cannot override final interface constant",
+                        class.name, constant.name
+                    ),
+                ));
+            }
+        }
     }
     Ok(())
 }

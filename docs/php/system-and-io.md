@@ -2,7 +2,7 @@
 title: "System & I/O"
 description: "System functions, date/time, JSON, filesystem utilities, process execution, and debugging utilities."
 sidebar:
-  order: 12
+  order: 13
 ---
 
 ## System functions
@@ -19,67 +19,15 @@ sidebar:
 | `getenv()` | `getenv($name): string` | Get environment variable |
 | `putenv()` | `putenv($assignment): bool` | Set environment variable ("KEY=VALUE") |
 | `define()` | `define($name, $value): bool` | Define a compile-time global constant with a string-literal name |
-| `defined()` | `defined($name): bool` | Check whether a constant name is defined (literal or runtime name) |
-| `constant()` | `constant($name): mixed` | Return the value of a constant by name (literal or runtime name) |
+| `defined()` | `defined($name): bool` | Check whether a string-literal constant name is defined |
 | `php_uname()` | `php_uname($mode = "a"): string` | Get system information from the target runtime |
-| `phpversion()` | `phpversion(?string $extension = null): string\|false` | With no argument, the elephc package version from `Cargo.toml`. With an extension name, `false` — elephc has no loadable extensions |
-| `extension_loaded()` | `extension_loaded($extension): bool` | Check whether a PHP extension is loaded (always `false`; see below) |
+| `phpversion()` | `phpversion(): string` | Get the elephc package version from `Cargo.toml` |
 | `exec()` | `exec($command): string` | Execute command, return output |
 | `shell_exec()` | `shell_exec($command): string` | Execute via shell, return output |
 | `system()` | `system($command): string` | Execute, output to stdout |
 | `passthru()` | `passthru($command): void` | Execute, pass raw output |
-| `trigger_deprecation()` | `trigger_deprecation($package, $version, $message, ...$args): void` | Symfony's `symfony/deprecation-contracts` global. Accepts the call and is a sound no-op: deprecation notices are advisory, so elephc evaluates the arguments and emits nothing |
-| `error_reporting()` | `error_reporting(?int $error_level = null): int` | Get or set the runtime error-reporting level. Seeds to `E_ALL` (30719). With no argument (or `null`) returns the current level unchanged; with an int sets the new level and returns the previous one |
-| `ignore_user_abort()` | `ignore_user_abort(?bool $enable = null): int` | Get or set the "ignore user abort" flag. Seeds to `0`. With no argument (or `null`) returns the current flag; with a bool sets it (`0`/`1`) and returns the previous flag |
-| `set_time_limit()` | `set_time_limit(int $seconds): bool` | Always returns `true`. A native AOT binary has no execution timeout, so the limit has no effect — an honest, documented AOT limitation |
-| `connection_aborted()` | `connection_aborted(): int` | Always returns `0`. A compiled program's connection is never aborted |
-| `error_log()` | `error_log(string $message, int $message_type = 0, ?string $destination = null, ?string $additional_headers = null): bool` | Writes `$message` plus a trailing newline to stderr (fd 2) and returns `true`. For `$message_type` `0` this matches PHP's CLI/SAPI default; other message types also go to stderr (documented AOT behavior — messages are never silently dropped), and the `$destination`/`$additional_headers` arguments are accepted but ignored |
-| `ini_get()` | `ini_get(string $option): string\|false` | Returns the current value of a runtime ini directive as a string, or `false` when the directive is unset. Directives are seeded to the CLI defaults (`memory_limit` → `128M`, `precision` → `14`, `display_errors` → `1`, …); an unseeded directive (e.g. `session.*`, `opcache.*`) returns `false`, matching PHP for unloaded extension directives |
-| `ini_set()` | `ini_set(string $option, string\|int\|float\|bool\|null $value): string\|false` | Sets a REGISTERED runtime ini directive and returns the previous value as a string. An unregistered (unseeded) directive is rejected with `false` and stores nothing, matching PHP. The value is cast to a string, as in PHP. Backed by a real persistent table, so the save/restore idiom `$p = ini_set($k, $v); …; ini_set($k, $p);` round-trips |
-| `get_cfg_var()` | `get_cfg_var(string $option): string\|false` | Returns the compiled-in master value of a core directive as a string, or `false` for unknown/unset directives (including `date.timezone`). Reads the immutable master map and is **not** affected by `ini_set()` |
-| `gc_enabled()` | `gc_enabled(): bool` | Returns the queryable garbage-collector enabled flag. Seeds to `true`, matching PHP's default |
-| `gc_enable()` | `gc_enable(): void` | Sets the queryable garbage-collector enabled flag to `true` |
-| `gc_disable()` | `gc_disable(): void` | Sets the queryable garbage-collector enabled flag to `false` |
-| `gc_collect_cycles()` | `gc_collect_cycles(): int` | Runs elephc's real cycle collector and always returns `0`. Collection itself is real (unreachable refcounted array/hash/object cycles are freed); the number of freed cycles is not tracked, so `0` is a documented approximation rather than PHP's actual freed-cycle count |
-| `gc_mem_caches()` | `gc_mem_caches(): int` | Always returns `0`. elephc has no request-scoped memory cache to free |
-| `error_get_last()` | `error_get_last(): ?array` | Always returns `null`. elephc does not currently record any runtime error/warning into a queryable last-error slot — faithful for every program that triggers no recorded error (all of them today, since `trigger_error()` is registered but has no EIR backend lowering and fails loudly at compile time instead of silently recording an error) |
-| `libxml_use_internal_errors()` | `libxml_use_internal_errors(?bool $use_errors = null): bool` | Get or set a real global flag. Seeds to `false`, matching PHP's default. With no argument (or `null`) returns the current flag unchanged; with a bool sets it and returns the previous flag |
-| `libxml_clear_errors()` | `libxml_clear_errors(): void` | No-op. elephc has no libxml/DOM subsystem, so there is never a recorded parse error to clear |
-| `libxml_get_errors()` | `libxml_get_errors(): array` | Always returns a fresh empty array. elephc has no libxml/DOM subsystem, so no libxml parse error can ever be recorded — byte-identical to PHP's own behavior with an empty error buffer |
 
-`error_reporting()` and `ignore_user_abort()` keep real global state for the running program: the first call seeds the level/flag to its PHP default, a value argument installs the new state and returns the previous value, and a null/omitted argument reads the current state without changing it. `set_time_limit()` and `connection_aborted()` are constant returns reflecting the AOT model (no execution timeout, no abortable connection).
-
-`ini_get()`/`ini_set()` maintain a real persistent global directive table seeded to the CLI defaults for ~20 core directives, and `get_cfg_var()` reads a separate immutable master map. The seeded set doubles as the set of REGISTERED directives: `ini_set()` on a directive that was not seeded returns `false` and stores nothing, and `ini_get()` on it returns `false` — exactly matching PHP, which rejects unregistered ini directives (and returns `false` for unloaded extension directives such as `session.*`, `opcache.*`, `apc.*`, and `xdebug.*`, none of which are seeded). One documented, intentional divergence applies: `ini_set()` has no engine effect — setting `memory_limit`, `precision`, etc. does not constrain the native binary; the table simply records the value so reads round-trip. A separate follow-up is that the ini `error_reporting` table value is not live-synced with the `error_reporting()` function's own global state — code that reads the level should call `error_reporting()`, not `ini_get('error_reporting')`.
-
-`gc_enabled()`/`gc_enable()`/`gc_disable()` keep real global state the same way `error_reporting()`/`ignore_user_abort()` do, so the flag round-trips exactly. The flag is honest queryable state, not a switch that gates elephc's safe-point cycle collector: cycle collection is semantically transparent (it only frees unreachable refcounted cycles and never changes program output), so disabling it via `gc_disable()` only affects timing/memory pressure, never observable behavior — unlike PHP, where disabling the collector can change *when* destructors run for cyclic objects. `gc_collect_cycles()` genuinely runs the collector every call; its `0` return is a documented approximation of PHP's freed-cycle count, since the collector does not track how many cycles it reclaimed.
-
-`error_get_last()` is backed by a real, zero-initialized global slot (`_rt_last_error_ptr`) rather than a hardcoded constant, so it is architecturally ready for future error-recording work to populate it. Nothing populates it today: `trigger_error()` is accepted by the checker but has no EIR backend lowering, so calling it fails loudly at compile time (`unsupported EIR backend feature: builtin call trigger_error`) instead of silently succeeding and lying to `error_get_last()`. This means `error_get_last()`'s `null` return is faithful for every program elephc can currently compile — not merely "the common case."
-
-`libxml_use_internal_errors()`/`libxml_clear_errors()`/`libxml_get_errors()` implement the exact save/restore idiom used by libraries such as Symfony's `XmlUtils` (`$prev = libxml_use_internal_errors(true); ...; libxml_use_internal_errors($prev);` plus `libxml_clear_errors()` and `foreach (libxml_get_errors() as $e)`). elephc has no libxml/DOM subsystem, so no libxml parse error can ever be recorded; PHP's own observable behavior with zero recorded errors is exactly a real boolean flag round-trip plus an empty array, which is what these three functions implement — not a stub, since there is no divergence to hide.
-
-`define()` returns `true` the first time a constant is defined at runtime. Duplicate attempts keep the first value, return `false`, and emit a suppressible runtime warning.
-
-`defined()` and `constant()` accept both string-literal and runtime (non-literal) names. A literal name is resolved at compile time (`defined()` folds to a boolean; `constant()` folds to the value). A non-literal name is resolved against a closed-world constant registry emitted into the binary: `defined()` returns whether the name is registered, and `constant()` returns the constant's value or throws a catchable `\Error` (`Undefined constant "NAME"`) on a miss. The registry covers scalar global constants — top-level `const` declarations, literal `define()` calls, and built-in scalar constants (`PHP_INT_SIZE`, `E_ALL`, `DIRECTORY_SEPARATOR`, …). Class constants (`Cls::C`), enum-case constants, and array/composite constant values are not yet registered for non-literal `constant()`, so a non-literal lookup of those names throws.
-
-`enum_exists()` likewise accepts a runtime (non-literal) enum name and resolves it against a closed-world enum registry; its `$autoload` argument is ignored in the closed-world model. A literal enum name still folds to a compile-time boolean.
-
-`extension_loaded()` resolves at compile time. elephc is a closed-world AOT compiler with no dynamically loaded PHP extensions, so it currently reports every extension as not loaded (`false`), matching extension names case-insensitively like PHP. This is the correct value for code that uses `extension_loaded()` to choose between a native extension and a userland fallback: the fallback path is selected, and elephc-provided functions remain available through `function_exists()` and the builtin catalog.
-
-A small curated set of `function_exists()`/`extension_loaded()` guards is additionally folded before the type checker runs, not just after: `fastcgi_finish_request`, `litespeed_finish_request`, `igbinary_*`, `frankenphp_*`, `apcu_*`, `opcache_*`, and `xdebug_*`. These names cover functions elephc has zero catalog presence under, so a guarded call to one of them (e.g. a Composer runtime's `if (function_exists('fastcgi_finish_request')) { fastcgi_finish_request(); }`, or `extension_loaded('igbinary') ? igbinary_serialize(...) : ...`) is pruned to the guard's `false` branch before the checker ever sees the unresolvable call, so the surrounding program still compiles. This pre-check fold only ever proves one of these curated names absent — it never reports a name present, and a program that declares its own function with one of these names is left untouched (the guard resolves to the user's real function instead).
-
-Some real-world code guards an unresolvable extension call behind a runtime condition the pre-check fold above cannot prove false at compile time — e.g. a cached `extension_loaded()`-derived flag such as `self::$apcuSupported ??= extension_loaded('apcu');` followed later by `if (self::isSupported()) { apcu_exists($key); }`. PHP itself resolves function calls LATE: an undefined function only fatals when the call actually executes, as a catchable `\Error` ("Call to undefined function apcu_exists()"), not at compile/parse time. elephc matches this for a small, EXACT curated allowlist of known-extension function names it has zero catalog presence under (currently `opcache_invalidate`, `opcache_compile_file`, `apcu_exists`, `apcu_store`, `apcu_delete`, `xdebug_is_enabled`, `igbinary_serialize`, `igbinary_unserialize`, and `frankenphp_handle_request` — extended as real-world guarded usages surface): a call site naming one of these compiles instead of erroring, and lowers to a catchable `\Error` throw with PHP's exact message. A guard that never reaches the call costs nothing to compile; a call that does execute fails exactly like PHP. This carve-out is intentionally narrow and exact-name-only (no prefix matching), so a typo or an unrelated function in the same extension family still errors at compile time, and it never applies inside a `const`/class-constant initializer (PHP itself rejects any function call there). `function_exists()` and `is_callable()` still report `false` for these names, and the builtin catalog does not register them as real builtins — only the call site's compiled shape changes.
-
-`register_shutdown_function(callable $callback, mixed ...$args): void` registers a callback that runs after the script's normal output — in registration order — both at normal script end and before `exit()`/`die()`. It is implemented as a real elephc-PHP prelude function (injected only into binaries that reference it), backed by a registration-ordered registry and a re-entry guard, so a callback that itself calls `exit()` does not re-run the queue. A callback registered by another shutdown callback (mid-run) still runs before the process exits, matching PHP.
-
-```php
-register_shutdown_function(function () {
-    echo "cleanup\n";
-});
-echo "main\n";
-// prints "main\ncleanup\n"
-```
-
-Only closures, first-class callables, and other values already typed `callable` are accepted as `$callback`; a `'funcname'` string or `[$obj, 'method']` array-callable form is rejected at compile time (`expects Callable, got Str`/`Array`) rather than silently accepted without visibility enforcement — pass a closure instead (`register_shutdown_function(fn() => someFunc())`). Fatal-error-triggered shutdown (PHP also runs registered shutdown functions after certain fatal errors) is not modeled: elephc has no error/fatal-signal handling infrastructure to hook it into.
+`define()` returns `true` the first time a constant is defined at runtime. Duplicate attempts keep the first value, return `false`, and emit a suppressible runtime warning. `defined()` currently requires a string literal in AOT mode.
 
 `php_uname()` supports PHP's standard one-character modes:
 
@@ -91,45 +39,6 @@ Only closures, first-class callables, and other values already typed `callable` 
 | `"r"` | Release |
 | `"v"` | Version |
 | `"m"` | Machine hardware name |
-
-## Output buffering
-
-| Function | Signature | Description |
-|---|---|---|
-| `ob_start()` | `ob_start(): bool` | Pushes a new output-buffering level. Always returns `true`. Only the plain, callback-free form is supported — `ob_start($callback)`/`ob_start(..., $chunk_size)` are a compile-time arity error, never silently accepted and ignored |
-| `ob_get_contents()` | `ob_get_contents(): string\|false` | Returns the current top level's captured bytes without popping it, or `false` when no buffer is active |
-| `ob_get_clean()` | `ob_get_clean(): string\|false` | Returns the current top level's captured bytes AND pops it (discarding the level without flushing it through), or `false` when no buffer is active |
-| `ob_end_clean()` | `ob_end_clean(): bool` | Discards the current top level's bytes without flushing them, and pops it. Returns `false` on an empty stack |
-| `ob_end_flush()` | `ob_end_flush(): bool` | Writes the current top level's bytes THROUGH to whatever is below it (an enclosing buffer if one is still active after the pop, otherwise the real output/`--web` response body), then pops it. Returns `false` on an empty stack |
-| `ob_get_level()` | `ob_get_level(): int` | The current output-buffering nesting depth (`0` when no buffer is active) |
-| `ob_get_status()` | `ob_get_status(bool $full_status = false): array` | Current-level status array (`name`, `type`, `flags`, `level`, `chunk_size`, `buffer_size`, `buffer_used`), or an empty array when no buffer is active. `ob_get_status(true)` (the full stack, one row per level) is a documented residual — a compile-time-unsupported call, not a silent partial result |
-| `headers_sent(?string &$file, ?int &$line)` | `headers_sent(?string &$file = null, ?int &$line = null): bool` | Whether real (non-buffered) output has left the buffer stack. `$file`/`$line` are always overwritten (`""`/`0`) — elephc does not track the exact source location where output first occurred, a documented approximation on the `true` branch |
-| `flush()` | `flush(): void` | A sound no-op. elephc's real output paths (the plain `write(1, …)` syscall, or `--web`'s per-request response-body append) are already unbuffered at the syscall layer, so there is nothing to flush — matching PHP's own observable CLI behavior |
-| `header_remove()` | `header_remove(?string $name = null): void` | Removes a previously-set response header by name (case-insensitively), or every header when `$name` is omitted. Only meaningful under `--web` (mirrors `header()`'s own web-gating: a genuine no-op in a non-`--web` build, since there is no response-header state to remove) |
-
-A capture-buffer stack (16 levels max, 1 MiB per level, a loud runtime fatal
-on overflow rather than silent truncation) shares the SAME choke point every
-`echo`/`print`/scalar-to-string write already travels through
-(`__rt_stdout_write`): `ob_start()` intercepts calls there before they reach
-the real `write()` syscall or the `--web` response-body capture, so no
-per-call-site changes were needed for `echo`/`print` to become
-buffer-aware.
-
-**Known limitation**: `var_dump()`/`print_r()`/`printf()`/`vprintf()` output
-for array/hash/object CONTENTS does not route through this same choke point
-(their container-walking runtime helpers perform their own direct `write()`
-syscalls) and therefore bypasses an active `ob_start()` buffer — a disclosed
-scope boundary, not a silent gap. Scalar `var_dump()`/`print_r()` values, and
-`var_dump()`/`print_r()`'s own literal wrapper text (`"array(N) {"`,
-`"object(Class)"`, …), DO route through the buffer, since those already share
-the `echo`/`print` choke point.
-
-```php
-ob_start();
-echo "captured";
-$out = ob_get_clean();
-var_dump($out); // string(8) "captured"
-```
 
 ## Date and time
 
@@ -247,8 +156,8 @@ The full PHP `JSON_*` family is exposed and can be combined with the bitwise OR 
 | Symbol | Kind | Description |
 |---|---|---|
 | `JsonSerializable` | Interface | Implementing classes can override `jsonSerialize(): mixed`; `json_encode()` dispatches to it instead of walking public properties. |
-| `Error` | Class | Base PHP error throwable with `message: string`, `code: int`, `__construct(string $message = "", int $code = 0)`, and the standard `Throwable` methods. `FiberError` extends this class. |
-| `Exception` | Class | Base PHP exception with `message: string`, `code: int`, `__construct(string $message = "", int $code = 0)`, and the standard `Throwable` methods. |
+| `Error` | Class | Base PHP error throwable with `message: string`, `code: int`, `previous: ?Throwable`, `__construct(string $message = "", int $code = 0, ?Throwable $previous = null)`, and the standard `Throwable` methods. `FiberError` extends this class. |
+| `Exception` | Class | Base PHP exception with `message: string`, `code: int`, `previous: ?Throwable`, `__construct(string $message = "", int $code = 0, ?Throwable $previous = null)`, and the standard `Throwable` methods. |
 | `RuntimeException` | Class | `extends Exception`. Standard PHP "runtime errors" base class. |
 | `JsonException` | Class | `extends RuntimeException`. Carries the originating `JSON_ERROR_*` code; `getCode()` returns it (e.g. 4 = SYNTAX, 1 = DEPTH, 10 = UTF16, 7 = INF_OR_NAN). |
 | `stdClass` | Class | Dynamic-property container. `$obj = new stdClass(); $obj->name = "x";` works for any property name; storage is a backing hash on the instance. `json_decode($json)` returns stdClass by default (PHP semantics); pass `assoc: true` to get an associative array. |
@@ -272,6 +181,47 @@ Encoding rules for objects:
 - Associative arrays whose keys form a sequential `0..count-1` sequence in insertion order encode as JSON arrays (`[...]`) — matching PHP's runtime detection. `__rt_json_encode_assoc` tracks that shape during the main hash walk, emits a provisional object form, and compacts the finished buffer in-place to array form only when every key matched. `JSON_FORCE_OBJECT` disables compaction so that flag still wins. Empty associative arrays also encode as `[]` (PHP's `json_encode([])` semantics).
 - Floats encode at PHP's `serialize_precision = -1` — the shortest decimal that round-trips back to the same `double` (so `json_encode(1.0/3.0)` is `0.3333333333333333`, not the 14-digit `echo`/`(string)` form, and `json_encode(0.1 + 0.2)` is `0.30000000000000004`). The JSON number layout differs from `var_export`: integer-valued floats drop the fraction (`json_encode(100.0)` is `100`, not `100.0`) unless `JSON_PRESERVE_ZERO_FRACTION` is set, and exponential magnitudes use a lowercase `e` with a `d.d` mantissa and a no-leading-zero exponent (`1.0e+17`, `1.0e-6`). The decimal/exponential boundary matches PHP (`zend_gcvt`): exponential when `decpt < -3` or `decpt > 17`. The dedicated `__rt_json_ftoa` runtime helper finds the shortest precision by probing `snprintf("%.*e", p, x)` against a `strtod` re-parse, independent of the default `precision` used elsewhere.
 - JSON helpers are emitted through the shared runtime surface on every supported target. Structural decode into `Mixed`, stdClass dynamic-property helpers, JsonSerializable-aware object encoding, validation, pretty-printing, depth tracking, and JSON error-message lookup are all part of that target-aware runtime path.
+
+## Serialization
+
+| Function | Signature | Notes |
+|---|---|---|
+| `serialize()` | `serialize($value): string` | Produces PHP's `serialize()` wire format, byte-for-byte: `N;` (null), `b:0;`/`b:1;` (bool), `i:<int>;` (int), `d:<float>;` (float, shortest round-trip at `serialize_precision = -1`, with `INF`/`-INF`/`NAN` for non-finite values), `s:<bytelen>:"<raw>";` (string, raw bytes with the exact byte length and no escaping), `a:<count>:{<key><value>...}` (indexed and associative arrays, nested, with int keys as `i:K;` and string keys as `s:N:"...";`, in insertion order), and `O:<len>:"<Class>":<count>:{...}` (objects). |
+| `unserialize()` | `unserialize($data, $options = []): mixed` | Parses the `serialize()` wire format back into a boxed `Mixed` value. Scalars, arrays, and objects round-trip exactly. Malformed or unsupported input returns `false`, matching PHP's failure indicator. The `$options` argument is accepted for signature compatibility and currently ignored. |
+
+`serialize()`/`unserialize()` round-trip the scalar, array, and object subset exactly,
+and the produced bytes are interchangeable with the PHP interpreter. They share the same
+runtime walker family as `json_encode`/`json_decode` and reuse the shortest-float
+formatter, so float output matches `json_encode`'s precision.
+
+### Objects
+
+Objects serialize as `O:<len>:"<Class>":<count>:{...}` with PHP's exact property-key
+mangling: public properties use the bare name, protected use `\0*\0name`, and private
+use `\0Class\0name`. Properties are emitted in declaration order (inherited first).
+
+Serialization magic methods are honoured:
+
+- **`__serialize(): array`** — when defined, the object body is the returned array's
+  `key;value;` pairs instead of the raw properties.
+- **`__unserialize(array $data): void`** — when defined, the parsed body is passed to it
+  to restore the object (instead of injecting properties by name). Its `$data` parameter
+  is treated as a string/int-keyed array so `$data['key']` works (a bare `array` hint
+  otherwise resolves to an integer-indexed array).
+- **`__sleep(): array`** — serializes only the named properties, in `__sleep()`'s order,
+  using their mangled keys.
+- **`__wakeup(): void`** — runs after properties are injected (when `__unserialize()` is
+  not defined).
+
+Repeated objects within a single `serialize()` call are emitted as `r:<index>;`
+back-references (PHP's global value counter: every value consumes the next index, array
+keys do not), and `unserialize()` rebuilds them as a single shared instance so `===`
+identity is preserved. This is the same machinery used to persist `Phar` global metadata
+(see [Streams](streams.md)).
+
+**Limitations:** a cyclic reference *inside an object's own properties* resolves to
+`null` on `unserialize()` (serialization itself handles cycles correctly), and the
+deprecated `Serializable` interface (`C:` wire form) is not supported.
 
 ## Regex
 
@@ -360,8 +310,6 @@ wrappers are documented in [Streams](streams.md).
 | `realpath_cache_size()` | `realpath_cache_size(): int` | `0`; elephc does not maintain a realpath cache. |
 | `fnmatch()` | `fnmatch($pattern, $filename [, $flags = 0]): bool` | Shell-glob match. Supports `*`, `?`, `[abc]`, `[a-z]`, `[!abc]`/`[^abc]`, `\\<char>`, and PHP flags. |
 
-> `dirname()` is foldable at compile time inside `include`/`require` path expressions when its `$path` argument is a compile-time-constant string (a string literal, a concatenation of foldable strings, or a `const`/`define()`-d string constant) and its optional `$levels` argument is an integer literal `>= 1`. This is what makes the Symfony front-controller pattern `require dirname(__DIR__) . '/vendor/autoload.php';` resolve: `__DIR__` is lowered to a string literal before the resolver runs, `dirname()` folds to the project root, and the concatenation produces a static include path. `dirname()` of a runtime value (a variable, a call result, etc.) is **not** folded — it emits the runtime `dirname` helper as usual. `basename()`, `realpath()`, and `pathinfo()` are not yet folded in include paths.
-
 > `pathinfo()` accepts `PATHINFO_DIRNAME` (1), `PATHINFO_BASENAME` (2), `PATHINFO_EXTENSION` (4), `PATHINFO_FILENAME` (8), and `PATHINFO_ALL` (15) constants, integer literals, variables, and bitmasks such as `PATHINFO_DIRNAME | PATHINFO_EXTENSION`. Component bitmasks follow PHP priority: dirname, basename, extension, then filename. The component-flag form returns the requested component as a string (or empty string when it is absent, for example `pathinfo("foo", PATHINFO_EXTENSION)` returns `""`). The no-flag and exact `PATHINFO_ALL` forms return an associative array; the `extension` key is omitted only when the basename has no dot, matching PHP's behaviour.
 
 > `fnmatch()` supports PHP's `FNM_NOESCAPE`, `FNM_PATHNAME`, `FNM_PERIOD`, and `FNM_CASEFOLD` flags, including runtime-computed bitmasks such as `FNM_PATHNAME | FNM_CASEFOLD`. The numeric values are target-specific and follow the selected platform's PHP/libc constants.
@@ -398,8 +346,8 @@ wrappers are documented in [Streams](streams.md).
 
 | Function | Signature | Description |
 |---|---|---|
-| `var_dump()` | `var_dump($value): void` | Output type and value. Homogeneous indexed arrays of `int`, `string`, `bool`, or `float` and associative arrays (hashes) print full per-element bodies (`[N]=>\n  int(V)\n`, `["key"]=>\n  string(…)\n`, etc.). Nested arrays/objects inside a Mixed-element array or hash print `NULL` (recursive nesting into those layouts is still pending). |
-| `print_r()` | `print_r($value): void` | Human-readable output. Indexed arrays, associative arrays, and arbitrarily nested arrays print PHP's recursive `Array\n(\n    [key] => value\n)\n` layout (unquoted keys, 4 spaces of indentation per level, `1`/empty for bool `true`/`false`, empty for `null`). The 2-argument return form (`print_r($v, true)`) is not yet supported. |
+| `var_dump()` | `var_dump(mixed ...$values): void` | Output the type and value of each argument in source order. Homogeneous indexed arrays of `int`, `string`, `bool`, or `float` and associative arrays (hashes) print full per-element bodies (`[N]=>\n  int(V)\n`, `["key"]=>\n  string(…)\n`, etc.). Nested arrays/objects inside a Mixed-element array or hash print `NULL` (recursive nesting into those layouts is still pending). |
+| `print_r()` | `print_r(mixed $value, bool $return = false): string\|true` | Human-readable output. Indexed arrays, associative arrays, and arbitrarily nested arrays print PHP's recursive `Array\n(\n    [key] => value\n)\n` layout (unquoted keys, 4 spaces of indentation per level, `1`/empty for bool `true`/`false`, empty for `null`). With `$return = true`, the rendering is returned instead of printed; captures are limited to 64 KiB. With `$return = false`, the function prints the rendering and returns `true`. |
 | `var_export()` | `var_export($value, $return = false): ?string` | Parsable representation. Renders scalars (`'…'`-quoted strings with `\\`/`\'` escaping, `true`/`false`, `NULL`, integers, and floats — an integer-valued float gains a `.0`) and arbitrarily nested arrays in PHP's `array (\n  key => value,\n)` layout (2 spaces of indentation per level, integer keys bare and string keys quoted, nested arrays on their own line). With `$return = true` the rendering is returned instead of printed. Objects are not yet rendered (PHP emits `\Class::__set_state(...)`). Floats use PHP's `serialize_precision = -1` semantics — the shortest decimal that round-trips back to the same `double` (so `1/3` renders as `0.3333333333333333`, not the 14-digit `(string)` form), with the same scientific layout as PHP (`1.0E+17`, `1.0E-6`), an integer-valued float gaining `.0` (`1.0`, `100.0`), and `-0.0`, `INF`, `-INF`, `NAN` preserved. This is independent of the default `precision` used by `echo`/`(string)`. |
 
 ```php
@@ -423,13 +371,53 @@ var_export(['a' => 1, 'b' => [2, 3]]);
 // )
 ```
 
-## Serialization
+## Output buffering
+
+Output buffering captures everything a piece of code prints — `echo`, `print`,
+`printf()`, `print_r()`, `var_dump()`, `readfile()`, `fpassthru()` — into an
+in-memory buffer instead of writing it to stdout. Buffers nest: flushing an
+inner buffer folds its contents into the enclosing one. Buffers still active at
+script end (including `exit()`/`die()`) are flushed to stdout automatically,
+matching PHP.
 
 | Function | Signature | Description |
 |---|---|---|
-| `serialize()` | `serialize($value): string` | Recognized but not yet fully implemented. |
-| `unserialize()` | `unserialize($data, $options = []): mixed` | Recognized but not yet fully implemented. |
+| `ob_start()` | `ob_start(?callable $callback = null, int $chunk_size = 0, int $flags = 112): bool` | Start a new output buffer (nesting supported, up to 64 levels). Output-handler callbacks are supported: closures, first-class callables, function-name strings, and boxed callables run on flush/clean with PHP's phase bits (`WRITE`/`CLEAN`/`FLUSH`/`FINAL`, plus `START` on the first run); returning `false` passes the raw contents through, any other return is cast to a string. A non-zero `$chunk_size` auto-flushes the buffer whenever it reaches that many bytes, and `$flags` gate cleanability/flushability/removability exactly like PHP (refusals raise PHP's notices). An unknown function name raises PHP's warning and returns `false`; array-pair callables (`[$obj, 'method']`) are rejected at compile time |
+| `ob_get_contents()` | `ob_get_contents(): string\|false` | Return the active buffer's contents without consuming them; `false` when no buffer is active |
+| `ob_get_clean()` | `ob_get_clean(): string\|false` | Return the active buffer's contents, then discard the buffer and pop it |
+| `ob_get_flush()` | `ob_get_flush(): string\|false` | Return the active buffer's contents, then flush them to the parent sink and pop the buffer |
+| `ob_get_length()` | `ob_get_length(): int\|false` | Byte length of the active buffer's contents; `false` when no buffer is active |
+| `ob_get_level()` | `ob_get_level(): int` | Current nesting depth (0 = no buffering) |
+| `ob_clean()` | `ob_clean(): bool` | Erase the active buffer's contents while keeping the buffer active |
+| `ob_end_clean()` | `ob_end_clean(): bool` | Discard the active buffer's contents and pop the buffer |
+| `ob_end_flush()` | `ob_end_flush(): bool` | Flush the active buffer's contents to the parent sink (enclosing buffer or stdout) and pop the buffer |
+| `ob_flush()` | `ob_flush(): bool` | Flush the active buffer's contents to the parent sink while keeping the buffer active |
+| `ob_get_status()` | `ob_get_status(bool $full_status = false): array` | Status of the active buffer (or an empty array without one): `name`, `type`, `flags`, `level`, `chunk_size`, `buffer_size`, `buffer_used`. With `$full_status = true`, one entry per nesting level |
+| `ob_implicit_flush()` | `ob_implicit_flush(bool $enable = true): bool` | Stores the flag and returns `true`. Semantically inert: elephc terminal writes are unbuffered syscalls, so implicit flushing is always effectively on |
+| `ob_list_handlers()` | `ob_list_handlers(): array` | One `"default output handler"` entry per active buffer level |
 
-`serialize()` and `unserialize()` are recognized as global builtins so that code referencing them — including unqualified calls inside a namespace that fall back to the global functions, the exact pattern used by `symfony/yaml` — type-checks and compiles. `function_exists("serialize")` and `function_exists("unserialize")` return `true`, and both names resolve case-insensitively.
+```php
+<?php
+ob_start();
+echo "hello";
+$captured = ob_get_clean();
+echo strtoupper($captured);   // HELLO
 
-The PHP serialization format itself is **not yet implemented**. Actually calling either function at runtime terminates the process with `Fatal error: serialize()/unserialize() is not yet supported`. This is a deferred follow-up; until it lands, only reference these functions on code paths that are not executed (e.g. behind an opt-in flag that your program never enables).
+ob_start();
+echo "outer:";
+ob_start();
+echo "inner";
+ob_end_flush();               // "inner" flows into the outer buffer
+echo ob_get_clean(), "\n";    // outer:inner
+```
+
+Output buffering state is shared between statically compiled code and
+`eval()`'d code: a buffer started inside `eval()` captures static echoes and
+vice versa, and handlers registered inside `eval()` run on flushes triggered
+from static code or at script end. Output produced inside a handler is
+discarded and calling `ob_start()` from inside a handler is a fatal error,
+matching PHP. `fwrite(STDOUT, ...)` writes to the real file descriptor and
+bypasses output buffers, matching PHP. Known divergences: the first-class
+callable of a named function reports that function's name (PHP reports
+`Closure::__invoke`), and `ob_get_status()` omits PHP's internal 0x2000
+disabled bit.

@@ -1,8 +1,8 @@
 ---
 title: "fclose()"
-description: "Lowers `fclose(stream)` after validating and unboxing the stream handle."
+description: "Closes an open file pointer."
 sidebar:
-  order: 137
+  order: 158
 ---
 
 ## fclose()
@@ -11,12 +11,17 @@ sidebar:
 function fclose(resource $stream): bool
 ```
 
-Lowers `fclose(stream)` after validating and unboxing the stream handle.
+Closes an open file pointer.
 
 **Parameters**:
 - `$stream` (`resource`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fclose.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fclose.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

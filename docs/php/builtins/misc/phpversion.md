@@ -2,21 +2,25 @@
 title: "phpversion()"
 description: "Returns the current PHP version information."
 sidebar:
-  order: 268
+  order: 296
 ---
 
 ## phpversion()
 
 ```php
-function phpversion(string $extension = null): string
+function phpversion(): string
 ```
 
 Returns the current PHP version information.
 
-**Parameters**:
-- `$extension` (`string`), default `null`, optional
+**Parameters**: none.
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/phpversion.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/phpversion.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

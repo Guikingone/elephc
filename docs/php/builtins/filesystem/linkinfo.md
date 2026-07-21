@@ -1,8 +1,8 @@
 ---
 title: "linkinfo()"
-description: "Lowers `linkinfo(path)` through the target-aware runtime lstat helper."
+description: "Gets information about a link."
 sidebar:
-  order: 115
+  order: 136
 ---
 
 ## linkinfo()
@@ -11,12 +11,17 @@ sidebar:
 function linkinfo(string $path): int
 ```
 
-Lowers `linkinfo(path)` through the target-aware runtime lstat helper.
+Gets information about a link.
 
 **Parameters**:
 - `$path` (`string`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/linkinfo.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/linkinfo.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

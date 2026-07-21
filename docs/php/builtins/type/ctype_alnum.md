@@ -1,8 +1,8 @@
 ---
 title: "ctype_alnum()"
-description: "Lowers `ctype_alnum(string)` by checking every byte against ASCII alpha or digit ranges."
+description: "Checks if all characters in the string are alphanumeric."
 sidebar:
-  order: 409
+  order: 429
 ---
 
 ## ctype_alnum()
@@ -11,12 +11,17 @@ sidebar:
 function ctype_alnum(string $text): bool
 ```
 
-Lowers `ctype_alnum(string)` by checking every byte against ASCII alpha or digit ranges.
+Checks if all characters in the string are alphanumeric.
 
 **Parameters**:
 - `$text` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/ctype_alnum.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/ctype_alnum.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

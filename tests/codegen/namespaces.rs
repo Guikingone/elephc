@@ -185,6 +185,31 @@ echo $box->value;
     assert_eq!(out, "7");
 }
 
+/// Verifies PHP's generic `object` type remains namespace-independent and
+/// case-insensitive while accepting an instance of a concrete namespaced class.
+#[test]
+fn test_namespace_preserves_generic_object_type_hints_case_insensitively() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+
+class Payload {}
+
+function handle(object $value): string {
+    return is_object($value) ? "lower" : "bad";
+}
+
+function handle_upper(OBJECT $value): string {
+    return is_object($value) ? "upper" : "bad";
+}
+
+$value = new Payload();
+echo handle($value) . ":" . handle_upper($value);
+"#,
+    );
+    assert_eq!(out, "lower:upper");
+}
+
 /// Verifies that `buffer<Vertex>` works correctly when `Vertex` is a packed class declared
 /// in the same namespace. Tests buffer element access with typed buffer slots.
 #[test]
@@ -604,4 +629,102 @@ echo FOO;
 "#,
     );
     assert_eq!(out, "1");
+}
+
+/// EC-12 (#495): a `new <ImportedAlias>` nested inside a NAMED ARGUMENT resolves the alias —
+/// the resolver's expression walk previously had no NamedArg arm, so the value expression
+/// escaped rewriting entirely ("Undefined class: Url" on the ward-component-catalog
+/// `new self(label: ..., url: new Url('/'))` previews pattern). Byte-parity vs PHP 8.5.
+#[test]
+fn test_named_argument_value_resolves_imported_alias() {
+    let out = compile_and_run(
+        r#"<?php
+
+namespace App\Url;
+
+final class Url {
+    public function __construct(public string $p) {}
+}
+
+namespace App\C;
+
+use App\Url\Url;
+
+final class K {
+    public function __construct(public string $label, public Url $t) {}
+
+    public static function mk(): K {
+        return new self(label: 'x', t: new Url('/'));
+    }
+}
+
+namespace Main;
+
+echo \App\C\K::mk()->t->p;
+"#,
+    );
+    assert_eq!(out, "/");
+}
+
+/// `use const PHP_INT_MAX;` — the lexer eagerly tokenizes such constants, so the
+/// use-declaration parser must accept the dedicated tokens as import names. Aliases
+/// resolve through the seeded constant map (expression uses are not lexer-only).
+#[test]
+fn test_use_const_of_lexer_tokenized_constant() {
+    let out = compile_and_run(
+        r#"<?php
+
+namespace App;
+
+use const PHP_INT_MAX;
+use const PHP_INT_MIN;
+use const STDERR;
+
+echo PHP_INT_MAX > 0 ? 'max' : '?', ':', PHP_INT_MIN < 0 ? 'min' : '?';
+"#,
+    );
+    assert_eq!(out, "max:min");
+}
+
+/// `use const PHP_INT_MAX as MAX` must resolve the alias through ConstRef, not only the
+/// dedicated lexer token path.
+#[test]
+fn test_use_const_alias_of_lexer_tokenized_constant() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+use const PHP_INT_MAX as MAX;
+echo MAX > 0 ? 'ok' : 'no';
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Imports multiple lexer-tokenized predefined constants in one `use const` declaration.
+#[test]
+fn test_use_const_multiple_lexer_tokenized_constants() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+use const PHP_INT_MAX as MAX, PHP_INT_MIN as MIN;
+echo MAX > 0 && MIN < 0 ? 'ok' : 'no';
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies `Enum` is accepted as an import alias, type name, constructor, and scoped receiver.
+#[test]
+fn test_enum_soft_keyword_import_alias() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Vendor { class Legacy {} }
+namespace App {
+    use Vendor\Legacy as Enum;
+    function imported_name(Enum $value): string { return Enum::class; }
+    echo imported_name(new Enum());
+}
+"#,
+    );
+    assert_eq!(out, "Vendor\\Legacy");
 }

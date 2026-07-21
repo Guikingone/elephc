@@ -2,15 +2,15 @@
 title: "microtime() — internals"
 description: "Compiler internals for microtime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 77
+  order: 98
 ---
 
 ## `microtime()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:111](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L111) (`lower_microtime`)
+- **Signature**: [`src/builtins/system/microtime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/microtime.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:111](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L111) (`lower_microtime`)
 - **Function symbol**: `lower_microtime()`
 
 
@@ -35,14 +35,18 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function microtime(bool $as_float): int
+function microtime(bool $as_float = false): mixed
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes 0–1 arguments (1 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/microtime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/microtime.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `microtime()`](../../../php/builtins/date/microtime.md)
-

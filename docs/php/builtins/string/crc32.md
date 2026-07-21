@@ -1,8 +1,8 @@
 ---
 title: "crc32()"
-description: "Lowers `crc32(string)` through the shared checksum runtime helper."
+description: "Calculates the CRC32 polynomial of a string."
 sidebar:
-  order: 332
+  order: 362
 ---
 
 ## crc32()
@@ -11,12 +11,17 @@ sidebar:
 function crc32(string $string): int
 ```
 
-Lowers `crc32(string)` through the shared checksum runtime helper.
+Calculates the CRC32 polynomial of a string.
 
 **Parameters**:
 - `$string` (`string`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/crc32.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/crc32.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

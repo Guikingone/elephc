@@ -2,15 +2,15 @@
 title: "fputcsv() — internals"
 description: "Compiler internals for fputcsv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 151
+  order: 172
 ---
 
 ## `fputcsv()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2784](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2784) (`lower_fputcsv`)
+- **Signature**: [`src/builtins/io/fputcsv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fputcsv.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:3003](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L3003) (`lower_fputcsv`)
 - **Function symbol**: `lower_fputcsv()`
 
 
@@ -26,14 +26,18 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function fputcsv(resource $stream, array $fields, string $separator = ',', string $enclosure = '"', string $escape = '\\', string $eol = '\n'): int
+function fputcsv(resource $stream, array $fields, string $separator = ',', string $enclosure = '"'): int
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–6 arguments (4 optional).
+- **Arity**: takes 2–4 arguments (2 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fputcsv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fputcsv.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 
 - [User reference for `fputcsv()`](../../../php/builtins/io/fputcsv.md)
-

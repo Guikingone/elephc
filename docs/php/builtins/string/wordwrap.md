@@ -1,25 +1,30 @@
 ---
 title: "wordwrap()"
-description: "Lowers `wordwrap(string, width?, break?, cut?)` through the shared runtime helper."
+description: "Wraps a string to a given number of characters."
 sidebar:
-  order: 407
+  order: 427
 ---
 
 ## wordwrap()
 
 ```php
-function wordwrap(string $string, int $width, string $break, bool $cut_long_words): string
+function wordwrap(string $string, int $width = 75, string $break = '\n', bool $cut_long_words = false): string
 ```
 
-Lowers `wordwrap(string, width?, break?, cut?)` through the shared runtime helper.
+Wraps a string to a given number of characters.
 
 **Parameters**:
 - `$string` (`string`)
-- `$width` (`int`), optional
-- `$break` (`string`), optional
-- `$cut_long_words` (`bool`), optional
+- `$width` (`int`), default `75`, optional
+- `$break` (`string`), default `'\n'`, optional
+- `$cut_long_words` (`bool`), default `false`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/wordwrap.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/wordwrap.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,8 @@
 ---
 title: "stream_supports_lock()"
-description: "Lowers `stream_supports_lock(stream)` as true after resource unboxing."
+description: "Tells whether the stream supports locking."
 sidebar:
-  order: 208
+  order: 242
 ---
 
 ## stream_supports_lock()
@@ -11,12 +11,17 @@ sidebar:
 function stream_supports_lock(resource $stream): bool
 ```
 
-Lowers `stream_supports_lock(stream)` as true after resource unboxing.
+Tells whether the stream supports locking.
 
 **Parameters**:
 - `$stream` (`resource`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/stream_supports_lock.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/stream_supports_lock.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

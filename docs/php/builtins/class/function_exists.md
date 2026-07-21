@@ -1,8 +1,8 @@
 ---
 title: "function_exists()"
-description: "Lowers `function_exists(\"name\")` for compile-time string names."
+description: "Returns true if the given function has been defined."
 sidebar:
-  order: 58
+  order: 75
 ---
 
 ## function_exists()
@@ -11,12 +11,17 @@ sidebar:
 function function_exists(string $function): bool
 ```
 
-Lowers `function_exists("name")` for compile-time string names.
+Returns true if the given function has been defined.
 
 **Parameters**:
 - `$function` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/function_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/function_exists.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

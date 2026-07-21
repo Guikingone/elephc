@@ -1,24 +1,29 @@
 ---
 title: "iterator_apply()"
-description: "Lowers `iterator_apply()` over supported Traversable sources and callback forms."
+description: "Call a function for every element in an iterator."
 sidebar:
-  order: 307
+  order: 338
 ---
 
 ## iterator_apply()
 
 ```php
-function iterator_apply(traversable $iterator, callable $callback, array $args): int
+function iterator_apply(traversable $iterator, callable $callback, array $args = null): int
 ```
 
-Lowers `iterator_apply()` over supported Traversable sources and callback forms.
+Call a function for every element in an iterator.
 
 **Parameters**:
 - `$iterator` (`traversable`)
 - `$callback` (`callable`)
-- `$args` (`array`), optional
+- `$args` (`array`), default `null`, optional
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/iterator_apply.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/iterator_apply.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

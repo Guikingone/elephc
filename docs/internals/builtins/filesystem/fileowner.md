@@ -2,15 +2,15 @@
 title: "fileowner() — internals"
 description: "Compiler internals for fileowner(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 97
+  order: 118
 ---
 
 ## `fileowner()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4849](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4849) (`lower_fileowner`)
+- **Signature**: [`src/builtins/io/fileowner.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fileowner.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5488](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5488) (`lower_fileowner`)
 - **Function symbol**: `lower_fileowner()`
 
 
@@ -35,7 +35,11 @@ function fileowner(string $filename): mixed
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fileowner.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fileowner.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `fileowner()`](../../../php/builtins/filesystem/fileowner.md)
-

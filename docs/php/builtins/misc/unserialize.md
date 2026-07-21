@@ -1,23 +1,28 @@
 ---
 title: "unserialize()"
-description: "unserialize() — misc builtin supported by Elephc."
+description: "Creates a PHP value from a stored representation."
 sidebar:
-  order: 273
+  order: 299
 ---
 
 ## unserialize()
 
 ```php
-function unserialize(mixed $data, mixed $options): mixed
+function unserialize(string $data, mixed $options = []): mixed
 ```
 
-`unserialize()` is a misc builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Creates a PHP value from a stored representation.
 
 **Parameters**:
-- `$data` (`mixed`)
-- `$options` (`mixed`), optional
+- `$data` (`string`)
+- `$options` (`mixed`), default `[]`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
@@ -26,4 +31,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `unserialize` is implemented in the compiler, see [the internals page](../../../internals/builtins/misc/unserialize.md).
 

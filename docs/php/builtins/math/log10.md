@@ -1,8 +1,8 @@
 ---
 title: "log10()"
-description: "log10() — math builtin supported by Elephc."
+description: "Returns the base-10 logarithm of a number."
 sidebar:
-  order: 238
+  order: 272
 ---
 
 ## log10()
@@ -11,12 +11,17 @@ sidebar:
 function log10(float $num): float
 ```
 
-`log10()` is a math builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Returns the base-10 logarithm of a number.
 
 **Parameters**:
 - `$num` (`float`)
 
 **Returns**: `float`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/log10.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/log10.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
@@ -25,4 +30,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `log10` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/log10.md).
 

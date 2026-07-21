@@ -9,79 +9,9 @@
 
 use super::*;
 
-/// Backend used by codegen fixtures when turning optimized AST/EIR into assembly.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TestCodegenBackend {
-    Legacy,
-    Ir,
-}
-
-/// Selects the fixture backend from `ELEPHC_TEST_BACKEND`, defaulting to EIR codegen.
-fn selected_test_codegen_backend() -> TestCodegenBackend {
-    match std::env::var("ELEPHC_TEST_BACKEND") {
-        Ok(value)
-            if value.is_empty()
-                || value.eq_ignore_ascii_case("ir")
-                || value.eq_ignore_ascii_case("eir") =>
-        {
-            TestCodegenBackend::Ir
-        }
-        Ok(value) if value.eq_ignore_ascii_case("legacy") || value.eq_ignore_ascii_case("ast") => {
-            TestCodegenBackend::Legacy
-        }
-        Ok(value) => panic!(
-            "unsupported ELEPHC_TEST_BACKEND `{}`; expected `legacy`, `ast`, `ir`, or `eir`",
-            value
-        ),
-        Err(_) => TestCodegenBackend::Ir,
-    }
-}
-
 /// Returns true when codegen fixtures are compiling through the EIR backend.
 pub(crate) fn codegen_fixture_uses_ir_backend() -> bool {
-    selected_test_codegen_backend() == TestCodegenBackend::Ir
-}
-
-/// Runs the frontend through type checking ONLY (tokenize → parse → resolve → name-resolve →
-/// autoload → conditional-function hoist → prelude injection → pre-checker extension fold →
-/// checker), mirroring `compile_source_to_asm_with_defines_repr`'s front half, and returns the
-/// checker's error message. Panics if `source` type-checks cleanly (use this only for fixtures
-/// that must fail). Used for asserting a specific compile-time diagnostic without paying for a
-/// full assemble/link/run cycle.
-pub(crate) fn compile_expect_check_error(source: &str) -> String {
-    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!("elephc_check_err_{}_{}", std::process::id(), id));
-    fs::create_dir_all(&dir).unwrap();
-
-    let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
-    let ast = elephc::parser::parse(&tokens).expect("parse failed");
-    let synthetic_main = dir.join("test.php");
-    let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
-    let ast = elephc::conditional::apply(ast, &HashSet::new());
-    let (autoload_registry, ast) = elephc::autoload::Registry::build(&dir, ast);
-    let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
-    let resolved = elephc::autoload::collect_aliases(resolved);
-    let resolved = elephc::pdo_prelude::inject_if_used(resolved);
-    let resolved = elephc::tz_prelude::inject_if_used(resolved);
-    let resolved = elephc::list_id_prelude::inject_if_used(resolved);
-    let resolved = elephc::image_prelude::inject_if_used(resolved);
-    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let (resolved, _autoload_warnings) =
-        elephc::autoload::run(resolved, &dir, &autoload_registry).expect("autoload failed");
-    let resolved = elephc::resolver::hoist_conditional_function_declarations(resolved);
-    let resolved = elephc::var_export_prelude::inject_if_used(resolved);
-    let resolved = elephc::shutdown_prelude::inject_if_used(resolved);
-    let resolved = elephc::optimize::fold_constants(resolved);
-    let pre_check_extension_set = elephc::optimize::FunctionExistenceSet::for_pre_check(&resolved);
-    let resolved = elephc::optimize::fold_function_existence(resolved, &pre_check_extension_set);
-    let resolved = elephc::optimize::prune_dead_static_branches(resolved);
-    let result = elephc::types::check_with_target(&resolved, target());
-
-    let _ = fs::remove_dir_all(&dir);
-    match result {
-        Ok(_) => panic!("expected source to fail type checking, but it checked cleanly"),
-        Err(e) => e.message,
-    }
+    true
 }
 
 // Variant of `compile_source_to_asm_with_defines` that uses an empty define set.
@@ -157,72 +87,23 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let synthetic_main = dir.join("test.php");
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
-    // Mirror `pipeline::compile`'s placement: snapshot declaration source files for
-    // `ReflectionClass`/`ReflectionFunction::getFileName()` right after magic-constant
-    // substitution, before autoload/resolver can merge in other files.
-    let (class_source_files, function_source_files) =
-        elephc::resolver::scan_reflection_source_files(&ast, &synthetic_main);
     let ast = elephc::conditional::apply(ast, defines);
     let (autoload_registry, ast) = elephc::autoload::Registry::build(dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
-    let resolved = elephc::pdo_prelude::inject_if_used(resolved);
-    let resolved = elephc::tz_prelude::inject_if_used(resolved);
+    let resolved = elephc::pdo_prelude::inject_if_used(resolved, false);
+    let resolved = elephc::tz_prelude::inject_if_used(resolved, false);
     let resolved = elephc::list_id_prelude::inject_if_used(resolved);
-    let resolved = elephc::image_prelude::inject_if_used(resolved);
-    // Mirror `pipeline::compile`'s Composer-global-function pre-scan: install the
-    // `autoload.files` global-function fallback set around BOTH the main name-resolution pass
-    // and `autoload::run` (which name-resolves each autoloaded file in isolation).
-    let known_composer_globals =
-        elephc::autoload::scan_composer_global_functions(&autoload_registry);
-    let (resolved, _autoload_warnings) =
-        elephc::name_resolver::with_known_composer_global_functions(known_composer_globals, || {
-            let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-            elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed")
-        });
-    let resolved = elephc::resolver::hoist_conditional_function_declarations(resolved);
-    // Mirror `pipeline::compile`: inject the var_export prelude AFTER autoload::run and
-    // the conditional-function hoist so usage inside PSR-4 autoloaded files is detected
-    // and the declaration is present before the type checker collects functions. Name
-    // resolution of those calls is handled by the name_resolver prelude-global fallback.
     let resolved = elephc::var_export_prelude::inject_if_used(resolved);
-    // Mirror `pipeline::compile`: inject the register_shutdown_function prelude at the same stage
-    // as var_export, immediately after it.
-    let resolved = elephc::shutdown_prelude::inject_if_used(resolved);
+    let resolved = elephc::image_prelude::inject_if_used(resolved, false);
+    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+    let (resolved, _autoload_warnings) =
+        elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
     let resolved = elephc::optimize::fold_constants(resolved);
-    // Mirror `pipeline::compile`'s pre-checker curated-extension `function_exists`/
-    // `extension_loaded` fold+prune (see `FunctionExistenceSet::for_pre_check`), placed right
-    // after `fold_constants` and before type checking so codegen fixtures exercise the same
-    // guarded-extension-call pruning real compilation does.
-    let pre_check_extension_set = elephc::optimize::FunctionExistenceSet::for_pre_check(&resolved);
-    let resolved = elephc::optimize::fold_function_existence(resolved, &pre_check_extension_set);
-    let resolved = elephc::optimize::prune_dead_static_branches(resolved);
-    let mut check_result =
+    let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized = elephc::optimize::propagate_constants(resolved);
-    let existence_sets = elephc::optimize::ClassExistenceSets::from_program_and_check_result(
-        &optimized,
-        &check_result,
-    );
-    let optimized = elephc::optimize::fold_class_existence(optimized, &existence_sets);
-    elephc::optimize::fold_class_existence_in_method_bodies(&mut check_result, &existence_sets);
-    let function_existence_set =
-        elephc::optimize::FunctionExistenceSet::from_check_result(&check_result);
-    let optimized = elephc::optimize::fold_function_existence(optimized, &function_existence_set);
-    elephc::optimize::fold_function_existence_in_method_bodies(
-        &mut check_result,
-        &function_existence_set,
-    );
-    // Mirror `pipeline::compile`: coerce literal string-callable arguments at `callable`-typed
-    // parameter positions into their first-class-callable AST equivalent (see
-    // `crate::optimize::callable_coercion`), placed at the same stage as real compilation.
-    let callable_coercion_set = elephc::optimize::CallableCoercionSet::from_check_result(&check_result);
-    let optimized = elephc::optimize::coerce_callable_string_args(optimized, &callable_coercion_set);
-    elephc::optimize::coerce_callable_string_args_in_method_bodies(
-        &mut check_result,
-        &callable_coercion_set,
-    );
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
@@ -230,67 +111,26 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
-    let ir_module = lower_and_validate_ir_for_codegen_fixture(
-        &optimized,
-        &check_result,
-        &class_source_files,
-        &function_source_files,
-    );
-    let (user_asm, runtime_asm, runtime_features) = match selected_test_codegen_backend() {
-        TestCodegenBackend::Legacy => {
-            let (user_asm, runtime_asm) = elephc::codegen::generate(
-                &optimized,
-                &check_result.global_env,
-                &check_result.functions,
-                &check_result.callable_param_sigs,
-                &check_result.callable_return_sigs,
-                &check_result.callable_array_return_sigs,
-                &check_result.interfaces,
-                &check_result.classes,
-                &check_result.enums,
-                &check_result.packed_classes,
-                &check_result.extern_functions,
-                &check_result.extern_classes,
-                &check_result.extern_globals,
-                heap_size,
-                gc_stats,
-                heap_debug,
-                target(),
-                requires_elephc_tls,
-                null_repr,
-            );
-            let runtime_features = elephc::codegen::runtime_features_for_program_and_classes(
-                &optimized,
-                &check_result.classes,
-            );
-            (user_asm, runtime_asm, runtime_features)
-        }
-        TestCodegenBackend::Ir => {
-            let exported_functions = HashMap::new();
-            // Honor ELEPHC_REGALLOC so the whole codegen suite can be run under
-            // both the linear-scan allocator (default) and the stack fallback.
-            let regalloc_linear =
-                !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
-            let user_asm = elephc::codegen_ir::generate_user_asm_from_ir_with_options(
-                &ir_module,
-                gc_stats,
-                heap_debug,
-                requires_elephc_tls,
-                elephc::codegen::Emit::Executable,
-                &exported_functions,
-                regalloc_linear,
-                false,
-            )
-            .expect("EIR backend codegen failed for codegen fixture");
-            let runtime_features = ir_module.required_runtime_features;
-            let runtime_asm = elephc::codegen::generate_runtime_with_features(
-                heap_size,
-                target(),
-                runtime_features,
-            );
-            (user_asm, runtime_asm, runtime_features)
-        }
-    };
+    let ir_module =
+        lower_and_validate_ir_for_codegen_fixture(&optimized, &check_result, &synthetic_main);
+    let exported_functions = HashMap::new();
+    // Honor ELEPHC_REGALLOC so the whole codegen suite can be run under both
+    // the linear-scan allocator (default) and the stack fallback.
+    let regalloc_linear = !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
+    let user_asm = elephc::codegen::generate_user_asm_from_ir_with_options(
+        &ir_module,
+        gc_stats,
+        heap_debug,
+        requires_elephc_tls,
+        elephc::codegen::Emit::Executable,
+        &exported_functions,
+        regalloc_linear,
+        false,
+    )
+    .expect("EIR backend codegen failed for codegen fixture");
+    let runtime_features = ir_module.required_runtime_features;
+    let runtime_asm =
+        elephc::codegen::generate_runtime_with_features(heap_size, target(), runtime_features);
     let mut required_libraries = check_result.required_libraries;
     for lib in elephc::codegen::required_libraries_for_runtime_features(runtime_features) {
         if !required_libraries.contains(&lib) {
@@ -302,20 +142,18 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
 }
 
 /// Lowers codegen fixtures to EIR, runs the default-on IR optimizer, and validates the result.
-fn lower_and_validate_ir_for_codegen_fixture(
+pub(crate) fn lower_and_validate_ir_for_codegen_fixture(
     program: &elephc::parser::ast::Program,
     check_result: &elephc::types::CheckResult,
-    class_source_files: &std::collections::HashMap<String, String>,
-    function_source_files: &std::collections::HashMap<String, String>,
+    source_path: &Path,
 ) -> elephc::ir::Module {
-    let mut module = elephc::ir_lower::lower_program(
+    let mut module = elephc::ir_lower::lower_program_with_source_path(
         program,
         check_result,
         target(),
-        class_source_files,
-        function_source_files,
+        source_path,
     )
-    .expect("AST-to-EIR lowering failed for codegen fixture");
+        .expect("AST-to-EIR lowering failed for codegen fixture");
     if ir_opt_enabled_for_codegen_fixture() {
         elephc::ir_passes::optimize_module(&mut module);
     }
@@ -343,6 +181,10 @@ pub(crate) fn inject_main_exit_harness(asm: &str, harness: &str) -> String {
         (Platform::MacOS, Arch::AArch64) => "    mov x0, #0\n    mov x16, #1\n    svc #0x80",
         (Platform::Linux, Arch::AArch64) => "    mov x0, #0\n    mov x8, #93\n    svc #0",
         (Platform::Linux, Arch::X86_64) => "    mov edi, 0\n    mov eax, 60\n    syscall",
+        (_, Arch::AArch64) => panic!(
+            "main exit harness is not implemented yet for target {}",
+            target()
+        ),
         (_, Arch::X86_64) => panic!(
             "main exit harness is not implemented yet for target {}",
             target()
@@ -663,4 +505,46 @@ fn compile_and_run_with_repr(source: &str, null_repr: elephc::codegen::NullRepr)
 
     let _ = fs::remove_dir_all(&dir);
     elephc_out
+}
+
+/// Runs the frontend through type checking ONLY (tokenize → parse → resolve → name-resolve →
+/// autoload → conditional-function hoist → prelude injection → pre-checker extension fold →
+/// checker), mirroring `compile_source_to_asm_with_defines_repr`'s front half, and returns the
+/// checker's error message. Panics if `source` type-checks cleanly (use this only for fixtures
+/// that must fail). Used for asserting a specific compile-time diagnostic without paying for a
+/// full assemble/link/run cycle.
+pub(crate) fn compile_expect_check_error(source: &str) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("elephc_check_err_{}_{}", std::process::id(), id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
+    let ast = elephc::parser::parse(&tokens).expect("parse failed");
+    let synthetic_main = dir.join("test.php");
+    let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
+    let ast = elephc::conditional::apply(ast, &HashSet::new());
+    let (autoload_registry, ast) = elephc::autoload::Registry::build(&dir, ast);
+    let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
+    let resolved = elephc::autoload::collect_aliases(resolved);
+    let resolved = elephc::pdo_prelude::inject_if_used(resolved, false);
+    let resolved = elephc::tz_prelude::inject_if_used(resolved, false);
+    let resolved = elephc::list_id_prelude::inject_if_used(resolved);
+    let resolved = elephc::image_prelude::inject_if_used(resolved, false);
+    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+    let (resolved, _autoload_warnings) =
+        elephc::autoload::run(resolved, &dir, &autoload_registry).expect("autoload failed");
+    let resolved = elephc::resolver::hoist_conditional_function_declarations(resolved);
+    let resolved = elephc::var_export_prelude::inject_if_used(resolved);
+    let resolved = elephc::shutdown_prelude::inject_if_used(resolved);
+    let resolved = elephc::optimize::fold_constants(resolved);
+    let pre_check_extension_set = elephc::optimize::FunctionExistenceSet::for_pre_check(&resolved);
+    let resolved = elephc::optimize::fold_function_existence(resolved, &pre_check_extension_set);
+    let resolved = elephc::optimize::prune_dead_static_branches(resolved);
+    let result = elephc::types::check_with_target(&resolved, target());
+
+    let _ = fs::remove_dir_all(&dir);
+    match result {
+        Ok(_) => panic!("expected source to fail type checking, but it checked cleanly"),
+        Err(e) => e.message,
+    }
 }

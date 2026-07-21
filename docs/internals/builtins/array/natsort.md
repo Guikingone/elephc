@@ -2,15 +2,15 @@
 title: "natsort() — internals"
 description: "Compiler internals for natsort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 39
+  order: 56
 ---
 
 ## `natsort()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1106](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1106) (`lower_natsort`)
+- **Signature**: [`src/builtins/array/natsort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/natsort.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1109](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1109) (`lower_natsort`)
 - **Function symbol**: `lower_natsort()`
 
 
@@ -35,7 +35,12 @@ function natsort(array $array): bool
 - **Arity**: takes exactly 1 argument.
 - **By-reference parameters**: `$array`.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/natsort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/natsort.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `values`
+- **By-reference parameters**: `$array`.
+
 ## Cross-references
 
 - [User reference for `natsort()`](../../../php/builtins/array/natsort.md)
-

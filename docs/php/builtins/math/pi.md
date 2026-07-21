@@ -1,8 +1,8 @@
 ---
 title: "pi()"
-description: "Lowers `pi()` as the same data-section float constant used by the legacy backend."
+description: "Gets value of pi."
 sidebar:
-  order: 243
+  order: 277
 ---
 
 ## pi()
@@ -11,11 +11,16 @@ sidebar:
 function pi(): float
 ```
 
-Lowers `pi()` as the same data-section float constant used by the legacy backend.
+Gets value of pi.
 
 **Parameters**: none.
 
 **Returns**: `float`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/pi.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/pi.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

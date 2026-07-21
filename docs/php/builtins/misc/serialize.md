@@ -1,8 +1,8 @@
 ---
 title: "serialize()"
-description: "serialize() — misc builtin supported by Elephc."
+description: "Generates a storable representation of a value."
 sidebar:
-  order: 270
+  order: 298
 ---
 
 ## serialize()
@@ -11,12 +11,17 @@ sidebar:
 function serialize(mixed $value): string
 ```
 
-`serialize()` is a misc builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Generates a storable representation of a value.
 
 **Parameters**:
 - `$value` (`mixed`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
@@ -25,4 +30,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `serialize` is implemented in the compiler, see [the internals page](../../../internals/builtins/misc/serialize.md).
 

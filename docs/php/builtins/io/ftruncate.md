@@ -1,8 +1,8 @@
 ---
 title: "ftruncate()"
-description: "Lowers `ftruncate(stream, size)` through the shared fd truncate runtime helper."
+description: "Truncates a file to a given length."
 sidebar:
-  order: 158
+  order: 179
 ---
 
 ## ftruncate()
@@ -11,13 +11,18 @@ sidebar:
 function ftruncate(resource $stream, int $size): bool
 ```
 
-Lowers `ftruncate(stream, size)` through the shared fd truncate runtime helper.
+Truncates a file to a given length.
 
 **Parameters**:
 - `$stream` (`resource`)
 - `$size` (`int`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/ftruncate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/ftruncate.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

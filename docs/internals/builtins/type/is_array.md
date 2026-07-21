@@ -2,15 +2,15 @@
 title: "is_array() — internals"
 description: "Compiler internals for is_array(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 421
+  order: 438
 ---
 
 ## `is_array()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:1772](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L1772) (`lower_is_array`)
+- **Signature**: [`src/builtins/types/is_array.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_array.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1621](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1621) (`lower_is_array`)
 - **Function symbol**: `lower_is_array()`
 
 
@@ -34,7 +34,11 @@ function is_array(mixed $value): bool
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/is_array.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_array.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `is_array()`](../../../php/builtins/type/is_array.md)
-

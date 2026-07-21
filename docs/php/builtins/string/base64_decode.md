@@ -1,23 +1,27 @@
 ---
 title: "base64_decode()"
-description: "Lowers `base64_decode(string $string, bool $strict = false)`."
+description: "Decodes a Base64-encoded string back into its original data."
 sidebar:
-  order: 326
+  order: 357
 ---
 
 ## base64_decode()
 
 ```php
-function base64_decode(string $string, bool $strict): string
+function base64_decode(string $string): string
 ```
 
-Lowers `base64_decode(string $string, bool $strict = false)`.
+Decodes a Base64-encoded string back into its original data.
 
 **Parameters**:
 - `$string` (`string`)
-- `$strict` (`bool`), optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/base64_decode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/base64_decode.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,8 @@
 ---
 title: "stream_get_wrappers()"
-description: "Lowers `stream_get_wrappers()` to the static built-in wrapper list."
+description: "Retrieves list of registered streams."
 sidebar:
-  order: 189
+  order: 223
 ---
 
 ## stream_get_wrappers()
@@ -11,11 +11,16 @@ sidebar:
 function stream_get_wrappers(): array
 ```
 
-Lowers `stream_get_wrappers()` to the static built-in wrapper list.
+Retrieves list of registered streams.
 
 **Parameters**: none.
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/stream_get_wrappers.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/stream_get_wrappers.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

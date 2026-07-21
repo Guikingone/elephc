@@ -1647,3 +1647,233 @@ echo $g();
     );
     assert_eq!(out, "99");
 }
+/// Regression for #487: a value the register allocator parks in a callee-saved register
+/// across an indirect callable invoke (here the loaded LHS of `$acc += $f()`) must survive
+/// the call. The generated descriptor-invoker trampoline used callee-saved registers as
+/// scratch without saving them, so the accumulator read back as the trampoline's leftover
+/// (the empty args-array length, 0) and only the last call's value survived.
+#[test]
+fn test_compound_assign_closure_call_rhs_accumulates() {
+    let out = compile_and_run(
+        r#"<?php
+$f = function (): int { return 4; };
+$acc = 0;
+for ($n = 0; $n < 20; $n++) { $acc += $f(); }
+echo $acc;
+"#,
+    );
+    assert_eq!(out, "80");
+}
+
+/// Regression for #487: same defect through a callable string and a first-class callable,
+/// with subtraction and multiplication (any operator whose LHS lives across the invoke).
+#[test]
+fn test_compound_assign_indirect_call_rhs_operators() {
+    let out = compile_and_run(
+        r#"<?php
+function four(): int { return 4; }
+$byName = 'four';
+$fcc = four(...);
+$a = 100;
+for ($n = 0; $n < 20; $n++) { $a -= $byName(); }
+$m = 1;
+for ($n = 0; $n < 5; $n++) { $m *= $fcc(); }
+echo $a, "|", $m;
+"#,
+    );
+    assert_eq!(out, "20|1024");
+}
+
+/// Regression for #487: the non-compound spelling and a property target exercise the same
+/// live-across-invoke registers.
+#[test]
+fn test_value_live_across_closure_invoke_survives() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public int $p = 0; }
+$f = function (): int { return 4; };
+$acc = 0;
+$b = new Box();
+for ($n = 0; $n < 20; $n++) {
+    $acc = $acc + $f();
+    $b->p += $f();
+}
+echo $acc, "|", $b->p;
+"#,
+    );
+    assert_eq!(out, "80|80");
+}
+
+/// Verifies that indirect calls with float overflow arguments use only volatile FP scratch state.
+#[test]
+fn test_indirect_float_overflow_uses_volatile_scratch() {
+    let dir = make_cli_test_dir("elephc_indirect_float_overflow_volatile_scratch");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$sum = function(
+    float $a, float $b, float $c, float $d, float $e,
+    float $f, float $g, float $h, float $i
+): float {
+    return $a + $b + $c + $d + $e + $f + $g + $h + $i;
+};
+echo $sum(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    match target().arch {
+        Arch::AArch64 => {
+            assert!(
+                user_asm.contains("d31"),
+                "AArch64 float overflow should exercise d31 staging:\n{}",
+                user_asm
+            );
+            assert!(
+                !user_asm.contains("d15"),
+                "AArch64 call lowering must preserve callee-saved d15:\n{}",
+                user_asm
+            );
+        }
+        Arch::X86_64 => assert!(
+            user_asm.contains("xmm15"),
+            "x86_64 float overflow should exercise xmm15 staging:\n{}",
+            user_asm
+        ),
+    }
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "45");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies that `call_user_func` dispatches a boxed-Mixed callback by runtime tag.
+///
+/// A callable stored in a `mixed` property is read back boxed, so the checker sees
+/// a Mixed callback and the backend routes it through `callable_descriptor_invoke`,
+/// which unboxes and dispatches on the runtime tag: a string function name (tag 1)
+/// through the per-candidate function lookup, and a closure descriptor (tag 10)
+/// directly. This is the mechanism the legacy 6-callable `session_set_save_handler`
+/// form relies on. Fixture registers one of each kind and expects both to invoke.
+#[test]
+fn test_call_user_func_dispatches_boxed_mixed_string_and_closure_callback() {
+    let out = compile_and_run(
+        r#"<?php
+function ext_reader(string $id): string { return "S:" . $id; }
+class Adapter {
+    public mixed $cb;
+    public function __construct(mixed $cb) { $this->cb = $cb; }
+    public function run(string $id): string { return (string)call_user_func($this->cb, $id); }
+}
+function make(mixed $cb): string {
+    $a = new Adapter($cb);
+    return $a->run("id");
+}
+echo make('ext_reader');
+echo make(function (string $id): string { return "C:" . $id; });
+"#,
+    );
+    assert_eq!(out, "S:idC:id");
+}
+
+/// Verifies that `call_user_func` dispatches a boxed-Mixed `[$obj, "method"]` callback.
+///
+/// An `[$obj, "method"]` array stored in a `mixed` property boxes to a runtime Mixed
+/// cell (indexed-array tag 4), so the checker sees a Mixed callback and the backend
+/// routes it through `callable_descriptor_invoke`. Regression: the boxed-array tag
+/// used to fall through to the "not callable" fatal; it now re-unboxes the array,
+/// fills the receiver/method selector slots, and dispatches the matching public
+/// instance method by runtime class-id — the form PHP session save handlers use.
+#[test]
+fn test_call_user_func_dispatches_boxed_mixed_instance_method_array_callback() {
+    let out = compile_and_run(
+        r#"<?php
+class Handler {
+    public function greet(string $id): string { return "H:" . $id; }
+}
+class Adapter {
+    public mixed $cb;
+    public function __construct(mixed $cb) { $this->cb = $cb; }
+    public function run(string $id): string { return (string)call_user_func($this->cb, $id); }
+}
+function make(mixed $cb): string {
+    $a = new Adapter($cb);
+    return $a->run("id");
+}
+$h = new Handler();
+echo make([$h, 'greet']);
+"#,
+    );
+    assert_eq!(out, "H:id");
+}
+
+/// Verifies boxed-Mixed callbacks dispatch invokable objects and static method
+/// arrays instead of treating those valid PHP callable forms as non-callable.
+#[test]
+fn test_call_user_func_dispatches_boxed_mixed_invokable_and_static_callbacks() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Handler {
+    public function __invoke(string $id): string { return "I:" . $id; }
+    public static function greet(string $id): string { return "S:" . $id; }
+}
+class Adapter {
+    public mixed $cb;
+    public function __construct(mixed $cb) { $this->cb = $cb; }
+    public function run(string $id): string { return (string)call_user_func($this->cb, $id); }
+}
+function dispatch(mixed $cb): string {
+    $adapter = new Adapter($cb);
+    return $adapter->run("id");
+}
+echo dispatch(new Handler());
+echo dispatch(["Handler", "greet"]);
+"#,
+    );
+    assert!(
+        out.success,
+        "callable dispatch failed: stdout={:?} stderr={:?}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(out.stdout, "I:idS:id");
+}
+
+/// Regression: a boxed callable array shorter than two elements must take a
+/// deterministic fatal path before codegen reads receiver/method slots out of bounds.
+#[test]
+fn test_call_user_func_rejects_short_boxed_mixed_callable_array_without_oob() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Handler {
+    public function greet(string $id): string { return $id; }
+}
+class Adapter {
+    public mixed $cb;
+    public function __construct(mixed $cb) { $this->cb = $cb; }
+    public function run(): string { return (string)call_user_func($this->cb, "id"); }
+}
+$handler = new Handler();
+$adapter = new Adapter([$handler]);
+echo $adapter->run();
+"#,
+    );
+
+    assert!(!out.success, "short callable array unexpectedly ran: {}", out.stdout);
+    assert!(
+        out.stderr
+            .contains("Fatal error: callable array did not resolve to an invokable target"),
+        "short callable array should fail cleanly, got: {}",
+        out.stderr
+    );
+}

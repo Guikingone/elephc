@@ -73,6 +73,8 @@ fn dummy_check_result() -> CheckResult {
         "f".to_string(),
         FunctionSig {
             params: vec![("x".to_string(), PhpType::Int)],
+            param_type_exprs: vec![None],
+            param_attributes: Vec::new(),
             defaults: vec![None],
             return_type: PhpType::Int,
             declared_return: true,
@@ -120,7 +122,10 @@ fn dummy_check_result() -> CheckResult {
     CheckResult {
         global_env: HashMap::new(),
         functions,
+        function_attribute_names: HashMap::new(),
+        function_attribute_args: HashMap::new(),
         callable_param_sigs: HashMap::new(),
+        return_alias_summaries: Default::default(),
         callable_return_sigs: HashMap::new(),
         callable_array_return_sigs: HashMap::new(),
         interfaces: HashMap::new(),
@@ -133,6 +138,7 @@ fn dummy_check_result() -> CheckResult {
         required_libraries: Vec::new(),
         warnings: Vec::new(),
         func_args_functions: std::collections::HashSet::new(),
+        throw_access_sites: HashMap::new(),
     }
 }
 
@@ -140,6 +146,8 @@ fn dummy_check_result() -> CheckResult {
 fn class_info(_class_name: &str) -> ClassInfo {
     let method_sig = FunctionSig {
         params: Vec::new(),
+        param_type_exprs: Vec::new(),
+        param_attributes: Vec::new(),
         defaults: Vec::new(),
         return_type: PhpType::Int,
         declared_return: true,
@@ -155,19 +163,26 @@ fn class_info(_class_name: &str) -> ClassInfo {
     static_methods.insert("sm".to_string(), method_sig);
     ClassInfo {
         class_id: 1,
+        declaration_span: crate::span::Span::dummy(),
         parent: None,
         is_abstract: false,
         is_final: false,
         is_readonly_class: false,
         allow_dynamic_properties: true,
         constants: HashMap::new(),
+        constant_types: HashMap::new(),
+        constant_visibilities: Default::default(),
+        final_constants: Default::default(),
         attribute_names: Vec::new(),
         attribute_args: Vec::new(),
         method_attribute_names: HashMap::new(),
         method_attribute_args: HashMap::new(),
         property_attribute_names: HashMap::new(),
         property_attribute_args: HashMap::new(),
+        constant_attribute_names: HashMap::new(),
+        constant_attribute_args: HashMap::new(),
         used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
         properties: Vec::new(),
         property_offsets: HashMap::new(),
         property_declaring_classes: HashMap::new(),
@@ -175,11 +190,14 @@ fn class_info(_class_name: &str) -> ClassInfo {
         property_visibilities: HashMap::new(),
         property_set_visibilities: HashMap::new(),
         declared_properties: Default::default(),
+        property_declared_slots: Vec::new(),
         final_properties: Default::default(),
         readonly_properties: Default::default(),
         reference_properties: Default::default(),
         owned_reference_properties: Default::default(),
         rebound_reference_properties: Default::default(),
+        promoted_properties: Default::default(),
+        property_reference_slots: Vec::new(),
         abstract_properties: Default::default(),
         abstract_property_hooks: HashMap::new(),
         static_properties: Vec::new(),
@@ -188,10 +206,11 @@ fn class_info(_class_name: &str) -> ClassInfo {
         static_property_visibilities: HashMap::new(),
         declared_static_properties: Default::default(),
         final_static_properties: Default::default(),
-        own_property_decl_order: Vec::new(),
         method_decls: Vec::new(),
         methods,
         static_methods,
+        late_static_method_returns: Default::default(),
+        late_static_static_method_returns: Default::default(),
         callable_method_return_sigs: HashMap::new(),
         callable_array_method_return_sigs: HashMap::new(),
         method_visibilities: HashMap::new(),
@@ -215,14 +234,8 @@ fn class_info(_class_name: &str) -> ClassInfo {
 fn lower_program(program: Program) -> String {
     let target = Target::detect_host();
     let check_result = dummy_check_result();
-    let module = crate::ir_lower::lower_program(
-        &program,
-        &check_result,
-        target,
-        &HashMap::new(),
-        &HashMap::new(),
-    )
-    .expect("synthetic AST should lower to valid EIR");
+    let module = crate::ir_lower::lower_program(&program, &check_result, target, false)
+        .expect("synthetic AST should lower to valid EIR");
     let text = print_module(&module);
     assert!(text.contains("function main"), "expected main function in {text}");
     text
@@ -288,6 +301,7 @@ fn lowers_every_expr_variant_smoke() {
         expr(ExprKind::Closure {
             params: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: None,
             by_ref_return: false,
@@ -333,6 +347,7 @@ fn lowers_every_expr_variant_smoke() {
         expr(ExprKind::ClassConstant { receiver: StaticReceiver::Self_ }),
         expr(ExprKind::ClassConstant { receiver: StaticReceiver::Static }),
         expr(ExprKind::ClassConstant { receiver: StaticReceiver::Parent }),
+        expr(ExprKind::ObjectClassName { object: Box::new(object.clone()) }),
         expr(ExprKind::ScopedConstantAccess { receiver: StaticReceiver::Named(name("C")), name: "K".to_string() }),
         expr(ExprKind::DynamicClassConstantAccess { object: Box::new(object.clone()), name: "K".to_string() }),
         expr(ExprKind::DynamicStaticPropertyAccess { receiver: StaticReceiver::Named(name("C")), property: Box::new(str_lit("p")) }),
@@ -366,6 +381,7 @@ fn lowers_every_stmt_variant_smoke() {
         is_static: false,
         is_abstract: false,
         by_ref: false,
+        is_promoted: false,
         default: Some(int(0)),
         span: sp(),
         attributes: Vec::new(),
@@ -374,6 +390,7 @@ fn lowers_every_stmt_variant_smoke() {
         name: "K".to_string(),
         visibility: Visibility::Public,
         is_final: false,
+        type_expr: None,
         value: int(1),
         span: sp(),
         attributes: Vec::new(),
@@ -436,7 +453,9 @@ fn lowers_every_stmt_variant_smoke() {
         stmt(StmtKind::FunctionDecl {
             name: "f".to_string(),
             params: vec![("x".to_string(), Some(TypeExpr::Int), None, false)],
+            param_attributes: Vec::new(),
             variadic: None,
+            variadic_by_ref: false,
             variadic_type: None,
             return_type: Some(TypeExpr::Int),
             by_ref_return: false,
@@ -461,7 +480,7 @@ fn lowers_every_stmt_variant_smoke() {
             methods: vec![method.clone(), static_method.clone()],
             constants: vec![class_const.clone()],
         }),
-        stmt(StmtKind::EnumDecl { name: "E".to_string(), backing_type: Some(TypeExpr::Int), cases: vec![EnumCaseDecl { name: "A".to_string(), value: Some(int(1)), span: sp(), attributes: Vec::new() }], implements: Vec::new(), methods: Vec::new(), constants: Vec::new() }),
+        stmt(StmtKind::EnumDecl { name: "E".to_string(), backing_type: Some(TypeExpr::Int), cases: vec![EnumCaseDecl { name: "A".to_string(), value: Some(int(1)), span: sp(), attributes: Vec::new() }], implements: Vec::new(), trait_uses: Vec::new(), methods: Vec::new(), constants: Vec::new() }),
         stmt(StmtKind::PackedClassDecl { name: "P".to_string(), fields: vec![PackedField { name: "x".to_string(), type_expr: TypeExpr::Int, span: sp() }] }),
         stmt(StmtKind::InterfaceDecl { name: "I".to_string(), extends: Vec::new(), properties: Vec::new(), methods: Vec::new(), constants: Vec::new() }),
         stmt(StmtKind::TraitDecl { name: "T".to_string(), trait_uses: Vec::new(), properties: Vec::new(), methods: vec![method], constants: vec![class_const] }),
@@ -495,7 +514,9 @@ fn class_method(name: &str, is_static: bool) -> ClassMethod {
         is_final: false,
         has_body: true,
         params: Vec::new(),
+        param_attributes: Vec::new(),
         variadic: None,
+        variadic_by_ref: false,
         variadic_type: None,
         return_type: Some(TypeExpr::Int),
         by_ref_return: false,

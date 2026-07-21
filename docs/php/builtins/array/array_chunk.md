@@ -1,24 +1,28 @@
 ---
 title: "array_chunk()"
-description: "Lowers `array_chunk()` by splitting an indexed array into nested indexed arrays."
+description: "Splits an array into chunks of the given size."
 sidebar:
-  order: 1
+  order: 3
 ---
 
 ## array_chunk()
 
 ```php
-function array_chunk(array $array, int $length, bool $preserve_keys): array
+function array_chunk(array $array, int $length): array
 ```
 
-Lowers `array_chunk()` by splitting an indexed array into nested indexed arrays.
+Splits an array into chunks of the given size.
 
 **Parameters**:
 - `$array` (`array`)
 - `$length` (`int`)
-- `$preserve_keys` (`bool`)
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_chunk.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_chunk.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

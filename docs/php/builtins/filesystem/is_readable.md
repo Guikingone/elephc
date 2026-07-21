@@ -1,8 +1,8 @@
 ---
 title: "is_readable()"
-description: "Lowers `is_readable(path)` through the target-aware runtime access helper."
+description: "Tells whether the filename is readable."
 sidebar:
-  order: 109
+  order: 130
 ---
 
 ## is_readable()
@@ -11,12 +11,17 @@ sidebar:
 function is_readable(string $filename): bool
 ```
 
-Lowers `is_readable(path)` through the target-aware runtime access helper.
+Tells whether the filename is readable.
 
 **Parameters**:
 - `$filename` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/is_readable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/is_readable.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

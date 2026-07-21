@@ -593,6 +593,8 @@ mod tests {
                 return_type: None,
                 by_ref_return: false,
                 body: Vec::new(),
+                param_attributes: Vec::new(),
+                variadic_by_ref: false,
             },
             Span::dummy(),
         );

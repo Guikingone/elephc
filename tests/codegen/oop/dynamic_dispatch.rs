@@ -57,6 +57,48 @@ fn test_dynamic_instance_method_brace_form() {
     assert_eq!(out, "r");
 }
 
+/// Verifies that `$obj?->$method()` dispatches dynamically when non-null and returns null when
+/// the receiver is null without evaluating arguments.
+#[test]
+fn test_nullsafe_dynamic_instance_method_call() {
+    let out = compile_and_run(
+        "<?php
+        class C {
+            public function run(string $value): string { return \"run:\" . $value; }
+        }
+        function skipped_arg(): string { echo \"arg:\"; return \"skip\"; }
+        $c = null;
+        $method = \"run\";
+        echo $c?->$method(skipped_arg()) ?? \"none\";
+        echo \"|\";
+        $c = new C();
+        echo $c?->$method(\"ok\");
+        ",
+    );
+    assert_eq!(out, "none|run:ok");
+}
+
+/// Verifies that the brace form `$obj?->{$expr}()` skips the method-name expression and
+/// arguments on the null branch, then dispatches dynamically on the non-null branch.
+#[test]
+fn test_nullsafe_dynamic_instance_method_brace_form_is_lazy() {
+    let out = compile_and_run(
+        "<?php
+        class Greeter {
+            public function hello(string $value): string { echo \"method:\"; return $value; }
+        }
+        function method_name(): string { echo \"name:\"; return \"hello\"; }
+        function skipped_arg(): string { echo \"arg:\"; return \"skip\"; }
+        $g = null;
+        echo $g?->{method_name()}(skipped_arg()) ?? \"none\";
+        echo \"|\";
+        $g = new Greeter();
+        echo $g?->{method_name()}(\"ok\");
+        ",
+    );
+    assert_eq!(out, "none|name:method:ok");
+}
+
 /// Verifies that `$cls::method()` dispatches to a static method on the named class.
 #[test]
 fn test_dynamic_static_call_literal_method() {
@@ -138,4 +180,48 @@ fn test_dynamic_static_call_on_literal_class_with_args() {
         ",
     );
     assert_eq!(out, "9");
+}
+
+/// Regression: a function with *no* return type annotation whose body returns a
+/// method call on a `mixed` receiver must infer a `mixed` return type, not `int`.
+/// Previously the method-call-on-`mixed` inference fell back to `int`, so the
+/// inferred function return type coerced the boxed string result to `0`.
+#[test]
+fn test_inferred_return_of_mixed_receiver_method_keeps_string() {
+    let out = compile_and_run(
+        "<?php
+        class Foo { public function hi(): string { return \"hi\"; } }
+        function call_it(mixed $x) { return $x->hi(); }
+        echo \"[\", call_it(new Foo()), \"]\";
+        ",
+    );
+    assert_eq!(out, "[hi]");
+}
+
+/// Regression: the same inferred-return path must still carry integer results
+/// correctly (the `mixed` widening must not break the scalar case).
+#[test]
+fn test_inferred_return_of_mixed_receiver_method_keeps_int() {
+    let out = compile_and_run(
+        "<?php
+        class Counter { public function n(): int { return 7; } }
+        function get_n(mixed $x) { return $x->n(); }
+        echo get_n(new Counter()) + 1;
+        ",
+    );
+    assert_eq!(out, "8");
+}
+
+/// Regression: an inferred `mixed` return flowing into string concatenation must
+/// materialize the boxed string, not a coerced scalar.
+#[test]
+fn test_inferred_mixed_receiver_method_in_concat() {
+    let out = compile_and_run(
+        "<?php
+        class Foo { public function name(): string { return \"world\"; } }
+        function call_it(mixed $x) { return $x->name(); }
+        echo \"hello \" . call_it(new Foo());
+        ",
+    );
+    assert_eq!(out, "hello world");
 }

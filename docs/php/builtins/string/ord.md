@@ -1,8 +1,8 @@
 ---
 title: "ord()"
-description: "Lowers `ord()` by returning the first byte of a string or zero for empty input."
+description: "Returns the ASCII value of the first character of a string."
 sidebar:
-  order: 366
+  order: 392
 ---
 
 ## ord()
@@ -11,12 +11,17 @@ sidebar:
 function ord(string $character): int
 ```
 
-Lowers `ord()` by returning the first byte of a string or zero for empty input.
+Returns the ASCII value of the first character of a string.
 
 **Parameters**:
 - `$character` (`string`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/ord.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/ord.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

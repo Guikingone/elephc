@@ -1,8 +1,8 @@
 ---
 title: "filesize()"
-description: "Lowers `filesize(path)` through the target-aware runtime stat helper."
+description: "Gets file size."
 sidebar:
-  order: 99
+  order: 120
 ---
 
 ## filesize()
@@ -11,12 +11,17 @@ sidebar:
 function filesize(string $filename): int
 ```
 
-Lowers `filesize(path)` through the target-aware runtime stat helper.
+Gets file size.
 
 **Parameters**:
 - `$filename` (`string`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/filesize.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/filesize.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

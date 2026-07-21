@@ -121,3 +121,16 @@ $right = new Bag();
 $right->items = &$left->items;     // $right->items aliases $left->items
 $left->items[] = "shared";
 echo implode(", ", $right->items), "\n"; // shared
+// --- Aliasing an indexed-array element (write-through both ways) ---
+$nums = [1, 2, 3];
+$second = &$nums[1];             // $second aliases the array's element 1
+$second = 99;                    // writes through to the array
+echo implode(", ", $nums), "\n"; // 1, 99, 3
+$nums[1] = 42;                   // writes through to the alias
+echo $second, "\n";              // 42
+
+// --- Aliasing a string array element ---
+$words = ["hello", "world"];
+$first = &$words[0];
+$first = "HEY";
+echo $words[0], "\n";            // HEY

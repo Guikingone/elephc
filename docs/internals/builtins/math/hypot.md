@@ -2,15 +2,15 @@
 title: "hypot() — internals"
 description: "Compiler internals for hypot(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 232
+  order: 266
 ---
 
 ## `hypot()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/math/libm.rs`:43](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/math/libm.rs#L43) (`lower_hypot`)
+- **Signature**: [`src/builtins/math/hypot.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/hypot.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math/libm.rs`:43](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math/libm.rs#L43) (`lower_hypot`)
 - **Function symbol**: `lower_hypot()`
 
 
@@ -32,7 +32,11 @@ function hypot(float $x, float $y): float
 
 - **Arity**: takes exactly 2 arguments.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/hypot.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/hypot.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `hypot()`](../../../php/builtins/math/hypot.md)
-

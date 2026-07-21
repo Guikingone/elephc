@@ -60,6 +60,11 @@ $m->v();
         "Method M::v expects at least 1 arguments, got 0",
     );
 }
+// NOTE: class_exists() (and the other class-like existence probes) accept a
+// dynamic autoload flag: it never contributes an AOT autoload demand and
+// existence still folds from the literal class name. Only the class-relation
+// builtins (class_implements/class_parents/class_uses) keep the literal
+// autoload requirement, covered below.
 
 /// Gated dynamic-invoker form: first-class-callable syntax (`f(...)`) creates a generic
 /// callable descriptor invoked later through the uniform-invoke ABI, which does not know

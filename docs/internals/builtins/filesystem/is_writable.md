@@ -2,15 +2,15 @@
 title: "is_writable() — internals"
 description: "Compiler internals for is_writable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 110
+  order: 131
 ---
 
 ## `is_writable()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:4973](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L4973) (`lower_is_writable`)
+- **Signature**: [`src/builtins/io/is_writable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/is_writable.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5612](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5612) (`lower_is_writable`)
 - **Function symbol**: `lower_is_writable()`
 
 
@@ -35,7 +35,11 @@ function is_writable(string $filename): bool
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/is_writable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/is_writable.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `is_writable()`](../../../php/builtins/filesystem/is_writable.md)
-

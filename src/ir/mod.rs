@@ -34,11 +34,11 @@ pub use function::{
 };
 pub use instr::{
     BuiltinId, CmpPredicate, Immediate, InstId, Instruction, MixedNumericOp, Op, RuntimeId,
-    StrBitKind,
+    PassOrigin, StrBitKind,
 };
 pub use module::{
     ClassTable, ConstScalar, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl,
-    InterfaceTable, Module, PackedLayoutTable,
+    InterfaceTable, Module, PackedLayoutTable, TraitMethodInfo,
 };
 pub use print::{print_function, print_module};
 pub use types::{IrHeapKind, IrType};

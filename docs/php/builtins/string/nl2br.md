@@ -1,23 +1,27 @@
 ---
 title: "nl2br()"
-description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
+description: "Inserts HTML line breaks before newlines in a string."
 sidebar:
-  order: 363
+  order: 390
 ---
 
 ## nl2br()
 
 ```php
-function nl2br(string $string, bool $use_xhtml): string
+function nl2br(string $string): string
 ```
 
-Lowers a one-argument string builtin that directly delegates to a runtime helper.
+Inserts HTML line breaks before newlines in a string.
 
 **Parameters**:
 - `$string` (`string`)
-- `$use_xhtml` (`bool`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/nl2br.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/nl2br.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

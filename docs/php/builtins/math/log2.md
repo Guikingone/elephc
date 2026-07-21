@@ -1,8 +1,8 @@
 ---
 title: "log2()"
-description: "log2() — math builtin supported by Elephc."
+description: "Returns the base-2 logarithm of a number."
 sidebar:
-  order: 239
+  order: 273
 ---
 
 ## log2()
@@ -11,12 +11,17 @@ sidebar:
 function log2(float $num): float
 ```
 
-`log2()` is a math builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Returns the base-2 logarithm of a number.
 
 **Parameters**:
 - `$num` (`float`)
 
 **Returns**: `float`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/log2.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/log2.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
@@ -25,4 +30,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `log2` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/log2.md).
 

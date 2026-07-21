@@ -1,8 +1,8 @@
 ---
 title: "is_link()"
-description: "Lowers `is_link(path)` through the target-aware runtime lstat helper."
+description: "Tells whether the filename is a symbolic link."
 sidebar:
-  order: 108
+  order: 129
 ---
 
 ## is_link()
@@ -11,12 +11,17 @@ sidebar:
 function is_link(string $filename): bool
 ```
 
-Lowers `is_link(path)` through the target-aware runtime lstat helper.
+Tells whether the filename is a symbolic link.
 
 **Parameters**:
 - `$filename` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/is_link.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/is_link.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

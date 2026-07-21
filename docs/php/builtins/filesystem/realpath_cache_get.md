@@ -1,8 +1,8 @@
 ---
 title: "realpath_cache_get()"
-description: "Lowers `realpath_cache_get()` to elephc's empty realpath-cache view."
+description: "Returns realpath cache entries."
 sidebar:
-  order: 123
+  order: 144
 ---
 
 ## realpath_cache_get()
@@ -11,11 +11,16 @@ sidebar:
 function realpath_cache_get(): array
 ```
 
-Lowers `realpath_cache_get()` to elephc's empty realpath-cache view.
+Returns realpath cache entries.
 
 **Parameters**: none.
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/realpath_cache_get.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/realpath_cache_get.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

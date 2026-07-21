@@ -1,8 +1,8 @@
 ---
 title: "fdatasync()"
-description: "Lowers `fdatasync(stream)` through the shared fd data-sync runtime helper."
+description: "Synchronizes data (but not meta-data) to file."
 sidebar:
-  order: 138
+  order: 159
 ---
 
 ## fdatasync()
@@ -11,12 +11,17 @@ sidebar:
 function fdatasync(resource $stream): bool
 ```
 
-Lowers `fdatasync(stream)` through the shared fd data-sync runtime helper.
+Synchronizes data (but not meta-data) to file.
 
 **Parameters**:
 - `$stream` (`resource`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fdatasync.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fdatasync.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

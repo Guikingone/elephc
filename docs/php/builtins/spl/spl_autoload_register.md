@@ -1,24 +1,29 @@
 ---
 title: "spl_autoload_register()"
-description: "Lowers autoload registration stubs by preserving arg effects and returning true."
+description: "Register given function as __autoload() implementation."
 sidebar:
-  order: 314
+  order: 345
 ---
 
 ## spl_autoload_register()
 
 ```php
-function spl_autoload_register(callable $callback, bool $throw, bool $prepend): bool
+function spl_autoload_register(callable $callback = null, bool $throw = true, bool $prepend = false): bool
 ```
 
-Lowers autoload registration stubs by preserving arg effects and returning true.
+Register given function as __autoload() implementation.
 
 **Parameters**:
-- `$callback` (`callable`), optional
-- `$throw` (`bool`), optional
-- `$prepend` (`bool`), optional
+- `$callback` (`callable`), default `null`, optional
+- `$throw` (`bool`), default `true`, optional
+- `$prepend` (`bool`), default `false`, optional
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload_register.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload_register.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

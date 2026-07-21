@@ -1,25 +1,30 @@
 ---
 title: "stream_socket_enable_crypto()"
-description: "Lowers `stream_socket_enable_crypto(stream, enable, method?, session_stream?)`."
+description: "Turns encryption on/off on an already connected socket."
 sidebar:
-  order: 201
+  order: 235
 ---
 
 ## stream_socket_enable_crypto()
 
 ```php
-function stream_socket_enable_crypto(resource $stream, bool $enable, int $crypto_method, resource $session_stream): bool
+function stream_socket_enable_crypto(resource $stream, bool $enable, int $crypto_method = null, resource $session_stream = null): bool
 ```
 
-Lowers `stream_socket_enable_crypto(stream, enable, method?, session_stream?)`.
+Turns encryption on/off on an already connected socket.
 
 **Parameters**:
 - `$stream` (`resource`)
 - `$enable` (`bool`)
-- `$crypto_method` (`int`), optional
-- `$session_stream` (`resource`), optional
+- `$crypto_method` (`int`), default `null`, optional
+- `$session_stream` (`resource`), default `null`, optional
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_enable_crypto.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_enable_crypto.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

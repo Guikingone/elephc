@@ -2,15 +2,15 @@
 title: "phpversion() — internals"
 description: "Compiler internals for phpversion(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 271
+  order: 296
 ---
 
 ## `phpversion()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:856](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L856) (`lower_phpversion`)
+- **Signature**: [`src/builtins/system/phpversion.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/phpversion.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:543](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L543) (`lower_phpversion`)
 - **Function symbol**: `lower_phpversion()`
 
 
@@ -20,20 +20,23 @@ sidebar:
 
 ## Runtime helpers
 
-The following runtime helpers are referenced:
-- `__rt_defined`
+_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
 
 ## Signature summary
 
 ```php
-function phpversion(string $extension = null): string
+function phpversion(): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 0–1 arguments (1 optional).
+- **Arity**: takes no arguments.
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/network_env/phpversion.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/phpversion.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 
 - [User reference for `phpversion()`](../../../php/builtins/misc/phpversion.md)
-

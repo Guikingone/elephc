@@ -3,7 +3,8 @@
 //! Provides contextual typing for callback `$matches` arrays before closure body inference.
 //!
 //! Called from:
-//! - `crate::types::checker::builtins::callables::check_builtin()`.
+//! - `crate::builtins::callables::preg_replace_callback` (the builtin registry home) and
+//!   `crate::types::checker::builtins::callables::check_preg_replace_callback_first_class_call`.
 //!
 //! Key details:
 //! - Untyped callback parameters must infer as `array<string>` so `$matches[0]`
@@ -57,6 +58,7 @@ fn contextual_closure_sig(
     let ExprKind::Closure {
         params,
         variadic,
+        variadic_by_ref,
         return_type,
         body,
         captures,
@@ -77,6 +79,7 @@ fn contextual_closure_sig(
 
     let mut closure_env = env.clone();
     let mut param_types = Vec::new();
+    let mut param_type_exprs = Vec::new();
     let mut defaults = Vec::new();
     let mut ref_params = Vec::new();
     let mut declared_params = Vec::new();
@@ -90,7 +93,7 @@ fn contextual_closure_sig(
                     callback.span,
                     &format!("Closure parameter ${}", name),
                 )?;
-                checker.validate_declared_default_type(
+                checker.validate_resolved_declared_default_type(
                     &declared_ty,
                     default.as_ref(),
                     callback.span,
@@ -118,6 +121,7 @@ fn contextual_closure_sig(
 
         closure_env.insert(name.clone(), env_ty);
         param_types.push((name.clone(), sig_ty));
+        param_type_exprs.push(type_ann.clone());
         defaults.push(default.clone());
         ref_params.push(*is_ref);
         declared_params.push(declared);
@@ -126,8 +130,9 @@ fn contextual_closure_sig(
     if let Some(name) = variadic {
         closure_env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Int)));
         param_types.push((name.clone(), PhpType::Array(Box::new(PhpType::Mixed))));
+        param_type_exprs.push(None);
         defaults.push(None);
-        ref_params.push(false);
+        ref_params.push(*variadic_by_ref);
         declared_params.push(false);
     }
 
@@ -135,6 +140,8 @@ fn contextual_closure_sig(
         checker.resolve_closure_return_type(body, return_type, callback.span, &closure_env)?;
     Ok(Some(FunctionSig {
         params: param_types,
+        param_type_exprs,
+        param_attributes: Vec::new(),
         defaults,
         return_type,
         declared_return,
@@ -152,7 +159,7 @@ fn contextual_closure_sig(
 /// expressions, synthesizes an `array<string>` type for the `$matches` callback
 /// parameter, and delegates to `check_known_callable_call` to verify the closure
 /// signature. Returns `PhpType::Str` on success.
-pub(super) fn check(
+pub(crate) fn check(
     checker: &mut Checker,
     args: &[Expr],
     span: crate::span::Span,

@@ -2,17 +2,21 @@
 title: "asin() — internals"
 description: "Compiler internals for asin(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 220
+  order: 254
 ---
 
 ## `asin()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/math/asin.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/asin.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/math/libm.rs`:22](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/math/libm.rs#L22) (`lower_unary_libm`)
+- **Function symbol**: `lower_unary_libm()`
 
+
+### Lowering notes
+
+- Lowers a one-argument libm builtin such as `sin()`, `cos()`, or `exp()`.
 
 ## Runtime helpers
 
@@ -28,7 +32,11 @@ function asin(float $num): float
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/asin.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/asin.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `asin()`](../../../php/builtins/math/asin.md)
-

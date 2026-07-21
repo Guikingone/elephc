@@ -44,10 +44,10 @@ pub(super) fn collect_expr_reads(
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
-        | ExprKind::Clone(inner)
         | ExprKind::PtrCast { expr: inner, .. } => collect_expr_reads(inner, scope, warnings),
         ExprKind::NullCoalesce { value, default } => {
             collect_expr_reads(value, scope, warnings);
@@ -104,6 +104,17 @@ pub(super) fn collect_expr_reads(
             if let ExprKind::NullsafeMethodCall { object, .. } = &expr.kind {
                 collect_expr_reads(object, scope, warnings);
             }
+            for arg in args {
+                collect_expr_reads(arg, scope, warnings);
+            }
+        }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            collect_expr_reads(object, scope, warnings);
+            collect_expr_reads(method, scope, warnings);
             for arg in args {
                 collect_expr_reads(arg, scope, warnings);
             }
@@ -197,6 +208,7 @@ pub(super) fn collect_expr_reads(
         }
         ExprKind::StaticPropertyAccess { .. } => {},
         ExprKind::BufferNew { len, .. } => collect_expr_reads(len, scope, warnings),
+        ExprKind::ObjectClassName { object } => collect_expr_reads(object, scope, warnings),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {}
         // `$obj::CONST` — collect variable reads from the evaluated object sub-expression.
         ExprKind::DynamicClassConstantAccess { object, .. } => {

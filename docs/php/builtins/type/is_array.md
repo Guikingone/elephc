@@ -1,8 +1,8 @@
 ---
 title: "is_array()"
-description: "Lowers `is_array()`: true for statically-known arrays/hashes, or a boxed Mixed/Union value"
+description: "Checks whether a variable is an array."
 sidebar:
-  order: 418
+  order: 438
 ---
 
 ## is_array()
@@ -11,12 +11,17 @@ sidebar:
 function is_array(mixed $value): bool
 ```
 
-Lowers `is_array()`: true for statically-known arrays/hashes, or a boxed Mixed/Union value
+Checks whether a variable is an array.
 
 **Parameters**:
 - `$value` (`mixed`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/is_array.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_array.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

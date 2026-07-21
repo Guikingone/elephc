@@ -1,6 +1,6 @@
 //! Purpose:
 //! Lowers literal-dispatched `filter_var()` calls to a synthetic per-filter
-//! builtin name that `crate::codegen_ir::lower_inst::builtins::filter` matches
+//! builtin name that `crate::codegen::lower_inst::builtins::filter` matches
 //! on directly, so the EIR backend never has to re-derive the filter id/flags
 //! from operand structure (which would depend on whether `--ir-opt` folded a
 //! `FILTER_NULL_ON_FAILURE | FILTER_REQUIRE_SCALAR`-style flags expression).
@@ -89,6 +89,7 @@ pub(super) fn lower_static_filter_var(
                 vec![value.value],
                 PhpType::Mixed,
                 expr.span,
+                None,
             ));
         }
         _ => return None,
@@ -100,6 +101,7 @@ pub(super) fn lower_static_filter_var(
         vec![value.value],
         PhpType::Mixed,
         expr.span,
+        None,
     ))
 }
 

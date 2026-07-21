@@ -1,23 +1,28 @@
 ---
 title: "sha1()"
-description: "Lowers `sha1(data, binary?)` through the shared crypto-backed runtime helper."
+description: "Calculates the SHA-1 hash of a string."
 sidebar:
-  order: 373
+  order: 397
 ---
 
 ## sha1()
 
 ```php
-function sha1(string $string, bool $binary): string
+function sha1(string $string, bool $binary = false): string
 ```
 
-Lowers `sha1(data, binary?)` through the shared crypto-backed runtime helper.
+Calculates the SHA-1 hash of a string.
 
 **Parameters**:
 - `$string` (`string`)
-- `$binary` (`bool`), optional
+- `$binary` (`bool`), default `false`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/sha1.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/sha1.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

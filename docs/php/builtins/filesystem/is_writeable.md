@@ -1,8 +1,8 @@
 ---
 title: "is_writeable()"
-description: "Lowers `is_writeable(path)`, PHP's alias of `is_writable(path)`."
+description: "Tells whether the filename is writable (alias of is_writable)."
 sidebar:
-  order: 111
+  order: 132
 ---
 
 ## is_writeable()
@@ -11,12 +11,17 @@ sidebar:
 function is_writeable(string $filename): bool
 ```
 
-Lowers `is_writeable(path)`, PHP's alias of `is_writable(path)`.
+Tells whether the filename is writable (alias of is_writable).
 
 **Parameters**:
 - `$filename` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/is_writeable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/is_writeable.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

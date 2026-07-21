@@ -1,8 +1,8 @@
 ---
 title: "closedir()"
-description: "Lowers `closedir(dir_handle)` for libc, glob, and userspace-wrapper handles."
+description: "Closes directory handle."
 sidebar:
-  order: 136
+  order: 157
 ---
 
 ## closedir()
@@ -11,12 +11,17 @@ sidebar:
 function closedir(resource $dir_handle): void
 ```
 
-Lowers `closedir(dir_handle)` for libc, glob, and userspace-wrapper handles.
+Closes directory handle.
 
 **Parameters**:
 - `$dir_handle` (`resource`)
 
 **Returns**: `void`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/closedir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/closedir.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

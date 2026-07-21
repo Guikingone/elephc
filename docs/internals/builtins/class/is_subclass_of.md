@@ -2,17 +2,21 @@
 title: "is_subclass_of() — internals"
 description: "Compiler internals for is_subclass_of(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 66
+  order: 87
 ---
 
 ## `is_subclass_of()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/callables/is_subclass_of.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/is_subclass_of.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`:369](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs#L369) (`lower_is_a_relation`)
+- **Function symbol**: `lower_is_a_relation()`
 
+
+### Lowering notes
+
+- Lowers `is_a()` and `is_subclass_of()` for object operands and literal targets.
 
 ## Runtime helpers
 
@@ -21,14 +25,18 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function is_subclass_of(mixed $object_or_class, string $class, bool $allow_string): bool
+function is_subclass_of(mixed $object_or_class, string $class, bool $allow_string = true): bool
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes 2–3 arguments (1 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/is_subclass_of.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/is_subclass_of.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `is_subclass_of()`](../../../php/builtins/class/is_subclass_of.md)
-

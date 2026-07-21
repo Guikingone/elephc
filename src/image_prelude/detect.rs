@@ -142,6 +142,7 @@ fn type_refs_image(type_expr: &TypeExpr) -> bool {
         TypeExpr::Int
         | TypeExpr::Float
         | TypeExpr::Bool
+        | TypeExpr::False
         | TypeExpr::Str
         | TypeExpr::Void
         | TypeExpr::Never
@@ -247,10 +248,10 @@ fn expr_refs_image(expr: &Expr) -> bool {
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
-        | ExprKind::Clone(inner)
         | ExprKind::YieldFrom(inner) => expr_refs_image(inner),
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ShortTernary { value, default } => {
@@ -341,6 +342,11 @@ fn expr_refs_image(expr: &Expr) -> bool {
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_refs_image(object) || args.iter().any(expr_refs_image)
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => expr_refs_image(object) || expr_refs_image(method) || args.iter().any(expr_refs_image),
         ExprKind::StaticMethodCall { receiver, args, .. } => {
             receiver_refs_image(receiver) || args.iter().any(expr_refs_image)
         }
@@ -353,6 +359,7 @@ fn expr_refs_image(expr: &Expr) -> bool {
         // `$obj::CONST` — recurse into the evaluated object expression.
         ExprKind::DynamicClassConstantAccess { object, .. } => expr_refs_image(object),
         ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_refs_image(property),
+        ExprKind::ObjectClassName { object } => expr_refs_image(object),
         ExprKind::NewScopedObject { receiver, args } => {
             receiver_refs_image(receiver) || args.iter().any(expr_refs_image)
         }

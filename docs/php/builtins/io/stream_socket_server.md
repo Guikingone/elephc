@@ -1,24 +1,27 @@
 ---
 title: "stream_socket_server()"
-description: "Lowers `stream_socket_server(address)` and boxes `resource|false`."
+description: "Create an Internet or Unix domain server socket."
 sidebar:
-  order: 206
+  order: 240
 ---
 
 ## stream_socket_server()
 
 ```php
-function stream_socket_server(string $address, int $error_code, int $error_message): mixed
+function stream_socket_server(string $address): mixed
 ```
 
-Lowers `stream_socket_server(address)` and boxes `resource|false`.
+Create an Internet or Unix domain server socket.
 
 **Parameters**:
 - `$address` (`string`)
-- `$error_code` (`int`), passed by reference
-- `$error_message` (`int`), passed by reference
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_server.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_server.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

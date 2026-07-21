@@ -2,15 +2,15 @@
 title: "inet_ntop() — internals"
 description: "Compiler internals for inet_ntop(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 359
+  order: 382
 ---
 
 ## `inet_ntop()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:614](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L614) (`lower_inet`)
+- **Signature**: [`src/builtins/string/inet_ntop.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/inet_ntop.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:559](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L559) (`lower_inet`)
 - **Function symbol**: `lower_inet()`
 
 
@@ -33,7 +33,11 @@ function inet_ntop(string $ip): mixed
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/network_env/inet_ntop.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/inet_ntop.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `inet_ntop()`](../../../php/builtins/string/inet_ntop.md)
-

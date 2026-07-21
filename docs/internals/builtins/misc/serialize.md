@@ -2,21 +2,31 @@
 title: "serialize() — internals"
 description: "Compiler internals for serialize(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 273
+  order: 298
 ---
 
 ## `serialize()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/system/serialize.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/serialize.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/serialize.rs`:33](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/serialize.rs#L33) (`lower_serialize`)
+- **Function symbol**: `lower_serialize()`
 
+
+### Lowering notes
+
+- Lowers `serialize($value)` into the shared serialize runtime helper.
+- Scalar static types are formatted directly through `__rt_serialize_value`; a
+- Mixed/Union argument is unboxed and dispatched by `__rt_serialize_mixed`.
+- Non-scalar static types (arrays/objects) are not yet supported and are rejected.
 
 ## Runtime helpers
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+The following runtime helpers are referenced:
+- `__rt_serialize_begin`
+- `__rt_serialize_mixed`
+- `__rt_serialize_value`
 
 ## Signature summary
 
@@ -28,7 +38,10 @@ function serialize(mixed $value): string
 
 - **Arity**: takes exactly 1 argument.
 
+## Eval interpreter (magician)
+
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+
 ## Cross-references
 
 - [User reference for `serialize()`](../../../php/builtins/misc/serialize.md)
-

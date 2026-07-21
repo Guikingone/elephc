@@ -1,8 +1,8 @@
 ---
 title: "get_resource_id()"
-description: "Lowers `get_resource_id(resource)` by unboxing the native handle and making it one-based."
+description: "Returns an integer identifier for the given resource."
 sidebar:
-  order: 414
+  order: 434
 ---
 
 ## get_resource_id()
@@ -11,12 +11,17 @@ sidebar:
 function get_resource_id(resource $resource): int
 ```
 
-Lowers `get_resource_id(resource)` by unboxing the native handle and making it one-based.
+Returns an integer identifier for the given resource.
 
 **Parameters**:
 - `$resource` (`resource`)
 
 **Returns**: `int`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/get_resource_id.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_resource_id.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

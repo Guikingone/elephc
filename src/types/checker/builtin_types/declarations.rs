@@ -21,7 +21,8 @@ use super::exception::{
     builtin_exception_get_line_method, builtin_exception_get_message_method,
     builtin_exception_get_previous_method, builtin_exception_get_trace_as_string_method,
     builtin_exception_get_trace_method, builtin_exception_message_property,
-    builtin_exception_to_string_method, builtin_throwable_methods,
+    builtin_exception_previous_property, builtin_exception_to_string_method,
+    builtin_throwable_methods,
 };
 use super::fiber::builtin_fiber_methods;
 
@@ -53,15 +54,15 @@ impl Clone for InterfaceDeclInfo {
     }
 }
 
-/// Registers the nine builtin exception/error types (Throwable, Error, TypeError,
-/// ValueError, Exception, RuntimeException, JsonException, Fiber, FiberError) in
+/// Registers the builtin throwable hierarchy and Fiber declarations in
 /// `interface_map` and `class_map`.
 ///
 /// Checks for name collisions with user-declared types before inserting; returns
 /// `CompileError` if any builtin name is already present. Insertion order sets
 /// the inheritance chain: Error/Exception extend Throwable; TypeError/ValueError
-/// extend Error; RuntimeException extends Exception; JsonException extends
-/// RuntimeException; FiberError extends Error. Fiber is final with no parent.
+/// extend Error; RuntimeException/ReflectionException extend Exception;
+/// JsonException extends RuntimeException; FiberError extends Error. Fiber is
+/// final with no parent.
 pub(crate) fn inject_builtin_throwables(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,
@@ -71,8 +72,10 @@ pub(crate) fn inject_builtin_throwables(
         "Error",
         "TypeError",
         "ValueError",
+        "ArithmeticError",
         "Exception",
         "RuntimeException",
+        "ReflectionException",
         "JsonException",
         "Fiber",
         "FiberError",
@@ -107,6 +110,7 @@ pub(crate) fn inject_builtin_throwables(
         "Error".to_string(),
         FlattenedClass {
             name: "Error".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: vec!["Throwable".to_string()],
             is_abstract: false,
@@ -115,6 +119,7 @@ pub(crate) fn inject_builtin_throwables(
             properties: vec![
                 builtin_exception_message_property(),
                 builtin_exception_code_property(),
+                builtin_exception_previous_property(),
             ],
             methods: vec![
                 builtin_exception_constructor_method(),
@@ -130,12 +135,14 @@ pub(crate) fn inject_builtin_throwables(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
     class_map.insert(
         "Exception".to_string(),
         FlattenedClass {
             name: "Exception".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: vec!["Throwable".to_string()],
             is_abstract: false,
@@ -144,6 +151,7 @@ pub(crate) fn inject_builtin_throwables(
             properties: vec![
                 builtin_exception_message_property(),
                 builtin_exception_code_property(),
+                builtin_exception_previous_property(),
             ],
             methods: vec![
                 builtin_exception_constructor_method(),
@@ -159,15 +167,17 @@ pub(crate) fn inject_builtin_throwables(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
-    // RuntimeException and JsonException inherit the Throwable API from
-    // Exception via the standard inheritance machinery; they don't need to
-    // redeclare anything locally.
+    // RuntimeException, ReflectionException, and JsonException inherit the
+    // Throwable API from Exception via the standard inheritance machinery; they
+    // don't need to redeclare anything locally.
     class_map.insert(
         "RuntimeException".to_string(),
         FlattenedClass {
             name: "RuntimeException".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("Exception".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -178,12 +188,32 @@ pub(crate) fn inject_builtin_throwables(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
+        },
+    );
+    class_map.insert(
+        "ReflectionException".to_string(),
+        FlattenedClass {
+            name: "ReflectionException".to_string(),
+            span: crate::span::Span::dummy(),
+            extends: Some("Exception".to_string()),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            methods: Vec::new(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
     class_map.insert(
         "JsonException".to_string(),
         FlattenedClass {
             name: "JsonException".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("RuntimeException".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -194,6 +224,7 @@ pub(crate) fn inject_builtin_throwables(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 
@@ -201,6 +232,7 @@ pub(crate) fn inject_builtin_throwables(
         "TypeError".to_string(),
         FlattenedClass {
             name: "TypeError".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("Error".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -211,12 +243,14 @@ pub(crate) fn inject_builtin_throwables(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
     class_map.insert(
         "ValueError".to_string(),
         FlattenedClass {
             name: "ValueError".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("Error".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -227,6 +261,25 @@ pub(crate) fn inject_builtin_throwables(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
+        },
+    );
+    class_map.insert(
+        "ArithmeticError".to_string(),
+        FlattenedClass {
+            name: "ArithmeticError".to_string(),
+            span: crate::span::Span::dummy(),
+            extends: Some("Error".to_string()),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            methods: Vec::new(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 
@@ -239,6 +292,7 @@ pub(crate) fn inject_builtin_throwables(
         "Fiber".to_string(),
         FlattenedClass {
             name: "Fiber".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: Vec::new(),
             is_abstract: false,
@@ -249,6 +303,7 @@ pub(crate) fn inject_builtin_throwables(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 
@@ -257,6 +312,7 @@ pub(crate) fn inject_builtin_throwables(
         "FiberError".to_string(),
         FlattenedClass {
             name: "FiberError".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("Error".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -267,6 +323,7 @@ pub(crate) fn inject_builtin_throwables(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 

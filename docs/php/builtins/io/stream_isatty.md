@@ -1,8 +1,8 @@
 ---
 title: "stream_isatty()"
-description: "Lowers `stream_isatty(stream)`."
+description: "Checks if a stream is a TTY."
 sidebar:
-  order: 191
+  order: 225
 ---
 
 ## stream_isatty()
@@ -11,12 +11,17 @@ sidebar:
 function stream_isatty(resource $stream): bool
 ```
 
-Lowers `stream_isatty(stream)`.
+Checks if a stream is a TTY.
 
 **Parameters**:
 - `$stream` (`resource`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_isatty.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_isatty.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,23 +1,28 @@
 ---
 title: "stream_context_create()"
-description: "Lowers `stream_context_create(options?, params?)`."
+description: "Creates a stream context."
 sidebar:
-  order: 174
+  order: 208
 ---
 
 ## stream_context_create()
 
 ```php
-function stream_context_create(array $options, array $params): mixed
+function stream_context_create(array $options = null, array $params = null): mixed
 ```
 
-Lowers `stream_context_create(options?, params?)`.
+Creates a stream context.
 
 **Parameters**:
-- `$options` (`array`), optional
-- `$params` (`array`), optional
+- `$options` (`array`), default `null`, optional
+- `$params` (`array`), default `null`, optional
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_create.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_create.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -181,6 +181,8 @@ fn precheck_prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             return_type,
             by_ref_return,
             body,
+            param_attributes,
+            variadic_by_ref,
         } => vec![Stmt {
             kind: StmtKind::FunctionDecl {
                 name,
@@ -190,6 +192,8 @@ fn precheck_prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                 return_type,
                 by_ref_return,
                 body: precheck_prune_block(body),
+                param_attributes,
+                variadic_by_ref,
             },
             span,
             attributes,
@@ -262,6 +266,7 @@ fn precheck_prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             implements,
             methods,
             constants,
+            trait_uses,
         } => vec![Stmt {
             kind: StmtKind::EnumDecl {
                 name,
@@ -270,6 +275,7 @@ fn precheck_prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                 implements,
                 methods: methods.into_iter().map(precheck_prune_method).collect(),
                 constants,
+                trait_uses,
             },
             span,
             attributes,

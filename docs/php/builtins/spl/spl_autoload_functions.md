@@ -1,8 +1,8 @@
 ---
 title: "spl_autoload_functions()"
-description: "Lowers `spl_autoload_functions()` to an indexed array of AOT rule placeholders."
+description: "Return all registered __autoload() functions."
 sidebar:
-  order: 313
+  order: 344
 ---
 
 ## spl_autoload_functions()
@@ -11,11 +11,16 @@ sidebar:
 function spl_autoload_functions(): array
 ```
 
-Lowers `spl_autoload_functions()` to an indexed array of AOT rule placeholders.
+Return all registered __autoload() functions.
 
 **Parameters**: none.
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload_functions.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload_functions.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

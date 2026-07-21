@@ -1,8 +1,8 @@
 ---
 title: "sscanf()"
-description: "Lowers `sscanf(string, format)` into the shared scanner helper."
+description: "Parses a string according to a format."
 sidebar:
-  order: 375
+  order: 399
 ---
 
 ## sscanf()
@@ -11,7 +11,7 @@ sidebar:
 function sscanf(string $string, string $format, ...$vars): array
 ```
 
-Lowers `sscanf(string, format)` into the shared scanner helper.
+Parses a string according to a format.
 
 **Parameters**:
 - `$string` (`string`)
@@ -19,6 +19,11 @@ Lowers `sscanf(string, format)` into the shared scanner helper.
 - `...$vars` — variadic: collects excess arguments into `$vars`.
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/formatting/sscanf.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/formatting/sscanf.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

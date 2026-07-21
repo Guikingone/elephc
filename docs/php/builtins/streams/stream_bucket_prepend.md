@@ -1,8 +1,8 @@
 ---
 title: "stream_bucket_prepend()"
-description: "stream_bucket_prepend() — streams builtin supported by Elephc."
+description: "Prepends a bucket to the brigade."
 sidebar:
-  order: 322
+  order: 353
 ---
 
 ## stream_bucket_prepend()
@@ -11,13 +11,18 @@ sidebar:
 function stream_bucket_prepend(mixed $brigade, mixed $bucket): void
 ```
 
-`stream_bucket_prepend()` is a streams builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Prepends a bucket to the brigade.
 
 **Parameters**:
 - `$brigade` (`mixed`)
 - `$bucket` (`mixed`)
 
 **Returns**: `void`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_bucket_prepend.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_bucket_prepend.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
@@ -26,4 +31,8 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
 
 
+
+## Internals
+
+For how `stream_bucket_prepend` is implemented in the compiler, see [the internals page](../../../internals/builtins/streams/stream_bucket_prepend.md).
 

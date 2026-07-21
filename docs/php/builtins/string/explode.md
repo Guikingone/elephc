@@ -1,24 +1,29 @@
 ---
 title: "explode()"
-description: "Lowers `explode(delimiter, string)` into the shared string-array splitter helper."
+description: "Splits a string by a separator into an array of substrings."
 sidebar:
-  order: 336
+  order: 363
 ---
 
 ## explode()
 
 ```php
-function explode(string $separator, string $string, int $limit): array
+function explode(string $separator, string $string, int $limit = PHP_INT_MAX): array
 ```
 
-Lowers `explode(delimiter, string)` into the shared string-array splitter helper.
+Splits a string by a separator into an array of substrings.
 
 **Parameters**:
 - `$separator` (`string`)
 - `$string` (`string`)
-- `$limit` (`int`), optional
+- `$limit` (`int`), default `PHP_INT_MAX`, optional
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/explode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/explode.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

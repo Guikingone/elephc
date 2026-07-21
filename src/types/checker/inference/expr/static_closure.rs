@@ -24,12 +24,196 @@ pub(super) fn body_must_not_use_this(body: &[Stmt], span: Span) -> Result<(), Co
 
 /// Returns true if a closure body references `$this` anywhere, including inside
 /// nested closures (which capture `$this` transitively from the enclosing
-/// scope). Reuses the static-closure `$this` walker, so it stays in lockstep
-/// with the constructs that walker covers. Used by EIR lowering to decide
-/// whether a non-static closure defined in an instance method must implicitly
-/// capture `$this`.
+/// scope) and inside `isset($this)` probes. Unlike `body_must_not_use_this`,
+/// which exempts bare `isset($this)` arguments (PHP allows the probe inside
+/// static closures), this walker counts every `$this` mention so EIR lowering
+/// captures `$this` for non-static closures that probe it via `isset`.
 pub(crate) fn closure_body_uses_this(body: &[Stmt]) -> bool {
-    body_must_not_use_this(body, Span::dummy()).is_err()
+    body_uses_this(body)
+}
+
+/// Walks statements looking for any `$this` mention, including inside `isset()`.
+fn body_uses_this(body: &[Stmt]) -> bool {
+    body.iter().any(stmt_uses_this)
+}
+
+/// Returns true if the statement references `$this` anywhere.
+fn stmt_uses_this(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Echo(e)
+        | StmtKind::Throw(e)
+        | StmtKind::ExprStmt(e)
+        | StmtKind::Include { path: e, .. }
+        | StmtKind::ConstDecl { value: e, .. }
+        | StmtKind::StaticVar { init: e, .. }
+        | StmtKind::ListUnpack { value: e, .. }
+        | StmtKind::Return(Some(e))
+        | StmtKind::Assign { value: e, .. }
+        | StmtKind::TypedAssign { value: e, .. }
+        | StmtKind::ArrayPush { value: e, .. } => expr_uses_this(e),
+        StmtKind::RefAssign { .. } => false,
+        StmtKind::ArrayAssign { index, value, .. } => {
+            expr_uses_this(index) || expr_uses_this(value)
+        }
+        StmtKind::NestedArrayAssign { target, value } => {
+            expr_uses_this(target) || expr_uses_this(value)
+        }
+        StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyArrayPush { object, value, .. } => {
+            expr_uses_this(object) || expr_uses_this(value)
+        }
+        StmtKind::PropertyArrayAssign {
+            object,
+            index,
+            value,
+            ..
+        } => expr_uses_this(object) || expr_uses_this(index) || expr_uses_this(value),
+        StmtKind::StaticPropertyAssign { value, .. }
+        | StmtKind::StaticPropertyArrayPush { value, .. } => expr_uses_this(value),
+        StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
+            expr_uses_this(index) || expr_uses_this(value)
+        }
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            expr_uses_this(condition)
+                || body_uses_this(then_body)
+                || elseif_clauses
+                    .iter()
+                    .any(|(cond, body)| expr_uses_this(cond) || body_uses_this(body))
+                || else_body.as_deref().is_some_and(body_uses_this)
+        }
+        StmtKind::While { condition, body } | StmtKind::DoWhile { body, condition } => {
+            expr_uses_this(condition) || body_uses_this(body)
+        }
+        StmtKind::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_deref().is_some_and(stmt_uses_this)
+                || condition.as_ref().is_some_and(expr_uses_this)
+                || update.as_deref().is_some_and(stmt_uses_this)
+                || body_uses_this(body)
+        }
+        StmtKind::Foreach { array, body, .. } => expr_uses_this(array) || body_uses_this(body),
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => {
+            expr_uses_this(subject)
+                || cases.iter().any(|(patterns, body)| {
+                    patterns.iter().any(expr_uses_this) || body_uses_this(body)
+                })
+                || default.as_deref().is_some_and(body_uses_this)
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            body_uses_this(try_body)
+                || catches.iter().any(|catch| body_uses_this(&catch.body))
+                || finally_body.as_deref().is_some_and(body_uses_this)
+        }
+        StmtKind::NamespaceBlock { body, .. } => body_uses_this(body),
+        StmtKind::FunctionDecl { .. }
+        | StmtKind::ClassDecl { .. }
+        | StmtKind::TraitDecl { .. }
+        | StmtKind::InterfaceDecl { .. } => false,
+        _ => false,
+    }
+}
+
+/// Returns true if the expression references `$this` anywhere, including
+/// inside `isset()` arguments (unlike `expr_must_not_use_this` which exempts
+/// bare `$this` inside `isset`).
+fn expr_uses_this(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::This => true,
+        ExprKind::BinaryOp { left, right, .. } => expr_uses_this(left) || expr_uses_this(right),
+        ExprKind::InstanceOf { value, target } => {
+            expr_uses_this(value) || instanceof_target_uses_this(target)
+        }
+        ExprKind::Negate(inner)
+        | ExprKind::Not(inner)
+        | ExprKind::BitNot(inner)
+        | ExprKind::Throw(inner)
+        | ExprKind::ErrorSuppress(inner)
+        | ExprKind::Print(inner)
+        | ExprKind::Spread(inner)
+        | ExprKind::PtrCast { expr: inner, .. }
+        | ExprKind::Cast { expr: inner, .. } => expr_uses_this(inner),
+        ExprKind::NullCoalesce { value, default }
+        | ExprKind::ShortTernary { value, default } => {
+            expr_uses_this(value) || expr_uses_this(default)
+        }
+        ExprKind::FunctionCall { name, args } => {
+            name.as_str().eq_ignore_ascii_case("isset") || args.iter().any(expr_uses_this)
+        }
+        ExprKind::ClosureCall { args, .. }
+        | ExprKind::NewObject { args, .. }
+        | ExprKind::NewScopedObject { args, .. }
+        | ExprKind::StaticMethodCall { args, .. } => args.iter().any(expr_uses_this),
+        ExprKind::ExprCall { callee, args } => expr_uses_this(callee) || args.iter().any(expr_uses_this),
+        ExprKind::MethodCall { object, args, .. }
+        | ExprKind::NullsafeMethodCall { object, args, .. } => {
+            expr_uses_this(object) || args.iter().any(expr_uses_this)
+        }
+        ExprKind::ArrayLiteral(items) => items.iter().any(expr_uses_this),
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            pairs.iter().any(|(k, v)| expr_uses_this(k) || expr_uses_this(v))
+        }
+        ExprKind::ArrayAccess { array, index } => expr_uses_this(array) || expr_uses_this(index),
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => expr_uses_this(condition) || expr_uses_this(then_expr) || expr_uses_this(else_expr),
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => {
+            expr_uses_this(subject)
+                || arms.iter().any(|(patterns, value)| {
+                    patterns.iter().any(expr_uses_this) || expr_uses_this(value)
+                })
+                || default.as_deref().is_some_and(expr_uses_this)
+        }
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::NullsafePropertyAccess { object, .. } => expr_uses_this(object),
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            expr_uses_this(object) || expr_uses_this(property)
+        }
+        ExprKind::NamedArg { value, .. } => expr_uses_this(value),
+        ExprKind::BufferNew { len, .. } => expr_uses_this(len),
+        ExprKind::FirstClassCallable(target) => callable_target_uses_this(target),
+        ExprKind::Closure { body, .. } => body_uses_this(body),
+        _ => false,
+    }
+}
+
+/// Returns true if a callable target references `$this`.
+fn callable_target_uses_this(target: &CallableTarget) -> bool {
+    match target {
+        CallableTarget::Method { object, .. } => expr_uses_this(object),
+        CallableTarget::Function(_) | CallableTarget::StaticMethod { .. } => false,
+    }
+}
+
+/// Returns true if an instanceof target references `$this`.
+fn instanceof_target_uses_this(target: &InstanceOfTarget) -> bool {
+    match target {
+        InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Expr(expr) => expr_uses_this(expr),
+    }
 }
 
 /// Recursively checks a statement and its children, rejecting any `$this` usage.
@@ -204,8 +388,23 @@ fn expr_must_not_use_this(expr: &Expr, span: Span) -> Result<(), CompileError> {
             expr_must_not_use_this(value, span)?;
             expr_must_not_use_this(default, span)
         }
-        ExprKind::FunctionCall { args, .. }
-        | ExprKind::ClosureCall { args, .. }
+        ExprKind::FunctionCall { name, args } => {
+            if name.as_str().eq_ignore_ascii_case("isset") {
+                for arg in args {
+                    if matches!(&arg.kind, ExprKind::This) {
+                        continue;
+                    }
+                    expr_must_not_use_this(arg, span)?;
+                }
+                Ok(())
+            } else {
+                for arg in args {
+                    expr_must_not_use_this(arg, span)?;
+                }
+                Ok(())
+            }
+        }
+        ExprKind::ClosureCall { args, .. }
         | ExprKind::NewObject { args, .. }
         | ExprKind::NewScopedObject { args, .. }
         | ExprKind::StaticMethodCall { args, .. } => {
@@ -224,6 +423,18 @@ fn expr_must_not_use_this(expr: &Expr, span: Span) -> Result<(), CompileError> {
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_must_not_use_this(object, span)?;
+            for arg in args {
+                expr_must_not_use_this(arg, span)?;
+            }
+            Ok(())
+        }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            expr_must_not_use_this(object, span)?;
+            expr_must_not_use_this(method, span)?;
             for arg in args {
                 expr_must_not_use_this(arg, span)?;
             }
@@ -324,310 +535,10 @@ fn instanceof_target_must_not_use_this(
 // property access on a PARAMETER typed as (or a subclass of) the rebound scope is then authorized
 // against that scope instead of the closure's lexically enclosing class (see `BoundScopeContext`).
 
-use crate::parser::ast::StaticReceiver;
-use crate::types::{PhpType, TypeEnv};
-use std::collections::HashSet;
 
-use super::super::super::{BoundScopeContext, Checker};
 
-/// Resolves `Closure::bind`/`bindTo`'s `$scope` argument into a rebind class name.
-///
-/// Only a literal `X::class` (a `ScopedConstantAccess`-free `ClassConstant` with a `Named`
-/// receiver) resolves to a rebind, and only when `X` names a REAL declared class (`X::class`
-/// itself is already checker-validated elsewhere, so this repeats that lookup defensively rather
-/// than trusting it). Every other shape — omitted, literal `null`, the literal string `"static"`
-/// (PHP's own default, meaning "keep current scope"), `self::class`/`static::class`/`parent::class`,
-/// or any non-literal expression — returns `None`: "omitted/null scope keeps the ORIGINAL scope,
-/// no inference from `$newThis`" and "'static' literal = no change" (both J2-established,
-/// master-verified rules this spec re-applies verbatim).
-pub(crate) fn resolve_bind_scope_class(checker: &Checker, scope_arg: Option<&Expr>) -> Option<String> {
-    let scope_arg = scope_arg?;
-    let ExprKind::ClassConstant {
-        receiver: StaticReceiver::Named(name),
-    } = &scope_arg.kind
-    else {
-        return None;
-    };
-    let normalized = name.as_str().trim_start_matches('\\').to_string();
-    checker.classes.contains_key(&normalized).then_some(normalized)
-}
 
-/// Checks a static/instance `Closure::bind`-family call's arguments, relaxing property-access
-/// visibility inside a closure LITERAL first argument when the scope rebind is JURY-safe (see
-/// the module doc comment above). Shared by `infer_static_method_call_type_with_options`
-/// (`crate::types::checker::inference::objects::methods`) and the `??=` assignment-effects
-/// pre-pass (`crate::types::checker::inference::expr::effects`) so both agree on the same
-/// bound-scope-aware check instead of the pre-pass rejecting the closure body BEFORE the
-/// specialized Closure::bind handling ever gets a chance to relax it.
-///
-/// `closure_arg` is the first (closure) argument; `scope_arg` is the `$scope` argument (or
-/// `None` when omitted). The remaining arguments (`$newThis`, and `$scope` itself) are always
-/// checked normally — only the closure literal's OWN body ever sees the rebound scope.
-pub(crate) fn check_closure_bind_call_args(
-    checker: &mut Checker,
-    closure_arg: &Expr,
-    rest: &[&Expr],
-    scope_arg: Option<&Expr>,
-    env: &TypeEnv,
-) -> Result<(), CompileError> {
-    // `env` stays `&TypeEnv` (not the `&mut TypeEnv` `infer_type_with_assignment_effects` uses)
-    // so this one helper serves both callers: `infer_static_method_call_type_with_options`
-    // (`crate::types::checker::inference::objects::methods`, which only has `&TypeEnv` here —
-    // matching the original un-relaxed `for arg in args { self.infer_type(arg, env)?; }` loop
-    // this replaces) and the `??=` assignment-effects pre-pass (`effects.rs`, which passes its
-    // `&mut TypeEnv` in — Rust reborrows it as `&TypeEnv` automatically at the call site).
-    if let Some(scope_class) = resolve_bind_scope_class(checker, scope_arg) {
-        if let ExprKind::Closure { params, body, .. } = &closure_arg.kind {
-            if closure_body_free_of_self_scope(body) {
-                let eligible_params = eligible_bound_scope_params(checker, params, &scope_class);
-                let previous = checker.bound_scope_context.replace(BoundScopeContext {
-                    scope_class,
-                    eligible_params,
-                });
-                let result = checker.infer_type(closure_arg, env);
-                checker.bound_scope_context = previous;
-                result?;
-                for arg in rest {
-                    checker.infer_type(arg, env)?;
-                }
-                if let Some(scope_arg) = scope_arg {
-                    checker.infer_type(scope_arg, env)?;
-                }
-                return Ok(());
-            }
-        }
-    }
-    checker.infer_type(closure_arg, env)?;
-    for arg in rest {
-        checker.infer_type(arg, env)?;
-    }
-    if let Some(scope_arg) = scope_arg {
-        checker.infer_type(scope_arg, env)?;
-    }
-    Ok(())
-}
 
-/// Returns the closure's own declared parameter names whose type is `Object(class)` where
-/// `class` is `scope_class` or a subclass of it (JURY ADDENDUM #2's precise eligibility rule).
-fn eligible_bound_scope_params(
-    checker: &Checker,
-    params: &[(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)],
-    scope_class: &str,
-) -> HashSet<String> {
-    params
-        .iter()
-        .filter_map(|(name, type_ann, _, _)| {
-            let type_ann = type_ann.as_ref()?;
-            let ty = checker.resolve_type_expr(type_ann, Span::dummy()).ok()?;
-            let PhpType::Object(class_name) = ty else {
-                return None;
-            };
-            let normalized = class_name.trim_start_matches('\\');
-            (normalized == scope_class || checker.is_subclass_of(normalized, scope_class))
-                .then(|| name.clone())
-        })
-        .collect()
-}
 
-/// Returns true when `body` is PROVABLY free of `$this`/`self::`/`static::`/`parent::` usage
-/// anywhere, including inside nested closures/arrow functions — the JURY ADDENDUM #1 lexical
-/// gate. A CONSERVATIVE whitelist scan: any statement or expression shape not explicitly
-/// recognized as safe is treated as UNSAFE (over-reject is fine; under-reject would be
-/// silent-wrong). Reuses `stmt_must_not_use_this`'s `$this`-only result as a fast reject first
-/// (that walker already recognizes strictly more shapes than this conservative one does, so a
-/// `$this` it finds is always a real one), then walks again for `self::`/`static::`/`parent::`.
-fn closure_body_free_of_self_scope(body: &[Stmt]) -> bool {
-    if closure_body_uses_this(body) {
-        return false;
-    }
-    body.iter().all(stmt_free_of_self_scope)
-}
 
-/// Conservative (default-reject) statement scan for JURY ADDENDUM #1 — see
-/// `closure_body_free_of_self_scope`.
-fn stmt_free_of_self_scope(stmt: &Stmt) -> bool {
-    match &stmt.kind {
-        StmtKind::Echo(e)
-        | StmtKind::Throw(e)
-        | StmtKind::ExprStmt(e)
-        | StmtKind::Return(Some(e))
-        | StmtKind::Assign { value: e, .. }
-        | StmtKind::TypedAssign { value: e, .. }
-        | StmtKind::ArrayPush { value: e, .. } => expr_free_of_self_scope(e),
-        StmtKind::Return(None) => true,
-        StmtKind::ArrayAssign { index, value, .. } => {
-            expr_free_of_self_scope(index) && expr_free_of_self_scope(value)
-        }
-        StmtKind::NestedArrayAssign { target, value } => {
-            expr_free_of_self_scope(target) && expr_free_of_self_scope(value)
-        }
-        StmtKind::PropertyAssign { object, value, .. }
-        | StmtKind::PropertyArrayPush { object, value, .. } => {
-            expr_free_of_self_scope(object) && expr_free_of_self_scope(value)
-        }
-        StmtKind::PropertyArrayAssign {
-            object,
-            index,
-            value,
-            ..
-        } => {
-            expr_free_of_self_scope(object)
-                && expr_free_of_self_scope(index)
-                && expr_free_of_self_scope(value)
-        }
-        StmtKind::If {
-            condition,
-            then_body,
-            elseif_clauses,
-            else_body,
-        } => {
-            expr_free_of_self_scope(condition)
-                && then_body.iter().all(stmt_free_of_self_scope)
-                && elseif_clauses
-                    .iter()
-                    .all(|(cond, body)| expr_free_of_self_scope(cond) && body.iter().all(stmt_free_of_self_scope))
-                && else_body
-                    .as_ref()
-                    .is_none_or(|body| body.iter().all(stmt_free_of_self_scope))
-        }
-        StmtKind::While { condition, body } | StmtKind::DoWhile { body, condition } => {
-            expr_free_of_self_scope(condition) && body.iter().all(stmt_free_of_self_scope)
-        }
-        StmtKind::Foreach { array, body, .. } => {
-            expr_free_of_self_scope(array) && body.iter().all(stmt_free_of_self_scope)
-        }
-        StmtKind::Switch {
-            subject,
-            cases,
-            default,
-        } => {
-            expr_free_of_self_scope(subject)
-                && cases.iter().all(|(patterns, body)| {
-                    patterns.iter().all(expr_free_of_self_scope) && body.iter().all(stmt_free_of_self_scope)
-                })
-                && default
-                    .as_ref()
-                    .is_none_or(|body| body.iter().all(stmt_free_of_self_scope))
-        }
-        StmtKind::Try {
-            try_body,
-            catches,
-            finally_body,
-        } => {
-            try_body.iter().all(stmt_free_of_self_scope)
-                && catches.iter().all(|catch| catch.body.iter().all(stmt_free_of_self_scope))
-                && finally_body
-                    .as_ref()
-                    .is_none_or(|body| body.iter().all(stmt_free_of_self_scope))
-        }
-        // The parser wraps a closure/function body in one top-level `Synthetic` node; recurse
-        // into it exactly like any other nested statement list.
-        StmtKind::Synthetic(body) => body.iter().all(stmt_free_of_self_scope),
-        StmtKind::Global { .. } | StmtKind::StaticVar { init: _, .. } | StmtKind::Break(_) | StmtKind::Continue(_) => {
-            // `static $x;`/`static $x = <const>;` initializers are compile-time constants
-            // (no self::/static::/$this reachable there); global/break/continue carry no
-            // sub-expressions this gate needs to inspect.
-            true
-        }
-        // Every other shape (RefAssign, ListUnpack, includes, gotos, static-property writes,
-        // dynamic-static-property writes, declarations, …) is conservatively rejected: none of
-        // these appear in the shipped target shape, and none is worth the risk of an inaccurate
-        // hand-written case under this gate's soundness requirement.
-        _ => false,
-    }
-}
 
-/// Conservative (default-reject) expression scan for JURY ADDENDUM #1 — see
-/// `closure_body_free_of_self_scope`.
-fn expr_free_of_self_scope(expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::This => false,
-        ExprKind::IntLiteral(_)
-        | ExprKind::FloatLiteral(_)
-        | ExprKind::StringLiteral(_)
-        | ExprKind::BoolLiteral(_)
-        | ExprKind::Null
-        | ExprKind::Variable(_)
-        | ExprKind::MagicConstant(_) => true,
-        ExprKind::BinaryOp { left, right, .. } => {
-            expr_free_of_self_scope(left) && expr_free_of_self_scope(right)
-        }
-        ExprKind::Negate(inner)
-        | ExprKind::Not(inner)
-        | ExprKind::BitNot(inner)
-        | ExprKind::ErrorSuppress(inner)
-        | ExprKind::Print(inner)
-        | ExprKind::Spread(inner)
-        | ExprKind::Cast { expr: inner, .. } => expr_free_of_self_scope(inner),
-        // Pre/post inc/dec bind a plain local variable NAME, not a sub-expression — no
-        // $this/self::/static:: is reachable there.
-        ExprKind::PreIncrement(_)
-        | ExprKind::PostIncrement(_)
-        | ExprKind::PreDecrement(_)
-        | ExprKind::PostDecrement(_) => true,
-        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
-            expr_free_of_self_scope(value) && expr_free_of_self_scope(default)
-        }
-        ExprKind::Ternary {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            expr_free_of_self_scope(condition)
-                && expr_free_of_self_scope(then_expr)
-                && expr_free_of_self_scope(else_expr)
-        }
-        ExprKind::ArrayAccess { array, index } => {
-            expr_free_of_self_scope(array) && expr_free_of_self_scope(index)
-        }
-        ExprKind::ArrayLiteral(items) => items.iter().all(expr_free_of_self_scope),
-        ExprKind::ArrayLiteralAssoc(pairs) => pairs
-            .iter()
-            .all(|(k, v)| expr_free_of_self_scope(k) && expr_free_of_self_scope(v)),
-        ExprKind::FunctionCall { args, .. } => args.iter().all(expr_free_of_self_scope),
-        ExprKind::ExprCall { callee, args } => {
-            expr_free_of_self_scope(callee) && args.iter().all(expr_free_of_self_scope)
-        }
-        ExprKind::MethodCall { object, args, .. } | ExprKind::NullsafeMethodCall { object, args, .. } => {
-            expr_free_of_self_scope(object) && args.iter().all(expr_free_of_self_scope)
-        }
-        ExprKind::PropertyAccess { object, .. } | ExprKind::NullsafePropertyAccess { object, .. } => {
-            expr_free_of_self_scope(object)
-        }
-        ExprKind::DynamicPropertyAccess { object, property }
-        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
-            expr_free_of_self_scope(object) && expr_free_of_self_scope(property)
-        }
-        ExprKind::NamedArg { value, .. } => expr_free_of_self_scope(value),
-        ExprKind::NewObject { args, .. } => args.iter().all(expr_free_of_self_scope),
-        // `self::`/`static::`/`parent::` receivers are exactly what this gate exists to reject;
-        // a `Named` (or interpolated-into-a-known-class) receiver is fine.
-        ExprKind::ClassConstant { receiver } | ExprKind::ScopedConstantAccess { receiver, .. } => {
-            matches!(receiver, StaticReceiver::Named(_))
-        }
-        ExprKind::StaticMethodCall { receiver, args, .. } => {
-            matches!(receiver, StaticReceiver::Named(_)) && args.iter().all(expr_free_of_self_scope)
-        }
-        ExprKind::StaticPropertyAccess { receiver, .. } => matches!(receiver, StaticReceiver::Named(_)),
-        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
-            matches!(receiver, StaticReceiver::Named(_)) && expr_free_of_self_scope(property)
-        }
-        // Expression-position assignment (`$a = $b = c()`, `if ($x = f())`) desugars with a
-        // `prelude` of hoisted statements plus `target`/`value`; all three must be checked.
-        ExprKind::Assignment {
-            target,
-            value,
-            prelude,
-            ..
-        } => {
-            expr_free_of_self_scope(target)
-                && expr_free_of_self_scope(value)
-                && prelude.iter().all(stmt_free_of_self_scope)
-        }
-        // Nested closures/arrow functions recurse — a nested `$this`/`self::`/`static::` is
-        // just as unsound as one at the top level (JURY ADDENDUM #1: "recursively including
-        // nested closures/arrow-functions").
-        ExprKind::Closure { body, is_static, .. } => *is_static || body.iter().all(stmt_free_of_self_scope),
-        _ => false,
-    }
-}

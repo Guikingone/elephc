@@ -2,15 +2,15 @@
 title: "checkdate() — internals"
 description: "Compiler internals for checkdate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 68
+  order: 89
 ---
 
 ## `checkdate()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/system.rs`:163](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/system.rs#L163) (`lower_checkdate`)
+- **Signature**: [`src/builtins/system/checkdate.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/checkdate.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:163](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L163) (`lower_checkdate`)
 - **Function symbol**: `lower_checkdate()`
 
 
@@ -37,7 +37,11 @@ function checkdate(int $month, int $day, int $year): bool
 
 - **Arity**: takes exactly 3 arguments.
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/checkdate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/checkdate.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `checkdate()`](../../../php/builtins/date/checkdate.md)
-

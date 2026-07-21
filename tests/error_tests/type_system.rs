@@ -151,6 +151,24 @@ fn test_error_union_typed_local_rejects_invalid_initializer() {
     expect_error("<?php int|string $value = 1.5;", "cannot initialize $value");
 }
 
+/// Verifies a boxed `mixed` value is gradually accepted at an object parameter boundary.
+/// The campaign's gradual-typing rule (`Mixed` is call-compatible with every parameter
+/// type) defers the object check to runtime, matching how framework code passes `mixed`
+/// containers into typed APIs.
+#[test]
+fn test_error_mixed_rejected_at_object_parameter_boundary() {
+    expect_ok(
+        "<?php final class Box {} function take(Box $box): void {} function relay(mixed $value): void { take($value); }",
+    );
+}
+
+/// Verifies a boxed `mixed` value is gradually accepted through an array return boundary
+/// under the same gradual-typing rule as parameter boundaries.
+#[test]
+fn test_error_mixed_rejected_at_array_return_boundary() {
+    expect_ok("<?php function relay(mixed $value): array { return $value; }");
+}
+
 /// Verifies that referencing an undefined variable produces an "Undefined variable" error.
 #[test]
 fn test_error_undefined_variable() {
@@ -227,6 +245,14 @@ function g(int $n): string {
 /// Verifies that reassigning an *inferred* local to an incompatible type is accepted under the
 /// gradual-typing model: the local widens to a boxed union instead of erroring.
 /// Input: `$x = 42; $x = "hello";` — `$x` widens from `Int` to `Union([Int, Str])`.
+/// Verifies that a plain self-referential assignment is not mistaken for `+=`.
+#[test]
+fn test_error_plain_self_read_assignment_remains_undefined() {
+    expect_error("<?php $x = $x + 1;", "Undefined variable: $x");
+}
+
+/// Verifies that reassigning a typed variable to a different type is rejected.
+/// Input: `$x = 42; $x = "hello";` — `$x` is int, reassignment to string fails.
 #[test]
 fn test_inferred_local_reassign_widens_instead_of_error() {
     assert!(
@@ -242,6 +268,102 @@ fn test_error_arithmetic_on_string() {
     expect_error(
         "<?php $x = \"hi\"; echo $x + 1;",
         "Arithmetic operators require numeric operands",
+    );
+}
+
+/// Verifies a name beginning with `with` does not imply a late-static fluent return.
+#[test]
+fn test_error_with_prefix_does_not_refine_declared_ancestor_return() {
+    expect_error(
+        r#"<?php
+interface Account {
+    public function withdraw(int $amount): Account;
+}
+interface Savings extends Account {
+    public function interestRate(): int;
+}
+final class SavingsAccount implements Savings {
+    public function withdraw(int $amount): Account { return $this; }
+    public function interestRate(): int { return 4; }
+}
+function rate(Savings $account): int {
+    return $account->withdraw(10)->interestRate();
+}
+echo rate(new SavingsAccount());
+"#,
+        "Undefined method: Account::interestRate",
+    );
+}
+
+/// Verifies that binding `static` preserves distinct explicit union members.
+///
+/// `static|Choice` called on `SpecialChoice` becomes `SpecialChoice|Choice`, so a
+/// subclass-only method is not safe on the result even though one branch is late-bound.
+#[test]
+fn test_error_late_static_union_keeps_explicit_ancestor_member() {
+    expect_error(
+        r#"<?php
+class Choice {
+    public function choose(bool $same): static|Choice {
+        return $same ? $this : new Choice();
+    }
+}
+class SpecialChoice extends Choice {
+    public function special(): string { return "special"; }
+}
+function render(SpecialChoice $choice): string {
+    return $choice->choose(false)->special();
+}
+"#,
+        "Undefined method",
+    );
+}
+
+/// Verifies an interface `static` contract cannot be implemented as the concrete class name.
+#[test]
+fn test_error_interface_static_return_requires_late_static_implementation() {
+    expect_error(
+        r#"<?php
+interface CreatesLateBound {
+    public function create(): static;
+}
+class ConcreteCreator implements CreatesLateBound {
+    public function create(): ConcreteCreator { return $this; }
+}
+"#,
+        "incompatible return type",
+    );
+}
+
+/// Verifies overriding `static` with the immediate child name is rejected for future subclasses.
+#[test]
+fn test_error_static_return_override_cannot_become_concrete_child() {
+    expect_error(
+        r#"<?php
+class LateBoundBase {
+    public function copy(): static { return $this; }
+}
+class ConcreteCopy extends LateBoundBase {
+    public function copy(): ConcreteCopy { return $this; }
+}
+"#,
+        "incompatible return type",
+    );
+}
+
+/// Verifies a child interface must preserve its parent's late-static return contract.
+#[test]
+fn test_error_interface_redeclaration_cannot_replace_static_with_child_name() {
+    expect_error(
+        r#"<?php
+interface LateBoundContract {
+    public function copy(): static;
+}
+interface ConcreteContract extends LateBoundContract {
+    public function copy(): ConcreteContract;
+}
+"#,
+        "compatible late-static return type",
     );
 }
 
@@ -534,6 +656,65 @@ class Box {
 $box = new Box("bad");
 "#,
         "Constructor 'Box::__construct' parameter $value expects Int, got Str",
+    );
+}
+
+/// Verifies that an unrelated object default is rejected after class relationships are known.
+#[test]
+fn test_error_promoted_property_rejects_incompatible_object_default() {
+    expect_error(
+        r#"<?php
+class Expected {}
+class Unrelated {}
+class Box {
+    public function __construct(public Expected $value = new Unrelated()) {}
+}
+"#,
+        "Method parameter $value expects Object(\"Expected\"), got Object(\"Unrelated\")",
+    );
+}
+
+/// Verifies an enum-typed parameter default rejects a missing enum case semantically.
+#[test]
+fn test_error_enum_case_parameter_default_rejects_missing_case() {
+    expect_error(
+        r#"<?php
+enum A {
+    case One;
+}
+function unused_enum_default(A $a = A::Nope): void {}
+"#,
+        "Undefined enum case: A::Nope",
+    );
+}
+
+/// Verifies a scalar class constant cannot default an object-typed parameter.
+#[test]
+fn test_error_object_parameter_default_rejects_scalar_class_constant() {
+    expect_error(
+        r#"<?php
+class Foo {
+    public const BAR = 1;
+}
+function unused_class_constant_default(Foo $value = Foo::BAR): void {}
+"#,
+        "Function 'unused_class_constant_default' parameter $value expects Object(\"Foo\"), got Int",
+    );
+}
+
+/// Verifies plain property enum case defaults remain outside the supported EIR surface.
+#[test]
+fn test_error_plain_property_enum_case_default_remains_unsupported() {
+    expect_error(
+        r#"<?php
+enum Level {
+    case Low;
+}
+class Config {
+    public Level $level = Level::Low;
+}
+"#,
+        "Property Config::$level default expects Object(\"Level\"), got Str",
     );
 }
 
@@ -1389,5 +1570,14 @@ fn test_error_base_or_sub_union_into_derived_param_stays_loud() {
         "<?php class B{} class S extends B{} function need(S $x){} \
          function mk(int $n): B|S { return new S(); } echo need(mk(1));",
         "expects Object(\"S\"), got Union([Object(\"B\"), Object(\"S\")])",
+    );
+}
+
+/// `Exception::__construct` third parameter must be `?Throwable`, matching PHP.
+#[test]
+fn test_error_exception_previous_rejects_non_throwable() {
+    expect_error(
+        "<?php throw new Exception('x', 0, previous: 123);",
+        "previous",
     );
 }

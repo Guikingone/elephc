@@ -1,8 +1,8 @@
 ---
 title: "is_file()"
-description: "Lowers `is_file(path)` through the target-aware runtime stat helper."
+description: "Tells whether the filename is a regular file."
 sidebar:
-  order: 107
+  order: 128
 ---
 
 ## is_file()
@@ -11,12 +11,17 @@ sidebar:
 function is_file(string $filename): bool
 ```
 
-Lowers `is_file(path)` through the target-aware runtime stat helper.
+Tells whether the filename is a regular file.
 
 **Parameters**:
 - `$filename` (`string`)
 
 **Returns**: `bool`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/is_file.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/is_file.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

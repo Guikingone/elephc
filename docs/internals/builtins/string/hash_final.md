@@ -2,15 +2,15 @@
 title: "hash_final() — internals"
 description: "Compiler internals for hash_final(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 349
+  order: 373
 ---
 
 ## `hash_final()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/strings.rs`:419](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/strings.rs#L419) (`lower_hash_final`)
+- **Signature**: [`src/builtins/string/hash_final.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hash_final.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:319](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L319) (`lower_hash_final`)
 - **Function symbol**: `lower_hash_final()`
 
 
@@ -26,14 +26,18 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function hash_final(resource $context, bool $binary): string
+function hash_final(resource $context, bool $binary = false): string
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes 1–2 arguments (1 optional).
 
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/hash_final.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_final.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
+
 ## Cross-references
 
 - [User reference for `hash_final()`](../../../php/builtins/string/hash_final.md)
-

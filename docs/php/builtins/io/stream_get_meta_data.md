@@ -1,8 +1,8 @@
 ---
 title: "stream_get_meta_data()"
-description: "Lowers `stream_get_meta_data(stream)` through the metadata runtime helper."
+description: "Retrieves metadata from streams/file pointers."
 sidebar:
-  order: 187
+  order: 221
 ---
 
 ## stream_get_meta_data()
@@ -11,12 +11,17 @@ sidebar:
 function stream_get_meta_data(resource $stream): array
 ```
 
-Lowers `stream_get_meta_data(stream)` through the metadata runtime helper.
+Retrieves metadata from streams/file pointers.
 
 **Parameters**:
 - `$stream` (`resource`)
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_get_meta_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_get_meta_data.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

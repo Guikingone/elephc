@@ -1,24 +1,29 @@
 ---
 title: "json_encode()"
-description: "Lowers `json_encode(value, flags?, depth?)` through the shared JSON encoder runtime."
+description: "Returns the JSON representation of a value."
 sidebar:
-  order: 214
+  order: 248
 ---
 
 ## json_encode()
 
 ```php
-function json_encode(mixed $value, int $flags, int $depth): string
+function json_encode(mixed $value, int $flags = 0, int $depth = 512): string
 ```
 
-Lowers `json_encode(value, flags?, depth?)` through the shared JSON encoder runtime.
+Returns the JSON representation of a value.
 
 **Parameters**:
 - `$value` (`mixed`)
-- `$flags` (`int`), optional
-- `$depth` (`int`), optional
+- `$flags` (`int`), default `0`, optional
+- `$depth` (`int`), default `512`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/json/json_encode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/json/json_encode.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

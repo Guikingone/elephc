@@ -1,8 +1,8 @@
 ---
 title: "stream_get_transports()"
-description: "Lowers `stream_get_transports()` to the static transport list."
+description: "Retrieves list of registered socket transports."
 sidebar:
-  order: 188
+  order: 222
 ---
 
 ## stream_get_transports()
@@ -11,11 +11,16 @@ sidebar:
 function stream_get_transports(): array
 ```
 
-Lowers `stream_get_transports()` to the static transport list.
+Retrieves list of registered socket transports.
 
 **Parameters**: none.
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/stream_get_transports.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/stream_get_transports.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

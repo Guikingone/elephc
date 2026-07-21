@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for associative arrays, indexed, associative-array helper builtins, nested arrays, array callbacks.
+//! - Submodules group focused fixtures for associative arrays, indexed, associative-array helper builtins, nested arrays, array callbacks, list/key-edge builtins.
 
 mod assoc;
 mod indexed;
@@ -14,3 +14,7 @@ mod nested;
 mod callbacks;
 mod foreach_key_write;
 mod mixed_key_store_readback;
+mod foreach_value_append;
+mod list_and_keys;
+mod nested_mixed_write;
+mod assoc_set_ops;

@@ -1,22 +1,27 @@
 ---
 title: "spl_autoload_extensions()"
-description: "Lowers `spl_autoload_extensions()` against the legacy mutable extension globals."
+description: "Register and return default file extensions for spl_autoload."
 sidebar:
-  order: 312
+  order: 343
 ---
 
 ## spl_autoload_extensions()
 
 ```php
-function spl_autoload_extensions(string $file_extensions): string
+function spl_autoload_extensions(string $file_extensions = null): string
 ```
 
-Lowers `spl_autoload_extensions()` against the legacy mutable extension globals.
+Register and return default file extensions for spl_autoload.
 
 **Parameters**:
-- `$file_extensions` (`string`), optional
+- `$file_extensions` (`string`), default `null`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload_extensions.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload_extensions.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

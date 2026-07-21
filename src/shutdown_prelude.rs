@@ -8,7 +8,7 @@
 //!   same pipeline stage as `crate::var_export_prelude` (after `autoload::run` and the
 //!   conditional-function hoist, before `optimize::fold_constants`), so PSR-4 autoloaded usage is
 //!   detected and the declaration is present before the type checker collects functions.
-//! - `crate::codegen_ir::context::FunctionContext::emit_shutdown_functions_runner_call_if_present`
+//! - `crate::codegen::context::FunctionContext::emit_shutdown_functions_runner_call_if_present`
 //!   reads `RUN_SHUTDOWN_FUNCTIONS_NAME` to conditionally call the injected runner from the
 //!   top-level epilogue (`codegen_ir::frame::emit_main_epilogue`) and from `exit()`/`die()`
 //!   lowering (`codegen_ir::lower_inst::builtins::system::lower_exit`) — the single source of

@@ -1,23 +1,27 @@
 ---
 title: "passthru()"
-description: "Lowers `passthru(command)` through libc `system()` for direct stdout passthrough."
+description: "Executes an external program and passes its output directly."
 sidebar:
-  order: 294
+  order: 324
 ---
 
 ## passthru()
 
 ```php
-function passthru(string $command, int $result_code): void
+function passthru(string $command): void
 ```
 
-Lowers `passthru(command)` through libc `system()` for direct stdout passthrough.
+Executes an external program and passes its output directly.
 
 **Parameters**:
 - `$command` (`string`)
-- `$result_code` (`int`), passed by reference
 
 **Returns**: `void`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/passthru.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/passthru.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

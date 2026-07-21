@@ -1,23 +1,28 @@
 ---
 title: "md5()"
-description: "Lowers `md5(data, binary?)` through the shared crypto-backed runtime helper."
+description: "Calculates the MD5 hash of a string."
 sidebar:
-  order: 362
+  order: 389
 ---
 
 ## md5()
 
 ```php
-function md5(string $string, bool $binary): string
+function md5(string $string, bool $binary = false): string
 ```
 
-Lowers `md5(data, binary?)` through the shared crypto-backed runtime helper.
+Calculates the MD5 hash of a string.
 
 **Parameters**:
 - `$string` (`string`)
-- `$binary` (`bool`), optional
+- `$binary` (`bool`), default `false`, optional
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/md5.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/md5.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

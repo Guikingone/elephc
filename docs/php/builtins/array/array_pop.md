@@ -1,8 +1,8 @@
 ---
 title: "array_pop()"
-description: "Lowers `array_pop()` for indexed arrays by mutating length and boxing `T|null` as Mixed."
+description: "Pops the element off the end of array."
 sidebar:
-  order: 17
+  order: 27
 ---
 
 ## array_pop()
@@ -11,12 +11,17 @@ sidebar:
 function array_pop(array $array): mixed
 ```
 
-Lowers `array_pop()` for indexed arrays by mutating length and boxing `T|null` as Mixed.
+Pops the element off the end of array.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
 
 **Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_pop.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_pop.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

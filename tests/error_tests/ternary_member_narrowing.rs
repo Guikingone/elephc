@@ -68,15 +68,13 @@ fn test_ternary_member_path_else_branch_not_narrowed() {
     );
 }
 
-/// Negative control — an `if`-block guard is NOT narrowed (deferred scope): WIN B is
-/// ternary-only, so `if ($this->x instanceof J) { $this->x->extra(); }` still errors.
-/// Documents that if-block member narrowing is a separate deferred milestone.
+/// Verifies `if`-block member-path narrowing now works: the property-fact narrowing
+/// (landed on main) narrows `$this->x` inside the guarded block, so
+/// `if ($this->x instanceof J) { $this->x->extra(); }` type-checks. This was previously
+/// a negative control while if-block member narrowing was deferred.
 #[test]
 fn test_if_block_member_path_not_narrowed() {
-    expect_error(
-        &fixture("if ($this->x instanceof J) { $this->x->extra(); }"),
-        "Undefined method",
-    );
+    expect_ok(&fixture("if ($this->x instanceof J) { $this->x->extra(); }"));
 }
 
 /// Regression — the variable-rooted ternary narrowing (WIN A) still works: a plain

@@ -2,15 +2,15 @@
 title: "fgetcsv() — internals"
 description: "Compiler internals for fgetcsv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 142
+  order: 163
 ---
 
 ## `fgetcsv()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:2772](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L2772) (`lower_fgetcsv`)
+- **Signature**: [`src/builtins/io/fgetcsv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fgetcsv.rs)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:2991](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L2991) (`lower_fgetcsv`)
 - **Function symbol**: `lower_fgetcsv()`
 
 
@@ -27,14 +27,18 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function fgetcsv(resource $stream, int $length, string $separator, string $enclosure, string $escape): array
+function fgetcsv(resource $stream, int $length = null, string $separator = ','): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 3–5 arguments (2 optional).
+- **Arity**: takes 1–3 arguments (2 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fgetcsv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fgetcsv.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 
 - [User reference for `fgetcsv()`](../../../php/builtins/io/fgetcsv.md)
-

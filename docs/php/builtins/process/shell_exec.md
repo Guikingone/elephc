@@ -1,8 +1,8 @@
 ---
 title: "shell_exec()"
-description: "Lowers `shell_exec(command)` by capturing shell stdout through the shared runtime helper."
+description: "Executes a command via the shell and returns the complete output as a string."
 sidebar:
-  order: 298
+  order: 328
 ---
 
 ## shell_exec()
@@ -11,12 +11,17 @@ sidebar:
 function shell_exec(string $command): string
 ```
 
-Lowers `shell_exec(command)` by capturing shell stdout through the shared runtime helper.
+Executes a command via the shell and returns the complete output as a string.
 
 **Parameters**:
 - `$command` (`string`)
 
 **Returns**: `string`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/shell_exec.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/shell_exec.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

@@ -1,24 +1,27 @@
 ---
 title: "array_keys()"
-description: "Lowers `array_keys()` for indexed arrays and associative arrays."
+description: "Returns all the keys of an array."
 sidebar:
-  order: 13
+  order: 21
 ---
 
 ## array_keys()
 
 ```php
-function array_keys(array $array, string $filter_value, bool $strict): array
+function array_keys(array $array): array
 ```
 
-Lowers `array_keys()` for indexed arrays and associative arrays.
+Returns all the keys of an array.
 
 **Parameters**:
 - `$array` (`array`)
-- `$filter_value` (`string`)
-- `$strict` (`bool`)
 
 **Returns**: `array`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_keys.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_keys.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
