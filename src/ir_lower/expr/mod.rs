@@ -8321,13 +8321,14 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
             Some(PhpType::stream_resource())
         }
         "realpath_cache_get" | "stream_context_get_options" | "stream_context_get_params"
-        | "stream_get_meta_data" | "ob_get_status" => Some(PhpType::AssocArray {
+        | "stream_get_meta_data" => Some(PhpType::AssocArray {
             key: Box::new(PhpType::Str),
             value: Box::new(PhpType::Mixed),
         }),
         // ob_* boxed results: string|false getters, int|false length, and the
         // status hash boxed as a Mixed associative array (like getdate/localtime).
         "ob_get_contents" | "ob_get_clean" | "ob_get_flush" | "ob_get_length"
+        | "ob_get_status"
         | "getdate" | "localtime" | "hrtime" | "file_get_contents" | "fileatime" | "filectime" | "filegroup" | "fileinode"
         | "fileowner" | "fileperms" | "filetype" | "readfile" | "readlink" | "realpath"
         | "fgetc" | "fgets" | "fopen" | "fstat" | "hash_copy" | "hash_file" | "hash_init"

@@ -166,6 +166,38 @@ impl Checker {
         }
     }
 
+
+    /// Returns whether a value of `ty` is gradually acceptable under PHP's
+    /// calling rules: a `Closure`, an object with `__invoke`, a function-name
+    /// `string`, `Callable` itself, `Mixed`, or a union containing any of
+    /// those. Used to accept call sites whose receiver is not exactly
+    /// `Callable` but could be callable at runtime, mirroring the gradual
+    /// acceptance of `Mixed`/union for indexing and arithmetic. Returns false
+    /// for concretely non-callable types (Int, Bool, plain object without
+    /// `__invoke`, non-callable array shapes, Void, Null, Resource).
+    pub(crate) fn type_is_callably_acceptable(&self, ty: &PhpType) -> bool {
+        match ty {
+            PhpType::Callable | PhpType::Mixed | PhpType::Str => true,
+            PhpType::Object(class_name) => {
+                // Closure is always invokable in PHP, even though it has no
+                // user-class entry in `self.classes` with an `__invoke` method.
+                if php_symbol_key(class_name.trim_start_matches('\\')) == "closure" {
+                    return true;
+                }
+                self.classes
+                    .get(class_name)
+                    .is_some_and(|ci| ci.methods.contains_key("__invoke"))
+            }
+            PhpType::Union(members) => {
+                members.iter().any(|m| self.type_is_callably_acceptable(m))
+            }
+            // Int, Bool, Float, Array, AssocArray, Void, Null, Resource, etc.
+            // are not callable. (PHP's callable-array [object, method] form is
+            // not represented by a plain Array type here and is out of scope.)
+            _ => false,
+        }
+    }
+
     /// Merges two array-like types for the `+` operator (array union).
     ///
     /// Handles `PhpType::Array` vs `PhpType::Array`, `PhpType::AssocArray` vs
@@ -437,6 +469,18 @@ impl Checker {
                         env,
                     );
                 }
+            }
+            if self.type_is_callably_acceptable(&var_ty) {
+                // The receiver could be callable at runtime (Mixed, a union
+                // containing Callable, a Closure, an invokable object, ...).
+                // With no statically-known signature, the call returns Mixed.
+                // (If a known callable signature was registered for `var`, the
+                // earlier `callable_sigs.get(var)` path below already handled
+                // it; this residual path only catches acceptable-but-unknown.)
+                for arg in args {
+                    self.infer_type(arg, env)?;
+                }
+                return Ok(PhpType::Mixed);
             }
             return Err(CompileError::new(
                 expr.span,

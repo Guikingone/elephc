@@ -855,9 +855,9 @@ pub(crate) fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
         // method_exists(object|string $object_or_class, string $method): bool.
         // trigger_error(string $message, int $error_level = E_USER_NOTICE (1024)): bool.
         "trigger_error" => Some(optional(&["message", "error_level"], 1, vec![int_lit(1024)])),
-        // set_error_handler(?callable $callback, int $error_levels = E_ALL (32767)): ?callable.
+        // set_error_handler(?callable $callback, int $error_levels = E_ALL (30719)): ?callable.
         "set_error_handler" => {
-            Some(optional(&["callback", "error_levels"], 1, vec![int_lit(32767)]))
+            Some(optional(&["callback", "error_levels"], 1, vec![int_lit(30719)]))
         }
         // restore_error_handler(): true.
         "restore_error_handler" => Some(fixed(&[])),

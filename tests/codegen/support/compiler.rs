@@ -100,9 +100,29 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let (resolved, _autoload_warnings) =
         elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
+    // Mirror `pipeline::compile`: hoist conditional function declarations, then inject the
+    // register_shutdown_function prelude (usage inside PSR-4 autoloaded files is detected too).
+    let resolved = elephc::resolver::hoist_conditional_function_declarations(resolved);
+    let resolved = elephc::shutdown_prelude::inject_if_used(resolved);
     let resolved = elephc::optimize::fold_constants(resolved);
-    let check_result =
+    // Mirror `pipeline::compile`'s pre-checker curated-extension `function_exists`/
+    // `extension_loaded` fold+prune so codegen fixtures exercise the same
+    // guarded-extension-call pruning real compilation does.
+    let pre_check_extension_set = elephc::optimize::FunctionExistenceSet::for_pre_check(&resolved);
+    let resolved = elephc::optimize::fold_function_existence(resolved, &pre_check_extension_set);
+    let resolved = elephc::optimize::prune_dead_static_branches(resolved);
+    let mut check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
+    // Mirror `pipeline::compile`: rewrite literal string-callable arguments at `callable`-typed
+    // positions into their first-class-callable AST equivalent on the REAL AST that lowering
+    // walks (the checker already accepted the coercion on an ephemeral copy).
+    let callable_coercion_set =
+        elephc::optimize::CallableCoercionSet::from_check_result(&check_result);
+    let resolved = elephc::optimize::coerce_callable_string_args(resolved, &callable_coercion_set);
+    elephc::optimize::coerce_callable_string_args_in_method_bodies(
+        &mut check_result,
+        &callable_coercion_set,
+    );
     let optimized = elephc::optimize::propagate_constants(resolved);
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);

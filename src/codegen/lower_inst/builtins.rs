@@ -610,9 +610,15 @@ fn emit_type_name_result(ctx: &mut FunctionContext<'_>, type_name: &[u8]) {
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
 }
 
-/// Lowers `phpversion()` as the compiler package version string.
+/// Lowers `phpversion()` as the compiler package version string. The one-argument
+/// `phpversion($extension)` form returns `false` (no loadable extensions exist in an
+/// AOT binary), matching PHP's behavior for an unknown extension.
 pub(crate) fn lower_phpversion(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "phpversion", 0)?;
+    ensure_arg_count_between(inst, "phpversion", 0, 1)?;
+    if inst.operands.len() == 1 {
+        emit_static_bool(ctx, false);
+        return store_if_result(ctx, inst);
+    }
     let (label, len) = ctx.data.add_string(env!("CARGO_PKG_VERSION").as_bytes());
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);

@@ -63,6 +63,16 @@ impl Platform {
         }
     }
 
+    /// Returns the PHP-compatible OS family string for this platform, matching PHP's
+    /// `PHP_OS_FAMILY` constant ("Darwin", "Linux", "Windows").
+    pub fn php_os_family(&self) -> &'static str {
+        match self {
+            Platform::MacOS => "Darwin",
+            Platform::Linux => "Linux",
+            Platform::Windows => "Windows",
+        }
+    }
+
 
     /// Returns the `O_WRONLY | O_CREAT | O_TRUNC` flag combination for `open()`.
     ///

@@ -380,8 +380,40 @@ impl Checker {
                 }
                 Ok(ty)
             }
-            ExprKind::NewObject { args, .. } | ExprKind::StaticMethodCall { args, .. } => {
+            ExprKind::NewObject { args, .. } => {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                for arg in &expanded_args {
+                    self.infer_type_with_assignment_effects(arg, env)?;
+                }
+                let ty = self.infer_type(expr, env)?;
+                Self::purge_property_narrowings(env);
+                Ok(ty)
+            }
+            ExprKind::StaticMethodCall {
+                receiver,
+                method,
+                args,
+            } => {
+                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                // A static method with a by-reference parameter (e.g. the yaml
+                // `Parser::preg_match($re, $value, $match)` shape) defines the caller's argument
+                // variable. Define such variables before inferring the arguments so the
+                // by-reference variable is not reported as "Undefined variable".
+                for (var, ty) in
+                    self.static_method_call_by_ref_outputs(receiver, method, &expanded_args, env)
+                {
+                    env.entry(var).or_insert(ty);
+                }
+                // Promote already-defined caller variables whose storage cannot hold the
+                // boxed/nullable value a by-reference parameter may write back.
+                for (var, ty) in self.static_method_call_by_ref_boxed_promotions(
+                    receiver,
+                    method,
+                    &expanded_args,
+                    env,
+                ) {
+                    env.insert(var, ty);
+                }
                 for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
@@ -433,10 +465,33 @@ impl Checker {
                 self.infer_type_with_assignment_effects(property, env)?;
                 self.infer_type(expr, env)
             }
-            ExprKind::MethodCall { object, args, .. }
-            | ExprKind::NullsafeMethodCall { object, args, .. } => {
-                self.infer_type_with_assignment_effects(object, env)?;
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+            }
+            | ExprKind::NullsafeMethodCall {
+                object,
+                method,
+                args,
+            } => {
+                let object_type = self.infer_type_with_assignment_effects(object, env)?;
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                // An instance method with a by-reference parameter defines the caller's argument
+                // variable. Define such variables before inferring the arguments so the
+                // by-reference variable is not reported as "Undefined variable".
+                for (var, ty) in
+                    self.method_call_by_ref_outputs(&object_type, method, &expanded_args, env)
+                {
+                    env.entry(var).or_insert(ty);
+                }
+                // Promote already-defined caller variables whose storage cannot hold the
+                // boxed/nullable value a by-reference parameter may write back.
+                for (var, ty) in
+                    self.method_call_by_ref_boxed_promotions(&object_type, method, &expanded_args, env)
+                {
+                    env.insert(var, ty);
+                }
                 for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }

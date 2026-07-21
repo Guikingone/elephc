@@ -1580,6 +1580,7 @@ fn is_filter_var_value_type(ty: &PhpType) -> bool {
             | PhpType::Float
             | PhpType::Str
             | PhpType::Bool
+            | PhpType::False
             | PhpType::Void
             | PhpType::Mixed
             | PhpType::Array(_)
