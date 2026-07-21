@@ -2,7 +2,7 @@
 title: "lchown() — internals"
 description: "Compiler internals for lchown(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 134
+  order: 133
 ---
 
 ## `lchown()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/lchown.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/lchown.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4479](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4479) (`lower_lchown`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4621](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4621) (`lower_lchown`)
 - **Function symbol**: `lower_lchown()`
 
 

@@ -2,7 +2,7 @@
 title: "umask() — internals"
 description: "Compiler internals for umask(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 155
+  order: 154
 ---
 
 ## `umask()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/umask.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/umask.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4489](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4489) (`lower_umask`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4631](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4631) (`lower_umask`)
 - **Function symbol**: `lower_umask()`
 
 

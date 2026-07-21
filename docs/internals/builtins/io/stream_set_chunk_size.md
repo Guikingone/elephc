@@ -2,7 +2,7 @@
 title: "stream_set_chunk_size() — internals"
 description: "Compiler internals for stream_set_chunk_size(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 229
+  order: 228
 ---
 
 ## `stream_set_chunk_size()` — internals

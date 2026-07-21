@@ -2,7 +2,7 @@
 title: "base64_decode() — internals"
 description: "Compiler internals for base64_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 357
+  order: 356
 ---
 
 ## `base64_decode()` — internals
@@ -26,12 +26,12 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function base64_decode(string $string): string
+function base64_decode(string $string, bool $strict = false): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–2 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

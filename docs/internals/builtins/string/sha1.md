@@ -2,7 +2,7 @@
 title: "sha1() — internals"
 description: "Compiler internals for sha1(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 397
+  order: 396
 ---
 
 ## `sha1()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/sha1.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/sha1.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:422](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L422) (`lower_sha1`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:806](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L806) (`lower_sha1`)
 - **Function symbol**: `lower_sha1()`
 
 

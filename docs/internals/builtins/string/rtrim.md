@@ -2,7 +2,7 @@
 title: "rtrim() — internals"
 description: "Compiler internals for rtrim(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 396
+  order: 395
 ---
 
 ## `rtrim()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/rtrim.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/rtrim.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:129](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L129) (`lower_trim_like`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:132](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L132) (`lower_trim_like`)
 - **Function symbol**: `lower_trim_like()`
 
 
@@ -20,7 +20,8 @@ sidebar:
 
 ## Runtime helpers
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+The following runtime helpers are referenced:
+- `__rt_str_persist`
 
 ## Signature summary
 

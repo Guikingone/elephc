@@ -2,7 +2,7 @@
 title: "rmdir() — internals"
 description: "Compiler internals for rmdir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 147
+  order: 146
 ---
 
 ## `rmdir()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/rmdir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/rmdir.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4429](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4429) (`lower_rmdir`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4508](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4508) (`lower_rmdir`)
 - **Function symbol**: `lower_rmdir()`
 
 
@@ -24,7 +24,6 @@ The following runtime helpers are referenced:
 - `__rt_chdir`
 - `__rt_copy`
 - `__rt_rmdir`
-- `__rt_scandir`
 - `__rt_tempnam`
 
 ## Signature summary

@@ -2,7 +2,7 @@
 title: "intval() — internals"
 description: "Compiler internals for intval(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 437
+  order: 436
 ---
 
 ## `intval()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/intval.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/intval.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1127](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1127) (`lower_intval`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1396](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1396) (`lower_intval`)
 - **Function symbol**: `lower_intval()`
 
 
@@ -27,12 +27,12 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function intval(mixed $value): int
+function intval(mixed $value, int $base = 10): int
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–2 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

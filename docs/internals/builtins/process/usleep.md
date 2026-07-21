@@ -2,7 +2,7 @@
 title: "usleep() — internals"
 description: "Compiler internals for usleep(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 331
+  order: 330
 ---
 
 ## `usleep()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/usleep.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/usleep.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:625](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L625) (`lower_usleep`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:638](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L638) (`lower_usleep`)
 - **Function symbol**: `lower_usleep()`
 
 
@@ -20,8 +20,7 @@ sidebar:
 
 ## Runtime helpers
 
-The following runtime helpers are referenced:
-- `__rt_getenv`
+_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
 
 ## Signature summary
 

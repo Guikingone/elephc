@@ -2,7 +2,7 @@
 title: "interface_exists() — internals"
 description: "Compiler internals for interface_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 85
+  order: 84
 ---
 
 ## `interface_exists()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/interface_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/interface_exists.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:585](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L585) (`lower_class_like_exists`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:724](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L724) (`lower_class_like_exists`)
 - **Function symbol**: `lower_class_like_exists()`
 
 

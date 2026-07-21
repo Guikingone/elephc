@@ -2,7 +2,7 @@
 title: "stream_get_transports() — internals"
 description: "Compiler internals for stream_get_transports(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 222
+  order: 221
 ---
 
 ## `stream_get_transports()` — internals

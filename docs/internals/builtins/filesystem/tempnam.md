@@ -2,7 +2,7 @@
 title: "tempnam() — internals"
 description: "Compiler internals for tempnam(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 152
+  order: 151
 ---
 
 ## `tempnam()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/tempnam.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/tempnam.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4449](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4449) (`lower_tempnam`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4528](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4528) (`lower_tempnam`)
 - **Function symbol**: `lower_tempnam()`
 
 
@@ -21,8 +21,6 @@ sidebar:
 ## Runtime helpers
 
 The following runtime helpers are referenced:
-- `__rt_glob`
-- `__rt_scandir`
 - `__rt_tempnam`
 
 ## Signature summary

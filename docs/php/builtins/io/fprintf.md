@@ -2,7 +2,7 @@
 title: "fprintf()"
 description: "Write a formatted string to a stream."
 sidebar:
-  order: 171
+  order: 170
 ---
 
 ## fprintf()

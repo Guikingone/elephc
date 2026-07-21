@@ -2,7 +2,7 @@
 title: "hash_final()"
 description: "Finalizes an incremental hash and returns the digest string."
 sidebar:
-  order: 373
+  order: 372
 ---
 
 ## hash_final()

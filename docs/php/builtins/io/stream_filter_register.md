@@ -2,7 +2,7 @@
 title: "stream_filter_register()"
 description: "Registers a user-defined stream filter."
 sidebar:
-  order: 216
+  order: 215
 ---
 
 ## stream_filter_register()

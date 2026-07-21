@@ -2,7 +2,7 @@
 title: "chown() — internals"
 description: "Compiler internals for chown(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 106
+  order: 105
 ---
 
 ## `chown()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/chown.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/chown.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4469](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4469) (`lower_chown`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4611](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4611) (`lower_chown`)
 - **Function symbol**: `lower_chown()`
 
 

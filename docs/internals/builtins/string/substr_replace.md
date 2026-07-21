@@ -2,7 +2,7 @@
 title: "substr_replace() — internals"
 description: "Compiler internals for substr_replace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 419
+  order: 418
 ---
 
 ## `substr_replace()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/substr_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/substr_replace.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:792](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L792) (`lower_substr_replace`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:1196](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L1196) (`lower_substr_replace`)
 - **Function symbol**: `lower_substr_replace()`
 
 

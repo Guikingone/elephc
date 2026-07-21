@@ -2,7 +2,7 @@
 title: "microtime()"
 description: "Returns the current Unix timestamp with microseconds."
 sidebar:
-  order: 98
+  order: 97
 ---
 
 ## microtime()

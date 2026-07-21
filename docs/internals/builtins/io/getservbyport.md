@@ -2,7 +2,7 @@
 title: "getservbyport() — internals"
 description: "Compiler internals for getservbyport(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 187
+  order: 186
 ---
 
 ## `getservbyport()` — internals

@@ -10,7 +10,7 @@ sidebar:
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
 | [`addslashes()`](./string/addslashes.md) | `(string $string): string` | `string` | ✓ | ✓ |
-| [`base64_decode()`](./string/base64_decode.md) | `(string $string): string` | `string` | ✓ | ✓ |
+| [`base64_decode()`](./string/base64_decode.md) | `(string $string, bool $strict = false): string` | `string` | ✓ | ✓ |
 | [`base64_encode()`](./string/base64_encode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`bin2hex()`](./string/bin2hex.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`chop()`](./string/chop.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |
@@ -31,9 +31,9 @@ sidebar:
 | [`hash_init()`](./string/hash_init.md) | `(string $algo, int $flags = 0, string $key = ''): mixed` | `mixed` | ✓ | ✓ |
 | [`hash_update()`](./string/hash_update.md) | `(resource $context, string $data): bool` | `bool` | ✓ | ✓ |
 | [`hex2bin()`](./string/hex2bin.md) | `(string $string): string` | `string` | ✓ | ✓ |
-| [`html_entity_decode()`](./string/html_entity_decode.md) | `(string $string): string` | `string` | ✓ | ✓ |
-| [`htmlentities()`](./string/htmlentities.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` | ✓ | ✓ |
-| [`htmlspecialchars()`](./string/htmlspecialchars.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` | ✓ | ✓ |
+| [`html_entity_decode()`](./string/html_entity_decode.md) | `(string $string, int $flags = 11, string $encoding = null): string` | `string` | ✓ | ✓ |
+| [`htmlentities()`](./string/htmlentities.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8', bool $double_encode = true): string` | `string` | ✓ | ✓ |
+| [`htmlspecialchars()`](./string/htmlspecialchars.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8', bool $double_encode = true): string` | `string` | ✓ | ✓ |
 | [`implode()`](./string/implode.md) | `(string $separator, array $array = null): string` | `string` | ✓ | ✓ |
 | [`inet_ntop()`](./string/inet_ntop.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
 | [`inet_pton()`](./string/inet_pton.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |

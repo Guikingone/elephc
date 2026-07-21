@@ -2,7 +2,7 @@
 title: "is_scalar()"
 description: "Checks whether a variable is a scalar."
 sidebar:
-  order: 448
+  order: 447
 ---
 
 ## is_scalar()

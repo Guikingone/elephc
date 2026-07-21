@@ -2,7 +2,7 @@
 title: "checkdate()"
 description: "Validates a Gregorian date."
 sidebar:
-  order: 89
+  order: 88
 ---
 
 ## checkdate()

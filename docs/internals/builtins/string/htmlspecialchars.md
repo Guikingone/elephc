@@ -2,7 +2,7 @@
 title: "htmlspecialchars() — internals"
 description: "Compiler internals for htmlspecialchars(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 380
+  order: 379
 ---
 
 ## `htmlspecialchars()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/htmlspecialchars.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/htmlspecialchars.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:92](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L92) (`lower_html_escape`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:95](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L95) (`lower_html_escape`)
 - **Function symbol**: `lower_html_escape()`
 
 
@@ -33,12 +33,12 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function htmlspecialchars(string $string, int $flags = 11, string $encoding = 'UTF-8'): string
+function htmlspecialchars(string $string, int $flags = 11, string $encoding = 'UTF-8', bool $double_encode = true): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 1–3 arguments (2 optional).
+- **Arity**: takes 1–4 arguments (3 optional).
 
 ## Eval interpreter (magician)
 

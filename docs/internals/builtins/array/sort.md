@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/sort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/sort.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1079](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1079) (`lower_sort`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1328](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1328) (`lower_sort`)
 - **Function symbol**: `lower_sort()`
 
 
@@ -33,12 +33,12 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function sort(array $array): bool
+function sort(array $array, int $flags = 0): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–2 arguments (1 optional).
 - **By-reference parameters**: `$array`.
 
 ## Eval interpreter (magician)

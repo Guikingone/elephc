@@ -2,7 +2,7 @@
 title: "unlink() — internals"
 description: "Compiler internals for unlink(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 156
+  order: 155
 ---
 
 ## `unlink()` — internals
@@ -22,7 +22,8 @@ sidebar:
 
 The following runtime helpers are referenced:
 - `__rt_mkdir`
-- `__rt_rmdir`
+- `__rt_mkdir_mode`
+- `__rt_mkdir_recursive`
 - `__rt_unlink`
 
 ## Signature summary

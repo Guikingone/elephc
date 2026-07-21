@@ -2,19 +2,20 @@
 title: "base64_decode()"
 description: "Decodes a Base64-encoded string back into its original data."
 sidebar:
-  order: 357
+  order: 356
 ---
 
 ## base64_decode()
 
 ```php
-function base64_decode(string $string): string
+function base64_decode(string $string, bool $strict = false): string
 ```
 
 Decodes a Base64-encoded string back into its original data.
 
 **Parameters**:
 - `$string` (`string`)
+- `$strict` (`bool`), default `false`, optional
 
 **Returns**: `string`
 

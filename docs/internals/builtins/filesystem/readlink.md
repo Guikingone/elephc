@@ -2,7 +2,7 @@
 title: "readlink() — internals"
 description: "Compiler internals for readlink(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 142
+  order: 141
 ---
 
 ## `readlink()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/readlink.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/readlink.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5454](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5454) (`lower_readlink`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5596](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5596) (`lower_readlink`)
 - **Function symbol**: `lower_readlink()`
 
 

@@ -2,7 +2,7 @@
 title: "dirname() — internals"
 description: "Compiler internals for dirname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 109
+  order: 108
 ---
 
 ## `dirname()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/dirname.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/dirname.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4571](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4571) (`lower_dirname`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4713](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4713) (`lower_dirname`)
 - **Function symbol**: `lower_dirname()`
 
 

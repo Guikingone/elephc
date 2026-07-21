@@ -2,7 +2,7 @@
 title: "hash()"
 description: "Generates a hash value using the given algorithm."
 sidebar:
-  order: 369
+  order: 368
 ---
 
 ## hash()

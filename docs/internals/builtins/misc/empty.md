@@ -2,7 +2,7 @@
 title: "empty() — internals"
 description: "Compiler internals for empty(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 291
+  order: 290
 ---
 
 ## `empty()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1236](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1236) (`lower_empty`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:1541](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L1541) (`lower_empty`)
 - **Function symbol**: `lower_empty()`
 
 

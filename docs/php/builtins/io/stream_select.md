@@ -2,7 +2,7 @@
 title: "stream_select()"
 description: "Runs the equivalent of the select() system call on the given arrays of streams."
 sidebar:
-  order: 227
+  order: 226
 ---
 
 ## stream_select()

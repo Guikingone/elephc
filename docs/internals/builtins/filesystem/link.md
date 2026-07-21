@@ -2,7 +2,7 @@
 title: "link() — internals"
 description: "Compiler internals for link(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 135
+  order: 134
 ---
 
 ## `link()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/link.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/link.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5449](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5449) (`lower_link`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5591](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5591) (`lower_link`)
 - **Function symbol**: `lower_link()`
 
 

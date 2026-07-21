@@ -2,7 +2,7 @@
 title: "time() — internals"
 description: "Compiler internals for time(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 101
+  order: 100
 ---
 
 ## `time()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/time.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/time.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:615](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L615) (`lower_time`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:628](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L628) (`lower_time`)
 - **Function symbol**: `lower_time()`
 
 

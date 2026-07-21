@@ -2,7 +2,7 @@
 title: "file_put_contents() — internals"
 description: "Compiler internals for file_put_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 167
+  order: 166
 ---
 
 ## `file_put_contents()` — internals
@@ -27,12 +27,12 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function file_put_contents(string $filename, string $data): int
+function file_put_contents(string $filename, string $data, int $flags = 0, mixed $context = null): int
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 2 arguments.
+- **Arity**: takes 2–4 arguments (2 optional).
 
 ## Eval interpreter (magician)
 

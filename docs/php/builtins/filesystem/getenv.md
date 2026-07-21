@@ -2,7 +2,7 @@
 title: "getenv()"
 description: "Gets the value of an environment variable."
 sidebar:
-  order: 124
+  order: 123
 ---
 
 ## getenv()

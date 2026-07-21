@@ -2,7 +2,7 @@
 title: "chgrp() — internals"
 description: "Compiler internals for chgrp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 104
+  order: 103
 ---
 
 ## `chgrp()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/chgrp.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/chgrp.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4474](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4474) (`lower_chgrp`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4616](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4616) (`lower_chgrp`)
 - **Function symbol**: `lower_chgrp()`
 
 

@@ -2,7 +2,7 @@
 title: "rename() — internals"
 description: "Compiler internals for rename(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 146
+  order: 145
 ---
 
 ## `rename()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/rename.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/rename.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4444](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4444) (`lower_rename`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4523](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4523) (`lower_rename`)
 - **Function symbol**: `lower_rename()`
 
 
@@ -21,8 +21,6 @@ sidebar:
 ## Runtime helpers
 
 The following runtime helpers are referenced:
-- `__rt_glob`
-- `__rt_scandir`
 - `__rt_tempnam`
 
 ## Signature summary

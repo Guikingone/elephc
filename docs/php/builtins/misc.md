@@ -17,7 +17,7 @@ sidebar:
 | [`http_response_code()`](./misc/http_response_code.md) | `(int $response_code = 0): int` | `int` | ✓ | ✓ |
 | [`isset()`](./misc/isset.md) | `(mixed $var, ...$vars): bool` | `bool` | ✓ | ✓ |
 | [`php_uname()`](./misc/php_uname.md) | `(string $mode = 'a'): string` | `string` | ✓ | ✓ |
-| [`phpversion()`](./misc/phpversion.md) | `(): string` | `string` | ✓ | ✓ |
+| [`phpversion()`](./misc/phpversion.md) | `(string $extension = null): string` | `string` | ✓ | ✓ |
 | [`print_r()`](./misc/print_r.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | ✓ |
 | [`serialize()`](./misc/serialize.md) | `(mixed $value): string` | `string` | ✓ | — |
 | [`unserialize()`](./misc/unserialize.md) | `(string $data, mixed $options = []): mixed` | `mixed` | ✓ | — |

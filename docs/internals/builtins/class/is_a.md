@@ -2,7 +2,7 @@
 title: "is_a() — internals"
 description: "Compiler internals for is_a(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 86
+  order: 85
 ---
 
 ## `is_a()` — internals

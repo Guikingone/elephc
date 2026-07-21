@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_replace_recursive.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_replace_recursive.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1345](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1345) (`lower_array_replace_recursive`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1575](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1575) (`lower_array_replace_recursive`)
 - **Function symbol**: `lower_array_replace_recursive()`
 
 
@@ -27,12 +27,13 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function array_replace_recursive(array $array, array $replacements): mixed
+function array_replace_recursive(array $array, ...$replacements): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 2 arguments.
+- **Arity**: takes exactly 1 argument.
+- **Variadic**: collects excess arguments into `$replacements`.
 
 ## Eval interpreter (magician)
 

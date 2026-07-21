@@ -2,7 +2,7 @@
 title: "filetype() — internals"
 description: "Compiler internals for filetype(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 121
+  order: 120
 ---
 
 ## `filetype()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/filetype.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/filetype.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5512](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5512) (`lower_filetype`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5654](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5654) (`lower_filetype`)
 - **Function symbol**: `lower_filetype()`
 
 

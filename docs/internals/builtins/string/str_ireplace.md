@@ -2,7 +2,7 @@
 title: "str_ireplace() — internals"
 description: "Compiler internals for str_ireplace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 402
+  order: 401
 ---
 
 ## `str_ireplace()` — internals
@@ -10,13 +10,17 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/str_ireplace.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_ireplace.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:842](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L842) (`lower_string_replace`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:1292](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L1292) (`lower_string_replace`)
 - **Function symbol**: `lower_string_replace()`
 
 
 ### Lowering notes
 
-- Lowers `str_replace()`/`str_ireplace()` with three string operands.
+- Lowers `str_replace()`/`str_ireplace()` with three operands.
+- Handles the common all-string form directly, and the PHP array-`$search` form (with an array or
+- single-string `$replace`) against a string `$subject` through the `__rt_*_array` runtime helpers.
+- Array operands must currently be indexed `Array(Str)` (string slots); other array shapes return a
+- clear unsupported error rather than miscompiling.
 
 ## Runtime helpers
 

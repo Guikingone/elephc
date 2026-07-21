@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_reverse.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_reverse.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:193](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L193) (`lower_array_reverse`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:343](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L343) (`lower_array_reverse`)
 - **Function symbol**: `lower_array_reverse()`
 
 
@@ -20,17 +20,20 @@ sidebar:
 
 ## Runtime helpers
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+The following runtime helpers are referenced:
+- `__rt_array_reverse_refcounted`
+- `__rt_decref_any`
+- `__rt_mixed_array_or_fatal`
 
 ## Signature summary
 
 ```php
-function array_reverse(array $array): array
+function array_reverse(array $array, bool $preserve_keys = false): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–2 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

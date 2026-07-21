@@ -2,13 +2,13 @@
 title: "preg_match()"
 description: "Performs a regular expression match."
 sidebar:
-  order: 333
+  order: 332
 ---
 
 ## preg_match()
 
 ```php
-function preg_match(string $pattern, string $subject, array $matches = []): int
+function preg_match(string $pattern, string $subject, array $matches = [], int $flags = 0, int $offset = 0): int
 ```
 
 Performs a regular expression match.
@@ -17,6 +17,8 @@ Performs a regular expression match.
 - `$pattern` (`string`)
 - `$subject` (`string`)
 - `$matches` (`array`), passed by reference, default `[]`, optional
+- `$flags` (`int`), default `0`, optional
+- `$offset` (`int`), default `0`, optional
 
 **Returns**: `int`
 

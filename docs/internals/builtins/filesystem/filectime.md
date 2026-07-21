@@ -2,7 +2,7 @@
 title: "filectime() — internals"
 description: "Compiler internals for filectime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 114
+  order: 113
 ---
 
 ## `filectime()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/filectime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/filectime.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5472](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5472) (`lower_filectime`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5614](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5614) (`lower_filectime`)
 - **Function symbol**: `lower_filectime()`
 
 

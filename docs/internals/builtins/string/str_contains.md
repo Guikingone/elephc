@@ -2,7 +2,7 @@
 title: "str_contains() — internals"
 description: "Compiler internals for str_contains(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 400
+  order: 399
 ---
 
 ## `str_contains()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/str_contains.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_contains.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:744](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L744) (`lower_str_contains`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:1128](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L1128) (`lower_str_contains`)
 - **Function symbol**: `lower_str_contains()`
 
 

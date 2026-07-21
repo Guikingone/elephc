@@ -8,13 +8,14 @@ sidebar:
 ## krsort()
 
 ```php
-function krsort(array $array): bool
+function krsort(array $array, int $flags = 0): bool
 ```
 
 Sorts an array by key in descending order.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
+- `$flags` (`int`), default `0`, optional
 
 **Returns**: `bool`
 

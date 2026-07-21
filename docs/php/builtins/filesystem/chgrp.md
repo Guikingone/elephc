@@ -2,7 +2,7 @@
 title: "chgrp()"
 description: "Changes file group."
 sidebar:
-  order: 104
+  order: 103
 ---
 
 ## chgrp()

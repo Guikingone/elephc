@@ -2,7 +2,7 @@
 title: "filesize() — internals"
 description: "Compiler internals for filesize(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 120
+  order: 119
 ---
 
 ## `filesize()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/filesize.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/filesize.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5420](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5420) (`lower_filesize`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5562](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5562) (`lower_filesize`)
 - **Function symbol**: `lower_filesize()`
 
 

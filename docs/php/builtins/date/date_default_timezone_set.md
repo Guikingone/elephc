@@ -2,7 +2,7 @@
 title: "date_default_timezone_set()"
 description: "Sets the default timezone."
 sidebar:
-  order: 92
+  order: 91
 ---
 
 ## date_default_timezone_set()

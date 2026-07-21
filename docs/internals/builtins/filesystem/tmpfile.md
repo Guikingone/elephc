@@ -2,7 +2,7 @@
 title: "tmpfile() — internals"
 description: "Compiler internals for tmpfile(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 153
+  order: 152
 ---
 
 ## `tmpfile()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/tmpfile.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/tmpfile.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5412](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5412) (`lower_tmpfile`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5554](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5554) (`lower_tmpfile`)
 - **Function symbol**: `lower_tmpfile()`
 
 

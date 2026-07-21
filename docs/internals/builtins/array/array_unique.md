@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_unique.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_unique.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:207](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L207) (`lower_array_unique`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:404](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L404) (`lower_array_unique`)
 - **Function symbol**: `lower_array_unique()`
 
 
@@ -27,12 +27,12 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function array_unique(array $array): array
+function array_unique(array $array, int $flags = 2): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–2 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

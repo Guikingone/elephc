@@ -2,7 +2,7 @@
 title: "number_format() — internals"
 description: "Compiler internals for number_format(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 391
+  order: 390
 ---
 
 ## `number_format()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/number_format.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/number_format.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:937](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L937) (`lower_number_format`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:1431](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L1431) (`lower_number_format`)
 - **Function symbol**: `lower_number_format()`
 
 

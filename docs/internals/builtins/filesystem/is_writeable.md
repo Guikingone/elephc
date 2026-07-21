@@ -2,7 +2,7 @@
 title: "is_writeable() — internals"
 description: "Compiler internals for is_writeable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 132
+  order: 131
 ---
 
 ## `is_writeable()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/is_writeable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/is_writeable.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5620](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5620) (`lower_is_writeable`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5762](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5762) (`lower_is_writeable`)
 - **Function symbol**: `lower_is_writeable()`
 
 

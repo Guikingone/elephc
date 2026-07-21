@@ -2,7 +2,7 @@
 title: "stream_wrapper_unregister()"
 description: "Unregisters a previously registered URL wrapper."
 sidebar:
-  order: 245
+  order: 244
 ---
 
 ## stream_wrapper_unregister()

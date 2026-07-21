@@ -2,7 +2,7 @@
 title: "mktime() — internals"
 description: "Compiler internals for mktime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 99
+  order: 98
 ---
 
 ## `mktime()` — internals

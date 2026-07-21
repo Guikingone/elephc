@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_flip.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_flip.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:179](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L179) (`lower_array_flip`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:180](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L180) (`lower_array_flip`)
 - **Function symbol**: `lower_array_flip()`
 
 
@@ -20,7 +20,9 @@ sidebar:
 
 ## Runtime helpers
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+The following runtime helpers are referenced:
+- `__rt_hash_is_list`
+- `__rt_mixed_array_is_list`
 
 ## Signature summary
 

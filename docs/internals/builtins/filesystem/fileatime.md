@@ -2,7 +2,7 @@
 title: "fileatime() — internals"
 description: "Compiler internals for fileatime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 113
+  order: 112
 ---
 
 ## `fileatime()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fileatime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fileatime.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5464](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5464) (`lower_fileatime`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5606](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5606) (`lower_fileatime`)
 - **Function symbol**: `lower_fileatime()`
 
 

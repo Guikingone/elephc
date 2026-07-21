@@ -2,7 +2,7 @@
 title: "gzdeflate() — internals"
 description: "Compiler internals for gzdeflate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 366
+  order: 365
 ---
 
 ## `gzdeflate()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/gzdeflate.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/gzdeflate.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:480](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L480) (`lower_gzdeflate`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:864](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L864) (`lower_gzdeflate`)
 - **Function symbol**: `lower_gzdeflate()`
 
 

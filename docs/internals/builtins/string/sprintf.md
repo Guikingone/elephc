@@ -2,7 +2,7 @@
 title: "sprintf() — internals"
 description: "Compiler internals for sprintf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 398
+  order: 397
 ---
 
 ## `sprintf()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/sprintf.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/sprintf.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:573](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L573) (`lower_sprintf`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:957](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L957) (`lower_sprintf`)
 - **Function symbol**: `lower_sprintf()`
 
 

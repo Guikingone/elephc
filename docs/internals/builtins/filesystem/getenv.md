@@ -2,7 +2,7 @@
 title: "getenv() — internals"
 description: "Compiler internals for getenv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 124
+  order: 123
 ---
 
 ## `getenv()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/getenv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/getenv.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:645](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L645) (`lower_getenv`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:668](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L668) (`lower_getenv`)
 - **Function symbol**: `lower_getenv()`
 
 
@@ -22,6 +22,7 @@ sidebar:
 
 The following runtime helpers are referenced:
 - `__rt_getenv`
+- `__rt_ini_get`
 
 ## Signature summary
 

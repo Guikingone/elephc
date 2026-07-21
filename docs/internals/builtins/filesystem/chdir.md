@@ -2,7 +2,7 @@
 title: "chdir() — internals"
 description: "Compiler internals for chdir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 103
+  order: 102
 ---
 
 ## `chdir()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/chdir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/chdir.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4434](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4434) (`lower_chdir`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4513](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4513) (`lower_chdir`)
 - **Function symbol**: `lower_chdir()`
 
 
@@ -23,8 +23,6 @@ sidebar:
 The following runtime helpers are referenced:
 - `__rt_chdir`
 - `__rt_copy`
-- `__rt_glob`
-- `__rt_scandir`
 - `__rt_tempnam`
 
 ## Signature summary

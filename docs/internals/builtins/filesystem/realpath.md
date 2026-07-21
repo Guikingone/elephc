@@ -2,7 +2,7 @@
 title: "realpath() — internals"
 description: "Compiler internals for realpath(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 143
+  order: 142
 ---
 
 ## `realpath()` — internals

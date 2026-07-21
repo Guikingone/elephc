@@ -2,7 +2,7 @@
 title: "stream_get_line()"
 description: "Gets line from stream resource up to a given delimiter."
 sidebar:
-  order: 220
+  order: 219
 ---
 
 ## stream_get_line()

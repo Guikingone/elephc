@@ -2,7 +2,7 @@
 title: "fstat() — internals"
 description: "Compiler internals for fstat(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 176
+  order: 175
 ---
 
 ## `fstat()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fstat.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fstat.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5535](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5535) (`lower_fstat`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5677](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5677) (`lower_fstat`)
 - **Function symbol**: `lower_fstat()`
 
 

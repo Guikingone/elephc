@@ -2,7 +2,7 @@
 title: "is_infinite() — internals"
 description: "Compiler internals for is_infinite(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 269
+  order: 268
 ---
 
 ## `is_infinite()` — internals

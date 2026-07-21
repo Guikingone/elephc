@@ -2,7 +2,7 @@
 title: "str_starts_with() — internals"
 description: "Compiler internals for str_starts_with(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 407
+  order: 406
 ---
 
 ## `str_starts_with()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/str_starts_with.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_starts_with.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:156](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L156) (`lower_binary_string_runtime`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:167](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L167) (`lower_binary_string_runtime`)
 - **Function symbol**: `lower_binary_string_runtime()`
 
 
@@ -20,8 +20,7 @@ sidebar:
 
 ## Runtime helpers
 
-The following runtime helpers are referenced:
-- `__rt_explode`
+_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
 
 ## Signature summary
 

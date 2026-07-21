@@ -2,7 +2,7 @@
 title: "chr() — internals"
 description: "Compiler internals for chr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 361
+  order: 360
 ---
 
 ## `chr()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/chr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/chr.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:920](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L920) (`lower_chr`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:1414](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L1414) (`lower_chr`)
 - **Function symbol**: `lower_chr()`
 
 

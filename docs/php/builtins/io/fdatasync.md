@@ -2,7 +2,7 @@
 title: "fdatasync()"
 description: "Synchronizes data (but not meta-data) to file."
 sidebar:
-  order: 159
+  order: 158
 ---
 
 ## fdatasync()

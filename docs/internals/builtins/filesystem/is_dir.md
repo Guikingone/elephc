@@ -2,7 +2,7 @@
 title: "is_dir() — internals"
 description: "Compiler internals for is_dir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 126
+  order: 125
 ---
 
 ## `is_dir()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/is_dir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/is_dir.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5596](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5596) (`lower_is_dir`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5738](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5738) (`lower_is_dir`)
 - **Function symbol**: `lower_is_dir()`
 
 

@@ -2,7 +2,7 @@
 title: "putenv() — internals"
 description: "Compiler internals for putenv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 140
+  order: 139
 ---
 
 ## `putenv()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/putenv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/putenv.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:657](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L657) (`lower_putenv`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:680](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L680) (`lower_putenv`)
 - **Function symbol**: `lower_putenv()`
 
 
@@ -21,7 +21,7 @@ sidebar:
 ## Runtime helpers
 
 The following runtime helpers are referenced:
-- `__rt_php_uname`
+- `__rt_ini_get`
 
 ## Signature summary
 

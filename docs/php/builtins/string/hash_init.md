@@ -2,7 +2,7 @@
 title: "hash_init()"
 description: "Initialize an incremental hashing context."
 sidebar:
-  order: 375
+  order: 374
 ---
 
 ## hash_init()

@@ -2,7 +2,7 @@
 title: "glob() — internals"
 description: "Compiler internals for glob(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 125
+  order: 124
 ---
 
 ## `glob()` — internals
@@ -10,28 +10,34 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/glob.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/glob.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4459](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4459) (`lower_glob`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4549](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4549) (`lower_glob`)
 - **Function symbol**: `lower_glob()`
 
 
 ### Lowering notes
 
-- Lowers `glob(pattern)` through the target-aware runtime glob expansion helper.
+- Lowers `glob($pattern, $flags = 0)` through the target-aware runtime glob
+- expansion helper. `$flags` must be a compile-time integer literal (after EIR
+- constant folding — `GLOB_NOSORT`, `GLOB_MARK`, `GLOB_BRACE`, `GLOB_ONLYDIR`,
+- and OR-combinations of them all fold to `Op::ConstI64`): only literal flags
+- can be validated against the supported bit set, so a non-literal `$flags`
+- stays loud instead of silently passing an unvalidated runtime value to libc.
+- `GLOB_ONLYDIR` is split out and never reaches libc `glob()` — see the
+- runtime helper's module doc for why.
 
 ## Runtime helpers
 
-The following runtime helpers are referenced:
-- `__rt_glob`
+_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
 
 ## Signature summary
 
 ```php
-function glob(string $pattern): array
+function glob(string $pattern, int $flags = 0): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–2 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

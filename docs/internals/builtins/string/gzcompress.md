@@ -2,7 +2,7 @@
 title: "gzcompress() — internals"
 description: "Compiler internals for gzcompress(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 365
+  order: 364
 ---
 
 ## `gzcompress()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/gzcompress.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/gzcompress.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:464](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L464) (`lower_gzcompress`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:848](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L848) (`lower_gzcompress`)
 - **Function symbol**: `lower_gzcompress()`
 
 

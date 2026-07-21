@@ -2,7 +2,7 @@
 title: "unlink()"
 description: "Deletes a file."
 sidebar:
-  order: 156
+  order: 155
 ---
 
 ## unlink()

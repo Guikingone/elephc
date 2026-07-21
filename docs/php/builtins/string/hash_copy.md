@@ -2,7 +2,7 @@
 title: "hash_copy()"
 description: "Copies the state of an incremental hashing context."
 sidebar:
-  order: 371
+  order: 370
 ---
 
 ## hash_copy()

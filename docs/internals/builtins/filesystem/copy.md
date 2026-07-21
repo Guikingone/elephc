@@ -2,7 +2,7 @@
 title: "copy() — internals"
 description: "Compiler internals for copy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 108
+  order: 107
 ---
 
 ## `copy()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/copy.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/copy.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4439](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4439) (`lower_copy`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4518](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4518) (`lower_copy`)
 - **Function symbol**: `lower_copy()`
 
 
@@ -22,8 +22,6 @@ sidebar:
 
 The following runtime helpers are referenced:
 - `__rt_copy`
-- `__rt_glob`
-- `__rt_scandir`
 - `__rt_tempnam`
 
 ## Signature summary

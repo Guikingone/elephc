@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/shuffle.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/shuffle.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1119](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1119) (`lower_shuffle`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1368](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1368) (`lower_shuffle`)
 - **Function symbol**: `lower_shuffle()`
 
 
@@ -20,8 +20,7 @@ sidebar:
 
 ## Runtime helpers
 
-The following runtime helpers are referenced:
-- `__rt_array_is_list`
+_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
 
 ## Signature summary
 

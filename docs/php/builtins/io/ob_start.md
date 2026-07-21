@@ -2,7 +2,7 @@
 title: "ob_start()"
 description: "Turns on output buffering."
 sidebar:
-  order: 201
+  order: 200
 ---
 
 ## ob_start()

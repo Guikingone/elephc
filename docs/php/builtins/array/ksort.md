@@ -8,13 +8,14 @@ sidebar:
 ## ksort()
 
 ```php
-function ksort(array $array): bool
+function ksort(array $array, int $flags = 0): bool
 ```
 
 Sorts an array by key in ascending order.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
+- `$flags` (`int`), default `0`, optional
 
 **Returns**: `bool`
 

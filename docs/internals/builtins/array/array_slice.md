@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_slice.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_slice.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:911](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L911) (`lower_array_slice`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1160](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1160) (`lower_array_slice`)
 - **Function symbol**: `lower_array_slice()`
 
 
@@ -25,12 +25,12 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function array_slice(array $array, int $offset, int $length = null): array
+function array_slice(array $array, int $offset, int $length = null, bool $preserve_keys = false): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–3 arguments (1 optional).
+- **Arity**: takes 2–4 arguments (2 optional).
 
 ## Eval interpreter (magician)
 

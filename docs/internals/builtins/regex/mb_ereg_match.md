@@ -2,7 +2,7 @@
 title: "mb_ereg_match() — internals"
 description: "Compiler internals for mb_ereg_match(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 332
+  order: 331
 ---
 
 ## `mb_ereg_match()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_ereg_match.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_ereg_match.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/regex.rs`:52](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/regex.rs#L52) (`lower_mb_ereg_match`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/regex.rs`:73](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/regex.rs#L73) (`lower_mb_ereg_match`)
 - **Function symbol**: `lower_mb_ereg_match()`
 
 

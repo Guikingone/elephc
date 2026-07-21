@@ -2,7 +2,7 @@
 title: "strstr() — internals"
 description: "Compiler internals for strstr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 415
+  order: 414
 ---
 
 ## `strstr()` — internals
@@ -10,13 +10,16 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/strstr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strstr.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:824](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L824) (`lower_strstr`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:1232](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L1232) (`lower_strstr`)
 - **Function symbol**: `lower_strstr()`
 
 
 ### Lowering notes
 
-- Lowers `strstr(haystack, needle)` by searching and returning the matching suffix.
+- Lowers `strstr(haystack, needle[, before_needle])`.
+- With `before_needle = false` (default) returns the matching suffix starting at the first
+- occurrence of the needle.  With `before_needle = true` returns the prefix that precedes
+- the first occurrence.  The `before_needle` argument must be a compile-time constant.
 
 ## Runtime helpers
 

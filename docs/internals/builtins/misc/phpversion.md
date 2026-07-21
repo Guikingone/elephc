@@ -2,7 +2,7 @@
 title: "phpversion() — internals"
 description: "Compiler internals for phpversion(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 296
+  order: 295
 ---
 
 ## `phpversion()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/phpversion.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/phpversion.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:543](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L543) (`lower_phpversion`)
+- **Lowering**: [`src/codegen/lower_inst/builtins.rs`:614](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins.rs#L614) (`lower_phpversion`)
 - **Function symbol**: `lower_phpversion()`
 
 
@@ -20,17 +20,19 @@ sidebar:
 
 ## Runtime helpers
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+The following runtime helpers are referenced:
+- `__rt_constant`
+- `__rt_defined`
 
 ## Signature summary
 
 ```php
-function phpversion(): string
+function phpversion(string $extension = null): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes no arguments.
+- **Arity**: takes 0–1 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

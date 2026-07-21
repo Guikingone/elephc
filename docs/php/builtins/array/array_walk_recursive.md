@@ -8,7 +8,7 @@ sidebar:
 ## array_walk_recursive()
 
 ```php
-function array_walk_recursive(array $array, callable $callback): void
+function array_walk_recursive(array $array, callable $callback, mixed $arg = null): void
 ```
 
 Applies a user function recursively to every member of an array.
@@ -16,6 +16,7 @@ Applies a user function recursively to every member of an array.
 **Parameters**:
 - `$array` (`array`), passed by reference
 - `$callback` (`callable`)
+- `$arg` (`mixed`), default `null`, optional
 
 **Returns**: `void`
 

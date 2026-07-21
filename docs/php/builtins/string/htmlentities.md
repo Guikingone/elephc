@@ -2,13 +2,13 @@
 title: "htmlentities()"
 description: "Converts all applicable characters in a string into their HTML entities."
 sidebar:
-  order: 379
+  order: 378
 ---
 
 ## htmlentities()
 
 ```php
-function htmlentities(string $string, int $flags = 11, string $encoding = 'UTF-8'): string
+function htmlentities(string $string, int $flags = 11, string $encoding = 'UTF-8', bool $double_encode = true): string
 ```
 
 Converts all applicable characters in a string into their HTML entities.
@@ -17,6 +17,7 @@ Converts all applicable characters in a string into their HTML entities.
 - `$string` (`string`)
 - `$flags` (`int`), default `11`, optional
 - `$encoding` (`string`), default `'UTF-8'`, optional
+- `$double_encode` (`bool`), default `true`, optional
 
 **Returns**: `string`
 

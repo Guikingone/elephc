@@ -2,7 +2,7 @@
 title: "ob_get_flush() — internals"
 description: "Compiler internals for ob_get_flush(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 195
+  order: 194
 ---
 
 ## `ob_get_flush()` — internals

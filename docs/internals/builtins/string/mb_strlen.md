@@ -2,7 +2,7 @@
 title: "mb_strlen() — internals"
 description: "Compiler internals for mb_strlen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 388
+  order: 387
 ---
 
 ## `mb_strlen()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_strlen.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_strlen.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:374](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L374) (`lower_mb_strlen`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:758](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L758) (`lower_mb_strlen`)
 - **Function symbol**: `lower_mb_strlen()`
 
 

@@ -2,7 +2,7 @@
 title: "html_entity_decode() — internals"
 description: "Compiler internals for html_entity_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 378
+  order: 377
 ---
 
 ## `html_entity_decode()` — internals
@@ -26,12 +26,12 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function html_entity_decode(string $string): string
+function html_entity_decode(string $string, int $flags = 11, string $encoding = null): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–3 arguments (2 optional).
 
 ## Eval interpreter (magician)
 

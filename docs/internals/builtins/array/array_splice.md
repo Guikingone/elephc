@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_splice.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_splice.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:956](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L956) (`lower_array_splice`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1205](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1205) (`lower_array_splice`)
 - **Function symbol**: `lower_array_splice()`
 
 
@@ -25,12 +25,12 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function array_splice(array $array, int $offset, int $length = null): array
+function array_splice(array $array, int $offset, int $length = null, array $replacement = []): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–3 arguments (1 optional).
+- **Arity**: takes 2–4 arguments (2 optional).
 - **By-reference parameters**: `$array`.
 
 ## Eval interpreter (magician)

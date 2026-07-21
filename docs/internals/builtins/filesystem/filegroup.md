@@ -2,7 +2,7 @@
 title: "filegroup() — internals"
 description: "Compiler internals for filegroup(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 115
+  order: 114
 ---
 
 ## `filegroup()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/filegroup.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/filegroup.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5496](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5496) (`lower_filegroup`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5638](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5638) (`lower_filegroup`)
 - **Function symbol**: `lower_filegroup()`
 
 

@@ -2,7 +2,7 @@
 title: "strrev() — internals"
 description: "Compiler internals for strrev(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 413
+  order: 412
 ---
 
 ## `strrev()` — internals

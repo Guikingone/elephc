@@ -2,7 +2,7 @@
 title: "is_file() — internals"
 description: "Compiler internals for is_file(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 128
+  order: 127
 ---
 
 ## `is_file()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/is_file.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/is_file.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5588](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5588) (`lower_is_file`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5730](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5730) (`lower_is_file`)
 - **Function symbol**: `lower_is_file()`
 
 

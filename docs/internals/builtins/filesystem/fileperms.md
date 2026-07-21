@@ -2,7 +2,7 @@
 title: "fileperms() — internals"
 description: "Compiler internals for fileperms(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 119
+  order: 118
 ---
 
 ## `fileperms()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fileperms.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fileperms.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5480](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5480) (`lower_fileperms`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5622](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5622) (`lower_fileperms`)
 - **Function symbol**: `lower_fileperms()`
 
 

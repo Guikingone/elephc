@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/uasort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/uasort.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1134](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1134) (`lower_uasort`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1383](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1383) (`lower_uasort`)
 - **Function symbol**: `lower_uasort()`
 
 
@@ -21,7 +21,7 @@ sidebar:
 ## Runtime helpers
 
 The following runtime helpers are referenced:
-- `__rt_array_is_list`
+- `__rt_array_edge_key`
 
 ## Signature summary
 

@@ -2,7 +2,7 @@
 title: "__elephc_ptr_is_null() — internals"
 description: "Compiler internals for __elephc_ptr_is_null(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 469
+  order: 468
 ---
 
 ## `__elephc_ptr_is_null()` — internals

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_intersect.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_intersect.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:881](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L881) (`lower_array_intersect`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/arrays.rs`:1130](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/arrays.rs#L1130) (`lower_array_intersect`)
 - **Function symbol**: `lower_array_intersect()`
 
 
@@ -29,7 +29,7 @@ The following runtime helpers are referenced:
 ## Signature summary
 
 ```php
-function array_intersect(array $array, ...$arrays): array
+function array_intersect(array $array, ...$arrays): mixed
 ```
 
 ## What the type checker enforces

@@ -32,7 +32,7 @@ sidebar:
 | [`fnmatch()`](./filesystem/fnmatch.md) | `(string $pattern, string $filename, int $flags = 0): bool` | `bool` | ✓ | ✓ |
 | [`getcwd()`](./filesystem/getcwd.md) | `(): string` | `string` | ✓ | ✓ |
 | [`getenv()`](./filesystem/getenv.md) | `(string $name): mixed` | `mixed` | ✓ | ✓ |
-| [`glob()`](./filesystem/glob.md) | `(string $pattern): array` | `array` | ✓ | ✓ |
+| [`glob()`](./filesystem/glob.md) | `(string $pattern, int $flags = 0): array` | `array` | ✓ | ✓ |
 | [`is_dir()`](./filesystem/is_dir.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`is_executable()`](./filesystem/is_executable.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`is_file()`](./filesystem/is_file.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
@@ -45,7 +45,7 @@ sidebar:
 | [`link()`](./filesystem/link.md) | `(string $target, string $link): bool` | `bool` | ✓ | ✓ |
 | [`linkinfo()`](./filesystem/linkinfo.md) | `(string $path): int` | `int` | ✓ | ✓ |
 | [`lstat()`](./filesystem/lstat.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
-| [`mkdir()`](./filesystem/mkdir.md) | `(string $directory): bool` | `bool` | ✓ | ✓ |
+| [`mkdir()`](./filesystem/mkdir.md) | `(string $directory, int $permissions = 511, bool $recursive = false, bool $context = null): bool` | `bool` | ✓ | ✓ |
 | [`pathinfo()`](./filesystem/pathinfo.md) | `(string $path, int $flags = 15): array` | `array` | ✓ | ✓ |
 | [`putenv()`](./filesystem/putenv.md) | `(string $assignment): bool` | `bool` | ✓ | ✓ |
 | [`readfile()`](./filesystem/readfile.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
@@ -55,7 +55,7 @@ sidebar:
 | [`realpath_cache_size()`](./filesystem/realpath_cache_size.md) | `(): int` | `int` | ✓ | ✓ |
 | [`rename()`](./filesystem/rename.md) | `(string $from, string $to): bool` | `bool` | ✓ | ✓ |
 | [`rmdir()`](./filesystem/rmdir.md) | `(string $directory): bool` | `bool` | ✓ | ✓ |
-| [`scandir()`](./filesystem/scandir.md) | `(string $directory): array` | `array` | ✓ | ✓ |
+| [`scandir()`](./filesystem/scandir.md) | `(string $directory, int $sorting_order = 0, mixed $context = null): array` | `array` | ✓ | ✓ |
 | [`stat()`](./filesystem/stat.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`symlink()`](./filesystem/symlink.md) | `(string $target, string $link): bool` | `bool` | ✓ | ✓ |
 | [`sys_get_temp_dir()`](./filesystem/sys_get_temp_dir.md) | `(): string` | `string` | ✓ | ✓ |

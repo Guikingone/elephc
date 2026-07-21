@@ -2,7 +2,7 @@
 title: "linkinfo() — internals"
 description: "Compiler internals for linkinfo(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 136
+  order: 135
 ---
 
 ## `linkinfo()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/linkinfo.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/linkinfo.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5436](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5436) (`lower_linkinfo`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:5578](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L5578) (`lower_linkinfo`)
 - **Function symbol**: `lower_linkinfo()`
 
 
