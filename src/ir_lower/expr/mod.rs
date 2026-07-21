@@ -10144,7 +10144,7 @@ fn body_contains_eval_call(body: &[Stmt]) -> bool {
 }
 
 /// Returns true when a statement or nested statement body contains an `eval(...)` call.
-fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
+pub(crate) fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
     match &stmt.kind {
         // Campaign statement forms: recurse into evaluated children.
         StmtKind::RefAssignToTarget { target, source, .. } => {

@@ -761,11 +761,32 @@ fn lower_dynamic_class_like_exists(
     name: &str,
     value: ValueId,
 ) -> Result<()> {
-    if ctx.value_php_type(value)?.codegen_repr() != PhpType::Str {
-        return Err(CodegenIrError::unsupported(format!(
-            "{} with non-string dynamic name",
-            name
-        )));
+    match ctx.value_php_type(value)?.codegen_repr() {
+        PhpType::Str => {}
+        // A boxed `Mixed`/union name is probed through the closed-world registry
+        // helper, which casts the cell to a string and walks the registered names
+        // (cloning the `constant()`/`defined()` non-literal path).
+        PhpType::Mixed | PhpType::Union(_) => {
+            let helper = match name {
+                "class_exists" => "__rt_class_exists",
+                "interface_exists" => "__rt_interface_exists",
+                "trait_exists" => "__rt_trait_exists",
+                "enum_exists" => "__rt_enum_exists",
+                _ => {
+                    return Err(CodegenIrError::unsupported(format!(
+                        "{} with non-string dynamic name",
+                        name
+                    )));
+                }
+            };
+            return emit_registry_string_lookup(ctx, value, name, helper);
+        }
+        _ => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} with non-string dynamic name",
+                name
+            )));
+        }
     }
     let candidates = dynamic_class_like_exists_candidates(ctx, name);
     if candidates.is_empty() {

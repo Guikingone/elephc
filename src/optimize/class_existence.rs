@@ -47,6 +47,10 @@ pub struct ClassExistenceSets {
     interfaces: HashSet<String>,
     traits: HashSet<String>,
     enums: HashSet<String>,
+    /// True when the program contains an `eval()` call: eval'd code can declare a
+    /// class-like at runtime, so an absent name must NOT fold to `false` (a present
+    /// AOT name still folds to `true` — eval can never remove a declaration).
+    has_eval: bool,
 }
 
 impl ClassExistenceSets {
@@ -72,11 +76,15 @@ impl ClassExistenceSets {
             .collect();
         let mut traits = HashSet::new();
         collect_declared_trait_names(program, &mut traits);
+        let has_eval = program
+            .iter()
+            .any(crate::ir_lower::stmt_contains_eval_call);
         Self {
             classes,
             interfaces,
             traits,
             enums,
+            has_eval,
         }
     }
 }
@@ -141,7 +149,15 @@ pub(in crate::optimize) fn try_fold_class_existence(name: &Name, args: &[Expr]) 
             ExistenceKind::Trait => &sets.traits,
             ExistenceKind::Enum => &sets.enums,
         };
-        Some(ExprKind::BoolLiteral(set.contains(&key)))
+        let exists = set.contains(&key);
+        // With an `eval()` in the program, a currently-absent class-like may be declared
+        // at runtime by eval'd code (the EIR lowering probes the eval class table for it),
+        // so only the sound direction folds: present names fold `true`, absent names stay
+        // a live call.
+        if !exists && sets.has_eval {
+            return None;
+        }
+        Some(ExprKind::BoolLiteral(exists))
     })
 }
 

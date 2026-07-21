@@ -14,6 +14,8 @@ mod builtin_datetime;
 mod context;
 mod effects_lookup;
 mod expr;
+
+pub(crate) use expr::stmt_contains_eval_call;
 mod fibers;
 mod function;
 mod ownership;
