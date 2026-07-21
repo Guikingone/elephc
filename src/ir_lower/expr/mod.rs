@@ -406,12 +406,10 @@ fn lower_numeric_binary(
     }
     if let Some(mixed_op) = mixed_numeric_op(op) {
         if should_use_mixed_numeric_binop(lhs.ir_type, rhs.ir_type) {
-            let result = lower_mixed_numeric_binary(ctx, lhs, rhs, mixed_op, expr);
-            release_binary_operand_temporary(ctx, lhs, expr.span);
-            if rhs.value != lhs.value {
-                release_binary_operand_temporary(ctx, rhs, expr.span);
-            }
-            return result;
+            // `lower_mixed_numeric_binary` releases owning operand temporaries
+            // internally; releasing them again here double-frees the checked
+            // arithmetic Mixed boxes (issue #500 reconciliation).
+            return lower_mixed_numeric_binary(ctx, lhs, rhs, mixed_op, expr);
         }
     }
     if lhs.ir_type == IrType::F64 || rhs.ir_type == IrType::F64 {
@@ -485,12 +483,9 @@ fn lower_numeric_binary(
         return LoweredValue { value, ir_type: result_type };
     }
     if let Some(mixed_op) = mixed_numeric_op(op) {
-        let result = lower_mixed_numeric_binary(ctx, lhs, rhs, mixed_op, expr);
-        release_binary_operand_temporary(ctx, lhs, expr.span);
-        if rhs.value != lhs.value {
-            release_binary_operand_temporary(ctx, rhs, expr.span);
-        }
-        return result;
+        // Operand releases happen inside `lower_mixed_numeric_binary`; a second
+        // caller-side release would double-free owning boxes (issue #500).
+        return lower_mixed_numeric_binary(ctx, lhs, rhs, mixed_op, expr);
     }
     ctx.emit_value(
         Op::RuntimeCall,
@@ -1150,11 +1145,10 @@ fn lower_numeric_unary(
         }
         _ if int_op == Op::INeg => {
             let zero = lower_int_literal(ctx, 0, expr);
-            let result = lower_mixed_numeric_binary(ctx, zero, value, MixedNumericOp::Sub, expr);
-            // Mirror the binary mixed-op path: an owning boxed operand (e.g.
-            // `-($i * 7 + 1)`, issue #500) must be released once consumed.
-            release_binary_operand_temporary(ctx, value, expr.span);
-            result
+            // An owning boxed operand (e.g. `-($i * 7 + 1)`, issue #500) is
+            // released inside `lower_mixed_numeric_binary`; no caller-side
+            // release, or the box is freed twice.
+            lower_mixed_numeric_binary(ctx, zero, value, MixedNumericOp::Sub, expr)
         }
         _ => ctx.emit_value(Op::RuntimeCall, vec![value.value], None, PhpType::Mixed, Effects::all(), Some(expr.span)),
     }
@@ -9214,7 +9208,7 @@ fn lower_array_access_from_value(
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
             let index_ty = index_expr_key_type(ctx, index);
-            if index_ty == PhpType::Int {
+            if index_ty == PhpType::Int || lowered_key_is_runtime_int(ctx, index_value) {
                 index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
                 if warn_on_missing {
                     Op::ArrayGet
@@ -9319,6 +9313,11 @@ fn lower_packed_array_associative_get(
         Some(expr.span),
     );
     crate::ir_lower::ownership::release_if_owned(ctx, mixed_array, Some(expr.span));
+    // An owning boxed key temporary (e.g. the `$i + 1` checked-arithmetic box in
+    // `$B[$i + 1]`) is consumed by `__rt_mixed_array_get` without any refcount
+    // operation on the key, and the result never aliases it — release it here or
+    // it leaks one cell per read (issue #500).
+    release_coerced_source_if_owned(ctx, index_value, Some(expr.span));
     result
 }
 
@@ -9365,6 +9364,9 @@ fn lower_scalar_receiver_associative_get(
         Some(expr.span),
     );
     crate::ir_lower::ownership::release_if_owned(ctx, mixed_scalar, Some(expr.span));
+    // Mirror of the packed-array associative get: an owning boxed key temporary
+    // is consumed without a key refcount operation, so release it here (issue #500).
+    release_coerced_source_if_owned(ctx, index_value, Some(expr.span));
     result
 }
 
@@ -9506,6 +9508,24 @@ fn lower_nullable_array_access(
 fn index_expr_key_type(_ctx: &LoweringContext<'_, '_>, index: &Expr) -> PhpType {
     let ty = infer_expr_type_syntactic(index);
     normalized_array_key_type(index, ty)
+}
+
+/// Returns true when a lowered index key is a raw runtime integer.
+///
+/// The syntactic key type can widen to `Mixed` (e.g. a loop counter whose `++`
+/// update is checked arithmetic) while the lowered value is still an unboxed
+/// `I64` holding a PHP `int`/`bool`. Such keys must stay on the packed
+/// `ArrayGet` fast path: routing them through the mixed-key read pessimizes
+/// the access and boxes the element (`Mixed` result), which leaked the boxed
+/// element per read in nested-loop shapes (issue #534 regression). `null`
+/// (`php=null` stored as `I64`) is excluded — PHP normalizes a null key to the
+/// empty string key, which must keep the mixed-key miss semantics (#357).
+fn lowered_key_is_runtime_int(ctx: &LoweringContext<'_, '_>, key: LoweredValue) -> bool {
+    key.ir_type == IrType::I64
+        && matches!(
+            ctx.builder.value_php_type(key.value).codegen_repr(),
+            PhpType::Int | PhpType::Bool
+        )
 }
 
 /// Returns the best PHP result type for a lowered array/string/hash access.
@@ -11041,6 +11061,18 @@ fn lower_new_object(
             return emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span);
         }
     }
+    if php_symbol_key(class_name.as_str().trim_start_matches('\\')) == "reflectionproperty" {
+        if let Some(operands) = lower_reflection_property_constructor_operands(ctx, args) {
+            let php_type = PhpType::Object(class_name.as_str().to_string());
+            return emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span);
+        }
+    }
+    if php_symbol_key(class_name.as_str().trim_start_matches('\\')) == "reflectionfunction" {
+        if let Some(operands) = lower_reflection_function_constructor_operands(ctx, args) {
+            let php_type = PhpType::Object(class_name.as_str().to_string());
+            return emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span);
+        }
+    }
     if ctx.has_eval_barrier()
         && !ctx.classes.contains_key(class_name.as_str())
         && plain_positional_call_args(args)
@@ -11132,6 +11164,41 @@ fn lower_reflection_method_constructor_operands(
         lower_expr(ctx, &class_arg).value,
         lower_expr(ctx, &method_arg).value,
     ])
+}
+
+/// Lowers direct `ReflectionProperty` constructor operands without parameter-storage coercion.
+///
+/// The constructor signature types the class argument `mixed` (PHP's `object|string`), but the
+/// operands must stay raw so literal strings remain `ConstStr` for the compile-time metadata
+/// bake and object/string values keep their concrete EIR types for the dynamic dispatcher.
+fn lower_reflection_property_constructor_operands(
+    ctx: &mut LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<Vec<ValueId>> {
+    let (class_arg, property_arg) = reflection_property_constructor_regular_args(ctx, args)?;
+    Some(vec![
+        lower_expr(ctx, &class_arg).value,
+        lower_expr(ctx, &property_arg).value,
+    ])
+}
+
+/// Lowers the direct `ReflectionFunction` constructor operand without parameter-storage
+/// coercion, for the same reason as `lower_reflection_property_constructor_operands`: literal
+/// function-name strings must stay `ConstStr`, and closure values must keep their concrete
+/// callable EIR type for the dynamic descriptor-backed path.
+fn lower_reflection_function_constructor_operands(
+    ctx: &mut LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<Vec<ValueId>> {
+    let arg = match args {
+        [arg] => match &arg.kind {
+            ExprKind::NamedArg { name, value } if name == "function" => value.as_ref(),
+            ExprKind::NamedArg { .. } | ExprKind::Spread(_) => return None,
+            _ => arg,
+        },
+        _ => return None,
+    };
+    Some(vec![lower_expr(ctx, arg).value])
 }
 
 /// Lowers PHP `clone $object` to a shallow object-copy opcode and optional `__clone()` hook.
@@ -13396,44 +13463,87 @@ fn reflection_class_property_name_at_index(
         .nth(index)
 }
 
-/// Returns `ReflectionClass::getProperties()` names after applying a known filter.
+/// Returns `ReflectionClass::getProperties()` names after applying a known filter, in PHP's
+/// real declaration order: the receiver's own declared properties first (instance and static
+/// interleaved in source order), then each ancestor's own declared properties appended (nearest
+/// ancestor first), skipping names claimed by a more-derived level and excluding
+/// inherited-but-not-overridden private ancestor properties (php -n verified).
 fn reflection_class_property_names_for_filter(
     ctx: &LoweringContext<'_, '_>,
     class_name: &str,
     filter: Option<i64>,
 ) -> Option<Vec<String>> {
-    let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
-    Some(
-        class_info
-            .properties
-            .iter()
-            .chain(class_info.static_properties.iter())
-            .map(|(name, _)| name)
-            .filter(|name| reflection_property_matches_filter(class_info, name, filter))
-            .cloned()
-            .collect(),
-    )
+    let root_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut visited = std::collections::HashSet::new();
+    let mut is_own_level = true;
+    let mut current = Some(class_name.trim_start_matches('\\').to_string());
+    while let Some(level_name) = current {
+        if !visited.insert(php_symbol_key(&level_name)) {
+            break;
+        }
+        let Some(info) = ctx.classes.get(level_name.trim_start_matches('\\')) else {
+            break;
+        };
+        for name in &info.own_property_decl_order {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            let visibility = info
+                .property_visibilities
+                .get(name)
+                .or_else(|| info.static_property_visibilities.get(name))
+                .cloned()
+                .unwrap_or(crate::parser::ast::Visibility::Public);
+            if visibility == crate::parser::ast::Visibility::Private && !is_own_level {
+                continue;
+            }
+            if reflection_property_matches_filter(root_info, name, filter) {
+                names.push(name.clone());
+            }
+        }
+        current = info.parent.clone();
+        is_own_level = false;
+    }
+    Some(names)
 }
 
-/// Returns `ReflectionClass::getMethods()` names after applying a known filter.
+/// Returns `ReflectionClass::getMethods()` names after applying a known filter, in PHP's real
+/// declaration order (own declared methods first in source order, then each ancestor's own
+/// declared methods, overrides keeping the overriding level's position, inherited-but-not-
+/// overridden private ancestor methods excluded — php -n verified).
 fn reflection_class_method_names_for_filter(
     ctx: &LoweringContext<'_, '_>,
     class_name: &str,
     filter: Option<i64>,
 ) -> Option<Vec<String>> {
-    let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    let root_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for name in class_info
-        .methods
-        .keys()
-        .chain(class_info.static_methods.keys())
-    {
-        if seen.insert(php_symbol_key(name))
-            && reflection_method_matches_filter(class_info, name, filter)
-        {
-            names.push(name.clone());
+    let mut visited = std::collections::HashSet::new();
+    let mut is_own_level = true;
+    let mut current = Some(class_name.trim_start_matches('\\').to_string());
+    while let Some(level_name) = current {
+        if !visited.insert(php_symbol_key(&level_name)) {
+            break;
         }
+        let Some(info) = ctx.classes.get(level_name.trim_start_matches('\\')) else {
+            break;
+        };
+        for decl in &info.method_decls {
+            if !seen.insert(php_symbol_key(&decl.name)) {
+                continue;
+            }
+            if decl.visibility == crate::parser::ast::Visibility::Private && !is_own_level {
+                continue;
+            }
+            if reflection_method_matches_filter(root_info, &decl.name, filter) {
+                names.push(decl.name.clone());
+            }
+        }
+        current = info.parent.clone();
+        is_own_level = false;
     }
     Some(names)
 }

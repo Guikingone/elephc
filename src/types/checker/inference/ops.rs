@@ -131,6 +131,15 @@ impl Checker {
             BinOp::Concat => Ok(PhpType::Str),
             BinOp::And | BinOp::Or | BinOp::Xor => Ok(PhpType::Bool),
             BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight => {
+                // PHP string bitwise: when BOTH operands are strings, `&`/`|`/`^` operate
+                // bytewise and produce a string (`<<`/`>>` are never string operators, and a
+                // string opposite an int is integer bitwise with string→int coercion).
+                if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor)
+                    && lt == PhpType::Str
+                    && rt == PhpType::Str
+                {
+                    return Ok(PhpType::Str);
+                }
                 let lt_ok = is_integer_operand_type(self, &lt);
                 let rt_ok = is_integer_operand_type(self, &rt);
                 if !lt_ok || !rt_ok {

@@ -52,6 +52,11 @@ use crate::codegen::{CodegenIrError, Result};
 // `reflection::emit_reflection_class_dynamic_dispatch_if_needed` (see the matching note on
 // `lower_inst`'s `pub(crate) mod objects;`).
 pub(crate) mod reflection;
+// `pub(crate)` so `codegen::block_emit` can reach the shared dynamic-construction dispatcher
+// emitters (`emit_reflection_class_dynamic_dispatch_if_needed` and friends).
+pub(crate) mod reflection_dynamic;
+pub(crate) mod reflection_members_dynamic;
+mod reflection_function_dynamic;
 mod return_type_guard;
 
 const RUNTIME_NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;

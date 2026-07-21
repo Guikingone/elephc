@@ -4985,7 +4985,11 @@ fn coerce_to_return_type(
     match ctx.return_type {
         IrType::I64 => coerce_return_scalar_source(ctx, value, span, coerce_to_int),
         IrType::F64 => coerce_return_scalar_source(ctx, value, span, coerce_to_float),
-        IrType::Str => coerce_return_scalar_source(ctx, value, span, coerce_to_string),
+        // `coerce_to_string` already releases an owning Mixed/heap source after its
+        // detached cast (`release_coercion_source_if_owned` in the `_` arm); wrapping
+        // it in `coerce_return_scalar_source` released the source a second time and
+        // tripped the heap-debug bad-refcount check on ternary merge temps.
+        IrType::Str => coerce_to_string(ctx, value, span),
         IrType::TaggedScalar => {
             coerce_return_scalar_source(ctx, value, span, coerce_to_tagged_scalar)
         }

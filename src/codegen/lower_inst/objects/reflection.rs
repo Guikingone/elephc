@@ -37,7 +37,7 @@ use crate::types::{
 use super::super::super::context::FunctionContext;
 
 /// Compile-time metadata used to populate one Reflection owner object.
-struct ReflectionOwnerMetadata {
+pub(super) struct ReflectionOwnerMetadata {
     reflected_name: Option<String>,
     attr_names: Vec<String>,
     attr_args: Vec<Option<Vec<AttrArgEntry>>>,
@@ -80,6 +80,13 @@ struct ReflectionOwnerMetadata {
     is_iterable: bool,
     modifiers: i64,
     member_flags: ReflectionMemberFlags,
+    /// True only for a closure-literal-backed `ReflectionFunction`: name-shaped methods
+    /// (`getName`/`getShortName`) throw instead of fabricating PHP's source-location closure
+    /// name format (see the `__unbacked_name` shell gate).
+    unbacked_name: bool,
+    /// True for a closure-literal-backed `ReflectionFunction`: no declaring source file is
+    /// tracked, so `getFileName()` throws (see the `__unbacked_file` shell gate).
+    unbacked_file: bool,
 }
 
 /// Compile-time metadata for one class/interface/trait/enum constant reflector.
@@ -301,11 +308,73 @@ pub(super) fn is_reflection_owner_class(class_name: &str) -> bool {
 }
 
 /// Lowers builtin Reflection owner allocation by populating compile-time metadata slots.
+///
+/// `ReflectionClass` with a non-literal, non-statically-Object reflected-name operand is routed
+/// to the shared dynamic-name dispatcher instead (see
+/// `crate::codegen::lower_inst::objects::reflection_dynamic`); every other case keeps the
+/// compile-time metadata bake below unchanged.
 pub(super) fn lower_reflection_owner_new(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     class_name: &str,
 ) -> Result<()> {
+    if class_name == "ReflectionClass" {
+        if let Some(&name_operand) = inst.operands.first() {
+            if !super::reflection_dynamic::is_const_string_or_class_value(
+                ctx.function,
+                name_operand,
+            ) && !matches!(
+                ctx.value_php_type(name_operand)?.codegen_repr(),
+                PhpType::Object(_)
+            ) {
+                return super::reflection_dynamic::lower_reflection_class_new_dynamic(
+                    ctx,
+                    inst,
+                    name_operand,
+                );
+            }
+        }
+    }
+    if class_name == "ReflectionFunction" {
+        if let Some(&function_operand) = inst.operands.first() {
+            if !is_reflection_function_static_operand(ctx, function_operand) {
+                return super::reflection_function_dynamic::lower_reflection_function_new_dynamic(
+                    ctx,
+                    inst,
+                    function_operand,
+                );
+            }
+        }
+    }
+    if matches!(class_name, "ReflectionMethod" | "ReflectionProperty") && inst.operands.len() >= 2
+    {
+        let class_operand = inst.operands[0];
+        let member_operand = inst.operands[1];
+        let dynamic = !super::reflection_dynamic::is_const_string_or_class_value(
+            ctx.function,
+            class_operand,
+        ) || !super::reflection_dynamic::is_const_string_or_class_value(
+            ctx.function,
+            member_operand,
+        );
+        if dynamic {
+            return if class_name == "ReflectionMethod" {
+                super::reflection_members_dynamic::lower_reflection_method_new_dynamic(
+                    ctx,
+                    inst,
+                    class_operand,
+                    member_operand,
+                )
+            } else {
+                super::reflection_members_dynamic::lower_reflection_property_new_dynamic(
+                    ctx,
+                    inst,
+                    class_operand,
+                    member_operand,
+                )
+            };
+        }
+    }
     if let Some(object_operand) = reflection_object_operand(ctx, class_name, inst)? {
         emit_reflection_owner_from_runtime_object(ctx, class_name, object_operand)?;
     } else {
@@ -553,7 +622,7 @@ fn reflection_interface_extends_interface(
 }
 
 /// Allocates and populates one builtin Reflection owner object from metadata.
-fn emit_reflection_owner_object(
+pub(super) fn emit_reflection_owner_object(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
     metadata: &ReflectionOwnerMetadata,
@@ -581,8 +650,26 @@ fn emit_reflection_owner_object(
     )?;
     if let Some(reflected_name) = metadata.reflected_name.as_deref() {
         emit_reflection_owner_string_property_by_name(ctx, class_name, "__name", reflected_name)?;
+        emit_reflection_owner_optional_string_property_by_name(
+            ctx,
+            class_name,
+            "name",
+            reflected_name,
+        )?;
         if is_reflection_class_owner || class_name == "ReflectionEnum" {
             emit_reflection_class_name_parts(ctx, class_name, reflected_name)?;
+            let source_file = ctx
+                .module
+                .class_source_files
+                .get(&php_symbol_key(reflected_name.trim_start_matches('\\')))
+                .cloned()
+                .unwrap_or_default();
+            emit_reflection_owner_optional_string_property_by_name(
+                ctx,
+                class_name,
+                "__file",
+                &source_file,
+            )?;
         }
         if is_reflection_class_owner {
             emit_reflection_owner_string_array_property_by_name(
@@ -731,6 +818,20 @@ fn emit_reflection_owner_object(
         }
         if class_name == "ReflectionFunction" {
             emit_reflection_function_name_parts(ctx, reflected_name)?;
+            if !metadata.unbacked_file {
+                let source_file = ctx
+                    .module
+                    .function_source_files
+                    .get(&php_symbol_key(reflected_name.trim_start_matches('\\')))
+                    .cloned()
+                    .unwrap_or_default();
+                emit_reflection_owner_optional_string_property_by_name(
+                    ctx,
+                    class_name,
+                    "__file",
+                    &source_file,
+                )?;
+            }
         }
         if class_name == "ReflectionMethod" {
             emit_reflection_method_name_parts(ctx, reflected_name)?;
@@ -774,6 +875,26 @@ fn emit_reflection_owner_object(
             class_name,
             metadata.parent_class_name.as_deref(),
         )?;
+        if let Some(declaring_class) = metadata.parent_class_name.as_deref() {
+            emit_reflection_owner_optional_string_property_by_name(
+                ctx,
+                class_name,
+                "class",
+                declaring_class,
+            )?;
+            let source_file = ctx
+                .module
+                .class_source_files
+                .get(&php_symbol_key(declaring_class.trim_start_matches('\\')))
+                .cloned()
+                .unwrap_or_default();
+            emit_reflection_owner_optional_string_property_by_name(
+                ctx,
+                class_name,
+                "__file",
+                &source_file,
+            )?;
+        }
         if matches!(class_name, "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase") {
             emit_reflection_enum_property(ctx, class_name, metadata.parent_class_name.as_deref())?;
         }
@@ -799,6 +920,32 @@ fn emit_reflection_owner_object(
             "__required_parameter_count",
             metadata.required_parameter_count,
         )?;
+        emit_reflection_owner_int_property(
+            ctx,
+            class_name,
+            "__parameter_count",
+            metadata.parameter_members.len() as i64,
+        )?;
+        if class_name == "ReflectionFunction" {
+            emit_reflection_owner_bool_property(
+                ctx,
+                class_name,
+                "__unbacked_name",
+                metadata.unbacked_name,
+            )?;
+            emit_reflection_owner_bool_property(
+                ctx,
+                class_name,
+                "__unbacked_file",
+                metadata.unbacked_file,
+            )?;
+            emit_reflection_owner_bool_property(
+                ctx,
+                class_name,
+                "__is_anonymous",
+                metadata.is_anonymous,
+            )?;
+        }
         emit_reflection_owner_bool_property(
             ctx,
             class_name,
@@ -1076,32 +1223,95 @@ fn reflection_enum_metadata(
 }
 
 /// Resolves `ReflectionClass(name)` metadata for a known class-like name.
-fn reflection_class_metadata_for_name(
+pub(super) fn reflection_class_metadata_for_name(
     ctx: &FunctionContext<'_>,
     reflected_class: &str,
 ) -> Result<ReflectionOwnerMetadata> {
+    reflection_class_metadata_for_name_impl(ctx, reflected_class, true)
+}
+
+/// Resolves `ReflectionClass(name)` metadata for a known class-like name.
+///
+/// `compute_members` gates the expensive method/property member enumeration (parameter
+/// metadata, prototypes, attributes): callers that only need the class-level shape (own
+/// name, interfaces, traits, modifiers, …) pass `false` to skip it entirely instead of
+/// computing the full member arrays and discarding them. This matters for self-referential
+/// declaring-class slots: reflecting a class with a large synthesized method surface (e.g.
+/// `ReflectionClass` itself) would otherwise re-run the full per-member bake once per member
+/// of the OUTER reflection (each member's `class` slot reflects its declaring class again),
+/// which measured in the hundreds of thousands of extra assembly lines / heap-exhausting
+/// runtime allocation for `new ReflectionClass(ReflectionClass::class)` before this guard.
+fn reflection_class_metadata_for_name_impl(
+    ctx: &FunctionContext<'_>,
+    reflected_class: &str,
+    compute_members: bool,
+) -> Result<ReflectionOwnerMetadata> {
     if let Some((class_name, info)) = resolve_reflection_class(ctx, &reflected_class) {
         let is_enum = is_reflection_enum(ctx, class_name);
-        let method_names = reflection_class_method_names(ctx, class_name);
         let property_names = reflection_class_property_names(ctx, class_name, info);
-        let constant_names = reflection_class_constant_names(ctx, class_name, info);
-        let constant_members = reflection_class_constant_members(ctx, class_name, info)?;
         let default_property_members =
             reflection_class_default_property_members(info, &property_names);
         let static_property_members = reflection_class_static_property_members(class_name, info);
-        let constant_reflection_members =
-            reflection_class_constant_reflection_members(ctx, class_name, info)?;
-        let enum_case_members = if is_enum {
-            reflection_enum_case_members(ctx, class_name)
+        let (
+            method_names,
+            constant_names,
+            constant_members,
+            constant_reflection_members,
+            enum_case_members,
+            method_members,
+            property_members,
+            constructor_member,
+            constructor_is_public,
+        ) = if compute_members {
+            let method_names = reflection_class_method_names(ctx, class_name);
+            let constant_names = reflection_class_constant_names(ctx, class_name, info);
+            let constant_members = reflection_class_constant_members(ctx, class_name, info)?;
+            let constant_reflection_members =
+                reflection_class_constant_reflection_members(ctx, class_name, info)?;
+            let enum_case_members = if is_enum {
+                reflection_enum_case_members(ctx, class_name)
+            } else {
+                Vec::new()
+            };
+            let ordered_method_names = reflection_class_ordered_method_names(ctx, class_name);
+            let ordered_property_names = reflection_class_ordered_property_names(ctx, class_name);
+            let method_members =
+                reflection_class_method_members(ctx, class_name, info, &ordered_method_names)?;
+            let property_members =
+                reflection_class_property_members(ctx, class_name, info, &ordered_property_names);
+            let constructor_member = reflection_constructor_member(&method_members);
+            let constructor_is_public = constructor_member.as_ref().map(|m| m.flags.is_public);
+            (
+                method_names,
+                constant_names,
+                constant_members,
+                constant_reflection_members,
+                enum_case_members,
+                method_members,
+                property_members,
+                constructor_member,
+                constructor_is_public,
+            )
         } else {
-            Vec::new()
+            // Cheap substitute for `is_instantiable` below: whether `__construct` exists and
+            // is public, without materializing the full constructor `ReflectionListedMember`
+            // (parameters, attributes, prototype chain).
+            let constructor_is_public = reflection_method_member_flags(info, "__construct")
+                .map(|flags| flags.is_public);
+            (
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                None,
+                constructor_is_public,
+            )
         };
-        let method_members = reflection_class_method_members(ctx, class_name, info, &method_names)?;
-        let property_members =
-            reflection_class_property_members(ctx, class_name, info, &property_names);
-        let constructor_member = reflection_constructor_member(&method_members);
         let is_instantiable =
-            reflection_class_is_instantiable(info, is_enum, constructor_member.as_ref());
+            reflection_class_is_instantiable(info, is_enum, constructor_is_public);
         let is_cloneable = reflection_class_is_cloneable(class_name, info, is_enum);
         let is_iterable = reflection_class_is_iterable(info, is_enum);
         return Ok(ReflectionOwnerMetadata {
@@ -1152,27 +1362,64 @@ fn reflection_class_metadata_for_name(
                 is_enum,
             ),
             member_flags: ReflectionMemberFlags::default(),
+            unbacked_name: false,
+            unbacked_file: false,
         });
     }
     if let Some(interface_name) = resolve_reflection_interface(ctx, &reflected_class) {
-        let method_names = reflection_interface_method_names(ctx, interface_name);
-        let property_names = reflection_interface_property_names(ctx, interface_name);
-        let constant_names = reflection_interface_constant_names(ctx, interface_name);
-        let constant_members = reflection_interface_constant_members(ctx, interface_name)?;
-        let constant_reflection_members =
-            reflection_interface_constant_reflection_members(ctx, interface_name)?;
-        let method_members = ctx
-            .module
-            .interface_infos
-            .get(interface_name)
-            .map(|info| {
-                reflection_interface_method_members(ctx, info, interface_name, &method_names)
-            })
-            .transpose()?
-            .unwrap_or_else(|| default_method_members(&method_names, true, interface_name));
-        let property_members = default_property_members(&property_names, true, interface_name);
-        let constructor_member = reflection_constructor_member(&method_members);
+        let (
+            method_names,
+            property_names,
+            constant_names,
+            constant_members,
+            constant_reflection_members,
+            method_members,
+            property_members,
+            constructor_member,
+        ) = if compute_members {
+            let method_names = reflection_interface_method_names(ctx, interface_name);
+            let property_names = reflection_interface_property_names(ctx, interface_name);
+            let constant_names = reflection_interface_constant_names(ctx, interface_name);
+            let constant_members = reflection_interface_constant_members(ctx, interface_name)?;
+            let constant_reflection_members =
+                reflection_interface_constant_reflection_members(ctx, interface_name)?;
+            let method_members = ctx
+                .module
+                .interface_infos
+                .get(interface_name)
+                .map(|info| {
+                    reflection_interface_method_members(ctx, info, interface_name, &method_names)
+                })
+                .transpose()?
+                .unwrap_or_else(|| default_method_members(&method_names, true, interface_name));
+            let property_members =
+                default_property_members(&property_names, true, interface_name);
+            let constructor_member = reflection_constructor_member(&method_members);
+            (
+                method_names,
+                property_names,
+                constant_names,
+                constant_members,
+                constant_reflection_members,
+                method_members,
+                property_members,
+                constructor_member,
+            )
+        } else {
+            (
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                None,
+            )
+        };
         return Ok(ReflectionOwnerMetadata {
+            unbacked_name: false,
+            unbacked_file: false,
             reflected_name: Some(interface_name.to_string()),
             attr_names: Vec::new(),
             attr_args: Vec::new(),
@@ -1231,22 +1478,59 @@ fn reflection_class_metadata_for_name(
             .get(trait_name)
             .cloned()
             .unwrap_or_default();
-        let method_names = reflection_trait_method_names(ctx, trait_name);
-        let property_names = reflection_trait_property_names(ctx, trait_name);
-        let constant_names = reflection_trait_constant_names(ctx, trait_name);
-        let constant_members = reflection_trait_constant_members(ctx, trait_name)?;
-        let constant_reflection_members =
-            reflection_trait_constant_reflection_members(ctx, trait_name)?;
-        let method_members = ctx
-            .module
-            .declared_trait_methods
-            .get(trait_name)
-            .map(|methods| reflection_trait_method_members(ctx, methods, trait_name, &method_names))
-            .transpose()?
-            .unwrap_or_else(|| default_method_members(&method_names, false, trait_name));
-        let property_members = default_property_members(&property_names, false, trait_name);
-        let constructor_member = reflection_constructor_member(&method_members);
+        let (
+            method_names,
+            property_names,
+            constant_names,
+            constant_members,
+            constant_reflection_members,
+            method_members,
+            property_members,
+            constructor_member,
+        ) = if compute_members {
+            let method_names = reflection_trait_method_names(ctx, trait_name);
+            let property_names = reflection_trait_property_names(ctx, trait_name);
+            let constant_names = reflection_trait_constant_names(ctx, trait_name);
+            let constant_members = reflection_trait_constant_members(ctx, trait_name)?;
+            let constant_reflection_members =
+                reflection_trait_constant_reflection_members(ctx, trait_name)?;
+            let method_members = ctx
+                .module
+                .declared_trait_methods
+                .get(trait_name)
+                .map(|methods| {
+                    reflection_trait_method_members(ctx, methods, trait_name, &method_names)
+                })
+                .transpose()?
+                .unwrap_or_else(|| default_method_members(&method_names, false, trait_name));
+            let property_members =
+                default_property_members(&property_names, false, trait_name);
+            let constructor_member = reflection_constructor_member(&method_members);
+            (
+                method_names,
+                property_names,
+                constant_names,
+                constant_members,
+                constant_reflection_members,
+                method_members,
+                property_members,
+                constructor_member,
+            )
+        } else {
+            (
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                None,
+            )
+        };
         return Ok(ReflectionOwnerMetadata {
+            unbacked_name: false,
+            unbacked_file: false,
             reflected_name: Some(trait_name.to_string()),
             attr_names: Vec::new(),
             attr_args: Vec::new(),
@@ -1306,17 +1590,21 @@ fn reflection_shallow_class_metadata_for_name(
     ctx: &FunctionContext<'_>,
     reflected_class: &str,
 ) -> Result<ReflectionOwnerMetadata> {
-    let mut metadata = reflection_class_metadata_for_name(ctx, reflected_class)?;
-    metadata.method_names.clear();
-    metadata.property_names.clear();
-    metadata.constant_names.clear();
-    metadata.constant_members.clear();
-    metadata.constant_reflection_members.clear();
-    metadata.enum_case_members.clear();
-    metadata.method_members.clear();
-    metadata.property_members.clear();
-    metadata.constructor_member = None;
+    // `compute_members: false` skips the expensive method/property enumeration outright
+    // instead of computing it and discarding it — see `reflection_class_metadata_for_name_impl`.
+    let mut metadata = reflection_class_metadata_for_name_impl(ctx, reflected_class, false)?;
     metadata.parent_class_name = None;
+    // `emit_reflection_owner_object` bakes BOTH `__interface_names` (a plain string array) AND
+    // `__interfaces`/`__traits` (arrays of full NESTED ReflectionClass objects, one full
+    // `reflection_class_metadata_for_name` bake per entry via `emit_reflection_class_array`) from
+    // these same lists. A non-empty list here would make a nested declaring-class slot eagerly
+    // re-trigger that full nested bake for every implemented interface/trait — for a class that
+    // implements a shared interface (every builtin Reflection* class implements `Stringable`),
+    // that reproduces the same declaring-class recursion this shallow path exists to avoid.
+    // Documented divergence: `getDeclaringClass()->getInterfaceNames()`/`getInterfaces()` on a
+    // reflected member's declaring class returns empty instead of chasing the full graph.
+    metadata.interface_names.clear();
+    metadata.trait_names.clear();
     Ok(metadata)
 }
 
@@ -1358,7 +1646,13 @@ fn reflection_function_metadata(
     let Some(function_operand) = inst.operands.first().copied() else {
         return Ok(empty_reflection_metadata());
     };
-    let function_name = const_required_string_operand(ctx, function_operand, "ReflectionFunction")?;
+    if let Some(closure_name) = closure_new_operand_name(ctx, function_operand) {
+        return reflection_closure_literal_metadata(ctx, &closure_name);
+    }
+    let function_name = match first_class_callable_operand_name(ctx, function_operand) {
+        Some(name) => name,
+        None => const_required_string_operand(ctx, function_operand, "ReflectionFunction")?,
+    };
     let Some(function) = ctx.function_by_name(&function_name) else {
         if let Some((builtin_name, signature)) =
             reflection_builtin_function_signature(&function_name)
@@ -1400,6 +1694,43 @@ fn reflection_function_metadata(
     metadata.type_metadata = type_metadata;
     metadata.is_deprecated = signature.deprecation.is_some();
     metadata.is_generator = function.flags.is_generator;
+    Ok(metadata)
+}
+
+/// Resolves `new ReflectionFunction(function (...) {...})` metadata for a closure literal.
+///
+/// Parameter/return metadata is fully backed from the closure's own signature; name-shaped and
+/// file-shaped methods are gated (`unbacked_name`/`unbacked_file`) because PHP's real closure
+/// name/file embed source locations elephc does not track.
+fn reflection_closure_literal_metadata(
+    ctx: &FunctionContext<'_>,
+    closure_name: &str,
+) -> Result<ReflectionOwnerMetadata> {
+    let mut metadata = empty_reflection_metadata();
+    metadata.is_anonymous = true;
+    metadata.unbacked_name = true;
+    metadata.unbacked_file = true;
+    let Some(signature) = ctx
+        .module
+        .closures
+        .iter()
+        .find(|function| function.name == closure_name)
+        .and_then(|function| function.signature.as_ref())
+    else {
+        return Ok(metadata);
+    };
+    metadata.required_parameter_count = reflection_required_parameter_count(signature);
+    metadata.type_metadata = reflection_return_type_metadata(signature);
+    metadata.parameter_members = reflection_parameter_members_with_declaring_function(
+        ctx,
+        signature,
+        "",
+        None,
+        None,
+        None,
+        &[],
+        None,
+    )?;
     Ok(metadata)
 }
 
@@ -1475,33 +1806,49 @@ fn reflection_method_metadata(
     };
     let reflected_class = const_string_or_class_operand(ctx, class_operand, "ReflectionMethod")?;
     let method_name = const_required_string_operand(ctx, method_operand, "ReflectionMethod")?;
-    let method_key = php_symbol_key(&method_name);
-    if let Some((_, info)) = resolve_reflection_class(ctx, &reflected_class) {
+    Ok(reflection_method_metadata_for_names(ctx, &reflected_class, &method_name)?
+        .unwrap_or_else(empty_reflection_metadata))
+}
+
+/// Resolves `ReflectionMethod` metadata for compile-time class and method names.
+///
+/// Returns `Ok(None)` when the class-like owner or the method does not exist — the dynamic
+/// member dispatcher uses that to decide which (class, method) pairs get a dispatch arm.
+pub(super) fn reflection_method_metadata_for_names(
+    ctx: &FunctionContext<'_>,
+    reflected_class: &str,
+    method_name: &str,
+) -> Result<Option<ReflectionOwnerMetadata>> {
+    let method_key = php_symbol_key(method_name);
+    if let Some((_, info)) = resolve_reflection_class(ctx, reflected_class) {
         if let Some(member) =
-            reflection_class_method_member(ctx, &reflected_class, info, &method_key)?
+            reflection_class_method_member(ctx, reflected_class, info, &method_key)?
         {
-            return Ok(reflection_method_owner_metadata(&method_name, member));
+            // PHP's `getName()` reports the DECLARED spelling regardless of the (case
+            // insensitively matched) query spelling.
+            let declared_name = member.name.clone();
+            return Ok(Some(reflection_method_owner_metadata(&declared_name, member)));
         }
     }
-    if let Some(interface_name) = resolve_reflection_interface(ctx, &reflected_class) {
+    if let Some(interface_name) = resolve_reflection_interface(ctx, reflected_class) {
         if let Some(info) = ctx.module.interface_infos.get(interface_name) {
             if let Some(member) =
                 reflection_interface_method_member(ctx, info, interface_name, &method_key)?
             {
-                return Ok(reflection_method_owner_metadata(&method_name, member));
+                return Ok(Some(reflection_method_owner_metadata(method_name, member)));
             }
         }
     }
-    if let Some(trait_name) = resolve_reflection_trait(ctx, &reflected_class) {
+    if let Some(trait_name) = resolve_reflection_trait(ctx, reflected_class) {
         if let Some(methods) = ctx.module.declared_trait_methods.get(trait_name) {
             if let Some(member) =
                 reflection_trait_method_member(ctx, methods, trait_name, &method_key)?
             {
-                return Ok(reflection_method_owner_metadata(&method_name, member));
+                return Ok(Some(reflection_method_owner_metadata(method_name, member)));
             }
         }
     }
-    Ok(empty_reflection_metadata())
+    Ok(None)
 }
 
 /// Builds direct ReflectionMethod constructor metadata from one reflected method member.
@@ -1552,6 +1899,8 @@ fn reflection_method_owner_metadata(
         is_iterable: false,
         modifiers: reflection_method_modifiers_from_flags(member.flags),
         member_flags: member.flags,
+        unbacked_name: false,
+        unbacked_file: false,
     }
 }
 
@@ -1568,7 +1917,23 @@ fn reflection_property_metadata(
     };
     let reflected_class = const_string_or_class_operand(ctx, class_operand, "ReflectionProperty")?;
     let property_name = const_required_string_operand(ctx, property_operand, "ReflectionProperty")?;
-    Ok(resolve_reflection_class(ctx, &reflected_class)
+    Ok(
+        reflection_property_metadata_for_names(ctx, &reflected_class, &property_name)
+            .unwrap_or_else(empty_reflection_metadata),
+    )
+}
+
+/// Resolves `ReflectionProperty` metadata for compile-time class and property names.
+///
+/// Returns `None` when the class or the (case-sensitive) property does not exist — the dynamic
+/// member dispatcher uses that to decide which (class, property) pairs get a dispatch arm.
+pub(super) fn reflection_property_metadata_for_names(
+    ctx: &FunctionContext<'_>,
+    reflected_class: &str,
+    property_name: &str,
+) -> Option<ReflectionOwnerMetadata> {
+    let property_name = property_name.to_string();
+    resolve_reflection_class(ctx, reflected_class)
         .and_then(|(_, info)| {
             let declaring_class_name =
                 reflection_property_declaring_class_name(info, &property_name);
@@ -1632,9 +1997,10 @@ fn reflection_property_metadata(
                 is_iterable: false,
                 modifiers: reflection_property_modifiers_for_info(info, &property_name)?,
                 member_flags,
+                unbacked_name: false,
+                unbacked_file: false,
             })
         })
-        .unwrap_or_else(empty_reflection_metadata))
 }
 
 /// Resolves `ReflectionParameter(target, parameter)` metadata.
@@ -1804,6 +2170,8 @@ fn reflection_class_constant_metadata(
         resolve_reflection_enum_case(ctx, &reflected_class, &constant_name)
     {
         return Ok(ReflectionOwnerMetadata {
+            unbacked_name: false,
+            unbacked_file: false,
             reflected_name: Some(constant_name.clone()),
             attr_names: case.attribute_names.clone(),
             attr_args: case.attribute_args.clone(),
@@ -1882,6 +2250,8 @@ fn reflection_enum_case_metadata(
     Ok(
         resolve_reflection_enum_case(ctx, &reflected_enum, &case_name)
             .map(|(enum_name, case)| ReflectionOwnerMetadata {
+                unbacked_name: false,
+                unbacked_file: false,
                 reflected_name: Some(case_name.clone()),
                 attr_names: case.attribute_names.clone(),
                 attr_args: case.attribute_args.clone(),
@@ -1949,6 +2319,8 @@ fn reflection_class_constant_owner_metadata(
     let member_flags =
         reflection_member_flags(false, &metadata.visibility, is_final, false, false, false);
     ReflectionOwnerMetadata {
+        unbacked_name: false,
+        unbacked_file: false,
         reflected_name: Some(reflected_name),
         attr_names: metadata.attr_names,
         attr_args: metadata.attr_args,
@@ -2222,16 +2594,19 @@ fn reflection_parent_class_names(
 }
 
 /// Returns PHP's `ReflectionClass::isInstantiable()` value for static class metadata.
+///
+/// `constructor_is_public` is `None` when the class has no visible `__construct`
+/// (defaults to instantiable, matching PHP's implicit public no-arg constructor), or
+/// `Some(is_public)` when one exists.
 fn reflection_class_is_instantiable(
     info: &crate::types::ClassInfo,
     is_enum: bool,
-    constructor_member: Option<&ReflectionListedMember>,
+    constructor_is_public: Option<bool>,
 ) -> bool {
     if info.is_abstract || is_enum {
         return false;
     }
-    constructor_member
-        .map(|member| member.flags.is_public)
+    constructor_is_public
         .unwrap_or(true)
 }
 
@@ -2301,7 +2676,7 @@ fn reflection_class_has_runtime_managed_storage(class_name: &str) -> bool {
 }
 
 /// Returns whether the reflected class-like name belongs to compiler-injected PHP metadata.
-fn reflection_class_like_is_internal(class_name: &str) -> bool {
+pub(super) fn reflection_class_like_is_internal(class_name: &str) -> bool {
     let key = php_symbol_key(class_name.trim_start_matches('\\'));
     matches!(
         key.as_str(),
@@ -2433,7 +2808,10 @@ fn collect_reflection_interface_parent_names(
 }
 
 /// Returns PHP case-insensitive method names visible to `ReflectionClass::hasMethod()`.
-fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_name: &str) -> Vec<String> {
+pub(super) fn reflection_class_method_names(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+) -> Vec<String> {
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut current = Some(class_name.to_string());
@@ -2451,8 +2829,87 @@ fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_name: &str) ->
     names
 }
 
+/// Returns method names in PHP's real `ReflectionClass::getMethods()` declaration order:
+/// the receiver's own declared methods first (in their own source order), then each ancestor's
+/// own declared methods appended (nearest ancestor first), skipping a name already claimed by a
+/// more-derived level. An inherited-but-not-overridden PRIVATE ancestor method is excluded from
+/// enumeration (php -n verified), independently of any `$filter` bitmask; the receiver's own
+/// private methods are kept. Names use each level's real declared spelling.
+fn reflection_class_ordered_method_names(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut current = Some(class_name.to_string());
+    let mut visited = std::collections::HashSet::new();
+    while let Some(level_name) = current {
+        if !visited.insert(level_name.clone()) {
+            break;
+        }
+        let Some((resolved_name, info)) = resolve_reflection_class(ctx, &level_name) else {
+            break;
+        };
+        let is_own_level = php_symbol_key(resolved_name) == php_symbol_key(class_name)
+            || level_name == class_name;
+        for decl in &info.method_decls {
+            let key = php_symbol_key(&decl.name);
+            if !seen.insert(key) {
+                continue;
+            }
+            if decl.visibility == Visibility::Private && !is_own_level {
+                continue;
+            }
+            names.push(decl.name.clone());
+        }
+        current = info.parent.clone();
+    }
+    names
+}
+
+/// Returns property names in PHP's real `ReflectionClass::getProperties()` declaration order
+/// (instance and static interleaved in source order, own class first, ancestors appended,
+/// overridden names promoted to the overriding level, inherited-not-overridden privates
+/// excluded — php -n verified). Property names are case-sensitive.
+fn reflection_class_ordered_property_names(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut current = Some(class_name.to_string());
+    let mut visited = std::collections::HashSet::new();
+    while let Some(level_name) = current {
+        if !visited.insert(level_name.clone()) {
+            break;
+        }
+        let Some((resolved_name, info)) = resolve_reflection_class(ctx, &level_name) else {
+            break;
+        };
+        let is_own_level = php_symbol_key(resolved_name) == php_symbol_key(class_name)
+            || level_name == class_name;
+        for name in &info.own_property_decl_order {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            let visibility = info
+                .property_visibilities
+                .get(name)
+                .or_else(|| info.static_property_visibilities.get(name))
+                .cloned()
+                .unwrap_or(Visibility::Public);
+            if visibility == Visibility::Private && !is_own_level {
+                continue;
+            }
+            names.push(name.clone());
+        }
+        current = info.parent.clone();
+    }
+    names
+}
+
 /// Returns PHP case-sensitive property names visible to `ReflectionClass::hasProperty()`.
-fn reflection_class_property_names(
+pub(super) fn reflection_class_property_names(
     ctx: &FunctionContext<'_>,
     class_name: &str,
     info: &crate::types::ClassInfo,
@@ -3972,7 +4429,18 @@ fn reflection_source_method_defaults(
         .module
         .class_infos
         .get(declaring_class_name)
-        .map(|info| info.method_decls.as_slice())
+        .map(|info| {
+            // `method_decls_unfolded` preserves source-visible constant-reference defaults
+            // (`self::X`/`parent::Y`) that `method_decls` loses to
+            // `resolve_const_default_references`'s in-place literal rewrite. It is only
+            // populated for user classes; fall back to `method_decls` (e.g. for
+            // compiler-injected classes) rather than reporting no declaration at all.
+            if info.method_decls_unfolded.is_empty() {
+                info.method_decls.as_slice()
+            } else {
+                info.method_decls_unfolded.as_slice()
+            }
+        })
         .or_else(|| {
             ctx.module
                 .interface_infos
@@ -5116,7 +5584,58 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         is_iterable: false,
         modifiers: 0,
         member_flags: ReflectionMemberFlags::default(),
+        unbacked_name: false,
+        unbacked_file: false,
     }
+}
+
+/// Returns true when `new ReflectionFunction($operand)` can be resolved at compile time: a
+/// closure literal, a first-class callable targeting a plain free function, or a compile-time
+/// constant string. `lower_reflection_owner_new` routes anything else (a genuinely dynamic
+/// `Closure`/`callable`-typed value, or a `Mixed`/`Union` value) to
+/// `super::reflection_function_dynamic::lower_reflection_function_new_dynamic` instead.
+pub(super) fn is_reflection_function_static_operand(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> bool {
+    closure_new_operand_name(ctx, value).is_some()
+        || first_class_callable_operand_name(ctx, value).is_some()
+        || const_required_string_operand(ctx, value, "ReflectionFunction").is_ok()
+}
+
+/// Returns the target function's name when `value` is an `Op::FirstClassCallableNew` operand
+/// (`target(...)`), or `None` for any other operand shape.
+fn first_class_callable_operand_name(ctx: &FunctionContext<'_>, value: ValueId) -> Option<String> {
+    reflection_data_string_for_op(ctx, value, Op::FirstClassCallableNew)
+}
+
+/// Returns the closure's own synthetic name (`ctx.module.closures`' key) when `value` is an
+/// `Op::ClosureNew` operand (a closure literal passed directly), or `None` for any other
+/// operand shape (including a `Closure`-typed variable — that value's defining instruction is
+/// whatever produced the variable's value, not `Op::ClosureNew`, so this does not chase loads).
+fn closure_new_operand_name(ctx: &FunctionContext<'_>, value: ValueId) -> Option<String> {
+    reflection_data_string_for_op(ctx, value, Op::ClosureNew)
+}
+
+/// Resolves `value`'s defining instruction, requires it to be exactly `expected_op`, and reads
+/// its `Immediate::Data` string out of the module's data pool.
+fn reflection_data_string_for_op(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+    expected_op: Op,
+) -> Option<String> {
+    let value_ref = ctx.function.value(value)?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return None;
+    };
+    let inst_ref = ctx.function.instruction(inst)?;
+    if inst_ref.op != expected_op {
+        return None;
+    }
+    let Some(Immediate::Data(data)) = inst_ref.immediate else {
+        return None;
+    };
+    ctx.module.data.strings.get(data.as_raw() as usize).cloned()
 }
 
 /// Extracts a constant string or class-name operand from an EIR value.
@@ -5232,7 +5751,7 @@ fn const_data_operand(
 }
 
 /// Writes a heap-persisted string into the current Reflection object result slot.
-fn emit_reflection_string_property(
+pub(super) fn emit_reflection_string_property(
     ctx: &mut FunctionContext<'_>,
     value: &str,
     low_offset: usize,
@@ -5281,6 +5800,27 @@ fn emit_reflection_owner_string_property_by_name(
     Ok(())
 }
 
+/// Writes a string into a Reflection object's named slot only when the shell declares it.
+///
+/// Used for the public `$name`/`$class` PHP-visible properties, which only some reflection
+/// owner shells expose; shells without the slot are silently skipped.
+fn emit_reflection_owner_optional_string_property_by_name(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    property_name: &str,
+    value: &str,
+) -> Result<()> {
+    let has_slot = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .is_some_and(|info| info.property_offsets.contains_key(property_name));
+    if has_slot {
+        emit_reflection_owner_string_property_by_name(ctx, class_name, property_name, value)?;
+    }
+    Ok(())
+}
+
 /// Replaces the Reflection object's default `__attrs` array with populated metadata.
 fn emit_reflection_attrs_property(
     ctx: &mut FunctionContext<'_>,
@@ -5294,7 +5834,7 @@ fn emit_reflection_attrs_property(
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, attrs_low_offset);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
     super::super::builtins::attributes::emit_reflection_attribute_array(
         ctx,
         attr_names,
@@ -5359,7 +5899,7 @@ fn emit_reflection_owner_string_array_property_by_name(
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
     emit_reflection_string_array(ctx, names)?;
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
@@ -5394,7 +5934,7 @@ fn emit_reflection_class_array_property_by_name(
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
     emit_reflection_class_array(ctx, names)?;
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
@@ -5429,13 +5969,13 @@ fn emit_reflection_constant_array_property_by_name(
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
     emit_reflection_constant_array(ctx, members)?;
     let assoc_type = PhpType::AssocArray {
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
     };
-    emit_box_current_value_as_mixed(ctx.emitter, &assoc_type);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &assoc_type);
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
@@ -5463,13 +6003,13 @@ fn emit_reflection_default_property_array_property_by_name(
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
     emit_reflection_default_property_array(ctx, members);
     let assoc_type = PhpType::AssocArray {
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
     };
-    emit_box_current_value_as_mixed(ctx.emitter, &assoc_type);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &assoc_type);
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
@@ -5497,7 +6037,7 @@ fn emit_reflection_static_property_array_property_by_name(
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
     emit_reflection_static_property_array(ctx, members);
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
@@ -5527,7 +6067,7 @@ fn emit_reflection_member_array_property_by_name(
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
     emit_reflection_member_array(ctx, member_class_name, members)?;
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
@@ -5562,7 +6102,7 @@ fn emit_reflection_property_hook_array_property_by_name(
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
     emit_reflection_property_hook_array(ctx, members)?;
     let assoc_type = reflection_property_hook_map_type();
     abi::emit_pop_reg(ctx.emitter, object_reg);
@@ -5601,7 +6141,7 @@ fn emit_reflection_constructor_property(
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(member) = member {
         emit_reflection_member_object(ctx, "ReflectionMethod", member)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionMethod".to_string()),
         );
@@ -5632,7 +6172,7 @@ fn emit_reflection_method_prototype_property(
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(member) = member {
         emit_reflection_member_object(ctx, "ReflectionMethod", member)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionMethod".to_string()),
         );
@@ -5665,7 +6205,7 @@ fn emit_reflection_parent_class_property(
     if let Some(parent_class_name) = parent_class_name {
         let parent_metadata = reflection_class_metadata_for_name(ctx, parent_class_name)?;
         emit_reflection_owner_object(ctx, "ReflectionClass", &parent_metadata)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
         );
@@ -5706,7 +6246,7 @@ fn emit_reflection_declaring_class_property(
         let declaring_metadata =
             reflection_shallow_class_metadata_for_name(ctx, declaring_class_name)?;
         emit_reflection_owner_object(ctx, "ReflectionClass", &declaring_metadata)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
         );
@@ -5742,7 +6282,7 @@ fn emit_reflection_enum_property(
     if let Some(enum_name) = enum_name {
         let enum_metadata = reflection_enum_metadata_for_name(ctx, enum_name)?;
         emit_reflection_owner_object(ctx, "ReflectionEnum", &enum_metadata)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionEnum".to_string()),
         );
@@ -5776,7 +6316,7 @@ fn emit_reflection_parameter_array_property_by_name(
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
     emit_reflection_parameter_array(ctx, parameters)?;
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
@@ -6434,6 +6974,20 @@ fn emit_reflection_member_object(
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let name_offset = reflection_property_offset(class_info, "__name")?;
     emit_reflection_string_property(ctx, &member.name, name_offset, name_offset + 8);
+    emit_reflection_owner_optional_string_property_by_name(
+        ctx,
+        member_class_name,
+        "name",
+        &member.name,
+    )?;
+    if let Some(declaring_class) = member.declaring_class_name.as_deref() {
+        emit_reflection_owner_optional_string_property_by_name(
+            ctx,
+            member_class_name,
+            "class",
+            declaring_class,
+        )?;
+    }
     emit_reflection_attrs_property(
         ctx,
         member_class_name,
@@ -6457,6 +7011,12 @@ fn emit_reflection_member_object(
             member_class_name,
             "__required_parameter_count",
             member.required_parameter_count,
+        )?;
+        emit_reflection_owner_int_property(
+            ctx,
+            member_class_name,
+            "__parameter_count",
+            member.parameters.len() as i64,
         )?;
         emit_reflection_owner_bool_property(
             ctx,
@@ -6779,7 +7339,7 @@ fn emit_reflection_parameter_declaring_function_property(
             metadata.is_deprecated = *is_deprecated;
             metadata.is_generator = *is_generator;
             emit_reflection_owner_object(ctx, "ReflectionFunction", &metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionFunction".to_string()),
             );
@@ -6807,7 +7367,7 @@ fn emit_reflection_parameter_declaring_function_property(
             metadata.is_deprecated = *is_deprecated;
             metadata.is_generator = *is_generator;
             emit_reflection_owner_object(ctx, "ReflectionMethod", &metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionMethod".to_string()),
             );
@@ -6846,7 +7406,7 @@ fn emit_reflection_parameter_declaring_class_property(
         let declaring_metadata =
             reflection_shallow_class_metadata_for_name(ctx, declaring_class_name)?;
         emit_reflection_owner_object(ctx, "ReflectionClass", &declaring_metadata)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
         );
@@ -6891,7 +7451,7 @@ fn emit_reflection_parameter_class_property(
     if let Some(class_name) = reflection_parameter_class_name(parameter) {
         let class_metadata = reflection_shallow_class_metadata_for_name(ctx, class_name)?;
         emit_reflection_owner_object(ctx, "ReflectionClass", &class_metadata)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
         );
@@ -6945,21 +7505,24 @@ fn emit_reflection_owner_type_property_by_name(
     match type_metadata {
         Some(ReflectionParameterTypeMetadata::Named(type_metadata)) => {
             emit_reflection_named_type_object(ctx, type_metadata)?;
-            emit_box_current_value_as_mixed(
+            // OWNED boxing: the freshly constructed type object's creation reference is
+            // transferred into the Mixed cell (retain-boxing it leaked one object + its
+            // persisted name string per baked type slot).
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionNamedType".to_string()),
             );
         }
         Some(ReflectionParameterTypeMetadata::Union(type_metadata)) => {
             emit_reflection_union_type_object(ctx, type_metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionUnionType".to_string()),
             );
         }
         Some(ReflectionParameterTypeMetadata::Intersection(type_metadata)) => {
             emit_reflection_intersection_type_object(ctx, type_metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionIntersectionType".to_string()),
             );

@@ -2484,6 +2484,7 @@ mod tests {
             declared_static_properties: HashSet::new(),
             final_static_properties: HashSet::new(),
             method_decls: Vec::new(),
+            method_decls_unfolded: Vec::new(),
             methods: HashMap::new(),
             static_methods: HashMap::new(),
             late_static_method_returns: HashMap::new(),

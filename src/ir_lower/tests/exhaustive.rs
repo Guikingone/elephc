@@ -207,6 +207,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         declared_static_properties: Default::default(),
         final_static_properties: Default::default(),
         method_decls: Vec::new(),
+        method_decls_unfolded: Vec::new(),
         methods,
         static_methods,
         late_static_method_returns: Default::default(),

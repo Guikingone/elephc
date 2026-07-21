@@ -33,7 +33,14 @@ fn generate_project_asm(
     heap_debug: bool,
     requires_elephc_tls: bool,
 ) -> (String, String, elephc::codegen::RuntimeFeatures) {
-    let ir_module = lower_and_validate_ir_for_codegen_fixture(program, check_result, source_path);
+    let empty_source_files = HashMap::new();
+    let ir_module = lower_and_validate_ir_for_codegen_fixture(
+        program,
+        check_result,
+        source_path,
+        &empty_source_files,
+        &empty_source_files,
+    );
     let exported_functions = HashMap::new();
     let regalloc_linear = !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
     let user_asm = elephc::codegen::generate_user_asm_from_ir_with_options(

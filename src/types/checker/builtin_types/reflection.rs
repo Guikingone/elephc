@@ -121,7 +121,9 @@ pub(crate) fn inject_builtin_reflection(
                 builtin_reflection_class_bool_method("isRepeated", "__is_repeated"),
             ],
             attributes: Vec::new(),
-            constants: Vec::new(),
+            // PHP: ReflectionAttribute::IS_INSTANCEOF = 2 — the getAttributes() flag that
+            // matches attributes by instanceof instead of exact class name.
+            constants: vec![builtin_class_const("IS_INSTANCEOF", 2)],
             used_traits: Vec::new(),
             trait_aliases: Vec::new(),
         },
@@ -139,13 +141,16 @@ pub(crate) fn inject_builtin_reflection(
             "ReflectionMethod",
             true,
             vec![
-                ("class_name", Some(TypeExpr::Str), None, false),
-                (
-                    "method_name",
-                    Some(TypeExpr::Nullable(Box::new(TypeExpr::Str))),
-                    null_expr(),
-                    false,
-                ),
+                // PHP's real first argument is `object|string $objectOrMethod`; typed
+                // `mixed` so object/boxed/scalar arguments reach the EIR dynamic member
+                // dispatcher, which weak-coerces and throws catchable errors like PHP.
+                ("class_name", Some(mixed_type()), None, false),
+                // Plain `string` (not `?string`): the deprecated one-argument
+                // `new ReflectionMethod("Class::method")` form is intercepted before signature
+                // checking, so a `null` member name can never legitimately reach this
+                // signature, and a non-string member name must stay a loud
+                // "expects Str" compile error (PHP does not weak-coerce it).
+                ("method_name", Some(TypeExpr::Str), None, false),
             ],
         ),
     );
@@ -155,7 +160,10 @@ pub(crate) fn inject_builtin_reflection(
             "ReflectionProperty",
             true,
             vec![
-                ("class_name", Some(TypeExpr::Str), None, false),
+                // PHP's real first argument is `object|string $class`; typed `mixed` so
+                // object/boxed/scalar arguments reach the EIR dynamic member dispatcher,
+                // which weak-coerces and throws catchable errors like PHP.
+                ("class_name", Some(mixed_type()), None, false),
                 ("property_name", Some(TypeExpr::Str), None, false),
             ],
         ),
@@ -620,6 +628,35 @@ fn builtin_reflection_method_create_from_method_name_method() -> ClassMethod {
 }
 
 /// Returns a public `setAccessible(bool $accessible)` no-op method shell.
+/// Returns a public `getClosure(?object $object = null): mixed` stub for `ReflectionMethod`.
+///
+/// Un-backed placeholder returning `null` typed `mixed`: the optional `object` parameter
+/// (modelled `mixed`) lets `$method->getClosure($obj)` type-check against PHP's signature.
+fn builtin_reflection_method_get_closure_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "getClosure".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("object".to_string(), Some(mixed_type()), null_lit(), false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 fn builtin_reflection_set_accessible_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
@@ -788,7 +825,12 @@ fn builtin_reflection_function_constructor_method() -> ClassMethod {
         is_abstract: false,
         is_final: false,
         has_body: true,
-        params: vec![("function".to_string(), Some(TypeExpr::Str), None, false)],
+        // PHP's real signature is `Closure|string $function`; typed `mixed` here so
+        // closure literals, `Closure`/`callable`-typed values, and boxed `Mixed` cells
+        // all pass the generic callable check — `validate_reflection_function_constructor`
+        // enforces the actual `Closure|string` compile-time shape and the EIR dynamic
+        // lowering performs the runtime tag check.
+        params: vec![("function".to_string(), Some(mixed_type()), None, false)],
         param_attributes: Vec::new(),
         variadic: None,
         variadic_by_ref: false,
@@ -808,7 +850,7 @@ fn builtin_reflection_function() -> FlattenedClass {
     let mut class = builtin_reflection_owner_class(
         "ReflectionFunction",
         true,
-        vec![("function", Some(TypeExpr::Str), None, false)],
+        vec![("function", Some(mixed_type()), None, false)],
     );
     if let Some(constructor) = class
         .methods
@@ -1603,13 +1645,27 @@ fn builtin_reflection_class() -> FlattenedClass {
         name: "ReflectionClass".to_string(),
         span: dummy(),
         extends: None,
-        implements: Vec::new(),
+        // PHP: every core Reflection* shell implements `Reflector` (which extends
+        // `Stringable`) — see `crate::types::checker::builtin_interfaces`.
+        implements: vec!["Reflector".to_string()],
         is_abstract: false,
         is_final: false,
         is_readonly_class: false,
         properties: vec![
             builtin_property(
                 "__name",
+                Visibility::Private,
+                Some(TypeExpr::Str),
+                empty_string(),
+            ),
+            // PHP exposes the reflected class name as a public readonly `$name` property
+            // alongside `getName()`; codegen bakes the same value into both slots.
+            builtin_property("name", Visibility::Public, Some(TypeExpr::Str), empty_string()),
+            // Declaring source file (empty-string sentinel for "unknown"); backs
+            // `getFileName()` from the entry file's declaration snapshot
+            // (`crate::resolver::scan_reflection_source_files`).
+            builtin_property(
+                "__file",
                 Visibility::Private,
                 Some(TypeExpr::Str),
                 empty_string(),
@@ -1833,7 +1889,12 @@ fn builtin_reflection_class() -> FlattenedClass {
                 false,
             )]),
             builtin_reflection_class_string_method("getName", "__name"),
-            builtin_reflection_class_string_method("__toString", "__string"),
+            builtin_reflection_unsupported_tostring_method("ReflectionClass"),
+            builtin_reflection_computed_method(
+                "getFileName",
+                str_or_false_type(),
+                empty_string_sentinel_expr("__file"),
+            ),
             builtin_reflection_constant_false_union_method("getDocComment"),
             builtin_reflection_constant_false_union_method("getExtensionName"),
             builtin_reflection_constant_null_mixed_method("getExtension"),
@@ -3942,6 +4003,31 @@ fn builtin_reflection_owner_class(
             empty_string(),
         ));
         methods.push(builtin_reflection_class_string_method("getName", "__name"));
+        // PHP exposes the reflected name as a public readonly `$name` property alongside
+        // `getName()`; codegen bakes the same value into both slots at construction.
+        properties.push(builtin_property(
+            "name",
+            Visibility::Public,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+    }
+    if matches!(
+        name,
+        "ReflectionMethod"
+            | "ReflectionProperty"
+            | "ReflectionClassConstant"
+            | "ReflectionEnumUnitCase"
+            | "ReflectionEnumBackedCase"
+    ) {
+        // PHP exposes the declaring/queried class name as a public readonly `$class`
+        // property on member reflectors; codegen bakes it at construction.
+        properties.push(builtin_property(
+            "class",
+            Visibility::Public,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
     }
     if reflection_owner_has_doc_comment_method(name) {
         methods.push(builtin_reflection_constant_false_union_method(
@@ -4066,12 +4152,24 @@ fn builtin_reflection_owner_class(
             Some(TypeExpr::Int),
             int_lit(0),
         ));
+        properties.push(builtin_property(
+            "__parameter_count",
+            Visibility::Private,
+            Some(TypeExpr::Int),
+            int_lit(0),
+        ));
         methods.push(builtin_reflection_class_array_method(
             "getParameters",
             "__parameters",
             object_array_type("ReflectionParameter"),
         ));
-        methods.push(builtin_reflection_parameter_count_method());
+        // Reads a dedicated baked count slot (not `count(__parameters)`) so the dynamic
+        // descriptor-backed `ReflectionFunction` construction path — which cannot build a
+        // real `ReflectionParameter[]` at runtime — still backs the count.
+        methods.push(builtin_reflection_class_int_method(
+            "getNumberOfParameters",
+            "__parameter_count",
+        ));
         methods.push(builtin_reflection_class_int_method(
             "getNumberOfRequiredParameters",
             "__required_parameter_count",
@@ -4106,6 +4204,19 @@ fn builtin_reflection_owner_class(
         ));
     }
     if name == "ReflectionMethod" {
+        // Declaring source file of the class that actually declares the method
+        // (empty-string sentinel for "unknown"); backs `getFileName()`.
+        properties.push(builtin_property(
+            "__file",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+        methods.push(builtin_reflection_computed_method(
+            "getFileName",
+            str_or_false_type(),
+            empty_string_sentinel_expr("__file"),
+        ));
         properties.push(builtin_property(
             "__has_prototype",
             Visibility::Private,
@@ -4127,6 +4238,7 @@ fn builtin_reflection_owner_class(
         methods.push(builtin_reflection_method_invoke_args_method());
         methods.push(builtin_reflection_method_create_from_method_name_method());
         methods.push(builtin_reflection_set_accessible_method());
+        methods.push(builtin_reflection_method_get_closure_method());
     }
     if name == "ReflectionFunction" {
         methods.push(builtin_reflection_function_invoke_method());
@@ -4137,9 +4249,106 @@ fn builtin_reflection_owner_class(
         methods.push(builtin_reflection_constant_false_bool_method(
             "isDisabled",
         ));
+        // PHP: `getClosureThis(): ?object` — the bound `$this` of a closure, or `null`.
+        // No runtime backing (elephc does not track a closure's bound receiver on
+        // `ReflectionFunction`); unconditional `null` stub typed `mixed` (covers `?object`).
+        methods.push(builtin_reflection_constant_null_mixed_method("getClosureThis"));
+        // Declaring source file of the reflected named function (empty-string sentinel);
+        // gated on `__unbacked_file` for closure-literal/dynamic instances.
+        properties.push(builtin_property(
+            "__file",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+        // Gating flags for construction paths elephc cannot fully back: a closure LITERAL
+        // sets `__unbacked_name` + `__unbacked_file` (PHP's real closure name/file embed
+        // source locations elephc does not track); a DYNAMIC descriptor-backed instance
+        // sets `__unbacked_file` + `__unbacked_params` + `__unbacked_return_type` while
+        // keeping the name backed from the descriptor.
+        for flag in [
+            "__unbacked_name",
+            "__unbacked_file",
+            "__unbacked_params",
+            "__unbacked_return_type",
+        ] {
+            properties.push(builtin_property(
+                flag,
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ));
+        }
+        properties.push(builtin_property(
+            "__is_anonymous",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "isAnonymous",
+            "__is_anonymous",
+        ));
+        methods.push(builtin_reflection_guarded_method(
+            "getFileName",
+            str_or_false_type(),
+            "__unbacked_file",
+            "ReflectionFunction::getFileName() is not supported for this instance: elephc does not track a declaring source file for a closure-literal-backed or dynamically-reflected instance",
+            empty_string_sentinel_expr("__file"),
+        ));
+        methods.push(builtin_reflection_unconditional_throw_method(
+            "getStartLine",
+            mixed_type(),
+            "ReflectionFunction::getStartLine() is not supported: elephc does not track declaration line numbers",
+        ));
+        methods.push(builtin_reflection_unconditional_throw_method(
+            "getEndLine",
+            mixed_type(),
+            "ReflectionFunction::getEndLine() is not supported: elephc does not track declaration line numbers",
+        ));
+        methods.push(builtin_reflection_unconditional_throw_method(
+            "getClosureScopeClass",
+            mixed_type(),
+            "ReflectionFunction::getClosureScopeClass() is not supported: elephc does not track per-closure lexical scope",
+        ));
+        // Gate the name-shaped, parameter-array-shaped, invocation-shaped, and
+        // return-type-shaped methods on the matching `__unbacked_*` flags.
+        for method in methods.iter_mut() {
+            match method.name.as_str() {
+                "getName" | "getShortName" => guard_reflection_method_body(
+                    method,
+                    "__unbacked_name",
+                    "ReflectionFunction name methods are not supported for a closure-literal-backed instance: elephc cannot reproduce PHP's source-location closure name format",
+                ),
+                "getParameters" | "invoke" | "invokeArgs" => guard_reflection_method_body(
+                    method,
+                    "__unbacked_params",
+                    "This ReflectionFunction method is not supported for a dynamically-reflected instance: no per-value parameter metadata is tracked at runtime",
+                ),
+                "getReturnType" => guard_reflection_method_body(
+                    method,
+                    "__unbacked_return_type",
+                    "ReflectionFunction::getReturnType() is not supported for a dynamically-reflected instance: no per-value declared return type is tracked at runtime",
+                ),
+                _ => {}
+            }
+        }
     }
     if name == "ReflectionProperty" {
         methods.push(builtin_reflection_set_accessible_method());
+        // PHP: `isDefaultValueAvailable(): bool` — un-backed stub returning `false`.
+        // Distinct from `ReflectionParameter::isDefaultValueAvailable` (this is the
+        // property-side counterpart, backed by no runtime slot).
+        methods.push(builtin_reflection_constant_false_bool_method(
+            "isDefaultValueAvailable",
+        ));
+        // PHP: `getDeclaringFunction(): ReflectionFunctionAbstract` — un-backed stub
+        // returning `null` typed `mixed` (object return → mixed; matches the reflection
+        // EIR backend's un-backed-stub convention: an object-typed stub without runtime
+        // backing lowers to an unsupported `Void`-to-`Object` runtime call).
+        methods.push(builtin_reflection_constant_null_mixed_method(
+            "getDeclaringFunction",
+        ));
     }
     properties.push(builtin_property(
         "__attrs",
@@ -4152,7 +4361,8 @@ fn builtin_reflection_owner_class(
         name: name.to_string(),
         span: dummy(),
         extends: None,
-        implements: Vec::new(),
+        // PHP: every core Reflection* shell implements `Reflector` (extends `Stringable`).
+        implements: vec!["Reflector".to_string()],
         is_abstract: false,
         is_final: true,
         is_readonly_class: false,
@@ -4223,43 +4433,6 @@ fn reflection_owner_constants(class_name: &str) -> Vec<ClassConst> {
     Vec::new()
 }
 
-/// Builds `getNumberOfParameters()` over the retained parameter array.
-fn builtin_reflection_parameter_count_method() -> ClassMethod {
-    let dummy_span = crate::span::Span::dummy();
-    ClassMethod {
-        name: "getNumberOfParameters".to_string(),
-        visibility: Visibility::Public,
-        is_static: false,
-        is_abstract: false,
-        is_final: false,
-        has_body: true,
-        params: Vec::new(),
-        param_attributes: Vec::new(),
-        variadic: None,
-        variadic_by_ref: false,
-        variadic_type: None,
-        return_type: Some(TypeExpr::Int),
-        by_ref_return: false,
-        body: vec![Stmt::new(
-            StmtKind::Return(Some(Expr::new(
-                ExprKind::FunctionCall {
-                    name: Name::unqualified("count"),
-                    args: vec![Expr::new(
-                        ExprKind::PropertyAccess {
-                            object: Box::new(Expr::new(ExprKind::This, dummy_span)),
-                            property: "__parameters".to_string(),
-                        },
-                        dummy_span,
-                    )],
-                },
-                dummy_span,
-            ))),
-            dummy_span,
-        )],
-        span: dummy_span,
-        attributes: Vec::new(),
-    }
-}
 
 /// Builds `ReflectionFunctionAbstract::isVariadic()` from the retained parameter list.
 fn builtin_reflection_function_method_is_variadic_method() -> ClassMethod {
@@ -4693,6 +4866,158 @@ fn add_reflection_member_flag_methods(
     }
 }
 
+/// Returns a `TypeExpr` for `string|false` (PHP's `getFileName()`-shaped "string result, or
+/// `false` when unavailable" return contract).
+fn str_or_false_type() -> TypeExpr {
+    TypeExpr::Union(vec![TypeExpr::Str, TypeExpr::Bool])
+}
+
+/// Returns `$this->slot === '' ? false : $this->slot`: the shared "empty-string sentinel means
+/// PHP `false`" pattern baked slots use for optional string metadata (`__file`'s declaring
+/// path). The slot is populated at codegen time (empty string when the real value is
+/// unknown/absent); this body never needs to know why it is empty.
+fn empty_string_sentinel_expr(slot: &str) -> Expr {
+    let dummy_span = crate::span::Span::dummy();
+    Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(binary_expr(
+                reflection_this_property(slot, dummy_span),
+                BinOp::StrictEq,
+                string_lit("", dummy_span),
+                dummy_span,
+            )),
+            then_expr: Box::new(Expr::new(ExprKind::BoolLiteral(false), dummy_span)),
+            else_expr: Box::new(reflection_this_property(slot, dummy_span)),
+        },
+        dummy_span,
+    )
+}
+
+/// Returns a public no-arg method whose body is `return body_expr;` typed `return_type`.
+fn builtin_reflection_computed_method(
+    method_name: &str,
+    return_type: TypeExpr,
+    body_expr: Expr,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(return_type),
+        by_ref_return: false,
+        body: vec![Stmt::new(StmtKind::Return(Some(body_expr)), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public no-arg method whose body is `if ($this->guard) { throw new
+/// ReflectionException(message); } return body_expr;`.
+///
+/// Used to gate name/file-shaped `ReflectionFunction` methods on instances elephc cannot back
+/// soundly (closure-literal or dynamically-reflected) — a real, catchable throw instead of a
+/// silently fabricated value.
+fn builtin_reflection_guarded_method(
+    method_name: &str,
+    return_type: TypeExpr,
+    guard_property: &str,
+    message: &str,
+    body_expr: Expr,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let mut method = builtin_reflection_computed_method(method_name, return_type, body_expr);
+    method.body.insert(
+        0,
+        reflection_guard_throw_stmt(guard_property, message, dummy_span),
+    );
+    method
+}
+
+/// Returns `if ($this->guard) { throw new ReflectionException(message); }`.
+fn reflection_guard_throw_stmt(
+    guard_property: &str,
+    message: &str,
+    dummy_span: crate::span::Span,
+) -> Stmt {
+    Stmt::new(
+        StmtKind::If {
+            condition: reflection_this_property(guard_property, dummy_span),
+            then_body: vec![throw_new_reflection_exception(
+                string_lit(message, dummy_span),
+                dummy_span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        dummy_span,
+    )
+}
+
+/// Prepends a `__unbacked`-guard throw to an existing synthesized method body, so a method
+/// backed for literal construction paths throws a catchable `ReflectionException` on instances
+/// the dynamic construction path cannot back (parameters, return type, invocation).
+fn guard_reflection_method_body(method: &mut ClassMethod, guard_property: &str, message: &str) {
+    method.body.insert(
+        0,
+        reflection_guard_throw_stmt(guard_property, message, crate::span::Span::dummy()),
+    );
+}
+
+/// Returns a public no-arg method whose body unconditionally throws a
+/// `ReflectionException(message)` — used for methods this shell cannot back for any
+/// construction path (declaration-line tracking, closure lexical scope).
+fn builtin_reflection_unconditional_throw_method(
+    method_name: &str,
+    return_type: TypeExpr,
+    message: &str,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let mut method =
+        builtin_reflection_computed_method(method_name, return_type, null_value(dummy_span));
+    method.body = vec![throw_new_reflection_exception(
+        string_lit(message, dummy_span),
+        dummy_span,
+    )];
+    method
+}
+
+/// Returns a public `__toString(): string` method that unconditionally throws a real `\Error`.
+///
+/// `Reflector` (which every core Reflection* shell implements) extends `Stringable`, so a
+/// concrete class implementing it must supply a `__toString()` body. elephc does not model
+/// PHP's real `Reflection*::__toString()` object-dump text, so — per the "no stub" policy — the
+/// body throws instead of fabricating output; echoing a Reflection object stays a loud,
+/// observable failure rather than silently returning an empty string.
+fn builtin_reflection_unsupported_tostring_method(class_name: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let message = format!(
+        "{}::__toString() is not supported: elephc's reflection shim does not implement PHP's object-dump text",
+        class_name
+    );
+    let mut method =
+        builtin_reflection_computed_method("__toString", TypeExpr::Str, string_lit("", dummy_span));
+    method.body = vec![Stmt::new(
+        StmtKind::Throw(Expr::new(
+            ExprKind::NewObject {
+                class_name: Name::unqualified("Error"),
+                args: vec![string_lit(&message, dummy_span)],
+            },
+            dummy_span,
+        )),
+        dummy_span,
+    )];
+    method
+}
+
 /// Builds a public `__construct` method for a reflection owner class using the
 /// provided parameter list: each tuple is (name, type_expr, default, by_ref).
 fn builtin_reflection_owner_constructor_method(
@@ -4722,8 +5047,12 @@ fn builtin_reflection_owner_constructor_method(
     }
 }
 
-/// Returns a public `getAttributes()` method that returns the private `__attrs`
-/// property as an `array` of `ReflectionAttribute` objects.
+/// Returns a public `getAttributes(?string $name = null, int $flags = 0)` method that returns
+/// the private `__attrs` property as an `array` of `ReflectionAttribute` objects. Filtering by
+/// name/flags is a runtime concern; the stub returns all collected attributes regardless. The
+/// two optional params exist so 1- and 2-arg calls (e.g. `getAttributes(AsCommand::class)` and
+/// `getAttributes($name, ReflectionAttribute::IS_INSTANCEOF)`) type-check against PHP's
+/// signature.
 fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
@@ -4733,7 +5062,15 @@ fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
         is_abstract: false,
         is_final: false,
         has_body: true,
-        params: Vec::new(),
+        params: vec![
+            (
+                "name".to_string(),
+                Some(TypeExpr::Nullable(Box::new(TypeExpr::Str))),
+                null_lit(),
+                false,
+            ),
+            ("flags".to_string(), Some(TypeExpr::Int), int_lit(0), false),
+        ],
         param_attributes: Vec::new(),
         variadic: None,
         variadic_by_ref: false,

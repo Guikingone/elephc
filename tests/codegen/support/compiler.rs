@@ -87,6 +87,11 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let synthetic_main = dir.join("test.php");
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
+    // Mirror `pipeline::compile`: snapshot which top-level classes/enums/functions are declared
+    // directly in the synthetic main file, before include/autoload merging, so
+    // `ReflectionClass`/`ReflectionFunction::getFileName()` resolve in codegen fixtures too.
+    let (class_source_files, function_source_files) =
+        elephc::resolver::scan_reflection_source_files(&ast, &synthetic_main);
     let ast = elephc::conditional::apply(ast, defines);
     let (autoload_registry, ast) = elephc::autoload::Registry::build(dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
@@ -147,8 +152,13 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
-    let ir_module =
-        lower_and_validate_ir_for_codegen_fixture(&optimized, &check_result, &synthetic_main);
+    let ir_module = lower_and_validate_ir_for_codegen_fixture(
+        &optimized,
+        &check_result,
+        &synthetic_main,
+        &class_source_files,
+        &function_source_files,
+    );
     let exported_functions = HashMap::new();
     // Honor ELEPHC_REGALLOC so the whole codegen suite can be run under both
     // the linear-scan allocator (default) and the stack fallback.
@@ -182,14 +192,19 @@ pub(crate) fn lower_and_validate_ir_for_codegen_fixture(
     program: &elephc::parser::ast::Program,
     check_result: &elephc::types::CheckResult,
     source_path: &Path,
+    class_source_files: &HashMap<String, String>,
+    function_source_files: &HashMap<String, String>,
 ) -> elephc::ir::Module {
-    let mut module = elephc::ir_lower::lower_program_with_source_path(
+    let mut module = elephc::ir_lower::lower_program_with_source_path_and_web(
         program,
         check_result,
         target(),
         source_path,
+        false,
+        class_source_files,
+        function_source_files,
     )
-        .expect("AST-to-EIR lowering failed for codegen fixture");
+    .expect("AST-to-EIR lowering failed for codegen fixture");
     if ir_opt_enabled_for_codegen_fixture() {
         elephc::ir_passes::optimize_module(&mut module);
     }

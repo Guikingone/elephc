@@ -353,7 +353,24 @@ pub struct ClassInfo {
     pub static_property_visibilities: HashMap<String, Visibility>,
     pub declared_static_properties: HashSet<String>,
     pub final_static_properties: HashSet<String>,
+    /// Names of properties (instance and static combined) THIS class itself declares, in
+    /// source AST order — mirrors `method_decls` below but as bare names. Used by the
+    /// reflection member enumeration to reconstruct PHP's real
+    /// `ReflectionClass::getProperties()` declaration order (own class's own order first,
+    /// then each ancestor's own order appended), which the accumulated, parent-first
+    /// `properties`/`static_properties` vectors cannot reproduce on their own.
+    pub own_property_decl_order: Vec<String>,
     pub method_decls: Vec<ClassMethod>,
+    /// Same declarations as `method_decls`, captured BEFORE
+    /// `resolve_const_default_references` rewrites class-constant-reference parameter
+    /// defaults (`self::LABEL`, `parent::BASE`, `Class::LABEL`) into their resolved scalar
+    /// literal in place. `method_decls` itself already carries that rewrite by the time this
+    /// `ClassInfo` is built (needed for actual default-value materialization elsewhere), which
+    /// would otherwise make it impossible for `ReflectionParameter::getDefaultValueConstantName()`
+    /// to recover the source-visible constant reference. Populated only for user classes (empty
+    /// for compiler-injected/builtin classes and enums); callers should fall back to
+    /// `method_decls` when a class has no entry here.
+    pub method_decls_unfolded: Vec<ClassMethod>,
     pub methods: HashMap<String, FunctionSig>,
     pub static_methods: HashMap<String, FunctionSig>,
     /// Exact return syntax for instance methods containing PHP's late-bound `static` type.

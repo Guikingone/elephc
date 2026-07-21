@@ -212,6 +212,18 @@ pub(super) fn check_types_impl(
         }
     }
 
+    // Snapshot each class's method declarations BEFORE `resolve_const_default_references`
+    // rewrites class-constant-reference parameter defaults (`self::LABEL`, `parent::BASE`,
+    // `Class::LABEL`) into their resolved literal in place below. `ClassInfo::method_decls`
+    // is built from the POST-rewrite `class_map` (needed for default-value materialization
+    // elsewhere), which would otherwise make it impossible for
+    // `ReflectionParameter::getDefaultValueConstantName()` to recover the source-visible
+    // constant reference — this snapshot backs `ClassInfo::method_decls_unfolded` instead.
+    let pre_const_fold_method_decls: HashMap<String, Vec<ClassMethod>> = class_map
+        .iter()
+        .map(|(name, class)| (name.clone(), class.methods.clone()))
+        .collect();
+
     // Fold class-constant references used as defaults — property defaults (`public int $y = A::X;`)
     // and method/constructor parameter defaults (`__construct(int $n = self::MAX)`) — into the
     // referenced constant's literal value. Runs on the complete `class_map` so it is independent of
@@ -247,6 +259,14 @@ pub(super) fn check_types_impl(
             &mut building,
         ) {
             errors.extend(error.flatten());
+        }
+    }
+    // Back-fill `method_decls_unfolded` with the pre-const-fold snapshot captured above, now
+    // that every user class has a built `ClassInfo`. Compiler-injected/builtin classes have no
+    // entry in `pre_const_fold_method_decls` and keep the empty default set at construction.
+    for (class_name, methods) in pre_const_fold_method_decls {
+        if let Some(info) = checker.classes.get_mut(&class_name) {
+            info.method_decls_unfolded = methods;
         }
     }
     if let Err(error) = inject_builtin_enums(program, &mut checker, &mut next_class_id) {

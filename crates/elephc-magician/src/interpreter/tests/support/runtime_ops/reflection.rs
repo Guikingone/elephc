@@ -40,6 +40,7 @@ macro_rules! impl_fake_reflection_ops {
         constant_value: RuntimeCellHandle,
         backing_value: RuntimeCellHandle,
         constructor: RuntimeCellHandle,
+        parameter_count: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_reflection_owner_new(
             owner_kind,
@@ -58,6 +59,7 @@ macro_rules! impl_fake_reflection_ops {
             constant_value,
             backing_value,
             constructor,
+            parameter_count,
         )
     }
     /// Reports fake generated AOT ReflectionMethod flags for metadata bridge tests.

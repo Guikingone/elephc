@@ -208,6 +208,12 @@ pub trait RuntimeValueOps {
         constant_value: RuntimeCellHandle,
         backing_value: RuntimeCellHandle,
         constructor: RuntimeCellHandle,
+        // `getNumberOfParameters()` reads a dedicated baked count slot rather than
+        // `count(__parameters)` (the compiled AOT side backs it the same way — see
+        // `crate::types::checker::builtin_types::reflection` on the elephc side) because a
+        // dynamic descriptor-backed `ReflectionFunction` construction path can report a count
+        // without materializing a real `ReflectionParameter[]` array.
+        parameter_count: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Returns generated AOT ReflectionMethod flags for a class/method pair.

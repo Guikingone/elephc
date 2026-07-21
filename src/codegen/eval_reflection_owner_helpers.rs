@@ -133,6 +133,8 @@ struct ReflectionOwnerLayout {
     is_callable_type_hi: Option<usize>,
     is_builtin_lo: Option<usize>,
     is_builtin_hi: Option<usize>,
+    parameter_count_lo: Option<usize>,
+    parameter_count_hi: Option<usize>,
 }
 
 /// Layouts for the Reflection owner classes eval can materialize.
@@ -272,6 +274,7 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
     let is_enum_case_lo = reflection_property_offset(info, "__is_enum_case");
     let required_parameter_count_lo =
         reflection_property_offset(info, "__required_parameter_count");
+    let parameter_count_lo = reflection_property_offset(info, "__parameter_count");
     let position_lo = reflection_property_offset(info, "__position");
     let is_optional_lo = reflection_property_offset(info, "__is_optional")
         .or_else(|| reflection_property_offset(info, "__optional"));
@@ -410,6 +413,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         is_callable_type_hi: is_callable_type_lo.map(|offset| offset + 8),
         is_builtin_lo,
         is_builtin_hi: is_builtin_lo.map(|offset| offset + 8),
+        parameter_count_lo,
+        parameter_count_hi: parameter_count_lo.map(|offset| offset + 8),
     })
 }
 
@@ -862,6 +867,7 @@ fn emit_aarch64_owner_kind_body(
     emit_set_owner_settable_type_property_aarch64(emitter, layout);
     emit_set_owner_backing_value_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_required_parameter_count_property_aarch64(emitter, layout);
+    emit_set_owner_parameter_count_property_aarch64(emitter, layout);
     emit_set_owner_named_type_flags_property_aarch64(emitter, layout);
     emit_set_owner_parameter_property_aarch64(emitter, layout);
     emit_set_owner_parameter_type_property_aarch64(emitter, layout, fail_label);
@@ -898,6 +904,7 @@ fn emit_x86_64_owner_kind_body(
     emit_set_owner_settable_type_property_x86_64(emitter, layout);
     emit_set_owner_backing_value_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_required_parameter_count_property_x86_64(emitter, layout);
+    emit_set_owner_parameter_count_property_x86_64(emitter, layout);
     emit_set_owner_named_type_flags_property_x86_64(emitter, layout);
     emit_set_owner_parameter_property_x86_64(emitter, layout);
     emit_set_owner_parameter_type_property_x86_64(emitter, layout, fail_label);
@@ -1724,6 +1731,50 @@ fn emit_set_owner_required_parameter_count_property_x86_64(
         abi::emit_store_to_address(emitter, "rax", "r10", is_deprecated_lo);
         abi::emit_store_zero_to_address(emitter, "r10", is_deprecated_hi);
     }
+}
+
+/// Stores incoming ARM64 ReflectionMethod/ReflectionFunction parameter count.
+///
+/// Read directly from the trailing (18th) call argument on the caller's outgoing stack area
+/// (`[sp, #232]`, right after the `constructor` argument at `[sp, #224]`) instead of a
+/// prologue-copied local slot, matching `emit_set_owner_constructor_property_aarch64`'s
+/// direct-read style: this is a dedicated baked count slot (see
+/// `crate::types::checker::builtin_types::reflection`) because the dynamic
+/// descriptor-backed `ReflectionFunction` construction path cannot build a real
+/// `ReflectionParameter[]` array to derive the count from at runtime.
+fn emit_set_owner_parameter_count_property_aarch64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+) {
+    let (Some(parameter_count_lo), Some(parameter_count_hi)) =
+        (layout.parameter_count_lo, layout.parameter_count_hi)
+    else {
+        return;
+    };
+    emitter.instruction("ldr x10, [sp, #232]"); // reload ReflectionMethod/Function parameter count
+    emitter.instruction("ldr x9, [sp, #32]"); // reload the Reflection owner object pointer
+    abi::emit_store_to_address(emitter, "x10", "x9", parameter_count_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", parameter_count_hi);
+}
+
+/// Stores incoming x86_64 ReflectionMethod/ReflectionFunction parameter count.
+///
+/// Read directly from the trailing (18th) call argument on the caller's outgoing stack area
+/// (`[rbp + 104]`, right after the `constructor` argument at `[rbp + 96]`); see the ARM64
+/// counterpart for why this is a dedicated baked count slot.
+fn emit_set_owner_parameter_count_property_x86_64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+) {
+    let (Some(parameter_count_lo), Some(parameter_count_hi)) =
+        (layout.parameter_count_lo, layout.parameter_count_hi)
+    else {
+        return;
+    };
+    emitter.instruction("mov rax, QWORD PTR [rbp + 104]"); // reload ReflectionMethod/Function parameter count
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]"); // reload the Reflection owner object pointer
+    abi::emit_store_to_address(emitter, "rax", "r10", parameter_count_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", parameter_count_hi);
 }
 
 /// Stores incoming ARM64 ReflectionParameter position and predicate flags.

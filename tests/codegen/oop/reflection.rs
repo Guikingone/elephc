@@ -124,7 +124,15 @@ class A implements I {}
 class B extends A {}
 $rb = new ReflectionClass("B");
 echo $rb->implementsInterface("I") ? "1" : "0";
-echo $rb->implementsInterface("Other") ? "1" : "0";
+// php -n verified (PHP 8.5): implementsInterface() with a non-existent interface name
+// THROWS a catchable ReflectionException ('Interface "Other" does not exist'), it does
+// not return false — the merged implementation matches real PHP here.
+try {
+    $rb->implementsInterface("Other");
+    echo "no-throw";
+} catch (\ReflectionException $e) {
+    echo $e->getMessage() === 'Interface "Other" does not exist' ? "0" : "?";
+}
 $names = $rb->getInterfaceNames();
 echo count($names);
 echo $names[0];

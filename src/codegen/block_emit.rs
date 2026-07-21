@@ -89,6 +89,14 @@ pub(super) fn emit_module(
     for closure in &module.closures {
         emit_user_function(module, closure, emitter, data, &mut shared, regalloc_linear)?;
     }
+    // Shared dynamic Reflection construction dispatchers (emitted once, only when a
+    // dynamic-argument `new ReflectionClass(...)` site exists in the module).
+    super::lower_inst::objects::reflection_dynamic::emit_reflection_class_dynamic_dispatch_if_needed(
+        module, emitter, data, &mut shared,
+    )?;
+    super::lower_inst::objects::reflection_members_dynamic::emit_reflection_member_dynamic_dispatch_if_needed(
+        module, emitter, data, &mut shared,
+    )?;
     emit_eir_fiber_wrappers(module, emitter);
     if matches!(emit, Emit::Cdylib) {
         return Ok(());

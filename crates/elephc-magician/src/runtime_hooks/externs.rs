@@ -154,6 +154,9 @@ unsafe extern "C" {
         constant_value: *mut RuntimeCell,
         backing_value: *mut RuntimeCell,
         constructor: *mut RuntimeCell,
+        // Trailing (18th) argument, appended after `constructor` so every earlier stack-arg
+        // offset in the hand-written ARM64/x86_64 helper body stays unchanged.
+        parameter_count: u64,
     ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_reflection_method_flags(
         class_ptr: *const u8,
