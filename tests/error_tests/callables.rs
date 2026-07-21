@@ -202,7 +202,7 @@ fn test_error_class_implements_wrong_args() {
 fn test_error_class_implements_requires_object_or_string() {
     expect_error(
         r#"<?php class_implements(42);"#,
-        "class_implements() first argument must be an object or string in AOT mode",
+        "class_implements() first argument must be an object or string literal in AOT mode",
     );
 }
 

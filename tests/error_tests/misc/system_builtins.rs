@@ -778,22 +778,9 @@ fn test_error_late_bound_name_in_class_const_decl_still_loud() {
 
 // -- output buffering / get_class_methods (K2): kept-loud forms --
 
-// `ob_start()` has a deliberately ZERO-parameter signature (elephc supports only the
-// plain, callback-free form): passing a callback is a PHP-faithful arity error, never
-// accept-and-ignore the callback.
-expect_builtin_arity_error!(
-    test_error_ob_start_callback_rejected,
-    "<?php ob_start(function () {});",
-    "ob_start() takes no arguments in AOT mode (callback/chunk_size forms are unsupported)"
-);
-
-// `ob_start(..., $chunk_size)` is likewise rejected — the whole callback/chunk_size
-// surface is out of scope, not just the callback slot.
-expect_builtin_arity_error!(
-    test_error_ob_start_chunk_size_rejected,
-    "<?php ob_start(null, 4096);",
-    "ob_start() takes no arguments in AOT mode (callback/chunk_size forms are unsupported)"
-);
+// NOTE: `ob_start()` callback and chunk_size forms are fully supported post-merge
+// (see `tests/codegen/io/output_buffering.rs` for the behavioral coverage), so the
+// former rejected-form tests were retired.
 
 // `get_class_methods()` requires a literal class-name string or an object of
 // statically-known type; a non-literal string is unsupported (never a silent guess).

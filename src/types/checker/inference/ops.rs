@@ -112,14 +112,14 @@ impl Checker {
                 Ok(PhpType::Bool)
             }
             BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
-                let numeric_ok =
-                    is_numeric_operand_type(self, &lt) && is_numeric_operand_type(self, &rt);
+                let ordered_ok = is_ordered_comparable_operand_type(self, &lt)
+                    && is_ordered_comparable_operand_type(self, &rt);
                 let datetime_ok =
                     is_datetime_family_object(&lt) && is_datetime_family_object(&rt);
-                if !numeric_ok && !datetime_ok {
+                if !ordered_ok && !datetime_ok {
                     return Err(CompileError::new(
                         expr.span,
-                        "Comparison operators require numeric operands",
+                        "Comparison operators require numeric or string operands",
                     ));
                 }
                 Ok(PhpType::Bool)
@@ -142,14 +142,14 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             BinOp::Spaceship => {
-                let numeric_ok =
-                    is_numeric_operand_type(self, &lt) && is_numeric_operand_type(self, &rt);
+                let ordered_ok = is_ordered_comparable_operand_type(self, &lt)
+                    && is_ordered_comparable_operand_type(self, &rt);
                 let datetime_ok =
                     is_datetime_family_object(&lt) && is_datetime_family_object(&rt);
-                if !numeric_ok && !datetime_ok {
+                if !ordered_ok && !datetime_ok {
                     return Err(CompileError::new(
                         expr.span,
-                        "Spaceship operator requires numeric operands",
+                        "Spaceship operator requires numeric or string operands",
                     ));
                 }
                 Ok(PhpType::Int)
@@ -1211,15 +1211,35 @@ fn is_array_like_type(ty: &PhpType) -> bool {
 /// Numeric operands include `Int`, `Float`, `Bool`, `Void`, `Mixed`, or a union
 /// with mixed integer dispatch behavior.
 fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
-    matches!(
-        ty,
+    match ty {
         PhpType::Int
-            | PhpType::Float
-            | PhpType::Bool
-            | PhpType::False
-            | PhpType::Void
-            | PhpType::Mixed
-    ) || checker.is_union_with_mixed_int_dispatch(ty)
+        | PhpType::Float
+        | PhpType::Bool
+        | PhpType::False
+        | PhpType::Void
+        | PhpType::Mixed => true,
+        // A union is numeric-operand-compatible when the mixed-int dispatch rule applies OR
+        // when every member is itself a numeric operand (gradual R2: `?float`, `int|float`,
+        // ...). `Str` members are tolerated because PHP coerces numeric strings in arithmetic
+        // and the runtime dispatch handles the boxed value.
+        PhpType::Union(members) => {
+            checker.is_union_with_mixed_int_dispatch(ty)
+                || members.iter().all(|member| {
+                    is_numeric_operand_type(checker, member) || *member == PhpType::Str
+                })
+        }
+        _ => false,
+    }
+}
+
+/// Returns `true` if `ty` is a valid operand type for the ordered comparison operators
+/// (`<`, `<=`, `>`, `>=`, `<=>`). This accepts every numeric operand type plus `Str`: PHP
+/// orders strings (numeric strings numerically, otherwise lexicographically), and the EIR
+/// backend lowers string/`Mixed` ordered comparisons through `__rt_php_compare`. Array,
+/// associative-array, and object operands remain rejected here (PHP's array/object ordering
+/// is intentionally unsupported); concrete `DateTime` family ordering is handled separately.
+fn is_ordered_comparable_operand_type(checker: &Checker, ty: &PhpType) -> bool {
+    is_numeric_operand_type(checker, ty) || *ty == PhpType::Str
 }
 
 /// Returns `true` if `ty` is a concrete `DateTime`/`DateTimeImmutable` object, the family PHP orders

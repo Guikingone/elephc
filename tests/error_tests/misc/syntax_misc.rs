@@ -110,14 +110,13 @@ fn test_error_reference_assignment_rejects_computed_source() {
     );
 }
 
-/// A plain static property is a valid reference source (`$e = &self::$n`), but a static
-/// *array-element* source (`&self::$a[$k]`) is a deferred slice: it is rejected rather than
-/// silently miscompiled. Asserts the deferral message stays explicit.
+/// A static *array-element* reference source (`&self::$a[$k]`, formerly a deferred slice)
+/// is now supported: the aliased element reads/writes through the shared cell (verified
+/// behaviorally by the references codegen tests); here the shape must simply type-check.
 #[test]
-fn test_error_reference_to_static_array_element_source_deferred() {
-    expect_error(
+fn test_reference_to_static_array_element_source_supported() {
+    expect_ok(
         "<?php class C { public static array $a = [1, 2]; static function t() { $k = 0; $e = &self::$a[$k]; return $e; } } echo C::t();",
-        "Reference to an array element is only supported on a plain array variable",
     );
 }
 

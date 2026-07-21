@@ -87,7 +87,15 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
         variadic_name.clone(),
         PhpType::Array(Box::new(PhpType::Mixed)),
     ));
-    wrapper_sig.defaults.push(None);
+    // Matches `variadic()`'s and `ensure_variadic_for_func_args`'s convention: the
+    // variadic slot's own `defaults` entry is `Some(<empty array literal>)`, not `None`.
+    // Call-argument-count validation (`call_validation::check_known_callable_call_with_options`)
+    // counts `None` defaults as "required parameters" — a bare `None` here falsely demanded
+    // an argument for the variadic tail itself, rejecting zero-arg calls to variadic methods
+    // (this path is exercised unconditionally by `build_method_sig` for every class method).
+    wrapper_sig
+        .defaults
+        .push(Some(Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy())));
     wrapper_sig.ref_params.push(variadic_ref);
     wrapper_sig.declared_params.push(variadic_declared);
     wrapper_sig.param_type_exprs.push(variadic_type_expr);

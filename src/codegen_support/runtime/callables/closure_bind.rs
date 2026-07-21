@@ -221,14 +221,6 @@ pub(crate) fn emit_closure_bind(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #80");                                     // tear down the closure-bind frame
     emitter.instruction("ret");                                                 // return null to the caller
 
-    // -- unsupported capture shape: fatal --
-    emitter.label("__rt_closure_bind_unsupported");
-    emitter.instruction("mov x0, #2");                                          // write the unsupported-bind fatal to stderr
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_closure_bind_unsupported_msg");
-    emitter.instruction("mov x2, #71");                                         // byte length of the unsupported-bind fatal message
-    emitter.syscall(4);
-    crate::codegen_support::abi::emit_exit(emitter, 1);
-
     emit_closure_bind_store_slot(emitter);
 }
 
@@ -420,14 +412,6 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return null to the caller
 
-    // -- unsupported capture shape: fatal --
-    emitter.label("__rt_closure_bind_unsupported");
-    emitter.instruction("mov edi, 2");                                          // write the unsupported-bind fatal to stderr
-    crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_closure_bind_unsupported_msg");
-    emitter.instruction("mov edx, 71");                                         // byte length of the unsupported-bind fatal message
-    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
-    emitter.instruction("syscall");                                             // emit the fatal before exiting
-    crate::codegen_support::abi::emit_exit(emitter, 1);
 
     emit_closure_bind_store_slot_x86_64(emitter);
 }

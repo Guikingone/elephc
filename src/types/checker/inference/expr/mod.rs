@@ -209,13 +209,19 @@ impl Checker {
                         Ok(PhpType::Str)
                     }
                     PhpType::Array(elem_ty) => {
-                        if normalized_idx_ty != PhpType::Int {
-                            // PHP allows string keys on indexed arrays: the array
-                            // promotes to hash at runtime. Return the element type
-                            // widened to Mixed so ?? / isset / reads type-check.
+                        if normalized_idx_ty == PhpType::Int {
+                            Ok(*elem_ty.clone())
+                        } else if array_key_is_gradually_acceptable(&idx_ty, &normalized_idx_ty) {
+                            // Gradual typing: a string/Mixed/coercible key into an array the
+                            // checker inferred packed/int-keyed is accepted as an associative
+                            // read. The key unboxes/normalizes at the access boundary and may
+                            // miss (PHP null) or hit, so the value widens to `Mixed`.
                             Ok(PhpType::Mixed)
                         } else {
-                            Ok(*elem_ty.clone())
+                            Err(CompileError::new(
+                                expr.span,
+                                "Array index must be integer",
+                            ))
                         }
                     }
                     PhpType::AssocArray { value, .. } => {
@@ -256,12 +262,19 @@ impl Checker {
                                 }
                                 PhpType::Array(elem_ty) => {
                                     saw_indexable_member = true;
-                                    if normalized_idx_ty != PhpType::Int {
-                                        // String key on indexed array: PHP promotes
-                                        // to hash at runtime; element may be Mixed.
+                                    if normalized_idx_ty == PhpType::Int {
+                                        result_members.push(*elem_ty.clone());
+                                    } else if array_key_is_gradually_acceptable(
+                                        &idx_ty,
+                                        &normalized_idx_ty,
+                                    ) {
+                                        // String/coercible key on indexed array: PHP
+                                        // promotes to hash at runtime; element may be Mixed.
                                         result_members.push(PhpType::Mixed);
                                     } else {
-                                        result_members.push(*elem_ty.clone());
+                                        first_index_error =
+                                            first_index_error.or(Some("Array index must be integer"));
+                                        continue;
                                     }
                                 }
                                 PhpType::AssocArray { value, .. } => {
@@ -1010,6 +1023,35 @@ fn php_type_is_int_offset_coercible(ty: &PhpType) -> bool {
         | PhpType::Void
         | PhpType::Never => true,
         PhpType::Union(members) => members.iter().all(php_type_is_int_offset_coercible),
+        _ => false,
+    }
+}
+
+/// Returns true when a non-`int` key expression type may still be used to
+/// index an array the checker inferred packed/int-keyed, under the gradual-typing model.
+///
+/// A `string`/`Mixed`/coercible-scalar key (or a union of those) is accepted and treated as
+/// an associative read: PHP coerces or hashes the key at runtime, so the array is interpreted
+/// associatively rather than erroring. A clearly non-key type (`array`/`object`/buffer/…) is
+/// still rejected. The `int` case is handled by the caller before this predicate runs.
+fn array_key_is_gradually_acceptable(idx_ty: &PhpType, normalized_idx_ty: &PhpType) -> bool {
+    php_type_is_array_key_coercible(normalized_idx_ty) || php_type_is_array_key_coercible(idx_ty)
+}
+
+/// Returns true when a value of `ty` can act as a PHP array key at the gradual-typing
+/// boundary: `int`, `string`, `Mixed`, the scalar families PHP casts to a key (`bool`,
+/// `float`), the null-like `Void`/`Never` tags (PHP treats a null key as `""`), and unions
+/// composed only of those. Heap container types are rejected.
+fn php_type_is_array_key_coercible(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Int
+        | PhpType::Str
+        | PhpType::Mixed
+        | PhpType::Bool
+        | PhpType::Float
+        | PhpType::Void
+        | PhpType::Never => true,
+        PhpType::Union(members) => members.iter().all(php_type_is_array_key_coercible),
         _ => false,
     }
 }

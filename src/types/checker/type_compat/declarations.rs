@@ -146,7 +146,7 @@ impl Checker {
         if Self::type_expr_contains_callable_pseudo_type(type_expr) {
             return Err(CompileError::new(
                 span,
-                &format!("{} cannot use type callable", context),
+                &format!("{} cannot have type callable", context),
             ));
         }
         Ok(ty)

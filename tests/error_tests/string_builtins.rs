@@ -344,12 +344,13 @@ fn test_error_htmlspecialchars_wrong_args() {
     );
 }
 
-/// Verifies that `htmlspecialchars()` rejects five arguments (PHP allows 1–4).
+/// Verifies that `htmlspecialchars()` rejects five arguments (PHP allows 1–4: string,
+/// flags, encoding, double_encode).
 #[test]
 fn test_error_htmlspecialchars_too_many_args() {
     expect_error(
         r#"<?php htmlspecialchars("x", 3, "UTF-8", true, 1);"#,
-        "htmlspecialchars() takes 1 to 3 arguments",
+        "htmlspecialchars() takes 1 to 4 arguments",
     );
 }
 

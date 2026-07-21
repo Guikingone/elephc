@@ -57,6 +57,38 @@ pub(crate) fn build_interface_info_recursive(
         ));
     }
 
+    // Keep `interface_name` in `building` while parents are recursively built so genuine cycles
+    // are still detected, then ALWAYS remove it — on Ok and on Err — before propagating the
+    // result. This mirrors the class-side fix and prevents a failed interface build from
+    // polluting the shared set and mis-flagging later interfaces as circular.
+    let result = build_interface_info_body(
+        interface_name,
+        interface_map,
+        class_map,
+        checker,
+        next_interface_id,
+        building,
+    );
+    building.remove(interface_name);
+    result
+}
+
+/// Performs the actual `InterfaceInfo` build for `interface_name`, assuming the caller has already
+/// inserted `interface_name` into `building` and is responsible for removing it on every exit path.
+///
+/// Flattens parent interfaces (rejecting extends-of-class), merges methods/properties/constants,
+/// validates signature compatibility, and stores the completed `InterfaceInfo` in
+/// `checker.interfaces`, bumping `next_interface_id`. This function forwards `building` to the
+/// recursive parent builds — which preserves genuine cycle detection — but otherwise leaves the set
+/// untouched so the caller can guarantee cleanup on both success and error.
+fn build_interface_info_body(
+    interface_name: &str,
+    interface_map: &HashMap<String, InterfaceDeclInfo>,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &mut Checker,
+    next_interface_id: &mut u64,
+    building: &mut HashSet<String>,
+) -> Result<(), CompileError> {
     let interface = interface_map.get(interface_name).cloned().ok_or_else(|| {
         CompileError::new(
             crate::span::Span::dummy(),
@@ -113,10 +145,18 @@ pub(crate) fn build_interface_info_recursive(
                 .get(method_name)
                 .expect("type checker bug: missing interface parent method signature");
             if static_methods.contains_key(method_name) {
-                return Err(interface_method_kind_conflict(
+                // The method reaches this interface non-static from `parent_name` while an
+                // earlier parent contributed it static: report PHP's exact conflict fatal
+                // with the static declarer recovered from the merged declaring map.
+                let static_declarer = static_method_declaring_interfaces
+                    .get(method_name)
+                    .cloned()
+                    .unwrap_or_else(|| interface.name.clone());
+                return Err(interface_static_made_non_static_conflict(
                     interface.span,
-                    &interface.name,
+                    &static_declarer,
                     method_name,
+                    &interface.name,
                 ));
             }
             if let Some(existing_sig) = methods.get(method_name) {
@@ -161,10 +201,18 @@ pub(crate) fn build_interface_info_recursive(
                 .get(method_name)
                 .expect("type checker bug: missing parent static interface method signature");
             if methods.contains_key(method_name) {
-                return Err(interface_method_kind_conflict(
+                // The method reaches this interface static from `parent_name` while an earlier
+                // parent contributed it non-static: report PHP's exact conflict fatal with the
+                // instance declarer recovered from the merged declaring map.
+                let instance_declarer = method_declaring_interfaces
+                    .get(method_name)
+                    .cloned()
+                    .unwrap_or_else(|| interface.name.clone());
+                return Err(interface_non_static_made_static_conflict(
                     interface.span,
-                    &interface.name,
+                    &instance_declarer,
                     method_name,
+                    &interface.name,
                 ));
             }
             if let Some(existing_sig) = static_methods.get(method_name) {
@@ -303,10 +351,17 @@ pub(crate) fn build_interface_info_recursive(
         let sig = build_method_sig(checker, method, &interface.name)?;
         if method.is_static {
             if methods.contains_key(&method_key) {
-                return Err(interface_method_kind_conflict(
+                // This interface redeclares an inherited NON-static method as static:
+                // PHP's exact fatal names the original instance declarer.
+                let instance_declarer = method_declaring_interfaces
+                    .get(&method_key)
+                    .cloned()
+                    .unwrap_or_else(|| interface.name.clone());
+                return Err(interface_non_static_made_static_conflict(
                     method.span,
-                    &interface.name,
+                    &instance_declarer,
                     &method.name,
+                    &interface.name,
                 ));
             }
             if let Some(parent_sig) = static_methods.get(&method_key) {
@@ -356,10 +411,17 @@ pub(crate) fn build_interface_info_recursive(
             continue;
         }
         if static_methods.contains_key(&method_key) {
-            return Err(interface_method_kind_conflict(
+            // This interface redeclares an inherited STATIC method as non-static:
+            // PHP's exact fatal names the original static declarer.
+            let static_declarer = static_method_declaring_interfaces
+                .get(&method_key)
+                .cloned()
+                .unwrap_or_else(|| interface.name.clone());
+            return Err(interface_static_made_non_static_conflict(
                 method.span,
-                &interface.name,
+                &static_declarer,
                 &method.name,
+                &interface.name,
             ));
         }
         if let Some(parent_sig) = methods.get(&method_key) {
@@ -486,21 +548,43 @@ pub(crate) fn build_interface_info_recursive(
         },
     );
     *next_interface_id += 1;
-    building.remove(interface_name);
     Ok(())
 }
 
-/// Constructs a diagnostic for conflicting static/non-static interface methods.
-fn interface_method_kind_conflict(
+/// Constructs the PHP-exact fatal for redeclaring a STATIC interface method as non-static
+/// (`php -n` verified: "Cannot make static method A::f() non static in class B").
+/// `static_declarer` is the interface that declared the method static; `class_name` is the
+/// interface performing the conflicting non-static (re)declaration.
+fn interface_static_made_non_static_conflict(
     span: crate::span::Span,
-    interface_name: &str,
+    static_declarer: &str,
     method_name: &str,
+    class_name: &str,
 ) -> CompileError {
     CompileError::new(
         span,
         &format!(
-            "Cannot combine static and non-static interface method: {}::{}",
-            interface_name, method_name
+            "Cannot make static method {}::{}() non static in class {}",
+            static_declarer, method_name, class_name
+        ),
+    )
+}
+
+/// Constructs the PHP-exact fatal for redeclaring a NON-static interface method as static
+/// (`php -n` verified: "Cannot make non static method A::f() static in class B").
+/// `instance_declarer` is the interface that declared the method non-static; `class_name` is
+/// the interface performing the conflicting static (re)declaration.
+fn interface_non_static_made_static_conflict(
+    span: crate::span::Span,
+    instance_declarer: &str,
+    method_name: &str,
+    class_name: &str,
+) -> CompileError {
+    CompileError::new(
+        span,
+        &format!(
+            "Cannot make non static method {}::{}() static in class {}",
+            instance_declarer, method_name, class_name
         ),
     )
 }

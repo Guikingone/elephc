@@ -8,6 +8,7 @@
 //! Key details:
 //! - Assignment-value parsing intentionally permits assignment expressions where PHP syntax allows them.
 
+mod array_literal;
 mod assignment_targets;
 mod calls;
 mod list_destructure;

@@ -332,6 +332,15 @@ fn guard_receiver_and_type(cond: &Expr) -> Option<(&Expr, PhpType)> {
                 // null as Void, so the complement strips it (`if (is_null($x)) { throw; }` leaves
                 // ?int as int on the fall-through path).
                 "is_null" => PhpType::Void,
+                // `is_countable($x)` guarantees the value is an `array` or a `Countable`
+                // object — exactly the two things `count()` accepts. Narrowing to this
+                // union lets guarded `count($x)` type-check even when `$x` is declared
+                // `iterable` (a non-Countable `Traversable` is dropped by the guard, so
+                // unguarded `count(iterable)` still errors).
+                "is_countable" => PhpType::Union(vec![
+                    PhpType::Array(Box::new(PhpType::Mixed)),
+                    PhpType::Object("Countable".to_string()),
+                ]),
                 _ => return None,
             };
             Some((&args[0], target))

@@ -212,11 +212,13 @@ fn validate_static_interface_method(
     building: &mut HashSet<String>,
 ) -> Result<(), CompileError> {
     if state.method_sigs.contains_key(method_name) {
+        // PHP-exact fatal (`php -n` verified): satisfying a STATIC interface contract with
+        // an instance method is "Cannot make static method I::f() non static in class C".
         return Err(CompileError::new(
             crate::span::Span::dummy(),
             &format!(
-                "Cannot use instance method to satisfy static interface contract: {}::{}",
-                class.name, method_name
+                "Cannot make static method {}::{}() non static in class {}",
+                interface_name, method_name, class.name
             ),
         ));
     }
@@ -263,7 +265,7 @@ fn validate_static_interface_method(
             return Err(CompileError::new(
                 crate::span::Span::dummy(),
                 &format!(
-                    "Class {} must implement interface static method {}::{}",
+                    "Class {} must implement interface method {}::{}",
                     class.name, interface_name, method_name
                 ),
             ))
@@ -434,11 +436,13 @@ fn validate_interface_method(
     building: &mut HashSet<String>,
 ) -> Result<(), CompileError> {
     if state.static_sigs.contains_key(method_name) {
+        // PHP-exact fatal (`php -n` verified): satisfying a NON-static interface contract
+        // with a static method is "Cannot make non static method I::f() static in class C".
         return Err(CompileError::new(
             crate::span::Span::dummy(),
             &format!(
-                "Cannot use static method to satisfy interface contract: {}::{}",
-                class.name, method_name
+                "Cannot make non static method {}::{}() static in class {}",
+                interface_name, method_name, class.name
             ),
         ));
     }

@@ -1394,7 +1394,7 @@ pub(crate) fn lower_strlen(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 
 /// Lowers `intval()` for concrete scalar operands.
 pub(crate) fn lower_intval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "intval", 1)?;
+    ensure_arg_count_between(inst, "intval", 1, 2)?;
     let value = expect_operand(inst, 0)?;
     let base = if inst.operands.len() == 2 {
         Some(expect_operand(inst, 1)?)

@@ -74,21 +74,13 @@ impl Checker {
                     .unwrap_or(return_ty));
             }
             // Union of two or more distinct object classes (`A|B`, `A|B|false`):
-            // the method must exist on every object member; codegen dispatches on
-            // the runtime class id and the result is the union of each member's
-            // return type. A non-object runtime value faults like PHP.
+            // PHP-faithful lenient dispatch — the call type-checks as long as at least one
+            // member declares the method; codegen dispatches on the runtime class id
+            // (see `infer_method_call_on_object_union`). A non-object runtime value
+            // faults like PHP.
             let object_classes = self.union_object_classes(&obj_ty);
             if object_classes.len() >= 2 {
-                let mut return_types = Vec::with_capacity(object_classes.len());
-                for class_name in &object_classes {
-                    let return_ty = if self.interfaces.contains_key(class_name) {
-                        self.infer_method_call_on_interface_type(class_name, method, args, expr, env)?
-                    } else {
-                        self.infer_method_call_on_class_type(class_name, method, args, expr, env)?
-                    };
-                    return_types.push(return_ty);
-                }
-                return Ok(self.normalize_union_type(return_types));
+                return self.infer_method_call_on_object_union(&object_classes, method, args, expr, env);
             }
             // No object class at all: re-run the strict check to surface its
             // diagnostic.
@@ -194,6 +186,111 @@ impl Checker {
     ///
     /// Returns `PhpType::Void` for invalid receivers. For valid nullable object
     /// unions, returns a union of the method's return type with `void`.
+    /// Infers a method call's return type against one class-or-interface receiver name,
+    /// routing interfaces through the interface-call path and classes through the class-call
+    /// path. Shared by the multi-member union dispatch below.
+    fn infer_method_return_on_class_or_interface(
+        &mut self,
+        class_name: &str,
+        method: &str,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        if self.interfaces.contains_key(class_name) {
+            self.infer_method_call_on_interface_type(class_name, method, args, expr, env)
+        } else {
+            self.infer_method_call_on_class_type(class_name, method, args, expr, env)
+        }
+    }
+
+    /// Resolves a method call against a multi-class object union (`A|B`, `A|B|false`) using
+    /// PHP-faithful lenient dispatch instead of requiring the method on every member: PHP
+    /// dispatches `$u->m()` on the runtime class, so a union type-checks as long as at least
+    /// one member declares `m`.
+    ///
+    /// - A member whose class/interface only reaches the call through `__call`/`__callStatic`
+    ///   magic forwarding does NOT count as "resolving" here — codegen's Mixed-receiver
+    ///   dispatch still forwards to `__call` for such a class at runtime independently of this
+    ///   checker decision, which is a documented, sound divergence (the checker
+    ///   under-approximates; the runtime path is strictly more permissive, never less).
+    /// - Exactly one resolving member: the call is validated/typed against that member alone,
+    ///   with no cross-member argument requirement.
+    /// - Two or more resolving members: the call's arguments are validated against EVERY
+    ///   resolving member's signature and must be accepted by ALL of them (codegen materializes
+    ///   the call arguments once for whichever branch runs, so a per-branch ABI mismatch would
+    ///   silently pass garbage); if any resolving member rejects the arguments, the whole call
+    ///   stays loud with that member's diagnostic. When all accept, the result type is the
+    ///   union of each member's return type.
+    /// - No member resolves: reports "Undefined method" against the full union type, naming
+    ///   every object member, matching today's diagnostic style.
+    fn infer_method_call_on_object_union(
+        &mut self,
+        object_classes: &[String],
+        method: &str,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let method_key = php_symbol_key(method);
+        let resolving: Vec<String> = object_classes
+            .iter()
+            .filter(|class_name| self.union_member_declares_method(class_name, &method_key))
+            .cloned()
+            .collect();
+        if resolving.is_empty() {
+            let union_ty = PhpType::Union(
+                object_classes
+                    .iter()
+                    .map(|class_name| PhpType::Object(class_name.clone()))
+                    .collect(),
+            );
+            return Err(CompileError::new(
+                expr.span,
+                &format!("Undefined method: {}::{}", union_ty, method),
+            ));
+        }
+        if resolving.len() == 1 {
+            return self.infer_method_return_on_class_or_interface(
+                &resolving[0],
+                method,
+                args,
+                expr,
+                env,
+            );
+        }
+        let mut return_types = Vec::with_capacity(resolving.len());
+        let mut first_err: Option<CompileError> = None;
+        for class_name in &resolving {
+            match self.infer_method_return_on_class_or_interface(class_name, method, args, expr, env) {
+                Ok(return_ty) => return_types.push(return_ty),
+                Err(err) => {
+                    if first_err.is_none() {
+                        first_err = Some(err);
+                    }
+                }
+            }
+        }
+        if let Some(err) = first_err {
+            return Err(err);
+        }
+        Ok(self.normalize_union_type(return_types))
+    }
+
+    /// Returns true when `class_name` (a class or interface) literally declares `method_key` —
+    /// i.e. the receiver's runtime class dispatches straight to it rather than only through
+    /// `__call` magic forwarding. Used by `infer_method_call_on_object_union` to decide whether
+    /// a union member "resolves" a call (`__call`-only members are excluded).
+    fn union_member_declares_method(&self, class_name: &str, method_key: &str) -> bool {
+        if let Some(interface_info) = self.interfaces.get(class_name) {
+            return interface_info.methods.contains_key(method_key);
+        }
+        self.classes
+            .get(class_name)
+            .map(|class_info| class_info.methods.contains_key(method_key))
+            .unwrap_or(false)
+    }
+
     pub(crate) fn infer_nullsafe_method_call_type(
         &mut self,
         object: &Expr,
@@ -203,20 +300,57 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
-        let Some((class_name, nullable)) =
-            self.nullsafe_object_receiver(&obj_ty, expr, "method call")?
-        else {
-            return Ok(PhpType::Void);
-        };
-        let return_ty = if self.interfaces.contains_key(&class_name) {
-            self.infer_method_call_on_interface_type(&class_name, method, args, expr, env)?
-        } else {
-            self.infer_method_call_on_class_type(&class_name, method, args, expr, env)?
-        };
-        if nullable {
-            Ok(self.normalize_union_type(vec![return_ty, PhpType::Void]))
-        } else {
-            Ok(return_ty)
+        // Gradual `Mixed` receiver: unknown runtime class → unknown return type. The `?->`
+        // null branch is subsumed by `Mixed`. Args were already inferred by the
+        // assignment-effects caller (same contract as the plain `->` Mixed path).
+        if matches!(obj_ty, PhpType::Mixed) {
+            return Ok(PhpType::Mixed);
+        }
+        match self.nullsafe_object_receiver(&obj_ty, expr, "method call") {
+            Ok(Some((class_name, nullable))) => {
+                let return_ty = self
+                    .infer_method_return_on_class_or_interface(&class_name, method, args, expr, env)?;
+                if nullable {
+                    Ok(self.normalize_union_type(vec![return_ty, PhpType::Void]))
+                } else {
+                    Ok(return_ty)
+                }
+            }
+            Ok(None) => Ok(PhpType::Void),
+            Err(strict_err) => {
+                // The strict single-class resolver rejects gradual unions that the plain
+                // `->` path still accepts (`Foo|false`, `A|B`, or a union carrying a
+                // `Mixed` member). A `?->` receiver may be non-object at runtime, so the
+                // result always admits `Void`.
+                if let Some(class_name) = self.union_single_object_class(&obj_ty) {
+                    let return_ty = self.infer_method_return_on_class_or_interface(
+                        &class_name,
+                        method,
+                        args,
+                        expr,
+                        env,
+                    )?;
+                    return Ok(self.normalize_union_type(vec![return_ty, PhpType::Void]));
+                }
+                let object_classes = self.union_object_classes(&obj_ty);
+                if object_classes.len() >= 2 {
+                    let return_ty =
+                        self.infer_method_call_on_object_union(&object_classes, method, args, expr, env)?;
+                    return Ok(self.normalize_union_type(vec![return_ty, PhpType::Void]));
+                }
+                if matches!(&obj_ty, PhpType::Union(members)
+                    if members.iter().any(|member| matches!(member, PhpType::Mixed)))
+                {
+                    return Ok(PhpType::Mixed);
+                }
+                // A `Callable` receiver (bare or nullable, e.g. `?Closure`/`?callable`) may
+                // be a `Closure` object at runtime, so `?->` on it is gradual — mirror the
+                // plain `->` path, which accepts callable receivers. Result is `Mixed`.
+                if type_contains_callable(&obj_ty) {
+                    return Ok(PhpType::Mixed);
+                }
+                Err(strict_err)
+            }
         }
     }
 
@@ -1030,6 +1164,21 @@ impl Checker {
             }
             return Ok(PhpType::Mixed);
         } else {
+            // Every interface method (static or instance) is abstract — an interface never
+            // has a runtime object to dispatch on, so `I::method()` is unconditionally invalid.
+            // PHP defers this to a runtime `Error` ("Cannot call abstract method I::f()",
+            // `php -n` verified), but the receiver is a literal class-like name here, so
+            // elephc's closed world can detect it at compile time instead of leaving it to
+            // fail at runtime — reported for both static and instance interface methods, since
+            // PHP's fatal wording does not distinguish between the two. Dynamic
+            // `$class::method()` dispatch through an interface-typed class-string is a
+            // different code path and is intentionally left untouched here.
+            if self.interfaces.contains_key(class_name) {
+                return Err(CompileError::new(
+                    expr.span,
+                    &format!("Cannot call abstract method {}::{}()", class_name, method),
+                ));
+            }
             // A static call on a class that is unknown everywhere in the closed world is an
             // absent optional dependency (e.g. `Process::fromShellCommandline(...)`): the call
             // yields an opaque `PhpType::Mixed` value with a warning instead of erroring. Argument
@@ -1268,5 +1417,18 @@ fn spread_source_keeps_runtime_keys(expr: &Expr, env: &TypeEnv) -> bool {
             crate::types::checker::infer_expr_type_syntactic(expr),
             PhpType::AssocArray { .. } | PhpType::Iterable
         ),
+    }
+}
+
+/// A callable value may be a `Closure` object at runtime, so a nullsafe method call on a
+/// callable (bare or nullable, e.g. `?Closure`/`?callable`) is accepted gradually — the
+/// same permissiveness the plain `->` path applies to callable receivers.
+fn type_contains_callable(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Callable => true,
+        PhpType::Union(members) => members
+            .iter()
+            .any(|member| matches!(member, PhpType::Callable)),
+        _ => false,
     }
 }

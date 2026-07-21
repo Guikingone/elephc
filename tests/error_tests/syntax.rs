@@ -676,14 +676,13 @@ fn test_error_extern_missing_function() {
 
 // --- Dynamic `new` with complex class-name expression errors ---
 
-/// Verifies that a dynamic-`new` class-name dereference chain without a constructor
-/// argument list (`new $arr['k']` with no following `(`) is rejected, since the `()` is
-/// required to distinguish object construction from a bare class-name expression.
+/// A dynamic-`new` class-name dereference chain without a constructor argument list
+/// (`new $arr['k']`) is valid PHP — the parentheses are optional for a zero-argument
+/// constructor — and is now supported end-to-end, so the shape must type-check.
 #[test]
-fn test_error_new_dynamic_array_access_missing_parens() {
-    expect_error(
-        "<?php $arr = []; $o = new $arr['k'];",
-        "Expected '(' after class-name expression in 'new'",
+fn test_new_dynamic_array_access_without_parens_supported() {
+    expect_ok(
+        "<?php class P {} $arr = ['k' => 'P']; $o = new $arr['k'];",
     );
 }
 

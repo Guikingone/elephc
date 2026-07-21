@@ -95,12 +95,77 @@ impl Checker {
                 Ok(result_ty)
             }
             ExprKind::BinaryOp { left, op, right } => {
-                self.infer_type_with_assignment_effects(left, env)?;
                 if matches!(op, BinOp::And | BinOp::Or) {
-                    let mut right_env = env.clone();
-                    self.infer_type_with_assignment_effects(right, &mut right_env)?;
+                    // PHP evaluates a short-circuit chain left-to-right, so an assignment in an
+                    // earlier operand is visible to every later operand of the same chain (e.g.
+                    // `... && ($w = strspn(...)) < n && '#' !== $line[$w]`). The chain is
+                    // left-associative, so the naive "clone the env for the right operand" approach
+                    // hides a nested operand's assignments from the operands that run after it.
+                    //
+                    // Flatten the chain into its source-order operands instead. Only operands joined
+                    // by the *same* operator are flattened: in a pure `&&` chain every earlier
+                    // operand definitely ran when a later one runs, and likewise for a pure `||`
+                    // chain (each later operand runs only after the earlier ones evaluated to
+                    // false). Mixing `&&` and `||` is left as a nested boundary, handled by the
+                    // recursive call, so we never treat a conditionally-skipped operand's
+                    // assignment as visible.
+                    //
+                    // The first operand always runs, so it is processed into `env` and its ordinary
+                    // assignments stay definitely-assigned past the chain. The remaining operands
+                    // are threaded through a single cloned `chain_env` for left-to-right visibility
+                    // without leaking their (conditionally evaluated) assignments to the outer
+                    // scope. By-reference call outputs in later operands are still surfaced to `env`,
+                    // matching PHP's non-flow-sensitive undefined-variable behavior for out-params.
+                    let mut operands = Vec::new();
+                    flatten_short_circuit_operands(expr, op, &mut operands);
+                    // Thread `chain_env` left-to-right so each operand is checked with the
+                    // assignments AND the type-guard narrowings implied by the operands that ran
+                    // before it. The first operand runs unconditionally, so it is inferred into
+                    // `env` (its definite assignments survive the chain); `chain_env` is then
+                    // re-cloned from `env` and every later operand mutates only `chain_env`.
+                    let mut chain_env = env.clone();
+                    for (i, &operand) in operands.iter().enumerate() {
+                        if i == 0 {
+                            self.infer_type_with_assignment_effects(operand, env)?;
+                            chain_env = env.clone();
+                        } else {
+                            self.infer_type_with_assignment_effects(operand, &mut chain_env)?;
+                            self.define_nested_by_ref_outputs(operand, env);
+                        }
+                        // Short-circuit type-guard narrowing: in a pure `&&` chain a later operand
+                        // runs only when this one was truthy, so a recognized type guard here
+                        // narrows its variable to the guard-true (`then_ty`) type for the operands
+                        // that follow; in a pure `||` chain a later operand runs only when this one
+                        // was falsy, so the guard-false (`else_ty`) complement applies. The narrowing
+                        // is read from and written to `chain_env` so repeated guards refine
+                        // cumulatively (e.g. `$x instanceof A && $x instanceof B`) and a variable
+                        // reassigned by an earlier operand is seen at its post-assignment type. This
+                        // runs for the FIRST operand too, which is frequently the guard itself
+                        // (`$q instanceof CQ && $q->m()`). Narrowing stays inside `chain_env`; the
+                        // `or_insert` surfacing below never overwrites an outer-scope type, so it
+                        // does not leak past the chain.
+                        if let Some(g) = self.type_guard_narrowing(operand, &chain_env) {
+                            let narrowed = if matches!(op, BinOp::And) {
+                                g.then_ty
+                            } else {
+                                g.else_ty
+                            };
+                            chain_env.insert(g.var, narrowed);
+                        }
+                    }
+                    // Surface ordinary assignments made in later (conditionally-evaluated) operands
+                    // to the outer scope, mirroring the by-ref-output surfacing above and PHP's
+                    // non-flow-sensitive undefined-variable behavior: a variable first assigned in a
+                    // `&&`/`||` operand is usable after the chain (e.g. `... && ($u = 5) > 0` then
+                    // read `$u`). `or_insert` only DEFINES a currently-undefined variable — it never
+                    // overwrites an existing type, so the flow-sensitive narrowing threaded through
+                    // `chain_env` for variables that already existed does not leak to the outer scope.
+                    for (var, ty) in chain_env {
+                        env.entry(var).or_insert(ty);
+                    }
                     Ok(PhpType::Bool)
                 } else {
+                    self.infer_type_with_assignment_effects(left, env)?;
                     self.infer_type_with_assignment_effects(right, env)?;
                     self.infer_type(expr, env)
                 }
@@ -149,10 +214,19 @@ impl Checker {
                     then_env.insert(guard.var.clone(), guard.then_ty);
                     else_env.insert(guard.var, guard.else_ty);
                 }
-                self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
-                self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
-                // Result type comes from the Mixed-aware ternary merge in `infer_type`.
-                self.infer_type(expr, env)
+                let then_ty =
+                    self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
+                let else_ty =
+                    self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
+                // By-reference call outputs in the cloned branches define their out-parameters
+                // for later code, mirroring PHP's undefined-variable behavior.
+                self.define_nested_by_ref_outputs(then_expr, env);
+                self.define_nested_by_ref_outputs(else_expr, env);
+                // Merge with the same Mixed-aware join as `infer_type`'s ternary arm, computed
+                // directly from the (narrowed) branch inferences: re-inferring the whole ternary
+                // through the plain path would drop the short-circuit chain narrowing threaded
+                // through the condition and falsely reject guarded member calls.
+                Ok(super::merge_match_arm_result_type(self, then_ty, else_ty))
             }
             ExprKind::ArrayLiteral(elems) => {
                 for elem in elems {
@@ -209,7 +283,48 @@ impl Checker {
             }
             ExprKind::FunctionCall { name, args } => {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                // A user function with a by-reference parameter defines the caller's argument
+                // variable, just like the builtin out-parameter handling below. Define such
+                // variables before inferring the arguments so the (otherwise undefined)
+                // by-reference variable is not reported as "Undefined variable".
+                for (var, ty) in self.function_call_by_ref_outputs(name, &expanded_args, env) {
+                    env.entry(var).or_insert(ty);
+                }
+                // Promote already-defined caller variables whose storage cannot hold the
+                // boxed/nullable value a by-reference parameter may write back.
+                for (var, ty) in
+                    self.function_call_by_ref_boxed_promotions(name, &expanded_args, env)
+                {
+                    env.insert(var, ty);
+                }
                 let builtin_name = name.trim_start_matches('\\');
+                // A builtin by-reference out-parameter auto-vivifies the caller's variable (PHP
+                // definite-assignment semantics), mirroring the user-function path above. Define
+                // such variables BEFORE inferring the call so the variable stays defined even when
+                // the call's own inference recovers from an error.
+                //
+                // `builtin_call_by_ref_outputs` returns only entries that must be applied: an
+                // as-yet-undefined var (any by-ref param) OR an already-defined var bound to an
+                // OUT-ONLY param (preg_match/preg_match_all `$matches`, preg_replace/
+                // preg_replace_callback `$count`), which PHP overwrites wholesale. Using `insert`
+                // (not `or_insert`) therefore re-types the aliased subject-as-out-param shape
+                // `preg_match_all(…, $s, $s)` while leaving IN-OUT params untouched.
+                for (var, out_ty) in
+                    Checker::builtin_call_by_ref_outputs(builtin_name, &expanded_args, env)
+                {
+                    env.insert(var, out_ty);
+                }
+                // Builtin by-reference out-parameter positions come from the canonical
+                // signature's `ref_params` (preg_match/preg_match_all &$matches, preg_replace
+                // &$count, parse_str &$result, proc_open &$pipes, ...): such arguments are not
+                // eagerly inferred here (they may be as-yet undefined) — they were defined in
+                // the caller scope above.
+                let builtin_sig = crate::types::builtin_call_sig(builtin_name);
+                let is_builtin_by_ref = |idx: usize| {
+                    builtin_sig
+                        .as_ref()
+                        .map_or(false, |sig| sig.ref_params.get(idx).copied().unwrap_or(false))
+                };
                 // `isset`/`unset` are lazy language constructs: an operand may be
                 // an undeclared property routed to `__isset`/`__unset`, which must
                 // not be inferred as a bare property access here. The call's own
@@ -223,10 +338,10 @@ impl Checker {
                     }
                 } else if !builtin_name.eq_ignore_ascii_case("unset") {
                     for (idx, arg) in expanded_args.iter().enumerate() {
-                        if builtin_name.eq_ignore_ascii_case("preg_replace_callback") && idx == 1 {
+                        if is_builtin_by_ref(idx) {
                             continue;
                         }
-                        if builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2 {
+                        if builtin_name.eq_ignore_ascii_case("preg_replace_callback") && idx == 1 {
                             continue;
                         }
                         // The user-sort comparator is type-checked by `check_builtin`
@@ -494,4 +609,28 @@ fn promote_indexed_local_for_element_unset(arg: &Expr, env: &mut TypeEnv) {
             value: Box::new(value_ty),
         },
     );
+}
+
+/// Collects, in source order, the operands of a left-associative short-circuit chain joined by `op`.
+///
+/// `op` is the chain's logical operator (`&&` or `||`). The function recurses into nested
+/// `BinaryOp` nodes only while they use the *same* operator, appending every other expression as a
+/// leaf operand. Mixing `&&` and `||` therefore stops the flattening at the operator boundary: a
+/// differently-joined sub-expression becomes a single leaf, so a conditionally-skipped operand's
+/// assignments are never threaded into operands that run after it. The resulting order matches
+/// PHP's left-to-right evaluation order, which the caller relies on for definite-assignment.
+fn flatten_short_circuit_operands<'a>(expr: &'a Expr, op: &BinOp, out: &mut Vec<&'a Expr>) {
+    if let ExprKind::BinaryOp {
+        left,
+        op: inner_op,
+        right,
+    } = &expr.kind
+    {
+        if inner_op == op {
+            flatten_short_circuit_operands(left, op, out);
+            flatten_short_circuit_operands(right, op, out);
+            return;
+        }
+    }
+    out.push(expr);
 }

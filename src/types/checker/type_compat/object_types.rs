@@ -338,12 +338,18 @@ impl Checker {
     /// parameter and property slot for all classes that share an inherited property from
     /// `declaring_class`. Used to sharpen types across an inheritance hierarchy after
     /// constructor argument type inference.
+    ///
+    /// The constructor-parameter refinement is resolved per target class: for each class
+    /// that shares the inherited property, the parameter index is looked up in that class's
+    /// own `constructor_param_to_prop` (never the instantiated class's `param_index`) and the
+    /// refinement is gated on that signature's own `declared_params`. A reordering subclass
+    /// that does not promote the shared property in its own constructor is therefore skipped
+    /// and never has an unrelated parameter overwritten.
     pub(crate) fn propagate_constructor_arg_type(
         &mut self,
         instantiated_class: &str,
         param_index: usize,
         arg_ty: &PhpType,
-        param_has_declared_type: bool,
     ) {
         let Some((prop_name, declaring_class)) =
             self.classes.get(instantiated_class).and_then(|class_info| {
@@ -383,10 +389,22 @@ impl Checker {
                 }
             }
 
-            if !param_has_declared_type {
+            // Resolve the constructor parameter index in THIS class's own promoted-property
+            // map, not the instantiated class's `param_index`. A subclass may reorder or omit
+            // the shared property in its own constructor, so the instantiated class's index is
+            // only valid for that class. Compute the index before borrowing `methods` mutably
+            // so the immutable borrow of `constructor_param_to_prop` is released first.
+            let target_idx = class_info
+                .constructor_param_to_prop
+                .iter()
+                .position(|mapped| mapped.as_deref() == Some(prop_name.as_str()));
+            if let Some(idx) = target_idx {
                 if let Some(sig) = class_info.methods.get_mut("__construct") {
-                    if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
-                        *param_ty = arg_ty.clone();
+                    let is_declared = sig.declared_params.get(idx).copied().unwrap_or(false);
+                    if !is_declared {
+                        if let Some((_, param_ty)) = sig.params.get_mut(idx) {
+                            *param_ty = arg_ty.clone();
+                        }
                     }
                 }
             }

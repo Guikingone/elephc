@@ -297,8 +297,11 @@ echo rate(new SavingsAccount());
 
 /// Verifies that binding `static` preserves distinct explicit union members.
 ///
-/// `static|Choice` called on `SpecialChoice` becomes `SpecialChoice|Choice`, so a
-/// subclass-only method is not safe on the result even though one branch is late-bound.
+/// `static|Choice` called on `SpecialChoice` becomes `SpecialChoice|Choice`. Union-receiver
+/// method dispatch is PHP-faithfully lenient (a call resolves as long as at least one member
+/// declares the method), so a subclass-only method is accepted; the union's preservation is
+/// instead observable in the no-member diagnostic, which must name BOTH members. A collapse
+/// to a single member would report `SpecialChoice::missing` instead.
 #[test]
 fn test_error_late_static_union_keeps_explicit_ancestor_member() {
     expect_error(
@@ -312,10 +315,10 @@ class SpecialChoice extends Choice {
     public function special(): string { return "special"; }
 }
 function render(SpecialChoice $choice): string {
-    return $choice->choose(false)->special();
+    return $choice->choose(false)->missing();
 }
 "#,
-        "Undefined method",
+        "Undefined method: SpecialChoice|Choice::missing",
     );
 }
 
@@ -1104,15 +1107,14 @@ fn test_error_ref_assign_into_property_array_element_unsupported() {
     );
 }
 
-/// Verifies that a reference to a static-property array element (`$x = &self::$arr[$k]`, the
-/// SLICE 3 form) loud-errors: SLICE 1 only supports a plain local-variable array base, so the
-/// static-property base is rejected cleanly instead of reaching an internal lowering mismatch.
+/// A reference to a static-property array element (`$x = &self::$arr[$k]`, the former
+/// SLICE 3 deferral) is now supported end-to-end: the alias write-through is covered
+/// behaviorally by the references codegen tests; here the shape must simply type-check.
 #[test]
-fn test_error_ref_assign_static_property_array_element_unsupported() {
-    expect_error(
+fn test_ref_assign_static_property_array_element_supported() {
+    expect_ok(
         "<?php class C { public static $a = [1, 2]; \
          static function t() { $x = &self::$a[0]; return $x; } }",
-        "Reference to an array element is only supported on a plain array variable",
     );
 }
 

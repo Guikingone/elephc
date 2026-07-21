@@ -49,6 +49,17 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         PhpType::Union(members) if members.iter().all(union_member_is_countable_array) => {
             Ok(PhpType::Int)
         }
+        // Gradual boundary: a union CONTAINING an array (e.g. the `array|Countable`
+        // produced by an `is_countable()` narrowing of an `iterable` parameter) is
+        // accepted; the EIR lowering emits a runtime unbox/assert that throws a
+        // TypeError for a non-countable runtime value.
+        ty2 @ PhpType::Union(_)
+            if crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(
+                ty2,
+            ) =>
+        {
+            Ok(PhpType::Int)
+        }
         PhpType::Object(class_name) => {
             if cx.checker.class_implements_interface(class_name, "Countable") {
                 Ok(PhpType::Int)

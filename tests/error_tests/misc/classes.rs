@@ -379,14 +379,15 @@ fn test_error_typed_property_rejects_void_type() {
     );
 }
 
-/// Verifies that a property typed `callable` type-checks cleanly. PHP forbids the bare
-/// `callable` pseudo-type as a property type, but elephc maps the `\Closure` class type hint to
-/// the same `PhpType::Callable` representation, and `\Closure` IS a valid property type in PHP.
-/// Since the two are indistinguishable post-resolution, elephc accepts `Callable` in property
-/// types as a permissive superset of PHP's rule (see `resolve_declared_property_type_hint`).
+/// Verifies that the bare `callable` pseudo-type is rejected as a property type with PHP's
+/// exact fatal wording (`php -n` verified: "Property Box::$callback cannot have type
+/// callable"). `\Closure`-typed properties remain valid and are covered separately below.
 #[test]
-fn test_typed_property_accepts_callable_type() {
-    assert!(check_source("<?php class Box { public callable $callback; }").is_ok());
+fn test_typed_property_rejects_bare_callable_type() {
+    expect_error(
+        "<?php class Box { public callable $callback; }",
+        "Property Box::$callback cannot have type callable",
+    );
 }
 
 /// Verifies that `\Closure`-typed properties, including nullable and union forms, type-check
@@ -407,11 +408,11 @@ fn test_closure_typed_properties_type_check_cleanly() {
 fn test_error_typed_property_rejects_nested_callable_types() {
     expect_error(
         "<?php class Box { public ?callable $callback; }",
-        "Property Box::$callback cannot use type callable",
+        "Property Box::$callback cannot have type callable",
     );
     expect_error(
         "<?php class Box { public callable|null $callback; }",
-        "Property Box::$callback cannot use type callable",
+        "Property Box::$callback cannot have type callable",
     );
 }
 
@@ -603,7 +604,7 @@ fn test_error_missing_static_interface_method() {
     // a concrete class must implement static methods required by interfaces.
     expect_error(
         "<?php interface Maker { public static function make(): string; } class Box implements Maker {}",
-        "Class Box must implement interface static method Maker::make",
+        "Class Box must implement interface method Maker::make",
     );
 }
 
@@ -613,7 +614,7 @@ fn test_error_instance_method_cannot_satisfy_static_interface_contract() {
     // PHP keeps static and instance interface contracts distinct.
     expect_error(
         "<?php interface Maker { public static function make(): string; } class Box implements Maker { public function make(): string { return \"x\"; } }",
-        "Cannot use instance method to satisfy static interface contract: Box::make",
+        "Cannot make static method Maker::make() non static in class Box",
     );
 }
 
@@ -623,7 +624,7 @@ fn test_error_static_method_cannot_satisfy_instance_interface_contract() {
     // PHP keeps static and instance interface contracts distinct in both directions.
     expect_error(
         "<?php interface Named { public function name(): string; } class User implements Named { public static function name(): string { return \"x\"; } }",
-        "Cannot use static method to satisfy interface contract: User::name",
+        "Cannot make non static method Named::name() static in class User",
     );
 }
 
@@ -633,7 +634,7 @@ fn test_error_interface_parent_static_method_kind_conflict() {
     // A child interface cannot redeclare a static parent method as non-static.
     expect_error(
         "<?php interface ParentMaker { public static function make(): string; } interface ChildMaker extends ParentMaker { public function make(): string; }",
-        "Cannot combine static and non-static interface method: ChildMaker::make",
+        "Cannot make static method ParentMaker::make() non static in class ChildMaker",
     );
 }
 

@@ -568,11 +568,11 @@ fn test_error_enum_method_undefined_variable() {
 }
 
 /// Verifies that `clone` on a definite non-object scalar is rejected at compile time,
-/// matching PHP's "clone expects an object" runtime error (deferred here to the checker
+/// matching PHP's "clone requires an object value" runtime error (deferred here to the checker
 /// for statically-known non-object operands).
 #[test]
 fn test_error_clone_non_object() {
-    expect_error("<?php $b = clone 42;", "clone expects an object");
+    expect_error("<?php $b = clone 42;", "clone requires an object value");
 }
 
 /// Verifies that a static `__clone` method is rejected: PHP invokes `__clone` on the
