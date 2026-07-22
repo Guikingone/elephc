@@ -244,6 +244,18 @@ pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
     }
 }
 
+/// Returns whether a recognized builtin may be (re)declared by user or prelude code
+/// without tripping the redeclare-builtin guard.
+///
+/// `trigger_error` is registered for recognition (`function_exists`, name resolution) but
+/// has no EIR backend lowering — the real implementation is supplied by the web prelude's
+/// web-SAPI stderr renderer (or by user code). Because the prelude declares
+/// `function trigger_error(...)`, the redeclaration check must treat it as overridable, or
+/// every `--web` compile fails with "Cannot redeclare built-in function: trigger_error".
+pub(crate) fn is_prelude_overridable_builtin(canonical: &str) -> bool {
+    matches!(canonical, "trigger_error")
+}
+
 /// Returns true only for PHP-visible builtin functions (non-internal builtins).
 ///
 /// Checks both compiler-resident names and the builtin registry. Registry entries

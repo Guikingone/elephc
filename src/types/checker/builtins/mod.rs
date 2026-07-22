@@ -30,7 +30,7 @@ use super::Checker;
 pub(crate) use arrays::array_arg_is_gradually_acceptable;
 pub(crate) use catalog::{
     canonical_builtin_function_name, is_php_visible_builtin_function,
-    is_supported_builtin_function, strict_php_hidden_builtin,
+    is_prelude_overridable_builtin, is_supported_builtin_function, strict_php_hidden_builtin,
     supported_builtin_function_names,
 };
 pub(crate) use callables::{

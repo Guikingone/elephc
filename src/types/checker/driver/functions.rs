@@ -40,11 +40,13 @@ impl Checker {
                 if let Some(builtin) =
                     crate::types::checker::builtins::canonical_builtin_function_name(name)
                 {
-                    errors.push(CompileError::new(
-                        stmt.span,
-                        &format!("Cannot redeclare built-in function: {}", builtin),
-                    ));
-                    continue;
+                    if !crate::types::checker::builtins::is_prelude_overridable_builtin(&builtin) {
+                        errors.push(CompileError::new(
+                            stmt.span,
+                            &format!("Cannot redeclare built-in function: {}", builtin),
+                        ));
+                        continue;
+                    }
                 }
                 self.function_variant_groups
                     .insert(name.clone(), variants.clone());
@@ -73,11 +75,13 @@ impl Checker {
                 if let Some(builtin) =
                     crate::types::checker::builtins::canonical_builtin_function_name(name)
                 {
-                    errors.push(CompileError::new(
-                        stmt.span,
-                        &format!("Cannot redeclare built-in function: {}", builtin),
-                    ));
-                    continue;
+                    if !crate::types::checker::builtins::is_prelude_overridable_builtin(&builtin) {
+                        errors.push(CompileError::new(
+                            stmt.span,
+                            &format!("Cannot redeclare built-in function: {}", builtin),
+                        ));
+                        continue;
+                    }
                 }
                 let param_names: Vec<String> =
                     params.iter().map(|(n, _, _, _)| n.clone()).collect();
