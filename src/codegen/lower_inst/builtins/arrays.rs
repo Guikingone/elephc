@@ -192,83 +192,20 @@ pub(crate) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction
 
 /// Lowers `array_is_list(array $array): bool`.
 ///
-/// A bare `PhpType::Array(_)` static type does NOT prove the runtime payload is a packed
-/// indexed array: gradual typing lets a runtime-built associative hash occupy that slot
-/// (e.g. a plain `array $a` parameter, or any array value narrowed back down from
-/// `Mixed`), so folding straight to the compile-time constant `true` there is unsound —
-/// see `lower_array_is_list_dynamic_kind`, which probes the actual heap kind instead. A
-/// statically known associative hash (`PhpType::AssocArray`) dispatches directly to
-/// `__rt_hash_is_list`, which walks the insertion-order keys and returns `1` only when
-/// they are exactly `0, 1, .., count-1`. A boxed `Mixed`/union operand goes through
-/// `__rt_mixed_array_is_list`, which unboxes the runtime tag before scanning the same way.
-/// The operand and boolean result share the single-arg int-result register (`x0` / `rax`).
+/// All array representations (packed indexed array, associative hash, or a boxed
+/// `Mixed`/union array payload) dispatch to the single monolithic `__rt_array_is_list`
+/// runtime helper, which reads the value's heap-kind header and picks the right path:
+/// an indexed array is always a list, a hash is walked along its insertion-order chain
+/// requiring keys `0, 1, .., count-1`, and a boxed mixed cell is unwrapped once and
+/// re-dispatched. The operand is materialized into the first integer argument register
+/// and the boolean result comes back in the int-result register.
 pub(crate) fn lower_array_is_list(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_is_list", 1)?;
-    let value = expect_operand(inst, 0)?;
-    let ty = ctx.value_php_type(value)?.codegen_repr();
-    match ty {
-        PhpType::Array(_) => lower_array_is_list_dynamic_kind(ctx, inst, value),
-        PhpType::AssocArray { .. } => {
-            ctx.load_value_to_result(value)?;
-            abi::emit_call_label(ctx.emitter, "__rt_hash_is_list");
-            store_if_result(ctx, inst)
-        }
-        PhpType::Mixed | PhpType::Union(_) => {
-            ctx.load_value_to_result(value)?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_array_is_list");
-            store_if_result(ctx, inst)
-        }
-        other => Err(CodegenIrError::unsupported(format!(
-            "array_is_list for PHP type {:?}",
-            other
-        ))),
-    }
-}
-
-/// Lowers `array_is_list()` for a `PhpType::Array(_)`-typed operand by probing the actual
-/// runtime heap kind (`__rt_heap_kind`) instead of trusting the static packed-list shape.
-///
-/// Heap kind `3` (associative hash) reloads the original pointer and tail-scans it through
-/// `__rt_hash_is_list`, exactly like the statically known `AssocArray` case. Any other kind
-/// — a genuinely packed indexed array (heap kind `2`), or a null/absent array reporting
-/// heap kind `0` — is a list by construction and resolves to the compile-time constant
-/// `true` with no further runtime work. This mirrors the existing `array_keys()` dynamic
-/// dispatch for a `PhpType::Array(Mixed)` operand in `builtins::arrays::keys`.
-fn lower_array_is_list_dynamic_kind(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    value: ValueId,
-) -> Result<()> {
-    ctx.load_value_to_result(value)?;
-    let hash_label = ctx.next_label("array_is_list_hash");
-    let done_label = ctx.next_label("array_is_list_done");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_push_reg(ctx.emitter, "x0");                              // preserve the array/hash pointer across the heap-kind probe
-            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
-            ctx.emitter.instruction("cmp x0, #3");                              // does the runtime payload behind this Array(T) slot turn out to be a hash?
-            ctx.emitter.instruction(&format!("b.eq {}", hash_label));           // hash payloads need the insertion-order key scan
-            abi::emit_pop_reg(ctx.emitter, "x0");                               // discard the saved pointer; a packed array is always a list
-            super::emit_static_bool(ctx, true);
-            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the hash-scan path after the packed-array fast result
-            ctx.emitter.label(&hash_label);
-            abi::emit_pop_reg(ctx.emitter, "x0");                               // reload the hash pointer for the key-sequence scan
-            abi::emit_call_label(ctx.emitter, "__rt_hash_is_list");
-        }
-        Arch::X86_64 => {
-            abi::emit_push_reg(ctx.emitter, "rax");                             // preserve the array/hash pointer across the heap-kind probe
-            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
-            ctx.emitter.instruction("cmp rax, 3");                              // does the runtime payload behind this Array(T) slot turn out to be a hash?
-            ctx.emitter.instruction(&format!("je {}", hash_label));             // hash payloads need the insertion-order key scan
-            abi::emit_pop_reg(ctx.emitter, "rax");                              // discard the saved pointer; a packed array is always a list
-            super::emit_static_bool(ctx, true);
-            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the hash-scan path after the packed-array fast result
-            ctx.emitter.label(&hash_label);
-            abi::emit_pop_reg(ctx.emitter, "rax");                              // reload the hash pointer for the key-sequence scan
-            abi::emit_call_label(ctx.emitter, "__rt_hash_is_list");
-        }
-    }
-    ctx.emitter.label(&done_label);
+    let array = expect_operand(inst, 0)?;
+    require_array_like_operand(ctx.value_php_type(array)?, "array_is_list")?;
+    let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(array, arg0)?;
+    abi::emit_call_label(ctx.emitter, "__rt_array_is_list");
     store_if_result(ctx, inst)
 }
 
