@@ -78,6 +78,22 @@ impl Checker {
                 }
                 Ok(ty)
             }
+            ExprKind::ListUnpack { vars, value } => {
+                // `[$a, $b] = EXPR` binds each positional target as a local (so later code,
+                // e.g. an `if` body, sees them defined) and evaluates to EXPR. Each target takes
+                // the source's element type, or `Mixed` when the source is not a statically-known
+                // array (e.g. `$pairs ?? null`, which PHP permits — targets become `null`).
+                let value_ty = self.infer_type_with_assignment_effects(value, env)?;
+                let elem_ty = match &value_ty {
+                    PhpType::Array(elem) => (**elem).clone(),
+                    PhpType::AssocArray { value: elem, .. } => (**elem).clone(),
+                    _ => PhpType::Mixed,
+                };
+                for var in vars {
+                    env.insert(var.clone(), elem_ty.clone());
+                }
+                Ok(value_ty)
+            }
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => {
                 let old_ty = env.get(name).cloned();
                 let result_ty = self.infer_type(expr, env)?;
@@ -247,20 +263,31 @@ impl Checker {
                 default,
             } => {
                 self.infer_type_with_assignment_effects(subject, env)?;
+                // PHP evaluates match arm conditions top-to-bottom in one shared scope, so an
+                // assignment in one arm's condition (e.g. `($len = $n) > 100 => ...`) is visible
+                // to the conditions of every later arm (`$len < 10 => ...`) and to the matching
+                // arm's body. Thread one `condition_env` through all arm conditions in source
+                // order to model that, instead of giving each arm a fresh clone of the outer env
+                // (which is what regressed cross-arm visibility). Each arm body sees the
+                // conditions evaluated up to and including its own arm, but body assignments stay
+                // in a per-arm clone so they do not leak to sibling arms (only one body runs).
+                // Condition assignments are not surfaced to the outer `env`, keeping post-match
+                // definite-assignment conservative. The result type still comes from the
+                // Mixed-aware merge in `infer_type` (given the same accumulated env) rather than
+                // the Str-absorbing syntactic join.
+                let mut condition_env = env.clone();
                 for (conditions, result) in arms {
-                    let mut arm_env = env.clone();
                     for condition in conditions {
-                        self.infer_type_with_assignment_effects(condition, &mut arm_env)?;
+                        self.infer_type_with_assignment_effects(condition, &mut condition_env)?;
                     }
+                    let mut arm_env = condition_env.clone();
                     self.infer_type_with_assignment_effects(result, &mut arm_env)?;
                 }
                 if let Some(default) = default {
-                    let mut default_env = env.clone();
+                    let mut default_env = condition_env.clone();
                     self.infer_type_with_assignment_effects(default, &mut default_env)?;
                 }
-                // Result type comes from the Mixed-aware match merge in `infer_type`
-                // (assignment effects must not reintroduce the Str-absorbing syntactic join).
-                self.infer_type(expr, env)
+                self.infer_type(expr, &condition_env)
             }
             ExprKind::ArrayAccess { array, index } => {
                 self.infer_type_with_assignment_effects(array, env)?;
