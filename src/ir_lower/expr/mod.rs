@@ -2065,6 +2065,15 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     };
     let php_type = if is_extern || is_user_function {
         call_return_type(ctx, canonical, &operands)
+    } else if let Some(php_type) =
+        registry_builtin_result_type(ctx, canonical, args, &operands, expr.span)
+    {
+        // Migrated registry builtins resolve their result type from the descriptor
+        // (declared type, checker-recorded span type, or the runtime target's
+        // representation-safe fallback), matching main's dispatch. This keeps
+        // synthetic prelude/eval-bridge calls (e.g. `explode` inside a DateTime
+        // helper) typed as `array<string>` instead of collapsing to `Mixed`.
+        php_type
     } else {
         call_return_type_for_args(ctx, canonical, args, &operands)
             .unwrap_or_else(|| call_return_type(ctx, canonical, &operands))
@@ -2148,6 +2157,58 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal)
 }
 
+/// Resolves a migrated registry builtin's result type from the same descriptor as the checker.
+///
+/// Returns `None` when `name` is not a registry builtin, so the caller falls back to the
+/// campaign inference. For registry builtins the type comes from the descriptor:
+/// `Declared` uses the declared return type, `Shared` runs the resolver, and `Checked`
+/// prefers the checker's per-span record but falls back to the runtime target's
+/// representation-safe type. The fallback matters for synthetic builtin-class and
+/// eval-bridge prelude AST nodes, whose spans the checker map cannot key individually —
+/// without it those calls (e.g. `explode` in a DateTime helper) collapse to `Mixed`.
+fn registry_builtin_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    operands: &[crate::ir::ValueId],
+    span: Span,
+) -> Option<PhpType> {
+    let def = crate::builtins::registry::lookup(name)?;
+    let arg_types = operands
+        .iter()
+        .map(|operand| ctx.builder.value_php_type(*operand))
+        .collect::<Vec<_>>();
+    let input = crate::builtins::semantics::BuiltinSemanticInput {
+        name: def.name,
+        args,
+        arg_types: &arg_types,
+        span,
+    };
+    let resolved = match def.spec.semantics.result_type {
+        crate::builtins::semantics::BuiltinResultType::Checked => {
+            // Synthetic builtin-class and prelude AST nodes share the dummy 0:0
+            // span, so the checker map cannot identify an individual call there.
+            // Use the typed runtime target's representation-safe fallback instead
+            // of accepting whichever synthetic call last occupied that key.
+            if span.line != 0 {
+                if let Some(checked) = ctx.builtin_call_types.get(&span) {
+                    return Some(normalize_value_php_type(checked.clone()));
+                }
+            }
+            let crate::builtins::semantics::BuiltinLowering::Runtime(
+                crate::ir::RuntimeCallTarget::Function(target),
+            ) = def.spec.semantics.lowering
+            else {
+                return None;
+            };
+            target.fallback_result_type(&arg_types, &def.return_type)
+        }
+        crate::builtins::semantics::BuiltinResultType::Declared => def.return_type.clone(),
+        crate::builtins::semantics::BuiltinResultType::Shared(resolve) => resolve(&input),
+    };
+    Some(normalize_value_php_type(resolved))
+}
+
 /// Emits a builtin call and releases owned temporary arguments after the call consumes them.
 fn emit_builtin_call_value(
     ctx: &mut LoweringContext<'_, '_>,
@@ -2159,30 +2220,28 @@ fn emit_builtin_call_value(
 ) -> LoweredValue {
     if eval_literal.is_none() {
         if let Some(def) = crate::builtins::registry::lookup(name) {
-            // Registry builtins carry their result-type contract in the descriptor; use it
-            // (declared type, or the checker's recorded type for span-keyed builtins) so the
-            // lowered value's type matches what downstream instructions expect.
-            let result_type = match def.spec.semantics.result_type {
-                crate::builtins::semantics::BuiltinResultType::Declared => {
-                    normalize_value_php_type(def.return_type.clone())
-                }
-                _ => {
-                    if span.line != 0 {
-                        ctx.builtin_call_types
-                            .get(&span)
-                            .cloned()
-                            .map(normalize_value_php_type)
-                            .unwrap_or_else(|| normalize_value_php_type(php_type.clone()))
-                    } else {
-                        normalize_value_php_type(php_type.clone())
-                    }
-                }
+            // The caller resolves the registry builtin's result type from the same
+            // descriptor as the checker (see `registry_builtin_result_type`), so the
+            // `php_type` passed here already matches what downstream instructions
+            // expect — including the runtime-target fallback used for synthetic
+            // prelude/eval-bridge spans the checker map cannot key.
+            //
+            // Positional builtin calls are lowered without a signature (see
+            // `call_signature`), so their operands are not yet coerced to the
+            // declared parameter storage. Registry builtins lower to strictly typed
+            // runtime ops (`strtolower` wants a `Str`, not a boxed `Mixed`), so coerce
+            // the already-lowered operands to the descriptor's parameter types here —
+            // in place, without materializing any trailing default the runtime op does
+            // not accept. Mirrors main's `coerce_scalar_arg_to_param_storage`.
+            let operands = match crate::builtins::registry::function_sig(name) {
+                Some(reg_sig) => coerce_operands_to_params(ctx, &reg_sig, operands),
+                None => operands,
             };
             let lowered = crate::builtins::semantics::lower_registry_call(
                 ctx,
                 def,
                 &operands,
-                &result_type,
+                &php_type,
                 span,
             )
             .unwrap_or_else(|error| {

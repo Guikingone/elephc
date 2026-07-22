@@ -185,6 +185,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         used_traits: Vec::new(),
         trait_aliases: Vec::new(),
         properties: Vec::new(),
+        own_property_decl_order: Vec::new(),
         property_offsets: HashMap::new(),
         property_declaring_classes: HashMap::new(),
         defaults: Vec::new(),
