@@ -1643,6 +1643,33 @@ pub(super) fn runtime_builtin_wrapper_sig(name: &str, sig: &FunctionSig) -> Func
             def.spec.semantics.runtime_functions
         {
             runtime_fn.refine_runtime_callable_wrapper_sig(&mut sig);
+        } else if let crate::builtins::semantics::BuiltinLowering::Runtime(target) =
+            def.spec.semantics.lowering
+        {
+            // Builtins lowered directly through a fixed-arity `RuntimeCallTarget` — e.g. the
+            // `Str -> Str` UnaryString transforms — accept exactly the runtime operand count.
+            // Their PHP signature can still carry extra optional parameters the runtime ignores
+            // (`base64_decode`'s `$strict`), so the callable wrapper must be capped to that fixed
+            // arity; otherwise the forwarded runtime call is emitted with too many operands and
+            // the typed lowering rejects it ("expected 1 operand, got 2").
+            if let Some(crate::ir::RuntimeCallSignature::Fixed { parameters, .. }) =
+                target.signature()
+            {
+                let arity = parameters.len();
+                sig.params.truncate(arity);
+                sig.defaults.truncate(arity);
+                sig.ref_params.truncate(arity);
+                sig.declared_params.truncate(arity);
+                sig.param_type_exprs.truncate(arity);
+                sig.param_attributes.truncate(arity);
+                if sig
+                    .variadic
+                    .as_deref()
+                    .is_some_and(|name| !sig.params.iter().any(|(param_name, _)| param_name == name))
+                {
+                    sig.variadic = None;
+                }
+            }
         }
     }
     sig
