@@ -2157,6 +2157,71 @@ fn emit_builtin_call_value(
     span: Span,
     eval_literal: Option<&str>,
 ) -> LoweredValue {
+    if eval_literal.is_none() {
+        if let Some(def) = crate::builtins::registry::lookup(name) {
+            // Registry builtins carry their result-type contract in the descriptor; use it
+            // (declared type, or the checker's recorded type for span-keyed builtins) so the
+            // lowered value's type matches what downstream instructions expect.
+            let result_type = match def.spec.semantics.result_type {
+                crate::builtins::semantics::BuiltinResultType::Declared => {
+                    normalize_value_php_type(def.return_type.clone())
+                }
+                _ => {
+                    if span.line != 0 {
+                        ctx.builtin_call_types
+                            .get(&span)
+                            .cloned()
+                            .map(normalize_value_php_type)
+                            .unwrap_or_else(|| normalize_value_php_type(php_type.clone()))
+                    } else {
+                        normalize_value_php_type(php_type.clone())
+                    }
+                }
+            };
+            let lowered = crate::builtins::semantics::lower_registry_call(
+                ctx,
+                def,
+                &operands,
+                &result_type,
+                span,
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "checked builtin {} failed backend-neutral EIR lowering at {}:{}: {}",
+                    def.name,
+                    span.line,
+                    span.col,
+                    error,
+                )
+            });
+            let call = LoweredValue {
+                value: lowered.value,
+                ir_type: ctx.builder.value_type(lowered.value),
+            };
+            let return_alias = match def.spec.semantics.result_ownership {
+                crate::builtins::semantics::BuiltinResultOwnership::NonHeap
+                | crate::builtins::semantics::BuiltinResultOwnership::Fresh
+                | crate::builtins::semantics::BuiltinResultOwnership::Independent => {
+                    ReturnArgAlias::None
+                }
+                crate::builtins::semantics::BuiltinResultOwnership::Aliases(indexes) => {
+                    ReturnArgAlias::Parameters(indexes.iter().copied().collect())
+                }
+                crate::builtins::semantics::BuiltinResultOwnership::Borrowed
+                | crate::builtins::semantics::BuiltinResultOwnership::MayAliasArguments => {
+                    ReturnArgAlias::Unknown
+                }
+            };
+            release_owned_call_arg_temporaries(
+                ctx,
+                &operands,
+                Some(call.value),
+                &return_alias,
+                span,
+            );
+            return call;
+        }
+    }
     let (op, immediate, effects) = if let Some(fragment) = eval_literal {
         (
             Op::EvalLiteralCall,
