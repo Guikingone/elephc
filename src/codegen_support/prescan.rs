@@ -176,6 +176,16 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    // debug_backtrace() option flags: the checker registers their Int type, but their
+    // literal values must be materialized here for constant folding (echo/comparison).
+    constants.insert(
+        "DEBUG_BACKTRACE_IGNORE_ARGS".to_string(),
+        (ExprKind::IntLiteral(2), PhpType::Int),
+    );
+    constants.insert(
+        "DEBUG_BACKTRACE_PROVIDE_OBJECT".to_string(),
+        (ExprKind::IntLiteral(1), PhpType::Int),
+    );
     // Lexer-tokenized numeric / math constants (also reachable via `use const` aliases).
     constants.insert(
         "PHP_INT_MAX".to_string(),
