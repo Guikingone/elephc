@@ -457,6 +457,22 @@ fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                             target,
                             crate::ir::RuntimeFnId::Defined | crate::ir::RuntimeFnId::EnumExists
                         );
+                        // `class_implements`/`class_parents`/`class_uses` are typed
+                        // RuntimeCalls too. A statically known class name folds to inline
+                        // metadata, but a non-const argument (e.g. an object instance) lowers
+                        // to `__rt_class_relation_lookup`/`__rt_hash_from_name_list`, gated on
+                        // class_relation_introspection. Mirror the name-based detector's
+                        // non-const-operand condition on the typed target identity.
+                        features.class_relation_introspection |= matches!(
+                            target,
+                            crate::ir::RuntimeFnId::ClassImplements
+                                | crate::ir::RuntimeFnId::ClassParents
+                                | crate::ir::RuntimeFnId::ClassUses
+                        ) && inst
+                            .operands
+                            .first()
+                            .copied()
+                            .is_some_and(|operand| !value_is_const_string(function, operand));
                     }
                     if builtin_call_requires_mb_strlen(module, inst) {
                         features.mb_strlen = true;
