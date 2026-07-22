@@ -256,6 +256,9 @@ pub(crate) struct Checker {
     /// Statically-decided access violations that must lower to a catchable
     /// `Error` throw instead of a compile-time error, keyed by source span.
     pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
+    /// Authoritative result type of each checked builtin call, keyed by call span.
+    /// EIR lowering consumes this instead of reimplementing builtin return inference.
+    pub builtin_call_types: HashMap<Span, PhpType>,
 }
 
 /// A saved snapshot of every per-body, variable-name-keyed callable side table
@@ -413,6 +416,7 @@ pub fn check_types(
         warnings,
         func_args_functions: checker.func_args_functions,
         throw_access_sites: checker.throw_access_sites,
+        builtin_call_types: checker.builtin_call_types,
     })
 }
 

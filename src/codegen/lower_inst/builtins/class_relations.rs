@@ -10,7 +10,7 @@
 //! `emit_dynamic_class_relation_lookup_from_string_result`).
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Results are boxed `Mixed` because PHP returns `array<string,string>|false`.

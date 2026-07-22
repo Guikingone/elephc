@@ -23,6 +23,7 @@ use crate::ir::{
 use crate::ir_passes::Allocation;
 use crate::types::PhpType;
 
+use super::callable_reachability::CallableReachabilityAnalysis;
 use super::frame::FrameLayout;
 use super::local_analysis::LocalSlotAnalysis;
 use super::shared_state::SharedCodegenState;
@@ -50,6 +51,7 @@ pub(crate) struct FunctionContext<'a> {
     local_offsets: HashMap<LocalSlotId, usize>,
     ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     local_analysis: LocalSlotAnalysis,
+    callable_reachability: CallableReachabilityAnalysis,
     current_inst: Option<InstId>,
     current_inst_promoted_ref_cells: HashSet<LocalSlotId>,
     adopted_ref_cell_owners: HashSet<LocalSlotId>,
@@ -80,6 +82,7 @@ impl<'a> FunctionContext<'a> {
         heap_debug: bool,
         epilogue_label: Option<String>,
     ) -> Self {
+        let callable_reachability = CallableReachabilityAnalysis::new(module, function);
         Self {
             module,
             function,
@@ -92,6 +95,7 @@ impl<'a> FunctionContext<'a> {
             local_offsets: layout.local_offsets,
             ref_cell_state_offsets: layout.ref_cell_state_offsets,
             local_analysis: layout.local_analysis,
+            callable_reachability,
             current_inst: None,
             current_inst_promoted_ref_cells: HashSet::new(),
             adopted_ref_cell_owners: HashSet::new(),
@@ -227,6 +231,11 @@ impl<'a> FunctionContext<'a> {
     pub(super) fn callable_function_by_name(&self, name: &str) -> Option<&'a Function> {
         self.function_by_name(name)
             .or_else(|| super::function_variants::variant_callee_for_group(self.module, name))
+    }
+
+    /// Returns the finite runtime callable names proven for one EIR value.
+    pub(super) fn runtime_callable_candidates(&self, value: ValueId) -> Option<Vec<String>> {
+        self.callable_reachability.candidates(value)
     }
 
     /// Returns a function value or a structured backend error.
@@ -944,7 +953,7 @@ impl<'a> FunctionContext<'a> {
                 | Op::CatchBind
                 | Op::Call
                 | Op::FunctionVariantCall
-                | Op::BuiltinCall
+                | Op::LanguageConstructCall
                 | Op::EvalFunctionCall
                 | Op::EvalFunctionCallArray
                 | Op::EvalConstantFetch

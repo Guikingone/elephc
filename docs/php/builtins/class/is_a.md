@@ -2,7 +2,7 @@
 title: "is_a()"
 description: "Checks whether an object is of a given type or has it as one of its parents."
 sidebar:
-  order: 85
+  order: 86
 ---
 
 ## is_a()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `is_a` is implemented in the compiler, see [the internals page](../../../internals/builtins/class/is_a.md).
-

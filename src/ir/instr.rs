@@ -12,6 +12,7 @@
 use crate::ir::effects::Effects;
 use crate::ir::function::{FunctionId, LocalSlotId};
 use crate::ir::module::DataId;
+use crate::ir::runtime_call::RuntimeCallTarget;
 use crate::ir::types::{IrHeapKind, IrType};
 use crate::ir::value::{Ownership, ValueId};
 use crate::span::Span;
@@ -120,6 +121,7 @@ pub enum Immediate {
     FunctionRef(FunctionId),
     BuiltinRef(BuiltinId),
     RuntimeRef(RuntimeId),
+    RuntimeCall(RuntimeCallTarget),
     ExternRef(u32),
     ClassRef(u32),
     EnumCaseRef {
@@ -144,6 +146,7 @@ pub enum Immediate {
     },
     HeapKind(IrHeapKind),
     MixedTag(u8),
+    TypePredicate(PhpTypePredicate),
     MixedNumericOp(MixedNumericOp),
     StrBitOp(StrBitKind),
     CmpPredicate(CmpPredicate),
@@ -159,6 +162,37 @@ pub enum MixedNumericOp {
     Add,
     Sub,
     Mul,
+}
+
+/// PHP runtime type category tested by the backend-neutral `TypePredicate` opcode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PhpTypePredicate {
+    Array,
+    Bool,
+    Float,
+    Int,
+    Iterable,
+    Object,
+    Resource,
+    Scalar,
+    String,
+}
+
+impl PhpTypePredicate {
+    /// Returns the stable textual spelling used by the EIR printer.
+    pub const fn as_eir(self) -> &'static str {
+        match self {
+            Self::Array => "array",
+            Self::Bool => "bool",
+            Self::Float => "float",
+            Self::Int => "int",
+            Self::Iterable => "iterable",
+            Self::Object => "object",
+            Self::Resource => "resource",
+            Self::Scalar => "scalar",
+            Self::String => "string",
+        }
+    }
 }
 
 impl MixedNumericOp {
@@ -358,6 +392,7 @@ pub enum Op {
     Spaceship,
     IsNull,
     IsTruthy,
+    TypePredicate,
     IsEmpty,
     InstanceOf,
     IToF,
@@ -518,8 +553,10 @@ pub enum Op {
     ClassGetAttributes,
     InstanceOfDynamic,
     Call,
-    FunctionVariantCall,
     BuiltinCall,
+    FunctionVariantCall,
+    ClosureBind,
+    LanguageConstructCall,
     EvalLiteralCall,
     EvalScopeGet,
     EvalScopeSet,
@@ -638,8 +675,6 @@ impl Op {
             | StrToF
             | StrToNumber
             | MixedTagOf
-            | IsNull
-            | IsTruthy
             | IsEmpty
             | FunctionVariantDispatch
             | PtrCast
@@ -715,12 +750,10 @@ impl Op {
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | BufferNew | GeneratorNew => {
                 E::ALLOC_HEAP
             }
-            // `clone` reads the operand's heap-backed properties, allocates a fresh
-            // object (and a fresh Mixed cell when the operand is boxed), retains
-            // refcounted/string property payloads, and may invoke a user `__clone()`
-            // that throws or emits output — so it is conservatively may-throw.
+            // `clone` reads heap-backed properties, allocates fresh, retains payloads,
+            // may invoke a user `__clone()` that throws/emits — conservatively may-throw.
             ObjectClone => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_THROW,
-            MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat | ArrayGetSilent
+            IsNull | IsTruthy | TypePredicate | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat | ArrayGetSilent
             | HashGetSilent
             | ArrayIsset | HashIsset | BufferGet | BufferLen | PackedFieldGet | PtrRead
             | PtrReadString => {
@@ -788,6 +821,8 @@ impl Op {
             Call
             | FunctionVariantCall
             | BuiltinCall
+            | ClosureBind
+            | LanguageConstructCall
             | EvalLiteralCall
             | EvalFunctionCall
             | EvalFunctionCallArray
@@ -831,7 +866,8 @@ impl Op {
             self,
             Op::Call
                 | Op::FunctionVariantCall
-                | Op::BuiltinCall
+                | Op::ClosureBind
+                | Op::LanguageConstructCall
                 | Op::EvalLiteralCall
                 | Op::EvalFunctionCall
                 | Op::EvalFunctionCallArray
@@ -927,6 +963,7 @@ impl Op {
             Spaceship => "spaceship",
             IsNull => "is_null",
             IsTruthy => "is_truthy",
+            TypePredicate => "type_predicate",
             IsEmpty => "is_empty",
             InstanceOf => "instance_of",
             IToF => "i_to_f",
@@ -1037,8 +1074,10 @@ impl Op {
             ClassGetAttributes => "class_get_attributes",
             InstanceOfDynamic => "instance_of_dynamic",
             Call => "call",
-            FunctionVariantCall => "function_variant_call",
             BuiltinCall => "builtin_call",
+            FunctionVariantCall => "function_variant_call",
+            ClosureBind => "closure_bind",
+            LanguageConstructCall => "language_construct_call",
             EvalLiteralCall => "eval_literal_call",
             EvalScopeGet => "eval_scope_get",
             EvalScopeSet => "eval_scope_set",

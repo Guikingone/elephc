@@ -21,6 +21,7 @@ sidebar:
 | [`function_exists()`](./class/function_exists.md) | `(string $function): bool` | `bool` | ✓ | ✓ |
 | [`get_called_class()`](./class/get_called_class.md) | `(): mixed` | `mixed` | — | ✓ |
 | [`get_class()`](./class/get_class.md) | `(object $object = null): string` | `string` | ✓ | ✓ |
+| [`get_class_methods()`](./class/get_class_methods.md) | `(mixed $object_or_class): mixed` | `mixed` | — | ✓ |
 | [`get_class_vars()`](./class/get_class_vars.md) | `(mixed $class): mixed` | `mixed` | — | ✓ |
 | [`get_declared_classes()`](./class/get_declared_classes.md) | `(): array` | `array` | ✓ | ✓ |
 | [`get_declared_interfaces()`](./class/get_declared_interfaces.md) | `(): array` | `array` | ✓ | ✓ |
@@ -30,4 +31,6 @@ sidebar:
 | [`interface_exists()`](./class/interface_exists.md) | `(string $interface, bool $autoload = true): bool` | `bool` | ✓ | ✓ |
 | [`is_a()`](./class/is_a.md) | `(object $object_or_class, string $class, bool $allow_string = false): bool` | `bool` | ✓ | ✓ |
 | [`is_subclass_of()`](./class/is_subclass_of.md) | `(mixed $object_or_class, string $class, bool $allow_string = true): bool` | `bool` | ✓ | ✓ |
+| [`method_exists()`](./class/method_exists.md) | `(mixed $object_or_class, string $method): bool` | `bool` | ✓ | ✓ |
+| [`property_exists()`](./class/property_exists.md) | `(mixed $object_or_class, string $property): bool` | `bool` | ✓ | ✓ |
 | [`trait_exists()`](./class/trait_exists.md) | `(string $trait, bool $autoload = true): bool` | `bool` | ✓ | ✓ |

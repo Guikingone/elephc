@@ -2,7 +2,7 @@
 title: "get_declared_traits()"
 description: "Returns an array of all declared traits."
 sidebar:
-  order: 81
+  order: 82
 ---
 
 ## get_declared_traits()
@@ -33,4 +33,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `get_declared_traits` is implemented in the compiler, see [the internals page](../../../internals/builtins/class/get_declared_traits.md).
-

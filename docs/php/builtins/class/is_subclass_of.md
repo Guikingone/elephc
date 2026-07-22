@@ -2,7 +2,7 @@
 title: "is_subclass_of()"
 description: "Checks if the object has a given class as one of its parents or implements it."
 sidebar:
-  order: 86
+  order: 87
 ---
 
 ## is_subclass_of()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `is_subclass_of` is implemented in the compiler, see [the internals page](../../../internals/builtins/class/is_subclass_of.md).
-

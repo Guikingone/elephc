@@ -2,13 +2,13 @@
 title: "preg_replace()"
 description: "Performs a regular expression search and replace."
 sidebar:
-  order: 334
+  order: 337
 ---
 
 ## preg_replace()
 
 ```php
-function preg_replace(string $pattern, string $replacement, string $subject, int $limit = -1, int $count = null): string
+function preg_replace(string $pattern, string $replacement, string $subject): string
 ```
 
 Performs a regular expression search and replace.
@@ -17,8 +17,6 @@ Performs a regular expression search and replace.
 - `$pattern` (`string`)
 - `$replacement` (`string`)
 - `$subject` (`string`)
-- `$limit` (`int`), default `-1`, optional
-- `$count` (`int`), passed by reference, default `null`, optional
 
 **Returns**: `string`
 
@@ -38,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `preg_replace` is implemented in the compiler, see [the internals page](../../../internals/builtins/regex/preg_replace.md).
-

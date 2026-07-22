@@ -1,30 +1,41 @@
 //! Purpose:
-//! Home of the PHP `defined` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `defined` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - A string-literal name folds to a compile-time boolean during lowering; a
-//!   non-literal name is accepted and lowered to the `__rt_defined` closed-world
-//!   constant-registry lookup, so dynamic `defined($name)` probes work at runtime.
-//! - `lower` delegates to the module-level `lower_defined` in `src/codegen/lower_inst/builtins.rs`.
+//! - `check` validates that the argument is a string literal (AOT requirement: the
+//!   constant name must be statically known at compile time).
 
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
-use crate::ir::Instruction;
+use crate::builtins::spec::BuiltinCheckCtx;
+use crate::errors::CompileError;
+use crate::parser::ast::ExprKind;
+use crate::types::PhpType;
 
 builtin! {
     name: "defined",
     area: System,
     params: [constant_name: Str],
     returns: Bool,
-    lower: lower,
+    check: check,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Defined,
+    ),
     summary: "Checks whether the given named constant exists.",
 }
 
-/// Lowers a `defined` call by delegating to the shared module-level emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::lower_defined(ctx, inst)
+/// Validates that the argument is a string literal.
+///
+/// AOT compilation requires a statically known constant name; dynamic names cannot
+/// be resolved at compile time. Returns `PhpType::Bool` on success.
+fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    cx.checker.infer_type(&cx.args[0], cx.env)?;
+    if !matches!(cx.args[0].kind, ExprKind::StringLiteral(_)) {
+        return Err(CompileError::new(
+            cx.span,
+            "defined() first argument must be a string literal in AOT mode",
+        ));
+    }
+    Ok(PhpType::Bool)
 }

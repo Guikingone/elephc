@@ -2,7 +2,7 @@
 title: "get_parent_class()"
 description: "Returns the name of the parent class of an object or class."
 sidebar:
-  order: 83
+  order: 84
 ---
 
 ## get_parent_class()
@@ -34,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `get_parent_class` is implemented in the compiler, see [the internals page](../../../internals/builtins/class/get_parent_class.md).
-

@@ -237,6 +237,7 @@ impl Checker {
             func_args_functions: HashSet::new(),
             compile_time_const_depth: 0,
             throw_access_sites: HashMap::new(),
+            builtin_call_types: HashMap::new(),
         }
     }
 }

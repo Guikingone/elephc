@@ -2,20 +2,19 @@
 title: "intval()"
 description: "Returns the integer value of a variable."
 sidebar:
-  order: 436
+  order: 439
 ---
 
 ## intval()
 
 ```php
-function intval(mixed $value, int $base = 10): int
+function intval(mixed $value): int
 ```
 
 Returns the integer value of a variable.
 
 **Parameters**:
 - `$value` (`mixed`)
-- `$base` (`int`), default `10`, optional
 
 **Returns**: `int`
 
@@ -35,4 +34,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `intval` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/intval.md).
-

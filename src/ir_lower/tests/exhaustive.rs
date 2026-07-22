@@ -139,6 +139,7 @@ fn dummy_check_result() -> CheckResult {
         warnings: Vec::new(),
         func_args_functions: std::collections::HashSet::new(),
         throw_access_sites: HashMap::new(),
+        builtin_call_types: HashMap::new(),
     }
 }
 

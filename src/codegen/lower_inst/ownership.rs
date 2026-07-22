@@ -117,6 +117,21 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if inst.op == Op::RuntimeCall {
+        let result_is_fresh = match inst.immediate {
+            Some(crate::ir::Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::Function(target),
+            )) => matches!(
+                target.result_ownership(),
+                crate::builtins::semantics::BuiltinResultOwnership::Fresh
+            ),
+            Some(crate::ir::Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::UnaryString(_),
+            )) => true,
+            _ => false,
+        };
+        return Ok(!result_is_fresh);
+    }
     Ok(matches!(
         inst.op,
         Op::IToStr
@@ -128,7 +143,6 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
             | Op::StrBitwise
             | Op::StrCharAt
             | Op::StrInterpolate
-            | Op::RuntimeCall
     ))
 }
 

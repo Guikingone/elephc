@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-**Source:** `src/types/` — `mod.rs`, `model.rs`, `traits.rs`, `checker/mod.rs`, `checker/driver/`, `checker/builtin_interfaces.rs`, `checker/builtin_iterators.rs`, `checker/builtin_json.rs`, `checker/builtin_spl_exceptions.rs`, `checker/builtin_stdclass.rs`, `checker/builtin_types/`, `checker/builtins/`, `checker/functions.rs`, `checker/functions/`, `checker/inference/`, `checker/stmt_check.rs`, `checker/stmt_check/`, `checker/type_compat.rs`, `checker/type_compat/`, `checker/schema/`, `checker/yield_validation/`, `warnings/`
+**Source:** `src/types/` — `mod.rs`, `model.rs`, `signatures.rs`, `result.rs`, `schema.rs`, `traits.rs`, `fibers.rs`, `checker/mod.rs`, `checker/driver/`, `checker/builtin_interfaces.rs`, `checker/builtin_iterators.rs`, `checker/builtin_json.rs`, `checker/builtin_spl_exceptions.rs`, `checker/builtin_stdclass.rs`, `checker/builtin_types/`, `checker/builtins/`, `checker/functions.rs`, `checker/functions/`, `checker/inference/`, `checker/stmt_check.rs`, `checker/stmt_check/`, `checker/type_compat.rs`, `checker/type_compat/`, `checker/schema/`, `checker/yield_validation/`, `warnings/`
 
 PHP is dynamically typed — variables can change type at runtime. But elephc compiles to native code where every value must have a known size and location. The type checker bridges this gap by **inferring types at compile time**.
 
@@ -31,6 +31,7 @@ pub enum PhpType {
     Float,
     Str,
     Bool,
+    False,                         // literal `false` subtype; runtime representation identical to Bool
     Void,                          // null
     Never,                         // marks a function/method that never returns (always throws / exits / loops)
     Iterable,                      // PHP `iterable` pseudo-type (array | Traversable), type-erased
@@ -52,6 +53,8 @@ pub enum PhpType {
 ```
 
 This is still much smaller than full PHP's runtime type system, but it now includes user-written union and nullable annotations where the language subset supports them. `Union(...)` values are lowered to the same boxed runtime representation used by `Mixed`. `TaggedScalar` is never produced by the checker itself: codegen funnels construct it from `int|null` unions under the tagged null representation (the default; see `--null-repr`), storing the value as an inline two-word `{payload, tag}` pair instead of a heap-boxed cell. The distinction between `Array` (indexed) and `AssocArray` (key-value) is determined at compile time from the literal syntax (`[1, 2]` vs `["a" => 1]`), and heterogeneous payloads in either representation widen to boxed `Mixed` elements.
+
+`False` is the PHP literal `false` subtype used by false-sentinel declarations such as `int|false` (the shape many builtins like `strpos` return). Its runtime representation is identical to `Bool`, and `bool` accepts a `False` value. Union normalization keeps a distinct `False` member only when the declaration is false-only: a full `bool` member in the same union absorbs it.
 
 `Never` is a return-position-only marker: a function annotated `: never` must always diverge (throw, call `exit()`/`die()`, or loop forever). The type checker rejects any reachable `return value;` from such a function, and the runtime size is zero because the value is never materialized. `: never` is rejected as a parameter or local-variable type — same restriction as `: void`.
 
@@ -79,52 +82,38 @@ $ok = true;       // $ok: Bool
 $nothing = null;   // $nothing: Void
 ```
 
-A local variable's static type is the flow-insensitive **join** of every value assigned to it in its scope. When successive assignments merge cleanly (e.g. `Int` then `Bool`) the variable keeps that single concrete type; when they do not (e.g. `Int` then `Str`) the variable widens to their least-upper-bound `Union`, which lowers to the same boxed `Mixed` storage for the whole scope. Reassignment is never rejected — PHP locals are gradually typed.
+The first assignment determines a variable's type. After that, reassignment is only allowed to the same type (with some exceptions):
 
-### Type merge rules
+### Type compatibility rules
 
-These rules describe how two assigned types **merge into a single concrete type**. When they do not merge, the variable widens to a `Union` (boxed `Mixed`) rather than producing an error.
-
-| From | To | Merges to one concrete type? |
+| From | To | Allowed? |
 |---|---|---|
 | `Int` | `Int` | Yes |
 | `Int` | `Float` | Yes (numeric types are interchangeable) |
 | `Int` | `Bool` | Yes (numeric/bool interchangeable) |
-| `Int` | `Str` | No — widens to `Union([Int, Str])` (boxed `Mixed`) |
+| `Int` | `Str` | **No** — compile error |
+| `False` | `Bool` | Yes (literal `false` is a subtype of `bool`) |
 | `Void` | anything | Yes (null can become any type) |
 | anything | `Void` | Yes (any variable can become null) |
 | `Array(T)` | `Array(U)` | Yes, if `T` and `U` merge; heterogeneous indexed values widen to `Array(Mixed)` |
 | `AssocArray(_, T)` | `AssocArray(_, U)` | Yes, if `T` and `U` merge; heterogeneous values widen to `Mixed` |
 | `Pointer(None)` | `Pointer(Some("T"))` | Yes (merged to the more specific pointer tag) |
 | `Pointer(Some("A"))` | `Pointer(Some("B"))` | Yes, but merged to opaque `Pointer(None)` if tags differ |
+| `Pointer(*)` | `Int` / `Str` / `Array` | **No** — compile error |
 | `Resource(None)` | `Resource(Some("stream"))` (or vice versa) | Yes (generic resource accepts typed resources) |
+| `Resource(Some("stream"))` | `Int` | **No** — stream handles are not plain numeric descriptors |
 | `Array(_)` / `AssocArray(_, _)` / object implementing `Iterator` or `IteratorAggregate` | `Iterable` parameter | Yes (PHP `iterable` accepts arrays and Traversable objects at the call boundary) |
 
-So code that PHP allows now type-checks, with the variable widening instead of erroring:
+Declared boundaries are looser than plain reassignment. A `Mixed` value is accepted where a declared parameter, return, or property expects a plain `Int`, `Float`, `Bool`, or `Str` (PHP's coercive mode): the checker lets it through and codegen inserts the runtime unboxing/narrowing conversion. Union values are accepted member-wise — every member of the actual union must be accepted by some member of the expected type.
+
+This means elephc rejects code that PHP would allow:
 
 ```php
 $x = 42;
-$x = "hello";  // ← $x widens to Union([Int, Str]); lowered as boxed Mixed
+$x = "hello";  // ← Type error: cannot reassign $x from Int to Str
 ```
 
-### The gradual boundary model
-
-elephc's checker is otherwise concrete-typed, but PHP is gradually typed. To bridge the two, a value whose static type is `Mixed` or a `Union` is accepted where a concrete type is declared (a parameter, return, property, or typed assignment), as long as the flow is sound:
-
-- A `Mixed` source is accepted for **any** concrete target — `Mixed` is the gradual top type.
-- A `Union` source is accepted into a concrete target when one member matches the target (equal, a sub/supertype, or numeric-widening compatible) and the remaining members are coercible to the target's value family: scalar targets accept any other scalar plus null; class and array/iterable targets accept only null among the extra members.
-- A **concrete** source type that is disjoint from the target (e.g. statically-`Int` into a `string` parameter) is still rejected — that is a real type error.
-
-For every accepted `Mixed`/`Union` → concrete flow, codegen emits a **runtime boundary guard** so native code never treats an arbitrary boxed payload as an unboxed value: a scalar target unboxes and applies the PHP coercive cast (`__rt_mixed_cast_*`), while an object/array/iterable target unboxes the heap pointer and fatals with a `TypeError` when the payload is null. When the value is already statically the concrete type, no guard is emitted.
-
-Passing a variable by reference is an alias assignment: when a by-reference parameter is `mixed`/union/nullable and the caller variable's storage cannot hold such a value, the caller variable is promoted (its type joined with the parameter type) so the writeback is sound and codegen holds it in a boxed cell for the call.
-
-The same boundary model applies to **index access**:
-
-- **String offsets** (`$s[$i]`) accept an `int`, `Mixed`, `float`/`bool`, or a union of those scalars as the index; the offset is unboxed and coerced to an integer at the access boundary (the same `coerce-to-int` guard the typed-parameter path uses). A statically-`string` index keeps being rejected — PHP coerces only a *numeric* string offset and throws a `TypeError` on a non-numeric one — and an `array`/`object` index is always a real type error.
-- **Array keys** (`$a[$k]`) on an array the checker inferred packed/int-keyed accept a `string`, `Mixed`, or union key and treat the read associatively: the value widens to `Mixed` (the key may miss to PHP `null` or hit). An `array`/`object` key is still rejected. Codegen routes such a read through the boxed-`Mixed` reader (`__rt_mixed_array_get`) — which normalizes a numeric-string key to its integer offset, returns the element for an integer key, and yields `null` for a genuine string key — instead of doing packed pointer math on a coerced-to-`0` key.
-
-**Lowering limitation.** The widened type computed here is the type checker's flow-insensitive join, but EIR lowering still types each local slot from the first value stored and widens it lazily as it walks statements. So two newly-accepted shapes type-check but are not yet fully boxed at runtime: a local first stored as a concrete scalar that only *later* widens to `Mixed` under a conditional branch renders with the wrong runtime tag when observed on the path that kept the original value (straight-line reassignment, where the final store boxes, is correct); and a scalar variable promoted for a `mixed`/nullable by-reference parameter is not re-boxed at the call, so a `null` writeback reads back as the scalar null sentinel. Closing this requires the lowering to pre-declare such locals as boxed from the checker's join rather than from the first store.
+This is intentional — it lets the compiler know exactly what `$x` is at every point, without needing runtime type tags.
 
 ## Statement checks
 
@@ -213,13 +202,13 @@ Every built-in function has a registered type signature:
 ```
 strlen($str: Str) → Int
 substr($str: Str, $start: Int, $len?: Int) → Str
-strpos($hay: Str, $needle: Str) → Int|Bool
-array_search($needle, $arr: Array|AssocArray) → Int|Str|Bool
-file_get_contents($filename: Str) → Str|Bool
+strpos($hay: Str, $needle: Str) → Int|False
+array_search($needle, $arr: Array|AssocArray) → Int|Str|False
+file_get_contents($filename: Str) → Str|False
 fopen($filename: Str, $mode: Str) → resource<stream>|Bool
-fileatime($filename: Str) / filectime($filename: Str) → Int|Bool
-fileperms($filename: Str) / fileowner($filename: Str) / filegroup($filename: Str) / fileinode($filename: Str) → Int|Bool
-filetype($filename: Str) → Str|Bool
+fileatime($filename: Str) / filectime($filename: Str) → Int|False
+fileperms($filename: Str) / fileowner($filename: Str) / filegroup($filename: Str) / fileinode($filename: Str) → Int|False
+filetype($filename: Str) → Str|False
 stat($filename: Str) / lstat($filename: Str) / fstat($handle: resource<stream>) → AssocArray|Bool
 define($name: Str, $value: scalar) → Bool
 count($arr: Array|AssocArray) → Int
@@ -245,7 +234,7 @@ The type checker validates:
 
 ## User-defined function checking
 
-**File:** `src/types/checker/functions.rs`
+**Files:** `src/types/checker/functions.rs`, `src/types/checker/functions/`
 
 When the type checker encounters a function declaration, it:
 
@@ -256,14 +245,17 @@ When the type checker encounters a function declaration, it:
 5. **Validates defaults, call sites, and return statements** against the declared types, including PHP-style default parameters such as `int $x = 10` and named-argument reordering against the declared parameter names
 6. **Stores the `FunctionSig`** — parameter count, parameter types, return type, reference parameters, and variadic parameter
 
-The `FunctionSig` struct:
+The `FunctionSig` struct (defined in `src/types/signatures.rs`):
 
 ```rust
 pub struct FunctionSig {
     pub params: Vec<(String, PhpType)>,
+    pub param_type_exprs: Vec<Option<TypeExpr>>, // source syntax of each parameter hint, when written
+    pub param_attributes: Vec<Vec<AttributeGroup>>, // PHP 8 attributes attached to each parameter
     pub defaults: Vec<Option<Expr>>,
     pub return_type: PhpType,
     pub declared_return: bool,        // whether return_type came from an explicit return hint
+    pub by_ref_return: bool,           // function &f() — returns a reference to the returned lvalue
     pub ref_params: Vec<bool>,         // which parameters are pass-by-reference (&$param)
     pub declared_params: Vec<bool>,    // whether each parameter came from an explicit type hint
     pub variadic: Option<String>,      // variadic parameter name (...$args), if any
@@ -271,6 +263,9 @@ pub struct FunctionSig {
 }
 ```
 
+- `param_type_exprs` preserves the exact source `TypeExpr` of each written parameter hint, alongside the resolved `PhpType` in `params`.
+- `param_attributes` carries PHP 8 attribute groups attached to each parameter, for Reflection metadata.
+- `by_ref_return` records `function &f()` / `fn &()` declarations — the function returns a reference (alias) to the returned lvalue rather than a copy.
 - `ref_params` tracks which parameters use `&` (pass by reference). The codegen passes the stack address of the argument instead of its value.
 - `declared_params` lets later phases distinguish explicit PHP type hints from inferred/defaulted parameter types.
 - `declared_return` lets later phases distinguish explicit PHP return hints from inferred return types.
@@ -279,15 +274,21 @@ pub struct FunctionSig {
 
 ### Call-site inference for untyped parameters
 
-Parameters without a type hint start from an `Int` fallback and are specialized from the actual argument types observed at call sites. The checker accumulates the argument types seen across *all* call sites for each undeclared parameter: a parameter called with a single type takes that type, while a parameter called with incompatible types (e.g. `int` at one site and `string` at another) widens to a `Union` so each argument keeps its own runtime representation instead of being coerced to the last-seen type. A union whose members are all `int`/`bool` collapses back to `Int` (preserving the int fallback for int- or bool-only calls), and a `void` argument never specializes a parameter. Because `Union` lowers to the same boxed runtime shape as `Mixed`, such arguments are boxed at the call site and unboxed where they are used.
+Parameters without a type hint start from an `Int` fallback and are specialized from the actual argument types observed at call sites. The first observed call discards the fallback exactly once and adopts that argument's type, so an all-`string` (etc.) parameter is not polluted by unioning the fallback; the discard is remembered, so a genuinely later `int` call widens instead of re-adopting. When later call sites disagree, the parameter widens conservatively: a `null` argument combined with `int` under the default tagged null representation becomes the inline `int|null` union (a genuinely nullable scalar), two different object types keep the first object type so object-typed dispatch keeps working, and any other mix widens to `Mixed`, so those arguments are boxed at the call site and unboxed where they are used. `Callable` arguments never retype the parameter itself — the callable's signature is recorded against the parameter name in `callable_param_sigs` instead. Under the legacy sentinel null representation (`--null-repr=sentinel`), a `null` argument never specializes a parameter.
 
 The same accumulation applies to instance-method and static-method parameters. Closure parameters specialize to the first observed argument type but do not widen to a union, so a closure invoked with incompatible argument types is rejected rather than coerced.
 
 This information is then used when checking calls to that function.
 
-### Type narrowing (`is_*` / `instanceof` guards)
+### Type narrowing (`is_*` / `instanceof` / strict-comparison guards)
 
-Inside an `if` guarded by a type predicate on a single variable, the checker narrows that variable's type for the guarded branch. `is_int`/`is_integer`/`is_long`, `is_float`/`is_double`, `is_string`, and `is_bool` narrow to the corresponding scalar; `$x instanceof Class` narrows to that class. The then-branch sees the guarded type and the else-branch sees the complement (a `Union` drops the matched members); a leading `!` swaps the two. A guard with no `else` whose body always diverges (`return`/`throw`) narrows the statements after the `if` to the complement. This is what makes the common "overload" shape type-check:
+**File:** `src/types/checker/stmt_check/narrowing.rs`
+
+Inside an `if` (or ternary) guarded by a type predicate, the checker narrows the guarded binding's type for each branch. `is_int`/`is_integer`/`is_long`, `is_float`/`is_double`/`is_real`, `is_string`, and `is_bool` narrow to the corresponding scalar; `$x instanceof Class` narrows to that class; `is_null($x)` and the strict comparisons `$x === null` and `$x === false` (in either operand order) narrow to `null` and to the literal `False` subtype respectively. The then-branch sees the guarded type and the else-branch sees the complement (a `Union` drops the matched members); a leading `!` swaps the two. The false-sentinel case preserves the literal `false`: after `if ($x === false) { throw ...; }`, an `int|false` value continues as plain `int`, while a full `bool` member is not stripped.
+
+The guarded receiver may be a variable or a simple property access (`$var->prop`, `$this->prop`). Property narrowings are stored under a synthetic environment key and are conservatively dropped after anything that could mutate the property — a property assignment, any call, or loop-body entry — and dropped per-object when the root local is rebound. Properties backed by PHP 8.4 `get` hooks or `__get` are never narrowed, because two reads may produce different values.
+
+Narrowing applies across `if`/`elseif`/`else` chains: each subsequent clause (and the `else`) sees the accumulated complement of the previous guards. A chain with no `else` whose every clause body always diverges (`return`, `throw`, `exit()`/`die()`, or a call to a function declared `: never`) narrows the statements after the entire `if` construct to the accumulated complement. This is what makes the common "overload" shape type-check:
 
 ```php
 function set($x): void {                 // $x inferred int|Foo from the call sites
@@ -296,15 +297,16 @@ function set($x): void {                 // $x inferred int|Foo from the call si
 }
 ```
 
-Narrowing is purely a type-checker step: the variable keeps its boxed runtime (`Mixed`) representation, and codegen coerces it where the narrowed type is required — unboxing for scalar uses, and dispatching a method on a `Mixed`/union receiver by its runtime class id. Narrowing is not flow-sensitive across reassignment of the variable within a branch.
+Narrowing is purely a type-checker step: the variable keeps its boxed runtime (`Mixed`) representation, and codegen coerces it where the narrowed type is required — unboxing for scalar uses, and dispatching a method on a `Mixed`/union receiver by its runtime class id. Reassigning a narrowed variable inside a branch replaces the narrowed binding with the assigned type, and it invalidates any property narrowings rooted at that variable.
 
 ## Diagnostics and warnings
 
 The checker is no longer strictly first-error-only. Many passes now accumulate independent semantic errors and return them as a grouped diagnostic instead of aborting immediately on the first failure.
 
-After successful checking, elephc also runs a warning pass over the AST. Current warnings include:
+After successful checking, elephc also runs a warning pass over the AST (`src/types/warnings/`). Current warnings include:
 - unused local variables and parameters
 - unreachable code
+- suspicious OOP declarations, such as `final private` methods (never overridden, so `final` is meaningless outside `__construct`)
 
 Warnings are returned through `CheckResult` and printed by the CLI without failing the compilation.
 
@@ -338,20 +340,30 @@ Before `ClassInfo` is built, the checker flattens trait composition through `src
 ```rust
 pub struct InterfaceInfo {
     pub interface_id: u64,
+    pub declaration_span: Span,             // Span::dummy() for compiler-injected interfaces
     pub parents: Vec<String>,
     pub properties: HashMap<String, PropertyHookContract>,
     pub property_order: Vec<String>,
+    pub method_decls: Vec<ClassMethod>,     // source declarations retained for Reflection
     pub methods: HashMap<String, FunctionSig>,
+    pub late_static_method_returns: HashMap<String, TypeExpr>, // exact syntax of `static`-typed returns
     pub method_declaring_interfaces: HashMap<String, String>,
     pub method_order: Vec<String>,
     pub method_slots: HashMap<String, usize>,
     pub static_methods: HashMap<String, FunctionSig>, // static interface methods (PHP 8.3+)
+    pub late_static_static_method_returns: HashMap<String, TypeExpr>,
+    pub static_method_declaring_interfaces: HashMap<String, String>,
     pub static_method_order: Vec<String>,
     pub constants: HashMap<String, Expr>,   // interface constants (PHP 5.0+)
+    pub constant_types: HashMap<String, TypeExpr>, // PHP 8.3 typed constants
+    pub constant_declaring_interfaces: HashMap<String, String>,
+    pub final_constants: HashSet<String>,   // PHP 8.1+ final constants
 }
 ```
 
-For each interface, the checker resolves `interface extends interface` transitively, rejects inheritance cycles, flattens required methods into a single signature map, and assigns a stable method ordering used by runtime metadata emission. `properties` records PHP 8.4 property hook contracts required by the interface, and `constants` carries interface constants inherited from parent interfaces. `static_methods` records PHP 8.3+ static interface methods separately from instance `methods`: static dispatch is by class, so they take no vtable slot. Conformance checking requires a concrete implementing class to declare a compatible static method (`Class {} must implement static interface method {}::{}` otherwise); abstract classes may defer.
+For each interface, the checker resolves `interface extends interface` transitively, rejects inheritance cycles, flattens required methods into a single signature map, and assigns a stable method ordering used by runtime metadata emission. `properties` records PHP 8.4 property hook contracts required by the interface, and `constants` carries interface constants inherited from parent interfaces, with PHP 8.3 declared constant types tracked in `constant_types` and PHP 8.1+ `final` constants in `final_constants`. `static_methods` records PHP 8.3+ static interface methods separately from instance `methods`: static dispatch is by class, so they take no vtable slot. Conformance checking requires a concrete implementing class to declare a compatible static method (`Class {} must implement static interface method {}::{}` otherwise); abstract classes may defer.
+
+Interface methods declared to return PHP's late-bound `static` type keep their exact return syntax in `late_static_method_returns` / `late_static_static_method_returns`. Return covariance is honored during conformance: an interface method whose required return names the interface itself (or via `self`/`static`) accepts an implementation that declares the implementing class's own type, as long as the class implements the interface naming that return (directly or through a parent interface).
 
 ## Class type checking
 
@@ -370,28 +382,40 @@ The `ClassInfo` struct:
 ```rust
 pub struct ClassInfo {
     pub class_id: u64,
+    pub declaration_span: Span,        // Span::dummy() for compiler-injected classes
     pub parent: Option<String>,
     pub is_abstract: bool,
     pub is_final: bool,
     pub is_readonly_class: bool,
     pub allow_dynamic_properties: bool, // #[\AllowDynamicProperties] (PHP 8.2)
     pub constants: HashMap<String, Expr>, // user-declared class constants
+    pub constant_types: HashMap<String, TypeExpr>, // PHP 8.3 typed constants
+    pub constant_visibilities: HashMap<String, Visibility>,
+    pub final_constants: HashSet<String>, // PHP 8.1+ final constants
     pub attribute_names: Vec<String>,
-    pub attribute_args: Vec<Option<Vec<AttrArgValue>>>,
+    pub attribute_args: Vec<Option<Vec<AttrArgEntry>>>,
     pub method_attribute_names: HashMap<String, Vec<String>>,
-    pub method_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgValue>>>>,
+    pub method_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgEntry>>>>,
     pub property_attribute_names: HashMap<String, Vec<String>>,
-    pub property_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgValue>>>>,
+    pub property_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgEntry>>>>,
+    pub constant_attribute_names: HashMap<String, Vec<String>>,
+    pub constant_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgEntry>>>>,
     pub used_traits: Vec<String>,
+    pub trait_aliases: Vec<(String, String)>, // (alias, Trait::method)
     pub properties: Vec<(String, PhpType)>,
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,
     pub defaults: Vec<Option<Expr>>,
     pub property_visibilities: HashMap<String, Visibility>,
+    pub property_set_visibilities: HashMap<String, Visibility>, // PHP 8.4 asymmetric `set` visibility
     pub declared_properties: HashSet<String>,
+    pub property_declared_slots: Vec<bool>, // per-layout-slot typed-declaration flags
     pub final_properties: HashSet<String>,
     pub readonly_properties: HashSet<String>,
     pub reference_properties: HashSet<String>,
+    pub owned_reference_properties: HashSet<String>, // ref cells the object allocates/frees itself
+    pub promoted_properties: HashSet<String>,
+    pub property_reference_slots: Vec<bool>, // per-layout-slot by-reference flags
     pub abstract_properties: HashSet<String>,
     pub abstract_property_hooks: HashMap<String, PropertyHookContract>,
     pub static_properties: Vec<(String, PhpType)>,
@@ -403,6 +427,8 @@ pub struct ClassInfo {
     pub method_decls: Vec<ClassMethod>,
     pub methods: HashMap<String, FunctionSig>,
     pub static_methods: HashMap<String, FunctionSig>,
+    pub late_static_method_returns: HashMap<String, TypeExpr>, // exact syntax of `static`-typed returns
+    pub late_static_static_method_returns: HashMap<String, TypeExpr>,
     pub callable_method_return_sigs: HashMap<String, FunctionSig>,
     pub callable_array_method_return_sigs: HashMap<String, FunctionSig>,
     pub method_visibilities: HashMap<String, Visibility>,
@@ -422,7 +448,11 @@ pub struct ClassInfo {
 }
 ```
 
-`vtable_methods` / `vtable_slots` drive ordinary inherited instance dispatch, while `static_vtable_methods` / `static_vtable_slots` carry the parallel metadata used by `static::method()` late static binding. `allow_dynamic_properties` records the PHP 8.2 `#[\AllowDynamicProperties]` attribute so codegen can route undeclared property storage through a per-object side table. The `*_attribute_names` / `*_attribute_args` fields carry PHP 8 attribute metadata for the class, its methods, and its properties so the Reflection codegen path can materialize `ReflectionAttribute` objects. `abstract_property_hooks` records PHP 8.4 property hook contracts that concrete subclasses must satisfy.
+`vtable_methods` / `vtable_slots` drive ordinary inherited instance dispatch, while `static_vtable_methods` / `static_vtable_slots` carry the parallel metadata used by `static::method()` late static binding. `allow_dynamic_properties` records the PHP 8.2 `#[\AllowDynamicProperties]` attribute so codegen can route undeclared property storage through a per-object side table. The `*_attribute_names` / `*_attribute_args` fields carry PHP 8 attribute metadata for the class, its methods, its properties, and its constants so the Reflection codegen path can materialize `ReflectionAttribute` objects. `abstract_property_hooks` records PHP 8.4 property hook contracts that concrete subclasses must satisfy, and `property_set_visibilities` records PHP 8.4 asymmetric write visibility (e.g. `public private(set)`) for properties whose write visibility differs from their read visibility. The per-slot vectors (`property_declared_slots`, `property_reference_slots`) follow the physical `properties` layout by index so hidden private parent slots keep their metadata when a child declares a same-named property.
+
+### Typed class constants (PHP 8.3)
+
+`src/types/checker/schema/class_constants.rs` validates typed constant declarations on classes, interfaces, enums, and traits. Validation is deferred until all class-like schemas exist, so object and interface relationships named in constant types resolve. Declared types are recorded in `constant_types`; initializer values are checked strictly against the declared type apart from PHP's allowed int-to-float widening, with a conservative `Mixed` inference accepted when an initializer cannot be narrowed statically. Inherited redeclarations must satisfy covariant type contracts, and constants declared `final` (PHP 8.1+) cannot be redeclared.
 
 For abstract methods, the checker keeps the inherited signature but intentionally leaves the implementation-class entry unset until a concrete subclass provides a body. Concrete classes are rejected if any abstract or interface requirement remains unresolved after inheritance + trait flattening + interface conformance checks.
 
@@ -445,6 +475,8 @@ PHP 8.4 property hook contracts are represented as abstract property requirement
 
 When checking method calls, it verifies the method exists, enforces method visibility (`public`, subclass-visible `protected`, declaring-class-only `private`), validates argument count and types against the method's `FunctionSig`, resolves `parent::method()` against the immediate parent class, resolves `self::method()` against the current lexical class, and accepts `static::method()` as a late-static-bound static call against the current class hierarchy. First-class callable validation uses the same method metadata for `static::method(...)` and stable object receiver targets such as `$obj->method(...)`.
 
+Methods declared to return PHP's late-bound `static` type (alone, nullable, or inside a union) keep their exact return syntax in `late_static_method_returns` / `late_static_static_method_returns`. At each call site the checker re-resolves that preserved syntax against the concrete receiver: `$child->create()` on a method inherited from a parent that returns `static` types as the child class, not the declaring class. The nominal `FunctionSig` return type stays the concrete declaring class or interface for compatibility checks.
+
 When checking `new ClassName(...)`, it also rejects interfaces and abstract classes before codegen.
 
 ### Built-in coroutine and iterator classes
@@ -457,13 +489,16 @@ When checking `new ClassName(...)`, it also rejects interfaces and abstract clas
 
 ## Output: CheckResult
 
-The type checker produces a `CheckResult`:
+The type checker produces a `CheckResult` (defined in `src/types/result.rs`):
 
 ```rust
 pub struct CheckResult {
     pub global_env: TypeEnv,                    // variable name → type
     pub functions: HashMap<String, FunctionSig>, // function name → signature
+    pub function_attribute_names: HashMap<String, Vec<String>>, // PHP 8 attributes on functions
+    pub function_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgEntry>>>>,
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>, // (function, param) → callable signature
+    pub(crate) return_alias_summaries: ReturnAliasSummaries, // proven return-to-parameter storage aliases
     pub callable_return_sigs: HashMap<String, FunctionSig>, // function → returned callable signature
     pub callable_array_return_sigs: HashMap<String, FunctionSig>, // function → returned callable-array element signature
     pub interfaces: HashMap<String, InterfaceInfo>, // interface name → interface info
@@ -475,6 +510,7 @@ pub struct CheckResult {
     pub extern_globals: HashMap<String, PhpType>,
     pub required_libraries: Vec<String>,
     pub warnings: Vec<CompileWarning>,
+    pub throw_access_sites: HashMap<Span, ThrowAccessInfo>, // access violations lowered to runtime Error throws
 }
 ```
 

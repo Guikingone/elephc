@@ -1,9 +1,8 @@
 //! Purpose:
-//! Home of the PHP `array_merge` builtin: its declaration, type-check hook, and lowering.
+//! Home of the PHP `array_merge` builtin: its single-source registry declaration and semantic target.
 //!
 //! Called from:
-//! - The builtin registry (declaration), the type checker (check hook), and the EIR
-//!   backend (lower hook), all via `crate::builtins::registry`.
+//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
 //! - The PHP golden signature is `variadic(&[], "arrays")` (min=0). The legacy CHECK
@@ -17,10 +16,7 @@
 //! - Arity is pre-validated by `check_arity`; the hook can assume exactly 2 args.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
 use crate::types::PhpType;
 
 builtin! {
@@ -30,7 +26,9 @@ builtin! {
     variadic: "arrays",
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::ArrayMerge,
+    ),
     summary: "Merges the elements of two arrays.",
     php_manual: "https://www.php.net/manual/en/function.array-merge.php",
 }
@@ -63,10 +61,6 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(result.unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Void))))
 }
 
-/// Lowers an `array_merge` call by delegating to the shared array-merge emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::arrays::lower_array_merge(ctx, inst)
-}
 
 /// Infers the return type for `array_merge(first, second)`.
 ///

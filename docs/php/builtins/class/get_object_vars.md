@@ -2,7 +2,7 @@
 title: "get_object_vars()"
 description: "get_object_vars() is available inside eval'd code via the magician interpreter; compiled (AOT) code does not support it yet."
 sidebar:
-  order: 82
+  order: 83
 ---
 
 ## get_object_vars()

@@ -130,6 +130,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// the hidden trailing arity-count ABI operand, and at function-body lowering to bind
     /// the matching hidden local.
     pub func_args_functions: &'m HashSet<String>,
+    pub builtin_call_types: &'m HashMap<Span, PhpType>,
     pub extern_functions: &'m HashMap<String, ExternFunctionSig>,
     pub extern_globals: &'m HashMap<String, PhpType>,
     pub callable_param_sigs: &'m HashMap<(String, String), FunctionSig>,
@@ -223,6 +224,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         env: TypeEnv,
         functions: &'m HashMap<String, FunctionSig>,
         func_args_functions: &'m HashSet<String>,
+        builtin_call_types: &'m HashMap<Span, PhpType>,
         extern_functions: &'m HashMap<String, ExternFunctionSig>,
         extern_globals: &'m HashMap<String, PhpType>,
         callable_param_sigs: &'m HashMap<(String, String), FunctionSig>,
@@ -253,6 +255,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             initialized_slots: HashSet::new(),
             functions,
             func_args_functions,
+            builtin_call_types,
             extern_functions,
             extern_globals,
             callable_param_sigs,
@@ -2162,20 +2165,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Returns true for builtin calls whose return value is newly allocated for the caller.
-    fn value_is_owning_builtin_temporary(&self, value: ValueId) -> bool {
-        let Some(inst) = self.builder.value_defining_instruction(value) else {
-            return false;
-        };
-        if inst.op != Op::BuiltinCall {
-            return false;
-        }
-        let Some(Immediate::Data(name_id)) = inst.immediate else {
-            return false;
-        };
-        let Some(name) = self.data.function_names.get(name_id.as_raw() as usize) else {
-            return false;
-        };
-        builtin_call_result_owns_storage_as_temporary(name)
+    fn value_is_owning_builtin_temporary(&self, _value: ValueId) -> bool {
+        // Builtin calls no longer lower through a dedicated `Op::BuiltinCall`; registry
+        // builtins carry their own ownership metadata, so this legacy fast-path is inert.
+        let _ = builtin_call_result_owns_storage_as_temporary;
+        false
     }
 
     /// Returns true when straight-line callable binding metadata is safe for a local.
@@ -2576,9 +2570,6 @@ fn local_kind_uses_plain_store_cleanup(kind: LocalKind) -> bool {
 /// when discarded.
 fn builtin_call_result_owns_storage_as_temporary(name: &str) -> bool {
     let name = php_symbol_key(name.trim_start_matches('\\'));
-    if crate::builtins::registry::returns_fresh_storage(&name) {
-        return true;
-    }
     matches!(
         name.as_str(),
         // Legacy classifications that have not yet migrated into BuiltinSpec metadata.
@@ -2746,3 +2737,142 @@ fn ref_cell_array_element_type(ty: &PhpType) -> Option<PhpType> {
         _ => None,
     }
 }
+
+
+impl<'m, 'f> LoweringContext<'m, 'f> {
+    /// Returns whether a user-call result can alias a borrowed visible argument.
+    ///
+    /// User functions currently return refcounted parameter storage without
+    /// acquiring it for the caller. Such a result is borrowed when the matching
+    /// argument is borrowed, but remains an owning temporary when an owning
+    /// argument temporary transfers through the call.
+    #[allow(dead_code)]
+    fn value_is_borrowed_user_call_result(&self, result: ValueId) -> bool {
+        let Some(inst) = self.builder.value_defining_instruction(result) else {
+            return false;
+        };
+        if inst.op != Op::Call {
+            return false;
+        }
+        let Some(Immediate::Data(function_id)) = inst.immediate else {
+            return false;
+        };
+        let Some(function_name) = self.data.function_names.get(function_id.as_raw() as usize)
+        else {
+            return false;
+        };
+        let Some(return_alias) = self.return_alias_summaries.function(function_name) else {
+            return false;
+        };
+        inst.operands
+            .iter()
+            .enumerate()
+            .any(|(parameter_index, argument)| {
+                if !return_alias.proven_aliases_parameter(parameter_index)
+                    || !self.call_result_may_alias_arg(*argument, result)
+                {
+                    return false;
+                }
+                let argument = LoweredValue {
+                    value: *argument,
+                    ir_type: self.builder.value_type(*argument),
+                };
+                !self.value_is_owning_temporary(argument)
+            })
+    }
+
+    /// Returns whether a call result can legally reuse one argument's refcounted payload.
+    #[allow(dead_code)]
+    pub(crate) fn call_result_may_alias_arg(&self, argument: ValueId, result: ValueId) -> bool {
+        if matches!(
+            self.builder.value_defining_op(argument),
+            Some(Op::MixedNumericBinop | Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul)
+        ) {
+            return false;
+        }
+        let argument_type = self.builder.value_php_type(argument).codegen_repr();
+        let result_type = self.builder.value_php_type(result).codegen_repr();
+        if !Ownership::php_type_needs_lifetime_tracking(&argument_type)
+            || !Ownership::php_type_needs_lifetime_tracking(&result_type)
+        {
+            return false;
+        }
+        match (&argument_type, &result_type) {
+            (PhpType::Mixed | PhpType::Union(_), _)
+            | (_, PhpType::Mixed | PhpType::Union(_)) => true,
+            (PhpType::Object(_), PhpType::Object(_)) => true,
+            (PhpType::Array(_), PhpType::Array(_)) => true,
+            (
+                PhpType::AssocArray { .. },
+                PhpType::AssocArray { .. } | PhpType::Array(_) | PhpType::Iterable,
+            ) => true,
+            (
+                PhpType::Iterable,
+                PhpType::Iterable
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_),
+            ) => true,
+            (PhpType::Array(_) | PhpType::Object(_), PhpType::Iterable) => true,
+            (PhpType::Str, PhpType::Str) => true,
+            (PhpType::Callable, PhpType::Callable) => true,
+            (PhpType::Buffer(_), PhpType::Buffer(_)) => true,
+            _ => argument_type == result_type,
+        }
+    }
+}
+
+impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, '_> {
+    /// Returns PHP metadata already attached to an EIR operand.
+    fn value_php_type(&self, value: ValueId) -> PhpType {
+        self.builder.value_php_type(value)
+    }
+
+    /// Emits a backend-neutral builtin operation through the ordinary EIR builder path.
+    fn emit_value(
+        &mut self,
+        op: Op,
+        operands: Vec<ValueId>,
+        immediate: Option<Immediate>,
+        php_type: PhpType,
+        effects: Effects,
+        span: Option<Span>,
+    ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        let lowered = LoweringContext::emit_value(
+            self,
+            op,
+            operands,
+            immediate,
+            php_type,
+            effects,
+            span,
+        );
+        crate::builtins::semantics::LoweredBuiltinValue {
+            value: lowered.value,
+        }
+    }
+
+    /// Emits a typed runtime call whose helper symbol and physical ABI remain backend-owned.
+    fn emit_runtime_call(
+        &mut self,
+        target: crate::ir::RuntimeCallTarget,
+        operands: Vec<ValueId>,
+        php_type: PhpType,
+        effects: Effects,
+        span: Option<Span>,
+    ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        let lowered = LoweringContext::emit_value(
+            self,
+            Op::RuntimeCall,
+            operands,
+            Some(Immediate::RuntimeCall(target)),
+            php_type,
+            effects,
+            span,
+        );
+        crate::builtins::semantics::LoweredBuiltinValue {
+            value: lowered.value,
+        }
+    }
+}
+

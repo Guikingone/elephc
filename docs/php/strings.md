@@ -134,20 +134,19 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | Function | Signature | Description |
 |---|---|---|
 | `strlen()` | `strlen($str): int` | Returns string length |
-| `strval()` | `strval($value): string` | Coerce a value to its string representation using PHP's `(string)` cast rules (`42` → `"42"`, `true` → `"1"`, `1.5` → `"1.5"`, `null` → `""`) |
+| `mb_strlen()` | `mb_strlen($str, $encoding = null): int` | Character count in the given encoding. An omitted or `null` encoding counts UTF-8, grouping malformed sequences like mbstring; `8bit`/`binary`/`7bit` return the byte length; other encodings are decoded through the system `iconv`. An unknown encoding name throws `\ValueError` |
 | `substr()` | `substr($str, $start [, $len]): string` | Extract substring |
 | `strpos()` | `strpos($hay, $needle): int\|false` | Find first occurrence. Returns `false` if not found |
 | `strrpos()` | `strrpos($hay, $needle): int\|false` | Find last occurrence. Returns `false` if not found |
 | `strstr()` | `strstr($hay, $needle): string` | Find first occurrence and return rest |
-| `strrchr()` | `strrchr($hay, $needle): string\|false` | Returns the substring of `$hay` from the **last** occurrence of `$needle`'s first byte to the end, or `false` if that byte never appears. Only the first byte of `$needle` is used |
-| `str_replace()` | `str_replace($search, $replace, $subject): string` | Replace all occurrences. `$search`/`$replace` may be arrays: each search element is applied in order (a later element sees earlier replacements), and missing replacement elements become `""` |
-| `str_ireplace()` | `str_ireplace($search, $replace, $subject): string` | Case-insensitive replace. Supports the same array `$search`/`$replace` form as `str_replace()` |
+| `str_replace()` | `str_replace($search, $replace, $subject): string` | Replace all occurrences |
+| `str_ireplace()` | `str_ireplace($search, $replace, $subject): string` | Case-insensitive replace |
 | `substr_replace()` | `substr_replace($str, $repl, $start [, $len]): string` | Replace substring |
 | `strtolower()` | `strtolower($str): string` | Convert to lowercase |
 | `strtoupper()` | `strtoupper($str): string` | Convert to uppercase |
 | `ucfirst()` | `ucfirst($str): string` | Uppercase first character |
 | `lcfirst()` | `lcfirst($str): string` | Lowercase first character |
-| `ucwords()` | `ucwords($str [, $separators]): string` | Uppercase first letter of each word; `$separators` (default `" \t\r\n\f\v"`) customizes the word-boundary set |
+| `ucwords()` | `ucwords($str): string` | Uppercase first letter of each word |
 | `trim()` | `trim($str [, $chars]): string` | Strip the default mask (`" \n\r\t\v\f\0"`) or explicit characters from both ends |
 | `ltrim()` | `ltrim($str [, $chars]): string` | Strip the default mask (`" \n\r\t\v\f\0"`) or explicit characters from the left |
 | `rtrim()` | `rtrim($str [, $chars]): string` | Strip the default mask (`" \n\r\t\v\f\0"`) or explicit characters from the right |
@@ -159,11 +158,6 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `grapheme_strrev()` | `grapheme_strrev($str): string\|false` | Reverse a UTF-8 string by grapheme clusters, preserving embedded NUL bytes and keeping combining marks, emoji modifiers, and ZWJ sequences with their base cluster. Returns `false` on malformed UTF-8. |
 | `strcmp()` | `strcmp($a, $b): int` | Binary-safe string comparison |
 | `strcasecmp()` | `strcasecmp($a, $b): int` | Case-insensitive comparison |
-| `strnatcmp()` | `strnatcmp($a, $b): int` | Natural-order comparison (`-1`/`0`/`1`): embedded digit runs compare by numeric value, so `strnatcmp("img2","img10")` is `-1`. Leading zeros and leading/inner whitespace are handled like PHP's `php_strnatcmp_ex` |
-| `strnatcasecmp()` | `strnatcasecmp($a, $b): int` | Case-insensitive natural-order comparison; ASCII letters are upper-folded before comparing |
-| `strcspn()` | `strcspn($str, $chars): int` | Length of the initial segment of `$str` containing none of the bytes in `$chars` |
-| `strspn()` | `strspn($str, $chars): int` | Length of the initial segment of `$str` consisting entirely of bytes in `$chars` |
-| `strpbrk()` | `strpbrk($str, $chars): string\|false` | Returns the substring of `$str` starting at the first byte found in `$chars`, or `false` if none occur |
 | `str_contains()` | `str_contains($hay, $needle): bool` | Check if string contains substring |
 | `str_starts_with()` | `str_starts_with($hay, $prefix): bool` | Check prefix |
 | `str_ends_with()` | `str_ends_with($hay, $suffix): bool` | Check suffix |
@@ -179,8 +173,6 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `sscanf()` | `sscanf($str, $fmt): array` | Parse string with format (%d, %f, %s, %%). Matched fields are returned as substrings (e.g. `%f` yields `"3.14"`), mirroring the existing `%d` behavior. |
 | `addslashes()` | `addslashes($str): string` | Escape quotes and backslashes |
 | `stripslashes()` | `stripslashes($str): string` | Remove escape backslashes |
-| `addcslashes()` | `addcslashes($str, $chars): string` | C-style escape every byte listed in `$chars` (which may use `a..z` ranges). Control bytes become `\n \r \t \a \v \b \f`, other non-printable bytes become `\ooo` octal, and printable members are backslash-prefixed |
-| `stripcslashes()` | `stripcslashes($str): string` | Inverse of `addcslashes()`: decode `\n \r \t \a \v \b \f`, `\\`, `\ooo` octal, and `\xHH` hex escapes. Unknown escapes yield the literal character; octal/hex values are truncated to one byte |
 | `nl2br()` | `nl2br($str): string` | Insert `<br />` before newlines |
 | `wordwrap()` | `wordwrap($str [, $width [, $break [, $cut]]]): string` | Wrap text at word boundaries; set `$cut` to break over-long words |
 | `bin2hex()` | `bin2hex($str): string` | Convert binary to hex |
@@ -209,7 +201,7 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `rawurlencode()` | `rawurlencode($str): string` | URL-encode (spaces as %20) |
 | `rawurldecode()` | `rawurldecode($str): string` | URL-decode (RFC 3986) |
 | `base64_encode()` | `base64_encode($str): string` | Base64 encode |
-| `base64_decode()` | `base64_decode($str, $strict = false): string` | Base64 decode; the optional `$strict` flag is accepted (decoding is unaffected) |
+| `base64_decode()` | `base64_decode($str): string` | Base64 decode |
 | `gzcompress()` | `gzcompress(string $data, int $level = -1): string` | Compress a string with zlib (system `libz`); `$level` is `-1` (default) or `0`–`9` |
 | `gzuncompress()` | `gzuncompress(string $data): string\|false` | Decompress a `gzcompress()`-produced string; `false` on a zlib error |
 | `gzdeflate()` | `gzdeflate(string $data, int $level = -1): string` | Compress a string into raw DEFLATE — no zlib header or trailer; `$level` is `-1` (default) or `0`–`9` |

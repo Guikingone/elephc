@@ -2,7 +2,7 @@
 title: "glob() — internals"
 description: "Compiler internals for glob(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 124
+  order: 127
 ---
 
 ## `glob()` — internals
@@ -10,24 +10,31 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/glob.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/glob.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/io.rs`:4549](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/io.rs#L4549) (`lower_glob`)
-- **Function symbol**: `lower_glob()`
+- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `glob($pattern, $flags = 0)` through the target-aware runtime glob
-- expansion helper. `$flags` must be a compile-time integer literal (after EIR
-- constant folding — `GLOB_NOSORT`, `GLOB_MARK`, `GLOB_BRACE`, `GLOB_ONLYDIR`,
-- and OR-combinations of them all fold to `Op::ConstI64`): only literal flags
-- can be validated against the supported bit set, so a non-literal `$flags`
-- stays loud instead of silently passing an unvalidated runtime value to libc.
-- `GLOB_ONLYDIR` is split out and never reaches libc `glob()` — see the
-- runtime helper's module doc for why.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.glob` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
-## Runtime helpers
+## Semantic descriptor
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+- **Target strategy**: `runtime_call`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (16 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.glob`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

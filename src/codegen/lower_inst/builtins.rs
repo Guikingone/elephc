@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen_support::emit_box_current_value_as_mixed;
-use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
+use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId, PhpTypePredicate};
 use crate::names::{define_seen_symbol, ir_global_symbol, php_symbol_key};
 use crate::parser::ast::Visibility;
 use crate::types::checker::builtins::is_php_visible_builtin_function;
@@ -60,11 +60,6 @@ const DEFINE_ALREADY_DEFINED_WARNING: &str =
 pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let name = ctx.function_name_data(expect_data(inst)?)?;
     let key = php_symbol_key(name.trim_start_matches('\\'));
-    // Registry-first: if the builtin is registered, invoke its lowering hook.
-    // Falls through to compiler-resident constructs when the name is not registered.
-    if let Some(def) = crate::builtins::registry::lookup(key.as_str()) {
-        return (def.spec.lower)(ctx, inst);
-    }
     match key.as_str() {
         "closure_bind" => lower_closure_bind(ctx, inst),
         "eval" => eval::lower_eval(ctx, inst),
@@ -959,7 +954,7 @@ fn emit_is_callable_dynamic_string_lookup(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Lowers `method_exists()` and `property_exists()` through eval or static metadata.
-fn lower_member_exists(
+pub(crate) fn lower_member_exists(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -1371,7 +1366,7 @@ fn lower_setlocale(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<
 /// capture shape — captureless, by-value, by-reference, any capture count — and
 /// returns a null descriptor instead of rebinding when the source is a `static`
 /// closure and `new_this` is non-null (PHP's own divergence).
-fn lower_closure_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_closure_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "closure_bind", 2)?;
     let descriptor = expect_operand(inst, 0)?;
     let new_this = expect_operand(inst, 1)?;
@@ -1390,6 +1385,7 @@ fn lower_closure_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
 }
 
 /// Lowers `strlen()` by coercing string-like values and returning the byte length.
+#[allow(dead_code)]
 pub(crate) fn lower_strlen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "strlen", 1)?;
     let value = expect_operand(inst, 0)?;
@@ -1420,6 +1416,7 @@ pub(crate) fn lower_strlen(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `intval()` for concrete scalar operands.
+#[allow(dead_code)]
 pub(crate) fn lower_intval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "intval", 1, 2)?;
     let value = expect_operand(inst, 0)?;
@@ -1466,6 +1463,7 @@ pub(crate) fn lower_intval(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 /// moves it into the base argument register (AArch64 x3 / x86_64 rdi, matching
 /// the `chmod(path, mode)`-style path+scalar convention used elsewhere in this
 /// backend), then calls the dedicated base-aware parser.
+#[allow(dead_code)]
 fn lower_intval_str_with_base(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
@@ -1489,6 +1487,7 @@ fn lower_intval_str_with_base(
 }
 
 /// Lowers `floatval()` for concrete scalar operands.
+#[allow(dead_code)]
 pub(crate) fn lower_floatval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "floatval", 1)?;
     let value = expect_operand(inst, 0)?;
@@ -1523,6 +1522,7 @@ pub(crate) fn lower_floatval(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 }
 
 /// Lowers `boolval()` using the same concrete scalar PHP truthiness rules as `IsTruthy`.
+#[allow(dead_code)]
 pub(crate) fn lower_boolval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "boolval", 1)?;
     let value = expect_operand(inst, 0)?;
@@ -1940,6 +1940,7 @@ fn normalized_type_name(type_name: &str) -> &str {
 }
 
 /// Lowers `is_null()` for concrete scalar values and boxed Mixed payloads.
+#[allow(dead_code)]
 pub(crate) fn lower_is_null_builtin(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_null", 1)?;
     let value = expect_operand(inst, 0)?;
@@ -2259,3 +2260,48 @@ fn extension_is_loaded(name: &str) -> bool {
 /// through `function_exists()` and the builtin catalog instead. Extend this set
 /// only when elephc genuinely emulates a named extension's full surface.
 const LOADED_EXTENSIONS: &[&str] = &[];
+
+/// Lowers one compiler-resident PHP language construct by its canonical name.
+pub(super) fn lower_language_construct_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let name = ctx.function_name_data(expect_data(inst)?)?;
+    let key = php_symbol_key(name.trim_start_matches('\\'));
+    match key.as_str() {
+        "eval" => eval::lower_eval(ctx, inst),
+        "empty" => lower_empty(ctx, inst),
+        "unset" => types::lower_unset_builtin(ctx, inst),
+        "isset" => isset::lower_isset(ctx, inst),
+        "exit" | "die" => system::lower_exit(ctx, inst),
+        _ => Err(CodegenIrError::unsupported(format!("language construct {}", name))),
+    }
+}
+
+/// Lowers the reusable EIR PHP type predicate through target-aware value inspection.
+pub(crate) fn lower_type_predicate(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let Some(Immediate::TypePredicate(predicate)) = inst.immediate else {
+        return Err(CodegenIrError::unsupported(
+            "type_predicate requires a typed predicate immediate",
+        ));
+    };
+    match predicate {
+        PhpTypePredicate::Array => lower_is_array(ctx, inst),
+        PhpTypePredicate::Bool => {
+            lower_static_type_predicate(ctx, inst, "type_predicate", PhpType::Bool)
+        }
+        PhpTypePredicate::Float => {
+            lower_static_type_predicate(ctx, inst, "type_predicate", PhpType::Float)
+        }
+        PhpTypePredicate::Int => {
+            lower_static_type_predicate(ctx, inst, "type_predicate", PhpType::Int)
+        }
+        PhpTypePredicate::Iterable => lower_is_iterable(ctx, inst),
+        PhpTypePredicate::Object => lower_is_object(ctx, inst),
+        PhpTypePredicate::Resource => types::lower_is_resource(ctx, inst),
+        PhpTypePredicate::Scalar => lower_is_scalar(ctx, inst),
+        PhpTypePredicate::String => {
+            lower_static_type_predicate(ctx, inst, "type_predicate", PhpType::Str)
+        }
+    }
+}
