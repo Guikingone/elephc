@@ -741,7 +741,13 @@ pub(super) fn array_family_bool_void_union_accepts_write(members: &[PhpType]) ->
     for member in members {
         match member {
             PhpType::Array(_) | PhpType::AssocArray { .. } => saw_array = true,
-            PhpType::Bool | PhpType::Void => {}
+            // `PhpType::False` is PHP's `false` pseudo-type, kept distinct from `PhpType::Bool`
+            // by `normalize_union_type` when the union has no sibling `bool` member (e.g.
+            // `array|false` normalizes to `Union([Array, False])`, never collapsing to `Bool`).
+            // Both must vivify here (`array|false` behaves exactly like `?array` on write —
+            // `php -n` verified: `Deprecated: Automatic conversion of false to array`, then the
+            // write and read both succeed).
+            PhpType::Bool | PhpType::False | PhpType::Void => {}
             _ => return false,
         }
     }

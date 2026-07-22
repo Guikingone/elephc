@@ -2591,11 +2591,93 @@ fn lower_property_array_runtime_set(
                 ),
             }
         }
+        // A declared property on a statically-known class (e.g. `array|false $v`, which
+        // `codegen_repr()` boxes to `Mixed`) lives inline at a fixed offset, so its cell
+        // address is computed directly instead of going through a name-based dynamic
+        // getter (`__rt_mixed_property_get`/`__rt_stdclass_get`) meant for hashtable-backed
+        // receivers.
+        PhpType::Object(_) => {
+            match objects::known_class_mixed_property_offset(ctx, object, &property, inst)? {
+                Some(offset) => match ctx.emitter.target.arch {
+                    Arch::AArch64 => lower_known_class_property_array_runtime_set_aarch64(
+                        ctx, object, key, value, offset,
+                    ),
+                    Arch::X86_64 => lower_known_class_property_array_runtime_set_x86_64(
+                        ctx, object, key, value, offset,
+                    ),
+                },
+                None => Err(CodegenIrError::unsupported(format!(
+                    "runtime_call property array set with receiver PHP type {:?}",
+                    ctx.value_php_type(object)?.codegen_repr()
+                ))),
+            }
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "runtime_call property array set with receiver PHP type {:?}",
             other
         ))),
     }
+}
+
+/// Lowers a property-array write through a known-class inline property offset and Mixed
+/// array set on AArch64. Unlike the stdClass/Mixed-receiver variant, no getter call is
+/// needed: the declared property's cell lives at `object + offset`.
+fn lower_known_class_property_array_runtime_set_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    key: ValueId,
+    value: ValueId,
+    offset: usize,
+) -> Result<()> {
+    let value_ty = ctx.load_value_to_result(value)?.codegen_repr();
+    if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
+        abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
+    } else {
+        emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
+    }
+    abi::emit_push_reg(ctx.emitter, "x0");
+    hashes::materialize_hash_key_aarch64(ctx, key)?;
+    abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+    ctx.load_value_to_reg(object, "x0")?;
+    // A `Mixed`-shaped declared property is pointer-sized storage (mirrors
+    // `emit_property_load`'s `is_pointer_sized_property_type` branch): the slot itself
+    // holds a POINTER to the separately heap-allocated Mixed cell, so it must be
+    // dereferenced (not just address-computed) to reach the cell `__rt_mixed_array_set`
+    // mutates in place.
+    abi::emit_load_from_address(ctx.emitter, "x0", "x0", offset); // load the boxed Mixed cell pointer stored in the property slot
+    abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+    abi::emit_pop_reg(ctx.emitter, "x3");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
+    Ok(())
+}
+
+/// Lowers a property-array write through a known-class inline property offset and Mixed
+/// array set on x86_64. Unlike the stdClass/Mixed-receiver variant, no getter call is
+/// needed: the declared property's cell lives at `object + offset`.
+fn lower_known_class_property_array_runtime_set_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    key: ValueId,
+    value: ValueId,
+    offset: usize,
+) -> Result<()> {
+    let value_ty = ctx.load_value_to_result(value)?.codegen_repr();
+    if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
+        abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
+    } else {
+        emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
+    }
+    abi::emit_push_reg(ctx.emitter, "rax");
+    hashes::materialize_hash_key_x86_64(ctx, key)?;
+    abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+    ctx.load_value_to_reg(object, "rdi")?;
+    // See the AArch64 twin above: the slot holds a pointer to the Mixed cell, so it must
+    // be dereferenced rather than address-computed.
+    abi::emit_load_from_address(ctx.emitter, "rdi", "rdi", offset); // load the boxed Mixed cell pointer stored in the property slot
+    abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+    abi::emit_pop_reg(ctx.emitter, "rcx");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
+    Ok(())
 }
 
 /// Lowers a property-array write through stdClass/Mixed property get and Mixed array set on AArch64.

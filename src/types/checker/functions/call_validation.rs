@@ -117,6 +117,16 @@ fn is_assoc_spread_source(expr: &Expr, env: &TypeEnv) -> bool {
 
 impl Checker {
     /// Returns true when an argument expression is an l-value supported by by-reference calls.
+    ///
+    /// A non-nullsafe, non-dynamic `$obj->prop` fetch (`ExprKind::PropertyAccess`) also
+    /// qualifies — mirrors `super::is_by_ref_property_arg`, which the same call-validation
+    /// paths already use to skip `require_boxed_by_ref_storage` for these args, and
+    /// `crate::ir_lower::expr::lower_by_ref_property_arg_with_signature`, which already
+    /// lowers this exact shape through a hidden-temp copy-in/copy-out (any by-ref parameter
+    /// type, not just arrays — the property is never widened; the callee writes into the
+    /// temp, and the temp is copied back into the property on the normal-return edge). Only
+    /// the checker gate was missing this case, rejecting programs the rest of the pipeline
+    /// already supports (e.g. `Helper::fill($this->refs)` for `fill(array &$refs)`).
     pub(crate) fn is_by_ref_argument_lvalue(
         &mut self,
         arg: &Expr,
@@ -124,6 +134,7 @@ impl Checker {
     ) -> Result<bool, CompileError> {
         match &arg.kind {
             ExprKind::Variable(_) => Ok(true),
+            ExprKind::PropertyAccess { .. } => Ok(true),
             ExprKind::ArrayAccess { array, .. } if matches!(array.kind, ExprKind::Variable(_)) => {
                 Ok(matches!(
                     self.infer_type(array, env)?.codegen_repr(),

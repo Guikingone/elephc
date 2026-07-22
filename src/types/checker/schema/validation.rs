@@ -9,9 +9,12 @@
 //! - Declaration metadata must align with name resolution, inheritance flattening, and runtime/codegen expectations.
 
 
+use std::collections::{HashMap, HashSet};
+
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Attribute, ClassMethod, Expr, ExprKind, StmtKind, TypeExpr, Visibility};
+use crate::types::traits::FlattenedClass;
 use crate::types::{FunctionSig, PhpType};
 
 use super::super::Checker;
@@ -406,12 +409,76 @@ pub(crate) fn late_static_return_compatible(
     )))
 }
 
+/// Force-builds any concrete class referenced by a covariant return type — a bare
+/// `Object(name)` or any `Object(name)` member of a `Union` (e.g. a nullable `?Dog`
+/// return, `Union([Object("Dog"), Void])`) — that is not yet registered in
+/// `checker.classes`, mirroring the identical prebuild step in
+/// `schema/classes/interfaces.rs`'s interface-implementation return-type check.
+///
+/// The top-level class-building driver visits classes in `HashMap` iteration order, so a
+/// method's declared return type may reference a class from an unrelated hierarchy that
+/// has not been built yet. Without this, `Checker::is_subclass_of` (which only walks
+/// `checker.classes`) nondeterministically rejects a legal covariant override depending on
+/// build order (`Sub::make(): Dog` overriding `Base::make(): Animal`, and equally
+/// `Sub::make(): ?Dog` overriding `Base::make(): ?Animal`, intermittently failed when `Dog`
+/// had not been built yet). `class.name` itself is skipped: the class currently being
+/// built is always mid-construction here, so attempting to recursively build it would
+/// either no-op (already present) or spuriously trip the circular-inheritance guard for a
+/// method that simply returns its own class.
+fn ensure_return_type_classes_built(
+    return_type: &PhpType,
+    class_name: &str,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &mut Checker,
+    next_class_id: &mut u64,
+    building: &mut HashSet<String>,
+) -> Result<(), CompileError> {
+    match return_type {
+        PhpType::Object(actual_name) => {
+            if actual_name != class_name
+                && class_map.contains_key(actual_name)
+                && !checker.classes.contains_key(actual_name)
+            {
+                super::classes::build_class_info_recursive(
+                    actual_name,
+                    class_map,
+                    checker,
+                    next_class_id,
+                    building,
+                )?;
+            }
+            Ok(())
+        }
+        PhpType::Union(members) => {
+            for member in members {
+                ensure_return_type_classes_built(
+                    member,
+                    class_name,
+                    class_map,
+                    checker,
+                    next_class_id,
+                    building,
+                )?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Validates that `method` can override `parent_sig` in class `class_name`.
 /// Builds the child signature via `build_method_sig`, skips validation for `__construct`,
 /// checks signature compatibility, and ensures the child does not remove a declared
 /// return type when the parent has one or make it incompatible.
+///
+/// `class_map`/`next_class_id`/`building` let this force-build a covariant return type's
+/// class(es) on demand — see [`ensure_return_type_classes_built`].
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn validate_override_signature(
-    checker: &Checker,
+    checker: &mut Checker,
+    class_map: &HashMap<String, FlattenedClass>,
+    next_class_id: &mut u64,
+    building: &mut HashSet<String>,
     class: &crate::types::traits::FlattenedClass,
     method: &ClassMethod,
     parent_sig: &FunctionSig,
@@ -442,6 +509,14 @@ pub(crate) fn validate_override_signature(
             ),
         ));
     }
+    ensure_return_type_classes_built(
+        &child_sig.return_type,
+        &class.name,
+        class_map,
+        checker,
+        next_class_id,
+        building,
+    )?;
     let late_static_compatible = late_static_return_compatible(
         checker,
         parent_late_static_return,

@@ -23,7 +23,7 @@ use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
 use super::super::context::FunctionContext;
-use super::objects::{emit_branch_if_dynamic_name_matches, label_fragment};
+use super::objects::{can_store_object_for_object_property, emit_branch_if_dynamic_name_matches, label_fragment};
 use super::{
     builtins, expect_data, expect_operand, load_value_to_first_int_arg, property_values,
     store_if_result,
@@ -115,7 +115,7 @@ pub(super) fn lower_store_static_property(
     let slot = resolve_static_property_slot(ctx, inst, true)?;
     ensure_static_property_type_supported(&slot.php_type, inst)?;
     let value_ty = ctx.value_php_type(value)?;
-    ensure_static_property_value_supported(&slot, &value_ty, inst)?;
+    ensure_static_property_value_supported(ctx, &slot, &value_ty, inst)?;
     let release_previous = !value_is_same_static_property_load(ctx, value, &slot)?;
     let eval_done_label =
         emit_eval_native_frame_static_property_set_if_needed(ctx, inst, value, &slot)?;
@@ -204,7 +204,7 @@ pub(super) fn lower_store_dynamic_static_property(
     let release_previous = !value_is_same_dynamic_static_property_load(ctx, value, inst)?;
     let class_name = static_property_label(ctx, inst)?.trim_start_matches('\\').to_string();
     dispatch_dynamic_static_property(ctx, inst, |ctx, slot| {
-        if ensure_static_property_value_supported(slot, &value_ty, inst).is_err() {
+        if ensure_static_property_value_supported(ctx, slot, &value_ty, inst).is_err() {
             emit_dynamic_static_property_type_mismatch_fatal(ctx, &class_name, &slot.property);
             return Ok(());
         }
@@ -435,7 +435,7 @@ pub(super) fn lower_store_reflection_static_property(
     let slot = resolve_static_property_slot(ctx, inst, false)?;
     ensure_static_property_type_supported(&slot.php_type, inst)?;
     let value_ty = ctx.value_php_type(value)?;
-    ensure_static_property_value_supported(&slot, &value_ty, inst)?;
+    ensure_static_property_value_supported(ctx, &slot, &value_ty, inst)?;
     load_static_property_store_value_to_result(ctx, value, &slot.php_type)?;
     let release_previous = !value_is_same_static_property_load(ctx, value, &slot)?;
     emit_direct_store_static_property_result(ctx, &slot, release_previous);
@@ -1071,11 +1071,15 @@ fn ensure_static_property_type_supported(php_type: &PhpType, inst: &Instruction)
 
 /// Verifies the assigned value already has the static property storage representation.
 fn ensure_static_property_value_supported(
+    ctx: &FunctionContext<'_>,
     slot: &StaticPropertySlot,
     value_ty: &PhpType,
     inst: &Instruction,
 ) -> Result<()> {
     if value_ty == &slot.php_type {
+        return Ok(());
+    }
+    if can_store_object_for_object_property(ctx, value_ty, &slot.php_type) {
         return Ok(());
     }
     if can_store_value_as_tagged_scalar_static_property(value_ty, &slot.php_type) {

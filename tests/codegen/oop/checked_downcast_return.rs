@@ -407,15 +407,26 @@ echo get_class(makeD(true));
 /// owner. Compares the leaked BLOCK COUNT against an equivalent plain `throw new
 /// \TypeError($dynamicallyBuiltMessage)` + `catch`-and-never-read control (the message must
 /// be dynamically built in the control too — an apples-to-apples comparison, since a
-/// compile-time-literal message needs no heap allocation at all and would under-count):
-/// elephc has a PRE-EXISTING, orthogonal gap where a caught exception object (and any
-/// heap-allocated payload hanging off it, e.g. a non-literal message) isn't freed at
-/// catch-end when nothing reads it (reproduced here by the control, unrelated to this guard
-/// — see the `Throwable message ownership` project note), so a `live_blocks=0` assertion
-/// would be testing a different, already-known gap. What this test guards against is the
-/// guard ADDITIONALLY leaking the DISCARDED MISMATCHED OBJECT (`new B()`) on top of that
-/// pre-existing baseline: both scenarios must leak the exact same NUMBER of blocks (the
-/// exception object + its message string), proving the mismatched object itself is released.
+/// compile-time-literal message needs no heap allocation at all and would under-count).
+///
+/// The control throws its `TypeError` from a single inline expression
+/// (`throw new \TypeError("..." . (...))`), matching the guard's own message synthesis,
+/// which is likewise built and passed to the thrown `TypeError` in one step with no
+/// PHP-visible intermediate local. An EARLIER version of this control instead assigned the
+/// concatenation to a `$msg` local before throwing it (`$msg = "..." . (...); throw new
+/// \TypeError($msg);`); `php -n`-equivalent semantics are identical, but under
+/// `--heap-debug` that extra local added ONE MORE leaked block than the guard could ever
+/// produce: elephc has a PRE-EXISTING, orthogonal gap where a live local's heap-allocated
+/// value is not released when a `throw` unwinds past its scope before the local's normal
+/// release point runs (see the `Throwable message ownership` / unwind-leak project notes) —
+/// unrelated to this guard, since the guard's mismatch branch never materializes an
+/// intermediate local for its message. Comparing against that local-carrying control made
+/// the assertion require the guard to ALSO leak a block it structurally cannot leak, which
+/// is why this test previously failed: the guard was (correctly) fully clean while the
+/// control (incidentally) was not. With the control's intermediate local removed, both
+/// scenarios legitimately reach `live_blocks=0`; what this test guards against is the guard
+/// leaking the DISCARDED MISMATCHED OBJECT (`new B()`) on top of whatever the control leaks,
+/// so the two must still match if a future change reintroduces a leak on either side.
 #[test]
 fn test_checked_downcast_return_mismatch_branch_leaks_no_more_blocks_than_baseline_throw() {
     let guard_mismatch = compile_and_run_with_heap_debug(
@@ -438,8 +449,7 @@ try {
     let baseline_throw = compile_and_run_with_heap_debug(
         r#"<?php
 function f(bool $x): void {
-    $msg = "some message here " . ($x ? "yes" : "no");
-    throw new \TypeError($msg);
+    throw new \TypeError("some message here " . ($x ? "yes" : "no"));
 }
 try {
     f(true);

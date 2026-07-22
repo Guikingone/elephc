@@ -1112,6 +1112,21 @@ pub(crate) fn lower_property_init_thunk(
 /// A null default whose slot type cannot represent null (a scalar slot rebound by
 /// constructor-argument propagation) is skipped: those slots are always overwritten
 /// before an observable read, and the store would be unrepresentable.
+///
+/// A slot shadowed by a child redeclaration (private-parent-property shadowing, see
+/// `apply_private_parent_property_shadowing` in `types::checker::schema::classes::properties`)
+/// is also skipped: `class_info.properties`/`defaults` keep BOTH the parent's original slot
+/// and the child's fresh slot by index, but `ClassInfo::visible_property_index` — which the
+/// synthetic `$this->property = ...` statement below re-resolves by NAME through the normal
+/// property-access lowering path — only ever returns the currently-visible (child) slot.
+/// Without this filter, the parent's shadowed-but-still-defaulted slot would emit a second
+/// `$this->property = <parent default>` statement that resolves to the SAME visible slot as
+/// the child's own default, assigning the parent's (possibly differently-typed) default value
+/// into the child's slot and failing EIR codegen with a property-type mismatch. The shadowed
+/// slot itself is unreachable by any PHP-visible name lookup (mirrors `ClassInfo::visible_*`
+/// elsewhere), and the object allocator (`emit_object_allocation` / `__rt_new_by_name`) already
+/// zero-fills every property slot before this thunk runs, so leaving it at zero instead of its
+/// now-unobservable parent default is safe for both correctness and GC.
 fn property_init_body(class_info: &ClassInfo) -> Vec<Stmt> {
     let span = Span::dummy();
     class_info
@@ -1121,6 +1136,9 @@ fn property_init_body(class_info: &ClassInfo) -> Vec<Stmt> {
         .filter_map(|(index, default)| {
             let default = default.as_ref()?;
             let (name, php_type) = class_info.properties.get(index)?;
+            if class_info.visible_property_index(name) != Some(index) {
+                return None;
+            }
             if matches!(default.kind, ExprKind::Null) && !php_type.null_property_default_required() {
                 return None;
             }

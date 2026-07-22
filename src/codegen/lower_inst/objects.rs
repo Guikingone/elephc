@@ -274,6 +274,7 @@ pub(super) fn lower_object_clone_shallow(
         property_count,
         allow_dynamic_properties,
         retained_offsets,
+        string_offsets,
         owned_reference_property_offsets,
     ) = {
         let class_info =
@@ -281,12 +282,14 @@ pub(super) fn lower_object_clone_shallow(
                 CodegenIrError::unsupported(format!("unknown class {}", class_name))
             })?;
         let retained_offsets = cloned_property_retain_offsets(class_info);
+        let string_offsets = cloned_property_string_offsets(class_info);
         let owned_reference_property_offsets = owned_reference_property_offsets(class_info);
         (
             class_info.class_id,
             class_info.properties.len(),
             class_info.allow_dynamic_properties,
             retained_offsets,
+            string_offsets,
             owned_reference_property_offsets,
         )
     };
@@ -309,7 +312,14 @@ pub(super) fn lower_object_clone_shallow(
     let dest_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_pop_reg(ctx.emitter, source_reg);
     ctx.load_value_to_reg(result, dest_reg)?;
-    emit_clone_declared_property_slots(ctx, source_reg, dest_reg, property_count, &retained_offsets);
+    emit_clone_declared_property_slots(
+        ctx,
+        source_reg,
+        dest_reg,
+        property_count,
+        &retained_offsets,
+        &string_offsets,
+    );
     if allow_dynamic_properties {
         emit_clone_dynamic_property_hash(
             ctx,
@@ -4660,7 +4670,11 @@ fn dynamic_property_hash_offset(property_count: usize) -> usize {
     8 + property_count * 16
 }
 
-/// Returns property slot offsets whose copied low word must be retained for the cloned owner.
+/// Returns property slot offsets whose copied low word must be retained (incref-shared)
+/// for the cloned owner: `Array`/`AssocArray`/`Object`/`Mixed`/`Union`/`Iterable` slots,
+/// which this runtime tracks with the shared uniform heap refcount header.
+///
+/// `PhpType::Str` is deliberately NOT included here — see [`cloned_property_string_offsets`].
 fn cloned_property_retain_offsets(class_info: &ClassInfo) -> Vec<usize> {
     class_info
         .properties
@@ -4670,24 +4684,45 @@ fn cloned_property_retain_offsets(class_info: &ClassInfo) -> Vec<usize> {
             if class_info.property_slot_is_reference(index, property) {
                 return None;
             }
-            property_clone_needs_retain(php_type).then_some(8 + index * 16)
+            php_type.codegen_repr().is_refcounted().then_some(8 + index * 16)
         })
         .collect()
 }
 
-/// Returns true when a property slot's low word owns heap storage after a shallow copy.
-fn property_clone_needs_retain(php_type: &PhpType) -> bool {
-    let php_type = php_type.codegen_repr();
-    matches!(php_type, PhpType::Str) || php_type.is_refcounted()
+/// Returns declared `string`-typed property slot offsets that need a deep copy (not a
+/// shared-pointer retain) when cloning.
+///
+/// Strings are exclusively owned in this runtime, never shared via refcount: every other
+/// string-producing path (`load_property_store_value_to_result`'s `__rt_str_persist` call,
+/// mirrored by `release_previous_property_value`'s unconditional `__rt_heap_free_safe` on
+/// overwrite) assumes a property's string buffer has exactly one owner. Aliasing a string
+/// pointer across the source and the clone via `__rt_incref` (as the refcounted-type retain
+/// path does) would let either side's subsequent property write `__rt_heap_free_safe` a
+/// buffer the other object still points to — reproduced as `x->s` reading freed memory
+/// after `y->s = ...` in `test_clone_shallow_copy_independence`.
+fn cloned_property_string_offsets(class_info: &ClassInfo) -> Vec<usize> {
+    class_info
+        .properties
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (property, php_type))| {
+            if class_info.property_slot_is_reference(index, property) {
+                return None;
+            }
+            matches!(php_type.codegen_repr(), PhpType::Str).then_some(8 + index * 16)
+        })
+        .collect()
 }
 
-/// Copies declared 16-byte property slots and retains heap-backed child payloads.
+/// Copies declared 16-byte property slots, retains heap-backed child payloads for
+/// refcounted types, and deep-copies string payloads into a fresh owned buffer.
 fn emit_clone_declared_property_slots(
     ctx: &mut FunctionContext<'_>,
     source_reg: &str,
     dest_reg: &str,
     property_count: usize,
     retained_offsets: &[usize],
+    string_offsets: &[usize],
 ) {
     for index in 0..property_count {
         let offset = 8 + index * 16;
@@ -4695,7 +4730,37 @@ fn emit_clone_declared_property_slots(
         if retained_offsets.contains(&offset) {
             emit_retain_cloned_property_pointer(ctx, source_reg, dest_reg, offset);
         }
+        if string_offsets.contains(&offset) {
+            emit_persist_cloned_property_string(ctx, source_reg, dest_reg, offset);
+        }
     }
+}
+
+/// Deep-copies a cloned string property into a fresh, independently-owned buffer.
+///
+/// `emit_copy_property_slot` has already copied the (aliased) pointer+length pair into the
+/// destination slot; this replaces just the pointer word with a fresh `__rt_str_persist`
+/// copy so the clone and source never share the same buffer. See
+/// [`cloned_property_string_offsets`] for why strings cannot use the refcounted retain path.
+fn emit_persist_cloned_property_string(
+    ctx: &mut FunctionContext<'_>,
+    source_reg: &str,
+    dest_reg: &str,
+    offset: usize,
+) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    // `__rt_str_persist` is a runtime helper: it may clobber any caller-saved scratch
+    // register, including `source_reg`/`dest_reg` (e.g. ARM64's `x9`), so both must be
+    // preserved across the call for the remaining loop iterations in
+    // `emit_clone_declared_property_slots` — mirrors `emit_retain_cloned_property_pointer`.
+    abi::emit_push_reg(ctx.emitter, source_reg);
+    abi::emit_push_reg(ctx.emitter, dest_reg);
+    abi::emit_load_from_address(ctx.emitter, ptr_reg, dest_reg, offset);
+    abi::emit_load_from_address(ctx.emitter, len_reg, dest_reg, offset + 8);
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    abi::emit_pop_reg(ctx.emitter, dest_reg);
+    abi::emit_pop_reg(ctx.emitter, source_reg);
+    abi::emit_store_to_address(ctx.emitter, ptr_reg, dest_reg, offset);
 }
 
 /// Copies one 16-byte declared-property slot from the source object to the clone.
@@ -4961,6 +5026,30 @@ fn owned_reference_property_offsets(class_info: &ClassInfo) -> Vec<usize> {
             }
         })
         .collect()
+}
+
+/// Resolves the byte offset of a known class's boxed-`Mixed`-shaped declared property, for
+/// the `$obj->prop[$key] = value` runtime array-set path
+/// (`lower_property_array_runtime_set` in `lower_inst.rs`).
+///
+/// That path needs the property CELL's address directly (to pass to `__rt_mixed_array_set`,
+/// which mutates the cell in place), rather than a name-based dynamic getter: a declared
+/// property on a statically-known class lives inline at a fixed offset, unlike a `stdClass`/
+/// `Mixed`-receiver property, which is looked up by name in a runtime hashtable. Returns
+/// `None` when the property's storage representation is not `Mixed`-shaped (e.g. a plain
+/// `Array`/`AssocArray` property, which is handled by a separate typed lowering path).
+pub(super) fn known_class_mixed_property_offset(
+    ctx: &FunctionContext<'_>,
+    object: crate::ir::ValueId,
+    property: &str,
+    inst: &Instruction,
+) -> Result<Option<usize>> {
+    let slot = resolve_property_slot(ctx, object, property, inst)?;
+    if slot.php_type.codegen_repr() == PhpType::Mixed {
+        Ok(Some(slot.offset))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Resolves the property slot for a concrete object receiver and declared property name.
@@ -5345,7 +5434,10 @@ fn ensure_property_value_supported(
 }
 
 /// Returns true when a concrete object value is assignable to an object-typed property.
-fn can_store_object_for_object_property(
+///
+/// `pub(super)` so `static_properties.rs` can reuse the same class/interface hierarchy walk
+/// for static-property stores (mirrors the checker's `type_accepts` object-compatibility rule).
+pub(super) fn can_store_object_for_object_property(
     ctx: &FunctionContext<'_>,
     value_ty: &PhpType,
     slot_ty: &PhpType,
@@ -5359,7 +5451,16 @@ fn can_store_object_for_object_property(
 }
 
 /// Returns true when `source_name` is the same class/interface or inherits `target_name`.
+///
+/// An empty `target_name` is the bare `object` type hint (`PhpType::Object(String::new())`),
+/// which accepts any object value — mirrors the checker's `type_accepts` special case in
+/// `src/types/checker/type_compat/unions.rs` (`expected_name.is_empty()`). Without this, a
+/// program the checker accepts (`object $prop = new AnyClass();`) fails at codegen with an
+/// "unsupported EIR backend feature" error.
 fn object_type_is_a(ctx: &FunctionContext<'_>, source_name: &str, target_name: &str) -> bool {
+    if target_name.is_empty() {
+        return true;
+    }
     if same_php_type_name(source_name, target_name) {
         return true;
     }
