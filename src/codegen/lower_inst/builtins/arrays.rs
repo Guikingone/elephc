@@ -224,6 +224,13 @@ pub(crate) fn lower_array_replace(ctx: &mut FunctionContext<'_>, inst: &Instruct
             "array_replace requires at least 1 argument",
         ));
     }
+    // The common two-argument form goes through the shared two-hash choreography, which
+    // converts a scalar indexed input (e.g. `array_replace([10, 20, 30], [1 => 99])`) to an
+    // owned hash before the last-wins overlay and releases the converted temporaries after.
+    // The N-argument loop below keeps the associative-hash fast path for 1 and 3+ arguments.
+    if inst.operands.len() == 2 {
+        return lower_two_hash_arg_builtin(ctx, inst, "array_replace", "__rt_array_replace", None);
+    }
     // Require every argument to be an associative hash with the SAME codegen
     // representation as the first. `__rt_hash_replace_into` copies source entries
     // verbatim (like `__rt_hash_union`), so the result type must match every operand's
