@@ -446,7 +446,47 @@ fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                             && function_belongs_to_phar_archive_helper_class(function);
                         features.descriptor_invoker |=
                             typed_builtin_requires_descriptor_invoker(function, inst, target);
+                        // `defined($name)`/`enum_exists($name)` with a non-literal name lower to
+                        // the typed `RuntimeFnId::Defined`/`EnumExists` runtime lookups (literal
+                        // calls fold to a static boolean before reaching EIR, so a typed target
+                        // here is always the runtime case). The name-based
+                        // `builtin_call_requires_const_introspection` cannot see a typed target's
+                        // name, so gate `__rt_defined`/`__rt_enum_exists`/`__rt_constant` emission
+                        // on the target identity instead.
+                        features.const_introspection |= matches!(
+                            target,
+                            crate::ir::RuntimeFnId::Defined | crate::ir::RuntimeFnId::EnumExists
+                        );
                     }
+                    if builtin_call_requires_mb_strlen(module, inst) {
+                        features.mb_strlen = true;
+                    }
+                    if builtin_call_requires_phar_archive(module, function, inst) {
+                        features.phar_archive = true;
+                    }
+                    if builtin_call_requires_descriptor_invoker(module, function, inst) {
+                        features.descriptor_invoker = true;
+                    }
+                    if builtin_call_requires_const_introspection(module, function, inst) {
+                        features.const_introspection = true;
+                    }
+                    if builtin_call_requires_class_introspection(module, function, inst) {
+                        features.class_introspection = true;
+                    }
+                    if builtin_call_requires_class_relation_introspection(module, function, inst) {
+                        features.class_relation_introspection = true;
+                    }
+                    if builtin_call_requires_eval(module, inst) {
+                        features.eval_bridge = true;
+                    }
+                }
+                Op::BuiltinCall => {
+                    // Campaign-legacy builtins still lower through Op::BuiltinCall, so they need
+                    // the same name-based runtime-feature detection as the migrated
+                    // Op::RuntimeCall builtins — otherwise a gated helper they reference is never
+                    // emitted. e.g. `constant($name)` emits `bl __rt_constant`, but __rt_constant
+                    // (and the sibling const-introspection helpers) are only emitted when
+                    // features.const_introspection is set, which this arm now detects.
                     if builtin_call_requires_mb_strlen(module, inst) {
                         features.mb_strlen = true;
                     }
