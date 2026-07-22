@@ -78,6 +78,13 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_array_get_indexed");
     emitter.instruction("ldr x10, [x0, #8]");                                   // x10 = array pointer
     emitter.instruction("cbz x10, __rt_mixed_array_get_null");                  // defensive null guard
+    // A value boxed with the indexed-array tag can have been promoted to an associative
+    // hash at runtime by a string/Mixed-key write (its static type stayed `array` while the
+    // storage became a hash). Probe the runtime heap-kind byte and read a promoted hash
+    // through the hash path so string keys resolve instead of missing.
+    emitter.instruction("ldrb w9, [x10, #-8]");                                 // runtime heap-kind byte of the array payload
+    emitter.instruction("cmp w9, #3");                                          // heap kind 3 = associative hash (promoted array)?
+    emitter.instruction("b.eq __rt_mixed_array_get_indexed_as_hash");           // read the promoted hash through the hash-get path
     emitter.instruction("ldr x11, [sp, #16]");                                  // load key_hi
     emitter.instruction("cmn x11, #1");                                         // compare with -1 (int-key sentinel)
     emitter.instruction("b.ne __rt_mixed_array_get_null");                      // string keys on indexed arrays → null
@@ -133,10 +140,15 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_warn_undefined_array_key_int");                // emit or suppress the undefined-array-key warning
     emitter.instruction("b __rt_mixed_array_get_null");                         // return boxed Mixed(null) after the warning
 
+    // Entry point for a promoted indexed array: x10 already holds the hash pointer.
+    emitter.label("__rt_mixed_array_get_indexed_as_hash");
+    emitter.instruction("b __rt_mixed_array_get_hash_from_ptr");                 // reuse the shared hash-get path below
+
     // Associative array: hash_get with normalized key.
     emitter.label("__rt_mixed_array_get_assoc");
     emitter.instruction("ldr x10, [x0, #8]");                                   // x10 = hash pointer
     emitter.instruction("cbz x10, __rt_mixed_array_get_null");                  // defensive null guard
+    emitter.label("__rt_mixed_array_get_hash_from_ptr");                        // shared entry with x10 = hash pointer
     emitter.instruction("mov x0, x10");                                         // x0 = hash pointer for hash_get
     emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = key_lo
     emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = key_hi
@@ -295,6 +307,12 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // r10 = array pointer
     emitter.instruction("test r10, r10");                                       // defensive null guard
     emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    // A value boxed with the indexed-array tag can have been promoted to an associative
+    // hash at runtime by a string/Mixed-key write. Probe the runtime heap-kind byte and
+    // read a promoted hash through the hash path so string keys resolve instead of missing.
+    emitter.instruction("movzx r9d, BYTE PTR [r10 - 8]");                       // runtime heap-kind byte of the array payload
+    emitter.instruction("cmp r9d, 3");                                          // heap kind 3 = associative hash (promoted array)?
+    emitter.instruction("je __rt_mixed_array_get_indexed_as_hash");             // read the promoted hash through the hash-get path
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // load key_hi
     emitter.instruction("cmp r11, -1");                                         // int-key sentinel?
     emitter.instruction("jne __rt_mixed_array_get_null");                       // string key on indexed array → null
@@ -354,10 +372,15 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_warn_undefined_array_key_int");              // emit or suppress the undefined-array-key warning
     emitter.instruction("jmp __rt_mixed_array_get_null");                       // return boxed Mixed(null) after the warning
 
+    // Entry point for a promoted indexed array: r10 already holds the hash pointer.
+    emitter.label("__rt_mixed_array_get_indexed_as_hash");
+    emitter.instruction("jmp __rt_mixed_array_get_hash_from_ptr");              // reuse the shared hash-get path below
+
     emitter.label("__rt_mixed_array_get_assoc");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // r10 = hash pointer
     emitter.instruction("test r10, r10");                                       // defensive null guard
     emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    emitter.label("__rt_mixed_array_get_hash_from_ptr");                        // shared entry with r10 = hash pointer
     emitter.instruction("mov rdi, r10");                                        // rdi = hash pointer for hash_get
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // rsi = key_lo
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // rdx = key_hi
