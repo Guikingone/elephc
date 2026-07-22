@@ -2052,8 +2052,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Later source-order stores can widen the final frame slot after this load has
     /// already been lowered. Array/hash/object/iterable loads are therefore treated as
     /// provisional owners; builder finalization removes their emitted releases if the
-    /// slot stays concrete. Callable loads use the eager answer because assignment has
-    /// a separate move-vs-retain decision that cannot be repaired by pruning a release.
+    /// slot stays concrete. Callable and Str loads use the eager answer because
+    /// assignment has a separate move-vs-retain decision that cannot be repaired by
+    /// pruning a release.
+    ///
+    /// A `Mixed`/`Union` storage slot narrowed to `Str` always allocates: codegen's
+    /// `coerce_loaded_local_to_result_type` unboxes it through `__rt_mixed_cast_string`,
+    /// which persists a fresh heap copy of the payload (or converts int/float/bool
+    /// payloads through `itoa`/`ftoa`, which also allocate). That freshly persisted
+    /// buffer is distinct from the payload the boxed local slot itself still owns, so
+    /// it needs its own release; treating the load as borrowed here silently leaked it
+    /// (issue #540 — a plain `echo $mixedNarrowedToStr;` or `$b = $a;` leaked one
+    /// persisted-string block per read).
     ///
     /// Callers that *publish* the pointer without consuming the local's ownership
     /// (notably `throw $e`) must still retain: the slot remains an owner after the load.
@@ -2085,7 +2095,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return true;
         }
         matches!(storage_type, PhpType::Mixed | PhpType::Union(_))
-            && matches!(result_type, PhpType::Callable)
+            && matches!(result_type, PhpType::Callable | PhpType::Str)
     }
 
     /// Returns whether a generic cast owns a detached string copy of a Mixed operand.
