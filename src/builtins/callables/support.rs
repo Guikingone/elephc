@@ -42,11 +42,15 @@ pub(crate) fn check_class_like_exists(_cx: &mut BuiltinCheckCtx) -> Result<PhpTy
 /// This hook is called with `lazy_check: true` so inference happens here, not in the common path.
 pub(crate) fn check_class_relation(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let first_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    let dynamic_eval_target = cx.checker.eval_barrier_active
-        && matches!(first_ty.codegen_repr(), PhpType::Mixed | PhpType::Str);
+    // An object or string literal resolves against the closed world at compile time. A
+    // non-literal string or Mixed name (e.g. a `string|int` return threaded through a variable)
+    // resolves at runtime through `__rt_class_relation_lookup`; the EIR feature scan sets
+    // class_relation_introspection for any non-const argument, so the helper is always emitted.
+    // Anything else (int, array, ...) cannot name a class and stays a compile-time error.
+    let runtime_name_target = matches!(first_ty.codegen_repr(), PhpType::Mixed | PhpType::Str);
     if !matches!(first_ty, PhpType::Object(_))
         && !matches!(cx.args[0].kind, ExprKind::StringLiteral(_))
-        && !dynamic_eval_target
+        && !runtime_name_target
     {
         return Err(CompileError::new(
             cx.span,
