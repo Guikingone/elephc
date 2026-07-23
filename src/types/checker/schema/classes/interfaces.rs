@@ -37,7 +37,7 @@ pub(super) fn collect_interfaces(
 ) -> Result<(), CompileError> {
     let mut seen_interfaces: HashSet<String> = state.interfaces.iter().cloned().collect();
     let mut queue = Vec::new();
-    for interface_name in class.implements.iter().rev() {
+    for interface_name in class.implements.iter() {
         if interface_is_throwable_contract(checker, interface_name)
             && !class_can_implement_throwable_contract(state, class)
         {
@@ -66,7 +66,14 @@ pub(super) fn collect_interfaces(
         }
         queue.push(interface_name.clone());
     }
-    while let Some(interface_name) = queue.pop() {
+    // Drain the queue FIFO (via a head cursor) so the result is breadth-first: all directly
+    // declared interfaces in declaration order first, then their inherited parents. This matches
+    // PHP's class_implements() ordering (e.g. Iterator, Countable, ArrayAccess, then the inherited
+    // Traversable) — a LIFO pop would splice each interface's parents in immediately (depth-first).
+    let mut head = 0;
+    while head < queue.len() {
+        let interface_name = queue[head].clone();
+        head += 1;
         if !seen_interfaces.insert(interface_name.clone()) {
             continue;
         }
@@ -76,7 +83,7 @@ pub(super) fn collect_interfaces(
                 &format!("Unknown interface: {}", interface_name),
             )
         })?;
-        for parent_name in interface_info.parents.iter().rev() {
+        for parent_name in interface_info.parents.iter() {
             queue.push(parent_name.clone());
         }
         state.interfaces.push(interface_name);
