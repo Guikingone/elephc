@@ -982,6 +982,7 @@ fn is_builtin_throwable_payload_class(class_name: &str) -> bool {
             | "TypeError"
             | "ValueError"
             | "ArithmeticError"
+            | "UnhandledMatchError"
             | "Exception"
             | "RuntimeException"
             | "ReflectionException"

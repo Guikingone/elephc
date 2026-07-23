@@ -1192,9 +1192,9 @@ pub(super) fn check_const_decl(
 
 /// Type-checks a list unpacking assignment (`[$a, $b, ...] = $arr`).
 ///
-/// Infers the type of the right-hand side expression and validates it is an array.
-/// For array types, extracts the element type and assigns it to each variable in `vars`.
-/// Returns an error if the right-hand side is not an array type.
+/// Infers the right-hand side and accepts homogeneous indexed arrays or associative arrays.
+/// Indexed arrays propagate their element type, while associative values bind adaptively as
+/// `Mixed`. Returns an error for non-array types, including unresolved nullable unions.
 pub(super) fn check_list_unpack(
     checker: &mut Checker,
     vars: &[String],
@@ -1203,31 +1203,27 @@ pub(super) fn check_list_unpack(
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
     let arr_ty = checker.infer_type(value, env)?;
-    match &arr_ty {
-        PhpType::Array(elem_ty) => {
-            for var in vars {
-                let unpack_ty = *elem_ty.clone();
-                env.insert(var.clone(), unpack_ty.clone());
-                update_list_unpack_callable_metadata(checker, var, value, &unpack_ty);
-                checker.reflection_class_targets.remove(var);
-            }
-        }
-        // Gradual right-hand side (`AssocArray`, `Mixed`, `?array`, or a union containing an
-        // array): the positional element types are not statically homogeneous, so bind each
-        // target as `Mixed`. PHP reads each positional offset at runtime (a missing offset
-        // yields null with a warning). A proven non-array RHS stays loud below.
-        t if array_arg_is_gradually_acceptable(t) => {
-            for var in vars {
-                env.insert(var.clone(), PhpType::Mixed);
-                update_list_unpack_callable_metadata(checker, var, value, &PhpType::Mixed);
-            }
-        }
+    let unpack_ty = match &arr_ty {
+        PhpType::Array(elem_ty) => *elem_ty.clone(),
+        // Associative arrays can contain integer keys used by positional destructuring. Their
+        // element type stays adaptive because hash values may be heterogeneous or absent.
+        PhpType::AssocArray { .. } => PhpType::Mixed,
+        // Gradual right-hand side (`Mixed`, `?array`, or a union containing an array): the
+        // positional element types are not statically homogeneous, so bind each target as
+        // `Mixed`. PHP reads each positional offset at runtime (a missing offset yields null
+        // with a warning). A proven non-array RHS stays loud below.
+        t if array_arg_is_gradually_acceptable(t) => PhpType::Mixed,
         _ => {
             return Err(CompileError::new(
                 span,
                 "List unpacking requires an array on the right-hand side",
             ));
         }
+    };
+    for var in vars {
+        env.insert(var.clone(), unpack_ty.clone());
+        update_list_unpack_callable_metadata(checker, var, value, &unpack_ty);
+        checker.reflection_class_targets.remove(var);
     }
     Ok(())
 }

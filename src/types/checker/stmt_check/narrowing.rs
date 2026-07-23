@@ -12,8 +12,8 @@
 //!   to `array<mixed>|Countable`. Narrowing is applied to each clause in an
 //!   if/elseif*/else chain (each subsequent clause, and the else, see the accumulated complement
 //!   from previous guards). For a chain with no else where *every* clause body always diverges
-//!   (return/throw/exit/die/never-function), the accumulated complement is applied to the statements
-//!   after the entire if construct.
+//!   (return/throw/break/continue/exit/die/never-function), the accumulated complement is applied
+//!   to the statements after the entire if construct.
 //! - `and_chain_then_narrowings` collects the guard-true narrowings for a single guard or a pure
 //!   `&&` chain of guards, folding repeated guards on one variable cumulatively; it powers
 //!   `switch (true)` case-body narrowing. `case_body_terminates` gates that narrowing under
@@ -265,7 +265,31 @@ impl Checker {
         }
     }
 
-    /// Returns true when a statement body always diverges.
+    /// Returns true when a statement body cannot fall through to the following statement.
+    ///
+    /// A body cannot fall through if its last statement is:
+    /// - `return`, `throw`, `break`, or `continue`
+    /// - a call to `exit()` or `die()`
+    /// - a call to a user function whose declared return type is `never`
+    ///
+    /// This is used by type narrowing so that an `if (guard) { ... diverging ... }` (with no else)
+    /// allows the statements *after* the if to be narrowed to the complement type.
+    pub(crate) fn body_cannot_fall_through(&self, body: &[Stmt]) -> bool {
+        let Some(last) = body.last() else {
+            return false;
+        };
+
+        match &last.kind {
+            StmtKind::Return(_)
+            | StmtKind::Throw(_)
+            | StmtKind::Break(_)
+            | StmtKind::Continue(_) => true,
+            StmtKind::ExprStmt(expr) => self.expr_always_diverges(expr),
+            _ => false,
+        }
+    }
+
+    /// Returns true when the body's control cannot reach past its last statement.
     ///
     /// A body is considered diverging if its last statement is:
     /// - `return` or `throw`

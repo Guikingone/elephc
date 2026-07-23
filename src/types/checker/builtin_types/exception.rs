@@ -354,7 +354,8 @@ fn nullable_throwable_type() -> TypeExpr {
 
 /// Patches the checker metadata for the Throwable interface and all builtin exception classes.
 /// Updates return types for getter methods and the `__construct` parameter types for Error, TypeError,
-/// ValueError, Exception, RuntimeException, ReflectionException, JsonException, and FiberError.
+/// ValueError, ArithmeticError, UnhandledMatchError, Exception, RuntimeException,
+/// ReflectionException, JsonException, and FiberError.
 pub(crate) fn patch_builtin_exception_signatures(checker: &mut Checker) {
     let nullable_throwable = checker.normalize_union_type(vec![
         PhpType::Object("Throwable".to_string()),
@@ -403,6 +404,7 @@ pub(crate) fn patch_builtin_exception_signatures(checker: &mut Checker) {
         "TypeError",
         "ValueError",
         "ArithmeticError",
+        "UnhandledMatchError",
         "Exception",
         "RuntimeException",
         "ReflectionException",

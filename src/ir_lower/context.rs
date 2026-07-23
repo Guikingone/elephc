@@ -784,13 +784,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
     }
 
-    /// Applies only the materialized local-scope part needed by EIR eval AOT.
-    pub(crate) fn apply_eval_scope_barrier(&mut self) {
+    /// Applies the materialized local scope and widens caller slots written by EIR eval AOT.
+    pub(crate) fn apply_eval_scope_barrier(&mut self, write_names: &BTreeSet<String>) {
         self.eval_barrier_active = true;
         self.declare_eval_scope_local();
         // Scope-sync codegen paths flush program globals into the local scope,
         // so the global-scope handle slot must exist alongside the scope slot.
         self.declare_eval_global_scope_local();
+        let widen_names = write_names
+            .iter()
+            .filter(|name| {
+                self.local_kinds.get(*name).copied() == Some(LocalKind::PhpLocal)
+                    && self
+                        .local_slots
+                        .get(*name)
+                        .is_some_and(|slot| eval_barrier_can_widen(&self.builder.local_php_type(*slot)))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for name in widen_names {
+            self.set_local_type(&name, PhpType::Mixed);
+        }
     }
 
     /// Ensures top-level eval fragments can see `$argc` and `$argv` by name.
@@ -2164,12 +2178,33 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         )
     }
 
-    /// Returns true for builtin calls whose return value is newly allocated for the caller.
-    fn value_is_owning_builtin_temporary(&self, _value: ValueId) -> bool {
-        // Builtin calls no longer lower through a dedicated `Op::BuiltinCall`; registry
-        // builtins carry their own ownership metadata, so this legacy fast-path is inert.
-        let _ = builtin_call_result_owns_storage_as_temporary;
-        false
+    /// Returns true for typed builtin calls whose result is newly allocated for the caller.
+    ///
+    /// Campaign-legacy builtins that still lower through `Op::BuiltinCall` fall through to the
+    /// `_ => false` arm (as before the merge); the migrated `Op::RuntimeCall` builtins carry their
+    /// ownership in the target's result-ownership metadata, detected here.
+    fn value_is_owning_builtin_temporary(&self, value: ValueId) -> bool {
+        let Some(inst) = self.builder.value_defining_instruction(value) else {
+            return false;
+        };
+        match inst.immediate {
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::ArrayFetchForWrite,
+            )) => false,
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))) => {
+                matches!(
+                    target.result_ownership(),
+                    crate::builtins::semantics::BuiltinResultOwnership::Fresh
+                )
+            }
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::UnaryString(_))) => true,
+            Some(Immediate::Data(name_id)) if inst.op == Op::LanguageConstructCall => self
+                .data
+                .function_names
+                .get(name_id.as_raw() as usize)
+                .is_some_and(|name| php_symbol_key(name.trim_start_matches('\\')) == "eval"),
+            _ => false,
+        }
     }
 
     /// Returns true when straight-line callable binding metadata is safe for a local.
@@ -2552,89 +2587,6 @@ fn local_kind_uses_plain_store_cleanup(kind: LocalKind) -> bool {
             | LocalKind::HiddenTemp
             | LocalKind::OwnedTemp
             | LocalKind::NamedArgTemp
-    )
-}
-
-/// Returns true when a builtin result must be released after a retaining consumer.
-///
-/// The result of a `BuiltinCall` is only released as a temporary when the callee OWNS its
-/// storage — i.e. it returns a freshly allocated refcounted value (array/string) whose
-/// lifetime is independent of its arguments. Adding a builtin here must not include any
-/// BORROWING builtin (current/reset/next/prev/key/each and similar element-access
-/// helpers return a pointer into a live argument array); releasing such a result would
-/// free storage still owned by the caller and corrupt the heap.
-///
-/// `end` is listed because elephc's `__rt_end_boxed` does NOT return a borrowed pointer
-/// into the argument array: it boxes the last element into a freshly allocated owned Mixed
-/// cell (or a boxed `false`), so its result owns independent storage and must be released
-/// when discarded.
-fn builtin_call_result_owns_storage_as_temporary(name: &str) -> bool {
-    let name = php_symbol_key(name.trim_start_matches('\\'));
-    matches!(
-        name.as_str(),
-        // Legacy classifications that have not yet migrated into BuiltinSpec metadata.
-        // Array/mixed-returning builtins that allocate fresh result storage.
-        "array_chunk"
-            | "end"
-            | "array_column"
-            | "array_combine"
-            | "array_diff"
-            | "eval"
-            | "array_fill"
-            | "array_fill_keys"
-            | "array_intersect"
-            | "array_keys"
-            | "array_map"
-            | "array_merge"
-            | "array_pad"
-            | "array_pop"
-            | "array_replace"
-            | "array_replace_recursive"
-            | "array_reverse"
-            | "array_shift"
-            | "array_slice"
-            | "array_unique"
-            | "array_values"
-            | "explode"
-            | "iterator_to_array"
-            | "preg_split"
-            | "range"
-            | "str_split"
-            // String-returning builtins that allocate fresh owned string storage.
-            | "ptr_read_string"
-            | "strpos"
-            | "strrpos"
-            // The trim family persists its borrowed slice into an owned heap copy
-            // (see `lower_trim_like`), so its result is a fresh owning temporary like the
-            // allocating builtins above. Without this, `$s = trim($s)` frees the old buffer the
-            // slice still aliases before copying it (symfony/yaml `Inline::parse` corruption).
-            | "trim"
-            | "ltrim"
-            | "rtrim"
-            | "chop"
-            // `box_owned_string_or_false_result` allocates a fresh OWNED Mixed cell (or a
-            // boxed `false`) holding an owned persisted string; its result owns independent
-            // storage, so its discarded temporary must be released like end/array_pop.
-            // Each name below funnels its lowering through box_owned_string_or_false_result.
-            | "realpath"
-            | "readlink"
-            | "readdir"
-            | "ini_get"
-            | "ini_set"
-            | "get_cfg_var"
-            | "hash_file"
-            | "file_get_contents"
-            | "stream_resolve_include_path"
-            | "stream_socket_get_name"
-            | "stream_socket_recvfrom"
-            | "gethostbyaddr"
-            | "getprotobynumber"
-            | "getservbyport"
-            // zval bridge: `zval_unpack` rebuilds a fresh owned value (scalars box a
-            // new Mixed cell; strings persist an owned copy; arrays own-transfer the
-            // freshly rebuilt array into the cell with refcount 1), so its Mixed result
-            // is an owning temporary that must be released after a retaining insert.
-            | "zval_unpack"
     )
 }
 
