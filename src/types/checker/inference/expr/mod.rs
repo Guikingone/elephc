@@ -19,7 +19,7 @@ mod assignments;
 mod by_ref_outputs;
 mod class_refs;
 mod effects;
-mod static_closure;
+pub(crate) mod static_closure;
 use super::super::type_compat::type_is_gradual_object_family;
 use super::super::Checker;
 use super::syntactic::wider_type_syntactic;

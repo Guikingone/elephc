@@ -216,6 +216,215 @@ fn instanceof_target_uses_this(target: &InstanceOfTarget) -> bool {
     }
 }
 
+/// Returns true when the closure body is provably free of every lexically-resolved scope
+/// reference: `$this`, `self::`, `static::`, and `parent::` (recursively, including nested
+/// closures/arrow functions). This is the JURY-mandated gate for `Closure::bind`/`bindTo` scope
+/// rebinding: `crate::ir_lower` resolves those references against the closure's lexical class, so
+/// they must be absent before the checker relaxes visibility against the rebound scope.
+pub(crate) fn closure_body_free_of_self_scope(body: &[Stmt]) -> bool {
+    !body_uses_this(body) && !body.iter().any(stmt_uses_relative_static)
+}
+
+/// Returns true if the statement references `self::`/`static::`/`parent::` anywhere. `$this` is
+/// covered separately by `stmt_uses_this`; this scanner only adds the relative static receivers.
+fn stmt_uses_relative_static(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Echo(e)
+        | StmtKind::Throw(e)
+        | StmtKind::ExprStmt(e)
+        | StmtKind::Include { path: e, .. }
+        | StmtKind::ConstDecl { value: e, .. }
+        | StmtKind::StaticVar { init: e, .. }
+        | StmtKind::ListUnpack { value: e, .. }
+        | StmtKind::Return(Some(e))
+        | StmtKind::Assign { value: e, .. }
+        | StmtKind::TypedAssign { value: e, .. }
+        | StmtKind::ArrayPush { value: e, .. } => expr_uses_relative_static(e),
+        StmtKind::ArrayAssign { index, value, .. } => {
+            expr_uses_relative_static(index) || expr_uses_relative_static(value)
+        }
+        StmtKind::NestedArrayAssign { target, value } => {
+            expr_uses_relative_static(target) || expr_uses_relative_static(value)
+        }
+        StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyArrayPush { object, value, .. } => {
+            expr_uses_relative_static(object) || expr_uses_relative_static(value)
+        }
+        StmtKind::PropertyArrayAssign {
+            object,
+            index,
+            value,
+            ..
+        } => {
+            expr_uses_relative_static(object)
+                || expr_uses_relative_static(index)
+                || expr_uses_relative_static(value)
+        }
+        StmtKind::StaticPropertyAssign { value, .. }
+        | StmtKind::StaticPropertyArrayPush { value, .. } => expr_uses_relative_static(value),
+        StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
+            expr_uses_relative_static(index) || expr_uses_relative_static(value)
+        }
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            expr_uses_relative_static(condition)
+                || then_body.iter().any(stmt_uses_relative_static)
+                || elseif_clauses.iter().any(|(cond, body)| {
+                    expr_uses_relative_static(cond) || body.iter().any(stmt_uses_relative_static)
+                })
+                || else_body
+                    .as_deref()
+                    .is_some_and(|b| b.iter().any(stmt_uses_relative_static))
+        }
+        StmtKind::While { condition, body } | StmtKind::DoWhile { body, condition } => {
+            expr_uses_relative_static(condition) || body.iter().any(stmt_uses_relative_static)
+        }
+        StmtKind::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_deref().is_some_and(stmt_uses_relative_static)
+                || condition.as_ref().is_some_and(expr_uses_relative_static)
+                || update.as_deref().is_some_and(stmt_uses_relative_static)
+                || body.iter().any(stmt_uses_relative_static)
+        }
+        StmtKind::Foreach { array, body, .. } => {
+            expr_uses_relative_static(array) || body.iter().any(stmt_uses_relative_static)
+        }
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => {
+            expr_uses_relative_static(subject)
+                || cases.iter().any(|(patterns, body)| {
+                    patterns.iter().any(expr_uses_relative_static)
+                        || body.iter().any(stmt_uses_relative_static)
+                })
+                || default
+                    .as_deref()
+                    .is_some_and(|b| b.iter().any(stmt_uses_relative_static))
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            try_body.iter().any(stmt_uses_relative_static)
+                || catches
+                    .iter()
+                    .any(|catch| catch.body.iter().any(stmt_uses_relative_static))
+                || finally_body
+                    .as_deref()
+                    .is_some_and(|b| b.iter().any(stmt_uses_relative_static))
+        }
+        StmtKind::NamespaceBlock { body, .. } => body.iter().any(stmt_uses_relative_static),
+        _ => false,
+    }
+}
+
+/// Returns true if the expression references `self::`/`static::`/`parent::` anywhere, via any of
+/// the seven `StaticReceiver`-bearing `ExprKind`s, recursing through every sub-expression.
+fn expr_uses_relative_static(expr: &Expr) -> bool {
+    let relative = |receiver: &crate::parser::ast::StaticReceiver| {
+        matches!(
+            receiver,
+            crate::parser::ast::StaticReceiver::Self_
+                | crate::parser::ast::StaticReceiver::Static
+                | crate::parser::ast::StaticReceiver::Parent
+        )
+    };
+    match &expr.kind {
+        ExprKind::ClassConstant { receiver }
+        | ExprKind::ScopedConstantAccess { receiver, .. }
+        | ExprKind::StaticPropertyAccess { receiver, .. } => relative(receiver),
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            relative(receiver) || expr_uses_relative_static(property)
+        }
+        ExprKind::StaticMethodCall { receiver, args, .. } => {
+            relative(receiver) || args.iter().any(expr_uses_relative_static)
+        }
+        ExprKind::NewScopedObject { receiver, args } => {
+            relative(receiver) || args.iter().any(expr_uses_relative_static)
+        }
+        ExprKind::BinaryOp { left, right, .. } => {
+            expr_uses_relative_static(left) || expr_uses_relative_static(right)
+        }
+        ExprKind::InstanceOf { value, target } => {
+            expr_uses_relative_static(value)
+                || matches!(target, InstanceOfTarget::Expr(e) if expr_uses_relative_static(e))
+        }
+        ExprKind::Negate(inner)
+        | ExprKind::Not(inner)
+        | ExprKind::BitNot(inner)
+        | ExprKind::Throw(inner)
+        | ExprKind::ErrorSuppress(inner)
+        | ExprKind::Print(inner)
+        | ExprKind::Spread(inner)
+        | ExprKind::PtrCast { expr: inner, .. }
+        | ExprKind::Cast { expr: inner, .. } => expr_uses_relative_static(inner),
+        ExprKind::NullCoalesce { value, default }
+        | ExprKind::ShortTernary { value, default } => {
+            expr_uses_relative_static(value) || expr_uses_relative_static(default)
+        }
+        ExprKind::FunctionCall { args, .. } => args.iter().any(expr_uses_relative_static),
+        ExprKind::ClosureCall { args, .. } | ExprKind::NewObject { args, .. } => {
+            args.iter().any(expr_uses_relative_static)
+        }
+        ExprKind::ExprCall { callee, args } => {
+            expr_uses_relative_static(callee) || args.iter().any(expr_uses_relative_static)
+        }
+        ExprKind::MethodCall { object, args, .. }
+        | ExprKind::NullsafeMethodCall { object, args, .. } => {
+            expr_uses_relative_static(object) || args.iter().any(expr_uses_relative_static)
+        }
+        ExprKind::ArrayLiteral(items) => items.iter().any(expr_uses_relative_static),
+        ExprKind::ArrayLiteralAssoc(pairs) => pairs
+            .iter()
+            .any(|(k, v)| expr_uses_relative_static(k) || expr_uses_relative_static(v)),
+        ExprKind::ArrayAccess { array, index } => {
+            expr_uses_relative_static(array) || expr_uses_relative_static(index)
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            expr_uses_relative_static(condition)
+                || expr_uses_relative_static(then_expr)
+                || expr_uses_relative_static(else_expr)
+        }
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => {
+            expr_uses_relative_static(subject)
+                || arms.iter().any(|(patterns, value)| {
+                    patterns.iter().any(expr_uses_relative_static)
+                        || expr_uses_relative_static(value)
+                })
+                || default.as_deref().is_some_and(expr_uses_relative_static)
+        }
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::NullsafePropertyAccess { object, .. } => expr_uses_relative_static(object),
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            expr_uses_relative_static(object) || expr_uses_relative_static(property)
+        }
+        ExprKind::NamedArg { value, .. } => expr_uses_relative_static(value),
+        ExprKind::BufferNew { len, .. } => expr_uses_relative_static(len),
+        ExprKind::Closure { body, .. } => body.iter().any(stmt_uses_relative_static),
+        _ => false,
+    }
+}
+
 /// Recursively checks a statement and its children, rejecting any `$this` usage.
 /// Used to enforce the PHP rule that static closures cannot capture `$this`.
 fn stmt_must_not_use_this(stmt: &Stmt, span: Span) -> Result<(), CompileError> {

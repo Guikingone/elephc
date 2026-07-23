@@ -880,7 +880,7 @@ impl Checker {
     }
 
     /// Resolves a static callable-array receiver to a concrete class name.
-    fn resolve_callable_array_static_receiver_class(
+    pub(crate) fn resolve_callable_array_static_receiver_class(
         &self,
         receiver: &StaticReceiver,
         span: Span,
@@ -911,7 +911,7 @@ impl Checker {
     }
 
     /// Resolves a class name case-insensitively against declared classes.
-    fn resolve_callable_array_class_name<'a>(&'a self, class_name: &str) -> Option<&'a str> {
+    pub(crate) fn resolve_callable_array_class_name<'a>(&'a self, class_name: &str) -> Option<&'a str> {
         let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
         self.classes
             .keys()

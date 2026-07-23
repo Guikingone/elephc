@@ -926,8 +926,22 @@ impl Checker {
         // `$closure->bindTo(...)`: it returns a new closure with `$this` rebound.
         // `$scope` is accepted and ignored (closed-world visibility).
         if class_name.trim_start_matches('\\') == "Closure" && php_symbol_key(method) == "bind" {
-            for arg in args {
-                self.infer_type(arg, env)?;
+            // `Closure::bind($closure, $newThis, $scope)`: when the closure is a literal, `$scope`
+            // is a literal class, and the body is free of lexically-resolved scope references, the
+            // closure body's protected/private access on parameters typed as the rebound scope is
+            // authorized against that scope (see `bound_scope_context`). The context is active only
+            // while inferring the closure literal argument.
+            let scope_ctx = self.closure_bind_scope_context(args);
+            for (index, arg) in args.iter().enumerate() {
+                if index == 0 && scope_ctx.is_some() {
+                    let saved = self.bound_scope_context.take();
+                    self.bound_scope_context = scope_ctx.clone();
+                    let result = self.infer_type(arg, env);
+                    self.bound_scope_context = saved;
+                    result?;
+                } else {
+                    self.infer_type(arg, env)?;
+                }
             }
             return Ok(PhpType::Callable);
         }
@@ -1343,6 +1357,79 @@ impl Checker {
             }
         }
         Ok(PhpType::Int)
+    }
+
+    /// Builds the `BoundScopeContext` for a `Closure::bind($closure, $newThis, $scope)` call, or
+    /// `None` when the rebind does not qualify for relaxed visibility.
+    ///
+    /// Qualifies only when: the first argument is a closure literal, the (optional) third argument
+    /// resolves to a literal scope class, the closure body is provably free of
+    /// `$this`/`self::`/`static::`/`parent::`, and at least one closure parameter is declared with
+    /// a type equal to or a subclass of the scope class. Those parameters become `eligible_params`,
+    /// the only receivers `can_access_property` will authorize against the rebound scope.
+    /// Returns whether a static call is `Closure::bind(...)` (the static form that can carry a
+    /// scope-rebind argument), by receiver name and method, independent of argument count.
+    pub(crate) fn is_closure_bind_static_call(
+        &self,
+        receiver: &StaticReceiver,
+        method: &str,
+    ) -> bool {
+        php_symbol_key(method) == "bind"
+            && matches!(
+                receiver,
+                StaticReceiver::Named(name)
+                    if name.as_str().trim_start_matches('\\') == "Closure"
+            )
+    }
+
+    pub(crate) fn closure_bind_scope_context(
+        &self,
+        args: &[Expr],
+    ) -> Option<crate::types::checker::BoundScopeContext> {
+        let closure = args.first()?;
+        let scope_arg = args.get(2)?;
+        let ExprKind::Closure { params, body, .. } = &closure.kind else {
+            return None;
+        };
+        if !crate::types::checker::inference::expr::static_closure::closure_body_free_of_self_scope(
+            body,
+        ) {
+            return None;
+        }
+        let scope_class = self.closure_bind_scope_class(scope_arg)?;
+        let mut eligible_params = std::collections::HashSet::new();
+        for (param_name, param_type, _default, _by_ref) in params {
+            let Some(type_expr) = param_type else { continue };
+            let Ok(PhpType::Object(param_class)) =
+                self.resolve_type_expr(type_expr, scope_arg.span)
+            else {
+                continue;
+            };
+            if param_class == scope_class || self.is_subclass_of(&param_class, &scope_class) {
+                eligible_params.insert(param_name.clone());
+            }
+        }
+        if eligible_params.is_empty() {
+            return None;
+        }
+        Some(crate::types::checker::BoundScopeContext {
+            scope_class,
+            eligible_params,
+        })
+    }
+
+    /// Resolves a `Closure::bind` `$scope` argument (`X::class` or a class-name string literal) to a
+    /// concrete class name, or `None` for a dynamic/unsupported scope expression.
+    fn closure_bind_scope_class(&self, scope_arg: &Expr) -> Option<String> {
+        match &scope_arg.kind {
+            ExprKind::StringLiteral(name) => self
+                .resolve_callable_array_class_name(name.trim_start_matches('\\'))
+                .map(str::to_string),
+            ExprKind::ClassConstant { receiver } => self
+                .resolve_callable_array_static_receiver_class(receiver, scope_arg.span)
+                .ok(),
+            _ => None,
+        }
     }
 
     /// Returns preserved late-static return syntax for a static method.

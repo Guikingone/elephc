@@ -441,8 +441,25 @@ impl Checker {
                 ) {
                     env.insert(var, ty);
                 }
-                for arg in &expanded_args {
-                    self.infer_type_with_assignment_effects(arg, env)?;
+                // `Closure::bind($closure, $newThis, $scope)`: the closure literal's body is
+                // type-checked here (assignment-effects walk), before the static-call inference
+                // runs, so the rebound-scope visibility relaxation must be applied at THIS point
+                // too — mirroring `infer_static_method_call_type_with_options`.
+                let scope_ctx = if self.is_closure_bind_static_call(receiver, method) {
+                    self.closure_bind_scope_context(&expanded_args)
+                } else {
+                    None
+                };
+                for (index, arg) in expanded_args.iter().enumerate() {
+                    if index == 0 && scope_ctx.is_some() {
+                        let saved = self.bound_scope_context.take();
+                        self.bound_scope_context = scope_ctx.clone();
+                        let result = self.infer_type_with_assignment_effects(arg, env);
+                        self.bound_scope_context = saved;
+                        result?;
+                    } else {
+                        self.infer_type_with_assignment_effects(arg, env)?;
+                    }
                 }
                 let ty = self.infer_type(expr, env)?;
                 Self::purge_property_narrowings(env);
