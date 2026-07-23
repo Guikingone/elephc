@@ -61,6 +61,12 @@ impl Checker {
         let Some((receiver, target)) = guard_receiver_and_type(cond) else {
             return Ok(None);
         };
+        // Resolve a relative `instanceof self`/`parent`/`static` target to the concrete enclosing
+        // class before narrowing, mirroring `type_guard_narrowing`. Without this the receiver was
+        // narrowed to the literal `Object("self")`, and a later member access reported
+        // "Undefined class: self". `guard_receiver_and_type` deliberately keeps the raw name so this
+        // resolution stays in one place.
+        let target = self.resolve_relative_instanceof_target(target);
         let Some(key) = Self::guard_env_key(receiver) else {
             return Ok(None);
         };
