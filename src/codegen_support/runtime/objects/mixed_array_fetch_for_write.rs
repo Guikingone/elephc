@@ -2,7 +2,7 @@
 //! Emits the fetch-for-write runtime helpers used by nested array assignments
 //! whose parent element may be missing (`$a[7][1] = ...` when `$a[7]` does not
 //! exist): `__rt_mixed_array_get_for_write`, `__rt_array_ensure_elem_for_write`,
-//! `__rt_mixed_cell_init_empty_array`, `__rt_mixed_cell_promote_to_hash`, and
+//! `__rt_mixed_cell_promote_to_hash`, and
 //! `__rt_mixed_new_empty_array_cell`.
 //!
 //! Called from:
@@ -45,14 +45,12 @@ use crate::codegen_support::sentinels::emit_branch_if_null_container;
 pub fn emit_mixed_array_fetch_for_write(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_new_empty_array_cell_x86_64(emitter);
-        emit_mixed_cell_init_empty_array_x86_64(emitter);
         emit_mixed_cell_promote_to_hash_x86_64(emitter);
         emit_mixed_array_get_for_write_x86_64(emitter);
         emit_array_ensure_elem_for_write_x86_64(emitter);
         return;
     }
     emit_mixed_new_empty_array_cell_aarch64(emitter);
-    emit_mixed_cell_init_empty_array_aarch64(emitter);
     emit_mixed_cell_promote_to_hash_aarch64(emitter);
     emit_mixed_array_get_for_write_aarch64(emitter);
     emit_array_ensure_elem_for_write_aarch64(emitter);
@@ -87,33 +85,6 @@ fn emit_mixed_new_empty_array_cell_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the fresh boxed array cell in x0
-}
-
-/// Initializes an existing ARM64 Mixed null cell as a fresh empty indexed array.
-///
-/// Input: `x0` = writable Mixed cell whose previous payload is null, zero, or the
-/// null-container sentinel. Output: `x0` = the fresh indexed-array payload.
-/// The array's initial reference is transferred into the cell.
-fn emit_mixed_cell_init_empty_array_aarch64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: mixed_cell_init_empty_array ---");
-    emitter.label_global("__rt_mixed_cell_init_empty_array");
-
-    emitter.instruction("sub sp, sp, #32");                                     // reserve the receiver cell and saved frame linkage
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // preserve frame pointer and return address
-    emitter.instruction("add x29, sp, #16");                                    // establish a stable helper frame
-    emitter.instruction("str x0, [sp, #0]");                                    // save the writable Mixed cell across allocation
-    emitter.instruction("mov x0, #0");                                          // request a zero-capacity indexed array (grown on demand)
-    emitter.instruction("mov x1, #8");                                          // autovivified arrays store boxed Mixed pointers
-    emitter.instruction("bl __rt_array_new");                                   // allocate the fresh empty indexed array
-    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the writable Mixed cell
-    emitter.instruction("mov x10, #4");                                         // runtime value tag 4 = indexed-array payload
-    emitter.instruction("str x10, [x9]");                                       // retag the cell as an indexed array
-    emitter.instruction("str x0, [x9, #8]");                                    // transfer the fresh array reference into the cell
-    emitter.instruction("str xzr, [x9, #16]");                                  // clear the unused high payload word
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
-    emitter.instruction("ret");                                                 // return the installed array payload in x0
 }
 
 /// Emits `__rt_mixed_cell_promote_to_hash` for ARM64.
@@ -192,9 +163,10 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_array_gfw_indexed");                   // route indexed payloads to the slot-based write-context lookup
     emitter.instruction("cmp x9, #5");                                          // is the payload an associative array?
     emitter.instruction("b.eq __rt_mixed_array_gfw_assoc");                     // route hash payloads to the key-based write-context lookup
-    emitter.instruction("cmp x9, #8");                                          // is the receiver a canonical Mixed null?
-    emitter.instruction("b.eq __rt_mixed_array_gfw_autovivify");                // nested writes autovivify null receivers in place
-    // Objects and scalars keep the plain reader's behavior.
+    emitter.instruction("cmp x9, #8");                                          // is the receiver canonical PHP null?
+    emitter.instruction("b.eq __rt_mixed_array_gfw_autovivify_receiver");       // nested writes autovivify the root null cell
+    // Objects and scalars keep the plain reader's behavior:
+    // PHP raises for scalar intermediates and elephc's set drops the write.
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the receiver cell for the plain reader
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload key_lo for the plain reader
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload key_hi for the plain reader
@@ -206,7 +178,12 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     // Indexed array payload: integer keys mutate slots, string keys promote.
     emitter.label("__rt_mixed_array_gfw_indexed");
     emitter.instruction("ldr x10, [x0, #8]");                                   // load the indexed-array pointer from the cell payload
-    emit_branch_if_null_container(emitter, "x10", "x9", "__rt_mixed_array_gfw_autovivify");
+    emit_branch_if_null_container(
+        emitter,
+        "x10",
+        "x9",
+        "__rt_mixed_array_gfw_autovivify_receiver",
+    );
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload key_hi
     emitter.instruction("cmn x11, #1");                                         // does key_hi carry the integer-key sentinel?
     emitter.instruction("b.ne __rt_mixed_array_gfw_promote");                   // string keys promote the indexed payload to hash storage
@@ -274,6 +251,12 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x12, [x10]");                                      // store the extended logical length
     emitter.instruction("b __rt_mixed_array_gfw_fill_slot");                    // install the autovivified element into the new slot
 
+    emitter.label("__rt_mixed_array_gfw_autovivify_receiver");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // pass the existing null-shaped receiver cell
+    emitter.instruction("bl __rt_mixed_cell_autovivify_array");                 // install a fresh empty indexed array in the receiver
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the now-indexed receiver cell
+    emitter.instruction("b __rt_mixed_array_gfw_indexed");                      // resolve the original key through normal write-context logic
+
     // String key on an indexed payload: promote to hash, then use the hash path.
     emitter.label("__rt_mixed_array_gfw_promote");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the receiver cell for the promotion helper
@@ -284,7 +267,12 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     // Associative array payload: hash lookup with write-context semantics.
     emitter.label("__rt_mixed_array_gfw_assoc");
     emitter.instruction("ldr x10, [x0, #8]");                                   // load the hash pointer from the cell payload
-    emit_branch_if_null_container(emitter, "x10", "x9", "__rt_mixed_array_gfw_autovivify");
+    emit_branch_if_null_container(
+        emitter,
+        "x10",
+        "x9",
+        "__rt_mixed_array_gfw_autovivify_receiver",
+    );
     emitter.instruction("mov x0, x10");                                         // pass the hash pointer to hash_get
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the normalized key low word
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the normalized key high word
@@ -319,12 +307,6 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the installed child cell
     emitter.instruction("bl __rt_incref");                                      // retain the installed cell so the caller owns the returned result
     emitter.instruction("b __rt_mixed_array_gfw_return");                       // finish after installing the autovivified element
-
-    emitter.label("__rt_mixed_array_gfw_autovivify");
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the writable receiver cell
-    emitter.instruction("bl __rt_mixed_cell_init_empty_array");                 // attach a fresh indexed array to the original receiver
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the now-indexed receiver cell
-    emitter.instruction("b __rt_mixed_array_gfw_indexed");                      // continue the write-context lookup through real storage
 
     emitter.label("__rt_mixed_array_gfw_detached_null");
     emitter.instruction("mov x0, #8");                                          // tag = 8 (null)
@@ -400,32 +382,6 @@ fn emit_mixed_new_empty_array_cell_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the fresh boxed array cell in rax
 }
 
-/// Initializes an existing x86_64 Mixed null cell as a fresh empty indexed array.
-///
-/// Input: `rdi` = writable Mixed cell whose previous payload is null, zero, or the
-/// null-container sentinel. Output: `rax` = the fresh indexed-array payload.
-/// The array's initial reference is transferred into the cell.
-fn emit_mixed_cell_init_empty_array_x86_64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: mixed_cell_init_empty_array ---");
-    emitter.label_global("__rt_mixed_cell_init_empty_array");
-
-    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame
-    emitter.instruction("sub rsp, 16");                                         // reserve a slot for the writable Mixed cell
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the writable Mixed cell across allocation
-    emitter.instruction("mov rdi, 0");                                          // request a zero-capacity indexed array (grown on demand)
-    emitter.instruction("mov rsi, 8");                                          // autovivified arrays store boxed Mixed pointers
-    emitter.instruction("call __rt_array_new");                                 // allocate the fresh empty indexed array
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the writable Mixed cell
-    emitter.instruction("mov QWORD PTR [r10], 4");                              // retag the cell as an indexed array
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // transfer the fresh array reference into the cell
-    emitter.instruction("mov QWORD PTR [r10 + 16], 0");                         // clear the unused high payload word
-    emitter.instruction("mov rsp, rbp");                                        // release the helper frame
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return the installed array payload in rax
-}
-
 /// Emits `__rt_mixed_cell_promote_to_hash` for x86_64.
 ///
 /// Input: `rdi` = boxed Mixed cell with a non-null indexed payload.
@@ -487,8 +443,8 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_array_gfw_indexed");                     // route indexed payloads to the slot-based write-context lookup
     emitter.instruction("cmp r10, 5");                                          // is the payload an associative array?
     emitter.instruction("je __rt_mixed_array_gfw_assoc");                       // route hash payloads to the key-based write-context lookup
-    emitter.instruction("cmp r10, 8");                                          // is the receiver a canonical Mixed null?
-    emitter.instruction("je __rt_mixed_array_gfw_autovivify");                  // nested writes autovivify null receivers in place
+    emitter.instruction("cmp r10, 8");                                          // is the receiver canonical PHP null?
+    emitter.instruction("je __rt_mixed_array_gfw_autovivify_receiver");         // nested writes autovivify the root null cell
     // Objects and scalars keep the plain reader's behavior.
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the receiver cell for the plain reader
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload key_lo for the plain reader
@@ -500,7 +456,12 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_array_gfw_indexed");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the indexed-array pointer from the cell payload
-    emit_branch_if_null_container(emitter, "r10", "r11", "__rt_mixed_array_gfw_autovivify");
+    emit_branch_if_null_container(
+        emitter,
+        "r10",
+        "r11",
+        "__rt_mixed_array_gfw_autovivify_receiver",
+    );
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload key_hi
     emitter.instruction("cmp r11, -1");                                         // does key_hi carry the integer-key sentinel?
     emitter.instruction("jne __rt_mixed_array_gfw_promote");                    // string keys promote the indexed payload to hash storage
@@ -573,6 +534,12 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10], r8");                             // store the extended logical length
     emitter.instruction("jmp __rt_mixed_array_gfw_fill_slot");                  // install the autovivified element into the new slot
 
+    emitter.label("__rt_mixed_array_gfw_autovivify_receiver");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the existing null-shaped receiver cell
+    emitter.instruction("call __rt_mixed_cell_autovivify_array");               // install a fresh empty indexed array in the receiver
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the now-indexed receiver cell
+    emitter.instruction("jmp __rt_mixed_array_gfw_indexed");                    // resolve the original key through normal write-context logic
+
     emitter.label("__rt_mixed_array_gfw_promote");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the receiver cell for the promotion helper
     emitter.instruction("call __rt_mixed_cell_promote_to_hash");                // convert the indexed payload to hash storage in the cell
@@ -581,7 +548,12 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_array_gfw_assoc");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the hash pointer from the cell payload
-    emit_branch_if_null_container(emitter, "r10", "r11", "__rt_mixed_array_gfw_autovivify");
+    emit_branch_if_null_container(
+        emitter,
+        "r10",
+        "r11",
+        "__rt_mixed_array_gfw_autovivify_receiver",
+    );
     emitter.instruction("mov rdi, r10");                                        // pass the hash pointer to hash_get
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the normalized key low word
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the normalized key high word
@@ -622,12 +594,6 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_incref");                                    // retain the installed cell so the caller owns the returned result
     abi::emit_pop_reg(emitter, "rax");
     emitter.instruction("jmp __rt_mixed_array_gfw_return");                     // finish after installing the autovivified element
-
-    emitter.label("__rt_mixed_array_gfw_autovivify");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the writable receiver cell
-    emitter.instruction("call __rt_mixed_cell_init_empty_array");               // attach a fresh indexed array to the original receiver
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the now-indexed receiver cell
-    emitter.instruction("jmp __rt_mixed_array_gfw_indexed");                    // continue the write-context lookup through real storage
 
     emitter.label("__rt_mixed_array_gfw_detached_null");
     emitter.instruction("mov rax, 8");                                          // tag = 8 (null) for mixed_from_value

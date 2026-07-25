@@ -14,6 +14,8 @@
 //! - A string key on an indexed payload promotes the payload to hash storage
 //!   via `__rt_mixed_cell_promote_to_hash` (PHP array-key semantics) instead
 //!   of dropping the write.
+//! - Canonical null and legacy null-container payloads autovivify through the
+//!   shared cell helper before any container header is dereferenced.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -146,10 +148,10 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_array_set_done");                         // finish after extending the array
 
     emitter.label("__rt_mixed_array_set_autovivify");
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the writable target Mixed cell
-    emitter.instruction("bl __rt_mixed_cell_init_empty_array");                 // attach a fresh empty indexed array to the null target
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the now-indexed target cell
-    emitter.instruction("b __rt_mixed_array_set_indexed");                      // finish the keyed write through normal indexed/hash dispatch
+    emitter.instruction("ldr x0, [sp, #0]");                                    // pass the existing null-shaped Mixed cell
+    emitter.instruction("bl __rt_mixed_cell_autovivify_array");                 // install a fresh empty indexed array in the cell
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the now-indexed receiver cell
+    emitter.instruction("b __rt_mixed_array_set_indexed");                      // apply the original key/value through the normal setter
 
     emitter.label("__rt_mixed_array_set_promote");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the target Mixed cell for the promotion helper
@@ -344,10 +346,10 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_array_set_done");                       // finish after extending the array
 
     emitter.label("__rt_mixed_array_set_autovivify");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the writable target Mixed cell
-    emitter.instruction("call __rt_mixed_cell_init_empty_array");               // attach a fresh empty indexed array to the null target
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the now-indexed target cell
-    emitter.instruction("jmp __rt_mixed_array_set_indexed");                    // finish the keyed write through normal indexed/hash dispatch
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the existing null-shaped Mixed cell
+    emitter.instruction("call __rt_mixed_cell_autovivify_array");               // install a fresh empty indexed array in the cell
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the now-indexed receiver cell
+    emitter.instruction("jmp __rt_mixed_array_set_indexed");                    // apply the original key/value through the normal setter
 
     emitter.label("__rt_mixed_array_set_promote");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell for the promotion helper
