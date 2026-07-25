@@ -287,7 +287,6 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
                 .then(|| crate::ir_lower::expr::lower_bound_closure_for_assignment(ctx, value))
                 .flatten()
         })
-        .or_else(|| lower_array_literal_for_local_storage(ctx, name, value))
         .unwrap_or_else(|| lower_expr(ctx, value));
     let (lowered, php_type) = contextualize_local_assignment(ctx, name, value, lowered, span);
     ctx.store_local(name, lowered, php_type, Some(span));
@@ -326,28 +325,6 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
     }
 }
 
-/// Lowers a literal directly into a local's stable boxed-payload array representation.
-fn lower_array_literal_for_local_storage(
-    ctx: &mut LoweringContext<'_, '_>,
-    name: &str,
-    value: &Expr,
-) -> Option<LoweredValue> {
-    if !matches!(value.kind, ExprKind::ArrayLiteral(_)) {
-        return None;
-    }
-    let target_ty = ctx.local_type(name).codegen_repr();
-    match target_ty {
-        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => {
-            Some(lower_array_literal_with_expected_type(
-                ctx,
-                value,
-                PhpType::Mixed,
-            ))
-        }
-        _ => None,
-    }
-}
-
 /// Returns whether a closure literal captures the local being assigned.
 fn closure_captures_local(value: &Expr, name: &str) -> bool {
     matches!(
@@ -369,22 +346,34 @@ fn contextualize_local_assignment(
     lowered: LoweredValue,
     span: Span,
 ) -> (LoweredValue, PhpType) {
-    let value_ty = ctx.builder.value_php_type(lowered.value);
-    let source_ty = value_ty.codegen_repr();
+    let source_ty = ctx.builder.value_php_type(lowered.value);
+    let source_repr = source_ty.codegen_repr();
     let contextual_ty = if crate::superglobals::is_superglobal(name) {
-        crate::superglobals::superglobal_type().codegen_repr()
+        crate::superglobals::superglobal_type()
     } else {
-        ctx.local_type(name).codegen_repr()
+        ctx.local_type(name)
     };
+    let contextual_repr = contextual_ty.codegen_repr();
+    let has_loop_contract = local_has_loop_storage_contract(ctx, name, &contextual_ty);
 
-    if matches!(contextual_ty, PhpType::Mixed)
-        && local_has_loop_storage_contract(ctx, name, &contextual_ty)
-    {
-        return (lowered, contextual_ty);
+    // A first assignment precedes the loop whose contract was computed from the final checker
+    // environment. Preserve the literal's natural storage here; the loop preheader owns the
+    // one-time conversion, including empty arrays whose runtime header still needs promotion.
+    if has_loop_contract && !ctx.has_local_slot(name) {
+        return (lowered, source_ty);
+    }
+
+    if matches!(contextual_repr, PhpType::Mixed) && has_loop_contract {
+        let converted = if matches!(source_repr, PhpType::Mixed | PhpType::Union(_)) {
+            lowered
+        } else {
+            ctx.box_value_as_mixed(lowered, contextual_ty.clone(), Some(span))
+        };
+        return (converted, contextual_ty);
     }
 
     if matches!(
-        (&source_ty, &contextual_ty),
+        (&source_repr, &contextual_repr),
         (
             PhpType::Array(source_element),
             PhpType::Array(target_element)
@@ -394,15 +383,15 @@ fn contextualize_local_assignment(
         let converted = coerce_container_to_mixed_payload(
             ctx,
             lowered,
-            &source_ty,
-            &contextual_ty,
+            &source_repr,
+            &contextual_repr,
             span,
         );
         return (converted, contextual_ty);
     }
 
     if matches!(
-        (&source_ty, &contextual_ty),
+        (&source_repr, &contextual_repr),
         (
             PhpType::AssocArray {
                 value: source_value,
@@ -418,16 +407,16 @@ fn contextualize_local_assignment(
         let converted = coerce_container_to_mixed_payload(
             ctx,
             lowered,
-            &source_ty,
-            &contextual_ty,
+            &source_repr,
+            &contextual_repr,
             span,
         );
         return (converted, contextual_ty);
     }
 
     if matches!(value.kind, ExprKind::ArrayLiteral(_))
-        && matches!(source_ty, PhpType::Array(_))
-        && matches!(contextual_ty, PhpType::AssocArray { .. })
+        && matches!(source_repr, PhpType::Array(_))
+        && matches!(contextual_repr, PhpType::AssocArray { .. })
     {
         let hash = ctx.emit_value(
             Op::ArrayToHash,
@@ -444,7 +433,7 @@ fn contextualize_local_assignment(
     // (`Resource(_)` -> `Int`, `Union(_)` -> `Mixed`/`TaggedScalar`, `False` -> `Bool`), and the
     // local's recorded type feeds `is_resource`/`gettype` and nullable-union lowering, so the
     // collapsed form must stay confined to the storage-contract comparisons above.
-    (lowered, value_ty)
+    (lowered, source_ty)
 }
 
 /// Returns whether this function-like scope records `target` for `name` on any loop header.
@@ -654,6 +643,17 @@ fn apply_loop_storage_contracts(
         let source = ctx.load_local(&name, span);
         let target_repr = target_ty.codegen_repr();
         match (&source_ty, &target_repr) {
+            (PhpType::Array(_), PhpType::AssocArray { .. }) => {
+                let converted = ctx.emit_value(
+                    Op::ArrayToHash,
+                    vec![source.value],
+                    None,
+                    target_ty.clone(),
+                    Op::ArrayToHash.default_effects(),
+                    span,
+                );
+                ctx.store_mutated_local(&name, converted, target_ty, span);
+            }
             (PhpType::Array(_), PhpType::Array(target_element))
                 if target_element.codegen_repr() == PhpType::Mixed =>
             {
@@ -685,7 +685,8 @@ fn apply_loop_storage_contracts(
                 ctx.store_mutated_local(&name, converted, target_ty, span);
             }
             (_, PhpType::Mixed) => {
-                ctx.store_local(&name, source, target_ty, span);
+                let converted = ctx.box_value_as_mixed(source, target_ty.clone(), span);
+                ctx.store_local(&name, converted, target_ty, span);
             }
             // The contract cannot be materialized for the representation this local actually
             // holds — the only remaining shapes disagree on container kind (an `AssocArray`

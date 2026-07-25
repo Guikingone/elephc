@@ -32,14 +32,41 @@ fn stabilize_loop_storage(
     update: Option<&Stmt>,
     env: &mut TypeEnv,
 ) {
+    let key = (checker.current_loop_storage_scope.clone(), loop_span);
+    if let Some(recorded) = checker.loop_storage_types.get(&key).cloned() {
+        for (name, storage_type) in recorded {
+            env.insert(name, storage_type);
+        }
+        return;
+    }
     let snapshot = env.clone();
+    let mut call_types: std::collections::HashMap<crate::span::Span, PhpType> =
+        std::collections::HashMap::new();
     let contracts = crate::types::checker::loop_carried_storage_types(
         body,
         update,
         &snapshot,
-        &mut |expr, analysis_env| checker.infer_type(expr, analysis_env).ok(),
+        &mut |expr, analysis_env| {
+            let is_call = matches!(
+                expr.kind,
+                ExprKind::FunctionCall { .. }
+                    | ExprKind::MethodCall { .. }
+                    | ExprKind::StaticMethodCall { .. }
+                    | ExprKind::ClosureCall { .. }
+                    | ExprKind::ExprCall { .. }
+            );
+            if is_call {
+                if let Some(cached) = call_types.get(&expr.span) {
+                    return Some(cached.clone());
+                }
+            }
+            let inferred = checker.infer_type(expr, analysis_env).ok()?;
+            if is_call {
+                call_types.insert(expr.span, inferred.clone());
+            }
+            Some(inferred)
+        },
     );
-    let key = (checker.current_loop_storage_scope.clone(), loop_span);
     let recorded = checker.loop_storage_types.entry(key).or_default();
     for (name, storage_type) in contracts {
         recorded.insert(name.clone(), storage_type.clone());

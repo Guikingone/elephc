@@ -11,15 +11,31 @@
 //! - EIR lowering consumes the checker-recorded contract instead of repeating expression
 //!   inference, keeping non-literal RHSs and cascading promotions aligned across both layers.
 
+use std::collections::HashSet;
+
 use crate::parser::ast::{CastType, Expr, ExprKind, Stmt, StmtKind};
-use crate::types::{PhpType, TypeEnv};
+use crate::types::{
+    merge_array_key_types, normalized_array_key_type, PhpType, TypeEnv,
+};
 
 /// Source recorded for a local assignment that may affect a later loop-carried array rebind.
 enum AssignedValue<'a> {
     /// An ordinary assignment whose RHS can be inferred under the evolving environment.
     Expr(&'a Expr),
+    /// A binding whose semantic type is declared by its enclosing control-flow construct.
+    Known(PhpType),
     /// A binding without a statically available RHS, such as a `foreach` value.
     Opaque,
+}
+
+/// One local array write, including an optional explicit key expression.
+struct ArrayWrite<'a> {
+    /// Local receiving the element.
+    name: &'a str,
+    /// Explicit offset for `$array[$key] = value`, or `None` for append forms.
+    index: Option<&'a Expr>,
+    /// Value stored in the array.
+    value: &'a Expr,
 }
 
 /// Computes stable storage types for array locals already present at loop entry.
@@ -47,9 +63,15 @@ pub fn loop_carried_storage_types(
     }
 
     let mut fixed = entry.clone();
+    let mut whole_mixed_sources = HashSet::new();
     loop {
         let previous = fixed.clone();
-        apply_assignment_evidence(&assignments, &mut fixed, infer_value);
+        apply_assignment_evidence(
+            &assignments,
+            &mut fixed,
+            infer_value,
+            &mut whole_mixed_sources,
+        );
         apply_array_write_evidence(&writes, &mut fixed, infer_value);
         if fixed == previous {
             break;
@@ -63,7 +85,11 @@ pub fn loop_carried_storage_types(
                 return None;
             }
             let fixed_ty = fixed.get(name)?;
-            representation_contract(entry_ty, fixed_ty)
+            representation_contract(
+                entry_ty,
+                fixed_ty,
+                whole_mixed_sources.contains(name),
+            )
                 .map(|contract| (name.clone(), contract))
         })
         .collect::<Vec<_>>();
@@ -76,14 +102,22 @@ fn apply_assignment_evidence(
     assignments: &[(&str, AssignedValue<'_>)],
     env: &mut TypeEnv,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
+    whole_mixed_sources: &mut HashSet<String>,
 ) {
     for (name, source) in assignments {
         let incoming = match source {
             AssignedValue::Expr(expr) => infer_storage_value_type(expr, env, infer_value)
                 .or_else(|| precise_scalar_expr_type(expr))
                 .unwrap_or(PhpType::Mixed),
+            AssignedValue::Known(ty) => ty.clone(),
             AssignedValue::Opaque => PhpType::Mixed,
         };
+        if env.get(*name).is_some_and(is_array_like)
+            && matches!(incoming.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+            && !matches!(source, AssignedValue::Opaque)
+        {
+            whole_mixed_sources.insert((*name).to_string());
+        }
         let merged = env
             .get(*name)
             .cloned()
@@ -95,28 +129,59 @@ fn apply_assignment_evidence(
 
 /// Applies indexed-array growth and element-write evidence to one fixed-point iteration.
 fn apply_array_write_evidence(
-    writes: &[(&str, &Expr)],
+    writes: &[ArrayWrite<'_>],
     env: &mut TypeEnv,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
 ) {
-    for (name, value) in writes {
-        let incoming = infer_storage_value_type(value, env, infer_value)
-            .or_else(|| precise_scalar_expr_type(value))
+    for write in writes {
+        let incoming = infer_storage_value_type(write.value, env, infer_value)
+            .or_else(|| precise_scalar_expr_type(write.value))
             .unwrap_or(PhpType::Mixed);
-        let Some(current) = env.get(*name).cloned() else {
+        let Some(current) = env.get(write.name).cloned() else {
             continue;
         };
+        let key_type = write.index.map(|index| {
+            let inferred = infer_storage_value_type(index, env, infer_value)
+                .or_else(|| precise_scalar_expr_type(index))
+                .unwrap_or(PhpType::Mixed);
+            normalized_array_key_type(index, inferred)
+        });
+        let forces_hash = write.index.is_some_and(|index| {
+            matches!(key_type.as_ref(), Some(PhpType::Str))
+                && matches!(index.kind, ExprKind::StringLiteral(_) | ExprKind::Null)
+        });
         let updated = match current {
-            PhpType::Array(element) => PhpType::Array(Box::new(
-                join_array_payload_type(*element, incoming),
-            )),
+            PhpType::Array(element) if forces_hash => {
+                let was_empty = matches!(element.as_ref(), PhpType::Never);
+                PhpType::AssocArray {
+                    key: Box::new(if was_empty {
+                        key_type.unwrap_or(PhpType::Mixed)
+                    } else {
+                        merge_array_key_types(
+                            PhpType::Int,
+                            key_type.unwrap_or(PhpType::Mixed),
+                        )
+                    }),
+                    value: Box::new(if was_empty {
+                        incoming
+                    } else {
+                        join_array_payload_type(*element, incoming)
+                    }),
+                }
+            }
+            PhpType::Array(element) => {
+                PhpType::Array(Box::new(join_array_payload_type(*element, incoming)))
+            }
             PhpType::AssocArray { key, value } => PhpType::AssocArray {
-                key,
+                key: Box::new(merge_array_key_types(
+                    *key,
+                    key_type.unwrap_or(PhpType::Int),
+                )),
                 value: Box::new(join_array_payload_type(*value, incoming)),
             },
             other => other,
         };
-        env.insert((*name).to_string(), updated);
+        env.insert(write.name.to_string(), updated);
     }
 }
 
@@ -271,6 +336,22 @@ fn join_loop_flow_type(existing: PhpType, incoming: PhpType) -> PhpType {
             key: left_key,
             value: Box::new(join_array_payload_type(*left_value, *right_value)),
         },
+        (PhpType::Array(element), PhpType::AssocArray { key, value })
+        | (PhpType::AssocArray { key, value }, PhpType::Array(element)) => {
+            let array_was_empty = matches!(element.as_ref(), PhpType::Never);
+            PhpType::AssocArray {
+                key: if array_was_empty {
+                    key
+                } else {
+                    Box::new(merge_array_key_types(PhpType::Int, *key))
+                },
+                value: Box::new(if array_was_empty {
+                    *value
+                } else {
+                    join_array_payload_type(*element, *value)
+                }),
+            }
+        }
         (PhpType::Array(array), PhpType::Void | PhpType::Never)
         | (PhpType::Void | PhpType::Never, PhpType::Array(array)) => PhpType::Array(array),
         (PhpType::AssocArray { key, value }, PhpType::Void | PhpType::Never)
@@ -297,7 +378,11 @@ fn join_array_payload_type(existing: PhpType, incoming: PhpType) -> PhpType {
 }
 
 /// Returns the concrete pre-loop storage contract required by a fixed-point result.
-fn representation_contract(entry: &PhpType, fixed: &PhpType) -> Option<PhpType> {
+fn representation_contract(
+    entry: &PhpType,
+    fixed: &PhpType,
+    has_whole_mixed_source: bool,
+) -> Option<PhpType> {
     match (entry.codegen_repr(), fixed.codegen_repr()) {
         (PhpType::Array(entry_element), PhpType::Array(fixed_element))
             if entry_element.codegen_repr() != PhpType::Mixed
@@ -322,7 +407,12 @@ fn representation_contract(entry: &PhpType, fixed: &PhpType) -> Option<PhpType> 
                 value: Box::new(PhpType::Mixed),
             })
         }
-        (entry_repr, PhpType::Mixed) if entry_repr != PhpType::Mixed => Some(PhpType::Mixed),
+        (PhpType::Array(_), fixed @ PhpType::AssocArray { .. }) => Some(fixed),
+        (entry_repr, PhpType::Mixed)
+            if entry_repr != PhpType::Mixed && has_whole_mixed_source =>
+        {
+            Some(PhpType::Mixed)
+        }
         _ => None,
     }
 }
@@ -505,7 +595,17 @@ fn collect_value_assignment_stmt<'a>(
             collect_value_assignments(try_body, out);
             for catch in catches {
                 if let Some(variable) = &catch.variable {
-                    out.push((variable, AssignedValue::Opaque));
+                    let catch_type = if catch.exception_types.len() == 1 {
+                        PhpType::Object(
+                            catch.exception_types[0]
+                                .as_str()
+                                .trim_start_matches('\\')
+                                .to_string(),
+                        )
+                    } else {
+                        PhpType::Object("Throwable".to_string())
+                    };
+                    out.push((variable, AssignedValue::Known(catch_type)));
                 }
                 collect_value_assignments(&catch.body, out);
             }
@@ -563,17 +663,21 @@ fn collect_value_assignments_from_expr<'a>(
 }
 
 /// Collects local indexed/associative array element writes from executable statements.
-fn collect_array_writes<'a>(statements: &'a [Stmt], out: &mut Vec<(&'a str, &'a Expr)>) {
+fn collect_array_writes<'a>(statements: &'a [Stmt], out: &mut Vec<ArrayWrite<'a>>) {
     for statement in statements {
         collect_array_write_stmt(statement, out);
     }
 }
 
 /// Collects array growth/write sites from one statement and its nested bodies.
-fn collect_array_write_stmt<'a>(statement: &'a Stmt, out: &mut Vec<(&'a str, &'a Expr)>) {
+fn collect_array_write_stmt<'a>(statement: &'a Stmt, out: &mut Vec<ArrayWrite<'a>>) {
     match &statement.kind {
         StmtKind::ArrayPush { array, value } => {
-            out.push((array, value));
+            out.push(ArrayWrite {
+                name: array,
+                index: None,
+                value,
+            });
             collect_growth_calls_from_expr(value, out);
         }
         StmtKind::ArrayAssign {
@@ -581,7 +685,11 @@ fn collect_array_write_stmt<'a>(statement: &'a Stmt, out: &mut Vec<(&'a str, &'a
             index,
             value,
         } => {
-            out.push((array, value));
+            out.push(ArrayWrite {
+                name: array,
+                index: Some(index),
+                value,
+            });
             collect_growth_calls_from_expr(index, out);
             collect_growth_calls_from_expr(value, out);
         }
@@ -710,15 +818,15 @@ fn collect_array_write_stmt<'a>(statement: &'a Stmt, out: &mut Vec<(&'a str, &'a
 }
 
 /// Collects `array_push($local, ...)` sites from an expression tree.
-fn collect_growth_calls_from_expr<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, &'a Expr)>) {
+fn collect_growth_calls_from_expr<'a>(expr: &'a Expr, out: &mut Vec<ArrayWrite<'a>>) {
     if let ExprKind::FunctionCall { name, args } = &expr.kind {
         if name.as_str().eq_ignore_ascii_case("array_push") {
             if let Some(array_name) = array_push_target_name(args) {
-                out.extend(
-                    args.iter()
-                        .skip(1)
-                        .map(|argument| (array_name, call_arg_value(argument))),
-                );
+                out.extend(args.iter().skip(1).map(|argument| ArrayWrite {
+                    name: array_name,
+                    index: None,
+                    value: call_arg_value(argument),
+                }));
             }
         }
     }
