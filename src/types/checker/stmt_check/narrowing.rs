@@ -97,11 +97,16 @@ impl Checker {
                 conditional_value_temp: None,
                 ..
             } if prelude.is_empty() => self.infer_type(value, env)?,
-            // A prior narrowing (or a variable binding) wins; otherwise a property receiver falls
-            // back to its declared field type. An unbound plain variable stays un-narrowed.
+            // A prior narrowing (or a variable binding) wins; otherwise a property or `$this`
+            // receiver falls back to its declared type (the enclosing class for `$this`). An
+            // unbound plain variable stays un-narrowed.
             _ => match env.get(&key) {
                 Some(ty) => ty.clone(),
-                None if matches!(receiver.kind, ExprKind::PropertyAccess { .. }) => {
+                None if matches!(
+                    receiver.kind,
+                    ExprKind::PropertyAccess { .. } | ExprKind::This
+                ) =>
+                {
                     self.infer_type(receiver, env)?
                 }
                 None => return Ok(None),
@@ -196,6 +201,17 @@ impl Checker {
         }
     }
 
+    /// Synthetic `TypeEnv` key under which an `instanceof` narrowing of the bare `$this` receiver
+    /// is recorded (`if ($this instanceof I) { $this->onlyOnI(); }`). Mirrors
+    /// `narrowed_property_env_key`: the leading `\x01` sigil keeps it out of the variable
+    /// namespace and lets `purge_property_narrowings` drop it after a potential mutation, while its
+    /// distinct `this` segment keeps `purge_property_narrowings_for_root` (which targets
+    /// `\x01prop\x01<root>->`) from touching it — an object's class cannot change under a local
+    /// rebind. `infer_this_type` consults it so a narrowed `$this` sees the proven subtype.
+    pub(crate) fn narrowed_this_env_key() -> &'static str {
+        "\u{1}this\u{1}$this"
+    }
+
     /// `TypeEnv` key for a guard receiver: a variable's name, an assignment's local target, or the
     /// synthetic property key for a simple property access. Conditional/compound assignment forms
     /// are safe here because expression-effect inference has already recorded the value stored in
@@ -210,6 +226,7 @@ impl Checker {
             ExprKind::PropertyAccess { object, property } => {
                 Self::narrowed_property_env_key(object, property)
             }
+            ExprKind::This => Some(Self::narrowed_this_env_key().to_string()),
             _ => None,
         }
     }
@@ -228,6 +245,28 @@ impl Checker {
     pub(crate) fn purge_property_narrowings_for_root(env: &mut TypeEnv, root: &str) {
         let prefix = format!("\u{1}prop\u{1}{root}->");
         env.retain(|key, _| !key.starts_with(&prefix));
+    }
+
+    /// Invalidates the property narrowings a *direct* property write (`$obj->prop = …`) can affect.
+    ///
+    /// A direct assignment rebinds one object's own `prop` slot; it cannot change what a *different*
+    /// syntactic receiver's property refers to, so only the fact keyed on this exact `<root>->prop`
+    /// is dropped. Sibling facts such as `$this->pool` therefore keep their precision when the write
+    /// targets `$clone->pool` — extending the syntactic scoping `purge_property_narrowings_for_root`
+    /// already applies to local rebinds. A target that is not a simple keyable receiver (an array
+    /// element or a deeper expression that may alias and mutate a shared value through) falls back to
+    /// purging every property fact.
+    pub(crate) fn purge_property_narrowings_for_property_write(
+        env: &mut TypeEnv,
+        object: &Expr,
+        property: &str,
+    ) {
+        match Self::narrowed_property_env_key(object, property) {
+            Some(key) => {
+                env.remove(&key);
+            }
+            None => Self::purge_property_narrowings(env),
+        }
     }
 
     /// Returns whether a property guard can invoke user code on either read. Hooked or magic
@@ -332,6 +371,40 @@ impl Checker {
                 Ok(None) | Err(_) => vec![],
             }
         }
+    }
+
+    /// Collects the receiver narrowings that hold on the fall-through path of a *diverging*
+    /// `if (A || B || …) { <cannot fall through> }`. Reaching the statement after such an `if`
+    /// proves the whole `||` condition was false, so De Morgan gives `!A && !B && …`: every
+    /// disjunct is false. For each disjunct this takes its guard-FALSE fact (the guard's `else_ty`)
+    /// and intersects facts that name the same binding via `narrow_to` (mirroring how a `&&` chain
+    /// refines repeated guards). Returns an empty vector when the condition is not a top-level `||`
+    /// chain, so a caller may invoke it unconditionally; the caller is responsible for confirming
+    /// the guarded body cannot fall through before persisting these facts.
+    pub(crate) fn or_chain_complement_narrowings(
+        &mut self,
+        condition: &Expr,
+        env: &TypeEnv,
+    ) -> Vec<(String, PhpType)> {
+        if !matches!(&condition.kind, ExprKind::BinaryOp { op: BinOp::Or, .. }) {
+            return Vec::new();
+        }
+        let mut disjuncts: Vec<&Expr> = Vec::new();
+        collect_or_operands(condition, &mut disjuncts);
+        let mut narrowings: Vec<(String, PhpType)> = Vec::new();
+        for disjunct in disjuncts {
+            let Ok(Some(guard)) = self.guard_narrowing(disjunct, env) else {
+                continue;
+            };
+            match narrowings.iter().position(|(v, _)| *v == guard.var) {
+                Some(idx) => {
+                    let existing = narrowings[idx].1.clone();
+                    narrowings[idx].1 = self.narrow_to(&existing, &guard.else_ty);
+                }
+                None => narrowings.push((guard.var, guard.else_ty)),
+            }
+        }
+        narrowings
     }
 
     /// Resolves a relative class name (`self`/`static`/`parent`, case-insensitive) inside an
@@ -481,6 +554,23 @@ impl Checker {
             .and_then(|canonical| self.functions.get(&canonical))
             .map(|sig| sig.return_type == PhpType::Never)
             .unwrap_or(false)
+    }
+}
+
+/// Flattens a left-associative `||` chain into its disjunct operands in source order. A non-`||`
+/// expression is a single disjunct. Used to distribute De Morgan's law over an `if (A || B) {…}`
+/// early-exit guard.
+fn collect_or_operands<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
+    if let ExprKind::BinaryOp {
+        left,
+        op: BinOp::Or,
+        right,
+    } = &expr.kind
+    {
+        collect_or_operands(left, out);
+        collect_or_operands(right, out);
+    } else {
+        out.push(expr);
     }
 }
 

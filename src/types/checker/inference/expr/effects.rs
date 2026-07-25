@@ -73,6 +73,12 @@ impl Checker {
                     ExprKind::Variable(name) => {
                         Self::purge_property_narrowings_for_root(env, name)
                     }
+                    // A direct `$obj->prop = …` rebinds only that receiver's own slot, so scope the
+                    // purge to the exact `<root>->prop` fact (keeping e.g. `$this->prop` when the
+                    // write targets `$clone->prop`); an element write still mutates through.
+                    ExprKind::PropertyAccess { object, property } => {
+                        Self::purge_property_narrowings_for_property_write(env, object, property)
+                    }
                     _ if assignment_may_write_property(target) => {
                         Self::purge_property_narrowings(env)
                     }

@@ -722,7 +722,7 @@ impl Checker {
                 method,
                 args,
             } => self.infer_static_method_call_type(receiver, method, args, expr, env),
-            ExprKind::This => self.infer_this_type(expr),
+            ExprKind::This => self.infer_this_type(expr, env),
             ExprKind::PtrCast {
                 target_type,
                 expr: inner,

@@ -652,7 +652,18 @@ impl Checker {
     /// permits it to reference `$this` so `Closure::bind()` can install one later; that receiver
     /// remains `Mixed`. Direct static-method use still errors, as does top-level use outside a
     /// bindable closure. Instance methods resolve to `Object(current_class)`.
-    pub(crate) fn infer_this_type(&mut self, expr: &Expr) -> Result<PhpType, CompileError> {
+    ///
+    /// An `if ($this instanceof I) { … }` guard records a narrowed receiver type under
+    /// `narrowed_this_env_key`; when present it wins, so a method that lives only on the proven
+    /// subtype type-checks inside the guarded region.
+    pub(crate) fn infer_this_type(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        if let Some(narrowed) = env.get(Self::narrowed_this_env_key()) {
+            return Ok(narrowed.clone());
+        }
         if self.current_method_is_static && self.closure_depth > 0 {
             return Ok(PhpType::Mixed);
         }

@@ -519,6 +519,22 @@ impl Checker {
                     }
                 }
 
+                // De Morgan complement for a diverging single-clause `if (A || B) { <diverges> }`:
+                // reaching the statements after the `if` proves the whole `||` condition was false,
+                // hence every disjunct false. Persist each disjunct's guard-false narrowing so a
+                // receiver proven by `!(cond || !$x instanceof T)` (i.e. `$x instanceof T`) is usable
+                // afterward. Gated on a body that cannot fall through (the only way past the `if` is
+                // with the condition false) and on there being no elseif/else clause — a
+                // fall-through clause would leave another path to the following code.
+                if else_body.is_none()
+                    && elseif_clauses.is_empty()
+                    && self.body_cannot_fall_through(then_body)
+                {
+                    for (var, then_ty) in self.or_chain_complement_narrowings(condition, env) {
+                        env.insert(var, then_ty);
+                    }
+                }
+
                 if errors.is_empty() {
                     Ok(())
                 } else {

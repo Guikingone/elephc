@@ -831,3 +831,83 @@ echo scaleNumericString("12");
     );
     assert_eq!(out, "24");
 }
+
+/// Verifies the De Morgan complement of a diverging `if ($cond || !$x instanceof I) { return; }`
+/// early-exit: reaching the code after the `if` proves `$x instanceof I`, so a method that lives
+/// only on the narrower interface `I` (not its `Wide` base) type-checks and dispatches. Without the
+/// `||` fall-through narrowing the checker keeps `$bag` at its wide `Wide` type and rejects `ph()`.
+#[test]
+fn test_or_early_exit_demorgan_narrows_interface_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+interface Wide { public function w(): string; }
+interface I extends Wide { public function ph(): string; }
+class Bag implements I {
+    public function w(): string { return "w"; }
+    public function ph(): string { return "p"; }
+}
+function run(bool $cond, Wide $bag): string {
+    if ($cond || !$bag instanceof I) { return "x"; }
+    return $bag->ph();
+}
+echo run(false, new Bag());
+"#,
+    );
+    assert_eq!(out, "p");
+}
+
+/// Verifies a member-path `instanceof` carried through a `&&` chain narrows the property receiver:
+/// `if ($this->container instanceof C && true)` proves `$this->container` is the sub-interface `C`,
+/// so `$this->container->param()` (a method on `C`, not its `Wide` base) type-checks and dispatches.
+#[test]
+fn test_member_path_and_chain_narrows_interface_property() {
+    let out = compile_and_run(
+        r#"<?php
+interface Wide { public function w(): int; }
+interface C extends Wide { public function param(): int; }
+class Container implements C {
+    public function w(): int { return 1; }
+    public function param(): int { return 7; }
+}
+class App {
+    public ?Wide $container = null;
+    public function __construct() { $this->container = new Container(); }
+    public function go(): int {
+        if ($this->container instanceof C && true) { return $this->container->param(); }
+        return 0;
+    }
+}
+echo (new App())->go();
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies a direct property write to an *unrelated* object's slot (`$clone->pool = $repl`) keeps
+/// a prior `$this->pool` narrowing: invalidation is scoped to the exact `<root>->prop` rebound, so
+/// `$this->pool` stays proven as the sub-interface `Ns` and `$this->pool->sub()` still dispatches.
+#[test]
+fn test_direct_property_write_to_other_receiver_preserves_this_narrowing() {
+    let out = compile_and_run(
+        r#"<?php
+interface Wide { public function w(): string; }
+interface Ns extends Wide { public function sub(): string; }
+class Pool implements Ns {
+    public function w(): string { return "w"; }
+    public function sub(): string { return "s"; }
+}
+class Ad {
+    public ?Wide $pool;
+    public function __construct(Wide $pool) { $this->pool = $pool; }
+    public function go(Wide $repl): string {
+        if (!$this->pool instanceof Ns) { throw new \Exception(); }
+        $clone = clone $this;
+        $clone->pool = $repl;
+        return $this->pool->sub();
+    }
+}
+echo (new Ad(new Pool()))->go(new Pool());
+"#,
+    );
+    assert_eq!(out, "s");
+}

@@ -208,8 +208,14 @@ impl Checker {
     /// rebindings clear only facts rooted at the rebound local.
     fn invalidate_property_narrowings_after_assignment(&self, stmt: &Stmt, env: &mut TypeEnv) {
         match &stmt.kind {
-            StmtKind::PropertyAssign { .. }
-            | StmtKind::PropertyArrayPush { .. }
+            // A direct `$obj->prop = …` only rebinds that receiver's own slot, so scope the purge
+            // to the exact `<root>->prop` fact — a write to `$clone->prop` keeps `$this->prop`.
+            StmtKind::PropertyAssign { object, property, .. } => {
+                Self::purge_property_narrowings_for_property_write(env, object, property)
+            }
+            // Array pushes / element writes mutate the value the property *points to*, which may be
+            // aliased by another receiver, so they still invalidate every property fact.
+            StmtKind::PropertyArrayPush { .. }
             | StmtKind::PropertyArrayAssign { .. } => Self::purge_property_narrowings(env),
             StmtKind::NestedArrayAssign { target, .. }
                 if assignment_target_may_write_property(target) =>
