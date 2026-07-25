@@ -265,7 +265,26 @@ pub(super) fn check_types_impl(
             // secondary "Undefined class" errors instead of the existing
             // absent-optional-dependency fallback.
             checker.declared_classes.remove(&class_name);
-            errors.extend(error.flatten());
+            // When the build fails only because the class extends or implements an absent
+            // optional dependency — a supertype that exists nowhere in the closed world, e.g. a
+            // class from an uninstalled component such as symfony/expression-language — the
+            // failure is expected: PHP never autoloads the class on any reached path (its parent
+            // does not exist, so any real use would fatal at load time and is guarded away).
+            // Removing the class above already routes every use site through the absent-optional
+            // fallback (degrade to Mixed), so emit a warning instead of failing the whole compile.
+            // A genuine failure (a real, present supertype with some other schema error) keeps
+            // erroring loudly.
+            if let Some(absent) = absent_optional_supertype(&class_name, &class_map, &checker) {
+                checker.warnings.push(crate::errors::CompileWarning::new(
+                    crate::span::Span::dummy(),
+                    &format!(
+                        "class {} extends or implements absent optional dependency '{}'; treated as an uninstalled optional dependency",
+                        class_name, absent
+                    ),
+                ));
+            } else {
+                errors.extend(error.flatten());
+            }
         }
     }
     // Back-fill `method_decls_unfolded` with the pre-const-fold snapshot captured above, now
@@ -442,6 +461,36 @@ pub(super) fn check_types_impl(
     finalize_magic_call_arg_signatures(&mut checker);
 
     Ok((checker, final_global_env))
+}
+
+/// Returns the name of a direct supertype of `class_name` that is absent from the entire closed
+/// world — a parent class or implemented interface present in neither the flatten set nor any
+/// known class-like table.
+///
+/// Such a supertype models an uninstalled optional dependency: the class can never be autoloaded
+/// (its parent/interface does not exist), so a flattening failure caused by it is expected rather
+/// than a genuine schema error. Parent resolution runs before member and interface checks during a
+/// class build, so whenever a class carries an absent supertype that supertype is what fails first,
+/// making this a reliable classifier for the absent-optional case. Returns `None` when every
+/// supertype is present, so a real build failure keeps erroring.
+fn absent_optional_supertype(
+    class_name: &str,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &Checker,
+) -> Option<String> {
+    let class = class_map.get(class_name)?;
+    if let Some(parent) = &class.extends {
+        if !class_map.contains_key(parent) && !checker.class_like_exists(parent) {
+            return Some(parent.clone());
+        }
+    }
+    class
+        .implements
+        .iter()
+        .find(|interface| {
+            !class_map.contains_key(*interface) && !checker.class_like_exists(interface)
+        })
+        .cloned()
 }
 
 /// Collects source-declared trait names recursively, including namespace blocks.

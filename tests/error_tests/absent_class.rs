@@ -169,11 +169,14 @@ fn test_new_on_known_interface_still_errors() {
     );
 }
 
-/// A declaration whose schema failed must not remain in the closed-world declaration set:
-/// later references should not add a misleading `Undefined class` cascade for the wrapper itself.
+/// A class whose parent is an absent optional dependency (a supertype that exists nowhere in the
+/// closed world, e.g. from an uninstalled component) degrades to a warning instead of failing the
+/// whole compile: PHP never autoloads such a class on any reached path. The declaration is still
+/// removed from the closed world, so its own uses fall through to the absent-optional fallback with
+/// no misleading `Undefined class` cascade and no spurious checking of its unavailable method body.
 #[test]
-fn test_failed_class_schema_is_not_treated_as_declared() {
-    let error = check_source_full(
+fn test_absent_parent_class_degrades_without_cascade() {
+    let result = check_source_full(
         r#"<?php
 class OptionalWrapper extends MissingBase {
     public function prepare($items): void {
@@ -185,24 +188,66 @@ function makeWrapper() {
 }
 "#,
     )
-    .expect_err("the missing parent must keep the declaration invalid");
-    let messages: Vec<String> = error.flatten().into_iter().map(|item| item.message).collect();
+    .expect("an absent optional parent must degrade to a warning, not fail the compile");
+    let warnings: Vec<String> = result
+        .warnings
+        .iter()
+        .map(|warning| warning.message.clone())
+        .collect();
     assert!(
-        messages
-            .iter()
-            .any(|message| message.contains("MissingBase")),
-        "expected the missing-parent diagnostic, got: {messages:?}"
+        warnings.iter().any(|message| message.contains("MissingBase")),
+        "expected the absent-optional-parent warning, got: {warnings:?}"
     );
     assert!(
-        !messages
+        !warnings
             .iter()
             .any(|message| message.contains("Undefined class: OptionalWrapper")),
-        "failed declarations must not create secondary undefined-class diagnostics: {messages:?}"
+        "degraded declarations must not create secondary undefined-class diagnostics: {warnings:?}"
     );
     assert!(
-        !messages
+        !warnings
             .iter()
             .any(|message| message.contains("array_unshift() first argument")),
-        "method bodies of unavailable declarations must not be checked: {messages:?}"
+        "method bodies of unavailable declarations must not be checked: {warnings:?}"
+    );
+}
+
+/// A class implementing an interface that is an absent optional dependency degrades to a warning
+/// (the absent contract simply can never be satisfied and only matters at a real use site), rather
+/// than hard-erroring the whole compile with `Unknown interface`. Mirrors Symfony's
+/// `ExpressionLanguageProvider implements ExpressionFunctionProviderInterface` when
+/// symfony/expression-language is not installed.
+#[test]
+fn test_absent_interface_implementation_degrades_to_warning() {
+    let result = check_source_full(
+        r#"<?php
+class Provider implements \Missing\Optional\ProviderInterface {
+    public function getFunctions(): array { return []; }
+}
+"#,
+    )
+    .expect("an absent optional interface must degrade to a warning, not fail the compile");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("Missing\\Optional\\ProviderInterface")),
+        "expected the absent-optional-interface warning, got: {:?}",
+        result
+            .warnings
+            .iter()
+            .map(|warning| warning.message.clone())
+            .collect::<Vec<_>>(),
+    );
+}
+
+/// Negative control for the flattening tolerance: extending a class-like symbol that DOES exist in
+/// the closed world but is not a valid parent (an interface) still hard-errors. The tolerance is
+/// scoped to supertypes absent everywhere, never a present-but-misused one.
+#[test]
+fn test_extends_known_interface_still_errors() {
+    expect_error(
+        "<?php interface Contract {} class Impl extends Contract {}",
+        "cannot extend interface",
     );
 }
