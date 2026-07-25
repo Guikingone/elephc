@@ -316,6 +316,34 @@ fn test_error_class_alias_rejects_runtime_call_shape() {
     );
 }
 
+/// Verifies a non-top-level `class_alias()` with literal class-name arguments is accepted: the
+/// alias target is fixed regardless of statement position, so a call nested inside a function and
+/// `if` (Symfony's `PhpFileLoader` guards `class_alias(AppReference::class, App::class)` this way)
+/// type-checks rather than being rejected as "only supported as a top-level statement".
+#[test]
+fn test_class_alias_literal_names_in_function_ok() {
+    expect_ok(
+        r#"<?php
+class Original {}
+function boot(): void {
+    if (!class_exists('App\\Aliased')) {
+        class_alias(Original::class, 'App\\Aliased');
+    }
+}
+"#,
+    );
+}
+
+/// Negative control: a non-top-level `class_alias()` built from dynamic (non-literal) class names
+/// stays rejected, since AOT cannot resolve the alias target ahead of time.
+#[test]
+fn test_class_alias_dynamic_names_in_function_still_errors() {
+    expect_error(
+        r#"<?php function boot(string $a, string $b): void { class_alias($a, $b); }"#,
+        "class_alias() is only supported as a top-level statement with literal class names",
+    );
+}
+
 // --- Closure / arrow function errors ---
 
 /// Verifies that error call non callable variable.
