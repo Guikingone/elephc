@@ -129,3 +129,15 @@ fn test_unrelated_property_write_preserves_this_narrowing() {
         "<?php interface Wide { public function w(): string; } interface Ns extends Wide { public function sub(): string; } class Ad { public ?Wide $pool; public function __construct(Wide $pool) { $this->pool = $pool; } public function go(Wide $repl): string { if (!$this->pool instanceof Ns) { throw new \\Exception(); } $clone = clone $this; $clone->pool = $repl; return $this->pool->sub(); } }",
     );
 }
+
+/// Verifies flow-sensitive branch-assignment typing does not leak a derived class past the merge:
+/// one branch assigns `Base`, another assigns `Derived`, so after the `if`/`else` the local joins
+/// to the base LUB and a `Derived`-only method call there still errors. The precise derived type is
+/// scoped to the assigning branch, never the post-merge read.
+#[test]
+fn test_branch_derived_assignment_does_not_leak_past_merge() {
+    expect_error(
+        "<?php class Base { public function b(): string { return \"b\"; } } class Derived extends Base { public function d(): int { return 7; } } function run(bool $f): int { if ($f) { $n = new Base(); } else { $n = new Derived(); } return $n->d(); }",
+        "Undefined method",
+    );
+}

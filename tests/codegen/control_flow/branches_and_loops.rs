@@ -314,4 +314,25 @@ fn test_while_null_no_loop() {
     assert_eq!(out, "ok");
 }
 
+/// Verifies a local assigned a more-derived class inside an `if`/`else` branch is typed as that
+/// derived class for the reads that follow it ON THAT PATH: the `else` branch calls a
+/// `Derived`-only method right after `$n = new Derived()`, which resolves, while the read after the
+/// merge dispatches the base method on the conservative join. Runtime output matches PHP.
+#[test]
+fn test_branch_local_assignment_is_flow_sensitive_to_derived_class() {
+    let out = compile_and_run(
+        r#"<?php
+        class Base { public function b(): string { return "b"; } }
+        class Derived extends Base { public function d(): int { return 7; } }
+        function run(bool $f): string {
+            if ($f) { $n = new Base(); }
+            else { $n = new Derived(); return (string)$n->d(); }
+            return $n->b();
+        }
+        echo run(false), run(true);
+        "#,
+    );
+    assert_eq!(out, "7b");
+}
+
 // --- Ternary operator ---

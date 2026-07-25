@@ -1036,6 +1036,22 @@ impl Checker {
                         .filter(|ty| precise_object_overwrites.get(name) == Some(ty))
                         .map(|ty| (name.clone(), ty))
                 }
+                // Flow-sensitive concrete-object assignment: `$x = new Concrete()` types `$x` as
+                // that exact class for the reads that follow it on THIS path, even when a sibling
+                // branch assigns a different (e.g. base) class and the storage-wide join is the
+                // common base. The join is restored at branch exit (via `conservative_types`), so
+                // the type after the whole `if` stays the conservative least-upper-bound — a
+                // Derived-only call past the merge still errors.
+                StmtKind::Assign { name, value }
+                    if matches!(&value.kind, ExprKind::NewObject { .. }) =>
+                {
+                    match self.infer_type(value, env) {
+                        Ok(PhpType::Object(class)) if !class.is_empty() => {
+                            Some((name.clone(), PhpType::Object(class)))
+                        }
+                        _ => None,
+                    }
+                }
                 _ => None,
             };
             let result = self.check_conditional_stmt(stmt, env);
