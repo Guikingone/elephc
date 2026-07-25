@@ -467,3 +467,89 @@ for ($i = 0; $i < 3; $i++) {
     let (allocs, frees) = parse_gc_stats(&out.stderr);
     assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
 }
+
+/// The narrowing-residual `$this instanceof <interface>` case that commit d25a367ae accepted at
+/// the checker but explicitly left un-lowered ("the EIR backend still dispatches a bare-`$this`
+/// call through the enclosing class's method table, so an abstract base cannot yet lower this end
+/// to end"). The receiver's EIR type stays the abstract base `NodeBase`, whose method table has no
+/// `kids`, so direct resolution used to abort with an "unknown method" backend error. Codegen now
+/// falls back to by-runtime-class-id dynamic dispatch over the classes that declare `kids`, so each
+/// concrete `Kid` implementor runs its OWN `kids` (proving the dispatch selects the right method,
+/// not a fixed one) while the unguarded `PlainNode` path returns without ever reaching the call.
+#[test]
+fn test_this_instanceof_subinterface_dispatches_derived_method_to_implementors() {
+    let out = compile_and_run(
+        r#"<?php
+interface Base { public function base(): string; }
+interface Kid extends Base { public function kids(): string; }
+abstract class NodeBase implements Base {
+    public function go(): string {
+        if ($this instanceof Kid) { return $this->kids(); }
+        return "plain";
+    }
+}
+class RealKidA extends NodeBase implements Kid {
+    public function base(): string { return "b"; }
+    public function kids(): string { return "kid:A"; }
+}
+class RealKidB extends NodeBase implements Kid {
+    public function base(): string { return "b"; }
+    public function kids(): string { return "kid:B"; }
+}
+class PlainNode extends NodeBase {
+    public function base(): string { return "b"; }
+}
+echo (new RealKidA())->go(), "|", (new RealKidB())->go(), "|", (new PlainNode())->go();
+"#,
+    );
+    assert_eq!(out, "kid:A|kid:B|plain");
+}
+
+/// The narrowed-`$this` derived-method result is usable downstream: the by-runtime-class-id
+/// dispatch of `$this->unwrap()` (an off-base method reached through the discarded `instanceof`
+/// narrowing) returns an object that a second method call then chains onto. Confirms the dynamic
+/// call's RETURN value (not just its side effects) is materialized correctly for the caller.
+#[test]
+fn test_this_instanceof_subinterface_dispatch_return_is_chainable() {
+    let out = compile_and_run(
+        r#"<?php
+interface Wrapped { public function reveal(): string; }
+class Payload implements Wrapped {
+    public function __construct(private string $v) {}
+    public function reveal(): string { return $this->v; }
+}
+interface Base { public function base(): string; }
+interface Boxed extends Base { public function unwrap(): Wrapped; }
+abstract class NodeBase implements Base {
+    public function go(): string {
+        if ($this instanceof Boxed) { $w = $this->unwrap(); return $w->reveal(); }
+        return "none";
+    }
+}
+class RealBox extends NodeBase implements Boxed {
+    public function base(): string { return "b"; }
+    public function unwrap(): Wrapped { return new Payload("inner"); }
+}
+echo (new RealBox())->go();
+"#,
+    );
+    assert_eq!(out, "inner");
+}
+
+/// Interface dispatch to multiple implementors through an interface-typed parameter, where the
+/// method IS declared on the interface: each concrete class runs its own `save`, proving the
+/// interface vtable selects the runtime object's implementation and threads the string argument
+/// and return value through correctly.
+#[test]
+fn test_interface_param_dispatches_to_multiple_implementors() {
+    let out = compile_and_run(
+        r#"<?php
+interface Sh { public function save(string $k): string; }
+class A implements Sh { public function save(string $k): string { return "A:$k"; } }
+class B implements Sh { public function save(string $k): string { return "B:$k"; } }
+function run(Sh $s, string $k): string { return $s->save($k); }
+echo run(new A(), "x"), "|", run(new B(), "y");
+"#,
+    );
+    assert_eq!(out, "A:x|B:y");
+}

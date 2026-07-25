@@ -3548,6 +3548,26 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     {
         return lower_interface_method_call(ctx, inst, &class_name, &method_name);
     }
+    // The checker accepted this call, but the receiver's static class (a base/abstract class or
+    // a bare `$this`) does not declare the method in its own flattened method table — it was
+    // reached through an `instanceof` narrowing to a subtype/interface that the EIR value type
+    // does not carry (the narrowing-residual case, e.g. `if ($this instanceof Kid) $this->kids()`
+    // in an abstract base whose `Kid` is a derived type). PHP dispatches on the runtime class, so
+    // lower it through the same by-runtime-class-id dynamic path as a narrowed interface —
+    // dispatching over the class-ids that declare the method literally (or forward via `__call`).
+    // Guarded on a non-empty candidate set so a genuinely unknown method still falls through to
+    // `resolve_method_call_target`'s precise diagnostic. Soundness rests on the checker having
+    // already vetted the call: the narrowing-leak negative cases are rejected before codegen.
+    if !class_declares_method(ctx, &class_name, &method_name)
+        && !mixed_method_candidates(ctx, &method_name, inst.operands.len())?.is_empty()
+    {
+        return lower_narrowed_interface_method_call(
+            ctx,
+            inst,
+            class_name.trim_start_matches('\\'),
+            &method_name,
+        );
+    }
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
     let mut param_types = Vec::with_capacity(target.params.len() + 1);
     param_types.push(PhpType::Object(class_name));
@@ -5595,6 +5615,21 @@ enum CalledClassIdArg {
     Local(LocalSlotId),
     ThisObject(LocalSlotId),
     ObjectValue(ValueId),
+}
+
+/// Returns whether `class_name`'s flattened (inherited) method table declares `method_name`.
+///
+/// Used to decide whether a concrete-class receiver resolves by direct static dispatch or must
+/// fall back to by-runtime-class-id dynamic dispatch (the method lives only on a descendant
+/// reached through a discarded `instanceof` narrowing). An unknown class returns false so the
+/// caller routes to dynamic dispatch when candidates exist, otherwise to the precise diagnostic.
+fn class_declares_method(ctx: &FunctionContext<'_>, class_name: &str, method_name: &str) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    let method_key = php_symbol_key(method_name);
+    ctx.module
+        .class_infos
+        .get(normalized)
+        .is_some_and(|class_info| class_info.methods.contains_key(&method_key))
 }
 
 /// Resolves method implementation class, canonical key, return type, and ABI arity.
