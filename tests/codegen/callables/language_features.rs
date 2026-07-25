@@ -343,6 +343,22 @@ fn test_shift_right_negative() {
     assert_eq!(out, "-4");
 }
 
+/// Verifies a statically-`float` operand is accepted by a shift/bitwise operator and truncated to
+/// int first, matching PHP's `(int)$f` coercion: `3.9 << 2` is `(int)3.9 << 2` = `3 << 2` = 12.
+#[test]
+fn test_shift_left_float_operand_truncates_to_int() {
+    let out = compile_and_run("<?php $x = 3.9; echo $x << 2;");
+    assert_eq!(out, "12");
+}
+
+/// Verifies a `float`-returning call (`round()` returns float) is a legal bitwise operand,
+/// truncated to int before the OR: `round(6.4) | 1` is `6 | 1` = 7.
+#[test]
+fn test_bitwise_or_float_call_operand() {
+    let out = compile_and_run("<?php echo round(6.4) | 1;");
+    assert_eq!(out, "7");
+}
+
 // ===== Feature 4: Spaceship operator <=> =====
 
 /// Verifies that the spaceship operator returns -1 when the left operand is less than the right (1 <=> 2).

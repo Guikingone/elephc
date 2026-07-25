@@ -298,11 +298,124 @@ fn infer_arrow_captures(
     if let Some(name) = variadic {
         bound.insert(name.clone());
     }
+    // A variable ASSIGNED inside the arrow body (e.g. `fn($x) => ($y = f($x)) + $y`, or a
+    // list-destructure `fn() => [$k, $v] = pair()`) is a body-local, not an outer capture.
+    // Seed `bound` with every simple-`$variable` assignment target before collecting reads so a
+    // later read of that same local is not mis-detected as a free variable and reported
+    // "Undefined variable in use()". Genuine outer captures (variables only ever read) are
+    // unaffected.
+    collect_arrow_assignment_targets(body_expr, &mut bound);
 
     let mut captures = Vec::new();
     let mut seen = HashSet::new();
     collect_arrow_expr_captures(body_expr, &bound, &mut seen, &mut captures);
     captures
+}
+
+/// Records every simple-`$variable` assignment target inside an arrow-function body into `bound`.
+///
+/// Walks the body expression looking for `Assignment` targets that are a plain `Variable(name)`
+/// and `ListUnpack` destructure targets, descending through the operator/container nodes an arrow
+/// expression can nest an assignment inside (binary ops, ternaries, coalesce/short-ternary, pipe,
+/// match arms, call arguments, array literals, casts, and the common unary wrappers). Compound and
+/// element/property targets are intentionally NOT treated as locals: `$a[$k] = v` or `$o->p = v`
+/// read their base variable from the enclosing scope, so those bases must still be captured.
+fn collect_arrow_assignment_targets(expr: &Expr, bound: &mut HashSet<String>) {
+    match &expr.kind {
+        ExprKind::Assignment { target, value, .. } => {
+            if let ExprKind::Variable(name) = &target.kind {
+                bound.insert(name.clone());
+            } else {
+                collect_arrow_assignment_targets(target, bound);
+            }
+            collect_arrow_assignment_targets(value, bound);
+        }
+        ExprKind::ListUnpack { vars, value } => {
+            for var in vars {
+                bound.insert(var.clone());
+            }
+            collect_arrow_assignment_targets(value, bound);
+        }
+        ExprKind::BinaryOp { left, right, .. } => {
+            collect_arrow_assignment_targets(left, bound);
+            collect_arrow_assignment_targets(right, bound);
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            collect_arrow_assignment_targets(condition, bound);
+            collect_arrow_assignment_targets(then_expr, bound);
+            collect_arrow_assignment_targets(else_expr, bound);
+        }
+        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
+            collect_arrow_assignment_targets(value, bound);
+            collect_arrow_assignment_targets(default, bound);
+        }
+        ExprKind::Pipe { value, callable } => {
+            collect_arrow_assignment_targets(value, bound);
+            collect_arrow_assignment_targets(callable, bound);
+        }
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => {
+            collect_arrow_assignment_targets(subject, bound);
+            for (patterns, result) in arms {
+                for pattern in patterns {
+                    collect_arrow_assignment_targets(pattern, bound);
+                }
+                collect_arrow_assignment_targets(result, bound);
+            }
+            if let Some(default) = default {
+                collect_arrow_assignment_targets(default, bound);
+            }
+        }
+        ExprKind::FunctionCall { args, .. }
+        | ExprKind::NewObject { args, .. }
+        | ExprKind::NewScopedObject { args, .. }
+        | ExprKind::StaticMethodCall { args, .. } => {
+            for arg in args {
+                collect_arrow_assignment_targets(arg, bound);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. }
+        | ExprKind::NullsafeMethodCall { object, args, .. } => {
+            collect_arrow_assignment_targets(object, bound);
+            for arg in args {
+                collect_arrow_assignment_targets(arg, bound);
+            }
+        }
+        ExprKind::ArrayLiteral(items) => {
+            for item in items {
+                collect_arrow_assignment_targets(item, bound);
+            }
+        }
+        ExprKind::ArrayLiteralAssoc(items) => {
+            for (key, value) in items {
+                collect_arrow_assignment_targets(key, bound);
+                collect_arrow_assignment_targets(value, bound);
+            }
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            collect_arrow_assignment_targets(array, bound);
+            collect_arrow_assignment_targets(index, bound);
+        }
+        ExprKind::NamedArg { value, .. } => {
+            collect_arrow_assignment_targets(value, bound);
+        }
+        ExprKind::Negate(inner)
+        | ExprKind::Not(inner)
+        | ExprKind::BitNot(inner)
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::PtrCast { expr: inner, .. }
+        | ExprKind::ErrorSuppress(inner)
+        | ExprKind::Print(inner)
+        | ExprKind::Spread(inner) => collect_arrow_assignment_targets(inner, bound),
+        _ => {}
+    }
 }
 
 /// Records `name` as an arrow capture unless it is bound locally or already recorded.

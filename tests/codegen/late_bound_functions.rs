@@ -140,6 +140,7 @@ fn test_late_bound_call_covers_full_curated_allowlist() {
         "apcu_store",
         "apcu_delete",
         "xdebug_is_enabled",
+        "xdebug_connect_to_client",
         "igbinary_serialize",
         "igbinary_unserialize",
         "frankenphp_handle_request",
@@ -160,4 +161,23 @@ fn test_late_bound_call_covers_full_curated_allowlist() {
             "curated name {name} did not throw the expected message"
         );
     }
+}
+
+/// Verifies the exact Symfony `FrankenPhpWorkerRunner::run()` shape: `xdebug_connect_to_client`
+/// called doubly-guarded behind `extension_loaded('xdebug') && function_exists('xdebug_connect_to_client')`
+/// inside a closure body (where the guard cannot be constant-folded away) compiles and runs to
+/// completion without ever reaching the late-bound throw.
+#[test]
+fn test_late_bound_xdebug_connect_guarded_in_closure_never_executes() {
+    let out = compile_and_run(
+        "<?php
+        $handler = function (): void {
+            if (\\extension_loaded('xdebug') && \\function_exists('xdebug_connect_to_client')) {
+                xdebug_connect_to_client();
+            }
+            echo 'ran';
+        };
+        $handler();",
+    );
+    assert_eq!(out, "ran");
 }

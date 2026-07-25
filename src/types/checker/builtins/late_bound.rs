@@ -25,8 +25,12 @@
 //!   families this project already treats as "never available"
 //!   (`crate::optimize::function_existence::NEVER_AVAILABLE_FUNCTION_PREFIXES`'s families):
 //!   `opcache_invalidate`, `opcache_compile_file`, `apcu_exists`, `apcu_store`, `apcu_delete`,
-//!   `apcu_add`, `xdebug_is_enabled`, `igbinary_serialize`, `igbinary_unserialize`,
-//!   `frankenphp_handle_request` (`apcu_add` added in the M1 easy sweep: `ApcuAdapter::clear()`
+//!   `apcu_add`, `xdebug_is_enabled`, `xdebug_connect_to_client`, `igbinary_serialize`,
+//!   `igbinary_unserialize`, `frankenphp_handle_request` (`xdebug_connect_to_client` is the
+//!   xdebug-family sibling of `xdebug_is_enabled`, called doubly-guarded behind
+//!   `extension_loaded('xdebug') && function_exists('xdebug_connect_to_client')` inside
+//!   `Symfony\Component\Runtime\Runner\FrankenPhpWorkerRunner::run()`'s request handler closure;
+//!   `apcu_add` added in the M1 easy sweep: `ApcuAdapter::clear()`
 //!   only reaches it behind `!apcu_exists(...)`, and `apcu_exists` already throws before
 //!   returning, so the site cannot depend on `apcu_add`'s return value). Non-extension-shaped
 //!   undefined names surfaced by the same scan (`debug_backtrace`, `proc_open`, `eval`,
@@ -83,6 +87,7 @@ const LATE_BOUND_UNDEFINED_FUNCTIONS: &[&str] = &[
     "apcu_delete",
     "apcu_add",
     "xdebug_is_enabled",
+    "xdebug_connect_to_client",
     "igbinary_serialize",
     "igbinary_unserialize",
     "frankenphp_handle_request",
@@ -122,6 +127,19 @@ mod tests {
         assert!(is_late_bound_undefined_function("apcu_add"));
         assert!(is_late_bound_undefined_function("APCU_ADD"));
         assert!(!is_late_bound_undefined_function("apcu_add_multi"));
+    }
+
+    /// `xdebug_connect_to_client` (the xdebug-family sibling of `xdebug_is_enabled`, called
+    /// doubly-guarded inside `FrankenPhpWorkerRunner::run()`'s handler closure) is late-bound,
+    /// including through its Symfony-namespaced attempt form, and does not match a typo.
+    #[test]
+    fn matches_xdebug_connect_to_client() {
+        assert!(is_late_bound_undefined_function("xdebug_connect_to_client"));
+        assert!(is_late_bound_undefined_function("XDEBUG_CONNECT_TO_CLIENT"));
+        assert!(is_late_bound_undefined_function(
+            "Symfony\\Component\\Runtime\\Runner\\xdebug_connect_to_client"
+        ));
+        assert!(!is_late_bound_undefined_function("xdebug_connect_to_clien"));
     }
 
     /// A curated name reached through a namespaced attempt (unqualified call inside a

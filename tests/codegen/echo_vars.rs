@@ -74,6 +74,23 @@ fn test_echo_unicode_variable_interpolated() {
     assert_eq!(out, "v=x");
 }
 
+/// Verifies `$` followed by a digit is NOT interpolated: `"$0"` is a literal `$0` (a digit is a
+/// valid identifier CONTINUE but not a valid identifier START, so no variable begins), while a
+/// following real `$x` still interpolates. Matches PHP: `echo "$0 and $x"` prints `$0 and 5`.
+#[test]
+fn test_echo_dollar_digit_is_literal_not_variable() {
+    let out = compile_and_run("<?php $x = 5; echo \"$0 and $x\";");
+    assert_eq!(out, "$0 and 5");
+}
+
+/// Verifies a variable whose name starts with a letter and contains a digit (`$x0`) still
+/// interpolates normally — the digit rule only blocks a digit as the FIRST character after `$`.
+#[test]
+fn test_echo_variable_with_trailing_digit_interpolates() {
+    let out = compile_and_run("<?php $x0 = 9; echo \"v=$x0\";");
+    assert_eq!(out, "v=9");
+}
+
 // --- Phase 2: Variables and integers ---
 
 /// Compiles `<?php echo 42;` and asserts stdout is `"42"`.

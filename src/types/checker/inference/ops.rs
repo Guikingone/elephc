@@ -1462,11 +1462,21 @@ fn is_datetime_family_object(ty: &PhpType) -> bool {
 }
 
 /// Returns `true` if `ty` is a valid operand type for bitwise binary operators.
-/// Accepts `Int`, `Bool`, `Void`, `Mixed`, or a union with mixed integer dispatch.
+/// Accepts `Int`, `Float`, `Bool`, `Void`, `Mixed`, or a union with mixed integer dispatch.
+/// PHP coerces a `float` operand to `int` for bitwise/shift operators (`(int)$f`, truncating
+/// toward zero), so a statically-`Float` operand is legal here; the integer-bitwise EIR
+/// lowering path in `crate::ir_lower::expr::lower_numeric_binary` already runs each operand
+/// through `coerce_to_int` (emitting `Op::FToI` for a float register), matching PHP's runtime
+/// float→int truncation. Array and object operands remain rejected.
 fn is_integer_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     matches!(
         ty,
-        PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void | PhpType::Mixed
+        PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Void
+            | PhpType::Mixed
     ) || checker.is_union_with_mixed_int_dispatch(ty)
 }
 

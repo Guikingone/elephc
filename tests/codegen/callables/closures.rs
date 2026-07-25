@@ -176,6 +176,34 @@ echo $calc(5);
     assert_eq!(out, "26");
 }
 
+/// Verifies a variable ASSIGNED inside an arrow-function body is treated as a body-local, not a
+/// mis-detected outer capture: `fn($x) => ($y = $x + 1) + $y` assigns `$y` then reads it, and must
+/// compile (not report "Undefined variable in use(): $y"). `f(2)`: `$y = 3`, `3 + 3` = 6.
+#[test]
+fn test_arrow_function_body_local_assignment_is_not_captured() {
+    let out = compile_and_run(
+        r#"<?php
+$f = fn($x) => ($y = $x + 1) + $y;
+echo $f(2);
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+/// Verifies the assignment-target seeding does not swallow a genuine outer capture: `$outer` is
+/// only ever read inside the arrow body, so it is still captured by value at definition time.
+#[test]
+fn test_arrow_function_genuine_capture_still_captured_with_body_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+$outer = 10;
+$g = fn($x) => ($y = $x + 1) + $y + $outer;
+echo $g(2);
+"#,
+    );
+    assert_eq!(out, "16");
+}
+
 /// Regression for #300: arrow functions capture outer locals by value at definition time.
 #[test]
 fn test_arrow_function_captures_outer_local_by_value() {
