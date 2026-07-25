@@ -911,3 +911,26 @@ echo (new Ad(new Pool()))->go(new Pool());
     );
     assert_eq!(out, "s");
 }
+
+/// Verifies the guarded `string|false` narrowing forms Symfony relies on. A value from a
+/// `string|false` source reaches a `string` parameter after each dominating guard: a
+/// `false === $x` early return, a `false !== $x` guard, a truthy `if ($x)`, and a `!$x` early
+/// return. Every form strips the `False` arm so the value is a plain `string` on the used path,
+/// and the compiled output matches PHP. An *unguarded* `string|false` still errors (covered by the
+/// checker's false-sentinel policy), so this only locks the narrowing, not over-acceptance.
+#[test]
+fn test_guarded_string_or_false_narrows_to_string() {
+    let out = compile_and_run(
+        r#"<?php
+        function needStr(string $s): string { return "[$s]"; }
+        function src(bool $b): string|false { return $b ? "hi" : false; }
+        function eqEarly(bool $b): string { $x = src($b); if (false === $x) { return "none"; } return needStr($x); }
+        function neq(bool $b): string { $x = src($b); if (false !== $x) { return needStr($x); } return "none"; }
+        function truthy(bool $b): string { $x = src($b); if ($x) { return needStr($x); } return "none"; }
+        function notEarly(bool $b): string { $x = src($b); if (!$x) { return "none"; } return needStr($x); }
+        echo eqEarly(true), eqEarly(false), "|", neq(true), neq(false), "|",
+             truthy(true), truthy(false), "|", notEarly(true), notEarly(false);
+        "#,
+    );
+    assert_eq!(out, "[hi]none|[hi]none|[hi]none|[hi]none");
+}
