@@ -91,7 +91,20 @@ impl Checker {
                 // e.g. an `if` body, sees them defined) and evaluates to EXPR. Each target takes
                 // the source's element type, or `Mixed` when the source is not a statically-known
                 // array (e.g. `$pairs ?? null`, which PHP permits — targets become `null`).
-                let value_ty = self.infer_type_with_assignment_effects(value, env)?;
+                let value_ty = match self.infer_type_with_assignment_effects(value, env) {
+                    Ok(value_ty) => value_ty,
+                    Err(err) => {
+                        // The RHS carries its own (unrelated) error — e.g. an undefined function
+                        // in `[$a, $b] = someUndefinedFn()`. Bind every destructure target as
+                        // `Mixed` before propagating so downstream reads of `$a`/`$b` do not
+                        // cascade into spurious "Undefined variable" diagnostics that bury the
+                        // real root error. The root error is still returned unchanged.
+                        for var in vars {
+                            env.insert(var.clone(), PhpType::Mixed);
+                        }
+                        return Err(err);
+                    }
+                };
                 let elem_ty = match &value_ty {
                     PhpType::Array(elem) => (**elem).clone(),
                     PhpType::AssocArray { value: elem, .. } => (**elem).clone(),

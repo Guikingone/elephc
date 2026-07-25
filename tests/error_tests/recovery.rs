@@ -152,3 +152,38 @@ fn test_branch_constructor_error_recovers_object_overwrite_type() {
         all.iter().map(|error| error.message.clone()).collect::<Vec<_>>(),
     );
 }
+
+/// Verifies a list-destructure whose right-hand side fails to type-check still binds each
+/// destructure target, so a later read of a target does not cascade into a spurious "Undefined
+/// variable" behind the real root error. The undefined-FUNCTION error is still reported.
+#[test]
+fn test_list_unpack_rhs_error_does_not_cascade_undefined_variable() {
+    let error =
+        check_source_full("<?php [$a, $b] = someUndefinedFunctionXYZ(); echo $a; echo $b;")
+            .unwrap_err();
+    let all = error.flatten();
+    assert!(
+        all.iter()
+            .any(|error| error.message.contains("Undefined function")
+                && error.message.contains("someUndefinedFunctionXYZ")),
+        "expected the real undefined-function root error, got {:?}",
+        all.iter().map(|error| error.message.clone()).collect::<Vec<_>>(),
+    );
+    assert!(
+        !all.iter().any(|error| error
+            .message
+            .contains("Undefined variable: $a")
+            || error.message.contains("Undefined variable: $b")),
+        "list-unpack recovery must bind the destructure targets and suppress the cascade, got {:?}",
+        all.iter().map(|error| error.message.clone()).collect::<Vec<_>>(),
+    );
+}
+
+/// Verifies list unpacking with a well-typed array right-hand side still type-checks cleanly —
+/// the error-recovery path must not disturb the happy path.
+#[test]
+fn test_list_unpack_valid_array_still_type_checks() {
+    expect_ok(
+        "<?php function pair(): array { return [1, 2]; } [$a, $b] = pair(); echo $a + $b;",
+    );
+}

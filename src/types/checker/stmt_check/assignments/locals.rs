@@ -1267,7 +1267,24 @@ pub(super) fn check_list_unpack(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let arr_ty = checker.infer_type(value, env)?;
+    let arr_ty = match checker.infer_type(value, env) {
+        Ok(arr_ty) => arr_ty,
+        Err(err) => {
+            // The RHS carries its own (unrelated) error — e.g. an undefined function in
+            // `[$a, $b] = someUndefinedFn();`. PHP still binds each destructure target (each
+            // missing offset reads as null), so bind every target as `Mixed` before propagating
+            // the RHS error. This keeps the real root error while preventing later reads of
+            // `$a`/`$b` from cascading into spurious "Undefined variable" diagnostics that bury
+            // it. Mirrors the plain `$x = <bad rhs>` recovery in `check_assign` and the
+            // expression-position `ExprKind::ListUnpack` recovery in the inference effects path.
+            for var in vars {
+                env.insert(var.clone(), PhpType::Mixed);
+                clear_callable_metadata(checker, var);
+                checker.reflection_class_targets.remove(var);
+            }
+            return Err(err);
+        }
+    };
     let unpack_ty = match &arr_ty {
         PhpType::Array(elem_ty) => *elem_ty.clone(),
         // Associative arrays can contain integer keys used by positional destructuring. Their
