@@ -538,6 +538,132 @@ pub(crate) fn lower_defined(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     store_if_result(ctx, inst)
 }
 
+/// Compile-time-known set of "loaded" PHP extensions for `extension_loaded()` and the regular
+/// (non-Zend) list returned by `get_loaded_extensions(false)`.
+///
+/// KEEP IN SYNC with `crates/elephc-magician/src/interpreter/builtins/network_env/extension_loaded.rs`.
+/// This is only the always-present core set. Bridge-linked extensions (e.g. `PDO`, `hash`,
+/// `openssl`) are added on top per-compilation from the linked-bridge set via
+/// `crate::codegen::linked_extensions()` — see [`extension_is_loaded`] and
+/// `lower_get_loaded_extensions`. The magician eval interpreter has no AOT link step, so it
+/// reports only this core set (documented divergence: `extension_loaded('PDO')` is `false` in eval).
+pub(crate) const CORE_LOADED_EXTENSIONS: &[&str] = &[
+    "Core",
+    "standard",
+    "SPL",
+    "json",
+    "pcre",
+    "date",
+    "ctype",
+    "mbstring",
+    "Reflection",
+    "Zend OPcache",
+];
+
+/// Compile-time-known set of loaded Zend extensions returned by `get_loaded_extensions(true)`.
+///
+/// Elephc ships the OPcache Zend extension but no Xdebug, so this list holds only "Zend OPcache".
+/// KEEP IN SYNC with `crates/elephc-magician/src/interpreter/builtins/network_env/get_loaded_extensions.rs`.
+pub(crate) const ZEND_LOADED_EXTENSIONS: &[&str] = &["Zend OPcache"];
+
+/// Returns true when `name` matches an always-present core extension OR a bridge
+/// actually linked into this compilation (`crate::codegen::linked_extensions()`),
+/// compared case-insensitively.
+///
+/// Mirrors PHP's case-insensitive extension-name comparison: only the canonical names match
+/// (e.g. "opcache" is not an alias for "Zend OPcache"). The linked set is populated by the
+/// pipeline before codegen from the bridges this program links (e.g. `PDO` under `--with-pdo`
+/// or `hash` when a program uses `hash()`), so a bridge-free program reports only the core set.
+fn extension_is_loaded(name: &str) -> bool {
+    CORE_LOADED_EXTENSIONS
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(name))
+        || crate::codegen::linked_extensions()
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(name))
+}
+
+/// Lowers `extension_loaded($extension)` over the effective extension set.
+///
+/// A literal name const-folds to a static boolean (no runtime cost). A dynamic name is lowered
+/// to a case-insensitive membership test against the same effective set (core ∪ linked bridges),
+/// which is baked into the binary at compile time — see [`lower_dynamic_extension_loaded`].
+pub(crate) fn lower_extension_loaded(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "extension_loaded", 1)?;
+    let value = expect_operand(inst, 0)?;
+    if let Some(extension_name) = maybe_const_string_operand(ctx, value)? {
+        emit_static_bool(ctx, extension_is_loaded(&extension_name));
+    } else {
+        lower_dynamic_extension_loaded(ctx, value)?;
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a dynamic (non-literal) `extension_loaded($name)` membership test.
+///
+/// The extension set is fully known at compile time (core ∪ the bridges this program links), so
+/// only the *name* is dynamic. The runtime string is materialized into one 16-byte temporary
+/// stack slot (pointer + length) and compared against every baked candidate with
+/// `__rt_strcasecmp`, matching PHP's case-insensitive extension-name lookup
+/// (`extension_loaded('JSON') === extension_loaded('json')`).
+///
+/// The temporary slot is read back from SP before each comparison rather than being kept in a
+/// register, because `__rt_strcasecmp` receives its arguments in caller-saved registers. The slot
+/// itself survives every call: `__rt_strcasecmp` is a leaf helper that never touches SP.
+fn lower_dynamic_extension_loaded(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    if ctx.value_php_type(value)?.codegen_repr() != PhpType::Str {
+        return Err(CodegenIrError::unsupported(
+            "extension_loaded with non-string dynamic name",
+        ));
+    }
+    let candidates = dynamic_extension_loaded_candidates();
+    if candidates.is_empty() {
+        emit_static_bool(ctx, false);
+        return Ok(());
+    }
+
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+
+    let matched_label = ctx.next_label("extension_loaded_dynamic_match");
+    let done_label = ctx.next_label("extension_loaded_dynamic_done");
+    for candidate in &candidates {
+        emit_branch_if_saved_string_matches_ci(ctx, candidate.as_bytes(), &matched_label);
+    }
+    emit_static_bool(ctx, false);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&matched_label);
+    emit_static_bool(ctx, true);
+
+    ctx.emitter.label(&done_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
+}
+
+/// Returns the effective extension set a dynamic `extension_loaded()` test compares against.
+///
+/// This is exactly the set [`extension_is_loaded`] folds against for a literal name: the
+/// always-present core extensions plus the canonical names of the bridges actually linked into
+/// this compilation, de-duplicated case-insensitively so a bridge that shadows a core name is not
+/// compared twice.
+fn dynamic_extension_loaded_candidates() -> Vec<String> {
+    let mut candidates: Vec<String> = CORE_LOADED_EXTENSIONS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    for extension in crate::codegen::linked_extensions() {
+        if !candidates
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(&extension))
+        {
+            candidates.push(extension);
+        }
+    }
+    candidates
+}
+
 /// Lowers `function_exists("name")` for compile-time string names.
 ///
 /// Recognizes user functions, externs, catalog builtins, and the date/time procedural aliases
@@ -656,13 +782,22 @@ fn emit_branch_if_dynamic_class_like_exists_candidate(
     matched_label: &str,
 ) {
     let bare_candidate = candidate.trim_start_matches('\\');
-    emit_dynamic_class_like_exists_compare(ctx, bare_candidate.as_bytes(), matched_label);
+    emit_branch_if_saved_string_matches_ci(ctx, bare_candidate.as_bytes(), matched_label);
     let qualified_candidate = format!("\\{}", bare_candidate);
-    emit_dynamic_class_like_exists_compare(ctx, qualified_candidate.as_bytes(), matched_label);
+    emit_branch_if_saved_string_matches_ci(ctx, qualified_candidate.as_bytes(), matched_label);
 }
 
-/// Emits one case-insensitive comparison for the saved dynamic class-like lookup.
-fn emit_dynamic_class_like_exists_compare(
+/// Emits one case-insensitive comparison of the string saved in the current 16-byte temporary
+/// stack slot (`[sp] = pointer`, `[sp + 8] = length`) against a baked candidate, branching to
+/// `matched_label` on equality.
+///
+/// Shared by the dynamic `class_exists()`-family lookup and dynamic `extension_loaded()`. The
+/// caller owns the temporary slot: it must push the runtime string with `emit_push_reg_pair`
+/// before the first comparison and release 16 bytes once all comparisons are done. `__rt_strcasecmp`
+/// is a leaf helper (no nested call, no SP adjustment) that reads its operands from
+/// `x1/x2/x3/x4` on AArch64 and `rdi/rsi/rdx/rcx` on x86_64 and clobbers only caller-saved
+/// scratch, so the slot and SP are intact across every emitted comparison.
+fn emit_branch_if_saved_string_matches_ci(
     ctx: &mut FunctionContext<'_>,
     candidate: &[u8],
     matched_label: &str,

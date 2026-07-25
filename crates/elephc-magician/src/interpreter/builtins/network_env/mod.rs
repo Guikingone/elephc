@@ -13,6 +13,8 @@
 use super::super::*;
 
 mod exec;
+mod extension_loaded;
+mod get_loaded_extensions;
 mod getenv;
 mod gethostbyaddr;
 mod gethostbyname;
@@ -25,6 +27,10 @@ mod inet_ntop;
 mod inet_pton;
 mod ip2long;
 mod long2ip;
+mod opcache_file_functions;
+mod opcache_get_configuration;
+mod opcache_get_status;
+mod opcache_reset;
 mod passthru;
 mod php_uname;
 mod phpversion;
@@ -33,6 +39,8 @@ mod shell_exec;
 mod system;
 
 pub(in crate::interpreter) use exec::*;
+pub(in crate::interpreter) use extension_loaded::*;
+pub(in crate::interpreter) use get_loaded_extensions::*;
 pub(in crate::interpreter) use getenv::*;
 pub(in crate::interpreter) use gethostbyaddr::*;
 pub(in crate::interpreter) use gethostbyname::*;
@@ -45,6 +53,10 @@ pub(in crate::interpreter) use inet_ntop::*;
 pub(in crate::interpreter) use inet_pton::*;
 pub(in crate::interpreter) use ip2long::*;
 pub(in crate::interpreter) use long2ip::*;
+pub(in crate::interpreter) use opcache_file_functions::*;
+pub(in crate::interpreter) use opcache_get_configuration::*;
+pub(in crate::interpreter) use opcache_get_status::*;
+pub(in crate::interpreter) use opcache_reset::*;
 pub(in crate::interpreter) use passthru::*;
 pub(in crate::interpreter) use php_uname::*;
 pub(in crate::interpreter) use phpversion::*;
@@ -65,6 +77,10 @@ pub(in crate::interpreter) fn eval_builtin_network_env_call(
         "shell_exec" => eval_builtin_shell_exec(args, context, scope, values),
         "system" => eval_builtin_system(args, context, scope, values),
         "passthru" => eval_builtin_passthru(args, context, scope, values),
+        "extension_loaded" => eval_builtin_extension_loaded(args, context, scope, values),
+        "get_loaded_extensions" => {
+            eval_builtin_get_loaded_extensions(args, context, scope, values)
+        }
         "getenv" => eval_builtin_getenv(args, context, scope, values),
         "gethostbyaddr" => eval_builtin_gethostbyaddr(args, context, scope, values),
         "gethostbyname" => eval_builtin_gethostbyname(args, context, scope, values),
@@ -137,6 +153,20 @@ pub(in crate::interpreter) fn eval_network_env_values_result(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_getservbyport_result(*port, *protocol, values)
+        }
+        "extension_loaded" => {
+            let [extension] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_extension_loaded_result(*extension, values)
+        }
+        "get_loaded_extensions" => {
+            let zend_extensions = match evaluated_args {
+                [] => false,
+                [flag] => values.truthy(*flag)?,
+                _ => return Err(EvalStatus::RuntimeFatal),
+            };
+            eval_get_loaded_extensions_result(zend_extensions, values)
         }
         "getenv" => {
             let [name] = evaluated_args else {

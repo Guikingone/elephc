@@ -54,6 +54,13 @@ thread_local! {
     static DECLARED_CLASS_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static DECLARED_INTERFACE_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static DECLARED_TRAIT_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Canonical PHP extension names of the bridge staticlibs actually linked
+    /// into the current compilation (e.g. `["PDO", "hash"]`). Set via
+    /// [`set_linked_extensions`] from the pipeline before `generate` runs; read
+    /// by `extension_loaded()` / `get_loaded_extensions()` const-folding so they
+    /// report linked bridges alongside the always-present core set. Thread-local
+    /// so parallel test runs don't interfere.
+    static LINKED_EXTENSIONS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Sets the number of autoload rules registered.
@@ -64,6 +71,21 @@ pub fn set_autoload_rule_count(n: usize) {
 /// Returns the number of autoload rules registered.
 pub fn autoload_rule_count() -> usize {
     AUTOLOAD_RULE_COUNT.with(|c| c.get())
+}
+
+/// Records the canonical PHP extension names of the bridge staticlibs linked
+/// into the current compilation, so `extension_loaded()` / `get_loaded_extensions()`
+/// report them in addition to the always-present core set. Set from the pipeline
+/// before codegen; read via [`linked_extensions`]. Passing an empty vec (the
+/// default) reports only the core extensions, matching a bridge-free program.
+pub fn set_linked_extensions(extensions: Vec<String>) {
+    LINKED_EXTENSIONS.with(|names| *names.borrow_mut() = extensions);
+}
+
+/// Returns the canonical PHP extension names of the bridges linked into the
+/// current compilation (empty unless [`set_linked_extensions`] ran for it).
+pub(crate) fn linked_extensions() -> Vec<String> {
+    LINKED_EXTENSIONS.with(|names| names.borrow().clone())
 }
 
 /// Stores the declaration order of classes, interfaces, and traits so that

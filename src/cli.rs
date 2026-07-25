@@ -15,7 +15,7 @@ pub(crate) use crate::codegen::Emit;
 use crate::codegen::platform::Target;
 
 /// Usage string printed to stderr when command-line arguments are invalid or missing.
-pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--php-version 8.2|8.3|8.4|8.5] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--emit-asm] [--emit KIND] [--check] [--strict-php] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--source-map] [--debug-info] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] [--with-CRATE] <source.php>";
+pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--php-version 8.2|8.3|8.4|8.5] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--emit-asm] [--emit KIND] [--check] [--strict-php] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--source-map] [--debug-info] [--define SYMBOL] [--ini KEY=VALUE] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] [--with-CRATE] <source.php>";
 
 /// Configuration derived from command-line arguments, passed to the compile pipeline.
 /// Controls heap allocation size, debug output, code generation options, and linking behavior.
@@ -52,6 +52,13 @@ pub(crate) struct CliConfig {
     /// the API is available even when feature auto-detection would not trigger.
     /// `--with-web` is folded into `web` instead, since it aliases `--web`.
     pub(crate) with_crates: HashSet<String>,
+    /// Compile-time INI directive overrides from repeated `--ini <key>=<value>` flags, in
+    /// the order supplied (last-wins per key is resolved downstream). For this increment only
+    /// `opcache.*` keys are meaningful — they are baked into the OPcache configuration surface
+    /// (`opcache_get_configuration`/`opcache_get_status`/`ini_get`/enabled-state). A non-opcache
+    /// key is stored but ignored by the opcache layer (general INI is a future increment); it is
+    /// never an error so a forward-looking `--ini` invocation does not break.
+    pub(crate) ini_overrides: Vec<(String, String)>,
 }
 
 /// Parse command-line arguments into a CliConfig struct.
@@ -81,6 +88,7 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     let mut strict_php = false;
     let mut web = false;
     let mut with_crates: HashSet<String> = HashSet::new();
+    let mut ini_overrides: Vec<(String, String)> = Vec::new();
     let mut null_repr = match std::env::var("ELEPHC_NULL_REPR").as_deref() {
         Ok("tagged") => crate::codegen::NullRepr::Tagged,
         Ok("sentinel") => crate::codegen::NullRepr::Sentinel,
@@ -157,6 +165,18 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
                 fail(message);
             }
             defines.insert(symbol.to_string());
+        } else if arg == "--ini" {
+            i += 1;
+            let assignment = required_value(args, i, "Missing key=value after --ini");
+            match parse_ini_assignment(&assignment) {
+                Ok(entry) => ini_overrides.push(entry),
+                Err(message) => fail(&message),
+            }
+        } else if let Some(assignment) = arg.strip_prefix("--ini=") {
+            match parse_ini_assignment(assignment) {
+                Ok(entry) => ini_overrides.push(entry),
+                Err(message) => fail(&message),
+            }
         } else if arg == "--link" || arg == "-l" {
             i += 1;
             extra_link_libs.push(required_value(
@@ -257,7 +277,24 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         strict_php,
         web,
         with_crates,
+        ini_overrides,
     }
+}
+
+/// Parses a single `--ini KEY=VALUE` assignment into a `(key, value)` pair, splitting on the
+/// FIRST `=` so an INI value that itself contains `=` is preserved intact. The key is trimmed
+/// (a stray CLI space is not part of a directive name) and must be non-empty; the value is taken
+/// verbatim (INI values are used exactly as supplied — e.g. `opcache.memory_consumption=256`
+/// must report `"256"`). Kept pure (no IO/exit) so the split rule is unit-testable.
+fn parse_ini_assignment(assignment: &str) -> Result<(String, String), String> {
+    let (key, value) = assignment
+        .split_once('=')
+        .ok_or_else(|| format!("Invalid --ini '{assignment}': expected KEY=VALUE"))?;
+    let key = key.trim();
+    if key.is_empty() {
+        return Err(format!("Invalid --ini '{assignment}': empty key"));
+    }
+    Ok((key.to_string(), value.to_string()))
 }
 
 /// Parses the required PHP compatibility version after `--php-version`.
@@ -538,6 +575,52 @@ mod tests {
         let args = vec!["elephc".into(), "app.php".into()];
         let config = parse_args(&args);
         assert!(config.with_crates.is_empty());
+    }
+
+    /// Verifies `--ini KEY=VALUE` splits on the first `=`, trims the key, and preserves a value
+    /// that itself contains `=`; an empty or `=`-less assignment is rejected.
+    #[test]
+    fn ini_assignment_splits_on_first_equals() {
+        assert_eq!(
+            parse_ini_assignment("opcache.enable_cli=1").unwrap(),
+            ("opcache.enable_cli".to_string(), "1".to_string())
+        );
+        // Value keeps later `=` intact (split on FIRST `=`).
+        assert_eq!(
+            parse_ini_assignment("opcache.blacklist_filename=a=b").unwrap(),
+            ("opcache.blacklist_filename".to_string(), "a=b".to_string())
+        );
+        // A stray space around the key is trimmed.
+        assert_eq!(
+            parse_ini_assignment(" opcache.jit =tracing").unwrap(),
+            ("opcache.jit".to_string(), "tracing".to_string())
+        );
+        assert!(parse_ini_assignment("no_equals_here").is_err());
+        assert!(parse_ini_assignment("=value").is_err());
+    }
+
+    /// Verifies repeated `--ini` flags (both split and `=` spellings) accumulate in order, and
+    /// the default is an empty override list.
+    #[test]
+    fn ini_flags_accumulate_in_order() {
+        let args = vec![
+            "elephc".into(),
+            "--ini".into(),
+            "opcache.enable_cli=1".into(),
+            "--ini=opcache.jit=tracing".into(),
+            "app.php".into(),
+        ];
+        let config = parse_args(&args);
+        assert_eq!(
+            config.ini_overrides,
+            vec![
+                ("opcache.enable_cli".to_string(), "1".to_string()),
+                ("opcache.jit".to_string(), "tracing".to_string()),
+            ]
+        );
+
+        let no_ini = parse_args(&["elephc".into(), "app.php".into()]);
+        assert!(no_ini.ini_overrides.is_empty());
     }
 
     /// Verifies `--strict-php` sets the strict-PHP flag on the parsed config.

@@ -1535,9 +1535,25 @@ function __elephc_ini_get_raw(string $key): string {
     if ($key === 'session.auto_start') { return elephc_web_session_get_auto_start() === 1 ? '1' : ''; }
     return '';
 }
-// ini_get($option): current value of a session.* directive as a string, or false
-// for a non-session/unknown directive. elephc only models the session.* surface.
+// The shared opcache.* INI helpers (__elephc_opcache_ini_string / _access / _keys /
+// _all_details / _all_plain), baked for the compile target. Substituted by inject_if_web
+// so ini_get/ini_set/ini_get_all can answer opcache.* directive queries ahead of the
+// session dispatch. The _all_* helpers are opcache-only and unreachable under --web (the
+// combined session+opcache all-helpers below own that job), so prune_unreachable_prelude_
+// functions drops them from a --web binary.
+__ELEPHC_OPCACHE_INI_HELPERS__
+// __elephc_ini_module_known($m): the KNOWN-MODULE predicate ini_get_all's extension filter
+// uses to tell "known module with no INI directives" ([]) from "no such module"
+// (E_WARNING + false). Rendered from CORE_LOADED_EXTENSIONS, lowercased, plus 'session'
+// (the extra module a --web binary registers).
+__ELEPHC_INI_MODULE_KNOWN__
+// ini_get($option): the raw INI string for an opcache.* directive, else the current
+// value of a session.* directive as a string, or false for any other/unknown directive.
+// opcache.* is consulted first (its keys are disjoint from session.*), so the session
+// surface below is byte-for-byte unchanged.
 function ini_get(string $option): string|false {
+    $__elephc_oc = __elephc_opcache_ini_string($option);
+    if ($__elephc_oc !== false) { return $__elephc_oc; }
     if (!__elephc_is_session_ini($option)) { return false; }
     return __elephc_ini_get_raw($option);
 }
@@ -1574,6 +1590,11 @@ function __elephc_session_name_valid(string $name): bool {
 // directives take (string)$value. PERDIR directives are rejected at runtime.
 function ini_set(string $option, $value): string|false {
     $old = '';
+    // opcache.* directives are compile-time-baked and cannot be mutated at runtime, so
+    // ini_set reports failure for every opcache key (documented interim; exact for the
+    // PHP_INI_SYSTEM majority). Checked ahead of the session dispatch; opcache keys are
+    // disjoint from session.* so this leaves the session surface unchanged.
+    if (__elephc_opcache_ini_string($option) !== false) { return false; }
     if (!__elephc_is_session_ini($option)) { return false; }
     if (__elephc_session_ini_perdir($option)) { return false; }
     if (elephc_web_session_get_status() === PHP_SESSION_ACTIVE) { return false; }
@@ -1651,22 +1672,152 @@ function ini_set(string $option, $value): string|false {
     if ($option === 'session.use_trans_sid') { elephc_web_session_set_use_trans_sid(__elephc_session_ini_bool($value)); }
     return $old;
 }
-// ini_get_all($extension, $details): the session.* directives. A non-session
-// $extension yields []. With $details each entry is
-// ['global_value'=>v,'local_value'=>v,'access'=>7]; otherwise the plain value.
-function ini_get_all(?string $extension = null, bool $details = true): array {
-    if ($extension !== null && $extension !== 'session') { return []; }
+// The --web ini_get_all projection helpers. Each BLOCK helper builds one directive block in
+// ONE value shape with its loop UNGUARDED; the two __elephc_ini_all_* dispatchers are pure
+// call-exit selectors. That arrangement is forced by TWO SEPARATE elephc codegen limitations,
+// both reproduced on this branch and both silent (no diagnostic):
+//
+// 1. ONE VALUE SHAPE PER FUNCTION. A function that writes an ARRAY-LITERAL value on one
+//    branch and a SCALAR on the other into the SAME array slot inside one loop miscompiles —
+//    SIGSEGV or heap exhaustion. That is exactly what the old single `$details`-branching loop
+//    did, and it is why `ini_get_all($ext, false)` used to crash the worker into an empty HTTP
+//    reply. So the `$details` choice is resolved by PICKING A HELPER, never inside a loop.
+//
+// 2. NO SKIPPED FIRST WRITE SITE. When a function has two conditional write sites into the
+//    same array local and the FIRST one is SKIPPED at runtime while the second executes, the
+//    result is corrupt: SIGSEGV for the loop form (verified: exit 139 on CLI, empty HTTP reply
+//    under --web), and a silently WRONG empty value for the plain `if ($g) { $a['x'] = …; }`
+//    form. Two UNGUARDED sequential loops are fine, and a single guarded loop is fine; only a
+//    skipped-then-executed pair breaks. So the extension filter must NOT be expressed as two
+//    `if`-guarded blocks inside one builder — it is expressed as a dispatch to a builder whose
+//    loops all run.
+//
+// Block/key order: the session block keeps its REGISTRATION key order (byte-for-byte the
+// order this prelude has always emitted) and the opcache key list is sorted ascending (see
+// render_opcache_ini_helpers), so the unfiltered surface is 33 session.* in registration order
+// followed by 54 sorted opcache.* keys.
+function __elephc_ini_session_details(): array {
     $__elephc_all = [];
     foreach (__elephc_ini_session_keys() as $__elephc_ak) {
-        $__elephc_av = __elephc_ini_get_raw($__elephc_ak);
-        if ($details) {
-            $__elephc_access = __elephc_session_ini_perdir($__elephc_ak) ? 2 : 7;
-            $__elephc_all[$__elephc_ak] = ['global_value' => $__elephc_av, 'local_value' => $__elephc_av, 'access' => $__elephc_access];
-        } else {
-            $__elephc_all[$__elephc_ak] = $__elephc_av;
-        }
+        $__elephc_av = __elephc_ini_session_detail_value($__elephc_ak);
+        $__elephc_access = __elephc_session_ini_perdir($__elephc_ak) ? 2 : 7;
+        $__elephc_all[$__elephc_ak] = ['global_value' => $__elephc_av, 'local_value' => $__elephc_av, 'access' => $__elephc_access];
     }
     return $__elephc_all;
+}
+// The session block's value accessor for ini_get_all. The `$option === ''` arm is UNREACHABLE —
+// __elephc_ini_session_keys() never yields the empty string — and exists only to type the return
+// as `?string`, matching __elephc_opcache_ini_detail_value so the two loops of the combined
+// helpers write one value shape. Same dead-exit device the RESTRICTED_GET_CONFIGURATION_TEMPLATE
+// uses to preserve reference PHP's `array|false` signature.
+function __elephc_ini_session_detail_value(string $option): ?string {
+    if ($option === '') { return null; }
+    $__elephc_sv = __elephc_ini_get_raw($option);
+    return $__elephc_sv;
+}
+function __elephc_ini_opcache_details(): array {
+    $__elephc_all = [];
+    foreach (__elephc_opcache_ini_keys() as $__elephc_ok) {
+        $__elephc_ov = __elephc_opcache_ini_detail_value($__elephc_ok);
+        $__elephc_all[$__elephc_ok] = ['global_value' => $__elephc_ov, 'local_value' => $__elephc_ov, 'access' => __elephc_opcache_ini_access($__elephc_ok)];
+    }
+    return $__elephc_all;
+}
+// Both blocks, both loops UNGUARDED (the shape proven to lower), and BOTH now write a `?string`
+// so the two write sites' static value type stays identical — which is what keeps limitation 1
+// above from applying across the two loops.
+//
+// WHY `?string` AND NOT `string`. Reference PHP reports ini_get_all()'s global_value/local_value
+// as PHP `null` — not `''` — for a directive php-src registered with a C NULL default that was
+// never assigned. `opcache.file_cache` is the only such directive in either block (VERIFIED on
+// reference PHP 8.5.6: it is the ONE opcache entry out of 54 whose two value fields are NULL, in
+// BOTH the $details=true and $details=false surfaces). __elephc_opcache_ini_detail_value returns
+// that null; __elephc_ini_session_detail_value below carries a DEAD null exit purely so the
+// session loop's value type matches — no session directive is ever null.
+function __elephc_ini_combined_details(): array {
+    $__elephc_all = [];
+    foreach (__elephc_ini_session_keys() as $__elephc_ak) {
+        $__elephc_av = __elephc_ini_session_detail_value($__elephc_ak);
+        $__elephc_access = __elephc_session_ini_perdir($__elephc_ak) ? 2 : 7;
+        $__elephc_all[$__elephc_ak] = ['global_value' => $__elephc_av, 'local_value' => $__elephc_av, 'access' => $__elephc_access];
+    }
+    foreach (__elephc_opcache_ini_keys() as $__elephc_ok) {
+        $__elephc_ov = __elephc_opcache_ini_detail_value($__elephc_ok);
+        $__elephc_all[$__elephc_ok] = ['global_value' => $__elephc_ov, 'local_value' => $__elephc_ov, 'access' => __elephc_opcache_ini_access($__elephc_ok)];
+    }
+    return $__elephc_all;
+}
+function __elephc_ini_session_plain(): array {
+    $__elephc_all = [];
+    foreach (__elephc_ini_session_keys() as $__elephc_ak) {
+        $__elephc_all[$__elephc_ak] = __elephc_ini_session_detail_value($__elephc_ak);
+    }
+    return $__elephc_all;
+}
+function __elephc_ini_opcache_plain(): array {
+    $__elephc_all = [];
+    foreach (__elephc_opcache_ini_keys() as $__elephc_ok) {
+        $__elephc_all[$__elephc_ok] = __elephc_opcache_ini_detail_value($__elephc_ok);
+    }
+    return $__elephc_all;
+}
+function __elephc_ini_combined_plain(): array {
+    $__elephc_all = [];
+    foreach (__elephc_ini_session_keys() as $__elephc_ak) {
+        $__elephc_all[$__elephc_ak] = __elephc_ini_session_detail_value($__elephc_ak);
+    }
+    foreach (__elephc_opcache_ini_keys() as $__elephc_ok) {
+        $__elephc_all[$__elephc_ok] = __elephc_opcache_ini_detail_value($__elephc_ok);
+    }
+    return $__elephc_all;
+}
+// The two dispatchers: pure call exits, one per accepted extension filter. null and 'core'
+// both select the combined (unfiltered) surface — see ini_get_all's docblock for the php-src
+// module_number==0 rule that 'core' reproduces.
+function __elephc_ini_all_details(?string $extension = null): array {
+    if ($extension === 'session') { return __elephc_ini_session_details(); }
+    if ($extension === 'zend opcache') { return __elephc_ini_opcache_details(); }
+    return __elephc_ini_combined_details();
+}
+function __elephc_ini_all_plain(?string $extension = null): array {
+    if ($extension === 'session') { return __elephc_ini_session_plain(); }
+    if ($extension === 'zend opcache') { return __elephc_ini_opcache_plain(); }
+    return __elephc_ini_combined_plain();
+}
+// ini_get_all($extension, $details): the --web INI surface, filtered by module name the way
+// php-src filters it.
+//
+// Reference PHP matches $extension VERBATIM against the module registry, whose keys are
+// lowercase, with NO case folding (unlike extension_loaded, which IS case-insensitive — the
+// two must not share a comparison helper). So 'session' and 'zend opcache' select their
+// blocks, while 'Zend OPcache' — the spelling get_loaded_extensions() reports — is "not
+// found": an E_WARNING (ini_get_all(): Extension "…" cannot be found) and false. A module
+// that IS known but registers no INI directives yields an EMPTY ARRAY, not false (verified
+// on reference PHP 8.5.6: spl/json/ctype/reflection → []).
+//
+// 'core' maps to the UNFILTERED surface, reproducing php-src's rule that Core's
+// module_number is 0 so the per-module filter is skipped for it. DOCUMENTED DIVERGENCE:
+// reference PHP's unfiltered surface is every directive of every loaded module (403 on the
+// reference build); elephc models only the blocks it owns, so unfiltered is 87 under --web
+// (33 session + 54 opcache) and 54 on CLI. The rule is reproduced, the population is
+// elephc's.
+//
+// The return type hint is DELIBERATELY OMITTED (reference PHP is array|false): the
+// opcache_get_status precedent applies — omitting the hint lets ordinary union return
+// inference handle the exits instead of leaning on union-return-type codegen.
+//
+// __elephc_ini_module_known takes ?string because $extension !== null does not currently
+// narrow a ?string parameter to Str in the checker; a nullable parameter accepts the
+// un-narrowed union while comparing identically against the string literals.
+function ini_get_all(?string $extension = null, bool $details = true) {
+    if ($extension !== null && $extension !== 'session' && $extension !== 'zend opcache'
+        && $extension !== 'core') {
+        if (__elephc_ini_module_known($extension)) { return []; }
+        trigger_error('ini_get_all(): Extension "' . $extension . '" cannot be found', E_WARNING);
+        return false;
+    }
+    if ($details) { return __elephc_ini_all_details($extension); }
+    return __elephc_ini_all_plain($extension);
 }
 // Reset PHP-side handler state on every request. Class statics live for the
 // worker process, unlike normal handler locals, so retaining these values would
@@ -1691,17 +1842,48 @@ pub(crate) const WEB_WRAP_SRC: &str =
 /// Prepends the web prelude when compiling with `--web` and wraps the whole
 /// handler body in a catch-all `try`/`catch` so uncaught exceptions become a 500.
 /// Returns the program unchanged otherwise.
-pub fn inject_if_web(program: Program, web: bool, php_version: PhpVersion) -> Program {
+pub fn inject_if_web(
+    program: Program,
+    web: bool,
+    php_version: PhpVersion,
+    ini_overrides: &[(String, String)],
+) -> Program {
     if !web {
         return program;
     }
     let user_usage = usage::collect(&program);
     let needs_callable_session_handler = user_usage.references("session_set_save_handler")
         || user_usage.dynamic_function_call;
-    let prelude = WEB_PRELUDE_SRC.replace(
-        "__ELEPHC_PHP_VERSION_ID__",
-        &php_version.version_id().to_string(),
-    );
+    let prelude = WEB_PRELUDE_SRC
+        .replace(
+            "__ELEPHC_PHP_VERSION_ID__",
+            &php_version.version_id().to_string(),
+        )
+        // Bake the shared opcache.* INI helpers (raw-string / access / keys) into the
+        // prelude so ini_get/ini_set/ini_get_all can answer opcache directive queries.
+        // Rendered from the same version-keyed table that backs opcache_get_configuration().
+        //
+        // The runtime ELEPHC_INI_* env-override block goes in FIRST and only here on the --web
+        // path: the raw-string arms above call into it, and so does the injected
+        // opcache_get_configuration() (which opcache_prelude::inject_if_used emits BEFORE this
+        // runs, so prune_unreachable_prelude_functions already sees those calls as roots).
+        // opcache_prelude deliberately does not emit the block when `web` is true — two copies
+        // would be a redeclaration.
+        .replace(
+            "__ELEPHC_OPCACHE_INI_HELPERS__",
+            &format!(
+                "{}{}",
+                crate::opcache_prelude::render_opcache_env_helpers(),
+                crate::opcache_prelude::render_opcache_ini_helpers(php_version, ini_overrides),
+            ),
+        )
+        // Bake the known-module predicate ini_get_all's extension filter consults, derived
+        // from CORE_LOADED_EXTENSIONS (lowercased) plus 'session' for the web SAPI, so the
+        // filter list cannot drift from the extension_loaded()/get_loaded_extensions() set.
+        .replace(
+            "__ELEPHC_INI_MODULE_KNOWN__",
+            &crate::opcache_prelude::render_ini_module_known(true),
+        );
     let tokens = crate::lexer::tokenize(&prelude).expect("web prelude must tokenize");
     let mut combined = crate::parser::parse(&tokens).expect("web prelude must parse");
     if !needs_callable_session_handler {
@@ -1884,7 +2066,7 @@ mod tests {
     /// Plain web programs keep auto-start/finalization roots but shed optional APIs.
     #[test]
     fn plain_web_program_prunes_optional_session_declarations() {
-        let injected = inject_if_web(parse("<?php echo 'ok';"), true, PhpVersion::Php85);
+        let injected = inject_if_web(parse("<?php echo 'ok';"), true, PhpVersion::Php85, &[]);
         assert!(declares_function(
             &injected,
             "__elephc_session_start_core"
@@ -1906,6 +2088,7 @@ mod tests {
             parse("<?php session_start(); session_regenerate_id(true);"),
             true,
             PhpVersion::Php85,
+            &[],
         );
         assert!(declares_function(&injected, "session_regenerate_id"));
     }
@@ -1917,6 +2100,7 @@ mod tests {
             parse("<?php echo function_exists('session_set_save_handler');"),
             true,
             PhpVersion::Php85,
+            &[],
         );
         assert!(declares_function(&injected, "session_set_save_handler"));
         assert!(declares_class(
@@ -1932,6 +2116,7 @@ mod tests {
             parse("<?php $name = 'session_regenerate_id'; $name();"),
             true,
             PhpVersion::Php85,
+            &[],
         );
         assert!(declares_function(&injected, "session_regenerate_id"));
         assert!(declares_function(&injected, "session_set_save_handler"));
@@ -1944,6 +2129,7 @@ mod tests {
             parse("<?php $name = 'session_regenerate_id'; echo function_exists($name);"),
             true,
             PhpVersion::Php85,
+            &[],
         );
         assert!(declares_function(&injected, "session_regenerate_id"));
         assert!(declares_function(&injected, "session_set_save_handler"));
@@ -1954,7 +2140,7 @@ mod tests {
     fn non_web_program_is_unchanged() {
         let program = parse("<?php echo 'ok';");
         assert_eq!(
-            inject_if_web(program.clone(), false, PhpVersion::Php85),
+            inject_if_web(program.clone(), false, PhpVersion::Php85, &[]),
             program
         );
     }

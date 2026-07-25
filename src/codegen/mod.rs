@@ -46,6 +46,7 @@ pub(crate) use crate::codegen_support::{
 };
 pub(crate) use crate::codegen_support::{
     autoload_rule_count, declared_class_names, declared_interface_names, declared_trait_names,
+    linked_extensions,
     emit_array_value_type_stamp, emit_box_current_owned_value_as_mixed,
     emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed, emit_callback_wrapper,
     emit_extern_callback_trampoline, emit_fiber_wrapper,
@@ -58,7 +59,9 @@ pub use crate::codegen_support::{
     required_libraries_for_runtime_features, runtime_features_for_program_and_classes,
     RuntimeFeatures,
 };
-pub use crate::codegen_support::{prepare_declared_name_order, set_autoload_rule_count};
+pub use crate::codegen_support::{
+    prepare_declared_name_order, set_autoload_rule_count, set_linked_extensions,
+};
 
 use std::collections::{HashMap, HashSet};
 use std::error::Error;

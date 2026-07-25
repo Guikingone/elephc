@@ -16,6 +16,8 @@
 //! - Check-hook builtins: microtime (literal-dependent return type), strtotime
 //!   (returns Union(Int, Bool)), getenv (returns Union(Str, Bool)), php_uname (validates
 //!   arg type), define (side-effect: registers constant type), defined (validates literal),
+//!   extension_loaded (validates literal; const-folds extension membership),
+//!   get_loaded_extensions (validates optional literal flag; const-folds the extension list),
 //!   class_attribute_names/class_attribute_args/class_get_attributes (compile-time reflection),
 //!   json_encode, json_decode, json_validate, unserialize, preg_match (by-ref `$matches`
 //!   variable check), preg_split (element type refined by arg count).
@@ -37,6 +39,8 @@ pub mod date_default_timezone_set;
 pub mod define;
 pub mod defined;
 pub mod exec;
+pub mod extension_loaded;
+pub mod get_loaded_extensions;
 pub mod getdate;
 pub mod getenv;
 pub mod gmdate;

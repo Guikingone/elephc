@@ -48,6 +48,14 @@ struct BridgeStaticlib {
     /// Whether the staticlib needs the dynamic loader (`-ldl`) on Linux for its
     /// Rust runtime/unwinder symbols.
     needs_libdl: bool,
+    /// Canonical PHP extension name this bridge makes `extension_loaded()` /
+    /// `get_loaded_extensions()` report as loaded when the bridge is linked into
+    /// the program, or `None` when the bridge exposes no distinct PHP extension
+    /// surface (its capability folds into an always-present core extension, or it
+    /// is an internal compiler facility with no PHP-visible extension). This is
+    /// the single source of the bridge -> extension map; each choice is justified
+    /// on its [`BRIDGES`] entry below.
+    php_extension: Option<&'static str>,
 }
 
 /// Every bridge staticlib elephc knows how to link. To support a new bridge,
@@ -61,6 +69,10 @@ const BRIDGES: &[BridgeStaticlib] = &[
         whole_archive: true,
         macos_frameworks: &[],
         needs_libdl: true,
+        // The TLS bridge implements PHP's OpenSSL-backed stream crypto surface
+        // (https:// wrappers, stream_socket_enable_crypto), which PHP exposes as
+        // the `openssl` extension.
+        php_extension: Some("openssl"),
     },
     BridgeStaticlib {
         lib_name: "elephc_pdo",
@@ -72,6 +84,11 @@ const BRIDGES: &[BridgeStaticlib] = &[
         // user), which references CoreFoundation / SystemConfiguration on macOS.
         macos_frameworks: &["CoreFoundation", "SystemConfiguration"],
         needs_libdl: true,
+        // The core PDO database-access layer. Driver sub-extensions
+        // (pdo_sqlite/pdo_mysql/pdo_pgsql) are compiled into the same staticlib
+        // but are out of scope for extension reporting; we report the umbrella
+        // `PDO` extension only.
+        php_extension: Some("PDO"),
     },
     BridgeStaticlib {
         lib_name: "elephc_crypto",
@@ -85,6 +102,10 @@ const BRIDGES: &[BridgeStaticlib] = &[
         macos_frameworks: &[],
         // Rust runtime/unwinder symbols, like the other bridges.
         needs_libdl: true,
+        // elephc_crypto implements PHP's `hash` extension digest/HMAC routines
+        // (see crates/elephc-crypto: algos.rs + hmac.rs). It is pure-Rust hashing
+        // only: it does NOT bundle libsodium, so it does not provide `sodium`.
+        php_extension: Some("hash"),
     },
     BridgeStaticlib {
         lib_name: "elephc_phar",
@@ -94,6 +115,8 @@ const BRIDGES: &[BridgeStaticlib] = &[
         whole_archive: false,
         macos_frameworks: &[],
         needs_libdl: true,
+        // The Phar archive reader/writer, exposed by PHP as the `Phar` extension.
+        php_extension: Some("Phar"),
     },
     BridgeStaticlib {
         lib_name: "elephc_tz",
@@ -109,6 +132,10 @@ const BRIDGES: &[BridgeStaticlib] = &[
         macos_frameworks: &[],
         // Rust runtime/unwinder symbols, like the other bridges.
         needs_libdl: true,
+        // No distinct PHP extension: timezone introspection is part of the
+        // always-present `date` extension, which is already in the core loaded
+        // set. Reporting a separate extension here would diverge from PHP.
+        php_extension: None,
     },
     BridgeStaticlib {
         lib_name: "elephc_image",
@@ -121,6 +148,9 @@ const BRIDGES: &[BridgeStaticlib] = &[
         // No native transitive deps (the `image` stack is pure Rust).
         macos_frameworks: &[],
         needs_libdl: true,
+        // The image codecs/drawing surface maps to PHP's `gd` extension
+        // (imagecreate*, imagepng, etc.).
+        php_extension: Some("gd"),
     },
     BridgeStaticlib {
         lib_name: "elephc_web",
@@ -133,6 +163,10 @@ const BRIDGES: &[BridgeStaticlib] = &[
         macos_frameworks: &[],
         // Rust runtime/unwinder symbols, like the other bridges.
         needs_libdl: true,
+        // The web bridge owns the session subsystem (crates/elephc-web/src/session:
+        // id/state/file_io/wire_format/upload_progress plus trans_sid), i.e. the
+        // PHP `session` extension surface, so a `--web` program reports `session`.
+        php_extension: Some("session"),
     },
     BridgeStaticlib {
         lib_name: "elephc_magician",
@@ -142,6 +176,9 @@ const BRIDGES: &[BridgeStaticlib] = &[
         whole_archive: false,
         macos_frameworks: &[],
         needs_libdl: true,
+        // Internal compiler facility (the magician eval interpreter). It backs
+        // `eval()`, not a PHP-visible extension, so it reports nothing.
+        php_extension: None,
     },
 ];
 
@@ -159,6 +196,18 @@ pub(crate) fn bridge_lib_for_flag(flag: &str) -> Option<&'static str> {
 /// so the CLI can list the accepted crates in its error message.
 pub(crate) fn crate_flag_names() -> Vec<&'static str> {
     BRIDGES.iter().map(|bridge| bridge.flag_name).collect()
+}
+
+/// Maps a bridge `lib_name` (as it appears in `extra_link_libs` /
+/// `required_libraries`) to the canonical PHP extension name it makes
+/// `extension_loaded()` report, or `None` when the bridge exposes no distinct
+/// PHP extension surface. Reads the single-source [`BRIDGES`] table so the map
+/// lives in exactly one place.
+pub(crate) fn php_extension_for_lib(lib_name: &str) -> Option<&'static str> {
+    BRIDGES
+        .iter()
+        .find(|bridge| bridge.lib_name == lib_name)
+        .and_then(|bridge| bridge.php_extension)
 }
 
 impl BridgeStaticlib {
@@ -822,6 +871,25 @@ mod tests {
         }
         assert_eq!(bridge_lib_for_flag("pdo"), Some("elephc_pdo"));
         assert_eq!(bridge_lib_for_flag("web"), Some("elephc_web"));
+    }
+
+    /// Verifies the single-source bridge -> PHP-extension map: bridges that back
+    /// a real PHP extension report its canonical name; bridges that fold into a
+    /// core extension (tz -> date) or are internal (eval) report nothing; and an
+    /// unknown lib name resolves to `None`.
+    #[test]
+    fn php_extension_map_matches_bridge_surface() {
+        assert_eq!(php_extension_for_lib("elephc_tls"), Some("openssl"));
+        assert_eq!(php_extension_for_lib("elephc_pdo"), Some("PDO"));
+        assert_eq!(php_extension_for_lib("elephc_crypto"), Some("hash"));
+        assert_eq!(php_extension_for_lib("elephc_phar"), Some("Phar"));
+        assert_eq!(php_extension_for_lib("elephc_image"), Some("gd"));
+        assert_eq!(php_extension_for_lib("elephc_web"), Some("session"));
+        // tz folds into the always-present `date` extension; eval/magician is an
+        // internal facility. Neither reports a separate PHP extension.
+        assert_eq!(php_extension_for_lib("elephc_tz"), None);
+        assert_eq!(php_extension_for_lib("elephc_magician"), None);
+        assert_eq!(php_extension_for_lib("elephc_bogus"), None);
     }
 
     /// Verifies an unknown crate flag resolves to `None` so the CLI rejects

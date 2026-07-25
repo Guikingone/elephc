@@ -45,6 +45,10 @@ pub mod magic_constants;
 pub mod name_resolver;
 /// Name resolution and mangling.
 pub mod names;
+/// Compile-time OPcache introspection data (directive matrix).
+pub mod opcache;
+/// `opcache_get_configuration()` standard-library prelude injection.
+pub mod opcache_prelude;
 /// Optimizer passes.
 pub mod optimize;
 /// Parser for PHP syntax.

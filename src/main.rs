@@ -31,6 +31,8 @@ mod list_id_prelude;
 mod magic_constants;
 mod name_resolver;
 mod names;
+mod opcache;
+mod opcache_prelude;
 mod optimize;
 mod parser;
 mod pdo_prelude;
@@ -65,10 +67,36 @@ mod web_prelude;
 ///
 /// # Side effects
 /// - Reads source files and writes the compiled binary alongside the source.
-/// - Emits warnings/errors to stderr.
+/// - Emits warnings/errors to stderr, including the OPcache `--ini` quantity diagnostics
+///   ([`emit_ini_override_warnings`]).
 /// - May create temporary files during assembly and linking.
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let config = cli::parse_args(&args);
+    emit_ini_override_warnings(&config);
     pipeline::compile(config);
+}
+
+/// Prints the startup diagnostics reference PHP would emit for the `--ini` overrides this
+/// compile carries, to stderr, before the pipeline runs.
+///
+/// Reference PHP emits these while REGISTERING the INI entries at startup — a
+/// `Warning: Invalid "opcache.max_file_size" setting. Invalid quantity "12abc": unknown
+/// multiplier "c", interpreting as "12" for backwards compatibility in Unknown on line 0` for
+/// `php -d opcache.max_file_size=12abc`. For elephc the compile IS the registration (the
+/// directive values are baked into the binary), so this is where the faithful analogue belongs
+/// and the only point at which it is actionable. The value is still STORED either way — see
+/// `crate::opcache::directives::parse_ini_quantity` — so without this the misread is silent.
+///
+/// The `in Unknown on line 0` tail is dropped: it names reference PHP's INI-file position, and
+/// elephc's source of the value is a command-line flag, which the compiler's own stderr voice
+/// already implies. Nothing is emitted when there are no `--ini` overrides, so the default
+/// compile path is byte-identical on stderr.
+fn emit_ini_override_warnings(config: &cli::CliConfig) {
+    for warning in opcache::directives::ini_override_warnings(
+        config.php_version.version_id(),
+        &config.ini_overrides,
+    ) {
+        eprintln!("Warning: {warning}");
+    }
 }

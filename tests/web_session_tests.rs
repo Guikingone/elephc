@@ -1824,3 +1824,142 @@ fn session_custom_handler_lazy_update_timestamp() {
     assert!(first.ends_with('W'), "first request must write: {first:?}");
     assert!(second.ends_with('U'), "unchanged request must update timestamp: {second:?}");
 }
+
+/// CHARACTERIZATION PIN — guards the upcoming INI-dispatcher-generalization
+/// refactor against silent regressions in today's closed, session-only
+/// `ini_get`/`ini_set`/`ini_get_all` surface (generated PHP in
+/// `src/web_prelude.rs`, defaults sourced from
+/// `crates/elephc-web/src/session/state.rs`).
+///
+/// This freezes, verbatim, the CURRENT behavior observed on this branch
+/// (default `--php-version` resolves to 8.5, so the `session.*` key list
+/// includes `session.cookie_partitioned`, giving 33 total directives):
+///
+/// 1. `ini_get()` on 23 distinct `session.*` directives, in the PHP default
+///    (unstarted-session) state, returns exactly:
+///    `1440,PHPSESSID,,files,nocache,180,0,/,,,,1,,1,1,,1,100,32,4,,php,`
+///    (empty-string ini_get results render as PHP's ini convention: `''` for
+///    off-booleans and for the yet-unset save_path/cookie_domain/etc.)
+/// 2. `ini_set('session.gc_maxlifetime', '9999')` returns the OLD value
+///    `"1440"`, and a subsequent `ini_get` of the same key reflects the new
+///    value `"9999"` — the round-trip contract.
+/// 3. `ini_get('opcache.enable')` now returns the raw INI string `"1"`,
+///    while `ini_get('nonexistent.key')` still returns `false`. RE-PINNED
+///    (the conscious, intended change foreseen below): the dispatcher now
+///    answers `opcache.*` directives with their raw INI strings AHEAD of the
+///    still-unchanged `session.*` surface (opcache keys are disjoint from
+///    session keys), and every other/unknown key remains `false`. opcache.*
+///    `ini_get` is now live under `--web`. This was the LOAD-BEARING DELTA:
+///    if this pin ever fails because a non-session key stops returning
+///    `false`, that is a conscious, intended change to re-pin, not a bug.
+/// 4. `ini_get_all()` shape and EXTENSION FILTER. RE-PINNED (the conscious,
+///    intended change this docblock foresees): the filter is no longer
+///    "`'session'` or `[]`" — it now reproduces php-src's dispatch.
+///
+///    - The argument is matched VERBATIM against the module registry, whose
+///      keys are lowercase, with NO case folding. This is deliberately
+///      UNLIKE `extension_loaded`, which IS case-insensitive; the two must
+///      not share a comparison helper. So `'session'` yields the 33
+///      `session.*` directives and `'zend opcache'` yields the 54
+///      `opcache.*` ones, while `'Zend OPcache'` — the spelling
+///      `get_loaded_extensions()` reports — is NOT FOUND.
+///    - A module that is KNOWN but registers no INI directives yields an
+///      EMPTY ARRAY (`'json'` → count 0), matching reference PHP 8.5.6
+///      (spl/json/ctype/reflection all return `[]`).
+///    - A module that is NOT in the registry yields `false` PLUS an
+///      `E_WARNING` reading exactly
+///      `ini_get_all(): Extension "<name>" cannot be found` (rendered
+///      `Warning: <msg>` on the worker's stderr). `'foo'` — which used to
+///      return `[]` — is now this case, which is why the pinned field for it
+///      changed from a count to `F`. `ini_get_all` is therefore
+///      `array|false`; the probe narrows with `is_array()` before counting,
+///      and the return type HINT is deliberately omitted in the prelude so
+///      ordinary union return inference handles the exits.
+///    - The default (`null`) extension yields BOTH blocks — 33 `session.*`
+///      followed by 54 `opcache.*` = 87 total on the 8.5 default — with the
+///      `session.*` entries byte-identical and appearing FIRST
+///      (`isset($all['session.gc_maxlifetime'])` stays true, first key is
+///      `session.name`). `'core'` maps to that same unfiltered surface,
+///      reproducing php-src's rule that Core's `module_number` is 0 so the
+///      per-module filter is skipped for it.
+///    - KEY ORDER: the `session.*` block keeps its REGISTRATION order
+///      (unchanged, byte for byte), and the `opcache.*` block is now SORTED
+///      ASCENDING, matching reference `ini_get_all`. The pin walks the
+///      opcache keys with `strcmp` (`S`) and pins the last key
+///      (`opcache.validate_timestamps`). `opcache_get_configuration()`
+///      keeps registration order and is unaffected.
+///    - Each detail entry is `['global_value' => v, 'local_value' => v,
+///      'access' => n]` where `n` is `7` for a normal session directive
+///      (`session.name`), `2` (PHP_INI_PERDIR) for an `upload_progress.*`
+///      directive (`session.upload_progress.enabled`), and the `PHP_INI_*`
+///      level for an opcache directive.
+///
+/// 5. `$details === false` (the flat-value projection) now WORKS. It used to
+///    crash the worker into an empty HTTP reply — one loop wrote an array
+///    literal on the `$details` branch and a scalar on the other into the
+///    same array slot — so it was excluded from this pin. It is covered
+///    directly by `tests/opcache_ini_tests.rs` on the CLI surface; this pin
+///    stays on the `$details === true` shape it has always pinned.
+///
+/// If this pin fails because a NON-session key stops returning `false` from
+/// `ini_get`, or because the extension-filter dispatch above changes, that is
+/// a conscious, intended change to re-pin, not a bug. A change in any
+/// `session.*` value, count, or order is a REGRESSION.
+#[test]
+fn session_ini_surface_is_pinned() {
+    let dir = make_test_dir("ini_surface_pin");
+    let src = r#"<?php
+$parts = [];
+$keys = ['session.gc_maxlifetime','session.name','session.save_path','session.save_handler','session.cache_limiter','session.cache_expire','session.cookie_lifetime','session.cookie_path','session.cookie_domain','session.cookie_secure','session.cookie_httponly','session.use_cookies','session.use_strict_mode','session.use_only_cookies','session.lazy_write','session.use_trans_sid','session.gc_probability','session.gc_divisor','session.sid_length','session.sid_bits_per_character','session.auto_start','session.serialize_handler','session.referer_check'];
+$vals = [];
+foreach ($keys as $k) {
+    $v = ini_get($k);
+    $vals[] = ($v === false) ? 'F' : $v;
+}
+$parts[] = implode(',', $vals);
+$old = ini_set('session.gc_maxlifetime', '9999');
+$new = ini_get('session.gc_maxlifetime');
+$parts[] = $old . '>' . $new;
+$parts[] = (ini_get('opcache.enable') === false ? 'F' : 'X') . (ini_get('nonexistent.key') === false ? 'F' : 'X');
+$foo = ini_get_all('foo');
+$json = ini_get_all('json');
+$sess = ini_get_all('session');
+$all = ini_get_all();
+$zend = ini_get_all('zend opcache');
+$cased = ini_get_all('Zend OPcache');
+if (is_array($json) && is_array($sess) && is_array($all) && is_array($zend)) {
+    $parts[] = ($foo === false ? 'F' : 'X') . ':' . count($json) . ':' . count($sess) . ':' . count($all) . ':' . (isset($all['session.gc_maxlifetime']) ? 'Y' : 'N');
+    $name_entry = $sess['session.name'];
+    $parts[] = $name_entry['global_value'] . '|' . $name_entry['local_value'] . '|' . $name_entry['access'];
+    $upload_entry = $sess['session.upload_progress.enabled'];
+    $parts[] = (string)$upload_entry['access'];
+    $first = ''; $last = ''; $oprev = ''; $osorted = 1;
+    foreach ($all as $ak => $av) {
+        $aks = (string) $ak;
+        if ($first === '') { $first = $aks; }
+        if (substr($aks, 0, 8) === 'opcache.') {
+            if ($oprev !== '' && strcmp($aks, $oprev) <= 0) { $osorted = 0; }
+            $oprev = $aks;
+        }
+        $last = $aks;
+    }
+    $parts[] = count($zend) . ':' . ($cased === false ? 'F' : 'X') . ':' . $first . ':' . $last . ':' . ($osorted === 1 ? 'S' : 'U');
+}
+echo implode('#', $parts);"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let expected = "1440,PHPSESSID,,files,nocache,180,0,/,,,,1,,1,1,,1,100,32,4,,php,\
+#1440>9999#XF#F:0:33:87:Y#PHPSESSID|PHPSESSID|7#2\
+#54:F:session.name:opcache.validate_timestamps:S";
+    assert!(
+        response.ends_with(expected),
+        "session ini surface pin mismatch (INI-dispatcher refactor changed \
+         observable behavior): {response:?}\nexpected suffix: {expected:?}"
+    );
+}

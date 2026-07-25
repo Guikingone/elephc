@@ -403,6 +403,78 @@ pub(crate) fn lower_get_declared_names(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `get_loaded_extensions($zend_extensions)` as a const-folded string array.
+///
+/// The optional flag selects between the regular extension list (default / literal `false`) and
+/// the Zend extension list (literal `true`). The `check` hook guarantees the argument is a literal
+/// bool, so the selection is resolved at compile time and baked into the emitted array.
+///
+/// The regular (non-Zend) list is the always-present core set followed by the canonical names of
+/// the bridges actually linked into this compilation (`crate::codegen::linked_extensions()`, e.g.
+/// `PDO`/`hash`), de-duplicated case-insensitively. The Zend list is unaffected: bridges are
+/// ordinary (non-Zend) extensions.
+pub(crate) fn lower_get_loaded_extensions(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count_between(inst, "get_loaded_extensions", 0, 1)?;
+    let zend_extensions = match inst.operands.first() {
+        Some(value) => const_bool_operand(ctx, *value)?.ok_or_else(|| {
+            CodegenIrError::unsupported("get_loaded_extensions with non-literal flag argument")
+        })?,
+        None => false,
+    };
+    let set = if zend_extensions {
+        super::ZEND_LOADED_EXTENSIONS
+    } else {
+        super::CORE_LOADED_EXTENSIONS
+    };
+    let mut names: Vec<String> = set.iter().map(|name| (*name).to_string()).collect();
+    if !zend_extensions {
+        for ext in crate::codegen::linked_extensions() {
+            if !names.iter().any(|name| name.eq_ignore_ascii_case(&ext)) {
+                names.push(ext);
+            }
+        }
+    }
+    emit_string_array(ctx, &names)?;
+    store_if_result(ctx, inst)
+}
+
+/// Reads a literal boolean operand produced by a constant instruction, or `None` when non-literal.
+///
+/// Accepts `ConstBool`, integer, float, null, and string const instructions using PHP truthiness so
+/// any literal the frontend folds into the flag operand resolves at compile time.
+fn const_bool_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<bool>> {
+    let value_ref = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    match (inst_ref.op, inst_ref.immediate.as_ref()) {
+        (Op::ConstBool, Some(Immediate::Bool(value))) => Ok(Some(*value)),
+        (Op::ConstI64, Some(Immediate::I64(value))) => Ok(Some(*value != 0)),
+        (Op::ConstF64, Some(Immediate::F64(value))) => Ok(Some(*value != 0.0)),
+        (Op::ConstNull, _) => Ok(Some(false)),
+        (Op::ConstStr, Some(Immediate::Data(data))) => {
+            let value = ctx
+                .module
+                .data
+                .strings
+                .get(data.as_raw() as usize)
+                .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?;
+            Ok(Some(!value.is_empty() && value != "0"))
+        }
+        _ => Ok(None),
+    }
+}
+
 /// Lowers `is_resource(value)` for static resources and boxed Mixed resource cells.
 pub(crate) fn lower_is_resource(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "is_resource", 1)?;
