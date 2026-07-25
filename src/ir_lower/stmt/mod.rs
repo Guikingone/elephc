@@ -523,7 +523,7 @@ fn lower_if_chain(
     span: Span,
 ) -> bool {
     let cond_value = lower_expr(ctx, condition);
-    let cond_value = ctx.truthy(cond_value, Some(condition.span));
+    let cond_value = ctx.truthy_consuming(cond_value, Some(condition.span));
     let split_initialized = ctx.initialized_slots_snapshot();
     let then_block = ctx.builder.create_named_block("if.then", Vec::new());
     let else_block = ctx.builder.create_named_block("if.else", Vec::new());
@@ -715,7 +715,7 @@ fn lower_while(
 
     ctx.builder.position_at_end(header);
     let cond = lower_expr(ctx, condition);
-    let cond = ctx.truthy(cond, Some(condition.span));
+    let cond = ctx.truthy_consuming(cond, Some(condition.span));
     ctx.builder.terminate(Terminator::CondBr {
         cond: cond.value,
         then_target: body_block,
@@ -763,7 +763,7 @@ fn lower_do_while(
 
     ctx.builder.position_at_end(cond_block);
     let cond = lower_expr(ctx, condition);
-    let cond = ctx.truthy(cond, Some(condition.span));
+    let cond = ctx.truthy_consuming(cond, Some(condition.span));
     ctx.builder.terminate(Terminator::CondBr {
         cond: cond.value,
         then_target: body_block,
@@ -805,7 +805,7 @@ fn lower_for(
     ctx.builder.position_at_end(header);
     let cond = if let Some(condition) = condition {
         let cond = lower_expr(ctx, condition);
-        ctx.truthy(cond, Some(condition.span))
+        ctx.truthy_consuming(cond, Some(condition.span))
     } else {
         emit_const_bool(ctx, true, None)
     };
@@ -2764,9 +2764,17 @@ fn lower_list_unpack(ctx: &mut LoweringContext<'_, '_>, vars: &[String], value: 
     let get_op = list_unpack_get_op(source.ir_type);
     for (index, var) in vars.iter().enumerate() {
         let index_value = lower_list_unpack_index(ctx, index, span);
+        let mut operands = vec![source.value, index_value.value];
+        // Boxed `Mixed` sources read through `__rt_mixed_array_get`, which takes an
+        // explicit warn-on-missing flag. Destructuring is an ordinary read, so a
+        // short source reports PHP's undefined-key warning like `$src[$i]` would.
+        if matches!(get_op, Op::RuntimeCall) {
+            let warning_flag = crate::ir_lower::expr::emit_bool_literal(ctx, true, Some(span));
+            operands.push(warning_flag.value);
+        }
         let item = ctx.emit_value(
             get_op,
-            vec![source.value, index_value.value],
+            operands,
             None,
             item_type.clone(),
             get_op.default_effects(),
