@@ -113,6 +113,45 @@ fn test_late_bound_call_does_not_evaluate_arguments() {
     assert_eq!(out, "caught");
 }
 
+/// The exact Symfony `PhpDumper::stripComments()` shape: `token_get_all` called past an early
+/// `if (!\function_exists('token_get_all')) { return $source; }` guard. elephc has no
+/// `token_get_all` catalog entry, so `function_exists` folds `false`, the guard fires, the
+/// method returns its input verbatim, and the late-bound `token_get_all()` throw is never
+/// reached — the whole point of adding `token_get_all` to the curated allowlist.
+#[test]
+fn test_late_bound_token_get_all_guarded_never_executes() {
+    let out = compile_and_run(
+        "<?php
+        class Dumper {
+            public static function stripComments(string $source): string {
+                if (!\\function_exists('token_get_all')) {
+                    return $source;
+                }
+                $tokens = token_get_all($source);
+                return (string) count($tokens);
+            }
+        }
+        echo Dumper::stripComments('<?php echo 1;');",
+    );
+    assert_eq!(out, "<?php echo 1;");
+}
+
+/// A direct, unguarded `token_get_all()` call throws the same catchable `\Error` with PHP's exact
+/// message (the checker carve-out lowers the call to a throw rather than a compile-time error).
+#[test]
+fn test_late_bound_token_get_all_direct_call_throws() {
+    let out = compile_and_run(
+        "<?php
+        try {
+            token_get_all('<?php 1;');
+            echo 'unreachable';
+        } catch (\\Error $e) {
+            echo get_class($e), '|', $e->getMessage();
+        }",
+    );
+    assert_eq!(out, "Error|Call to undefined function token_get_all()");
+}
+
 /// `function_exists()` still reports `false` for a curated late-bound name — the checker
 /// carve-out changes call-site compilation only, never the closed-world existence answer (the J3
 /// pre-check fold already false-folds it).
@@ -144,6 +183,7 @@ fn test_late_bound_call_covers_full_curated_allowlist() {
         "igbinary_serialize",
         "igbinary_unserialize",
         "frankenphp_handle_request",
+        "token_get_all",
     ];
     for name in names {
         let source = format!(

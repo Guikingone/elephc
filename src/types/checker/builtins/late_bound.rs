@@ -32,11 +32,35 @@
 //!   `Symfony\Component\Runtime\Runner\FrankenPhpWorkerRunner::run()`'s request handler closure;
 //!   `apcu_add` added in the M1 easy sweep: `ApcuAdapter::clear()`
 //!   only reaches it behind `!apcu_exists(...)`, and `apcu_exists` already throws before
-//!   returning, so the site cannot depend on `apcu_add`'s return value). Non-extension-shaped
-//!   undefined names surfaced by the same scan (`debug_backtrace`, `proc_open`, `eval`,
-//!   `token_get_all`, `next`, `is_uploaded_file`, `move_uploaded_file`, `request_parse_body`,
-//!   `highlight_file`) are OUT of scope: they are either core PHP functions elephc genuinely
-//!   lacks (a real gap, not a late-bound guard pattern) or handled by unrelated work.
+//!   returning, so the site cannot depend on `apcu_add`'s return value).
+//! - `token_get_all` was added later once its Symfony call site was verified to sit behind a
+//!   guard that is genuinely DEAD under AOT: `PhpDumper::stripComments()` calls it only past
+//!   `if (!\function_exists('token_get_all')) { return $source; }`, and elephc has NO
+//!   `token_get_all` catalog entry, so `function_exists('token_get_all')` folds to `false`, the
+//!   guard fires (early `return $source`), and the `token_get_all()` call never executes at
+//!   runtime — but the checker still visits it and would otherwise reject the whole compile with
+//!   "Undefined function". Late-binding it to PHP's own "Call to undefined function" `\Error` is
+//!   therefore byte-faithful AND its throw is provably dead. It is a single EXACT name, so unlike
+//!   a prefix family this costs no typo-detection signal.
+//! - `proc_open` was deliberately NOT added, even though it too sits behind a
+//!   `!\function_exists('proc_open')` guard in `Console\Terminal::readFromProcess()`. Unlike
+//!   `token_get_all`, `proc_open` IS a catalog builtin (`CAMPAIGN_LEGACY_BUILTIN_FUNCTIONS`) with
+//!   a signature but no EIR lowering, so `function_exists('proc_open')` folds to `true`; its
+//!   guards do NOT fire, meaning a late-bound throw would be reachable (e.g. the profiler's
+//!   `RequestDataCollector` path) rather than dead — a wrong runtime, not a PHP-faithful dead
+//!   guard. The premise of this whole list ("dead under AOT") does not hold for `proc_open`, so
+//!   it stays a loud compile-time error; the correct fix is either a real `proc_open`
+//!   implementation or making it `function_exists`-invisible so its guards fire (both out of
+//!   scope here).
+//! - The remaining non-extension-shaped undefined names surfaced by the same scan
+//!   (`debug_backtrace`, `eval`, `next`, `is_uploaded_file`, `move_uploaded_file`,
+//!   `request_parse_body`, `highlight_file`) stay OUT of scope: they are core PHP functions
+//!   elephc genuinely lacks and are called UNCONDITIONALLY (not behind a dead guard), so keeping
+//!   them a loud compile-time "Undefined function" is the honest real-gap signal — each needs a
+//!   real implementation or new runtime support (`debug_backtrace` needs runtime call-stack
+//!   metadata; `is_uploaded_file`/`move_uploaded_file` need an rfc1867 upload-tracking set;
+//!   `request_parse_body` needs request-body parsing; `highlight_file` needs a runtime
+//!   tokenizer), tracked as separate follow-up work.
 //!   `register_shutdown_function` was ALSO in that original "out of scope" list but is now a real
 //!   fix elsewhere — see `crate::name_resolver::PRELUDE_GLOBAL_FUNCTIONS` (an own-feature
 //!   namespace-fallback gap, not a late-bound guard pattern: PHP's own
@@ -91,6 +115,11 @@ const LATE_BOUND_UNDEFINED_FUNCTIONS: &[&str] = &[
     "igbinary_serialize",
     "igbinary_unserialize",
     "frankenphp_handle_request",
+    // Tokenizer builtin elephc does not provide, reached only through a verified
+    // `!function_exists('token_get_all')` early-return guard that IS dead under AOT
+    // (elephc has no `token_get_all` catalog entry, so `function_exists` folds false and
+    // the guard fires). See the module doc.
+    "token_get_all",
 ];
 
 /// Returns whether `canonical_name` (as resolved by name-resolver/checker call lookup, possibly
@@ -158,6 +187,24 @@ mod tests {
         assert!(!is_late_bound_undefined_function("apcu_ftch"));
         assert!(!is_late_bound_undefined_function("apcu_tpyo"));
         assert!(!is_late_bound_undefined_function("opcache_invalidat"));
+    }
+
+    /// `token_get_all` (the verified dead-guarded tokenizer addition) is late-bound, including
+    /// through its Symfony-namespaced attempt form, and does not match a typo. `proc_open` is
+    /// deliberately NOT late-bound (it is a catalog builtin whose guards do not fire — see the
+    /// module doc), so it must stay a compile-time error, i.e. NOT match here.
+    #[test]
+    fn matches_dead_guarded_token_get_all_not_proc_open() {
+        assert!(is_late_bound_undefined_function("token_get_all"));
+        assert!(is_late_bound_undefined_function("TOKEN_GET_ALL"));
+        assert!(is_late_bound_undefined_function(
+            "Symfony\\Component\\DependencyInjection\\Dumper\\token_get_all"
+        ));
+        assert!(!is_late_bound_undefined_function("token_get_al"));
+        assert!(!is_late_bound_undefined_function("proc_open"));
+        assert!(!is_late_bound_undefined_function(
+            "Symfony\\Component\\Console\\proc_open"
+        ));
     }
 
     /// A name outside the curated allowlist entirely does not match, even when it shares a
