@@ -687,9 +687,14 @@ fn apply_loop_storage_contracts(
             (_, PhpType::Mixed) => {
                 ctx.store_local(&name, source, target_ty, span);
             }
-            _ => {
-                ctx.set_local_type(&name, target_ty);
-            }
+            // The contract cannot be materialized for the representation this local actually
+            // holds — the only remaining shapes disagree on container kind (an `AssocArray`
+            // local against an `Array(Mixed)` contract, or a non-container local). Re-declaring
+            // the type here would leave the slot holding a hash while every later read is typed
+            // `array<mixed>`, so the write-site promotion reads storage it has already released.
+            // Leave the local alone and let its own assignment path convert it, mirroring the
+            // heap-kind guard the pre-fixed-point widening applied before promoting.
+            _ => {}
         }
     }
 }
