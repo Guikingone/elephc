@@ -336,6 +336,22 @@ impl Checker {
                 &format!("Undefined property: {}::{}", class_name, property),
             ));
         }
+        // A value narrowed to an interface type (e.g. `$m instanceof \Reflector`
+        // then `$m->name`) misses the `self.classes` lookup above because interfaces
+        // are registered in `self.interfaces`/`self.declared_interfaces`, never in
+        // `self.classes`. PHP interfaces cannot declare instance properties, so any
+        // property read on an interface-typed receiver is a dynamic read resolved on
+        // the concrete implementor at runtime; its static type is therefore `Mixed`,
+        // not a compile error. This generalizes the fixed `UnitEnum`/`BackedEnum`
+        // property surface handled above to every builtin/user marker interface
+        // (`Reflector`, which all core `Reflection*` shells implement, is the case
+        // that motivated it: `ReflectionCaster::addMap()` reads `$m->name`).
+        let interface_key = class_name.trim_start_matches('\\');
+        if self.interfaces.contains_key(interface_key)
+            || self.declared_interfaces.contains(interface_key)
+        {
+            return Ok(PhpType::Mixed);
+        }
         Err(CompileError::new(
             expr.span,
             &format!("Undefined class: {}", class_name),

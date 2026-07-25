@@ -1631,3 +1631,27 @@ fn test_error_exception_previous_rejects_non_throwable() {
         "previous",
     );
 }
+
+/// A value narrowed to the builtin marker interface `\Reflector` (which every core `Reflection*`
+/// class implements) accepts a property read like `$m->name`: PHP interfaces cannot declare
+/// instance properties, so the read is a dynamic runtime read on the concrete implementor, typed
+/// `Mixed` rather than reported as an undefined class. This is the exact
+/// `Symfony\Component\VarDumper\Caster\ReflectionCaster::addMap()` shape that previously failed
+/// with "Undefined class: Reflector".
+#[test]
+fn test_reflector_marker_interface_property_read_accepted() {
+    expect_ok(
+        "<?php function g(mixed $m): mixed { return $m instanceof \\Reflector ? $m->name : $m; }",
+    );
+}
+
+/// The same acceptance generalizes to any user-declared interface: a value narrowed to an
+/// interface type may read an (interface-undeclarable) property as a dynamic `Mixed` read instead
+/// of erroring, since interfaces never carry an instance-property surface.
+#[test]
+fn test_user_interface_narrowed_property_read_accepted() {
+    expect_ok(
+        "<?php interface Marker {} \
+         function g(mixed $m): mixed { return $m instanceof Marker ? $m->anything : null; }",
+    );
+}
