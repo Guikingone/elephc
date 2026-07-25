@@ -378,11 +378,13 @@ fn test_error_case_insensitive_function_string_introspection_keeps_callback_chec
 /// Verifies that error closure return type rejects mismatch.
 #[test]
 fn test_error_closure_return_type_rejects_mismatch() {
-    // Verifies a closure with an explicit return type that returns a mismatched
-    // type produces a diagnostic showing the expected and actual types.
+    // Verifies a closure with an explicit return type that returns a NON-coercible
+    // mismatched type produces a diagnostic showing the expected and actual types. An
+    // `array` return is not weak-coercible to `string` (unlike `int`/`float`/Stringable),
+    // so it stays loud.
     expect_error(
-        "<?php $f = function(): string { return 1; };",
-        "Closure return type expects Str, got Int",
+        "<?php $f = function(): string { return [1]; };",
+        "Closure return type expects Str, got Array",
     );
 }
 

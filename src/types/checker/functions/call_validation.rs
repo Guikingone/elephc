@@ -387,6 +387,32 @@ impl Checker {
         }
     }
 
+    /// Like `require_compatible_arg_type`, but additionally admits the PHP weak-mode value-boundary
+    /// coercions the call-argument codegen realizes (`weak_boundary_coercion_accepts`): a concrete
+    /// scalar or Stringable object into a `string` parameter, and a scalar/Stringable/union into a
+    /// boxed-`Mixed` union parameter. Used ONLY at call-argument positions whose codegen lowers
+    /// through `lower_args_with_signature` (which coerces the argument at the boundary); property
+    /// and static-property stores keep using the strict `require_compatible_arg_type` because they
+    /// emit no such coercion.
+    pub(crate) fn require_compatible_call_arg_type(
+        &self,
+        expected: &PhpType,
+        actual: &PhpType,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        match self.require_compatible_arg_type(expected, actual, span, context) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                if self.weak_boundary_coercion_accepts(expected, actual) {
+                    Ok(())
+                } else {
+                    Err(err)
+                }
+            }
+        }
+    }
+
     /// Formats a parameter-count range as a human-readable string, e.g. `3` or `2 to 5`.
     pub(crate) fn format_fixed_or_range_arity(min_args: usize, max_args: usize) -> String {
         if min_args == max_args {
@@ -589,7 +615,7 @@ impl Checker {
                             &format!("{} parameter ${}", callee_desc, param_name),
                         )?;
                     }
-                    self.require_compatible_arg_type(
+                    self.require_compatible_call_arg_type(
                         expected_ty,
                         &actual_ty,
                         arg.span,

@@ -1021,14 +1021,15 @@ fn test_error_nullable_intersection_type_rejected() {
     );
 }
 
-/// Verifies the gradual-typing boundary model still rejects a statically-`int` argument flowing
-/// into a `string` parameter: a concrete source type that is disjoint from the target is a real
-/// type error and must NOT be loosened (only Mixed/union sources are accepted gradually).
+/// Verifies PHP weak-mode coercion of a concrete `int` argument into a `string` parameter is
+/// accepted (`weak_boundary_coercion_accepts`): PHP coerces `5` to `"5"` at the boundary, and the
+/// call codegen emits the same `IToStr` cast. A concrete `array` or non-Stringable object into a
+/// `string` parameter stays a real type error (covered by the sibling tests below).
 #[test]
-fn test_error_concrete_int_into_string_param_still_rejected() {
-    expect_error(
-        "<?php function f(string $s) {} f(5);",
-        "parameter $s expects Str, got Int",
+fn test_concrete_int_into_string_param_weak_coerces() {
+    assert!(
+        check_source("<?php function f(string $s): string { return $s; } echo f(5);").is_ok(),
+        "a concrete int argument should weak-coerce into a string parameter, matching PHP",
     );
 }
 

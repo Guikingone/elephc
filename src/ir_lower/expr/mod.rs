@@ -6217,6 +6217,14 @@ fn flush_byref_prop_writebacks(ctx: &mut LoweringContext<'_, '_>, mark: usize) {
 /// conversion is also explicit here because it allocates caller-owned storage whose lifetime
 /// depends on the call's return/argument alias contract; leaving that conversion hidden in ABI
 /// materialization would give EIR no value to transfer or release after the call.
+///
+/// PHP weak-mode string coercion at a `string` parameter also fires here for a concrete
+/// `int`/`float` source (`IToStr`/`FToStr`) and a Stringable object source (`(string)$obj`'s
+/// `__toString()` dispatch via the object arm of `lower_cast_to_string`). The checker only
+/// admits these exact sources at a plain-`string` parameter (`weak_boundary_coercion_accepts`),
+/// so a non-Stringable object or an array never reaches this coercion. A union parameter is a
+/// boxed `Mixed` slot, so a concrete scalar/object flowing into it is boxed by the ABI and
+/// weak-coerced by the callee at use — no explicit conversion is emitted here for that case.
 fn coerce_scalar_arg_to_param_storage(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -6232,7 +6240,16 @@ fn coerce_scalar_arg_to_param_storage(
         return coerce_to_float(ctx, value, arg);
     }
     let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
-    if param_ty == PhpType::Str && matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
+    if param_ty == PhpType::Str
+        && matches!(
+            source_ty,
+            PhpType::Mixed
+                | PhpType::Union(_)
+                | PhpType::Int
+                | PhpType::Float
+                | PhpType::Object(_)
+        )
+    {
         return coerce_to_string(ctx, value, arg);
     }
     value
@@ -6268,7 +6285,14 @@ fn coerce_operands_to_params(
             };
             operands[index] = coerce_to_float_at_span(ctx, lowered, None).value;
         } else if param_ty == PhpType::Str
-            && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
+            && matches!(
+                operand_ty,
+                PhpType::Mixed
+                    | PhpType::Union(_)
+                    | PhpType::Int
+                    | PhpType::Float
+                    | PhpType::Object(_)
+            )
         {
             let lowered = LoweredValue {
                 value,

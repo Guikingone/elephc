@@ -435,7 +435,7 @@ impl Checker {
                             &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
                     }
-                    self.require_compatible_arg_type(
+                    self.require_compatible_call_arg_type(
                         &declared_ty,
                         &ty,
                         arg.span,
@@ -665,7 +665,7 @@ impl Checker {
                             &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
                     }
-                    self.require_compatible_arg_type(
+                    self.require_compatible_call_arg_type(
                         expected_ty,
                         &actual_ty,
                         arg.span,

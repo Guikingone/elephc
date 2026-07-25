@@ -33,6 +33,7 @@ mod array_basics;
 mod numeric_scalars;
 mod type_builtins;
 mod casts_and_constants;
+mod arg_return_coercions;
 mod include_paths;
 mod magic_constants;
 mod strings;

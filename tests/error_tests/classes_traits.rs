@@ -816,18 +816,17 @@ fn test_reflection_property_dynamic_class_argument_compiles() {
     );
 }
 
-/// K1 Part B did NOT widen the SECOND (member-name) argument the same way: the constructor
-/// signature still declares `method_name`/`property_name` as `Str` (see
-/// `builtin_reflection_owner_class`/`builtin_reflection_property` in
-/// `crate::types::checker::builtin_types::reflection`), so a non-`Str` argument there is still
-/// rejected by the normal callable-signature type check, before `reflection_member_name_arg`
-/// (which ALSO keeps requiring `Str`, no `Mixed`/`Object`/weak-coercion acceptance — php -n
-/// verified real PHP does not weak-coerce this argument either) ever runs.
+/// The SECOND (member-name) argument of `ReflectionMethod`/`ReflectionProperty` stays loud for a
+/// non-string value. Now that a concrete `int` weak-coerces past the constructor's `Str` parameter
+/// signature (`weak_boundary_coercion_accepts`), the dedicated `reflection_member_name_arg` check
+/// (in `crate::types::checker::builtin_types::reflection`) is what rejects it: elephc resolves the
+/// reflected member at compile time and needs a real string name, not a coerced scalar, so a
+/// non-string member name remains a hard error (with its own diagnostic).
 #[test]
 fn test_error_reflection_method_non_string_member_name_argument_stays_loud() {
     expect_error(
         "<?php class C { public function foo(): void {} } $r = new ReflectionMethod('C', 42);",
-        "parameter $method_name expects Str, got Int",
+        "ReflectionMethod::__construct() method name argument must be a string",
     );
 }
 
@@ -836,7 +835,7 @@ fn test_error_reflection_method_non_string_member_name_argument_stays_loud() {
 fn test_error_reflection_property_non_string_member_name_argument_stays_loud() {
     expect_error(
         "<?php class C { public int $prop = 1; } $r = new ReflectionProperty('C', 42);",
-        "parameter $property_name expects Str, got Int",
+        "ReflectionProperty::__construct() property name argument must be a string",
     );
 }
 

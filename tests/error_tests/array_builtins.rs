@@ -758,12 +758,14 @@ fn test_array_map_accepts_object_elements() {
     );
 }
 
-/// Verifies contextual callback checking still rejects declarations incompatible with known elements.
+/// Verifies contextual callback checking still rejects declarations incompatible with known
+/// elements. A concrete `int` element weak-coerces into a `string` callback parameter (PHP's weak
+/// mode), so a NON-coercible `array` element is used here to keep the mismatch loud.
 #[test]
 fn test_error_array_callback_rejects_known_element_mismatch() {
     expect_error(
-        "<?php array_map(static fn(string $value): string => $value, [1, 2]);",
-        "array_map() callback parameter $value expects Str, got Int",
+        "<?php array_map(static fn(string $value): string => $value, [[1], [2]]);",
+        "array_map() callback parameter $value expects Str, got Array",
     );
 }
 

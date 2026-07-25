@@ -239,6 +239,119 @@ impl Checker {
         }
     }
 
+    /// PHP weak-mode call-argument / return coercions that the value-passing codegen boundary
+    /// realizes with defined, memory-safe semantics. This is used ONLY as a fallback at
+    /// call-argument and return positions (`require_compatible_call_arg_type` and the
+    /// `require_compatible_return_type` fallback) — never at property or static-property stores,
+    /// which emit no coercion and must keep using the strict predicates only.
+    ///
+    /// Accepted flows (everything else stays loud):
+    /// 1. Concrete `int`/`float` → `string`. The call/return boundary emits the same
+    ///    `IToStr`/`FToStr` used by `(string)$scalar`. `bool` is excluded here because its
+    ///    int-like representation would stringify `false` as `"0"` rather than PHP's `""`.
+    /// 2. Stringable object → `string`. A class (or ancestor) with a public `__toString()` is
+    ///    coerced through the same `__toString()` dispatch as `(string)$obj`.
+    /// 3. Concrete scalar (`int`/`float`/`bool`/`string`) or Stringable object → a union whose
+    ///    codegen representation is a boxed `Mixed` and that offers a compatible member. The
+    ///    source is boxed into the union slot and the callee weak-coerces it at use, so no eager
+    ///    conversion is emitted. A union source whose every member so flows is accepted too.
+    ///
+    /// Deliberately kept loud: non-Stringable objects into `string`, `array` into `string`,
+    /// scalars into a scalar-free union (e.g. `array|null`), and any object mismatch against a
+    /// concrete (by-offset) object target — none of which the boundary can realize safely.
+    pub(crate) fn weak_boundary_coercion_accepts(
+        &self,
+        expected: &PhpType,
+        actual: &PhpType,
+    ) -> bool {
+        match expected {
+            PhpType::Str => self.coerces_to_string_boundary(actual),
+            PhpType::Union(members) if expected.codegen_repr() == PhpType::Mixed => {
+                self.scalar_or_stringable_flows_into_boxed_union(members, actual)
+            }
+            _ => false,
+        }
+    }
+
+    /// Returns true when `actual` coerces to a plain `string` slot at a value boundary: a
+    /// concrete `int`/`float`, or a Stringable object.
+    ///
+    /// The object case requires a CONCRETE, non-abstract static class with a resolvable
+    /// `__toString` (`object_class_has_eager_tostring`): the plain-`string` boundary emits an
+    /// eager `(string)$obj` cast, which resolves a DIRECT call to the class's `__toString`
+    /// symbol. An abstract-base or interface static type has no such body-linked symbol, so it
+    /// stays loud here (a value typed by an abstract/interface Stringable reaches a `string`
+    /// slot only through a boxed union in practice — that path dispatches `__toString` virtually
+    /// at use). See `weak_boundary_coercion_accepts`.
+    fn coerces_to_string_boundary(&self, actual: &PhpType) -> bool {
+        match actual {
+            PhpType::Int | PhpType::Float => true,
+            PhpType::Object(name) => self.object_class_has_eager_tostring(name),
+            _ => false,
+        }
+    }
+
+    /// Returns true when `actual` may flow into a boxed-`Mixed` union target: a concrete scalar
+    /// or Stringable object matching a compatible member, or a union source whose every member
+    /// so flows. See `weak_boundary_coercion_accepts`.
+    fn scalar_or_stringable_flows_into_boxed_union(
+        &self,
+        members: &[PhpType],
+        actual: &PhpType,
+    ) -> bool {
+        match actual {
+            // A CONCRETE scalar argument (including a bare `false`, which PHP coerces to `""`)
+            // boxes into the union's `Mixed` slot and weak-coerces at use. This is distinct from a
+            // `false` MEMBER of a union SOURCE (a `strpos()`-style sentinel), which stays loud
+            // below to preserve the sentinel diagnostic.
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str => {
+                union_has_scalar_member(members)
+            }
+            PhpType::Object(name) => {
+                members.iter().any(|member| *member == PhpType::Str)
+                    && self.object_class_is_stringable(name)
+            }
+            // A union source flows straight through only when it is ALSO a boxed `Mixed` slot:
+            // the boundary copies the box pointer with no conversion. A nullable-int union source
+            // (`int|null`) has a TAGGED-SCALAR representation, not `Mixed`, so copying it into a
+            // `Mixed` slot would be read as a boxed pointer — a crash — and it must stay loud.
+            PhpType::Union(_) if actual.codegen_repr() == PhpType::Mixed => {
+                let PhpType::Union(src_members) = actual else {
+                    return false;
+                };
+                src_members
+                    .iter()
+                    .all(|member| self.boxed_union_source_member_flows(members, member))
+            }
+            _ => false,
+        }
+    }
+
+    /// Returns true when one `member` of a union source may flow into a boxed-`Mixed` union
+    /// target: null/void, an exact/subtype member match, a scalar coercible to a target scalar
+    /// member, or a Stringable object where the target offers `string`.
+    fn boxed_union_source_member_flows(&self, target_members: &[PhpType], member: &PhpType) -> bool {
+        if matches!(member, PhpType::Void | PhpType::Never | PhpType::Mixed) {
+            return true;
+        }
+        if target_members
+            .iter()
+            .any(|target_member| self.type_accepts(target_member, member))
+        {
+            return true;
+        }
+        match member {
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str => {
+                union_has_scalar_member(target_members)
+            }
+            PhpType::Object(name) => {
+                target_members.iter().any(|tm| *tm == PhpType::Str)
+                    && self.object_class_is_stringable(name)
+            }
+            _ => false,
+        }
+    }
+
     /// Returns true if `ty` is a `PhpType::Union` that contains `PhpType::Void`.
     pub(crate) fn union_contains_void(ty: &PhpType) -> bool {
         matches!(ty, PhpType::Union(members) if members.iter().any(|member| *member == PhpType::Void))
@@ -459,4 +572,17 @@ impl Checker {
             _ => declared_ty.clone(),
         }
     }
+}
+
+/// Returns true when `members` contains at least one scalar member (`string`/`int`/`float`/
+/// `bool`/`false`) that a weak-mode scalar argument can coerce to when boxed into the union's
+/// `Mixed` slot. A scalar-free union (for example `array|null`) returns false so a scalar into
+/// it stays a loud type error, matching PHP.
+fn union_has_scalar_member(members: &[PhpType]) -> bool {
+    members.iter().any(|member| {
+        matches!(
+            member,
+            PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False
+        )
+    })
 }

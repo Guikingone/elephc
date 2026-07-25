@@ -69,8 +69,10 @@ fn test_type_checker_recovery_collects_multiple_early_errors() {
 /// `check_source_full` to confirm at least 2 errors are reported with their messages.
 #[test]
 fn test_type_checker_recovery_collects_multiple_method_return_errors() {
+    // `array` is not weak-coercible to `string` (unlike `int`/`float`/Stringable), so each method
+    // return stays a real, independently-collected error.
     let error = check_source_full(
-        "<?php class Demo { public function one(): string { return 1; } public function two(): string { return 2; } }",
+        "<?php class Demo { public function one(): string { return [1]; } public function two(): string { return [2]; } }",
     )
     .unwrap_err();
     let all = error.flatten();
@@ -90,8 +92,8 @@ fn test_assignment_rhs_error_does_not_cascade_undefined_variable() {
     let error = check_source_full(
         "<?php
         function needs_str(string $s): bool { return strlen($s) > 0; }
-        function probe(int $argc): string {
-            $flag = needs_str($argc);
+        function probe(array $items): string {
+            $flag = needs_str($items);
             if ($flag) { return \"a\"; }
             return $flag ? \"b\" : \"c\";
         }",
@@ -99,7 +101,7 @@ fn test_assignment_rhs_error_does_not_cascade_undefined_variable() {
     .unwrap_err();
     let all = error.flatten();
     assert!(
-        all.iter().any(|error| error.message.contains("expects Str, got Int")),
+        all.iter().any(|error| error.message.contains("expects Str, got Array")),
         "expected the real right-hand-side type error, got {:?}",
         all.iter().map(|error| error.message.clone()).collect::<Vec<_>>(),
     );
@@ -125,9 +127,9 @@ fn test_branch_constructor_error_recovers_object_overwrite_type() {
         function updateRecoveredBranch(bool $alternate): void {
             $value = "source";
             if ($alternate) {
-                $value = new RecoveredBranchBox(1);
+                $value = new RecoveredBranchBox([1]);
             } else {
-                $value = new RecoveredBranchBox(2);
+                $value = new RecoveredBranchBox([2]);
                 $value->attributes["inside"] = 1;
             }
             $value->attributes["after"] = 2;
@@ -138,7 +140,7 @@ fn test_branch_constructor_error_recovers_object_overwrite_type() {
     let all = error.flatten();
     assert!(
         all.iter()
-            .any(|error| error.message.contains("expects Str, got Int")),
+            .any(|error| error.message.contains("expects Str, got Array")),
         "expected the constructor argument error, got {:?}",
         all.iter().map(|error| error.message.clone()).collect::<Vec<_>>(),
     );

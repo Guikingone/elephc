@@ -376,23 +376,24 @@ fn test_error_named_arguments_reject_unknown_extern_parameter() {
     );
 }
 
-/// Verifies that a function with a declared return type that returns a mismatched
-/// type (without being called) produces a return type mismatch error.
+/// Verifies that a function with a declared return type that returns a NON-coercible mismatched
+/// type (without being called) produces a return type mismatch error. An `array` return is not
+/// weak-coercible to `string` (unlike `int`/`float`/Stringable), so it stays loud.
 #[test]
 fn test_error_function_declared_return_type_rejects_mismatch_without_call() {
     expect_error(
-        "<?php function foo(): string { return 1; }",
-        "Function 'foo' return type expects Str, got Int",
+        "<?php function foo(): string { return [1]; }",
+        "Function 'foo' return type expects Str, got Array",
     );
 }
 
-/// Verifies that a function with a declared return type that is violated when
-/// invoked via first-class callable syntax produces the expected error.
+/// Verifies that a function with a declared return type that is violated by a NON-coercible return
+/// when invoked via first-class callable syntax produces the expected error.
 #[test]
 fn test_error_function_declared_return_type_rejects_mismatch_via_first_class_callable() {
     expect_error(
-        "<?php function foo(): string { return 1; } $f = foo(...);",
-        "Function 'foo' return type expects Str, got Int",
+        "<?php function foo(): string { return [1]; } $f = foo(...);",
+        "Function 'foo' return type expects Str, got Array",
     );
 }
 

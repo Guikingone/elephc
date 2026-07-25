@@ -343,7 +343,13 @@ impl Checker {
             // classes still fail loudly below; this never widens acceptance beyond what the
             // runtime guard can enforce.
             Err(err) => {
-                if self.object_return_downcast_guardable(expected, actual) {
+                // The return-coercion codegen (`coerce_to_return_type`) already emits the same
+                // `IToStr`/`FToStr`/`__toString` string cast (for a `string` return) or boxes the
+                // value into a `Mixed` union return slot — so the PHP weak-mode value-boundary
+                // coercions are realized at the return boundary exactly as at a call argument.
+                if self.object_return_downcast_guardable(expected, actual)
+                    || self.weak_boundary_coercion_accepts(expected, actual)
+                {
                     Ok(())
                 } else {
                     Err(err)

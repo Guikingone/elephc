@@ -233,6 +233,8 @@ mod ternary_member_narrowing;
 mod switch_case_narrowing;
 #[path = "error_tests/ctor_arg_propagation_cross_class.rs"]
 mod ctor_arg_propagation_cross_class;
+#[path = "error_tests/weak_coercion_negatives.rs"]
+mod weak_coercion_negatives;
 
 // --- Iterator-related errors ---
 

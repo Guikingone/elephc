@@ -420,36 +420,21 @@ fn test_error_filesystem_spl_classes_cannot_be_redeclared() {
 }
 
 /// Verifies that Phase 8 SPL filesystem constructors validate argument types.
+///
+/// A concrete `int` filename/pattern/directory argument now weak-coerces into the `string`
+/// parameter (PHP's weak mode; `weak_boundary_coercion_accepts`) — covered by
+/// `test_spl_filesystem_constructors_weak_coerce_int_filename` — so only the NON-coercible
+/// mismatches (string→`int`, unrelated object) remain hard errors here.
 #[test]
 fn test_error_filesystem_spl_constructors_validate_types() {
     for (source, expected) in [
-        (
-            "<?php $info = new SplFileInfo(123);",
-            "Constructor 'SplFileInfo::__construct' parameter $filename expects Str, got Int",
-        ),
-        (
-            "<?php $file = new SplFileObject(123);",
-            "Constructor 'SplFileObject::__construct' parameter $filename expects Str, got Int",
-        ),
         (
             "<?php $tmp = new SplTempFileObject(\"bad\");",
             "Constructor 'SplTempFileObject::__construct' parameter $maxMemory expects Int, got Str",
         ),
         (
-            "<?php $it = new DirectoryIterator(123);",
-            "Constructor 'DirectoryIterator::__construct' parameter $directory expects Str, got Int",
-        ),
-        (
             "<?php $it = new FilesystemIterator(\".\", \"bad\");",
             "Constructor 'FilesystemIterator::__construct' parameter $flags expects Int, got Str",
-        ),
-        (
-            "<?php $it = new GlobIterator(123);",
-            "Constructor 'GlobIterator::__construct' parameter $pattern expects Str, got Int",
-        ),
-        (
-            "<?php $it = new RecursiveDirectoryIterator(123);",
-            "Constructor 'RecursiveDirectoryIterator::__construct' parameter $directory expects Str, got Int",
         ),
         (
             "<?php $it = new RecursiveCachingIterator(new ArrayIterator([]));",
@@ -457,6 +442,25 @@ fn test_error_filesystem_spl_constructors_validate_types() {
         ),
     ] {
         expect_error(source, expected);
+    }
+}
+
+/// Locks the PHP weak-mode coercion of a concrete `int` filename/pattern argument into the
+/// `string` parameter of the SPL filesystem constructors — PHP coerces (`new SplFileInfo(123)` sees
+/// `"123"`), and the call codegen emits the same `IToStr` cast, so the constructor type-checks.
+#[test]
+fn test_spl_filesystem_constructors_weak_coerce_int_filename() {
+    for source in [
+        "<?php $info = new SplFileInfo(123);",
+        "<?php $file = new SplFileObject(123);",
+        "<?php $it = new DirectoryIterator(123);",
+        "<?php $it = new GlobIterator(123);",
+        "<?php $it = new RecursiveDirectoryIterator(123);",
+    ] {
+        assert!(
+            check_source(source).is_ok(),
+            "int filename should weak-coerce to string for `{source}`",
+        );
     }
 }
 

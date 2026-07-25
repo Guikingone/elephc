@@ -65,6 +65,77 @@ impl Checker {
         false
     }
 
+    /// Returns true when a value statically typed as an object of `class_name` is usable in a
+    /// PHP string context — the class or one of its ancestors declares a public `__toString()`
+    /// method (satisfying the implicit `Stringable` contract), or the type implements
+    /// `Stringable` explicitly (directly or through interface inheritance).
+    ///
+    /// The parent-chain walk is what makes an abstract-base static type (for example
+    /// `Symfony\Component\String\AbstractString`, whose concrete children carry the real
+    /// `__toString()`) count as Stringable: the abstract base itself declares the method, and a
+    /// value typed as a subclass inherits it. This mirrors the codegen string-cast object arm
+    /// (`lower_object_to_string`), which dispatches `__toString()` virtually on the runtime class.
+    pub(crate) fn object_class_is_stringable(&self, class_name: &str) -> bool {
+        let normalized = class_name.trim_start_matches('\\');
+        if normalized.is_empty() {
+            return false;
+        }
+        let tostring_key = crate::names::php_symbol_key("__toString");
+        let stringable_key = crate::names::php_symbol_key("Stringable");
+        let mut current = Some(normalized.to_string());
+        let mut seen = HashSet::new();
+        while let Some(name) = current {
+            if !seen.insert(name.clone()) {
+                break;
+            }
+            let Some(info) = self.classes.get(&name) else {
+                break;
+            };
+            let tostring_is_public = info
+                .method_visibilities
+                .get(&tostring_key)
+                .map(|visibility| *visibility == Visibility::Public)
+                // PHP requires `__toString` to be public; a class that records the method
+                // without a visibility entry (compiler-synthesized shells) is treated as public.
+                .unwrap_or_else(|| info.methods.contains_key(&tostring_key));
+            if tostring_is_public && info.methods.contains_key(&tostring_key) {
+                return true;
+            }
+            if info
+                .interfaces
+                .iter()
+                .any(|iface| crate::names::php_symbol_key(iface) == stringable_key)
+            {
+                return true;
+            }
+            current = info.parent.clone();
+        }
+        // Interface-typed targets (and any Stringable reachable only through interface
+        // inheritance) are covered here.
+        self.object_type_implements_interface(normalized, "Stringable")
+    }
+
+    /// Returns true when `class_name` is a CONCRETE (non-abstract) class with a resolvable
+    /// `__toString`, so an eager `(string)$obj` cast at a plain-`string` value boundary resolves a
+    /// direct call to a real `__toString` method body.
+    ///
+    /// Interfaces and unknown names (`self.classes` miss) and abstract classes are rejected: the
+    /// eager cast would emit a call to a symbol with no body (a link failure). A concrete class
+    /// that satisfies `Stringable` necessarily carries a concrete `__toString` (its own or an
+    /// inherited concrete one) — otherwise it could not be concrete — so `object_class_is_stringable`
+    /// on a concrete class is sufficient. Abstract-base and interface Stringable static types reach
+    /// a `string` slot only through a boxed union, which dispatches `__toString` virtually at use.
+    pub(crate) fn object_class_has_eager_tostring(&self, class_name: &str) -> bool {
+        let normalized = class_name.trim_start_matches('\\');
+        let Some(info) = self.classes.get(normalized) else {
+            return false;
+        };
+        if info.is_abstract {
+            return false;
+        }
+        self.object_class_is_stringable(normalized)
+    }
+
     /// Returns true if `class_name` directly implements `interface_name` (not via inheritance).
     pub(crate) fn class_implements_interface(&self, class_name: &str, interface_name: &str) -> bool {
         self.classes.get(class_name).is_some_and(|class_info| {
