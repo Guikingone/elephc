@@ -7,16 +7,18 @@
 //!
 //! Key details:
 //! - Mixed helpers use boxed tag/payload cells; tag constants and ownership rules are shared with type checking and codegen.
-//! - Null/sentinel array and hash payloads normalize to canonical tag-8 Mixed null
-//!   cells before retention, so no consumer receives an array-shaped sentinel.
+//! - Null or sentinel payloads presented with a container-shaped tag (4–6) are
+//!   normalized to the canonical Mixed null tag before ownership or allocation.
 
-use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::NULL_SENTINEL;
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
-
-/// mixed_from_value: retain/persist a runtime value and box it into a mixed cell.
+/// Retains or persists a runtime value and boxes it into a Mixed cell.
+///
+/// Container-shaped tags with a zero or null-sentinel payload are normalized to
+/// canonical PHP null before retain/allocation, preventing malformed boxes from
+/// escaping into downstream consumers.
 /// Input:  x0=value_tag, x1=value_lo, x2=value_hi
 /// Output: x0=boxed mixed pointer
 pub fn emit_mixed_from_value(emitter: &mut Emitter) {
@@ -35,12 +37,23 @@ pub fn emit_mixed_from_value(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the runtime value tag across helper calls
     emitter.instruction("stp x1, x2, [sp, #8]");                                // save the incoming payload words across helper calls
 
+    emitter.instruction("cmp x0, #4");                                          // do only container-shaped tags need null-payload normalization?
+    emitter.instruction("b.lt __rt_mixed_from_value_dispatch");                 // scalar tags preserve every payload bit pattern
+    emitter.instruction("cmp x0, #6");                                          // indexed arrays, hashes, and objects are the container-shaped tags
+    emitter.instruction("b.gt __rt_mixed_from_value_dispatch");                 // nested Mixed/callable tags use ordinary pointer ownership
+    emit_branch_if_null_container(
+        emitter,
+        "x1",
+        "x9",
+        "__rt_mixed_from_value_null_container",
+    );
+    emitter.label("__rt_mixed_from_value_dispatch");
     emitter.instruction("cmp x0, #1");                                          // does this mixed payload hold a string?
     emitter.instruction("b.eq __rt_mixed_from_value_string");                   // strings must be persisted for the boxed owner
     emitter.instruction("cmp x0, #4");                                          // does this mixed payload hold an indexed array?
-    emitter.instruction("b.eq __rt_mixed_from_value_container");                // normalize null-shaped indexed payloads before retaining real arrays
+    emitter.instruction("b.eq __rt_mixed_from_value_retain");                   // refcounted child pointers must be retained for the boxed owner
     emitter.instruction("cmp x0, #5");                                          // does this mixed payload hold an associative array?
-    emitter.instruction("b.eq __rt_mixed_from_value_container");                // normalize null-shaped hash payloads before retaining real hashes
+    emitter.instruction("b.eq __rt_mixed_from_value_retain");                   // refcounted child pointers must be retained for the boxed owner
     emitter.instruction("cmp x0, #6");                                          // does this mixed payload hold an object?
     emitter.instruction("b.eq __rt_mixed_from_value_retain");                   // refcounted child pointers must be retained for the boxed owner
     emitter.instruction("cmp x0, #7");                                          // does this mixed payload hold another mixed cell?
@@ -49,18 +62,11 @@ pub fn emit_mixed_from_value(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_from_value_retain");                   // callable descriptors are retained for the boxed owner
     emitter.instruction("b __rt_mixed_from_value_alloc");                       // scalars can be boxed without additional retention
 
-    emitter.label("__rt_mixed_from_value_container");
-    emitter.instruction("cbz x1, __rt_mixed_from_value_null_container");        // zero container pointers are PHP null, not heap children
-    abi::emit_load_int_immediate(emitter, "x9", NULL_SENTINEL);
-    emitter.instruction("cmp x1, x9");                                          // does the container payload carry the in-band null sentinel?
-    emitter.instruction("b.eq __rt_mixed_from_value_null_container");           // normalize missed-read sentinels to canonical Mixed null
-    emitter.instruction("b __rt_mixed_from_value_retain");                      // real container pointers remain tagged and retained
-
     emitter.label("__rt_mixed_from_value_null_container");
-    emitter.instruction("mov x9, #8");                                          // runtime value tag 8 = PHP null
-    emitter.instruction("str x9, [sp, #0]");                                    // replace the array/hash tag with the canonical null tag
-    emitter.instruction("stp xzr, xzr, [sp, #8]");                              // canonical Mixed null has two zero payload words
-    emitter.instruction("b __rt_mixed_from_value_alloc");                       // allocate the normalized null cell without retaining a sentinel
+    emitter.instruction("mov x9, #8");                                          // runtime tag 8 is the canonical boxed PHP null
+    emitter.instruction("str x9, [sp, #0]");                                    // replace the container-shaped tag before allocation
+    emitter.instruction("stp xzr, xzr, [sp, #8]");                              // canonical null has no payload words or ownership
+    emitter.instruction("b __rt_mixed_from_value_alloc");                       // allocate the normalized Mixed null without retaining the sentinel
 
     emitter.label("__rt_mixed_from_value_string");
     emitter.instruction("bl __rt_str_persist");                                 // duplicate the string payload for the boxed owner
@@ -102,12 +108,23 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the runtime value tag across helper-driven ownership normalization
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // save the low payload word across helper calls and the final heap allocation
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save the high payload word across helper calls and the final heap allocation
+    emitter.instruction("cmp rax, 4");                                          // do only container-shaped tags need null-payload normalization?
+    emitter.instruction("jl __rt_mixed_from_value_dispatch");                   // scalar tags preserve every payload bit pattern
+    emitter.instruction("cmp rax, 6");                                          // indexed arrays, hashes, and objects are the container-shaped tags
+    emitter.instruction("jg __rt_mixed_from_value_dispatch");                   // nested Mixed/callable tags use ordinary pointer ownership
+    emit_branch_if_null_container(
+        emitter,
+        "rdi",
+        "r10",
+        "__rt_mixed_from_value_null_container",
+    );
+    emitter.label("__rt_mixed_from_value_dispatch");
     emitter.instruction("cmp rax, 1");                                          // detect string payloads that need their own owned copy inside the mixed box
     emitter.instruction("je __rt_mixed_from_value_string");                     // strings must be persisted so the mixed cell owns a stable payload
     emitter.instruction("cmp rax, 4");                                          // detect indexed arrays that participate in refcounted ownership
-    emitter.instruction("je __rt_mixed_from_value_container");                  // normalize null-shaped indexed payloads before retaining real arrays
+    emitter.instruction("je __rt_mixed_from_value_retain");                     // retain indexed arrays before storing them inside the mixed cell
     emitter.instruction("cmp rax, 5");                                          // detect associative arrays that participate in refcounted ownership
-    emitter.instruction("je __rt_mixed_from_value_container");                  // normalize null-shaped hash payloads before retaining real hashes
+    emitter.instruction("je __rt_mixed_from_value_retain");                     // retain associative arrays before storing them inside the mixed cell
     emitter.instruction("cmp rax, 6");                                          // detect objects that participate in refcounted ownership
     emitter.instruction("je __rt_mixed_from_value_retain");                     // retain objects before storing them inside the mixed cell
     emitter.instruction("cmp rax, 7");                                          // detect nested mixed cells that participate in refcounted ownership
@@ -116,19 +133,11 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_from_value_retain");                     // retain callable descriptors before storing them inside the mixed cell
     emitter.instruction("jmp __rt_mixed_from_value_alloc");                     // scalars can be boxed directly without additional ownership work
 
-    emitter.label("__rt_mixed_from_value_container");
-    emitter.instruction("test rdi, rdi");                                       // zero container pointers are PHP null, not heap children
-    emitter.instruction("je __rt_mixed_from_value_null_container");             // normalize zero pointers before any retention
-    abi::emit_load_int_immediate(emitter, "r10", NULL_SENTINEL);
-    emitter.instruction("cmp rdi, r10");                                        // does the container payload carry the in-band null sentinel?
-    emitter.instruction("je __rt_mixed_from_value_null_container");             // normalize missed-read sentinels to canonical Mixed null
-    emitter.instruction("jmp __rt_mixed_from_value_retain");                    // real container pointers remain tagged and retained
-
     emitter.label("__rt_mixed_from_value_null_container");
-    emitter.instruction("mov QWORD PTR [rbp - 8], 8");                          // replace the array/hash tag with canonical PHP null
-    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // canonical Mixed null has a zero low payload word
-    emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // canonical Mixed null has a zero high payload word
-    emitter.instruction("jmp __rt_mixed_from_value_alloc");                     // allocate the normalized null cell without retaining a sentinel
+    emitter.instruction("mov QWORD PTR [rbp - 8], 8");                          // replace the container-shaped tag with canonical Mixed null
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // canonical null has no low payload or ownership
+    emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // canonical null has no high payload
+    emitter.instruction("jmp __rt_mixed_from_value_alloc");                     // allocate the normalized Mixed null without retaining the sentinel
 
     emitter.label("__rt_mixed_from_value_string");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // move the source string pointer into the x86_64 string helper input register

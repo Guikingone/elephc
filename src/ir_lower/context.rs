@@ -1685,6 +1685,41 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         )
     }
 
+    /// Publishes lowering's owning-temporary proof into final EIR ownership metadata.
+    ///
+    /// Ordinary local loads stay conservative because their provisional ownership is
+    /// repaired separately after final slot widening. One-shot `OwnedTemp` loads are
+    /// exact and can be promoted along with non-load producers. String results stay
+    /// conservative because `Owned` cannot distinguish heap strings from concat scratch
+    /// storage; their Mixed-box transfer remains classified by the string-specific path.
+    pub(crate) fn finalize_value_ownership_metadata(&mut self) {
+        let owned_values = (0..self.builder.value_count())
+            .filter_map(|raw| {
+                let value = ValueId::from_raw(raw as u32);
+                if self.builder.value_ownership(value) != Ownership::MaybeOwned {
+                    return None;
+                }
+                if self.builder.value_php_type(value).codegen_repr() == PhpType::Str {
+                    return None;
+                }
+                let op = self.builder.value_defining_op(value);
+                if matches!(op, Some(Op::LoadLocal | Op::LoadStaticLocal))
+                    && !self.value_is_owned_temp_load(value)
+                {
+                    return None;
+                }
+                let lowered = LoweredValue {
+                    value,
+                    ir_type: self.builder.value_type(value),
+                };
+                self.value_is_owning_temporary(lowered).then_some(value)
+            })
+            .collect::<Vec<_>>();
+        for value in owned_values {
+            self.builder.set_value_ownership(value, Ownership::Owned);
+        }
+    }
+
     /// Returns whether a user-call result can alias a borrowed visible argument.
     ///
     /// User functions currently return refcounted parameter storage without
@@ -2264,6 +2299,30 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::IsTruthy.default_effects(),
             span,
         )
+    }
+
+    /// Computes truthiness and releases `input` when this path owns it.
+    ///
+    /// `IsTruthy` reads its operand and yields a fresh, non-aliasing boolean, so
+    /// a branch condition that consumes an owned temporary — e.g. the boxed
+    /// `Mixed` result of `$x[0] ?? default` fed into an `if`/ternary/`&&`/`!` —
+    /// must release that temporary here or it leaks on the truthiness path
+    /// (issue #586). Use this at condition sites that discard the original
+    /// value; callers that also forward it (short ternary `?:`) must keep using
+    /// [`Self::truthy`], which never releases.
+    pub(crate) fn truthy_consuming(
+        &mut self,
+        input: LoweredValue,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        let owns_input = self.value_is_owning_temporary(input);
+        let result = self.truthy(input, span);
+        // Only release when a distinct boolean was produced; the `I64` fast path
+        // in `truthy` returns `input` itself (and non-heap values never own).
+        if owns_input && result.value != input.value {
+            crate::ir_lower::ownership::release_if_owned(self, input, span);
+        }
+        result
     }
 }
 
