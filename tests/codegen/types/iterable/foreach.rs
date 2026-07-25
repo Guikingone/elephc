@@ -527,7 +527,10 @@ fn test_iterable_value_in_indexed_array_stays_boxed() {
         show([id([1, 2])]);
         ",
     );
-    assert_eq!(out, "array:array(2) {\n}\n");
+    // The inner array dumps its elements: the boxed Mixed unbox lands on the real
+    // array and the walker reads its runtime value_type stamp. It used to print the
+    // empty `array(2) {\n}\n` shell.
+    assert_eq!(out, "array:array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n");
 }
 
 /// Verifies that a `mixed` iterable containing an inner associative array preserves
@@ -547,7 +550,10 @@ fn test_iterable_value_in_assoc_array_stays_boxed() {
         }
         ",
     );
-    assert_eq!(out, "array:array(2) {\n}\n");
+    // The inner array dumps its elements: the boxed Mixed unbox lands on the real
+    // array and the walker reads its runtime value_type stamp. It used to print the
+    // empty `array(2) {\n}\n` shell.
+    assert_eq!(out, "array:array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n");
 }
 
 /// Verifies an `iterable` value stored in a mixed associative array remains a boxed Mixed value
@@ -566,7 +572,10 @@ fn test_iterable_value_in_mixed_assoc_array_direct_read_stays_boxed() {
         var_dump($value);
         ",
     );
-    assert_eq!(out, "array:array(2) {\n}\n");
+    // The inner array dumps its elements: the boxed Mixed unbox lands on the real
+    // array and the walker reads its runtime value_type stamp. It used to print the
+    // empty `array(2) {\n}\n` shell.
+    assert_eq!(out, "array:array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n");
 }
 
 /// Verifies an inner `iterable` array appended to a plain array stays boxed and `is_iterable()` is

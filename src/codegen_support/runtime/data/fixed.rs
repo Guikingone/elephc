@@ -809,25 +809,36 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // __rt_hash_get. v1 limitation: only one active context at a time —
     // a fresh stream_context_create overwrites the slot.
     out.push_str(".comm _stream_context_options, 8, 3\n");
-    // var_dump body literals (rodata): per-element prefix/suffix bytes
-    // used by the array walkers __rt_var_dump_array_int / _str.
-    out.push_str(".globl _vd_indent_open\n_vd_indent_open:\n    .ascii \"  [\"\n");
+    // var_dump body literals (rodata): per-element prefix/suffix bytes used by
+    // the array/hash walkers. NONE of them carry a leading indent: every
+    // var_dump line is padded by `__rt_vd_pad`, which writes `_vd_indent`
+    // spaces first, so one set of literals serves every nesting depth.
+    out.push_str(".globl _vd_indent_open\n_vd_indent_open:\n    .ascii \"[\"\n");
     out.push_str(".globl _vd_close_arrow\n_vd_close_arrow:\n    .ascii \"]=>\\n\"\n");
-    out.push_str(".globl _vd_int_prefix\n_vd_int_prefix:\n    .ascii \"  int(\"\n");
+    out.push_str(".globl _vd_int_prefix\n_vd_int_prefix:\n    .ascii \"int(\"\n");
     out.push_str(".globl _vd_close_paren\n_vd_close_paren:\n    .ascii \")\\n\"\n");
-    out.push_str(".globl _vd_str_prefix\n_vd_str_prefix:\n    .ascii \"  string(\"\n");
+    out.push_str(".globl _vd_str_prefix\n_vd_str_prefix:\n    .ascii \"string(\"\n");
     out.push_str(".globl _vd_close_paren_space\n_vd_close_paren_space:\n    .ascii \") \\\"\"\n");
     out.push_str(".globl _vd_close_quote\n_vd_close_quote:\n    .ascii \"\\\"\\n\"\n");
-    // var_dump bool-array literals — preformatted lines (12 / 13 bytes) so
-    // the bool walker is a single dispatch + write.
-    out.push_str(".globl _vd_bool_true_line\n_vd_bool_true_line:\n    .ascii \"  bool(true)\\n\"\n");
-    out.push_str(".globl _vd_bool_false_line\n_vd_bool_false_line:\n    .ascii \"  bool(false)\\n\"\n");
-    out.push_str(".globl _vd_float_prefix\n_vd_float_prefix:\n    .ascii \"  float(\"\n");
-    out.push_str(".globl _vd_null_line\n_vd_null_line:\n    .ascii \"  NULL\\n\"\n");
-    // var_dump hash (associative array) string-key delimiters: `  ["` before the
-    // key bytes and `"]=>\n` after, matching PHP's `  ["key"]=>` line format.
-    out.push_str(".globl _vd_str_key_open\n_vd_str_key_open:\n    .ascii \"  [\\\"\"\n");
+    // var_dump bool literals — preformatted lines (11 / 12 bytes) so the bool
+    // emitter is a single dispatch + write after the indent pad.
+    out.push_str(".globl _vd_bool_true_line\n_vd_bool_true_line:\n    .ascii \"bool(true)\\n\"\n");
+    out.push_str(".globl _vd_bool_false_line\n_vd_bool_false_line:\n    .ascii \"bool(false)\\n\"\n");
+    out.push_str(".globl _vd_float_prefix\n_vd_float_prefix:\n    .ascii \"float(\"\n");
+    out.push_str(".globl _vd_null_line\n_vd_null_line:\n    .ascii \"NULL\\n\"\n");
+    // var_dump hash (associative array) string-key delimiters: `["` before the
+    // key bytes and `"]=>\n` after, matching PHP's `["key"]=>` line format.
+    out.push_str(".globl _vd_str_key_open\n_vd_str_key_open:\n    .ascii \"[\\\"\"\n");
     out.push_str(".globl _vd_str_key_close\n_vd_str_key_close:\n    .ascii \"\\\"]=>\\n\"\n");
+    // var_dump nested-container delimiters: `array(` + count + `) {\n` opens a
+    // nested array/hash on its value line, `}\n` closes it at the same indent.
+    out.push_str(".globl _vd_array_prefix\n_vd_array_prefix:\n    .ascii \"array(\"\n");
+    out.push_str(".globl _vd_brace_open\n_vd_brace_open:\n    .ascii \") {\\n\"\n");
+    out.push_str(".globl _vd_brace_close\n_vd_brace_close:\n    .ascii \"}\\n\"\n");
+    // _vd_indent: current var_dump line indentation, in spaces. The var_dump
+    // builtin sets it to 2 around a top-level array body and back to 0 after;
+    // `__rt_var_dump_value` bumps it by 2 across each nested container walk.
+    out.push_str(".comm _vd_indent, 8, 3\n");
     // print_r body literals (rodata): PHP's `Array\n(\n` header, `)\n` footer,
     // `[`/`] => ` key delimiters (unquoted keys, unlike var_dump), a lone
     // newline, the `1` rendered for boolean true, and a 64-space pad used by

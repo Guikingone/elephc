@@ -1,6 +1,7 @@
 //! Purpose:
 //! Lowers PHP diagnostic output builtins for the EIR backend.
-//! Handles concrete scalar/resource values and array/hash shells without recursive dumps.
+//! Handles concrete scalar/resource values plus arrays and hashes, which dump
+//! RECURSIVELY through the runtime walkers.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
@@ -8,8 +9,16 @@
 //! Key details:
 //! - Output must match PHP-compatible text for the supported concrete types.
 //! - Mixed dispatch follows the runtime tag/payload contract from `__rt_mixed_unbox`.
+//! - `var_dump` emits only the top-level `array(N) {` / `}` frame here; the body
+//!   (and every nested container) comes from `codegen_support::runtime::io::
+//!   var_dump_walk`, driven by the `_vd_indent` global this file sets to 2 for
+//!   the duration of the walk. `print_r` passes its indent as a call argument
+//!   instead — the two schemes are independent.
 //! - Object dumps read the runtime class id from the object header and map it
-//!   through the EIR module's class metadata.
+//!   through the EIR module's class metadata. KNOWN GAP: the dump is the class
+//!   name only (`object(C)`), not PHP's `object(C)#id (n) { … }` body — the
+//!   handle id and the full (including non-public) property descriptor do not
+//!   exist at runtime yet. Objects nested inside an array/hash render `NULL`.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -147,7 +156,8 @@ fn lower_print_r_runtime_flag(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `var_dump(value, ...values)` for concrete scalar/resource values and array/hash shells.
+/// Lowers `var_dump(value, ...values)` for concrete scalar/resource values and for
+/// arrays/hashes, which are dumped recursively (nested containers included).
 /// Each operand is dumped independently in source order, matching PHP's variadic var_dump.
 pub(crate) fn lower_var_dump(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() {
@@ -493,6 +503,12 @@ fn emit_var_dump_null(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Emits `var_dump` output for an array/hash payload in the integer result register.
+///
+/// Writes the `array(N) {\n` header and the closing `}\n` around the runtime body
+/// walk. The body lines are indented by the runtime through the `_vd_indent`
+/// global: it is set to 2 (PHP's one nesting level) for the duration of the walk
+/// and back to 0 before the closing brace, which sits at the header's indent.
+/// Nested containers manage their own deeper indents inside `__rt_var_dump_value`.
 fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()> {
     let result_reg = abi::int_result_reg(ctx.emitter);
     // An untyped null-defaulted property rebound to array storage reads a null
@@ -515,6 +531,9 @@ fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()
     abi::emit_call_label(ctx.emitter, "__rt_itoa");
     emit_write_current_string(ctx);
     emit_write_literal(ctx, b") {\n");
+    // -- body lines sit one PHP nesting level (2 spaces) in --
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 2);
+    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_vd_indent", 0);
     abi::emit_pop_reg(ctx.emitter, result_reg);
     if let Some(walker) = var_dump_array_walker(ty) {
         if matches!(ctx.emitter.target.arch, Arch::X86_64) {
@@ -522,6 +541,9 @@ fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()
         }
         abi::emit_call_label(ctx.emitter, walker);
     }
+    // -- the closing brace aligns with the header, so drop back to column 0 --
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_vd_indent", 0);
     emit_write_literal(ctx, b"}\n");
     ctx.emit_branch(&done_label);
     ctx.emitter.label(&null_label);
@@ -532,10 +554,17 @@ fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()
 
 /// Returns the runtime var_dump walker for an array/hash element layout.
 ///
-/// Homogeneous indexed arrays use a per-element-type walker; `Array(Mixed)` uses the
-/// boxed-cell walker; associative arrays (hashes) use `__rt_var_dump_hash`, which iterates
-/// entries and formats string/integer keys plus scalar values (nested containers fall back
-/// to `NULL`, matching the indexed Mixed walker).
+/// Homogeneous indexed arrays of a scalar element type keep their per-element-type
+/// walker (nothing there can nest). EVERY other indexed element type — `Mixed`
+/// boxed cells, nested `Array`/`AssocArray`, objects — goes through
+/// `__rt_var_dump_indexed`, which self-dispatches on the array's runtime
+/// value_type stamp and recurses through `__rt_var_dump_value`. Associative
+/// arrays (hashes) use `__rt_var_dump_hash`, which iterates entries, formats
+/// string/integer keys and delegates each value to the same recursive renderer.
+///
+/// `Iterable` is deliberately absent: its runtime representation is ambiguous
+/// (a direct indexed array or a hash), so the body is left empty rather than
+/// risking a walk of the wrong layout — the same choice `print_r` makes.
 fn var_dump_array_walker(ty: &PhpType) -> Option<&'static str> {
     match ty {
         PhpType::Array(elem_ty) => match elem_ty.as_ref() {
@@ -543,8 +572,7 @@ fn var_dump_array_walker(ty: &PhpType) -> Option<&'static str> {
             PhpType::Str => Some("__rt_var_dump_array_str"),
             PhpType::Bool => Some("__rt_var_dump_array_bool"),
             PhpType::Float => Some("__rt_var_dump_array_float"),
-            PhpType::Mixed => Some("__rt_var_dump_array_mixed"),
-            _ => None,
+            _ => Some("__rt_var_dump_indexed"),
         },
         PhpType::AssocArray { .. } => Some("__rt_var_dump_hash"),
         _ => None,

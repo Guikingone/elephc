@@ -215,7 +215,10 @@ fn test_iterable_boxes_to_mixed_with_concrete_array_tag() {
         var_dump(box([10, 20]));
         ",
     );
-    assert_eq!(out, "y|array|array(2) {\n}\n");
+    // The boxed Mixed carries the concrete array pointer, so the var_dump walk
+    // reads the array's real value_type stamp and prints the elements. It used to
+    // print the empty `array(2) {\n}\n` shell (the walker assumed boxed cells).
+    assert_eq!(out, "y|array|array(2) {\n  [0]=>\n  int(10)\n  [1]=>\n  int(20)\n}\n");
 }
 
 /// Verifies `empty()` on an `iterable` uses the underlying array length: empty array is "empty",

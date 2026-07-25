@@ -124,9 +124,20 @@ var_dump($map["a"]);
 var_dump($map["o"]);
 "#,
     );
+    // The array slot dumps its elements: the boxed Mixed unbox lands on the real
+    // array, and the universal indexed walker reads its runtime value_type stamp
+    // (int) rather than assuming boxed cells. The object slot is the KNOWN GAP —
+    // PHP prints `object(Box)#1 (0) {\n}`, elephc prints the class name only.
     assert_eq!(
         out,
-        "int(42)\nstring(5) \"hello\"\nbool(true)\nNULL\narray(2) {\n}\nobject(Box)\n"
+        concat!(
+            "int(42)\n",
+            "string(5) \"hello\"\n",
+            "bool(true)\n",
+            "NULL\n",
+            "array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n",
+            "object(Box)\n",
+        )
     );
 }
 

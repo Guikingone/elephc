@@ -476,7 +476,12 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_var_dump_array_str(emitter);
     io::emit_var_dump_array_bool(emitter);
     io::emit_var_dump_array_float(emitter);
-    io::emit_var_dump_array_mixed(emitter);
+    io::emit_var_dump_indexed(emitter);
+    io::emit_var_dump_value(emitter);
+    io::emit_var_dump_open_container(emitter);
+    io::emit_var_dump_close_container(emitter);
+    io::emit_var_dump_pad(emitter);
+    io::emit_var_dump_indent_step(emitter);
     io::emit_var_dump_emit_indexed_key(emitter);
     io::emit_var_dump_emit_string_key(emitter);
     io::emit_var_dump_hash(emitter);
