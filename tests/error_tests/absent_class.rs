@@ -82,6 +82,44 @@ class OptionalAdapter {
     );
 }
 
+/// Verifies an absent-dependency receiver whose method name is declared by exactly ONE unrelated
+/// class is NOT bound to that lone class's concrete nominal return type. Modeled on Symfony's
+/// `private readonly \Symfony\Component\Stopwatch\Stopwatch $stopwatch` (uninstalled) calling
+/// `$this->stopwatch->start(...)->stop()`: a single `TracerAdapter::start(): TracerEvent` must not
+/// make `start()` resolve to `TracerEvent`, which would mis-report `TracerEvent::stop` /
+/// `::getDuration` as "Undefined method". The chained call must stay gradual `Mixed` and compile.
+#[test]
+fn test_absent_class_method_result_ignores_lone_candidate_object_return() {
+    expect_warning(
+        r#"<?php
+class TracerEvent {}
+class TracerAdapter {
+    public function start(string $name): TracerEvent { return new TracerEvent(); }
+}
+class TraceableRunner {
+    public function __construct(private readonly \Symfony\Component\Stopwatch\Stopwatch $stopwatch) {}
+    public function run(): void {
+        $event = $this->stopwatch->start('run');
+        $event->stop();
+        $event->getDuration();
+    }
+}
+"#,
+        ABSENT_MESSAGE,
+    );
+}
+
+/// Negative control for the absent-receiver gradual routing: a receiver whose class DOES exist in
+/// the closed world but lacks the called method still hard-errors "Undefined method" — the
+/// gradual tolerance is scoped to absent-class receivers, never a real class with a real typo.
+#[test]
+fn test_existing_class_missing_method_still_errors() {
+    expect_error(
+        "<?php class Real { public function foo(): int { return 1; } } $r = new Real(); $r->missingMethod();",
+        "Undefined method: Real::missingMethod",
+    );
+}
+
 /// Verifies an `instanceof`-narrowed optional extension receiver still produces a gradual method
 /// result, so guarded iteration does not inherit the legacy integer fallback.
 #[test]

@@ -143,6 +143,18 @@ impl Checker {
     /// Falls back to the name-only candidate set when arity filtering finds
     /// nothing (e.g. methods with default parameters), and returns `None` when
     /// no class declares the method at all.
+    ///
+    /// A SINGLE arbitrary class happening to declare `method` does NOT mean the
+    /// `mixed` receiver IS that class — a common source of `mixed` here is an
+    /// absent optional-dependency class hint (`private readonly \Vendor\Absent
+    /// $x`) degraded to `Mixed`. Returning that lone candidate's concrete NOMINAL
+    /// object return type would make a later chained call resolve strictly against
+    /// the unrelated class and mis-report "Undefined method": e.g. an absent
+    /// `Stopwatch` property whose `start()` mis-binds to `Cache\Adapter\
+    /// TraceableAdapter::start(): TraceableAdapterEvent`, so `->stop()` then fails.
+    /// Such an object-typed single candidate is therefore degraded to gradual
+    /// `Mixed`. Scalar single candidates (e.g. `$x->name(): string`) stay precise:
+    /// they render correctly and never chain into a strict object method lookup.
     fn mixed_receiver_method_return_type(&self, method: &str, arg_count: usize) -> Option<PhpType> {
         let method_key = php_symbol_key(method);
         let mut arity_matched: Vec<PhpType> = Vec::new();
@@ -166,8 +178,22 @@ impl Checker {
         };
         match candidates.as_slice() {
             [] => None,
+            [only] if Self::type_mentions_nominal_object(only) => Some(PhpType::Mixed),
             [only] => Some(only.clone()),
             _ => Some(PhpType::Mixed),
+        }
+    }
+
+    /// Returns whether `ty` is (or, for a union, contains) a nominal `Object` class type.
+    ///
+    /// Used to decide whether a lone `mixed`-receiver method candidate is safe to surface as a
+    /// concrete static type: a nominal object result would make chained calls resolve strictly
+    /// against a possibly-unrelated class, so it is degraded to gradual `Mixed` instead.
+    fn type_mentions_nominal_object(ty: &PhpType) -> bool {
+        match ty {
+            PhpType::Object(_) => true,
+            PhpType::Union(members) => members.iter().any(Self::type_mentions_nominal_object),
+            _ => false,
         }
     }
 
