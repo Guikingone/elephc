@@ -1531,6 +1531,25 @@ fn test_error_object_base_into_derived_param_stays_loud() {
     );
 }
 
+/// A base/interface-typed value flowing into a derived-class typed PROPERTY stays loud (`I`-typed
+/// value into `Impl $p`). A property write, like a parameter boundary, emits NO runtime instanceof
+/// guard (unlike the RETURN boundary, which does — see `object_return_downcast_guardable`), so the
+/// static property slot offset would be used to read fields that a non-`Impl` runtime value does not
+/// have, bit-reading off-layout memory (empirically a SIGSEGV / garbage read — verified with a
+/// `mixed`-boxed sibling object reaching the slot). PHP raises a catchable TypeError here instead of
+/// crashing, so elephc must stay loud rather than accept the unguarded base->derived downcast at a
+/// property write. Locks the property-position half of the object-downcast memory-safety boundary.
+#[test]
+fn test_error_base_into_derived_typed_property_stays_loud() {
+    expect_error(
+        "<?php interface I {} class Impl implements I { public int $sx = 5; } \
+         class Holder { public Impl $p; } \
+         function mk(int $n): I { return new Impl(); } \
+         $h = new Holder(); $h->p = mk(1);",
+        "Property Holder::$p expects Object(\"Impl\"), got Object(\"I\")",
+    );
+}
+
 /// An all-object union whose extra member is UNRELATED to the concrete object target stays loud
 /// (`RC|Route` into `RC $x`, where `Route` is not assignable to `RC`). The unrelated member could
 /// be the runtime value and would bit-read as the wrong object; PHP raises a TypeError, so it must
