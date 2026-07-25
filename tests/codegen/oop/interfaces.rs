@@ -565,3 +565,69 @@ echo (new AlwaysCopyable())->copy()->label();
     );
     assert_eq!(out, "copy");
 }
+
+/// PHP-faithful lenient dispatch: a method call on an interface-typed receiver where the method is
+/// declared only on implementors (absent from the interface) dispatches on the runtime class, and
+/// each concrete implementor runs its OWN method. `speak()` is not on `Animal`; `Dog` and `Cat`
+/// each declare it. The `Animal`-typed parameter dispatches by runtime class id to the correct
+/// implementation (`php` verified: "woof|meow").
+#[test]
+fn test_interface_receiver_subtype_method_dispatches_per_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+interface Animal { public function name(): string; }
+class Dog implements Animal { public function name(): string { return "dog"; } public function speak(): string { return "woof"; } }
+class Cat implements Animal { public function name(): string { return "cat"; } public function speak(): string { return "meow"; } }
+function sound(Animal $a): string { return $a->speak(); }
+echo sound(new Dog()), "|", sound(new Cat());
+"#,
+    );
+    assert_eq!(out, "woof|meow");
+}
+
+/// PHP-faithful lenient dispatch across a chained ancestor-typed return: `withHeader(): Message`
+/// keeps its declared `Message` return (not refined to the implementor), and the chained
+/// `->requestOnly()` on that `Message`-typed value dispatches on the runtime class — running when the
+/// concrete object declares it. Here `Req::withHeader()` returns `$this` (a `Req`, which HAS
+/// `requestOnly`), so it runs and prints "req" (`php` verified).
+#[test]
+fn test_interface_ancestor_return_chained_method_runs_when_present() {
+    let out = compile_and_run(
+        r#"<?php
+interface Message { public function withHeader(): Message; }
+interface Request extends Message { public function requestOnly(): string; }
+class Req implements Request {
+    public function withHeader(): Message { return $this; }
+    public function requestOnly(): string { return "req"; }
+}
+function read(Request $request): string {
+    return $request->withHeader()->requestOnly();
+}
+echo read(new Req());
+"#,
+    );
+    assert_eq!(out, "req");
+}
+
+/// SAFETY GATE: when an interface-typed receiver holds a runtime object whose concrete class LACKS
+/// the lenient-dispatched method, the call must fault CLEANLY (a catchable PHP-style `Error` /
+/// controlled abort with a diagnostic and non-zero exit), never a SIGSEGV or silent garbage. Here
+/// `radius()` lives only on `Circle`, but a `Square` (also a `Shape`) is passed: the runtime class
+/// id matches no dispatch branch and falls through to the member-call fatal. `php` faults with "Call
+/// to undefined method Square::radius()"; elephc emits the equivalent controlled member-call `Error`.
+#[test]
+fn test_interface_receiver_genuine_absence_faults_cleanly() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+interface Shape { public function area(): float; }
+class Circle implements Shape { public function area(): float { return 3.14; } public function radius(): float { return 2.0; } }
+class Square implements Shape { public function area(): float { return 4.0; } }
+function getRadius(Shape $s): float { return $s->radius(); }
+echo getRadius(new Square());
+"#,
+    );
+    assert!(
+        err.contains("Call to a member function radius() on null"),
+        "expected a clean member-call Error for the genuinely-absent method, got: {err}"
+    );
+}

@@ -1133,13 +1133,17 @@ I::f();
 }
 
 /// Verifies that a genuine `: DeclaringClass` return (NOT `: static`) is early-bound to the
-/// declaring class and is NOT late-bound to the receiver. `Base::make(): Base` called on a `Sub`
-/// still yields `Base`, so a `Sub`-only method on the result is undefined. Guards that the
-/// late-static-binding refinement does not over-apply to explicit class-name returns (PHP
-/// late-binds only `: static`).
+/// declaring class and is NOT late-bound to the receiver: `Base::make(): Base` called on a `Sub`
+/// still yields `Base` (the ancestor-return intent this test guards — PHP late-binds only `: static`).
+/// The follow-up `$r->only()` on that `Base`-typed result is then accepted via PHP-faithful lenient
+/// dispatch, because a concrete subclass (`Sub`, which IS-A `Base`) declares `only` and PHP
+/// dispatches on the runtime class rather than checking method existence at compile time. Here
+/// `make()` returns `new Base()`, which lacks `only`, so this faults cleanly at runtime with a
+/// PHP-style `Error` (`php` verified: "Call to undefined method Base::only()"). It therefore COMPILES
+/// (this test) and faults at runtime, exactly like PHP, instead of the previous compile-time rejection.
 #[test]
-fn test_error_declaring_class_return_not_late_bound() {
-    expect_error(
+fn test_declaring_class_return_not_late_bound_dispatches_at_runtime() {
+    expect_ok(
         r#"<?php
 class Base { public function make(): Base { return new Base(); } }
 class Sub extends Base { public function only(): string { return "s"; } }
@@ -1147,16 +1151,19 @@ $s = new Sub();
 $r = $s->make();
 echo $r->only();
 "#,
-        "Undefined method: Base::only",
     );
 }
 
 /// Verifies that a `: self` return is early-bound to the declaring class (like an explicit class
-/// name) and is NOT late-bound to the receiver, mirroring PHP where only `: static` is late-bound.
-/// `Base::make(): self` on a `Sub` yields `Base`, so a `Sub`-only method on the result is undefined.
+/// name) and is NOT late-bound to the receiver, mirroring PHP where only `: static` is late-bound:
+/// `Base::make(): self` on a `Sub` yields `Base` (the ancestor-return intent this test guards). The
+/// follow-up `$r->only()` on that `Base`-typed result is then accepted via PHP-faithful lenient
+/// dispatch (`Sub` IS-A `Base` declares `only`; PHP dispatches on the runtime class). Here `make()`
+/// returns `new Base()`, which lacks `only`, so it faults cleanly at runtime with a PHP-style `Error`
+/// (`php` verified: "Call to undefined method Base::only()") — COMPILES here and faults at runtime.
 #[test]
-fn test_error_self_return_not_late_bound() {
-    expect_error(
+fn test_self_return_not_late_bound_dispatches_at_runtime() {
+    expect_ok(
         r#"<?php
 class Base { public function make(): self { return new Base(); } }
 class Sub extends Base { public function only(): string { return "s"; } }
@@ -1164,7 +1171,6 @@ $s = new Sub();
 $r = $s->make();
 echo $r->only();
 "#,
-        "Undefined method: Base::only",
     );
 }
 

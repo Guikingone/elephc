@@ -324,6 +324,77 @@ impl Checker {
             .unwrap_or(false)
     }
 
+    /// Accepts a method call on a SINGLE interface- or base-class-typed receiver whose static type
+    /// does NOT declare `method` itself, matching PHP's runtime-dispatch semantics: PHP performs no
+    /// compile-time method-existence check on such a receiver — it dispatches on the runtime class,
+    /// faulting cleanly (a PHP `Error`) only if the actual object's class lacks the method.
+    ///
+    /// The call type-checks when at least one CONCRETE class that IS-A `receiver_type` (the class
+    /// itself, a subclass, or — for an interface receiver — an implementor) declares `method`: that
+    /// is exactly the set of runtime classes the by-class-id dynamic dispatch can land on (the same
+    /// path union receivers and narrowed-interface receivers use in codegen, see
+    /// `lower_narrowed_interface_method_call`). At runtime the receiver's real class id selects its
+    /// own implementation; a class id with no declaration falls through to the clean member-call
+    /// fatal. With no such concrete class the call stays LOUD with the original "Undefined method"
+    /// diagnostic — a genuinely undefined method (no class could satisfy it), or one living only on
+    /// a sub-interface with no concrete implementor for the dispatch to reach.
+    ///
+    /// Argument expressions are inferred so nested errors still surface, but they are deliberately
+    /// NOT validated against any one candidate signature: the concrete runtime class is unknown
+    /// here and codegen materializes the arguments per matched candidate branch, so PHP's
+    /// no-compile-time-argument-check is the faithful behavior. The result type is the candidates'
+    /// single shared declared return type, or `Mixed` when they disagree (the receiver may resolve
+    /// to any of them at runtime).
+    fn infer_lenient_subtype_method_call(
+        &mut self,
+        receiver_type: &str,
+        method: &str,
+        method_key: &str,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let return_types = self.subtype_dispatch_return_types(receiver_type, method_key);
+        if return_types.is_empty() {
+            return Err(CompileError::new(
+                expr.span,
+                &format!("Undefined method: {}::{}", receiver_type, method),
+            ));
+        }
+        for arg in args {
+            self.infer_type(arg, env)?;
+        }
+        Ok(match return_types.as_slice() {
+            [only] => only.clone(),
+            _ => PhpType::Mixed,
+        })
+    }
+
+    /// Returns the distinct declared return types of `method_key` across every CONCRETE class that
+    /// IS-A `receiver_type` and declares it (see `infer_lenient_subtype_method_call`). Interfaces
+    /// are never counted — they have no runtime instances and the dispatch is on concrete class ids
+    /// only — so a method declared solely on a sub-interface with no implementor yields an empty
+    /// result, keeping the call loud. An empty result means no concrete runtime class in the closed
+    /// world could dispatch the method.
+    fn subtype_dispatch_return_types(&self, receiver_type: &str, method_key: &str) -> Vec<PhpType> {
+        let mut return_types: Vec<PhpType> = Vec::new();
+        for (class_name, class_info) in &self.classes {
+            let Some(sig) = class_info.methods.get(method_key) else {
+                continue;
+            };
+            let is_a = class_name.as_str() == receiver_type
+                || self.is_subclass_of(class_name, receiver_type)
+                || self.class_implements_interface(class_name, receiver_type);
+            if !is_a {
+                continue;
+            }
+            if !return_types.contains(&sig.return_type) {
+                return_types.push(sig.return_type.clone());
+            }
+        }
+        return_types
+    }
+
     pub(crate) fn infer_nullsafe_method_call_type(
         &mut self,
         object: &Expr,
@@ -428,17 +499,25 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let method_key = php_symbol_key(method);
-        let sig = self
+        let Some(sig) = self
             .interfaces
             .get(interface_name)
             .and_then(|interface_info| interface_info.methods.get(&method_key))
             .cloned()
-            .ok_or_else(|| {
-                CompileError::new(
-                    expr.span,
-                    &format!("Undefined method: {}::{}", interface_name, method),
-                )
-            })?;
+        else {
+            // The interface itself does not declare the method. PHP performs no compile-time
+            // method-existence check on an interface-typed receiver — it dispatches on the runtime
+            // class — so accept the call whenever a concrete implementor declares the method (the
+            // by-runtime-class-id dispatch path lowers it), and keep it loud otherwise.
+            return self.infer_lenient_subtype_method_call(
+                interface_name,
+                method,
+                &method_key,
+                args,
+                expr,
+                env,
+            );
+        };
         self.check_known_callable_call(
             &sig,
             args,
@@ -645,10 +724,14 @@ impl Checker {
                 magic_return_ty = Some(effective_sig.return_type.clone());
                 magic_original_args = Some(args.to_vec());
             } else {
-                return Err(CompileError::new(
-                    expr.span,
-                    &format!("Undefined method: {}::{}", class_name, method),
-                ));
+                // The class exists but declares neither this instance method, a same-named static
+                // method, nor `__call`. PHP still performs no compile-time method-existence check
+                // on a base-class-typed receiver — it dispatches on the runtime class — so accept
+                // the call whenever a concrete subclass declares the method (the by-runtime-class-id
+                // dispatch path lowers it), and keep it loud otherwise.
+                return self.infer_lenient_subtype_method_call(
+                    class_name, method, &method_key, args, expr, env,
+                );
             }
         }
         if let Some(return_ty) = magic_return_ty {

@@ -74,17 +74,19 @@ fn test_error_undefined_method() {
     );
 }
 
-/// SPEC G1: verifies that a method call on an object union (`A|B`) type-checks when the method
-/// is declared on at least one member class, even though it is absent from another member. PHP
-/// dispatches `$u->m()` on the runtime class, so this is legal PHP (Symfony ships this pattern
-/// extensively) — codegen dispatches on the runtime class id and faults cleanly only if the
-/// actual runtime value's class lacks the method (see `codegen::oop::union_types` for the
-/// runtime match/no-match codegen coverage of this exact shape). Supersedes the previous
-/// "every object member must provide the method" rule this test used to enforce.
-/// Verifies an interface call keeps its declared ancestor return type.
+/// PHP-faithful lenient dispatch: an interface call keeps its declared ancestor return type, and a
+/// follow-up call on that ancestor type is dispatched on the runtime class rather than rejected at
+/// compile time. `withHeader()` is declared `: Message`, so its result stays `Message` (NOT refined
+/// to `Request`/`Req` — that ancestor-return intent is preserved). The chained `->requestOnly()` on
+/// a `Message`-typed receiver is then accepted because a concrete implementor (`Req`, which IS-A
+/// `Message`) declares `requestOnly`: PHP performs no compile-time method-existence check here and
+/// dispatches on the runtime class. At runtime `Req::withHeader()` returns a `Plain`, which lacks
+/// `requestOnly`, so this faults cleanly with a PHP-style `Error` — `php` verified: "Call to
+/// undefined method Plain::requestOnly()". It therefore COMPILES (this test) and faults at runtime,
+/// exactly like PHP, instead of the previous over-strict compile-time rejection.
 #[test]
-fn test_error_interface_method_does_not_infer_receiver_from_wither_name() {
-    expect_error(
+fn test_interface_method_on_ancestor_receiver_dispatches_at_runtime() {
+    expect_ok(
         r#"<?php
 interface Message { public function withHeader(): Message; }
 interface Request extends Message { public function requestOnly(): string; }
@@ -97,7 +99,30 @@ function read(Request $request): string {
     return $request->withHeader()->requestOnly();
 }
 "#,
-        "Undefined method: Message::requestOnly",
+    );
+}
+
+/// KEEP-LOUD boundary of the PHP-faithful lenient-dispatch relaxation: a method call on an
+/// interface-typed receiver stays loud when NO class in the closed world (interface or concrete)
+/// declares the method — it is genuinely undefined, no runtime class could ever satisfy it, so the
+/// relaxation must not swallow the diagnostic. `save()` exists nowhere despite `Persister`
+/// having a concrete implementor.
+#[test]
+fn test_error_interface_receiver_genuinely_undefined_method_stays_loud() {
+    expect_error(
+        "<?php interface Persister { public function id(): int; } class DbPersister implements Persister { public function id(): int { return 1; } } function f(Persister $p): int { return $p->save(); }",
+        "Undefined method: Persister::save",
+    );
+}
+
+/// KEEP-LOUD boundary: a method call on a base-class-typed receiver stays loud when neither the
+/// class nor any subclass declares the method — no concrete runtime class the dynamic dispatch
+/// could land on has it, so the relaxation keeps the loud diagnostic instead of accepting.
+#[test]
+fn test_error_base_class_receiver_no_subclass_method_stays_loud() {
+    expect_error(
+        "<?php class Base {} class Sub extends Base { public function present(): int { return 1; } } function f(Base $b): int { return $b->absent(); }",
+        "Undefined method: Base::absent",
     );
 }
 

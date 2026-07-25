@@ -281,10 +281,17 @@ fn test_error_arithmetic_on_string() {
     );
 }
 
-/// Verifies a name beginning with `with` does not imply a late-static fluent return.
+/// Verifies a name beginning with `with` does not imply a late-static fluent return: `withdraw()`
+/// is declared `: Account`, so its result stays `Account` (NOT refined to `Savings`/`SavingsAccount`
+/// — that ancestor-return intent is preserved). The chained `->interestRate()` on the `Account`-typed
+/// result is then accepted via PHP-faithful lenient dispatch, because a concrete implementor
+/// (`SavingsAccount`, which IS-A `Account`) declares `interestRate` and PHP dispatches on the runtime
+/// class rather than checking method existence at compile time. Here `withdraw()` returns `$this` (a
+/// `SavingsAccount`), which HAS `interestRate`, so it RUNS and prints `4` — `php` verified — instead
+/// of the previous over-strict compile-time rejection. Now type-checks (compile + run).
 #[test]
-fn test_error_with_prefix_does_not_refine_declared_ancestor_return() {
-    expect_error(
+fn test_with_prefix_ancestor_return_dispatches_at_runtime() {
+    expect_ok(
         r#"<?php
 interface Account {
     public function withdraw(int $amount): Account;
@@ -301,7 +308,6 @@ function rate(Savings $account): int {
 }
 echo rate(new SavingsAccount());
 "#,
-        "Undefined method: Account::interestRate",
     );
 }
 
