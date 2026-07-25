@@ -22,7 +22,7 @@ mod system;
 pub(crate) mod spl;
 
 use crate::errors::CompileError;
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::Checker;
@@ -118,7 +118,15 @@ impl Checker {
         // validation, and result typing. Only compiler-resident language
         // constructs continue below this branch.
         if let Some(def) = crate::builtins::registry::lookup(name) {
-            crate::builtins::registry::check_arity(name, args.len(), span)?;
+            // A spread argument (`f(...$xs)`) unpacks at runtime into a statically-unknown
+            // number of positional arguments, so the pre-expansion argument count is not the
+            // real arity. PHP validates the effective count at runtime; skip the compile-time
+            // arity gate when any argument is unpacked, matching that deferral (e.g. Symfony's
+            // `method_exists(...$controller)`). All other spec validation still runs.
+            let has_spread = args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)));
+            if !has_spread {
+                crate::builtins::registry::check_arity(name, args.len(), span)?;
+            }
             let requirement_input = crate::builtins::semantics::BuiltinRequirementInput {
                 args,
             };

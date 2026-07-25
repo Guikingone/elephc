@@ -237,6 +237,19 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<(), CompileError> {
+        // A spread argument (`new ReflectionMethod(...$controller)`) unpacks at runtime into a
+        // statically-unknown number of positional arguments whose values are not literals, so the
+        // compile-time literal-target validation below cannot apply — neither the one-argument
+        // `"Class::method"` form nor the `object|string` first-argument shape is decidable. The
+        // reflected class/member is only known at runtime and is handled by the EIR dynamic
+        // reflection dispatchers. Infer the argument expressions for their side effects
+        // (undefined-variable diagnostics, narrowing) and skip literal validation.
+        if args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
+            for arg in args {
+                self.infer_type(arg, env)?;
+            }
+            return Ok(());
+        }
         if class_name == "ReflectionMethod" && args.len() == 1 {
             return self.validate_reflection_method_constructor_from_method_name(args, expr, env);
         }

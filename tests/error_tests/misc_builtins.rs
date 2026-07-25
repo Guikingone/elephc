@@ -108,6 +108,14 @@ expect_builtin_arity_error!(
     "method_exists() takes exactly 2 arguments"
 );
 
+/// A spread call unpacks a statically-unknown number of positional arguments, so the exact-2
+/// arity gate must be deferred to runtime rather than fired on the pre-expansion count of one.
+/// Symfony's `ControllerEvent` uses `method_exists(...$controller)`; that shape must type-check.
+#[test]
+fn test_method_exists_spread_argument_ok() {
+    expect_ok(r#"<?php function check(array $pair): bool { return method_exists(...$pair); }"#);
+}
+
 expect_builtin_arity_error!(
     test_error_restore_error_handler_takes_no_args,
     "<?php restore_error_handler(1);",
