@@ -39,6 +39,8 @@ impl Checker {
     /// - Ternary, null coalesce, and match clone the environment per branch so assignments
     ///   do not leak across arms; match/ternary result types then reuse `infer_type`'s
     ///   Mixed-aware branch merge (not the Str-absorbing syntactic join).
+    /// - Logical NOT returns `Bool` directly after applying nested effects, so
+    ///   `!($value = call())` does not re-check `call()` against its own newly assigned result.
     /// - `preg_replace_callback` argument at index 1 is skipped (special handling for capture groups).
     pub(crate) fn infer_type_with_assignment_effects(
         &mut self,
@@ -160,7 +162,7 @@ impl Checker {
                         // (`$q instanceof CQ && $q->m()`). Narrowing stays inside `chain_env`; the
                         // `or_insert` surfacing below never overwrites an outer-scope type, so it
                         // does not leak past the chain.
-                        if let Some(g) = self.type_guard_narrowing(operand, &chain_env) {
+                        if let Some(g) = self.guard_narrowing(operand, &chain_env)? {
                             let narrowed = if matches!(op, BinOp::And) {
                                 g.then_ty
                             } else {
@@ -187,7 +189,18 @@ impl Checker {
                 }
             }
             ExprKind::NullCoalesce { value, default } => {
-                let value_ty = self.infer_type_with_assignment_effects(value, env)?;
+                let value_ty =
+                    if let ExprKind::PropertyAccess { object, property } = &value.kind {
+                        self.infer_type_with_assignment_effects(object, env)?;
+                        self.infer_property_null_coalesce_type(
+                            object,
+                            property,
+                            value,
+                            env,
+                        )?
+                    } else {
+                        self.infer_type_with_assignment_effects(value, env)?
+                    };
                 let default_ty = if value_ty == PhpType::Void {
                     self.infer_type_with_assignment_effects(default, env)?
                 } else {
@@ -246,7 +259,14 @@ impl Checker {
             }
             ExprKind::ArrayLiteral(elems) => {
                 for elem in elems {
-                    self.infer_type_with_assignment_effects(elem, env)?;
+                    if let ExprKind::Spread(inner) = &elem.kind {
+                        // The enclosing array-literal inference owns spread validation because it
+                        // can insert the gradual runtime array guard. Preserve source-order effects
+                        // here without applying the stricter call/general-spread rule to the child.
+                        self.infer_type_with_assignment_effects(inner, env)?;
+                    } else {
+                        self.infer_type_with_assignment_effects(elem, env)?;
+                    }
                 }
                 self.infer_type(expr, env)
             }
@@ -275,27 +295,68 @@ impl Checker {
                 // definite-assignment conservative. The result type still comes from the
                 // Mixed-aware merge in `infer_type` (given the same accumulated env) rather than
                 // the Str-absorbing syntactic join.
+                let narrows_between_arms =
+                    matches!(subject.kind, ExprKind::BoolLiteral(true));
                 let mut condition_env = env.clone();
+                let mut result_ty: Option<PhpType> = None;
                 for (conditions, result) in arms {
-                    for condition in conditions {
-                        self.infer_type_with_assignment_effects(condition, &mut condition_env)?;
-                    }
-                    let mut arm_env = condition_env.clone();
-                    self.infer_type_with_assignment_effects(result, &mut arm_env)?;
+                    let mut arm_env = if narrows_between_arms && conditions.len() == 1 {
+                        let condition = &conditions[0];
+                        self.infer_type_with_assignment_effects(
+                            condition,
+                            &mut condition_env,
+                        )?;
+                        if let Some(guard) = self.guard_narrowing(condition, &condition_env)? {
+                            let mut narrowed_env = condition_env.clone();
+                            narrowed_env.insert(guard.var.clone(), guard.then_ty);
+                            condition_env.insert(guard.var, guard.else_ty);
+                            narrowed_env
+                        } else {
+                            let mut narrowed_env = condition_env.clone();
+                            for (var, then_ty) in
+                                self.and_chain_then_narrowings(condition, &condition_env)
+                            {
+                                narrowed_env.insert(var, then_ty);
+                            }
+                            narrowed_env
+                        }
+                    } else {
+                        for condition in conditions {
+                            self.infer_type_with_assignment_effects(
+                                condition,
+                                &mut condition_env,
+                            )?;
+                        }
+                        condition_env.clone()
+                    };
+                    let ty =
+                        self.infer_type_with_assignment_effects(result, &mut arm_env)?;
+                    result_ty = Some(match result_ty {
+                        Some(acc) => super::merge_match_arm_result_type(self, acc, ty),
+                        None => ty,
+                    });
                 }
                 if let Some(default) = default {
                     let mut default_env = condition_env.clone();
-                    self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    let ty =
+                        self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    result_ty = Some(match result_ty {
+                        Some(acc) => super::merge_match_arm_result_type(self, acc, ty),
+                        None => ty,
+                    });
                 }
-                self.infer_type(expr, &condition_env)
+                Ok(result_ty.unwrap_or(PhpType::Void))
             }
             ExprKind::ArrayAccess { array, index } => {
                 self.infer_type_with_assignment_effects(array, env)?;
                 self.infer_type_with_assignment_effects(index, env)?;
                 self.infer_type(expr, env)
             }
+            ExprKind::Not(inner) => {
+                self.infer_type_with_assignment_effects(inner, env)?;
+                Ok(PhpType::Bool)
+            }
             ExprKind::Negate(inner)
-            | ExprKind::Not(inner)
             | ExprKind::BitNot(inner)
             | ExprKind::Throw(inner)
             | ExprKind::ErrorSuppress(inner)
@@ -310,6 +371,7 @@ impl Checker {
             }
             ExprKind::FunctionCall { name, args } => {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                let mut evaluated_arg_types = Vec::new();
                 // A user function with a by-reference parameter defines the caller's argument
                 // variable, just like the builtin out-parameter handling below. Define such
                 // variables before inferring the arguments so the (otherwise undefined)
@@ -383,20 +445,50 @@ impl Checker {
                         {
                             continue;
                         }
-                        self.infer_type_with_assignment_effects(arg, env)?;
-                    }
-                }
-                let ty = self.infer_type(expr, env)?;
-                // The callee may mutate any reachable object; drop property narrowings. (The
-                // call's own argument checking above still saw them.)
-                Self::purge_property_narrowings(env);
-                if builtin_name.eq_ignore_ascii_case("preg_match") {
-                    if let Some(arg) = expanded_args.get(2) {
-                        if let Some(name) = preg_match_output_var(arg) {
-                            env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Str)));
+                        let arg_ty = self.infer_type_with_assignment_effects(arg, env)?;
+                        if arg.span.line != 0 {
+                            evaluated_arg_types.push((
+                                arg.span,
+                                super::super::super::EvaluatedExprType {
+                                    kind: std::mem::discriminant(&arg.kind),
+                                    ty: arg_ty.clone(),
+                                },
+                            ));
+                        }
+                        if let ExprKind::NamedArg { value, .. } = &arg.kind {
+                            if value.span.line != 0 {
+                                evaluated_arg_types.push((
+                                    value.span,
+                                    super::super::super::EvaluatedExprType {
+                                        kind: std::mem::discriminant(&value.kind),
+                                        ty: arg_ty,
+                                    },
+                                ));
+                            }
                         }
                     }
                 }
+                // Argument values are captured in source order before the callee runs. Revalidating
+                // the complete call must therefore reuse those evaluated types rather than
+                // re-reading an earlier property receiver after a nested argument call purged its
+                // flow fact. Span-keyed entries are temporary and restored even when validation
+                // reports an error, so nested calls compose without leaking cached types.
+                let mut previous_types = Vec::with_capacity(evaluated_arg_types.len());
+                for (span, ty) in evaluated_arg_types {
+                    previous_types.push((span, self.evaluated_expr_types.insert(span, ty)));
+                }
+                let inferred = self.infer_type(expr, env);
+                for (span, previous) in previous_types.into_iter().rev() {
+                    if let Some(previous) = previous {
+                        self.evaluated_expr_types.insert(span, previous);
+                    } else {
+                        self.evaluated_expr_types.remove(&span);
+                    }
+                }
+                let ty = inferred?;
+                // The callee may mutate any reachable object; drop property narrowings. (The
+                // call's own argument checking above still saw them.)
+                Self::purge_property_narrowings(env);
                 if builtin_name.eq_ignore_ascii_case("unset") {
                     for arg in &expanded_args {
                         promote_indexed_local_for_element_unset(arg, env);
@@ -467,6 +559,11 @@ impl Checker {
             }
             ExprKind::ClosureCall { var, args } => {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                for (output, ty) in
+                    self.callable_variable_by_ref_outputs(var, &expanded_args, env)
+                {
+                    env.entry(output).or_insert(ty);
+                }
                 let skip_contextual_callback =
                     self.variable_targets_preg_replace_callback(var.as_str());
                 for (idx, arg) in expanded_args.iter().enumerate() {
@@ -482,6 +579,13 @@ impl Checker {
             ExprKind::ExprCall { callee, args } => {
                 self.infer_type_with_assignment_effects(callee, env)?;
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                if let ExprKind::Variable(var) = &callee.kind {
+                    for (output, ty) in
+                        self.callable_variable_by_ref_outputs(var, &expanded_args, env)
+                    {
+                        env.entry(output).or_insert(ty);
+                    }
+                }
                 let skip_contextual_callback = self
                     .expr_targets_preg_replace_callback(callee);
                 for (idx, arg) in expanded_args.iter().enumerate() {
@@ -520,6 +624,18 @@ impl Checker {
                 args,
             } => {
                 let object_type = self.infer_type_with_assignment_effects(object, env)?;
+                let evaluated_property_receiver = match &object.kind {
+                    ExprKind::PropertyAccess {
+                        object: root,
+                        property,
+                    }
+                    | ExprKind::NullsafePropertyAccess {
+                        object: root,
+                        property,
+                    } => Self::narrowed_property_env_key(root, property)
+                        .map(|key| (key, object_type.clone())),
+                    _ => None,
+                };
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
                 // An instance method with a by-reference parameter defines the caller's argument
                 // variable. Define such variables before inferring the arguments so the
@@ -539,7 +655,26 @@ impl Checker {
                 for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
-                let ty = self.infer_type(expr, env)?;
+                // PHP evaluates the receiver before the arguments. An argument call may purge
+                // property facts because it can mutate reachable state, but that cannot change
+                // the receiver value already captured for this outer call. Reinstall only that
+                // receiver's evaluated type while validating the call, then restore the
+                // post-argument environment before applying the outer call's own invalidation.
+                let ty = if let Some((key, evaluated_type)) = evaluated_property_receiver {
+                    let post_arg_fact = env.insert(key.clone(), evaluated_type);
+                    let result = self.infer_type(expr, env);
+                    match post_arg_fact {
+                        Some(ty) => {
+                            env.insert(key, ty);
+                        }
+                        None => {
+                            env.remove(&key);
+                        }
+                    }
+                    result?
+                } else {
+                    self.infer_type(expr, env)?
+                };
                 Self::purge_property_narrowings(env);
                 Ok(ty)
             }
@@ -568,6 +703,22 @@ impl Checker {
                 let ty = self.infer_type(expr, env)?;
                 Self::purge_property_narrowings(env);
                 Ok(ty)
+            }
+            ExprKind::Closure { capture_refs, .. } => {
+                // A by-reference capture (`use (&$x)`) always binds `$x` in the enclosing scope,
+                // auto-vivifying it to null; PHP never warns on it (unlike a by-value `use($x)` of
+                // an undefined variable). Record each as an assignment effect so a later read of
+                // the captured variable is not flagged "Undefined variable".
+                for capture in capture_refs {
+                    env.entry(capture.clone()).or_insert(PhpType::Mixed);
+                }
+                self.infer_type(expr, env)
+            }
+            ExprKind::InstanceOf { value, .. } => {
+                // The left operand of `instanceof` is always evaluated, so an assignment inside it
+                // (`($x = f()) instanceof T`) defines its target; collect those effects.
+                self.infer_type_with_assignment_effects(value, env)?;
+                self.infer_type(expr, env)
             }
             _ => self.infer_type(expr, env),
         }
@@ -657,15 +808,6 @@ fn assignment_may_write_property(target: &Expr) -> bool {
         ExprKind::Variable(_) => false,
         ExprKind::ArrayAccess { array, .. } => assignment_may_write_property(array),
         _ => true,
-    }
-}
-
-/// Returns the variable name used as `preg_match()`'s output `$matches` argument.
-fn preg_match_output_var(arg: &Expr) -> Option<&String> {
-    match &arg.kind {
-        ExprKind::Variable(name) => Some(name),
-        ExprKind::NamedArg { value, .. } => preg_match_output_var(value),
-        _ => None,
     }
 }
 

@@ -11,6 +11,7 @@ sidebar:
 |---|---|---|:-:|:-:|
 | [`array_all()`](./builtins/array/array_all.md) | `(mixed $array, mixed $callback): bool` | `bool` | ✓ | — |
 | [`array_any()`](./builtins/array/array_any.md) | `(mixed $array, mixed $callback): bool` | `bool` | ✓ | — |
+| [`array_change_key_case()`](./builtins/array/array_change_key_case.md) | `(array $array, int $case = 0): array` | `array` | ✓ | — |
 | [`array_chunk()`](./builtins/array/array_chunk.md) | `(array $array, int $length): array` | `array` | ✓ | ✓ |
 | [`array_column()`](./builtins/array/array_column.md) | `(array $array, string $column_key): array` | `array` | ✓ | ✓ |
 | [`array_combine()`](./builtins/array/array_combine.md) | `(array $keys, array $values): array` | `array` | ✓ | ✓ |
@@ -86,7 +87,6 @@ sidebar:
 | [`function_exists()`](./builtins/class/function_exists.md) | `(string $function): bool` | `bool` | ✓ | ✓ |
 | [`get_called_class()`](./builtins/class/get_called_class.md) | `(): mixed` | `mixed` | — | ✓ |
 | [`get_class()`](./builtins/class/get_class.md) | `(object $object = null): string` | `string` | ✓ | ✓ |
-| [`get_class_methods()`](./builtins/class/get_class_methods.md) | `(mixed $object_or_class): mixed` | `mixed` | — | ✓ |
 | [`get_class_vars()`](./builtins/class/get_class_vars.md) | `(mixed $class): mixed` | `mixed` | — | ✓ |
 | [`get_declared_classes()`](./builtins/class/get_declared_classes.md) | `(): array` | `array` | ✓ | ✓ |
 | [`get_declared_interfaces()`](./builtins/class/get_declared_interfaces.md) | `(): array` | `array` | ✓ | ✓ |
@@ -345,7 +345,7 @@ sidebar:
 | [`mb_ereg_match()`](./builtins/regex/mb_ereg_match.md) | `(string $pattern, string $subject, string $options = null): bool` | `bool` | ✓ | ✓ |
 | [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches = [], int $flags = 0, int $offset = 0): int` | `int` | ✓ | ✓ |
 | [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject, array $matches = [], int $flags = 0, int $offset = 0): int` | `int` | ✓ | ✓ |
-| [`preg_replace()`](./builtins/regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject): string` | `string` | ✓ | ✓ |
+| [`preg_replace()`](./builtins/regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject, int $limit = -1, int $count = null): string` | `string` | ✓ | ✓ |
 | [`preg_replace_callback()`](./builtins/regex/preg_replace_callback.md) | `(string $pattern, callable $callback, string $subject, int $limit = -1, int $count = null, int $flags = 0): string` | `string` | ✓ | ✓ |
 | [`preg_split()`](./builtins/regex/preg_split.md) | `(string $pattern, string $subject, int $limit = -1, int $flags = 0): array` | `array` | ✓ | ✓ |
 | [`iterator_apply()`](./builtins/spl/iterator_apply.md) | `(traversable $iterator, callable $callback, array $args = null): int` | `int` | ✓ | ✓ |
@@ -447,7 +447,7 @@ sidebar:
 | [`get_resource_id()`](./builtins/type/get_resource_id.md) | `(resource $resource): int` | `int` | ✓ | ✓ |
 | [`get_resource_type()`](./builtins/type/get_resource_type.md) | `(resource $resource): string` | `string` | ✓ | ✓ |
 | [`gettype()`](./builtins/type/gettype.md) | `(mixed $value): string` | `string` | ✓ | ✓ |
-| [`intval()`](./builtins/type/intval.md) | `(mixed $value): int` | `int` | ✓ | ✓ |
+| [`intval()`](./builtins/type/intval.md) | `(mixed $value, int $base = 10): int` | `int` | ✓ | ✓ |
 | [`is_array()`](./builtins/type/is_array.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_bool()`](./builtins/type/is_bool.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_callable()`](./builtins/type/is_callable.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |

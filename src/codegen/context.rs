@@ -932,6 +932,10 @@ impl<'a> FunctionContext<'a> {
         Ok(matches!(
             inst.op,
             Op::Acquire
+                | Op::MixedNumericBinop
+                | Op::ICheckedAdd
+                | Op::ICheckedSub
+                | Op::ICheckedMul
                 | Op::ArrayNew
                 | Op::HashNew
                 | Op::ArrayToMixed

@@ -9,6 +9,7 @@
 
 use super::*;
 
+mod coalesce;
 mod nullsafe;
 mod nullsafe_side_effects;
 mod mutations;

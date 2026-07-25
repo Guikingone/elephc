@@ -9,6 +9,22 @@
 
 use crate::support::*;
 
+/// Verifies `memory_get_usage` exposes live and committed heap accounting through namespace and case-insensitive builtin fallback.
+#[test]
+fn test_memory_get_usage_reports_runtime_heap_counters() {
+    let out = compile_and_run(
+        "<?php
+        namespace Demo;
+        $live = MEMORY_GET_USAGE();
+        $committed = memory_get_usage(true);
+        echo $live >= 0;
+        echo $committed >= $live;
+        echo function_exists('memory_get_usage');
+        ",
+    );
+    assert_eq!(out, "111");
+}
+
 // --- Date/time functions ---
 
 /// Verifies `date("Y", timestamp)` returns the correct 4-digit year for a known UTC timestamp.

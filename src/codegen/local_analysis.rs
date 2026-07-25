@@ -131,7 +131,10 @@ fn ref_cell_target_slot(
 ) -> Option<LocalSlotId> {
     match (op, immediate) {
         (
-            Op::PromoteLocalRefCell | Op::AliasLocalRefCell,
+            Op::PromoteLocalRefCell
+            | Op::AliasLocalRefCell
+            | Op::AdoptRefCell
+            | Op::LocalRefEnsure,
             Some(Immediate::LocalSlotPair { first, .. }),
         ) => Some(*first),
         (
@@ -484,6 +487,64 @@ mod tests {
         let analysis = LocalSlotAnalysis::new(&function);
         assert!(analysis.release_may_observe_ref_cell(InstId::from_raw(1)));
         assert!(analysis.inst_may_observe_ref_cell(InstId::from_raw(1), slot));
+    }
+
+    /// Verifies a hoisted persistent-cell ensure flows into later explicit ref-cell stores.
+    #[test]
+    fn local_ref_ensure_marks_later_store_as_ref_cell_storage() {
+        let mut function =
+            Function::new("local_ref_ensure".to_string(), IrType::Void, PhpType::Void);
+        function.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::Heap(crate::ir::IrHeapKind::Array),
+            php_type: PhpType::Array(Box::new(PhpType::Int)),
+            by_ref: false,
+            variadic: false,
+        });
+        let slot = function.add_local(
+            Some("value".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Int)),
+            LocalKind::PhpLocal,
+        );
+        let owner = function.add_local(
+            None,
+            IrType::Heap(crate::ir::IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Int)),
+            LocalKind::RefCell,
+        );
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.emit(
+                Op::LocalRefEnsure,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair {
+                    first: slot,
+                    second: owner,
+                }),
+                IrType::Heap(crate::ir::IrHeapKind::Array),
+                PhpType::Array(Box::new(PhpType::Int)),
+                Ownership::MaybeOwned,
+            );
+            let value = builder.emit_const_i64(1);
+            builder.emit(
+                Op::StoreRefCell,
+                vec![value],
+                Some(Immediate::LocalSlot(slot)),
+                IrType::Void,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+
+        let analysis = LocalSlotAnalysis::new(&function);
+        assert!(analysis.inst_may_observe_ref_cell(InstId::from_raw(2), slot));
+        assert!(analysis.has_dynamic_ref_cell_state(slot));
+        assert!(analysis.owns_parameter_slot(slot));
     }
 
     /// Verifies runtime exception-handler edges conservatively preserve ref-cell

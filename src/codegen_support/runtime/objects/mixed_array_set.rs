@@ -8,13 +8,14 @@
 //! Key details:
 //! - The key tuple matches `emit_normalized_hash_key`: int keys use `key_hi = -1`.
 //! - The helper consumes the boxed Mixed value pointer when the write succeeds.
+//! - Boxed null and false targets are auto-vivified as empty indexed arrays before mutation.
 //! - A string key on an indexed payload promotes the payload to hash storage
 //!   via `__rt_mixed_cell_promote_to_hash` (PHP array-key semantics) instead
 //!   of dropping the write.
 
+use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::abi;
 
 /// Emits the `__rt_mixed_array_set` runtime helper for writing into boxed Mixed arrays.
 ///
@@ -22,7 +23,8 @@ use crate::codegen_support::abi;
 /// arguments via registers `x0`–`x3`; on x86_64 it uses the SysV convention (`rdi`, `rsi`,
 /// `rdx`, `rcx`). The key tuple encoding matches `emit_normalized_hash_key`: integer keys
 /// use `key_hi = -1`. The helper consumes the boxed Mixed value pointer when the write
-/// succeeds, releasing it if the target is null or the payload type is incompatible.
+/// succeeds, auto-vivifies boxed null/false targets, and releases the value if the target pointer
+/// is null or the payload type is incompatible.
 pub fn emit_mixed_array_set(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_array_set_x86_64(emitter);
@@ -40,8 +42,9 @@ pub fn emit_mixed_array_set(emitter: &mut Emitter) {
 /// - `x3`: pointer to the boxed `Mixed` value being written
 ///
 /// Behavior:
-/// - If `x0` is null or the payload is neither indexed array (tag 4) nor assoc array (tag 5),
-///   the value is released via `__rt_decref_mixed` and the helper returns.
+/// - Boxed null (tag 8) and false (tag 3, zero payload) are auto-vivified as empty arrays.
+/// - If `x0` is null or the payload is otherwise incompatible, the value is released via
+///   `__rt_decref_mixed` and the helper returns.
 /// - For indexed arrays the slot is mutated directly; for assoc arrays `__rt_hash_set` is called.
 /// - Array capacity is grown via `__rt_array_grow` if the target index exceeds current capacity.
 /// - Overwriting an existing slot releases the previous `Mixed` cell.
@@ -69,7 +72,23 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_array_set_assoc");                     // route hash arrays to key-based mutation
     emitter.instruction("cmp x9, #6");                                          // is the Mixed payload an object?
     emitter.instruction("b.eq __rt_mixed_array_set_object");                    // route runtime-managed ArrayAccess objects to offsetSet
-    emitter.instruction("b __rt_mixed_array_set_drop");                         // non-array Mixed payloads cannot be mutated here
+    emitter.instruction("cmp x9, #8");                                          // is the Mixed payload null?
+    emitter.instruction("b.eq __rt_mixed_array_set_vivify");                    // auto-vivify null before applying the indexed write
+    emitter.instruction("cmp x9, #3");                                          // is the Mixed payload boolean?
+    emitter.instruction("b.ne __rt_mixed_array_set_drop");                      // reject non-array scalar payloads
+    emitter.instruction("ldr x10, [x0, #8]");                                   // load the boolean payload
+    emitter.instruction("cbnz x10, __rt_mixed_array_set_drop");                 // true cannot be auto-vivified as an array
+    emitter.label("__rt_mixed_array_set_vivify");
+    emitter.instruction("mov x0, #0");                                          // request an empty indexed array
+    emitter.instruction("mov x1, #8");                                          // use boxed-Mixed pointer slots in the fresh array
+    emitter.instruction("bl __rt_array_new");                                   // allocate the autovivified array payload
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the target Mixed cell
+    emitter.instruction("mov x9, #4");                                          // runtime value tag 4 identifies indexed arrays
+    emitter.instruction("str x9, [x10]");                                       // retag the target cell as an indexed array
+    emitter.instruction("str x0, [x10, #8]");                                   // transfer the fresh array reference into the target cell
+    emitter.instruction("str xzr, [x10, #16]");                                 // clear the unused high payload word
+    emitter.instruction("mov x0, x10");                                         // restore the target cell argument for indexed mutation
+    emitter.instruction("b __rt_mixed_array_set_indexed");                      // apply the original write to the fresh array
     emitter.label("__rt_mixed_array_set_indexed");
     emitter.instruction("ldr x10, [x0, #8]");                                   // load the indexed-array pointer from the Mixed payload
     emitter.instruction("cbz x10, __rt_mixed_array_set_drop");                  // null array payloads cannot be mutated
@@ -235,7 +254,8 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
 /// - `rdx`: key high word (integer-key sentinel `-1` or hash high word)
 /// - `rcx`: pointer to the boxed `Mixed` value being written
 ///
-/// Behavior mirrors the ARM64 version with x86_64-specific register and instruction encoding.
+/// Boxed null and false targets are auto-vivified before mutation. Other behavior mirrors the
+/// ARM64 version with x86_64-specific register and instruction encoding.
 /// The helper frame is 64 bytes; callee-saved register `rbp` is preserved.
 fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.blank();
@@ -260,7 +280,22 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_array_set_assoc");                       // route hash arrays to key-based mutation
     emitter.instruction("cmp r10, 6");                                          // is the Mixed payload an object?
     emitter.instruction("je __rt_mixed_array_set_object");                      // route runtime-managed ArrayAccess objects to offsetSet
-    emitter.instruction("jmp __rt_mixed_array_set_drop");                       // non-array Mixed payloads cannot be mutated here
+    emitter.instruction("cmp r10, 8");                                          // is the Mixed payload null?
+    emitter.instruction("je __rt_mixed_array_set_vivify");                      // auto-vivify null before applying the indexed write
+    emitter.instruction("cmp r10, 3");                                          // is the Mixed payload boolean?
+    emitter.instruction("jne __rt_mixed_array_set_drop");                       // reject non-array scalar payloads
+    emitter.instruction("cmp QWORD PTR [rdi + 8], 0");                          // is the boolean payload false?
+    emitter.instruction("jne __rt_mixed_array_set_drop");                       // true cannot be auto-vivified as an array
+    emitter.label("__rt_mixed_array_set_vivify");
+    emitter.instruction("xor edi, edi");                                        // request an empty indexed array
+    emitter.instruction("mov esi, 8");                                          // use boxed-Mixed pointer slots in the fresh array
+    emitter.instruction("call __rt_array_new");                                 // allocate the autovivified array payload
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell
+    emitter.instruction("mov QWORD PTR [r10], 4");                              // retag the target cell as an indexed array
+    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // transfer the fresh array reference into the target cell
+    emitter.instruction("mov QWORD PTR [r10 + 16], 0");                         // clear the unused high payload word
+    emitter.instruction("mov rdi, r10");                                        // restore the target cell argument for indexed mutation
+    emitter.instruction("jmp __rt_mixed_array_set_indexed");                    // apply the original write to the fresh array
     emitter.label("__rt_mixed_array_set_indexed");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the indexed-array pointer from the Mixed payload
     emitter.instruction("test r10, r10");                                       // null array payloads cannot be mutated

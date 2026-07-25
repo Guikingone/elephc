@@ -1,7 +1,7 @@
 //! Purpose:
 //! Defines PHP string-function integer constants exposed by elephc.
-//! Keeps `str_pad()` padding modes and html-entity flags in one source of truth
-//! for type checking and codegen.
+//! Keeps `str_pad()` padding modes, case-conversion modes, and html-entity flags in one
+//! source of truth for type checking and codegen.
 //!
 //! Called from:
 //! - `crate::types::checker` when registering predefined constants.
@@ -13,12 +13,14 @@
 
 /// Tuple of `(name, value)` pairs for PHP string-function integer constants.
 ///
-/// Covers `str_pad()` padding modes (`STR_PAD_*`) and the html-entity quote/document
-/// flags (`ENT_*`) used by `htmlspecialchars()` and friends.
+/// Covers `str_pad()` padding modes (`STR_PAD_*`), case-conversion modes (`CASE_*`), and
+/// the html-entity quote/document flags (`ENT_*`) used by `htmlspecialchars()` and friends.
 pub(crate) const STRING_INT_CONSTANTS: &[(&str, i64)] = &[
     ("STR_PAD_RIGHT", 1),
     ("STR_PAD_LEFT", 0),
     ("STR_PAD_BOTH", 2),
+    ("CASE_LOWER", 0),
+    ("CASE_UPPER", 1),
     ("ENT_QUOTES", 3),
     ("ENT_COMPAT", 2),
     ("ENT_HTML401", 0),
@@ -43,6 +45,13 @@ mod tests {
         assert_eq!(value_of("STR_PAD_RIGHT"), 1);
         assert_eq!(value_of("STR_PAD_LEFT"), 0);
         assert_eq!(value_of("STR_PAD_BOTH"), 2);
+    }
+
+    /// Verifies PHP's lower/upper case-conversion mode values.
+    #[test]
+    fn test_case_conversion_mode_values() {
+        assert_eq!(value_of("CASE_LOWER"), 0);
+        assert_eq!(value_of("CASE_UPPER"), 1);
     }
 
     /// Verifies html-entity flag constants match PHP's ext/standard values.

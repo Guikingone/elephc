@@ -2,7 +2,7 @@
 title: "array_reverse() — internals"
 description: "Compiler internals for array_reverse(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 34
+  order: 35
 ---
 
 ## `array_reverse()` — internals

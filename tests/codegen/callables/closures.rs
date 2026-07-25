@@ -11,6 +11,123 @@ use crate::support::*;
 
 // --- Anonymous functions (closures) and arrow functions ---
 
+/// Verifies a declared `Closure` return accepts the descriptor-equivalent type produced by
+/// `instanceof Closure` narrowing while the other branch converts a generic callable.
+#[test]
+fn test_closure_return_accepts_instanceof_narrowed_callable() {
+    let out = compile_and_run(
+        r#"<?php
+function normalize_closure_return(callable $code): Closure {
+    if (!$code instanceof Closure) {
+        return $code(...);
+    }
+    return $code;
+}
+
+function closure_return_target(int $value): int {
+    return $value + 1;
+}
+
+$literal = normalize_closure_return(fn (int $value): int => $value + 2);
+$firstClass = normalize_closure_return(closure_return_target(...));
+echo $literal(3) . ":" . $firstClass(4);
+"#,
+    );
+    assert_eq!(out, "5:5");
+}
+
+/// Verifies a nullable object rebound to a callable converges to `Closure` after a negated
+/// `instanceof Closure` branch normalizes the possible non-closure object with first-class syntax.
+#[test]
+fn test_negated_closure_guard_converges_nullable_object_to_callable() {
+    let out = compile_and_run(
+        r#"<?php
+class CallableApplication {
+    public function __invoke(): int {
+        return 7;
+    }
+}
+
+function normalize_application(?object $application): Closure {
+    $application ??= static fn (): int => 5;
+
+    if (!$application instanceof Closure) {
+        if (!is_callable($application)) {
+            throw new LogicException("not callable");
+        }
+
+        $application = $application(...);
+    }
+
+    return $application;
+}
+
+$default = normalize_application(null);
+$object = normalize_application(new CallableApplication());
+echo $default() . ":" . $object();
+"#,
+    );
+    assert_eq!(out, "5:7");
+}
+
+/// Verifies a method's early object return is checked with its branch-local type even when the
+/// same parameter is normalized to a callable later in the body.
+#[test]
+fn test_method_early_object_return_keeps_flow_type_before_callable_reassignment() {
+    let out = compile_and_run(
+        r#"<?php
+interface RunnerContract {
+    public function run(): int;
+}
+
+class ConcreteRunner implements RunnerContract {
+    public function run(): int {
+        return 9;
+    }
+}
+
+class InvokableApplication {
+    public function __invoke(): int {
+        return 7;
+    }
+}
+
+class ClosureRunnerAdapter implements RunnerContract {
+    public function __construct(Closure $closure) {}
+
+    public function run(): int {
+        return 1;
+    }
+}
+
+class RunnerFactory {
+    public function getRunner(?object $application): RunnerContract {
+        $application ??= static fn (): int => 5;
+
+        if ($application instanceof RunnerContract) {
+            return $application;
+        }
+
+        if (!$application instanceof Closure) {
+            if (!is_callable($application)) {
+                throw new LogicException("not callable");
+            }
+            $application = $application(...);
+        }
+
+        return new ClosureRunnerAdapter($application);
+    }
+}
+
+$factory = new RunnerFactory();
+echo $factory->getRunner(new ConcreteRunner())->run();
+echo ":";
+echo $factory->getRunner(new InvokableApplication())->run();
+"#,
+    );
+    assert_eq!(out, "9:1");
+}
+
 /// Verifies basic anonymous function creation, assignment to variable, and invocation with one argument.
 #[test]
 fn test_closure_basic() {
@@ -1237,6 +1354,33 @@ echo $bound();
     assert_eq!(out, "50");
 }
 
+/// Verifies a non-static closure declared inside a static method may reference `$this` and receive
+/// its runtime receiver later through `Closure::bind`, while the static method itself has no
+/// implicit receiver.
+#[test]
+fn test_closure_from_static_method_can_bind_this_later() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticClosureFactory {
+    public static function make(): Closure {
+        return function (): string { return $this->value; };
+    }
+}
+class StaticClosureTarget {
+    public string $value = "bound";
+}
+
+$closure = Closure::bind(
+    StaticClosureFactory::make(),
+    new StaticClosureTarget(),
+    StaticClosureTarget::class,
+);
+echo $closure();
+"#,
+    );
+    assert_eq!(out, "bound");
+}
+
 /// Verifies the optional `$scope` argument is accepted by both bind spellings.
 #[test]
 fn test_closure_bind_accepts_scope_argument() {
@@ -1553,6 +1697,59 @@ echo $reader($box);
 "#,
     );
     assert_eq!(out, "99");
+}
+
+/// Regression test for Symfony Cache's bound factory closures: a local constructed inside a
+/// closure rebound to the constructed class may write that class's protected properties.
+#[test]
+fn test_closure_bind_scope_rebind_allows_protected_property_write_on_constructed_local() {
+    let out = compile_and_run(
+        r#"<?php
+class BoundCacheItem {
+    protected string $key = "";
+    public function getKey(): string { return $this->key; }
+}
+$factory = \Closure::bind(
+    static function (string $key): BoundCacheItem {
+        $item = new BoundCacheItem();
+        $item->key = $key;
+        return $item;
+    },
+    null,
+    BoundCacheItem::class
+);
+echo $factory("cache-key")->getKey();
+"#,
+    );
+    assert_eq!(out, "cache-key");
+}
+
+/// Regression test for Symfony Cache's proxy factory: an untyped closure parameter narrowed
+/// with `instanceof` to the rebound scope may expose a protected property to a local item.
+#[test]
+fn test_closure_bind_scope_rebind_allows_protected_property_read_on_narrowed_param() {
+    let out = compile_and_run(
+        r#"<?php
+class BoundProxyItem {
+    protected string $secret;
+    public function __construct(string $secret) { $this->secret = $secret; }
+    public function getSecret(): string { return $this->secret; }
+}
+$copy = \Closure::bind(
+    static function ($source): BoundProxyItem {
+        $item = new BoundProxyItem("");
+        if ($source instanceof BoundProxyItem) {
+            $item->secret = $source->secret;
+        }
+        return $item;
+    },
+    null,
+    BoundProxyItem::class
+);
+echo $copy(new BoundProxyItem("metadata"))->getSecret();
+"#,
+    );
+    assert_eq!(out, "metadata");
 }
 
 /// Regression test: an OMITTED `$scope` argument keeps the closure's ORIGINAL (lexical) scope —
@@ -1890,4 +2087,34 @@ echo $fib(10);
 "#,
     );
     assert_eq!(out, "55");
+}
+
+/// Verifies an inferred closure array return remains available through a local callable invocation.
+#[test]
+fn test_local_closure_infers_array_return_after_loop_mutation() {
+    let out = compile_and_run(
+        r#"<?php
+function segmentCount(string $path): int {
+    $splitPath = static function ($path) {
+        $result = [];
+
+        foreach (explode("/", trim($path, "/")) as $segment) {
+            if (".." === $segment) {
+                array_pop($result);
+            } elseif ("." !== $segment && "" !== $segment) {
+                $result[] = $segment;
+            }
+        }
+
+        return $result;
+    };
+
+    $segments = $splitPath($path);
+    return count($segments);
+}
+
+echo segmentCount("/a/b/../c");
+"#,
+    );
+    assert_eq!(out, "2");
 }

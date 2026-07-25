@@ -1791,6 +1791,37 @@ echo count($levelAttrs);
     assert_eq!(out, "ANSWER:1:ANSWER:const:missing:2:Ready:LEVEL:case:0");
 }
 
+/// Verifies `ReflectionClass::getReflectionConstants()` applies PHP modifier filters, including
+/// named arguments, OR masks, and the special zero mask that selects no constants.
+#[test]
+fn test_reflection_class_filters_constant_reflector_objects() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectFilteredConstTarget {
+    public const PUBLIC_VALUE = 1;
+    protected const PROTECTED_VALUE = 2;
+    private const PRIVATE_VALUE = 3;
+    final public const FINAL_VALUE = 4;
+}
+
+$reflection = new ReflectionClass(ReflectFilteredConstTarget::class);
+$visible = $reflection->getReflectionConstants(
+    ReflectionClassConstant::IS_PUBLIC | ReflectionClassConstant::IS_PROTECTED
+);
+foreach ($visible as $constant) {
+    echo $constant->getName() . ":";
+}
+$final = $reflection->getReflectionConstants(filter: ReflectionClassConstant::IS_FINAL);
+echo count($final) . ":" . $final[0]->getName() . ":";
+echo count($reflection->getReflectionConstants(0));
+"#,
+    );
+    assert_eq!(
+        out,
+        "PUBLIC_VALUE:PROTECTED_VALUE:FINAL_VALUE:1:FINAL_VALUE:0"
+    );
+}
+
 /// Verifies that `ReflectionClass` reports implemented interface and used trait names.
 #[test]
 fn test_reflection_class_reports_relation_names() {

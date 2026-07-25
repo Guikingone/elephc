@@ -34,6 +34,29 @@ echo $box->reveal();
     assert_eq!(out, "42");
 }
 
+/// Verifies a parent scope can access protected members declared by a child class.
+#[test]
+fn test_parent_scope_can_access_child_protected_members() {
+    let out = compile_and_run(
+        r#"<?php
+class ProtectedParent {
+    public static function read(ProtectedChild $child): int {
+        return $child->value + $child->extra();
+    }
+}
+class ProtectedChild extends ProtectedParent {
+    protected int $value = 7;
+
+    protected function extra(): int {
+        return 8;
+    }
+}
+echo ProtectedParent::read(new ProtectedChild());
+"#,
+    );
+    assert_eq!(out, "15");
+}
+
 /// Verifies protected static method `base()` is callable via fully-qualified name
 /// `SecretMath::base()` from within public static method `answer()`, returning 42.
 #[test]
@@ -905,4 +928,34 @@ echo $c->value;
 "#,
     );
     assert_eq!(out, "1:3:3");
+}
+
+/// Verifies an explicit ancestor class name can lexically invoke that ancestor's instance
+/// implementation while keeping the current child object as `$this`.
+#[test]
+fn test_explicit_ancestor_instance_method_call_uses_current_this() {
+    let out = compile_and_run(
+        r#"<?php
+class ExplicitAncestorBase {
+    protected string $suffix = "!";
+
+    public function render(string $value): string {
+        return "base:" . $value . $this->suffix;
+    }
+}
+
+class ExplicitAncestorChild extends ExplicitAncestorBase {
+    public function render(string $value): string {
+        return "child:" . $value;
+    }
+
+    public function run(): string {
+        return ExplicitAncestorBase::render("ok");
+    }
+}
+
+echo (new ExplicitAncestorChild())->run();
+"#,
+    );
+    assert_eq!(out, "base:ok!");
 }

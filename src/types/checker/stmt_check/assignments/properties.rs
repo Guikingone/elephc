@@ -131,10 +131,8 @@ pub(super) fn check_property_array_assign(
         PhpType::Object(class_name) => {
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, object, class_name, property, span)?;
-            if let PhpType::Object(prop_class_name) = &prop_ty {
-                if checker.object_type_implements_interface(prop_class_name, "ArrayAccess") {
-                    return Ok(());
-                }
+            if type_satisfies_array_access(checker, &prop_ty) {
+                return Ok(());
             }
             if !is_php_array_key_type(&normalized_idx_ty) {
                 return Err(CompileError::new(span, "Array index must be integer"));
@@ -428,7 +426,7 @@ pub(super) fn refined_untyped_property_assignment_type(
 /// Delegates the type decision to `refined_untyped_property_assignment_type`; see its
 /// documentation for the nullable-union storage rules. Only updates when the refined
 /// type differs from the current type.
-fn refine_object_property_type(
+pub(super) fn refine_object_property_type(
     checker: &mut Checker,
     class_name: &str,
     property: &str,
@@ -766,6 +764,34 @@ pub(super) fn is_php_array_key_type(ty: &PhpType) -> bool {
         PhpType::Int | PhpType::Str | PhpType::Mixed | PhpType::Bool
         | PhpType::Float | PhpType::Void | PhpType::Never => true,
         PhpType::Union(members) => members.iter().all(is_php_array_key_type),
+        _ => false,
+    }
+}
+
+/// Returns whether every non-null member is an object implementing `ArrayAccess`.
+pub(super) fn type_satisfies_array_access(checker: &Checker, ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(class_name) => {
+            checker.object_type_implements_interface(class_name, "ArrayAccess")
+        }
+        PhpType::Union(members) => {
+            let mut saw_array_access = false;
+            for member in members {
+                match member {
+                    PhpType::Void | PhpType::Never => {}
+                    PhpType::Object(class_name)
+                        if checker.object_type_implements_interface(
+                            class_name,
+                            "ArrayAccess",
+                        ) =>
+                    {
+                        saw_array_access = true;
+                    }
+                    _ => return false,
+                }
+            }
+            saw_array_access
+        }
         _ => false,
     }
 }

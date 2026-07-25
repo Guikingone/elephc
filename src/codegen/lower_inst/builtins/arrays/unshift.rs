@@ -1,6 +1,6 @@
 //! Purpose:
 //! Lowers PHP `array_unshift(array &$array, mixed ...$values)` calls for
-//! indexed scalar (`Int`/`Bool`) arrays in the EIR backend.
+//! indexed scalar (`Int`/`Bool`) and boxed-Mixed arrays in the EIR backend.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::builtins::arrays::lower_array_unshift()`.
@@ -17,7 +17,7 @@
 //!   realloc on any iteration keeps aliases (`$b =& $a`) in sync.
 //! - Mutates the caller-visible array after copy-on-write splitting.
 //! - Returns the new indexed-array length as PHP `int`.
-//! - Supports integer and boolean indexed payloads, matching the existing 8-byte helper.
+//! - Supports integer, boolean, and boxed-Mixed indexed payloads through the 8-byte helper.
 //! - M2 PART B: `lower_array_unshift_union` handles a first argument whose STATIC type is a
 //!   union containing an indexed-array member (the `$a = $x ?: false` gradual-typing idiom).
 //!   The value is EIR-unwrapped from its boxed Mixed representation with a runtime tag check
@@ -64,24 +64,26 @@ pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
     require_array_unshift_result_type(&inst.result_php_type.codegen_repr())?;
 
     let source_local = super::source_load_local_slot(ctx, array)?;
+    if let Some(slot) = source_local {
+        ctx.release_mutated_source_local_owner(slot, array)?;
+    }
 
     // Prepend in reverse source order: the LAST call places the FIRST-listed
     // value at index 0 (each prepend pushes everything already placed one
     // slot to the right), matching PHP's left-to-right variadic order.
     for &value in values.iter().rev() {
         match ctx.emitter.target.arch {
-            Arch::AArch64 => lower_array_unshift_one_aarch64(ctx, array, value)?,
-            Arch::X86_64 => lower_array_unshift_one_x86_64(ctx, array, value)?,
+            Arch::AArch64 => lower_array_unshift_one_aarch64(ctx, array, value, &elem_ty)?,
+            Arch::X86_64 => lower_array_unshift_one_x86_64(ctx, array, value, &elem_ty)?,
         }
         // `__rt_array_unshift_grow` returns the (possibly COW-split and/or
-        // reallocated) array pointer in the integer result register — write
-        // it back into the SSA value AND the by-ref source local immediately,
-        // mirroring the identical pattern `crate::codegen::lower_inst::arrays::lower_array_push`
-        // uses for its own (single-value) write-back.
+        // reallocated) array pointer in the integer result register. Keep the SSA
+        // home current between iterations; publishing the by-ref local once after
+        // the loop avoids replacing the same boxed-Mixed owner more than once.
         ctx.store_result_value(array)?;
-        if let Some(slot) = source_local {
-            ctx.store_value_to_local(slot, array)?;
-        }
+    }
+    if let Some(slot) = source_local {
+        ctx.store_value_to_local(slot, array)?;
     }
 
     emit_load_array_length_as_result(ctx, array)?;
@@ -93,7 +95,10 @@ fn array_unshift_element_type(ty: PhpType) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
-            if matches!(elem, PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never) {
+            if matches!(
+                elem,
+                PhpType::Int | PhpType::Bool | PhpType::Mixed | PhpType::Void | PhpType::Never
+            ) {
                 return Ok(elem);
             }
             Err(CodegenIrError::unsupported(format!(
@@ -407,6 +412,11 @@ fn emit_throw_static_type_error(ctx: &mut FunctionContext<'_>, message: &str) {
 
 /// Verifies a prepended value matches the runtime helper's scalar slot layout.
 fn require_array_unshift_value_type(elem_ty: &PhpType, value_ty: &PhpType) -> Result<()> {
+    if elem_ty == &PhpType::Mixed
+        && matches!(value_ty, PhpType::Int | PhpType::Bool | PhpType::Mixed)
+    {
+        return Ok(());
+    }
     if matches!(value_ty, PhpType::Int | PhpType::Bool)
         && (elem_ty == value_ty || matches!(elem_ty, PhpType::Void | PhpType::Never))
     {
@@ -435,10 +445,31 @@ fn lower_array_unshift_one_aarch64(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
     value: ValueId,
+    elem_ty: &PhpType,
 ) -> Result<()> {
-    ctx.load_value_to_reg(value, "x1")?;
+    materialize_array_unshift_value_aarch64(ctx, value, elem_ty)?;
     ctx.load_value_to_reg(array, "x0")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_unshift_grow");
+    Ok(())
+}
+
+/// Materializes one AArch64 prepend payload, boxing or retaining values for Mixed slots.
+fn materialize_array_unshift_value_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    elem_ty: &PhpType,
+) -> Result<()> {
+    if elem_ty != &PhpType::Mixed {
+        ctx.load_value_to_reg(value, "x1")?;
+        return Ok(());
+    }
+    let value_ty = ctx.load_value_to_result(value)?;
+    if value_ty == PhpType::Mixed {
+        abi::emit_call_label(ctx.emitter, "__rt_incref");
+    } else {
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
+    }
+    ctx.emitter.instruction("mov x1, x0");                                      // pass the owned boxed-Mixed prepend payload to the array helper
     Ok(())
 }
 
@@ -447,10 +478,31 @@ fn lower_array_unshift_one_x86_64(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
     value: ValueId,
+    elem_ty: &PhpType,
 ) -> Result<()> {
-    ctx.load_value_to_reg(value, "rsi")?;
+    materialize_array_unshift_value_x86_64(ctx, value, elem_ty)?;
     ctx.load_value_to_reg(array, "rdi")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_unshift_grow");
+    Ok(())
+}
+
+/// Materializes one x86_64 prepend payload, boxing or retaining values for Mixed slots.
+fn materialize_array_unshift_value_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    elem_ty: &PhpType,
+) -> Result<()> {
+    if elem_ty != &PhpType::Mixed {
+        ctx.load_value_to_reg(value, "rsi")?;
+        return Ok(());
+    }
+    let value_ty = ctx.load_value_to_result(value)?;
+    if value_ty == PhpType::Mixed {
+        abi::emit_call_label(ctx.emitter, "__rt_incref");
+    } else {
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
+    }
+    ctx.emitter.instruction("mov rsi, rax");                                    // pass the owned boxed-Mixed prepend payload to the array helper
     Ok(())
 }
 

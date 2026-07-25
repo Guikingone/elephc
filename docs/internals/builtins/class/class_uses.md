@@ -2,7 +2,7 @@
 title: "class_uses() — internals"
 description: "Compiler internals for class_uses(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 73
+  order: 74
 ---
 
 ## `class_uses()` — internals

@@ -1,8 +1,8 @@
 //! Purpose:
 //! Pre-scans a loop body for local-array growth/write sites whose element types widen an
-//! indexed array to `mixed` across the loop back-edge (issue #452), so both the type
-//! checker and EIR lowering can fix the array's element type to `mixed` *before*
-//! processing the body once.
+//! indexed array to `mixed` across the loop back-edge (issue #452), including nested
+//! writes that autovivify an entry-empty root, so both the type checker and EIR lowering
+//! can fix the array's element type to `mixed` *before* processing the body once.
 //!
 //! Called from:
 //! - `crate::types::checker::stmt_check::control_flow` (loop arms widen the `TypeEnv`).
@@ -13,7 +13,8 @@
 //! - Both passes are single-pass over loop bodies; without this scan an early write site
 //!   is typed/lowered against the pre-promotion element type and writes an unboxed
 //!   scalar into mixed-element storage on iterations >= 2, corrupting the heap.
-//! - Sites covered: `$name[] =`, `$name[$i] =`, and `array_push($name, ...)`.
+//! - Sites covered: `$name[] =`, `$name[$i] =`, nested `$name[$i][...] =`, and
+//!   `array_push($name, ...)`.
 //! - Only the widening-to-`mixed` transition is reported: it is the one that changes the
 //!   element representation (raw scalar slots vs boxed cells). Same-type growth and
 //!   `never -> T` keep their current lowering.
@@ -43,30 +44,33 @@ enum AssignedValue<'a> {
     Opaque,
 }
 
-/// Returns the names of locals that currently hold a non-`mixed` indexed array and whose
-/// element type joins to `mixed` across the local-array growth/write sites found in the
-/// loop body (and the optional `for` update statement). `lookup` supplies the current type
-/// of a local at loop entry; names it does not know are skipped as targets. `infer_value`
-/// supplies the caller's best semantic type for pushed values and assignment RHSs.
-pub fn loop_grown_mixed_array_pushes(
+/// Returns the local names and container types required by loop-carried array writes.
+///
+/// Ordinary growth that joins incompatible element types targets `array<mixed>`. A nested write
+/// into an entry-empty root targets `array<mixed, mixed>` because runtime autovivification may
+/// promote that root to hash storage; fixing the representation before the loop keeps earlier
+/// reads valid on every back-edge. `lookup` supplies entry types and `infer_value` supplies the
+/// caller's best semantic type for written values.
+pub fn loop_grown_array_widenings(
     body: &[Stmt],
     update: Option<&Stmt>,
     lookup: &dyn Fn(&str) -> Option<PhpType>,
     infer_value: &mut dyn FnMut(&Expr) -> Option<PhpType>,
-) -> Vec<String> {
+) -> Vec<(String, PhpType)> {
     let mut pushes: Vec<(&str, &Expr)> = Vec::new();
-    collect_array_pushes(body, &mut pushes);
+    let mut nested_roots: Vec<&str> = Vec::new();
+    collect_array_pushes(body, &mut pushes, &mut nested_roots);
     if let Some(stmt) = update {
-        collect_array_push_stmt(stmt, &mut pushes);
+        collect_array_push_stmt(stmt, &mut pushes, &mut nested_roots);
     }
     let mut assignments: Vec<(&str, AssignedValue<'_>)> = Vec::new();
     collect_value_assignments(body, &mut assignments);
     if let Some(stmt) = update {
         collect_value_assignment_stmt(stmt, &mut assignments);
     }
-    let mut names: Vec<String> = Vec::new();
+    let mut widenings: Vec<(String, PhpType)> = Vec::new();
     for (name, _) in &pushes {
-        if names.iter().any(|n| n == name) {
+        if widenings.iter().any(|(candidate, _)| candidate == name) {
             continue;
         }
         let Some(PhpType::Array(elem)) = lookup(name) else {
@@ -96,10 +100,36 @@ pub fn loop_grown_mixed_array_pushes(
             joined = PhpType::Mixed;
         }
         if joined == PhpType::Mixed {
-            names.push(name.to_string());
+            widenings.push((
+                name.to_string(),
+                PhpType::Array(Box::new(PhpType::Mixed)),
+            ));
         }
     }
-    names
+    // An entry-empty local that receives a nested write carries an array/hash child around the
+    // loop back-edge. Its root element therefore needs boxed Mixed storage before an earlier
+    // read in the next iteration; otherwise that read still sees `Never` and the lowering uses a
+    // stale raw-array representation. Concrete non-empty matrices keep their specialized type.
+    for name in nested_roots {
+        if matches!(
+            lookup(name),
+            Some(PhpType::Array(elem)) if matches!(elem.as_ref(), PhpType::Never)
+        ) {
+            let target = PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            };
+            if let Some((_, existing_target)) = widenings
+                .iter_mut()
+                .find(|(candidate, _)| candidate == name)
+            {
+                *existing_target = target;
+            } else {
+                widenings.push((name.to_string(), target));
+            }
+        }
+    }
+    widenings
 }
 
 /// Resolves the evidence a pushed/written value contributes to the element join.
@@ -305,10 +335,14 @@ fn join_pushed_element_type(a: PhpType, b: PhpType) -> PhpType {
     }
 }
 
-/// Collects local-array growth/write sites from every statement in `stmts`, recursively.
-fn collect_array_pushes<'a>(stmts: &'a [Stmt], out: &mut Vec<(&'a str, &'a Expr)>) {
+/// Collects local-array growth/write sites and nested-write roots recursively.
+fn collect_array_pushes<'a>(
+    stmts: &'a [Stmt],
+    out: &mut Vec<(&'a str, &'a Expr)>,
+    nested_roots: &mut Vec<&'a str>,
+) {
     for stmt in stmts {
-        collect_array_push_stmt(stmt, out);
+        collect_array_push_stmt(stmt, out, nested_roots);
     }
 }
 
@@ -316,10 +350,20 @@ fn collect_array_pushes<'a>(stmts: &'a [Stmt], out: &mut Vec<(&'a str, &'a Expr)
 /// body that executes as part of the enclosing loop iteration. Declaration bodies
 /// (functions, classes) do not execute in the loop and closures capture by value by
 /// default, so neither is descended into.
-fn collect_array_push_stmt<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, &'a Expr)>) {
+fn collect_array_push_stmt<'a>(
+    stmt: &'a Stmt,
+    out: &mut Vec<(&'a str, &'a Expr)>,
+    nested_roots: &mut Vec<&'a str>,
+) {
     match &stmt.kind {
         StmtKind::ArrayPush { array, value } => out.push((array.as_str(), value)),
         StmtKind::ArrayAssign { array, value, .. } => out.push((array.as_str(), value)),
+        StmtKind::NestedArrayAssign { target, value } => {
+            if let Some(root) = nested_array_root_variable(target) {
+                nested_roots.push(root);
+            }
+            collect_growth_calls_from_expr(value, out);
+        }
         StmtKind::ExprStmt(expr) => collect_growth_calls_from_expr(expr, out),
         StmtKind::Assign { value, .. } | StmtKind::TypedAssign { value, .. } => {
             collect_growth_calls_from_expr(value, out);
@@ -331,12 +375,12 @@ fn collect_array_push_stmt<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, &'a Expr)
             else_body,
             ..
         } => {
-            collect_array_pushes(then_body, out);
+            collect_array_pushes(then_body, out, nested_roots);
             for (_, clause_body) in elseif_clauses {
-                collect_array_pushes(clause_body, out);
+                collect_array_pushes(clause_body, out, nested_roots);
             }
             if let Some(else_body) = else_body {
-                collect_array_pushes(else_body, out);
+                collect_array_pushes(else_body, out, nested_roots);
             }
         }
         StmtKind::IfDef {
@@ -344,15 +388,17 @@ fn collect_array_push_stmt<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, &'a Expr)
             else_body,
             ..
         } => {
-            collect_array_pushes(then_body, out);
+            collect_array_pushes(then_body, out, nested_roots);
             if let Some(else_body) = else_body {
-                collect_array_pushes(else_body, out);
+                collect_array_pushes(else_body, out, nested_roots);
             }
         }
         StmtKind::While { body, .. }
         | StmtKind::DoWhile { body, .. }
         | StmtKind::Foreach { body, .. }
-        | StmtKind::IncludeOnceGuard { body, .. } => collect_array_pushes(body, out),
+        | StmtKind::IncludeOnceGuard { body, .. } => {
+            collect_array_pushes(body, out, nested_roots)
+        }
         StmtKind::For {
             init,
             update,
@@ -360,19 +406,19 @@ fn collect_array_push_stmt<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, &'a Expr)
             ..
         } => {
             if let Some(init) = init {
-                collect_array_push_stmt(init, out);
+                collect_array_push_stmt(init, out, nested_roots);
             }
             if let Some(update) = update {
-                collect_array_push_stmt(update, out);
+                collect_array_push_stmt(update, out, nested_roots);
             }
-            collect_array_pushes(body, out);
+            collect_array_pushes(body, out, nested_roots);
         }
         StmtKind::Switch { cases, default, .. } => {
             for (_, case_body) in cases {
-                collect_array_pushes(case_body, out);
+                collect_array_pushes(case_body, out, nested_roots);
             }
             if let Some(default) = default {
-                collect_array_pushes(default, out);
+                collect_array_pushes(default, out, nested_roots);
             }
         }
         StmtKind::Try {
@@ -380,16 +426,31 @@ fn collect_array_push_stmt<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, &'a Expr)
             catches,
             finally_body,
         } => {
-            collect_array_pushes(try_body, out);
+            collect_array_pushes(try_body, out, nested_roots);
             for catch in catches {
-                collect_array_pushes(&catch.body, out);
+                collect_array_pushes(&catch.body, out, nested_roots);
             }
             if let Some(finally_body) = finally_body {
-                collect_array_pushes(finally_body, out);
+                collect_array_pushes(finally_body, out, nested_roots);
             }
         }
-        StmtKind::Synthetic(stmts) => collect_array_pushes(stmts, out),
+        StmtKind::Synthetic(stmts) => collect_array_pushes(stmts, out, nested_roots),
         _ => {}
+    }
+}
+
+/// Returns the local variable at the root of a nested array-access assignment target.
+fn nested_array_root_variable(target: &Expr) -> Option<&str> {
+    let mut current = target;
+    loop {
+        let ExprKind::ArrayAccess { array, .. } = &current.kind else {
+            return None;
+        };
+        match &array.kind {
+            ExprKind::Variable(name) => return Some(name.as_str()),
+            ExprKind::ArrayAccess { .. } => current = array,
+            _ => return None,
+        }
     }
 }
 

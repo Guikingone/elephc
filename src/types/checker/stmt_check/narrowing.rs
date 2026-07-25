@@ -1,5 +1,5 @@
 //! Purpose:
-//! Flow-sensitive type narrowing for `if`/`else` branches guarded by type predicates.
+//! Flow-sensitive type narrowing for `if`/`else` branches guarded by type predicates or truthiness.
 //! Narrows a union- or mixed-typed variable to the guarded type in the matching branch.
 //!
 //! Called from:
@@ -7,17 +7,23 @@
 //!   `switch (true)` case bodies.
 //!
 //! Key details:
-//! - Recognizes `is_int`/`is_float`/`is_string`/`is_bool`/`is_countable($var)` (and aliases) and
-//!   `$var instanceof Class` guards, optionally negated with a leading `!`. `is_countable` narrows
-//!   to `array<mixed>|Countable`. Narrowing is applied to each clause in an
+//! - Recognizes `is_int`/`is_float`/`is_string`/`is_bool`/`is_array`/`is_object`/`is_numeric`/
+//!   `is_countable($var)` (and aliases), `$var instanceof Class`, and strict false/null guards
+//!   around a simple local assignment, optionally negated with a leading `!`. A local or simple
+//!   local assignment truthiness guard removes only representable `null`/`false` union arms on
+//!   its true edge, leaving scalar zero/empty-value possibilities conservative on its false edge.
+//!   An assignment's inferred value type replaces the prior binding on both edges. `is_object`
+//!   narrows to generic `object`; `is_numeric` preserves numeric strings through an
+//!   `int|float|string` arithmetic-safe union; `is_countable` narrows to
+//!   `array<mixed>|Countable`.
+//!   Narrowing is applied to each clause in an
 //!   if/elseif*/else chain (each subsequent clause, and the else, see the accumulated complement
 //!   from previous guards). For a chain with no else where *every* clause body always diverges
 //!   (return/throw/break/continue/exit/die/never-function), the accumulated complement is applied
 //!   to the statements after the entire if construct.
-//! - `and_chain_then_narrowings` collects the guard-true narrowings for a single guard or a pure
-//!   `&&` chain of guards, folding repeated guards on one variable cumulatively; it powers
-//!   `switch (true)` case-body narrowing. `case_body_terminates` gates that narrowing under
-//!   PHP fall-through (only a case that cannot be fallen into is narrowed by its own guard).
+//! - `and_chain_then_narrowings` collects guard-true narrowings and assignment facts for a
+//!   single condition or pure `&&` chain, folding repeated guards cumulatively and replacing
+//!   earlier facts on a later assignment. It powers `if` and `switch (true)` bodies.
 //! - Conservative: a concrete (non-union, non-mixed) type is left unchanged, and an empty narrowing
 //!   result falls back to the original type, so valid code is never narrowed away to `Never`.
 
@@ -44,11 +50,13 @@ impl Checker {
     /// Detects a type-predicate guard in an `if`/ternary condition and computes the then/else
     /// narrowing for the guarded binding against the current environment. Handles the scalar
     /// `is_*` predicates, `is_null`, `instanceof Class`, and `=== false` / `=== null`, each with an
-    /// optional leading `!` that swaps the branches. The guarded receiver may be a variable
-    /// (narrowed under its name) or a simple property access `$var->prop` / `$this->prop`
-    /// (narrowed under a synthetic key that `infer_property_access_type` consults). Returns
-    /// `Ok(None)` when the condition is not a recognized guard or the receiver's current type is
-    /// unknown.
+    /// optional leading `!` that swaps the branches. A bare local condition also narrows away
+    /// representable `null` and literal `false` arms on its truthy edge. The guarded receiver may be
+    /// a variable, a
+    /// simple local assignment such as `false === $parts = parse_url($dsn)`, or a simple property
+    /// access `$var->prop` / `$this->prop` (narrowed under a synthetic key that
+    /// `infer_property_access_type` consults). Returns `Ok(None)` when the condition is not a
+    /// recognized guard or the receiver's current type is unknown.
     pub(crate) fn guard_narrowing(
         &mut self,
         condition: &Expr,
@@ -58,9 +66,13 @@ impl Checker {
             ExprKind::Not(inner) => (inner.as_ref(), true),
             _ => (condition, false),
         };
-        let Some((receiver, target)) = guard_receiver_and_type(cond) else {
+        if let Some(narrowing) = self.truthy_binding_guard_narrowing(cond, negated, env)? {
+            return Ok(Some(narrowing));
+        }
+        let Some((receiver, target, guard_negated)) = guard_receiver_and_type(cond) else {
             return Ok(None);
         };
+        let negated = negated ^ guard_negated;
         // Resolve a relative `instanceof self`/`parent`/`static` target to the concrete enclosing
         // class before narrowing, mirroring `type_guard_narrowing`. Without this the receiver was
         // narrowed to the literal `Object("self")`, and a later member access reported
@@ -73,14 +85,27 @@ impl Checker {
         if self.property_guard_receiver_is_unstable(receiver, env)? {
             return Ok(None);
         }
-        // A prior narrowing (or a variable binding) wins; otherwise a property receiver falls back
-        // to its declared field type. An unbound plain variable stays un-narrowed.
-        let current = match env.get(&key) {
-            Some(ty) => ty.clone(),
-            None if matches!(receiver.kind, ExprKind::PropertyAccess { .. }) => {
-                self.infer_type(receiver, env)?
-            }
-            None => return Ok(None),
+        // For a comparison-wrapped assignment, narrow the value just assigned rather than the
+        // local's storage-wide join with its previous values. In
+        // `false === $parts = parse_url($dsn)`, the assignment result is `array|false` even when
+        // `$parts` previously held the input string.
+        let current = match &receiver.kind {
+            ExprKind::Assignment {
+                value,
+                result_target: None,
+                prelude,
+                conditional_value_temp: None,
+                ..
+            } if prelude.is_empty() => self.infer_type(value, env)?,
+            // A prior narrowing (or a variable binding) wins; otherwise a property receiver falls
+            // back to its declared field type. An unbound plain variable stays un-narrowed.
+            _ => match env.get(&key) {
+                Some(ty) => ty.clone(),
+                None if matches!(receiver.kind, ExprKind::PropertyAccess { .. }) => {
+                    self.infer_type(receiver, env)?
+                }
+                None => return Ok(None),
+            },
         };
         let matched = self.narrow_to(&current, &target);
         let complement = self.narrow_complement(&current, &target);
@@ -90,6 +115,73 @@ impl Checker {
             (matched, complement)
         };
         Ok(Some(GuardNarrowing { var: key, then_ty, else_ty }))
+    }
+
+    /// Narrows a local binding on its truthy edge by removing only union arms whose complete value
+    /// space is falsey (`Void` for null and the literal `False` subtype). The binding may be read
+    /// directly or be the target of a simple assignment in the condition. An assignment replaces
+    /// the prior local type on both edges because PHP executes it before testing truthiness; this
+    /// remains useful even when an empty array/string subset cannot be represented more narrowly.
+    /// Integer zero, empty strings/arrays, and the false half of `Bool` stay conservative. A leading
+    /// logical `!` swaps the truthy and falsey branch facts.
+    fn truthy_binding_guard_narrowing(
+        &self,
+        condition: &Expr,
+        negated: bool,
+        env: &TypeEnv,
+    ) -> Result<Option<GuardNarrowing>, CompileError> {
+        let (var, current, overwrites) = match &condition.kind {
+            ExprKind::Variable(var) => {
+                let Some(current) = env.get(var) else {
+                    return Ok(None);
+                };
+                (var.clone(), current.clone(), false)
+            }
+            ExprKind::Assignment {
+                target,
+                result_target: None,
+                prelude,
+                conditional_value_temp: None,
+                ..
+            } if prelude.is_empty() => {
+                let ExprKind::Variable(var) = &target.kind else {
+                    return Ok(None);
+                };
+                let Some(current) = env.get(var) else {
+                    return Ok(None);
+                };
+                (var.clone(), current.clone(), true)
+            }
+            _ => return Ok(None),
+        };
+        let truthy = match &current {
+            PhpType::Union(members) => {
+                let kept: Vec<PhpType> = members
+                    .iter()
+                    .filter(|member| !matches!(member, PhpType::Void | PhpType::False))
+                    .cloned()
+                    .collect();
+                if kept.is_empty() || kept.len() == members.len() {
+                    current.clone()
+                } else {
+                    self.normalize_union_type(kept)
+                }
+            }
+            _ => current.clone(),
+        };
+        if !overwrites && truthy == current {
+            return Ok(None);
+        }
+        let (then_ty, else_ty) = if negated {
+            (current, truthy)
+        } else {
+            (truthy, current)
+        };
+        Ok(Some(GuardNarrowing {
+            var,
+            then_ty,
+            else_ty,
+        }))
     }
 
     /// Synthetic `TypeEnv` key for a narrowed simple property access `$var->prop` (`None` for a
@@ -104,11 +196,17 @@ impl Checker {
         }
     }
 
-    /// `TypeEnv` key for a guard receiver: a variable's name, or the synthetic property key for a
-    /// simple property access. `None` for receivers narrowing can't key (complex chains).
+    /// `TypeEnv` key for a guard receiver: a variable's name, an assignment's local target, or the
+    /// synthetic property key for a simple property access. Conditional/compound assignment forms
+    /// are safe here because expression-effect inference has already recorded the value stored in
+    /// the local before guard detection. `None` for receivers narrowing cannot key safely.
     fn guard_env_key(receiver: &Expr) -> Option<String> {
         match &receiver.kind {
             ExprKind::Variable(var) => Some(var.clone()),
+            ExprKind::Assignment { target, .. } => match &target.kind {
+                ExprKind::Variable(var) => Some(var.clone()),
+                _ => None,
+            },
             ExprKind::PropertyAccess { object, property } => {
                 Self::narrowed_property_env_key(object, property)
             }
@@ -169,10 +267,22 @@ impl Checker {
     /// case body) do not need it, and the `&&`-chain complement is a union this single-guard helper
     /// must not approximate.
     pub(crate) fn and_chain_then_narrowings(
-        &self,
+        &mut self,
         cond: &Expr,
         env: &TypeEnv,
     ) -> Vec<(String, PhpType)> {
+        self.and_chain_then_facts(cond, env)
+            .into_iter()
+            .map(|(var, ty, _)| (var, ty))
+            .collect()
+    }
+
+    /// Collects ordered guard and assignment facts that hold when a pure `&&` condition is true.
+    fn and_chain_then_facts(
+        &mut self,
+        cond: &Expr,
+        env: &TypeEnv,
+    ) -> Vec<(String, PhpType, bool)> {
         if let ExprKind::BinaryOp {
             left,
             op: BinOp::And,
@@ -183,21 +293,43 @@ impl Checker {
             // `then_ty` is already narrowed against the declared type in `env`; when two operands
             // guard the same variable, intersect the accumulated type with the new one via
             // `narrow_to` so repeated guards refine cumulatively.
-            let mut narrowings = self.and_chain_then_narrowings(left, env);
-            for (var, then_ty) in self.and_chain_then_narrowings(right, env) {
-                match narrowings.iter().position(|(v, _)| *v == var) {
+            let mut narrowings = self.and_chain_then_facts(left, env);
+            for (var, then_ty, overwrites) in self.and_chain_then_facts(right, env) {
+                match narrowings.iter().position(|(v, _, _)| *v == var) {
                     Some(idx) => {
-                        let existing = narrowings[idx].1.clone();
-                        narrowings[idx].1 = self.narrow_to(&existing, &then_ty);
+                        if overwrites {
+                            narrowings[idx].1 = then_ty;
+                            narrowings[idx].2 = true;
+                        } else {
+                            let existing = narrowings[idx].1.clone();
+                            narrowings[idx].1 = self.narrow_to(&existing, &then_ty);
+                        }
                     }
-                    None => narrowings.push((var, then_ty)),
+                    None => narrowings.push((var, then_ty, overwrites)),
                 }
             }
             narrowings
         } else {
-            match self.type_guard_narrowing(cond, env) {
-                Some(g) => vec![(g.var, g.then_ty)],
-                None => vec![],
+            if let ExprKind::Assignment {
+                target,
+                value,
+                result_target: None,
+                prelude,
+                conditional_value_temp: None,
+                ..
+            } = &cond.kind
+            {
+                if prelude.is_empty() {
+                    if let ExprKind::Variable(var) = &target.kind {
+                        if let Ok(ty) = self.infer_type(value, env) {
+                            return vec![(var.clone(), ty, true)];
+                        }
+                    }
+                }
+            }
+            match self.guard_narrowing(cond, env) {
+                Ok(Some(g)) => vec![(g.var, g.then_ty, false)],
+                Ok(None) | Err(_) => vec![],
             }
         }
     }
@@ -237,6 +369,12 @@ impl Checker {
                 let kept: Vec<PhpType> =
                     members.iter().filter(|m| guard_matches(m, target)).cloned().collect();
                 if kept.is_empty() {
+                    target.clone()
+                } else if kept.len() > 1 && matches!(target, PhpType::Array(_)) {
+                    // Several array arms can differ only in their inferred element type
+                    // (`array<mixed>|array<never>` after `$x ??= []`). The `is_array` proof
+                    // guarantees the common array family; collapse to its gradual element type
+                    // instead of retaining a union that array builtins reject as non-concrete.
                     target.clone()
                 } else {
                     self.normalize_union_type(kept)
@@ -348,9 +486,11 @@ impl Checker {
 
 /// Extracts the guarded receiver expression and the target type from a (non-negated) guard
 /// expression. Recognizes the scalar `is_*` predicates, `is_null`, `instanceof <Name>`, and
-/// `=== false` / `=== null`. The receiver may be any expression here — `guard_env_key` decides
-/// which receivers narrowing can actually key (variables and simple property accesses).
-fn guard_receiver_and_type(cond: &Expr) -> Option<(&Expr, PhpType)> {
+/// `=== false` / `!== false` / `=== null` / `!== null`. The receiver may be any expression here
+/// — `guard_env_key` decides which receivers narrowing can actually key (variables, assignment
+/// results, and simple property accesses). The boolean marks a comparison whose truth edge is
+/// the complement of the literal type.
+fn guard_receiver_and_type(cond: &Expr) -> Option<(&Expr, PhpType, bool)> {
     match &cond.kind {
         ExprKind::FunctionCall { name, args } if args.len() == 1 => {
             let target = match name.as_str().to_ascii_lowercase().as_str() {
@@ -358,6 +498,19 @@ fn guard_receiver_and_type(cond: &Expr) -> Option<(&Expr, PhpType)> {
                 "is_float" | "is_double" | "is_real" => PhpType::Float,
                 "is_string" => PhpType::Str,
                 "is_bool" => PhpType::Bool,
+                "is_array" => PhpType::Array(Box::new(PhpType::Mixed)),
+                // `is_numeric($x)` accepts ints, floats, and numeric strings without changing
+                // the runtime value. Preserve all three possibilities so arithmetic selects
+                // mixed numeric dispatch for strings instead of pretending the value was cast.
+                "is_numeric" => PhpType::Union(vec![
+                    PhpType::Int,
+                    PhpType::Float,
+                    PhpType::Str,
+                ]),
+                // `is_object($x)` proves the boxed value carries an object pointer, but it does
+                // not identify a concrete class. Keep that distinction through generic `object`
+                // so guarded `$x::class` and other class-agnostic object operations type-check.
+                "is_object" => PhpType::Object(String::new()),
                 // `is_null($x)`: same narrowing as `$x === null` — elephc models a `?T` value's
                 // null as Void, so the complement strips it (`if (is_null($x)) { throw; }` leaves
                 // ?int as int on the fall-through path).
@@ -373,36 +526,60 @@ fn guard_receiver_and_type(cond: &Expr) -> Option<(&Expr, PhpType)> {
                 ]),
                 _ => return None,
             };
-            Some((&args[0], target))
+            Some((&args[0], target, false))
         }
         ExprKind::InstanceOf { value, target } => {
             let InstanceOfTarget::Name(class) = target else {
                 return None;
             };
-            Some((value, PhpType::Object(class.as_str().to_string())))
+            Some((value, PhpType::Object(class.as_str().to_string()), false))
         }
-        // `$var === false` / `false === $var`: narrow to the literal False subtype in the
-        // then-branch; the else-branch strips only that member (e.g. int|false → int) while a full
-        // `bool` member remains. Enables the common
-        // `if ($x === false) { throw; } return $x;` guard (ward-http StreamGuards::requireInt etc.).
-        ExprKind::BinaryOp { left, op: BinOp::StrictEq, right } => {
-            let (receiver, lit) = match (&left.kind, &right.kind) {
-                (ExprKind::Variable(_) | ExprKind::PropertyAccess { .. }, _) => {
-                    (left.as_ref(), &right.kind)
-                }
-                (_, ExprKind::Variable(_) | ExprKind::PropertyAccess { .. }) => {
-                    (right.as_ref(), &left.kind)
-                }
-                _ => return None,
+        // `$var === false` / `$var !== false` (and reversed operands): equality narrows the
+        // then-branch to False, while inequality narrows it to the complement (e.g.
+        // int|false → int). A full `bool` member remains representable and is not stripped.
+        ExprKind::BinaryOp {
+            left,
+            op: op @ (BinOp::StrictEq | BinOp::StrictNotEq),
+            right,
+        } => {
+            let (receiver, lit) = if let Some(receiver) =
+                strict_comparison_guard_receiver(left)
+            {
+                (receiver, &right.kind)
+            } else if let Some(receiver) = strict_comparison_guard_receiver(right) {
+                (receiver, &left.kind)
+            } else {
+                return None;
             };
             match lit {
-                ExprKind::BoolLiteral(false) => Some((receiver, PhpType::False)),
+                ExprKind::BoolLiteral(false) => {
+                    Some((receiver, PhpType::False, *op == BinOp::StrictNotEq))
+                }
                 // `$x === null`: strip the null-ish member (elephc models a `?T` value's null as
                 // Void), e.g. `?self` / self|null → self after `if ($x === null) { throw; }`.
-                ExprKind::Null => Some((receiver, PhpType::Void)),
+                ExprKind::Null => Some((receiver, PhpType::Void, *op == BinOp::StrictNotEq)),
                 _ => None,
             }
         }
+        _ => None,
+    }
+}
+
+/// Returns a receiver whose binding can be narrowed by a strict false/null comparison.
+///
+/// Besides variables and stable property reads, this accepts an ordinary expression-position
+/// assignment to a local. Its assigned value is the current runtime value even when the local's
+/// storage type also includes values written before the assignment.
+fn strict_comparison_guard_receiver(expr: &Expr) -> Option<&Expr> {
+    match &expr.kind {
+        ExprKind::Variable(_) | ExprKind::PropertyAccess { .. } => Some(expr),
+        ExprKind::Assignment {
+            target,
+            result_target: None,
+            prelude,
+            conditional_value_temp: None,
+            ..
+        } if prelude.is_empty() && matches!(target.kind, ExprKind::Variable(_)) => Some(expr),
         _ => None,
     }
 }
@@ -411,79 +588,27 @@ fn guard_receiver_and_type(cond: &Expr) -> Option<(&Expr, PhpType)> {
 /// Returns true when a union member is compatible with a guard target, used to keep (then) or drop
 /// (else) members. Scalar targets require an exact variant match; an `Object` target matches an
 /// object member with the same class name (inheritance-aware narrowing is left for the future).
+/// Generic `object` matches every concrete object member so `is_object()` preserves any known
+/// classes already present in a union. The compiler's `Callable` representation is the same
+/// closure descriptor used for anonymous and first-class callables, so it matches nominal
+/// `Closure` guards as well.
 fn guard_matches(member: &PhpType, target: &PhpType) -> bool {
     match (member, target) {
-        (PhpType::Object(member_class), PhpType::Object(target_class)) => member_class == target_class,
+        (PhpType::Callable, PhpType::Object(target_class))
+            if target_class
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("Closure") =>
+        {
+            true
+        }
+        (PhpType::Object(member_class), PhpType::Object(target_class)) => {
+            target_class.is_empty() || member_class == target_class
+        }
+        (
+            PhpType::Array(_) | PhpType::AssocArray { .. },
+            PhpType::Array(_),
+        ) => true,
         (PhpType::False, PhpType::Bool) => true,
         _ => member == target,
-    }
-}
-
-impl Checker {
-        /// Detects a type-predicate guard in an `if` condition and computes the then/else narrowing
-        /// for the guarded variable against the current environment. Handles the scalar `is_*`
-        /// predicates and `$var instanceof Class`, with an optional leading `!` that swaps the
-        /// branches. Returns `None` when the condition is not a recognized single-variable guard or the
-        /// variable has no known type in `env`.
-        pub(crate) fn type_guard_narrowing(
-            &self,
-            condition: &Expr,
-            env: &TypeEnv,
-        ) -> Option<GuardNarrowing> {
-            let (cond, negated) = match &condition.kind {
-                ExprKind::Not(inner) => (inner.as_ref(), true),
-                _ => (condition, false),
-            };
-            let (var, target) = guard_var_and_type(cond)?;
-            let target = self.resolve_relative_instanceof_target(target);
-            let current = env.get(&var)?.clone();
-            let matched = self.narrow_to(&current, &target);
-            let complement = self.narrow_complement(&current, &target);
-            let (then_ty, else_ty) = if negated {
-                (complement, matched)
-            } else {
-                (matched, complement)
-            };
-            Some(GuardNarrowing { var, then_ty, else_ty })
-        }
-}
-
-/// Extracts the guarded variable name and the target type from a (non-negated) guard expression.
-/// Recognizes the scalar `is_*` predicates and `instanceof <Name>`; returns `None` for anything
-/// else (including guards on non-variable operands).
-fn guard_var_and_type(cond: &Expr) -> Option<(String, PhpType)> {
-    match &cond.kind {
-        ExprKind::FunctionCall { name, args } if args.len() == 1 => {
-            let ExprKind::Variable(var) = &args[0].kind else {
-                return None;
-            };
-            let target = match name.as_str().to_ascii_lowercase().as_str() {
-                "is_int" | "is_integer" | "is_long" => PhpType::Int,
-                "is_float" | "is_double" => PhpType::Float,
-                "is_string" => PhpType::Str,
-                "is_bool" => PhpType::Bool,
-                // `is_countable($x)` guarantees the value is an `array` or a `Countable`
-                // object — exactly the two things `count()` accepts. Narrowing to this
-                // union lets guarded `count($x)` type-check even when `$x` is declared
-                // `iterable` (a non-Countable `Traversable` is dropped by the guard, so
-                // unguarded `count(iterable)` still errors).
-                "is_countable" => PhpType::Union(vec![
-                    PhpType::Array(Box::new(PhpType::Mixed)),
-                    PhpType::Object("Countable".to_string()),
-                ]),
-                _ => return None,
-            };
-            Some((var.clone(), target))
-        }
-        ExprKind::InstanceOf { value, target } => {
-            let ExprKind::Variable(var) = &value.kind else {
-                return None;
-            };
-            let InstanceOfTarget::Name(class) = target else {
-                return None;
-            };
-            Some((var.clone(), PhpType::Object(class.as_str().to_string())))
-        }
-        _ => None,
     }
 }

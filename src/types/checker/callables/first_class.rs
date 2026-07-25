@@ -11,8 +11,10 @@
 
 use crate::errors::CompileError;
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver};
+use crate::span::Span;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
+use super::super::type_compat::type_is_gradual_object_family;
 use super::super::Checker;
 
 impl Checker {
@@ -190,11 +192,69 @@ impl Checker {
             CallableTarget::Method { object, method } => {
                 let object_ty = self.infer_type(object, env)?;
                 match object_ty {
+                    PhpType::Callable if method == "__invoke" => Ok(self
+                        .resolve_expr_callable_sig(object, env)?
+                        .unwrap_or_else(Self::gradual_instance_method_callable_sig)),
+                    PhpType::Object(class_name) if class_name.is_empty() => {
+                        Ok(self.mixed_receiver_first_class_callable_sig(method))
+                    }
                     PhpType::Object(class_name) => {
                         let class_info = self.classes.get(&class_name).ok_or_else(|| {
                             CompileError::new(span, &format!("Undefined class: {}", class_name))
                         })?;
-                        let Some(sig) = class_info.methods.get(method) else {
+                        if let Some(sig) = class_info.methods.get(method) {
+                            if let Some(visibility) = class_info.method_visibilities.get(method) {
+                                let declaring_class = class_info
+                                    .method_declaring_classes
+                                    .get(method)
+                                    .map(String::as_str)
+                                    .unwrap_or(class_name.as_str());
+                                if !self.can_access_member(declaring_class, visibility) {
+                                    return Err(CompileError::new(
+                                        span,
+                                        &format!(
+                                            "Cannot access {} method: {}::{}",
+                                            Self::visibility_label(visibility),
+                                            class_name,
+                                            method
+                                        ),
+                                    ));
+                                }
+                            }
+                            let declared_flags =
+                                Self::declared_method_param_flags(class_info, method, false);
+                            let effective_sig =
+                                Self::callable_sig_for_declared_params(sig, &declared_flags);
+                            return Ok(Self::callable_wrapper_sig(&effective_sig));
+                        }
+                        if let Some(sig) = class_info.static_methods.get(method) {
+                            if let Some(visibility) =
+                                class_info.static_method_visibilities.get(method)
+                            {
+                                let declaring_class = class_info
+                                    .static_method_declaring_classes
+                                    .get(method)
+                                    .map(String::as_str)
+                                    .unwrap_or(class_name.as_str());
+                                if !self.can_access_member(declaring_class, visibility) {
+                                    return Err(CompileError::new(
+                                        span,
+                                        &format!(
+                                            "Cannot access {} method: {}::{}",
+                                            Self::visibility_label(visibility),
+                                            class_name,
+                                            method
+                                        ),
+                                    ));
+                                }
+                            }
+                            let declared_flags =
+                                Self::declared_method_param_flags(class_info, method, true);
+                            let effective_sig =
+                                Self::callable_sig_for_declared_params(sig, &declared_flags);
+                            return Ok(Self::callable_wrapper_sig(&effective_sig));
+                        }
+                        {
                             // FCC of `$this` (or any object) whose class does not statically
                             // declare `__invoke`. PHP treats `$this(...)` as a *callable value*;
                             // whether it is actually invokable is a runtime concern (guarded with
@@ -226,37 +286,81 @@ impl Checker {
                                     class_name, method
                                 ),
                             ));
-                        };
-                        if let Some(visibility) = class_info.method_visibilities.get(method) {
-                            let declaring_class = class_info
-                                .method_declaring_classes
-                                .get(method)
-                                .map(String::as_str)
-                                .unwrap_or(class_name.as_str());
-                            if !self.can_access_member(declaring_class, visibility) {
-                                return Err(CompileError::new(
-                                    span,
-                                    &format!(
-                                        "Cannot access {} method: {}::{}",
-                                        Self::visibility_label(visibility),
-                                        class_name,
-                                        method
-                                    ),
-                                ));
-                            }
                         }
-                        let declared_flags =
-                            Self::declared_method_param_flags(class_info, method, false);
-                        let effective_sig =
-                            Self::callable_sig_for_declared_params(sig, &declared_flags);
-                        Ok(Self::callable_wrapper_sig(&effective_sig))
                     }
-                    _ => Err(CompileError::new(
+                    receiver_ty if type_is_gradual_object_family(&receiver_ty) => {
+                        Ok(self.mixed_receiver_first_class_callable_sig(method))
+                    }
+                    _ if method == "__invoke" => {
+                        Ok(Self::gradual_instance_method_callable_sig())
+                    }
+                    receiver_ty => Err(CompileError::new(
                         span,
-                        "First-class method callable requires an object receiver",
+                        &format!(
+                            "First-class method callable requires an object receiver, got {:?}",
+                            receiver_ty
+                        ),
                     )),
                 }
             }
+        }
+    }
+
+    /// Resolves the shared callable signature for a method selected from a gradual receiver.
+    ///
+    /// A single fully declared signature keeps precise argument checking. Ambiguous, inferred,
+    /// or absent candidates use a permissive variadic contract because runtime class dispatch
+    /// selects the concrete descriptor and enforces its own metadata.
+    fn mixed_receiver_first_class_callable_sig(&self, method: &str) -> FunctionSig {
+        let method_key = crate::names::php_symbol_key(method);
+        let mut candidates = Vec::new();
+        for (class_name, class_info) in &self.classes {
+            let Some(sig) = class_info.methods.get(&method_key) else {
+                continue;
+            };
+            if let Some(visibility) = class_info.method_visibilities.get(&method_key) {
+                let declaring_class = class_info
+                    .method_declaring_classes
+                    .get(&method_key)
+                    .map(String::as_str)
+                    .unwrap_or(class_name.as_str());
+                if !self.can_access_member(declaring_class, visibility) {
+                    continue;
+                }
+            }
+            if !candidates.contains(sig) {
+                candidates.push(sig.clone());
+            }
+        }
+        if let [sig] = candidates.as_slice() {
+            if sig.declared_params.iter().all(|declared| *declared) {
+                return Self::callable_wrapper_sig(sig);
+            }
+        }
+        Self::gradual_instance_method_callable_sig()
+    }
+
+    /// Builds the permissive callable contract used when a gradual receiver has runtime-selected
+    /// method metadata.
+    fn gradual_instance_method_callable_sig() -> FunctionSig {
+        FunctionSig {
+            params: vec![(
+                "args".to_string(),
+                PhpType::Array(Box::new(PhpType::Mixed)),
+            )],
+            param_type_exprs: vec![None],
+            param_attributes: vec![Vec::new()],
+            defaults: vec![Some(Expr::new(
+                ExprKind::ArrayLiteral(Vec::new()),
+                Span::dummy(),
+            ))],
+            return_type: PhpType::Mixed,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false],
+            declared_params: vec![true],
+            variadic: Some("args".to_string()),
+            deprecation: None,
         }
     }
 

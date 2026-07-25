@@ -115,7 +115,8 @@ fn class_can_implement_throwable_contract(
 ///
 /// Class metadata is not registered yet while interface contracts are validated, so
 /// this derives the subtype relationship from the interface currently being checked
-/// and the interfaces declared directly on the class.
+/// and the interfaces declared directly on the class. A nullable/union interface return accepts
+/// the same concrete self subtype through any compatible object member.
 fn interface_self_return_conforms(
     checker: &Checker,
     class: &FlattenedClass,
@@ -133,6 +134,17 @@ fn interface_self_return_conforms(
                             || checker.interface_extends_interface(declared, expected_name)
                     }))
         }
+        (PhpType::Union(required_members), PhpType::Object(_)) => required_members.iter().any(
+            |required_member| {
+                interface_self_return_conforms(
+                    checker,
+                    class,
+                    interface_name,
+                    required_member,
+                    actual_return,
+                )
+            },
+        ),
         _ => false,
     }
 }

@@ -568,7 +568,23 @@ fn runtime_builtin_descriptor_cases(
         };
         let wrapper_sig =
             runtime_builtin_wrapper_sig(name, &crate::types::callable_wrapper_sig(&sig));
-        let case_sig = callable_dispatch::specialized_runtime_case_sig(&wrapper_sig, source_arg_ty);
+        let mut case_sig =
+            callable_dispatch::specialized_runtime_case_sig(&wrapper_sig, source_arg_ty);
+        if php_symbol_key(name) == "strlen" {
+            if let Some(source_ty) = source_arg_ty {
+                let source_ty = source_ty.codegen_repr();
+                if crate::builtins::semantics::strlen_accepts_source(&source_ty)
+                    && !matches!(
+                        source_ty,
+                        PhpType::Str | PhpType::Mixed | PhpType::Union(_) | PhpType::Void
+                    )
+                {
+                    if let Some((_, param_ty)) = case_sig.params.first_mut() {
+                        *param_ty = source_ty;
+                    }
+                }
+            }
+        }
         let entry_label = emit_runtime_builtin_wrapper_inline(ctx, name, &case_sig)?;
         let invoker_label = emit_runtime_callable_invoker_inline(ctx, &case_sig, &[]);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
@@ -778,7 +794,7 @@ pub(super) fn emit_invokable_object_descriptor_value(
 /// Returns one module-wide static descriptor template for a public instance method.
 /// Receiver objects are captured into runtime copies, so the wrapper, invoker, and
 /// immutable descriptor header can be shared by every dynamic call site.
-fn runtime_instance_method_descriptor_template(
+pub(super) fn runtime_instance_method_descriptor_template(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
     method_name: &str,

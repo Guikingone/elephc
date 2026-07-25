@@ -115,6 +115,88 @@ echo $a[0][1] . "\n";
     );
 }
 
+/// An initially empty outer array has element type `Never`; a nested keyed write
+/// must still create both levels and retain the stored value.
+#[test]
+fn test_autovivify_nested_keyed_write_from_empty_array() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [];
+$a["outer"]["inner"] = "stored";
+echo $a["outer"]["inner"], "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "stored\n");
+    assert!(
+        !out.stderr.contains("Undefined array key"),
+        "autovivifying write must not warn, got: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A nullable/coalesced outer key obtained by `foreach` destructuring must keep
+/// the empty-array root eligible for nested keyed autovivification.
+#[test]
+fn test_autovivify_nested_keyed_write_with_coalesced_dynamic_key() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function build(array $rows) {
+    $result = [];
+    foreach ($rows as [$scope, $name, $writeScope]) {
+        $result[$writeScope ?? $scope][$name] = "stored";
+    }
+    return $result;
+}
+
+$result = build([["scope", "name", null]]);
+echo $result["scope"]["name"], "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "stored\n");
+    assert!(
+        !out.stderr.contains("Undefined array key"),
+        "autovivifying write must not warn, got: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// An uncalled method keeps destructured inputs gradual; its empty local still
+/// needs to type-check the same coalesced-key nested write used at runtime.
+#[test]
+fn test_autovivify_uncalled_method_with_gradual_coalesced_key() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Builder {
+    public static function build($rows): array {
+        $result = [];
+        foreach ($rows as [$scope, $name, $writeScope]) {
+            $result[$writeScope ?? $scope][$name] = "stored";
+        }
+        return $result;
+    }
+}
+
+echo "ok\n";
+"#,
+    );
+    assert_eq!(out.stdout, "ok\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// A first out-of-range write leaves null gap slots behind; a second nested
 /// write must autovivify THROUGH such a null gap slot.
 #[test]

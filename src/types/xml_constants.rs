@@ -1,8 +1,7 @@
 //! Purpose:
-//! Defines `ext/dom`/`ext/xml` node-kind integer constants (`XML_*`) exposed by
-//! elephc. Only the subset demanded by real-world PHP source (currently
-//! `XML_DOCUMENT_TYPE_NODE`) is registered; the full DOM node-kind space is
-//! intentionally out of scope.
+//! Defines demanded `ext/dom`/`ext/xml`/libxml integer constants exposed by elephc.
+//! Covers the DOM document-type node plus parser/security flags used by Symfony; the
+//! complete XML/libxml constant space is intentionally out of scope.
 //!
 //! Called from:
 //! - `crate::types::checker` when registering predefined constants.
@@ -13,8 +12,13 @@
 //!   PHP exposes verbatim. Verified with
 //!   `php -n -r 'var_dump(XML_DOCUMENT_TYPE_NODE);'` (PHP 8.5.6 local).
 
-/// Tuple of `(name, value)` pairs for the demanded `ext/dom` `XML_*` node-kind constants.
-pub(crate) const XML_INT_CONSTANTS: &[(&str, i64)] = &[("XML_DOCUMENT_TYPE_NODE", 10)];
+/// Tuple of `(name, value)` pairs for the demanded DOM/XML/libxml constants.
+pub(crate) const XML_INT_CONSTANTS: &[(&str, i64)] = &[
+    ("XML_DOCUMENT_TYPE_NODE", 10),
+    ("LIBXML_ERR_WARNING", 1),
+    ("LIBXML_COMPACT", 65536),
+    ("LIBXML_NONET", 2048),
+];
 
 #[cfg(test)]
 mod tests {
@@ -29,6 +33,21 @@ mod tests {
             .expect("XML_DOCUMENT_TYPE_NODE defined")
             .1;
         assert_eq!(value, 10);
+    }
+
+    /// Verifies the demanded libxml error/security flags match PHP 8.5.6.
+    #[test]
+    fn test_libxml_flags_match_php() {
+        let value_of = |name: &str| {
+            XML_INT_CONSTANTS
+                .iter()
+                .find(|(constant_name, _)| *constant_name == name)
+                .unwrap_or_else(|| panic!("{name} defined"))
+                .1
+        };
+        assert_eq!(value_of("LIBXML_ERR_WARNING"), 1);
+        assert_eq!(value_of("LIBXML_COMPACT"), 65536);
+        assert_eq!(value_of("LIBXML_NONET"), 2048);
     }
 
     /// Asserts no duplicate names exist in `XML_INT_CONSTANTS`.

@@ -2885,6 +2885,95 @@
   },
   {
     "area": "Array",
+    "canonical_name": "array_change_key_case",
+    "description": "Changes the case of all string keys in an array.",
+    "eval": {
+      "kind": "none",
+      "supported": false
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 423,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.array_change_key_case` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/array/array_change_key_case.rs",
+      "sig_line": null
+    },
+    "name": "array_change_key_case",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": []
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "array_change_key_case"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "array_change_key_case"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "case",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "array",
+      "variadic": null
+    },
+    "slug": "array_change_key_case",
+    "sub_area": "Array"
+  },
+  {
+    "area": "Array",
     "canonical_name": "array_chunk",
     "description": "Splits an array into chunks of the given size.",
     "eval": {
@@ -4897,7 +4986,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "shared",
+      "result_type": "checked",
       "runtime_functions": [
         "array_map"
       ],
@@ -19137,64 +19226,6 @@
   },
   {
     "area": "Class",
-    "canonical_name": "get_class_methods",
-    "description": "get_class_methods() is available inside eval'd code via the magician interpreter; compiled (AOT) code does not support it yet.",
-    "eval": {
-      "area": "symbols",
-      "home_file": "crates/elephc-magician/src/interpreter/builtins/symbols/get_class_methods.rs",
-      "hooks": [
-        "direct",
-        "values"
-      ],
-      "kind": "registry",
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "object_or_class",
-          "optional": false
-        }
-      ],
-      "required_param_count": 1,
-      "supported": true,
-      "variadic": null
-    },
-    "eval_only": true,
-    "in_catalog": true,
-    "is_extension": false,
-    "is_internal": false,
-    "lowering": {
-      "checker_file": null,
-      "checker_line": null,
-      "codegen_file": null,
-      "codegen_function": null,
-      "codegen_line": null,
-      "notes": [],
-      "runtime_helpers": [],
-      "sig_arm": null,
-      "sig_file": null,
-      "sig_line": null
-    },
-    "name": "get_class_methods",
-    "semantics": null,
-    "sig": {
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "object_or_class",
-          "optional": false,
-          "type": "mixed"
-        }
-      ],
-      "return_type": "mixed",
-      "variadic": null
-    },
-    "slug": "get_class_methods",
-    "sub_area": "Class"
-  },
-  {
-    "area": "Class",
     "canonical_name": "get_class_vars",
     "description": "get_class_vars() is available inside eval'd code via the magician interpreter; compiled (AOT) code does not support it yet.",
     "eval": {
@@ -25062,8 +25093,9 @@
       "codegen_function": "lower_registry_call",
       "codegen_line": 423,
       "notes": [
-        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
-        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.intval` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -25074,32 +25106,55 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "dynamic"
+        "kind": "dynamic_target",
+        "target": "intval"
       },
       "effects": {
-        "kind": "shared"
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
       },
       "lowering": {
-        "kind": "eir"
+        "kind": "runtime_call",
+        "target": "intval"
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "non_heap"
+        "kind": "may_alias_arguments"
       },
       "requirements": {
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
-      "runtime_functions": [],
-      "target_strategy": "eir_primitive",
+      "result_type": "checked",
+      "runtime_functions": [
+        "intval"
+      ],
+      "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
         "linux-aarch64",
         "linux-x86_64"
       ],
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": true
       }
     },
     "sig": {
@@ -25110,6 +25165,13 @@
           "name": "value",
           "optional": false,
           "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "10",
+          "name": "base",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "int",
@@ -34828,7 +34890,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "phpversion"
       ],
@@ -34839,7 +34901,8 @@
         "linux-x86_64"
       ],
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": false
       }
     },
     "sig": {
@@ -35214,6 +35277,12 @@
           "default": "0",
           "name": "flags",
           "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
+          "optional": true
         }
       ],
       "required_param_count": 2,
@@ -35374,6 +35443,12 @@
           "by_ref": false,
           "default": "0",
           "name": "flags",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
           "optional": true
         }
       ],
@@ -35595,7 +35670,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "preg_replace"
       ],
@@ -35606,7 +35681,8 @@
         "linux-x86_64"
       ],
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": true
       }
     },
     "sig": {
@@ -35631,6 +35707,20 @@
           "name": "subject",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "-1",
+          "name": "limit",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": true,
+          "default": "null",
+          "name": "count",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "string",

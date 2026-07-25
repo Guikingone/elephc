@@ -82,6 +82,9 @@ pub(super) fn lower(
         RuntimeFnId::Intdiv => Some({
             crate::codegen::lower_inst::builtins::math::lower_intdiv(ctx, inst)
         }),
+        RuntimeFnId::Intval => Some({
+            crate::codegen::lower_inst::builtins::lower_intval(ctx, inst)
+        }),
         RuntimeFnId::Log => Some({
             crate::codegen::lower_inst::builtins::math::lower_log(ctx, inst)
         }),

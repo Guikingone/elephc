@@ -23,6 +23,7 @@ use crate::codegen::{
     emit_box_current_value_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
     runtime_value_tag, CodegenIrError, Result, UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
 };
+use crate::codegen_support::callable_descriptor;
 use crate::ir::{Immediate, Instruction, Op, TraitMethodInfo, ValueDef, ValueId};
 use crate::names::{
     enum_case_symbol, php_symbol_key, property_hook_get_method, property_hook_set_method,
@@ -381,10 +382,62 @@ pub(super) fn lower_reflection_owner_new(
         let metadata = reflection_owner_metadata(ctx, class_name, inst)?;
         emit_reflection_owner_object(ctx, class_name, &metadata)?;
     }
+    if class_name == "ReflectionFunction" {
+        let function_operand = inst.operands.first().copied().ok_or_else(|| {
+            CodegenIrError::invalid_module("ReflectionFunction object_new missing callable operand")
+        })?;
+        emit_reflection_function_closure_property(ctx, function_operand)?;
+    }
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
     ctx.store_result_value(result)
+}
+
+/// Retains the reflected callable operand into the synthetic `__closure` property.
+///
+/// Callable operands already carry a descriptor pointer. Compile-time string operands use the
+/// same runtime callable registry as other string-to-callable conversions, yielding a static
+/// descriptor that the retain/release helpers safely treat as persistent.
+fn emit_reflection_function_closure_property(
+    ctx: &mut FunctionContext<'_>,
+    function_operand: ValueId,
+) -> Result<()> {
+    let closure_offset = ctx
+        .module
+        .class_infos
+        .get("ReflectionFunction")
+        .and_then(|class_info| class_info.property_offsets.get("__closure"))
+        .copied()
+        .ok_or_else(|| CodegenIrError::missing_entry("ReflectionFunction::__closure", 0))?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    match ctx.value_php_type(function_operand)?.codegen_repr() {
+        PhpType::Callable => {
+            ctx.load_value_to_result(function_operand)?;
+        }
+        PhpType::Str => {
+            super::super::callables::emit_runtime_string_descriptor_value(
+                ctx,
+                function_operand,
+                result_reg,
+                "ReflectionFunction::getClosure",
+            )?;
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "ReflectionFunction callable storage for PHP type {:?}",
+                other
+            )));
+        }
+    }
+    callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, closure_offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, closure_offset + 8);
+    abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+    Ok(())
 }
 
 /// Returns the constructor object operand for ReflectionClass/Object object reflection.
@@ -944,6 +997,12 @@ pub(super) fn emit_reflection_owner_object(
                 class_name,
                 "__is_anonymous",
                 metadata.is_anonymous,
+            )?;
+            emit_reflection_owner_bool_property(
+                ctx,
+                class_name,
+                "__is_static",
+                metadata.member_flags.is_static,
             )?;
         }
         emit_reflection_owner_bool_property(
@@ -1710,13 +1769,16 @@ fn reflection_closure_literal_metadata(
     metadata.is_anonymous = true;
     metadata.unbacked_name = true;
     metadata.unbacked_file = true;
-    let Some(signature) = ctx
+    let Some(function) = ctx
         .module
         .closures
         .iter()
         .find(|function| function.name == closure_name)
-        .and_then(|function| function.signature.as_ref())
     else {
+        return Ok(metadata);
+    };
+    metadata.member_flags.is_static = function.flags.is_static;
+    let Some(signature) = function.signature.as_ref() else {
         return Ok(metadata);
     };
     metadata.required_parameter_count = reflection_required_parameter_count(signature);
@@ -5591,15 +5653,16 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
 
 /// Returns true when `new ReflectionFunction($operand)` can be resolved at compile time: a
 /// closure literal, a first-class callable targeting a plain free function, or a compile-time
-/// constant string. `lower_reflection_owner_new` routes anything else (a genuinely dynamic
-/// `Closure`/`callable`-typed value, or a `Mixed`/`Union` value) to
+/// constant string. `lower_reflection_owner_new` routes anything else (a runtime `Str`, a
+/// genuinely dynamic `Closure`/`callable`-typed value, or a `Mixed`/`Union` value) to
 /// `super::reflection_function_dynamic::lower_reflection_function_new_dynamic` instead.
 pub(super) fn is_reflection_function_static_operand(
     ctx: &FunctionContext<'_>,
     value: ValueId,
 ) -> bool {
     closure_new_operand_name(ctx, value).is_some()
-        || first_class_callable_operand_name(ctx, value).is_some()
+        || first_class_callable_operand_name(ctx, value)
+            .is_some_and(|name| !name.contains("::"))
         || const_required_string_operand(ctx, value, "ReflectionFunction").is_ok()
 }
 
@@ -7183,7 +7246,7 @@ fn emit_reflection_parameter_object(
     emit_reflection_parameter_properties(ctx, parameter)
 }
 
-/// Writes one ReflectionParameter object's private metadata properties.
+/// Writes one ReflectionParameter object's public name and private metadata properties.
 fn emit_reflection_parameter_properties(
     ctx: &mut FunctionContext<'_>,
     parameter: &ReflectionParameterMember,
@@ -7199,6 +7262,12 @@ fn emit_reflection_parameter_properties(
     let default_value_object_class_offset =
         reflection_property_offset(class_info, "__default_value_object_class")?;
     emit_reflection_string_property(ctx, &parameter.name, name_offset, name_offset + 8);
+    emit_reflection_owner_string_property_by_name(
+        ctx,
+        "ReflectionParameter",
+        "name",
+        &parameter.name,
+    )?;
     emit_reflection_attrs_property(
         ctx,
         "ReflectionParameter",

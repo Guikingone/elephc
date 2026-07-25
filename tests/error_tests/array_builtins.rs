@@ -86,6 +86,13 @@ fn test_array_values_mixed_arg_type_checks() {
     expect_ok("<?php function tc(mixed $x): void { $y = array_values($x); }");
 }
 
+/// Verifies array_keys() accepts a `Mixed` argument gradually and leaves its concrete
+/// indexed-versus-associative shape to the EIR runtime boundary.
+#[test]
+fn test_array_keys_mixed_arg_type_checks() {
+    expect_ok("<?php function tc(mixed $x): void { $y = array_keys($x); }");
+}
+
 /// Verifies array_filter() accepts a `Mixed` first argument gradually.
 #[test]
 fn test_array_filter_mixed_arg_type_checks() {
@@ -438,6 +445,24 @@ fn test_error_array_flip_wrong_args() {
     );
 }
 
+/// Verifies `array_change_key_case()` enforces its one-or-two argument signature.
+#[test]
+fn test_error_array_change_key_case_wrong_args() {
+    expect_error(
+        "<?php array_change_key_case();",
+        "array_change_key_case() takes 1 or 2 arguments",
+    );
+}
+
+/// Verifies `array_change_key_case()` rejects a concretely non-array first argument.
+#[test]
+fn test_error_array_change_key_case_non_array_arg() {
+    expect_error(
+        "<?php array_change_key_case(5);",
+        "array_change_key_case() argument must be array",
+    );
+}
+
 /// Verifies that error array chunk wrong args.
 #[test]
 fn test_error_array_chunk_wrong_args() {
@@ -721,12 +746,15 @@ fn test_indexed_array_unrelated_object_values_widen_to_mixed() {
     );
 }
 
-/// Verifies `array_map()` rejects object elements until its callback runtime supports them.
+/// Verifies `array_map()` accepts object elements through its pointer-sized callback ABI.
 #[test]
-fn test_error_array_map_rejects_object_elements() {
-    expect_error(
-        "<?php final class Box {} $items = [new Box()]; array_map(static fn(Box $box): Box => $box, $items);",
-        "array_map() does not yet support object array elements",
+fn test_array_map_accepts_object_elements() {
+    assert!(
+        check_source(
+            "<?php final class Box {} $items = [new Box()]; array_map(static fn(Box $box): int => 1, $items);",
+        )
+        .is_ok(),
+        "object elements should use the refcounted pointer-slot callback path",
     );
 }
 
@@ -761,6 +789,7 @@ fn test_reset_current_key_recognized() {
     assert!(
         check_source(
             r#"<?php
+namespace ArrayPointerRecognition;
 $a = [1, 2, 3];
 $r = reset($a);
 $c = current($a);
@@ -909,14 +938,10 @@ fn test_error_array_replace_wrong_args() {
     expect_ok("<?php $a = [\"k\" => 1]; $r = array_replace($a); print_r($r);");
 }
 
-/// Verifies that array_replace() rejects string-element indexed arrays (scalar indexed inputs
-/// are supported; string/heap element indexed inputs are a follow-up).
+/// Verifies that array_replace() accepts string-element indexed arrays.
 #[test]
-fn test_error_array_replace_string_indexed_unsupported() {
-    expect_error(
-        "<?php array_replace([\"a\", \"b\"], [\"c\"]);",
-        "array_replace() arguments must be associative arrays or indexed arrays of scalars",
-    );
+fn test_array_replace_string_indexed_supported() {
+    expect_ok("<?php array_replace([\"a\", \"b\"], [\"c\"]);");
 }
 
 /// Verifies that array_replace_recursive() accepts a single argument (PHP:
@@ -926,14 +951,10 @@ fn test_error_array_replace_recursive_wrong_args() {
     expect_ok("<?php $a = [\"k\" => 1]; $r = array_replace_recursive($a); print_r($r);");
 }
 
-/// Verifies that array_replace_recursive() rejects string-element indexed arrays (scalar indexed
-/// inputs are supported; string/heap element indexed inputs are a follow-up).
+/// Verifies that array_replace_recursive() accepts string-element indexed arrays.
 #[test]
-fn test_error_array_replace_recursive_string_indexed_unsupported() {
-    expect_error(
-        "<?php array_replace_recursive([\"a\"], [\"b\"]);",
-        "array_replace_recursive() arguments must be associative arrays or indexed arrays of scalars",
-    );
+fn test_array_replace_recursive_string_indexed_supported() {
+    expect_ok("<?php array_replace_recursive([\"a\"], [\"b\"]);");
 }
 
 /// Verifies that array_diff_assoc() with a single argument reports an arity error.

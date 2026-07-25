@@ -112,6 +112,17 @@ impl RuntimeFeatures {
             class_relation_introspection: true,
         }
     }
+
+    /// Enables optional runtime families referenced by code generated for another feature.
+    ///
+    /// The unbounded descriptor invoker emits generic wrappers for every dynamically callable
+    /// builtin, including `preg_match()` and `preg_match_all()`. Those wrappers reference the
+    /// regex helpers even when the source program contains no direct `preg_*` call.
+    pub(crate) fn include_transitive_codegen_dependencies(&mut self) {
+        if self.descriptor_invoker {
+            self.regex = true;
+        }
+    }
 }
 
 /// Returns the optional runtime features referenced by the given optimized program.
@@ -171,6 +182,7 @@ fn runtime_features_for_program_and_classes_opt(
     features.regex = program_requires_regex(program, classes);
     features.phar_archive = class_emission_can_reference_phar_archive(program, classes);
     features.descriptor_invoker = program_requires_descriptor_invoker(program);
+    features.include_transitive_codegen_dependencies();
     features
 }
 
@@ -271,9 +283,6 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
         | StmtKind::Throw(expr)
         | StmtKind::ExprStmt(expr)
         | StmtKind::ConstDecl { value: expr, .. }
-        | StmtKind::Assign { value: expr, .. }
-        | StmtKind::TypedAssign { value: expr, .. }
-        | StmtKind::StaticVar { init: expr, .. }
         | StmtKind::ListUnpack { value: expr, .. }
         | StmtKind::Return(Some(expr))
         | StmtKind::ArrayPush { value: expr, .. }
@@ -282,6 +291,11 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
         | StmtKind::StaticPropertyAssign { value: expr, .. }
         | StmtKind::StaticPropertyArrayPush { value: expr, .. }
         | StmtKind::Include { path: expr, .. } => expr_has_regex_call(expr),
+        StmtKind::Assign { value, .. }
+        | StmtKind::TypedAssign { value, .. }
+        | StmtKind::StaticVar { init: value, .. } => {
+            expr_has_regex_call(value) || expr_is_regex_callback_string(value)
+        }
         StmtKind::ArrayAssign { index, value, .. }
         | StmtKind::PropertyArrayAssign { index, value, .. }
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
@@ -435,6 +449,7 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
             body_has_regex_call(prelude)
                 || expr_has_regex_call(target)
                 || expr_has_regex_call(value)
+                || expr_is_regex_callback_string(value)
                 || result_target.as_deref().is_some_and(expr_has_regex_call)
         }
         ExprKind::ArrayLiteral(items) => items.iter().any(expr_has_regex_call),
@@ -560,6 +575,18 @@ fn expr_is_regex_callback_string(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::StringLiteral(name) => is_regex_builtin_name(name),
         ExprKind::NamedArg { value, .. } => expr_is_regex_callback_string(value),
+        ExprKind::Ternary {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            expr_is_regex_callback_string(then_expr)
+                || expr_is_regex_callback_string(else_expr)
+        }
+        ExprKind::ShortTernary { value, default }
+        | ExprKind::NullCoalesce { value, default } => {
+            expr_is_regex_callback_string(value) || expr_is_regex_callback_string(default)
+        }
         _ => false,
     }
 }
@@ -1103,6 +1130,22 @@ mod tests {
         );
     }
 
+    /// Verifies a finite conditional regex function-name assignment enables regex helpers for a
+    /// later direct dynamic call.
+    #[test]
+    fn test_runtime_features_include_regex_for_conditional_dynamic_callable() {
+        assert_eq!(
+            features_for(
+                "<?php $match = $all ? 'preg_match_all' : 'preg_match'; $match('/a/', 'a');",
+            ),
+            RuntimeFeatures {
+                regex: true,
+                descriptor_invoker: true,
+                ..RuntimeFeatures::none()
+            }
+        );
+    }
+
     /// Verifies first-class callable references to regex builtins enable regex helpers.
     #[test]
     fn test_runtime_features_include_regex_for_first_class_callable() {
@@ -1172,10 +1215,10 @@ mod tests {
     /// Verifies a dynamic `call_user_func()` callback requests the dispatcher.
     #[test]
     fn test_runtime_features_include_descriptor_invoker_for_dynamic_call_user_func() {
-        assert!(
-            features_for("<?php $cb = \"strlen\"; echo call_user_func($cb, \"hi\");")
-                .descriptor_invoker
-        );
+        let features =
+            features_for("<?php $cb = \"strlen\"; echo call_user_func($cb, \"hi\");");
+        assert!(features.descriptor_invoker);
+        assert!(features.regex);
     }
 
     /// Verifies a direct dynamic string call requests the dispatcher.

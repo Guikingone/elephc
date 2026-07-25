@@ -111,3 +111,44 @@ fn test_assignment_rhs_error_does_not_cascade_undefined_variable() {
         all.iter().map(|error| error.message.clone()).collect::<Vec<_>>(),
     );
 }
+
+/// Verifies a failed constructor argument check still recovers the assigned object's type inside
+/// each branch, so following property-array writes do not add unrelated receiver-type cascades.
+#[test]
+fn test_branch_constructor_error_recovers_object_overwrite_type() {
+    let error = check_source_full(
+        r#"<?php
+        final class RecoveredBranchBox {
+            public array $attributes = [];
+            public function __construct(string $name) {}
+        }
+        function updateRecoveredBranch(bool $alternate): void {
+            $value = "source";
+            if ($alternate) {
+                $value = new RecoveredBranchBox(1);
+            } else {
+                $value = new RecoveredBranchBox(2);
+                $value->attributes["inside"] = 1;
+            }
+            $value->attributes["after"] = 2;
+        }
+        "#,
+    )
+    .unwrap_err();
+    let all = error.flatten();
+    assert!(
+        all.iter()
+            .any(|error| error.message.contains("expects Str, got Int")),
+        "expected the constructor argument error, got {:?}",
+        all.iter().map(|error| error.message.clone()).collect::<Vec<_>>(),
+    );
+    assert!(
+        !all.iter().any(|error| {
+            error
+                .message
+                .contains("Array index assignment requires an object or typed pointer")
+        }),
+        "constructor recovery must suppress property-array receiver cascades, got {:?}",
+        all.iter().map(|error| error.message.clone()).collect::<Vec<_>>(),
+    );
+}

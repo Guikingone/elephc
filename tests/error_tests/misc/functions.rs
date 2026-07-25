@@ -87,6 +87,27 @@ fn test_error_function_ref_param_rejects_literal() {
     );
 }
 
+/// Verifies that an explicit named `null` remains invalid for a by-reference parameter even when
+/// the declaration default is `null`; only an omitted parameter may consume that default.
+#[test]
+fn test_error_named_ref_param_rejects_explicit_default_value() {
+    expect_error(
+        "<?php
+        class Target {
+            static function parseName(
+                string $value,
+                ?string &$ignored = null,
+                ?string &$parsedName = null
+            ): string {
+                return $value;
+            }
+        }
+        $parsedName = '';
+        Target::parseName('binding', ignored: null, parsedName: $parsedName);",
+        "Static method Target::parseName parameter $ignored must be passed a variable",
+    );
+}
+
 /// Verifies that an array-element argument (`$arr['k']`) is still rejected for a by-reference
 /// parameter. The by-reference property relaxation is scoped to non-nullsafe instance property
 /// fetches only; array elements remain future work.
@@ -604,12 +625,12 @@ fn test_error_by_value_self_capture_still_undefined() {
     );
 }
 
-/// Verifies that a by-ref capture of a variable that is NOT the assignment
-/// target is still rejected as undefined (issue #382 guard).
+/// Verifies that a by-reference capture (`use(&$h)`) of a variable that does not yet exist in
+/// the enclosing scope is ACCEPTED: PHP auto-vivifies the parent binding to null and binds it
+/// into the closure by reference, never warning. (This corrects the earlier issue #382 guard,
+/// which over-strictly rejected the shape; by-value `use($f)` of an undefined variable still
+/// errors — see `test_error_by_value_self_capture_still_undefined`.)
 #[test]
-fn test_error_by_ref_capture_not_assignment_target_still_undefined() {
-    expect_error(
-        "<?php $g = function() use(&$h) { return $h; };",
-        "Undefined variable in use()",
-    );
+fn test_by_ref_capture_of_undefined_auto_vivifies() {
+    expect_ok("<?php $g = function() use(&$h) { return $h; };");
 }

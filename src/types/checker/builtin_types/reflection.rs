@@ -42,6 +42,7 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionClass",
         "ReflectionObject",
         "ReflectionEnum",
+        "ReflectionFunctionAbstract",
         "ReflectionFunction",
         "ReflectionMethod",
         "ReflectionProperty",
@@ -134,25 +135,35 @@ pub(crate) fn inject_builtin_reflection(
         builtin_reflection_object_class(),
     );
     class_map.insert("ReflectionEnum".to_string(), builtin_reflection_enum_class());
-    class_map.insert("ReflectionFunction".to_string(), builtin_reflection_function());
+    let mut reflection_function = builtin_reflection_function();
+    let mut reflection_method = builtin_reflection_owner_class(
+        "ReflectionMethod",
+        true,
+        vec![
+            // PHP's real first argument is `object|string $objectOrMethod`; typed
+            // `mixed` so object/boxed/scalar arguments reach the EIR dynamic member
+            // dispatcher, which weak-coerces and throws catchable errors like PHP.
+            ("class_name", Some(mixed_type()), None, false),
+            // Plain `string` (not `?string`): the deprecated one-argument
+            // `new ReflectionMethod("Class::method")` form is intercepted before signature
+            // checking, so a `null` member name can never legitimately reach this
+            // signature, and a non-string member name must stay a loud
+            // "expects Str" compile error (PHP does not weak-coerce it).
+            ("method_name", Some(TypeExpr::Str), None, false),
+        ],
+    );
+    let reflection_function_abstract =
+        builtin_reflection_function_abstract(&reflection_function, &reflection_method);
+    reflection_function.extends = Some("ReflectionFunctionAbstract".to_string());
+    reflection_method.extends = Some("ReflectionFunctionAbstract".to_string());
+    class_map.insert(
+        "ReflectionFunctionAbstract".to_string(),
+        reflection_function_abstract,
+    );
+    class_map.insert("ReflectionFunction".to_string(), reflection_function);
     class_map.insert(
         "ReflectionMethod".to_string(),
-        builtin_reflection_owner_class(
-            "ReflectionMethod",
-            true,
-            vec![
-                // PHP's real first argument is `object|string $objectOrMethod`; typed
-                // `mixed` so object/boxed/scalar arguments reach the EIR dynamic member
-                // dispatcher, which weak-coerces and throws catchable errors like PHP.
-                ("class_name", Some(mixed_type()), None, false),
-                // Plain `string` (not `?string`): the deprecated one-argument
-                // `new ReflectionMethod("Class::method")` form is intercepted before signature
-                // checking, so a `null` member name can never legitimately reach this
-                // signature, and a non-string member name must stay a loud
-                // "expects Str" compile error (PHP does not weak-coerce it).
-                ("method_name", Some(TypeExpr::Str), None, false),
-            ],
-        ),
+        reflection_method,
     );
     class_map.insert(
         "ReflectionProperty".to_string(),
@@ -862,20 +873,99 @@ fn builtin_reflection_function() -> FlattenedClass {
     class
 }
 
-/// Builds the `ReflectionParameter` shell with private name/position/optional/
-/// variadic slots and public accessors, populated at codegen from the reflected
-/// function's signature.
+/// Builds the abstract parent shared by `ReflectionFunction` and `ReflectionMethod`.
+///
+/// The concrete synthetic shells remain the runtime method owners because their private
+/// metadata layouts differ. Only methods with the same caller-visible signature on both
+/// children become abstract parent declarations, which gives typed
+/// `ReflectionFunctionAbstract` receivers a sound vtable dispatch surface.
+fn builtin_reflection_function_abstract(
+    reflection_function: &FlattenedClass,
+    reflection_method: &FlattenedClass,
+) -> FlattenedClass {
+    let mut methods = reflection_function
+        .methods
+        .iter()
+        .filter(|method| method.name != "__construct")
+        .filter_map(|method| {
+            let method_key = php_symbol_key(&method.name);
+            let peer = reflection_method
+                .methods
+                .iter()
+                .find(|candidate| php_symbol_key(&candidate.name) == method_key)?;
+            if !reflection_methods_have_matching_signatures(method, peer) {
+                return None;
+            }
+            let mut declaration = method.clone();
+            declaration.is_abstract = true;
+            declaration.is_final = false;
+            declaration.has_body = false;
+            declaration.body.clear();
+            Some(declaration)
+        })
+        .collect::<Vec<_>>();
+    methods.sort_by(|left, right| php_symbol_key(&left.name).cmp(&php_symbol_key(&right.name)));
+    FlattenedClass {
+        name: "ReflectionFunctionAbstract".to_string(),
+        span: dummy(),
+        extends: None,
+        implements: vec!["Reflector".to_string()],
+        is_abstract: true,
+        is_final: false,
+        is_readonly_class: false,
+        properties: vec![builtin_property(
+            "name",
+            Visibility::Public,
+            Some(TypeExpr::Str),
+            empty_string(),
+        )],
+        methods,
+        attributes: Vec::new(),
+        constants: Vec::new(),
+        used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
+    }
+}
+
+/// Returns whether two concrete reflection methods expose the same override signature.
+fn reflection_methods_have_matching_signatures(left: &ClassMethod, right: &ClassMethod) -> bool {
+    left.visibility == right.visibility
+        && left.is_static == right.is_static
+        && left.params.len() == right.params.len()
+        && left
+            .params
+            .iter()
+            .zip(&right.params)
+            .all(|(left, right)| {
+                left.0 == right.0
+                    && left.1 == right.1
+                    && left.2.is_some() == right.2.is_some()
+                    && left.3 == right.3
+            })
+        && left.variadic == right.variadic
+        && left.variadic_by_ref == right.variadic_by_ref
+        && left.variadic_type == right.variadic_type
+        && left.return_type == right.return_type
+        && left.by_ref_return == right.by_ref_return
+}
+
+/// Builds the `ReflectionParameter` shell with PHP's public `$name`, private
+/// position/optional/variadic metadata slots, and public accessors, populated
+/// at codegen from the reflected function's signature.
 fn builtin_reflection_parameter() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionParameter".to_string(),
         span: dummy(),
         extends: None,
-        implements: Vec::new(),
+        // PHP: ReflectionParameter implements Reflector (which extends Stringable).
+        // The backed `__toString()` slot getter below satisfies the inherited contract.
+        implements: vec!["Reflector".to_string()],
         is_abstract: false,
         is_final: true,
         is_readonly_class: false,
         properties: vec![
             builtin_property("__name", Visibility::Private, Some(TypeExpr::Str), empty_string()),
+            builtin_property("name", Visibility::Public, Some(TypeExpr::Str), empty_string()),
             builtin_property("__attrs", Visibility::Private, Some(array_type()), empty_array()),
             builtin_property("__position", Visibility::Private, Some(TypeExpr::Int), int_lit(0)),
             builtin_property(
@@ -1895,6 +1985,16 @@ fn builtin_reflection_class() -> FlattenedClass {
                 str_or_false_type(),
                 empty_string_sentinel_expr("__file"),
             ),
+            builtin_reflection_unconditional_throw_method(
+                "getStartLine",
+                mixed_type(),
+                "ReflectionClass::getStartLine() is not supported: elephc does not track declaration line numbers",
+            ),
+            builtin_reflection_unconditional_throw_method(
+                "getEndLine",
+                mixed_type(),
+                "ReflectionClass::getEndLine() is not supported: elephc does not track declaration line numbers",
+            ),
             builtin_reflection_constant_false_union_method("getDocComment"),
             builtin_reflection_constant_false_union_method("getExtensionName"),
             builtin_reflection_constant_null_mixed_method("getExtension"),
@@ -1949,7 +2049,7 @@ fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_mixed_method("getStaticProperties", "__static_properties"),
             builtin_reflection_class_get_static_property_value_method(),
             builtin_reflection_class_set_static_property_value_method(),
-            builtin_reflection_class_array_method(
+            builtin_reflection_class_filtered_array_method(
                 "getReflectionConstants",
                 "__reflection_constants",
                 object_array_type("ReflectionClassConstant"),
@@ -4198,6 +4298,9 @@ fn builtin_reflection_owner_class(
             "getTentativeReturnType",
         ));
         methods.push(builtin_reflection_function_method_is_variadic_method());
+        methods.push(builtin_reflection_constant_empty_array_method(
+            "getStaticVariables",
+        ));
         methods.push(builtin_reflection_class_string_method(
             "__toString",
             "__string",
@@ -4239,10 +4342,31 @@ fn builtin_reflection_owner_class(
         methods.push(builtin_reflection_method_create_from_method_name_method());
         methods.push(builtin_reflection_set_accessible_method());
         methods.push(builtin_reflection_method_get_closure_method());
+        methods.push(builtin_reflection_unconditional_throw_method(
+            "getStartLine",
+            mixed_type(),
+            "ReflectionMethod::getStartLine() is not supported: elephc does not track declaration line numbers",
+        ));
+        methods.push(builtin_reflection_unconditional_throw_method(
+            "getEndLine",
+            mixed_type(),
+            "ReflectionMethod::getEndLine() is not supported: elephc does not track declaration line numbers",
+        ));
     }
     if name == "ReflectionFunction" {
         methods.push(builtin_reflection_function_invoke_method());
         methods.push(builtin_reflection_function_invoke_args_method());
+        properties.push(builtin_property(
+            "__closure",
+            Visibility::Private,
+            Some(TypeExpr::Named(Name::unqualified("Closure"))),
+            None,
+        ));
+        methods.push(builtin_reflection_slot_getter(
+            "getClosure",
+            "__closure",
+            TypeExpr::Named(Name::unqualified("Closure")),
+        ));
         methods.push(builtin_reflection_constant_empty_array_method(
             "getClosureUsedVariables",
         ));
@@ -4253,6 +4377,12 @@ fn builtin_reflection_owner_class(
         // No runtime backing (elephc does not track a closure's bound receiver on
         // `ReflectionFunction`); unconditional `null` stub typed `mixed` (covers `?object`).
         methods.push(builtin_reflection_constant_null_mixed_method("getClosureThis"));
+        // PHP: `getClosureCalledClass(): ?ReflectionClass` — named functions and
+        // unbound/static closures report `null`. Elephc does not retain a closure's
+        // late-static called scope, so expose the same nullable fallback.
+        methods.push(builtin_reflection_constant_null_mixed_method(
+            "getClosureCalledClass",
+        ));
         // Declaring source file of the reflected named function (empty-string sentinel);
         // gated on `__unbacked_file` for closure-literal/dynamic instances.
         properties.push(builtin_property(
@@ -4285,9 +4415,19 @@ fn builtin_reflection_owner_class(
             Some(bool_type()),
             false_bool(),
         ));
+        properties.push(builtin_property(
+            "__is_static",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
         methods.push(builtin_reflection_class_bool_method(
             "isAnonymous",
             "__is_anonymous",
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "isStatic",
+            "__is_static",
         ));
         methods.push(builtin_reflection_guarded_method(
             "getFileName",

@@ -864,6 +864,60 @@ foreach ($c as $k => $v) { echo '[' . $k . ':' . $v . ']'; }
     assert_eq!(out, "[0:10][1:20][x:1]");
 }
 
+/// Verifies an array literal spreads a boxed `mixed` array after a runtime shape check.
+#[test]
+fn test_array_literal_spread_mixed_array_runtime_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function printSpreadValues(mixed $values): void {
+    $spread = ["head", ...$values];
+    foreach ($spread as $key => $value) {
+        echo "[" . $key . ":" . $value . "]";
+    }
+}
+
+printSpreadValues(["x", "y"]);
+"#,
+    );
+    assert_eq!(out, "[0:head][1:x][2:y]");
+}
+
+/// Verifies an array literal rejects a boxed `mixed` scalar instead of silently spreading nothing.
+#[test]
+fn test_array_literal_spread_mixed_scalar_runtime_guard() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+function spreadValues(mixed $values): void {
+    $spread = [...$values];
+}
+
+spreadValues(42);
+"#,
+    );
+    assert!(
+        err.contains("array builtin argument must be of type array"),
+        "unexpected gradual spread diagnostic: {err}"
+    );
+}
+
+/// Verifies an array literal accepts an `iterable` operand and preserves its string keys.
+#[test]
+fn test_array_literal_spread_iterable_runtime_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+function printSpreadValues(iterable $values): void {
+    $spread = ["head", ...$values];
+    foreach ($spread as $key => $value) {
+        echo "[" . $key . ":" . $value . "]";
+    }
+}
+
+printSpreadValues(["named" => "x", 20 => "y"]);
+"#,
+    );
+    assert_eq!(out, "[0:head][named:x][1:y]");
+}
+
 /// Verifies that a variadic function with a preceding regular parameter receives zero rest elements when called with exactly one argument.
 #[test]
 fn test_variadic_with_regular_and_no_extra() {

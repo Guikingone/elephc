@@ -94,6 +94,12 @@ expect_builtin_arity_error!(
 );
 
 expect_builtin_arity_error!(
+    test_error_memory_get_usage_too_many_args,
+    "<?php memory_get_usage(true, false);",
+    "memory_get_usage() takes at most 1 argument"
+);
+
+expect_builtin_arity_error!(
     test_error_error_get_last_too_many_args,
     "<?php error_get_last(1);",
     "error_get_last() takes no arguments"

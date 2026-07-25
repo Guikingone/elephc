@@ -2,7 +2,7 @@
 title: "array_replace()"
 description: "Replaces elements from passed arrays into the first array."
 sidebar:
-  order: 32
+  order: 33
 ---
 
 ## array_replace()

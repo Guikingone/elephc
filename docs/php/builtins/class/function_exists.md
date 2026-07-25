@@ -2,7 +2,7 @@
 title: "function_exists()"
 description: "Returns true if the given function has been defined."
 sidebar:
-  order: 75
+  order: 76
 ---
 
 ## function_exists()

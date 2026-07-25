@@ -1,7 +1,8 @@
 //! Purpose:
-//! Lowers `new ReflectionFunction($dynamicValue)` for a `Closure`/`callable`-typed operand whose
-//! identity is not statically resolvable at the call site, or a `Mixed`/`Union` operand the
-//! checker accepted for the same reason. The runtime callable descriptor
+//! Lowers `new ReflectionFunction($dynamicValue)` for a runtime `Str`, a
+//! `Closure`/`callable`-typed operand whose identity is not statically resolvable at the call
+//! site, or a `Mixed`/`Union` operand the checker accepted for the same reason. The runtime
+//! callable descriptor
 //! (`crate::codegen_support::callable_descriptor`) already carries a full signature record and
 //! the target's real name, so no additional metadata table is emitted: the only per-call-site
 //! cost is instructions dereferencing the descriptor.
@@ -12,16 +13,17 @@
 //!   constructor's single operand.
 //!
 //! Key details:
-//! - The ctor performs a runtime tag check before touching the descriptor: a `Mixed`/`Union`
-//!   operand is unboxed and tag 10 (callable descriptor) proceeds; array/object/resource tags
-//!   throw a catchable, php-verified `\TypeError` ("must be of type Closure|string, X given");
-//!   a runtime string or weak-coercible scalar is a PHP-valid input this compiler cannot yet
-//!   resolve (dynamic function-name lookup) and hits a loud runtime fatal instead of a silently
-//!   wrong guess.
-//! - Populated slots: `__parameter_count`/`__required_parameter_count` (read off the
+//! - A statically typed runtime string is resolved case-insensitively through the closed-world
+//!   callable registry. A `Mixed`/`Union` operand is unboxed and tag 10 (callable descriptor)
+//!   proceeds; array/object/resource tags throw a catchable, php-verified `\TypeError`
+//!   ("must be of type Closure|string, X given"). Boxed runtime strings and weak-coercible
+//!   scalars are PHP-valid inputs this path cannot yet recover with their string length intact
+//!   and hit a loud runtime fatal instead of a silently wrong guess.
+//! - Populated slots: `__closure` (a retained descriptor returned by `getClosure()`),
+//!   `__parameter_count`/`__required_parameter_count` (read off the
 //!   descriptor's signature record), `__name`/`__short_name`/`name` (the `"{closure}"` marker
 //!   for an anonymous closure descriptor, or the descriptor's own real name for a wrapped named
-//!   target), and `__is_anonymous`.
+//!   target), `__is_anonymous`, and `__is_static`.
 //! - `__unbacked_name` stays `false` (name methods stay backed); `__unbacked_file`,
 //!   `__unbacked_params`, and `__unbacked_return_type` are set `true`: no per-value source
 //!   file, parameter array, or declared return type exists on a runtime descriptor, so those
@@ -35,7 +37,10 @@ use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
 use crate::codegen_support::callable_descriptor::{
-    CALLABLE_DESC_KIND_CLOSURE, CALLABLE_DESC_SIGNATURE_OFFSET,
+    self,
+    CALLABLE_DESC_ENVIRONMENT_OFFSET, CALLABLE_DESC_ENV_IS_STATIC_OFFSET,
+    CALLABLE_DESC_KIND_CLOSURE, CALLABLE_DESC_KIND_STATIC_METHOD,
+    CALLABLE_DESC_SIGNATURE_OFFSET,
 };
 use crate::ir::{Instruction, ValueId};
 use crate::types::PhpType;
@@ -76,9 +81,9 @@ const NAME_SLOT: usize = 32;
 const TEMP_STACK_BYTES: usize = 48;
 
 /// Lowers `new ReflectionFunction($dynamicValue)` — see the module doc comment. The operand's
-/// static PHP type (`Callable` for an unboxed descriptor pointer, `Mixed`/`Union` for a boxed
-/// cell that may or may not be callable at runtime) selects how the descriptor pointer is
-/// obtained before the shared property-population sequence runs.
+/// static PHP type (`Str` for runtime registry lookup, `Callable` for an unboxed descriptor
+/// pointer, `Mixed`/`Union` for a boxed cell that may or may not be callable at runtime) selects
+/// how the descriptor pointer is obtained before the shared property-population sequence runs.
 pub(super) fn lower_reflection_function_new_dynamic(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -87,6 +92,16 @@ pub(super) fn lower_reflection_function_new_dynamic(
     let operand_ty = ctx.value_php_type(function_operand)?.codegen_repr();
     abi::emit_reserve_temporary_stack(ctx.emitter, TEMP_STACK_BYTES);
     match operand_ty {
+        PhpType::Str => {
+            let descriptor_reg = abi::int_result_reg(ctx.emitter);
+            super::super::callables::emit_runtime_string_descriptor_value(
+                ctx,
+                function_operand,
+                descriptor_reg,
+                "ReflectionFunction::__construct",
+            )?;
+            abi::emit_store_to_sp(ctx.emitter, descriptor_reg, DESCRIPTOR_SLOT);
+        }
         PhpType::Callable => {
             // Already an unboxed descriptor pointer by ABI invariant — no tag to check.
             ctx.load_value_to_result(function_operand)?;
@@ -111,6 +126,7 @@ pub(super) fn lower_reflection_function_new_dynamic(
         property_count,
         uninitialized_marker_offsets,
         name_off,
+        closure_off,
         public_name_off,
         short_off,
         np_off,
@@ -118,6 +134,7 @@ pub(super) fn lower_reflection_function_new_dynamic(
         unbacked_file_off,
         unbacked_params_off,
         is_anonymous_off,
+        is_static_off,
         unbacked_return_type_off,
     ) = {
         let class_info = ctx
@@ -137,6 +154,7 @@ pub(super) fn lower_reflection_function_new_dynamic(
             class_info.properties.len(),
             super::uninitialized_property_marker_offsets(class_info),
             slot("__name")?,
+            slot("__closure")?,
             slot("name")?,
             slot("__short_name")?,
             slot("__parameter_count")?,
@@ -144,6 +162,7 @@ pub(super) fn lower_reflection_function_new_dynamic(
             slot("__unbacked_file")?,
             slot("__unbacked_params")?,
             slot("__is_anonymous")?,
+            slot("__is_static")?,
             slot("__unbacked_return_type")?,
         )
     };
@@ -156,6 +175,7 @@ pub(super) fn lower_reflection_function_new_dynamic(
         &[],
     )?;
     abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), OBJECT_SLOT);
+    emit_callable_property(ctx, closure_off);
 
     // `__unbacked_name` stays false (name methods are backed below); file/params/return-type
     // are unconditionally unbacked for every dynamic instance — no per-value source file,
@@ -163,6 +183,7 @@ pub(super) fn lower_reflection_function_new_dynamic(
     emit_store_object_property_immediate(ctx, 1, unbacked_file_off);
     emit_store_object_property_immediate(ctx, 1, unbacked_params_off);
     emit_store_object_property_immediate(ctx, 1, unbacked_return_type_off);
+    emit_callable_staticness_property(ctx, is_static_off);
 
     // -- branch on the descriptor's own `kind` field to select the name/anonymity story --
     let closure_label = ctx.next_label("reflect_fn_dyn_closure");
@@ -238,6 +259,30 @@ pub(super) fn lower_reflection_function_new_dynamic(
     ctx.store_result_value(result)
 }
 
+/// Retains the unboxed descriptor into the allocated object's `__closure` property.
+fn emit_callable_property(ctx: &mut FunctionContext<'_>, closure_offset: usize) {
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        DESCRIPTOR_SLOT,
+    );
+    callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, OBJECT_SLOT);
+    abi::emit_store_to_address(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        object_reg,
+        closure_offset,
+    );
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, closure_offset + 8);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        OBJECT_SLOT,
+    );
+}
+
 /// Stores a compile-time-known small integer (`0` or `1`) into an object property slot.
 /// Requires the object pointer to already be in the ABI integer result register.
 fn emit_store_object_property_immediate(
@@ -250,6 +295,104 @@ fn emit_store_object_property_immediate(
     abi::emit_load_int_immediate(ctx.emitter, scratch, value);
     abi::emit_store_to_address(ctx.emitter, scratch, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, low_offset + 8);
+}
+
+/// Stores whether the runtime callable descriptor represents a static closure or static method.
+fn emit_callable_staticness_property(ctx: &mut FunctionContext<'_>, is_static_off: usize) {
+    let static_label = ctx.next_label("reflect_fn_dyn_static");
+    let closure_label = ctx.next_label("reflect_fn_dyn_static_closure");
+    let false_label = ctx.next_label("reflect_fn_dyn_not_static");
+    let store_label = ctx.next_label("reflect_fn_dyn_static_done");
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        DESCRIPTOR_SLOT,
+    );
+    let scratch = abi::secondary_scratch_reg(ctx.emitter);
+    let value_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, scratch, abi::int_result_reg(ctx.emitter), 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!(
+                "cmp {}, #{}",
+                scratch, CALLABLE_DESC_KIND_STATIC_METHOD
+            )); // does the descriptor target a static class method?
+            ctx.emitter.instruction(&format!("b.eq {}", static_label));        // static method descriptors report true
+            ctx.emitter.instruction(&format!(
+                "cmp {}, #{}",
+                scratch, CALLABLE_DESC_KIND_CLOSURE
+            )); // does the descriptor represent a closure literal?
+            ctx.emitter.instruction(&format!("b.eq {}", closure_label));       // closures keep their declaration staticness in the environment
+            ctx.emitter.instruction(&format!("b {}", false_label));            // named functions and instance methods are not static
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!(
+                "cmp {}, {}",
+                scratch, CALLABLE_DESC_KIND_STATIC_METHOD
+            )); // does the descriptor target a static class method?
+            ctx.emitter.instruction(&format!("je {}", static_label));          // static method descriptors report true
+            ctx.emitter.instruction(&format!(
+                "cmp {}, {}",
+                scratch, CALLABLE_DESC_KIND_CLOSURE
+            )); // does the descriptor represent a closure literal?
+            ctx.emitter.instruction(&format!("je {}", closure_label));         // closures keep their declaration staticness in the environment
+            ctx.emitter.instruction(&format!("jmp {}", false_label));          // named functions and instance methods are not static
+        }
+    }
+
+    ctx.emitter.label(&closure_label);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        DESCRIPTOR_SLOT,
+    );
+    abi::emit_load_from_address(
+        ctx.emitter,
+        scratch,
+        abi::int_result_reg(ctx.emitter),
+        CALLABLE_DESC_ENVIRONMENT_OFFSET,
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {}, {}", scratch, false_label)); // a closure without an environment has the default non-static flag
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", scratch, scratch)); // does this closure carry an environment record?
+            ctx.emitter.instruction(&format!("je {}", false_label));           // a missing record means the default non-static flag
+        }
+    }
+    abi::emit_load_from_address(
+        ctx.emitter,
+        value_reg,
+        scratch,
+        CALLABLE_DESC_ENV_IS_STATIC_OFFSET,
+    );
+    abi::emit_jump(ctx.emitter, &store_label);
+
+    ctx.emitter.label(&static_label);
+    abi::emit_load_int_immediate(ctx.emitter, value_reg, 1);
+    abi::emit_jump(ctx.emitter, &store_label);
+
+    ctx.emitter.label(&false_label);
+    abi::emit_load_int_immediate(ctx.emitter, value_reg, 0);
+
+    ctx.emitter.label(&store_label);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        OBJECT_SLOT,
+    );
+    abi::emit_store_to_address(
+        ctx.emitter,
+        value_reg,
+        abi::int_result_reg(ctx.emitter),
+        is_static_off,
+    );
+    abi::emit_store_zero_to_address(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        is_static_off + 8,
+    );
 }
 
 /// Copies the descriptor's own `php_name` (pointer/length) into the object's `__name`, public

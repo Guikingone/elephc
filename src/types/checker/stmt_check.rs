@@ -15,9 +15,10 @@ pub(crate) mod narrowing;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{ExprKind, Stmt, StmtKind};
-use crate::types::TypeEnv;
+use crate::types::{PhpType, TypeEnv};
 
 use super::Checker;
+use super::functions::ReturnInfo;
 
 /// Statement-level type checking for the Checker context.
 impl Checker {
@@ -103,8 +104,8 @@ impl Checker {
             }
             StmtKind::FunctionDecl { .. } => Ok(()),
             StmtKind::Return(expr) => {
-                if let Some(e) = expr {
-                    self.infer_type_with_assignment_effects(e, env)?;
+                let return_info = if let Some(e) = expr {
+                    let ty = self.infer_type_with_assignment_effects(e, env)?;
                     // `function &f() { return $obj->prop; }` returns a reference to the
                     // property, so promote it to a reference property program-wide.
                     if self.current_by_ref_return {
@@ -136,6 +137,18 @@ impl Checker {
                             }
                         }
                     }
+                    ReturnInfo {
+                        ty,
+                        has_value: true,
+                    }
+                } else {
+                    ReturnInfo {
+                        ty: PhpType::Void,
+                        has_value: false,
+                    }
+                };
+                if let Some(return_infos) = self.active_return_info_scopes.last_mut() {
+                    return_infos.push(return_info);
                 }
                 Ok(())
             }

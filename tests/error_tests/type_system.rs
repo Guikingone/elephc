@@ -16,12 +16,12 @@ fn test_error_null_coalesce_assignment_missing_rhs() {
     expect_error("<?php $x ??=;", "Unexpected token");
 }
 
-/// Verifies that `??=` rejects a type-changing initializer on an existing typed variable.
-/// Input: `$x = 5; $x ??= 2.5;` — `$x` is int, RHS is float, which widens and is rejected.
+/// Verifies that `??=` rejects a type-changing initializer on an explicitly typed local.
+/// Input: `int $x = 5; $x ??= 2.5;` — the declared int contract rejects the float RHS.
 #[test]
 fn test_error_null_coalesce_assignment_type_change() {
     expect_error(
-        "<?php $x = 5; $x ??= 2.5;",
+        "<?php int $x = 5; $x ??= 2.5;",
         "null coalescing assignment for $x must keep int, got float",
     );
 }
@@ -78,6 +78,16 @@ fn test_error_string_offset_assignment_is_not_supported() {
     expect_error(
         "<?php $s = \"hello\"; $s[0] = \"H\";",
         "String offset assignment is not supported",
+    );
+}
+
+/// Verifies gradual `mixed` support for `yield from` does not admit a statically concrete scalar
+/// operand, which remains a compile-time type error instead of reaching iterator lowering.
+#[test]
+fn test_error_yield_from_rejects_concrete_integer() {
+    expect_error(
+        "<?php function invalidDelegate(): iterable { yield from 42; }",
+        "yield from expects an array or Generator",
     );
 }
 
@@ -1487,6 +1497,19 @@ fn test_error_union_scalar_member_into_object_param_stays_loud() {
          function pick(int $n): Q|string { return new Q(); } \
          $x = pick($argc); echo need($x);",
         "expects Object(\"Q\")",
+    );
+}
+
+/// A scalar assignment inside a conditional branch remains part of the post-branch flow type.
+#[test]
+fn test_error_conditional_scalar_assignment_into_object_param_stays_loud() {
+    expect_error(
+        "<?php class ConditionalObject {} \
+         function needConditionalObject(ConditionalObject $value): void {} \
+         $value = new ConditionalObject(); \
+         if ($argc > 1) { $value = 'bad'; } \
+         needConditionalObject($value);",
+        "expects Object(\"ConditionalObject\")",
     );
 }
 

@@ -41,9 +41,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::Platform;
 use crate::errors::CompileError;
-use crate::parser::ast::{
-    CallableTarget, Expr, Program, TypeExpr,
-};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, Program, TypeExpr};
 use crate::span::Span;
 use crate::types::{
     collect_attribute_args, collect_attribute_names, CheckResult, ClassInfo, EnumInfo,
@@ -52,7 +50,7 @@ use crate::types::{
 };
 
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
-pub(crate) use loop_widening::loop_grown_mixed_array_pushes;
+pub(crate) use loop_widening::loop_grown_array_widenings;
 pub(crate) use inference::closure_body_uses_this;
 pub(crate) use builtin_types::InterfaceDeclInfo;
 use builtin_types::validate_magic_method_contracts;
@@ -137,13 +135,12 @@ pub(crate) struct Checker {
     /// Active `Closure::bind($closure, $newThis, $scope)`/`bindTo` scope rebind, set only while
     /// type-checking a closure LITERAL argument that the checker has proven safe to relax
     /// (see `crate::types::checker::inference::expr::static_closure::resolve_bind_scope_class`
-    /// and the JURY-mandated lexical gate). `Property access on a parameter whose declared type
-    /// equals or subclasses `scope_class` is checked against `scope_class`'s visibility instead
-    /// of the closure's lexically enclosing `current_class` — narrower than swapping
-    /// `current_class` itself, which would also (unsoundly) loosen unrelated `self::`/`static::`/
-    /// `$this` resolution; the lexical gate proves those are absent from the body before this is
-    /// ever set, and `can_access_property` only consults it for a receiver naming one of
-    /// `eligible_params`.
+    /// and the JURY-mandated lexical gate). Property access on an eligible typed parameter or a
+    /// closure-local variable is checked against `scope_class`'s visibility instead of the
+    /// closure's lexically enclosing `current_class` — narrower than swapping `current_class`
+    /// itself, which would also (unsoundly) loosen unrelated `self::`/`static::`/`$this`
+    /// resolution. Captured variables remain excluded, and the lexical gate proves the other
+    /// scope-sensitive references are absent before this is ever set.
     pub(crate) bound_scope_context: Option<BoundScopeContext>,
     /// Name of the current method being type-checked, when inside a class body.
     pub current_method: Option<String>,
@@ -153,6 +150,11 @@ pub(crate) struct Checker {
     /// reference (`function &f()`). A `return $obj->prop` in such a body promotes the
     /// property to a reference property (see `reference_property_promotions`).
     pub current_by_ref_return: bool,
+    /// Return types observed at their flow-sensitive checking point for each active callable.
+    ///
+    /// Nested closures push their own scope so their returns never contribute to the enclosing
+    /// function or method. `with_local_storage_context` returns the completed scope to the caller.
+    active_return_info_scopes: Vec<Vec<functions::ReturnInfo>>,
     /// Nesting depth of closure bodies currently being type-checked. A non-zero
     /// depth means `$this` is allowed even outside a class method: such a
     /// closure can be bound to an object later via `Closure::bind` / `bindTo`.
@@ -202,6 +204,12 @@ pub(crate) struct Checker {
     /// local enforces its hint: a later concrete-disjoint assignment is a real type error. Scoped
     /// per function/closure body and reset by `with_local_storage_context`.
     pub declared_typed_locals: HashSet<String>,
+    /// Nesting depth of branch or loop bodies whose assignments may not execute.
+    ///
+    /// A direct assignment in the surrounding sequential stream replaces the local's current
+    /// flow type, while assignments under conditional control flow retain the conservative type
+    /// join needed at the merge point. EIR independently widens frame storage as stores lower.
+    pub conditional_assignment_depth: usize,
     /// Whether the active local statement stream has crossed an `eval()` call.
     ///
     /// Once set, unknown local reads are treated as dynamic `Mixed` values because
@@ -259,6 +267,23 @@ pub(crate) struct Checker {
     /// Authoritative result type of each checked builtin call, keyed by call span.
     /// EIR lowering consumes this instead of reimplementing builtin return inference.
     pub builtin_call_types: HashMap<Span, PhpType>,
+    /// Types captured for call arguments at their PHP evaluation point.
+    ///
+    /// The assignment-effects pass installs these only while the enclosing call is revalidated,
+    /// preventing a later argument or nested call from making the checker re-read an earlier
+    /// property argument under an invalidated flow fact.
+    evaluated_expr_types: HashMap<Span, EvaluatedExprType>,
+}
+
+/// A type captured at an expression's PHP evaluation point.
+///
+/// The AST-kind discriminant prevents a later semantic normalization that reuses the source span
+/// (for example, coercing a string literal to a first-class callable) from being bypassed by the
+/// temporary call-argument cache.
+#[derive(Clone)]
+struct EvaluatedExprType {
+    kind: std::mem::Discriminant<ExprKind>,
+    ty: PhpType,
 }
 
 /// A saved snapshot of every per-body, variable-name-keyed callable side table
@@ -333,11 +358,17 @@ impl Checker {
 pub(crate) struct BoundScopeContext {
     /// The literal `$scope` class the closure was rebound to (`X::class`'s resolved name).
     pub(crate) scope_class: String,
-    /// Names of the closure's OWN declared parameters whose declared type is `Object(class)`
-    /// where `class` is `scope_class` or a subclass of it — the only receivers
-    /// `can_access_property` will authorize against `scope_class` instead of the closure's
-    /// lexically enclosing `current_class`.
+    /// Names of the closure's OWN declared parameters that can carry an object in the rebound
+    /// scope: untyped parameters (once inference has narrowed them to such an object), plus
+    /// parameters declared as `scope_class` or a subclass. `can_access_property` authorizes these
+    /// and non-captured closure-local variables against `scope_class`.
     pub(crate) eligible_params: HashSet<String>,
+    /// All parameters declared by the closure, used to distinguish untyped parameters from
+    /// closure-local variables introduced by assignments, loops, or catches.
+    pub(crate) declared_params: HashSet<String>,
+    /// Variables imported from the lexical scope by value or by reference. They remain outside
+    /// the deliberately narrow visibility relaxation even when their inferred object type fits.
+    pub(crate) captured_variables: HashSet<String>,
 }
 
 #[derive(Clone)]

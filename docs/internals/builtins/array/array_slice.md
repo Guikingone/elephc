@@ -2,7 +2,7 @@
 title: "array_slice() — internals"
 description: "Compiler internals for array_slice(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 37
+  order: 38
 ---
 
 ## `array_slice()` — internals

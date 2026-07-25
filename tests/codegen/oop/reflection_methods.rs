@@ -43,6 +43,37 @@ echo $plain->getTentativeReturnType() === null ? "Q" : "q";
     assert_eq!(out, "D:d:G:L:g:c:r:h:Q");
 }
 
+/// Verifies declaration-line accessors remain callable on `ReflectionMethod` and fail loudly
+/// with catchable exceptions while elephc has no source-line metadata to report.
+#[test]
+fn test_reflection_method_line_accessors_throw_catchable_exceptions() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectMethodLineTarget {
+    public function run(): void {}
+}
+
+$method = new ReflectionMethod(ReflectMethodLineTarget::class, "run");
+try {
+    $method->getStartLine();
+    echo "start-missed";
+} catch (\ReflectionException $ignored) {
+    echo "start";
+}
+echo "|";
+try {
+    $method->getEndLine();
+    echo "end-missed";
+} catch (\ReflectionException $ignored) {
+    echo "end";
+}
+echo "|";
+echo $method->getName();
+"#,
+    );
+    assert_eq!(out, "start|end|run");
+}
+
 /// Verifies `ReflectionMethod` exposes declared AOT return type metadata.
 #[test]
 fn test_reflection_method_reports_aot_return_type_metadata() {
@@ -298,4 +329,51 @@ echo (new ReflectionMethod(ReflectInvokeInferredTarget::class, "join"))->invoke(
 "#,
     );
     assert_eq!(out, "AB");
+}
+
+/// Verifies the shared reflection parent exposes parameter metadata through runtime dispatch.
+#[test]
+fn test_reflection_function_abstract_dispatches_get_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+function reflection_abstract_parameter_names(ReflectionFunctionAbstract $reflector): string {
+    $names = $reflector->name . ":";
+    foreach ($reflector->getParameters() as $parameter) {
+        $names .= $parameter->getName();
+    }
+    return $names . ":" . count($reflector->getStaticVariables());
+}
+
+function reflection_abstract_declaring_class(ReflectionFunctionAbstract $reflector): void {
+    echo $reflector->class;
+}
+
+function reflection_abstract_conditional_static_variables(ReflectionFunctionAbstract $reflector): void {
+    foreach ($reflector->getParameters() as $value) {
+    }
+    if (true && $value = $reflector->getStaticVariables()) {
+        foreach ($value as $name => $staticValue) {
+            echo $name, $staticValue;
+        }
+    }
+    echo ":flow";
+}
+
+function reflection_abstract_function(int $left, string $right): void {}
+class ReflectionAbstractMethodTarget {
+    public function run(bool $enabled, float $ratio): void {}
+}
+
+echo reflection_abstract_parameter_names(new ReflectionFunction("reflection_abstract_function"));
+echo ":";
+echo reflection_abstract_parameter_names(new ReflectionMethod(ReflectionAbstractMethodTarget::class, "run"));
+echo ":";
+reflection_abstract_declaring_class(new ReflectionMethod(ReflectionAbstractMethodTarget::class, "run"));
+reflection_abstract_conditional_static_variables(new ReflectionMethod(ReflectionAbstractMethodTarget::class, "run"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "reflection_abstract_function:leftright:0:run:enabledratio:0:ReflectionAbstractMethodTarget:flow"
+    );
 }

@@ -19,8 +19,8 @@ use super::super::Checker;
 impl Checker {
     /// Checks whether the current class context can access a member with the given visibility
     /// declared in `declaring_class`. Public members are always accessible; protected members
-    /// are accessible if the current class is the declaring class or a subclass; private
-    /// members are only accessible if the current class is exactly the declaring class.
+    /// are accessible when the current and declaring classes share one inheritance chain in
+    /// either direction; private members require the exact declaring class.
     pub(crate) fn can_access_member(
         &self,
         declaring_class: &str,
@@ -29,7 +29,9 @@ impl Checker {
         match visibility {
             Visibility::Public => true,
             Visibility::Protected => self.current_class.as_deref().is_some_and(|current| {
-                current == declaring_class || self.is_subclass_of(current, declaring_class)
+                current == declaring_class
+                    || self.is_subclass_of(current, declaring_class)
+                    || self.is_subclass_of(declaring_class, current)
             }),
             Visibility::Private => self.current_class.as_deref() == Some(declaring_class),
         }
@@ -465,11 +467,12 @@ impl Checker {
         /// `declaring_class`, additionally consulting an active `Closure::bind`/`bindTo` scope
         /// rebind (`Checker::bound_scope_context`) when the normal `can_access_member` check fails.
         ///
-        /// The bound-scope override applies ONLY when `receiver` is exactly `ExprKind::Variable(name)`
-        /// naming one of the active rebind's `eligible_params` (JURY ADDENDUM #2: "->prop writes/reads
-        /// allowed only on PARAMETERS whose declared type equals (or is a subclass of) the rebound
-        /// scope class") — never for a computed expression, a captured variable, or `$this` (which the
-        /// lexical gate that populates `bound_scope_context` already proved absent from the body).
+        /// The bound-scope override applies only when `receiver` is exactly
+        /// `ExprKind::Variable(name)` naming either an eligible declared parameter or a variable
+        /// local to the closure body. An untyped parameter becomes eligible only once ordinary
+        /// inference reaches this property check with an object in the rebound scope. Captured
+        /// variables remain excluded, as do computed expressions and `$this` (which the lexical
+        /// gate that populates `bound_scope_context` already proved absent from the body).
         pub(crate) fn can_access_property(
             &self,
             receiver: &Expr,
@@ -485,7 +488,10 @@ impl Checker {
             let crate::parser::ast::ExprKind::Variable(name) = &receiver.kind else {
                 return false;
             };
-            if !context.eligible_params.contains(name) {
+            let is_eligible_param = context.eligible_params.contains(name);
+            let is_closure_local = !context.declared_params.contains(name)
+                && !context.captured_variables.contains(name);
+            if !is_eligible_param && !is_closure_local {
                 return false;
             }
             match visibility {

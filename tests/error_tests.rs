@@ -225,6 +225,8 @@ mod image;
 mod absent_class;
 #[path = "error_tests/short_circuit_narrowing.rs"]
 mod short_circuit_narrowing;
+#[path = "error_tests/match_narrowing.rs"]
+mod match_narrowing;
 #[path = "error_tests/ternary_member_narrowing.rs"]
 mod ternary_member_narrowing;
 #[path = "error_tests/switch_case_narrowing.rs"]
@@ -372,17 +374,15 @@ function outer(mixed $m) { yield from $m; }
     );
 }
 
-/// Codegen-safety guard: `yield from` an `Iterable`-typed operand must STAY an
-/// error. `__rt_gen_delegate` can only drive a `Generator`, not an arbitrary
-/// iterable/Traversable, so `type_accepts(Object("Generator"), Iterable)` is
-/// false and the operand is rejected. Accepting bare `Iterable`/`Traversable`
-/// operands needs a separate runtime iterator-delegation path (follow-up).
+/// Codegen-safety guard: `yield from` still rejects a concrete object that implements neither
+/// `Iterator` nor `IteratorAggregate`; gradual `Iterable` has its own checked runtime dispatch.
 #[test]
-fn test_error_yield_from_rejects_iterable_operand() {
+fn test_error_yield_from_rejects_plain_object_operand() {
     expect_error(
         "<?php
-function outer(iterable $it) { yield from $it; }
+class Plain {}
+function outer(Plain $value) { yield from $value; }
 ",
-        "yield from expects an array or Generator, got Iterable",
+        "yield from expects an array or Generator, got Object(\"Plain\")",
     );
 }

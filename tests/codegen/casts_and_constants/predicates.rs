@@ -228,6 +228,28 @@ var_dump(is_object(42));
     assert_eq!(out, "bool(true)\nbool(false)\nbool(false)\n");
 }
 
+/// Verifies `is_object()` narrows a gradual value to generic `object`, allowing guarded
+/// object-class-name reads while the scalar branch never reaches the object-only operation.
+#[test]
+fn test_is_object_guard_narrows_mixed_for_object_class_name() {
+    let out = compile_and_run(
+        r#"<?php
+class GuardedObjectClassName {}
+
+function guardedClassName(mixed $value): string {
+    if (is_object($value)) {
+        return $value::class;
+    }
+
+    return "scalar";
+}
+
+echo guardedClassName(new GuardedObjectClassName()), "|", guardedClassName(42);
+"#,
+    );
+    assert_eq!(out, "GuardedObjectClassName|scalar");
+}
+
 /// Verifies `is_scalar` is true for int/float/string/bool and false for null/array/object,
 /// matching PHP's classification (resources and null are not scalars).
 #[test]

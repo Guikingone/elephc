@@ -242,6 +242,32 @@ echo $values[2];
     assert_eq!(out, "3:9");
 }
 
+/// Verifies object syntax can create a callable for an accessible static method without
+/// capturing the receiver, matching PHP's `$this->staticMethod(...)` callable form.
+#[test]
+fn test_first_class_callable_static_method_through_this() {
+    let out = compile_and_run(
+        r#"<?php
+class LocaleFormatter {
+    private static function normalize(string $locale): string {
+        return strtoupper($locale);
+    }
+
+    public function normalizeAll(array $locales): array {
+        return array_map($this->normalize(...), $locales);
+    }
+}
+
+$formatter = new LocaleFormatter();
+$values = $formatter->normalizeAll(["fr", "en"]);
+echo $values[0];
+echo ":";
+echo $values[1];
+"#,
+    );
+    assert_eq!(out, "FR:EN");
+}
+
 /// Verifies callback runtimes preserve a method first-class callable receiver when
 /// the descriptor is passed through a callable parameter before `array_map()`.
 #[test]
@@ -1127,6 +1153,51 @@ echo $fn("Ada");
 "#,
     );
     assert_eq!(out, "Hi Ada");
+}
+
+/// Verifies a boxed `mixed` object can create and invoke a receiver-bound method callable.
+#[test]
+fn test_first_class_callable_mixed_object_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class ValueSetter {
+    public function setValue(string $value): string {
+        return "set:" . $value;
+    }
+}
+
+function invokeSetter(mixed $receiver): string {
+    $setter = $receiver->setValue(...);
+    return $setter("ok");
+}
+
+echo invokeSetter(new ValueSetter());
+"#,
+    );
+    assert_eq!(out, "set:ok");
+}
+
+/// Verifies a boxed `mixed` receiver retains private-method access in its declaring class.
+#[test]
+fn test_first_class_callable_mixed_private_method_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class PrivateValueSetter {
+    private function setValue(string $value): string {
+        return "private:" . $value;
+    }
+
+    public function invoke(mixed $receiver): string {
+        $setter = $receiver->setValue(...);
+        return $setter("ok");
+    }
+}
+
+$setter = new PrivateValueSetter();
+echo $setter->invoke($setter);
+"#,
+    );
+    assert_eq!(out, "private:ok");
 }
 
 /// Verifies callable-array variables use descriptor callback environments in array runtimes.

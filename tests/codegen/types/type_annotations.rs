@@ -437,6 +437,28 @@ fn test_untyped_static_method_parameter_heterogeneous_calls_keep_runtime_type() 
     assert_eq!(out, "integer|string");
 }
 
+/// Verifies an uncalled method body sees an untyped parameter as gradual `Mixed` instead of
+/// the legacy `Int` schema sentinel used only until call-site specialization.
+#[test]
+fn test_uncalled_untyped_method_parameter_uses_gradual_body_type() {
+    let out = compile_and_run(
+        r#"<?php
+class DeferredUntypedBody {
+    public function length($value): int {
+        return mb_strlen($value);
+    }
+
+    public static function staticLength($value): int {
+        return mb_strlen($value);
+    }
+}
+
+echo "ready";
+"#,
+    );
+    assert_eq!(out, "ready");
+}
+
 /// Verifies a nullable return type `?int` boxes an integer result and a `null` result,
 /// with `is_null()` correctly identifying the null case at runtime.
 #[test]

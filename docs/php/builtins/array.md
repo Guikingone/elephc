@@ -11,6 +11,7 @@ sidebar:
 |---|---|---|:-:|:-:|
 | [`array_all()`](./array/array_all.md) | `(mixed $array, mixed $callback): bool` | `bool` | ✓ | — |
 | [`array_any()`](./array/array_any.md) | `(mixed $array, mixed $callback): bool` | `bool` | ✓ | — |
+| [`array_change_key_case()`](./array/array_change_key_case.md) | `(array $array, int $case = 0): array` | `array` | ✓ | — |
 | [`array_chunk()`](./array/array_chunk.md) | `(array $array, int $length): array` | `array` | ✓ | ✓ |
 | [`array_column()`](./array/array_column.md) | `(array $array, string $column_key): array` | `array` | ✓ | ✓ |
 | [`array_combine()`](./array/array_combine.md) | `(array $keys, array $values): array` | `array` | ✓ | ✓ |

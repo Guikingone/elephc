@@ -34,7 +34,20 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let lt = self.infer_type(left, env)?;
-        let rt = self.infer_type(right, env)?;
+        let rt = if matches!(op, BinOp::And | BinOp::Or) {
+            let mut right_env = env.clone();
+            if let Some(guard) = self.guard_narrowing(left, env)? {
+                let narrowed = if matches!(op, BinOp::And) {
+                    guard.then_ty
+                } else {
+                    guard.else_ty
+                };
+                right_env.insert(guard.var, narrowed);
+            }
+            self.infer_type(right, &right_env)?
+        } else {
+            self.infer_type(right, env)?
+        };
         match op {
             BinOp::Pow => {
                 let lt_ok = is_numeric_operand_type(self, &lt);
@@ -48,11 +61,24 @@ impl Checker {
                 Ok(PhpType::Float)
             }
             BinOp::Add => {
-                if is_array_like_type(&lt) || is_array_like_type(&rt) {
+                if is_array_like_type(&lt)
+                    || is_array_like_type(&rt)
+                    || (is_array_family_only_type(&lt) && is_array_family_only_type(&rt))
+                {
                     return self.infer_array_union_type(&lt, &rt, left, right, expr);
                 }
-                let lt_ok = is_numeric_operand_type(self, &lt);
-                let rt_ok = is_numeric_operand_type(self, &rt);
+                let lt_numeric_string =
+                    is_datetime_fractional_unix_format(self, left, env);
+                let rt_numeric_string =
+                    is_datetime_fractional_unix_format(self, right, env);
+                let dynamic_array_or_numeric_add =
+                    is_array_or_numeric_union(self, &lt) && is_array_or_numeric_union(self, &rt);
+                let lt_ok = is_numeric_operand_type(self, &lt)
+                    || lt_numeric_string
+                    || dynamic_array_or_numeric_add;
+                let rt_ok = is_numeric_operand_type(self, &rt)
+                    || rt_numeric_string
+                    || dynamic_array_or_numeric_add;
                 if !lt_ok || !rt_ok {
                     return Err(CompileError::new(
                         expr.span,
@@ -61,7 +87,11 @@ impl Checker {
                 }
                 if uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt) {
                     Ok(PhpType::Mixed)
-                } else if lt == PhpType::Float || rt == PhpType::Float {
+                } else if lt == PhpType::Float
+                    || rt == PhpType::Float
+                    || lt_numeric_string
+                    || rt_numeric_string
+                {
                     Ok(PhpType::Float)
                 } else if let Some(literal_ty) =
                     checked_literal_int_arithmetic_type(op, left, right)
@@ -276,6 +306,31 @@ impl Checker {
                     value: Box::new(value),
                 })
             }
+            // Gradual typing: one operand is a concrete array and the other is a
+            // `Mixed` / union-containing-array value. PHP's `+` requires both sides
+            // to be arrays at runtime (an array `+` non-array is a fatal), so a `+`
+            // with a concrete-array operand is unambiguously an array union. The
+            // boxed operand is unboxed and asserted to be an array at the EIR
+            // boundary, then unioned; the result element/key shape is unknown, so it
+            // widens to `array<mixed, mixed>`. A concretely non-array opposite a
+            // concrete array still falls through to the error below.
+            (lt, rt)
+                if (is_array_like_type(lt) && type_may_be_array(rt))
+                    || (type_may_be_array(lt) && is_array_like_type(rt)) =>
+            {
+                Ok(PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::Mixed),
+                })
+            }
+            // Control-flow can box both operands by joining different concrete array shapes.
+            // When every union member remains an array, `+` is unambiguously PHP array union.
+            (lt, rt) if is_array_family_only_type(lt) && is_array_family_only_type(rt) => {
+                Ok(PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::Mixed),
+                })
+            }
             _ => Err(CompileError::new(
                 expr.span,
                 "Array union requires both operands to be arrays",
@@ -430,8 +485,13 @@ impl Checker {
         });
         self.current_by_ref_return = prev_by_ref_return;
         self.closure_depth -= 1;
-        body_result?;
-        self.resolve_closure_return_type(body, return_type, expr.span, &closure_sig.env)?;
+        let (_, return_infos) = body_result?;
+        self.resolve_closure_return_type_from_infos(
+            body,
+            return_type,
+            expr.span,
+            &return_infos,
+        )?;
         Ok(PhpType::Callable)
     }
 
@@ -614,7 +674,10 @@ impl Checker {
         }
         let nullable_callable =
             Self::is_nullable_callable_from_nullsafe_chain(callee, &callee_ty);
-        if callee_ty != PhpType::Callable && !nullable_callable {
+        if callee_ty != PhpType::Callable
+            && !nullable_callable
+            && !self.type_is_callably_acceptable(&callee_ty)
+        {
             return Err(CompileError::new(
                 expr.span,
                 &format!(
@@ -1259,6 +1322,51 @@ fn is_array_like_type(ty: &PhpType) -> bool {
     matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
 }
 
+/// Returns true when `ty` is a concrete array or a non-empty union containing only array-family
+/// members.
+///
+/// Unlike `type_may_be_array`, this excludes gradual unions with scalar/object arms. It therefore
+/// identifies the boxed-on-both-sides case where PHP `+` cannot mean numeric addition.
+fn is_array_family_only_type(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => true,
+        PhpType::Union(members) => {
+            !members.is_empty() && members.iter().all(is_array_family_only_type)
+        }
+        _ => false,
+    }
+}
+
+/// Returns true for a non-empty union whose runtime arms are all valid either for PHP array
+/// union or numeric addition, with at least one array arm.
+///
+/// Two such operands require runtime dispatch: array+array performs the left-biased PHP union,
+/// scalar+scalar remains numeric, and an array/scalar mismatch raises `TypeError`.
+fn is_array_or_numeric_union(checker: &Checker, ty: &PhpType) -> bool {
+    let PhpType::Union(members) = ty else {
+        return false;
+    };
+    !members.is_empty()
+        && members.iter().any(type_may_be_array)
+        && members.iter().all(|member| {
+            is_array_family_only_type(member)
+                || is_numeric_operand_type(checker, member)
+                || *member == PhpType::Str
+        })
+}
+
+/// Returns `true` if a value of `ty` may hold an array at runtime under the gradual-typing
+/// boundary: a concrete array, the `Mixed` top type, or a union with at least one array
+/// member. Used by `+` (array union) to accept a boxed operand opposite a concrete array.
+fn type_may_be_array(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Mixed => true,
+        PhpType::Array(_) | PhpType::AssocArray { .. } => true,
+        PhpType::Union(members) => members.iter().any(is_array_like_type),
+        _ => false,
+    }
+}
+
 /// Returns `true` if `ty` is a valid operand type for numeric binary operators
 /// (addition, subtraction, multiplication, division, modulo, comparison, spaceship).
 /// Numeric operands include `Int`, `Float`, `Bool`, `Void`, `Mixed`, or a union
@@ -1281,6 +1389,53 @@ fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
                     is_numeric_operand_type(checker, member) || *member == PhpType::Str
                 })
         }
+        _ => false,
+    }
+}
+
+/// Returns whether an expression is a DateTime-family `format('U.u')` call.
+///
+/// PHP guarantees this exact format is a decimal Unix timestamp string, so an
+/// arithmetic context may parse it as a float without admitting arbitrary
+/// statically-string operands. The receiver check prevents unrelated user
+/// methods named `format` from gaining numeric-string semantics.
+fn is_datetime_fractional_unix_format(
+    checker: &mut Checker,
+    expr: &Expr,
+    env: &TypeEnv,
+) -> bool {
+    let ExprKind::MethodCall {
+        object,
+        method,
+        args,
+    } = &expr.kind
+    else {
+        return false;
+    };
+    if !method.eq_ignore_ascii_case("format")
+        || !matches!(
+            args.as_slice(),
+            [Expr {
+                kind: ExprKind::StringLiteral(format),
+                ..
+            }] if format == "U.u"
+        )
+    {
+        return false;
+    }
+    checker
+        .infer_type(object, env)
+        .is_ok_and(|ty| is_datetime_format_receiver_type(&ty))
+}
+
+/// Returns whether a type is a DateTime formatter whose `U.u` output is numeric.
+fn is_datetime_format_receiver_type(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(name) => matches!(
+            name.trim_start_matches('\\'),
+            "DateTime" | "DateTimeImmutable" | "DateTimeInterface"
+        ),
+        PhpType::Union(members) => members.iter().any(is_datetime_format_receiver_type),
         _ => false,
     }
 }

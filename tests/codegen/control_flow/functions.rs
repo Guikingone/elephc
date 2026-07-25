@@ -219,6 +219,17 @@ fn test_strict_false_guard_narrowing() {
     assert_eq!(out, "42:7");
 }
 
+/// Verifies a strict-false guard narrows the value assigned inside its comparison rather than
+/// retaining the local's pre-assignment string type. This is Symfony's
+/// `false === $parts = parse_url($parts)` DSN-validation idiom.
+#[test]
+fn test_strict_false_guard_narrows_assignment_result() {
+    let out = compile_and_run(
+        "<?php function parseParts(): array|false { return ['host' => 'example.com']; } function host(string $dsn): string { $parts = $dsn; if (false === $parts = parseParts()) { throw new \\RuntimeException('invalid'); } return $parts['host']; } echo host('https://example.com/path');",
+    );
+    assert_eq!(out, "example.com");
+}
+
 /// EC-8 (#491): `if ($x === null) { throw; } return $x;` narrows a nullable value to non-null
 /// after the divergent guard (elephc models `?T`'s null as Void), so `?string`→string and
 /// `?self`→self. Byte-parity vs PHP 8.5.

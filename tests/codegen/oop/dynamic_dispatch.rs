@@ -146,6 +146,56 @@ fn test_static_and_instance_calls_unaffected() {
     assert_eq!(out, "isT");
 }
 
+/// Verifies PHP's object-call syntax can invoke a declared static method while preserving
+/// receiver-before-argument evaluation order.
+#[test]
+fn test_static_method_called_through_object() {
+    let out = compile_and_run(
+        "<?php
+        function receiver(): StaticViaObject {
+            echo \"receiver:\";
+            return new StaticViaObject();
+        }
+        function argument(): int {
+            echo \"argument:\";
+            return 41;
+        }
+        class StaticViaObject {
+            public static function increment(int $value): int {
+                return $value + 1;
+            }
+        }
+        echo receiver()->increment(argument());
+        ",
+    );
+    assert_eq!(out, "receiver:argument:42");
+}
+
+/// Verifies an object-call static method uses the receiver's runtime class for overrides
+/// and late-static binding even when the function parameter has the base type.
+#[test]
+fn test_static_method_called_through_base_typed_object_is_late_bound() {
+    let out = compile_and_run(
+        "<?php
+        class StaticObjectBase {
+            public static function label(): string {
+                return \"base:\" . static::class;
+            }
+        }
+        class StaticObjectChild extends StaticObjectBase {
+            public static function label(): string {
+                return \"child:\" . static::class;
+            }
+        }
+        function label_for(StaticObjectBase $object): string {
+            return $object->label();
+        }
+        echo label_for(new StaticObjectChild());
+        ",
+    );
+    assert_eq!(out, "child:StaticObjectChild");
+}
+
 /// Compiles and runs the checked-in `examples/dynamic-dispatch/main.php` fixture, covering
 /// dynamic instance method dispatch by name and a dynamic static call.
 #[test]

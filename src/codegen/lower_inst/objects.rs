@@ -33,9 +33,10 @@ use super::{
     expect_data,
     coerce_loaded_value_to_tagged_scalar, emit_loaded_assoc_array_to_mixed,
     emit_loaded_indexed_array_to_mixed, emit_mixed_string_for_persistent_store,
-    emit_ref_arg_writebacks, expect_operand, iterators, load_value_to_first_int_arg,
+    emit_ref_arg_writebacks, emitted_class_method_abi, expect_operand, iterators,
+    load_value_to_first_int_arg,
     materialize_method_call_args_with_receiver_reg_and_refs, resolve_method_call_target,
-    property_values, store_call_result, store_if_result, store_method_call_result,
+    property_values, predicates, store_call_result, store_if_result, store_method_call_result,
 };
 use crate::codegen::fibers;
 use crate::codegen::literal_defaults::{
@@ -176,14 +177,6 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
         }
         let property_defaults = collect_property_defaults(class_info, inst)?;
         let constructor_impl = if let Some(constructor) = class_info.methods.get(&constructor_key) {
-            if constructor.params.len() != inst.operands.len() {
-                return Err(CodegenIrError::unsupported(format!(
-                    "constructor call to {}::__construct with {} args for {} params",
-                    class_name,
-                    inst.operands.len(),
-                    constructor.params.len()
-                )));
-            }
             let impl_class = class_info
                 .method_impl_classes
                 .get(&constructor_key)
@@ -195,15 +188,30 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
                     impl_class
                 )));
             }
-            let param_types = constructor
-                .params
-                .iter()
-                .map(|(_, ty)| ty.codegen_repr())
-                .collect::<Vec<_>>();
+            let (param_types, ref_params) =
+                emitted_class_method_abi(ctx, &impl_class, &constructor_key, false)
+                    .unwrap_or_else(|| {
+                        (
+                            constructor
+                                .params
+                                .iter()
+                                .map(|(_, ty)| ty.codegen_repr())
+                                .collect(),
+                            constructor.ref_params.clone(),
+                        )
+                    });
+            if param_types.len() != inst.operands.len() {
+                return Err(CodegenIrError::unsupported(format!(
+                    "constructor call to {}::__construct with {} args for {} params",
+                    class_name,
+                    inst.operands.len(),
+                    param_types.len()
+                )));
+            }
             Some(ConstructorCallTarget {
                 impl_class,
                 param_types,
-                ref_params: constructor.ref_params.clone(),
+                ref_params,
             })
         } else if !inst.operands.is_empty() {
             return Err(CodegenIrError::unsupported(format!(
@@ -2015,9 +2023,6 @@ fn dynamic_new_candidate(
     }
     let constructor_key = php_symbol_key("__construct");
     let constructor_impl = if let Some(constructor) = class_info.methods.get(&constructor_key) {
-        if constructor.params.len() != arg_count {
-            return Ok(None);
-        }
         let impl_class = class_info
             .method_impl_classes
             .get(&constructor_key)
@@ -2026,15 +2031,26 @@ fn dynamic_new_candidate(
         if !class_method_already_emitted(ctx, &impl_class, &constructor_key, false) {
             return Ok(None);
         }
-        let param_types = constructor
-            .params
-            .iter()
-            .map(|(_, ty)| ty.codegen_repr())
-            .collect::<Vec<_>>();
+        let (param_types, ref_params) =
+            emitted_class_method_abi(ctx, &impl_class, &constructor_key, false).unwrap_or_else(
+                || {
+                    (
+                        constructor
+                            .params
+                            .iter()
+                            .map(|(_, ty)| ty.codegen_repr())
+                            .collect(),
+                        constructor.ref_params.clone(),
+                    )
+                },
+            );
+        if param_types.len() != arg_count {
+            return Ok(None);
+        }
         Some(ConstructorCallTarget {
             impl_class,
             param_types,
-            ref_params: constructor.ref_params.clone(),
+            ref_params,
         })
     } else if arg_count == 0 {
         None
@@ -2638,6 +2654,17 @@ fn lower_prop_get_nonnull(
     ) {
         return lower_mixed_prop_get(ctx, inst, object, property);
     }
+    if matches!(
+        ctx.value_php_type(object)?.codegen_repr(),
+        PhpType::Object(class_name) if class_name.is_empty()
+    ) {
+        return lower_generic_object_prop_get(ctx, inst, object, property);
+    }
+    if let Some(candidates) =
+        abstract_descendant_property_candidates(ctx, object, property, inst)?
+    {
+        return lower_abstract_descendant_prop_get(ctx, inst, object, property, candidates);
+    }
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_stdclass_prop_get(ctx, inst, object, property);
     }
@@ -2656,6 +2683,93 @@ fn lower_prop_get_nonnull(
     emit_property_load(ctx, &slot, base_reg)?;
     materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
     store_if_result(ctx, inst)
+}
+
+/// Lowers a property read that exists on only some concrete children of an abstract receiver.
+fn lower_abstract_descendant_prop_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+    candidates: Vec<MixedPropertyCandidate>,
+) -> Result<()> {
+    let miss_label = ctx.next_label("abstract_descendant_prop_miss");
+    let done_label = ctx.next_label("abstract_descendant_prop_done");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "abstract_descendant_prop_{}",
+                label_fragment(&candidate.slot.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+    let base_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, base_reg)?;
+    emit_mixed_property_class_dispatch(
+        ctx,
+        &candidates,
+        &match_labels,
+        &miss_label,
+        &miss_label,
+    );
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        if candidate.slot.is_declared {
+            emit_uninitialized_typed_property_guard(ctx, &candidate.slot, base_reg);
+        }
+        emit_property_load(ctx, &candidate.slot, base_reg)?;
+        materialize_loaded_property_result(ctx, inst, &candidate.slot.php_type)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+    ctx.emitter.label(&miss_label);
+    emit_undefined_property_warning_for_loaded_object(ctx, property);
+    emit_dynamic_property_miss_result(ctx, inst);
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
+}
+
+/// Collects concrete descendant slots for an abstract receiver's undeclared property read.
+fn abstract_descendant_property_candidates(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+    inst: &Instruction,
+) -> Result<Option<Vec<MixedPropertyCandidate>>> {
+    let PhpType::Object(base_name) = ctx.value_php_type(object)?.codegen_repr() else {
+        return Ok(None);
+    };
+    let Some(base_info) = class_info_by_name(ctx, &base_name) else {
+        return Ok(None);
+    };
+    if !base_info.is_abstract
+        || base_info
+            .properties
+            .iter()
+            .any(|(name, _)| name == property)
+    {
+        return Ok(None);
+    }
+    let mut candidates = Vec::new();
+    for (candidate_name, candidate_info) in &ctx.module.class_infos {
+        if candidate_info.is_abstract
+            || same_php_type_name(candidate_name, &base_name)
+            || !class_extends_class(ctx, candidate_name, &base_name)
+            || !candidate_info
+                .properties
+                .iter()
+                .any(|(name, _)| name == property)
+        {
+            continue;
+        }
+        let slot = resolve_property_slot_for_class(ctx, candidate_name, property, inst)?;
+        candidates.push(MixedPropertyCandidate {
+            class_id: candidate_info.class_id,
+            slot,
+        });
+    }
+    candidates.sort_by_key(|candidate| candidate.class_id);
+    Ok((!candidates.is_empty()).then_some(candidates))
 }
 
 /// Lowers `LoadPropRefCell`: loads the raw ref-cell pointer stored in a reference
@@ -3009,6 +3123,65 @@ fn lower_mixed_prop_get(
         return lower_declared_mixed_prop_get(ctx, inst, object, property, candidates);
     }
     lower_runtime_mixed_prop_get(ctx, inst, object, property)
+}
+
+/// Lowers a property read on PHP's bare `object` pseudo-type by dispatching the raw object
+/// pointer across declared-property owners, with stdClass and undefined-property fallbacks.
+///
+/// Unlike `lower_declared_mixed_prop_get`, the receiver is already an object payload rather than
+/// a boxed `Mixed` cell. The surrounding typed-object null guard has also rejected the null
+/// container before this helper runs.
+fn lower_generic_object_prop_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+) -> Result<()> {
+    let candidates = declared_mixed_property_candidates(ctx, property, inst)?;
+    let miss_label = ctx.next_label("generic_object_prop_miss");
+    let done_label = ctx.next_label("generic_object_prop_done");
+    let stdclass_label = ctx.next_label("generic_object_prop_stdclass");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "generic_object_prop_{}",
+                label_fragment(&candidate.slot.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    emit_mixed_property_class_dispatch(
+        ctx,
+        &candidates,
+        &match_labels,
+        &stdclass_label,
+        &miss_label,
+    );
+
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let base_reg = abi::int_result_reg(ctx.emitter);
+        if candidate.slot.is_declared {
+            emit_uninitialized_typed_property_guard(ctx, &candidate.slot, base_reg);
+        }
+        emit_property_load(ctx, &candidate.slot, base_reg)?;
+        box_mixed_property_candidate_result(ctx, &candidate.slot.php_type);
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&stdclass_label);
+    emit_stdclass_get_from_loaded_object(ctx, property);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&miss_label);
+    emit_undefined_property_warning_for_loaded_object(ctx, property);
+    emit_boxed_null(ctx);
+
+    ctx.emitter.label(&done_label);
+    cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
+    store_if_result(ctx, inst)
 }
 
 /// Lowers a `Mixed` receiver by dispatching known user classes before stdClass fallback.
@@ -4565,6 +4738,23 @@ fn emit_property_assign_on_null_fatal(ctx: &mut FunctionContext<'_>, property: &
 pub(super) fn lower_instanceof(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     let value_ty = ctx.value_php_type(value)?;
+    let class_name = class_name_immediate(ctx, inst)?.to_string();
+    if php_symbol_key(class_name.trim_start_matches('\\')) == "closure" {
+        match value_ty {
+            PhpType::Callable => {
+                abi::emit_load_int_immediate(
+                    ctx.emitter,
+                    abi::int_result_reg(ctx.emitter),
+                    1,
+                );
+            }
+            PhpType::Mixed | PhpType::Union(_) => {
+                predicates::emit_mixed_tag_eq(ctx, value, 10)?;
+            }
+            _ => emit_false(ctx),
+        }
+        return store_if_result(ctx, inst);
+    }
     if !matches!(
         value_ty,
         PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
@@ -4572,7 +4762,6 @@ pub(super) fn lower_instanceof(ctx: &mut FunctionContext<'_>, inst: &Instruction
         emit_false(ctx);
         return store_if_result(ctx, inst);
     }
-    let class_name = class_name_immediate(ctx, inst)?.to_string();
     if builtins::has_eval_context(ctx) {
         return builtins::lower_eval_object_is_a(ctx, inst, value, &class_name, false);
     }

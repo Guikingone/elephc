@@ -10,6 +10,7 @@
 
 mod array_chunk;
 mod array_chunk_refcounted;
+mod array_change_key_case;
 mod array_column;
 mod array_column_mixed;
 mod array_column_ref;
@@ -85,6 +86,7 @@ mod array_to_mixed;
 mod array_udiff_uintersect;
 mod array_union;
 mod array_unique;
+mod array_unique_mixed;
 mod array_unique_refcounted;
 mod array_unshift;
 mod array_unshift_grow;
@@ -174,6 +176,8 @@ pub use array_chunk::emit_array_chunk;
 /// Emit array chunk helper (split array into chunks).
 pub use array_chunk_refcounted::emit_array_chunk_refcounted;
 /// Emit refcounted array chunk helper.
+pub use array_change_key_case::emit_array_change_key_case;
+/// Emit associative-array string-key case conversion.
 pub use array_column::emit_array_column;
 /// Emit array column extraction helper.
 pub use array_column_mixed::emit_array_column_mixed;
@@ -325,6 +329,8 @@ pub use array_union::emit_array_union;
 /// Emit array union helper.
 pub use array_unique::emit_array_unique;
 /// Emit array unique helper.
+pub use array_unique_mixed::emit_array_unique_mixed;
+/// Emit boxed-Mixed array unique helper.
 pub use array_unique_refcounted::emit_array_unique_refcounted;
 /// Emit refcounted array unique helper.
 pub use array_unshift::emit_array_unshift;

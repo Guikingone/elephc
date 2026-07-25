@@ -276,6 +276,36 @@ echo $data[0]["tags"][1];
     assert_eq!(out, "rust");
 }
 
+/// Verifies a string-keyed nested write autovivifies an empty declared array property.
+#[test]
+fn test_nested_string_key_write_autovivifies_empty_array_property() {
+    let out = compile_and_run(
+        r#"<?php
+class DebugState {
+    private array $started = [];
+
+    public function start(string $id): void {
+        $this->started[$id] = ["border" => 1];
+    }
+
+    public function mark(string $id): void {
+        $this->started[$id]["out"] = true;
+    }
+
+    public function isMarked(string $id): bool {
+        return $this->started[$id]["out"];
+    }
+}
+
+$state = new DebugState();
+$state->start("request");
+$state->mark("request");
+echo $state->isMarked("request") ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
 /// Tests access to a private static property inside its class via `self::$code`.
 /// Verifies static property resolution and access within the declaring class context.
 /// Compilation and stdout checked.

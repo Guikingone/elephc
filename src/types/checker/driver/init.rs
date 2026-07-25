@@ -213,6 +213,7 @@ impl Checker {
             current_method: None,
             current_method_is_static: false,
             current_by_ref_return: false,
+            active_return_info_scopes: Vec::new(),
             closure_depth: 0,
             in_callable_body: false,
             extern_functions: HashMap::new(),
@@ -227,6 +228,7 @@ impl Checker {
             active_statics: HashSet::new(),
             foreach_key_locals: HashSet::new(),
             declared_typed_locals: HashSet::new(),
+            conditional_assignment_depth: 0,
             eval_barrier_active: false,
             break_continue_depth: 0,
             finally_break_continue_bases: Vec::new(),
@@ -237,6 +239,7 @@ impl Checker {
             func_args_functions: HashSet::new(),
             compile_time_const_depth: 0,
             throw_access_sites: HashMap::new(),
+            evaluated_expr_types: HashMap::new(),
             builtin_call_types: HashMap::new(),
         }
     }

@@ -1828,6 +1828,12 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             sig.declared_return = true;
             Some(sig)
         }
+        "preg_match" | "preg_match_all" => {
+            let mut sig = builtin_call_sig(name)?;
+            sig.return_type = PhpType::Int;
+            sig.declared_return = true;
+            Some(sig)
+        }
         // Date/time helpers that return scalars or arrays. Like `date`/`gmdate`,
         // they reuse the catalog parameter contract and override only the return
         // type, so first-class-callable references (`checkdate(...)`, etc.) match PHP.

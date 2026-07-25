@@ -2,7 +2,7 @@
 title: "array_key_first() — internals"
 description: "Compiler internals for array_key_first(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 19
+  order: 20
 ---
 
 ## `array_key_first()` — internals

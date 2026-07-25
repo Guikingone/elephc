@@ -50,6 +50,7 @@ pub struct RuntimeFnDescriptor {
 pub enum RuntimeFnId {
     ArrayAll,
     ArrayAny,
+    ArrayChangeKeyCase,
     ArrayChunk,
     ArrayColumn,
     ArrayCombine,
@@ -316,6 +317,7 @@ pub enum RuntimeFnId {
     Fmod,
     Hypot,
     Intdiv,
+    Intval,
     Log,
     Log10,
     Log2,
@@ -456,6 +458,7 @@ pub enum RuntimeFnId {
     JsonLastErrorMsg,
     JsonValidate,
     Localtime,
+    MemoryGetUsage,
     Microtime,
     Mktime,
     Passthru,
@@ -623,6 +626,7 @@ impl RuntimeFnId {
         match self {
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
+            RuntimeFnId::ArrayChangeKeyCase |
             RuntimeFnId::ArrayChunk |
             RuntimeFnId::ArrayColumn |
             RuntimeFnId::ArrayCombine |
@@ -782,6 +786,9 @@ impl RuntimeFnId {
             self,
             RuntimeFnId::Abs
                 | RuntimeFnId::Gettype
+                | RuntimeFnId::Intval
+                | RuntimeFnId::PregMatch
+                | RuntimeFnId::PregMatchAll
                 | RuntimeFnId::Trim
         )
     }
@@ -805,6 +812,22 @@ impl RuntimeFnId {
                 )
             }),
             RuntimeFnId::Gettype => true,
+            RuntimeFnId::Intval => source.is_none_or(|ty| {
+                matches!(
+                    ty,
+                    PhpType::Bool
+                        | PhpType::Float
+                        | PhpType::Int
+                        | PhpType::Mixed
+                        | PhpType::Never
+                        | PhpType::Str
+                        | PhpType::Union(_)
+                        | PhpType::Void
+                )
+            }),
+            RuntimeFnId::PregMatch | RuntimeFnId::PregMatchAll => {
+                source.is_none_or(|ty| matches!(ty, PhpType::Str))
+            }
             RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
             _ => false,
         }
@@ -900,6 +923,7 @@ impl RuntimeFnId {
         if matches!(
             self,
             RuntimeFnId::Abs
+                | RuntimeFnId::ArrayChangeKeyCase
                 | RuntimeFnId::ArrayChunk
                 | RuntimeFnId::ArrayColumn
                 | RuntimeFnId::ArrayCombine
@@ -955,6 +979,7 @@ impl RuntimeFnId {
         match self {
             RuntimeFnId::ArrayAll => "array_all",
             RuntimeFnId::ArrayAny => "array_any",
+            RuntimeFnId::ArrayChangeKeyCase => "array_change_key_case",
             RuntimeFnId::ArrayChunk => "array_chunk",
             RuntimeFnId::ArrayColumn => "array_column",
             RuntimeFnId::ArrayCombine => "array_combine",
@@ -1221,6 +1246,7 @@ impl RuntimeFnId {
             RuntimeFnId::Fmod => "fmod",
             RuntimeFnId::Hypot => "hypot",
             RuntimeFnId::Intdiv => "intdiv",
+            RuntimeFnId::Intval => "intval",
             RuntimeFnId::Log => "log",
             RuntimeFnId::Log10 => "log10",
             RuntimeFnId::Log2 => "log2",
@@ -1361,6 +1387,7 @@ impl RuntimeFnId {
             RuntimeFnId::JsonLastErrorMsg => "json_last_error_msg",
             RuntimeFnId::JsonValidate => "json_validate",
             RuntimeFnId::Localtime => "localtime",
+            RuntimeFnId::MemoryGetUsage => "memory_get_usage",
             RuntimeFnId::Microtime => "microtime",
             RuntimeFnId::Mktime => "mktime",
             RuntimeFnId::Passthru => "passthru",

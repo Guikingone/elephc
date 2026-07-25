@@ -1,14 +1,14 @@
 //! Purpose:
-//! Resolves class-constant references used as default values (class property defaults and class
-//! method/constructor parameter defaults) into the referenced constant's literal value, before
-//! class schema metadata is built.
+//! Resolves class-like constant references used as default values (class property defaults and
+//! class method/constructor parameter defaults) into the referenced constant's literal value,
+//! before class schema metadata is built.
 //!
 //! Called from:
 //! - `crate::types::checker::driver::init` (after `class_map` is fully populated).
 //!
 //! Key details:
-//! - Runs on the complete `class_map`, so it is order-independent: a default in a class declared
-//!   before the class it references (`B` before `A`) still resolves.
+//! - Runs on the complete class and interface maps, so it is order-independent: a default in a
+//!   class declared before the class-like symbol it references still resolves.
 //! - Rewrites the default expression in place to the resolved scalar literal, so both syntactic
 //!   type inference and codegen see a literal instead of a `ScopedConstantAccess`. For property
 //!   defaults this also satisfies the codegen property-default emitter, which only accepts literal
@@ -20,6 +20,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
+use crate::types::checker::builtin_types::InterfaceDeclInfo;
 use crate::types::traits::FlattenedClass;
 
 /// Maximum number of constant indirections to follow when resolving a default
@@ -27,23 +28,25 @@ use crate::types::traits::FlattenedClass;
 /// definitions producing unbounded recursion.
 const MAX_CONST_RESOLUTION_DEPTH: usize = 32;
 
-/// A class's constant value expressions plus its parent link, used for order-independent
-/// constant resolution while defaults are rewritten.
+/// A class-like symbol's constant values and parent links, used for order-independent resolution.
 struct ClassConsts {
     /// Constant name (case-sensitive, matching PHP) → declared value expression.
     constants: HashMap<String, Expr>,
-    /// Fully-qualified parent class name, for walking the inheritance chain.
-    parent: Option<String>,
+    /// Fully-qualified parent class or parent interface names, for walking inheritance.
+    parents: Vec<String>,
 }
 
 /// Rewrites every class property default and class method/constructor parameter default that is a
 /// class-constant reference (`A::X`, `self::X`, `parent::X`, `static::X`) into the referenced
 /// constant's scalar literal value, when that value resolves to a literal.
 ///
-/// Operates on the fully-populated `class_map` so resolution does not depend on declaration order.
+/// Operates on the complete class and interface maps so resolution is declaration-order independent.
 /// Non-resolvable references and non-literal constant values are left unchanged.
-pub(crate) fn resolve_const_default_references(class_map: &mut HashMap<String, FlattenedClass>) {
-    let const_table = build_const_table(class_map);
+pub(crate) fn resolve_const_default_references(
+    class_map: &mut HashMap<String, FlattenedClass>,
+    interface_map: &HashMap<String, InterfaceDeclInfo>,
+) {
+    let const_table = build_const_table(class_map, interface_map);
     for class in class_map.values_mut() {
         let class_name = class.name.clone();
         // Instance and static property defaults.
@@ -73,9 +76,12 @@ fn rewrite_default(
     }
 }
 
-/// Builds the order-independent constant lookup table from every class in `class_map`.
-fn build_const_table(class_map: &HashMap<String, FlattenedClass>) -> HashMap<String, ClassConsts> {
-    class_map
+/// Builds the order-independent constant lookup table from every class and interface declaration.
+fn build_const_table(
+    class_map: &HashMap<String, FlattenedClass>,
+    interface_map: &HashMap<String, InterfaceDeclInfo>,
+) -> HashMap<String, ClassConsts> {
+    let mut table: HashMap<String, ClassConsts> = class_map
         .iter()
         .map(|(name, class)| {
             let constants = class
@@ -87,11 +93,26 @@ fn build_const_table(class_map: &HashMap<String, FlattenedClass>) -> HashMap<Str
                 name.clone(),
                 ClassConsts {
                     constants,
-                    parent: class.extends.clone(),
+                    parents: class.extends.iter().cloned().collect(),
                 },
             )
         })
-        .collect()
+        .collect();
+    table.extend(interface_map.iter().map(|(name, interface)| {
+        let constants = interface
+            .constants
+            .iter()
+            .map(|constant| (constant.name.clone(), constant.value.clone()))
+            .collect();
+        (
+            name.clone(),
+            ClassConsts {
+                constants,
+                parents: interface.extends.clone(),
+            },
+        )
+    }));
+    table
 }
 
 /// Attempts to resolve a single default expression to a scalar literal.
@@ -155,25 +176,34 @@ fn receiver_class(
         StaticReceiver::Self_ | StaticReceiver::Static => {
             (!current_class.is_empty()).then(|| current_class.to_string())
         }
-        StaticReceiver::Parent => table.get(current_class).and_then(|c| c.parent.clone()),
+        StaticReceiver::Parent => table
+            .get(current_class)
+            .and_then(|class| class.parents.first().cloned()),
     }
 }
 
-/// Looks up a class constant by name, walking the parent chain. Returns the constant's value
-/// expression together with the class that actually declares it (used as the lexical context for
-/// resolving any nested `self`/`parent` references in that value).
+/// Looks up a class-like constant by name, walking class or interface parent links.
+///
+/// Returns the value expression with the symbol that declares it, which supplies the lexical
+/// context for resolving nested `self`/`parent` references in that value.
 fn lookup_constant(
     class_name: &str,
     const_name: &str,
     table: &HashMap<String, ClassConsts>,
 ) -> Option<(Expr, String)> {
-    let mut current = Some(class_name.to_string());
-    while let Some(cn) = current {
-        let class = table.get(&cn)?;
+    let mut pending = vec![class_name.to_string()];
+    let mut visited = HashSet::new();
+    while let Some(cn) = pending.pop() {
+        if !visited.insert(cn.clone()) {
+            continue;
+        }
+        let Some(class) = table.get(&cn) else {
+            continue;
+        };
         if let Some(value) = class.constants.get(const_name) {
             return Some((value.clone(), cn));
         }
-        current = class.parent.clone();
+        pending.extend(class.parents.iter().rev().cloned());
     }
     None
 }

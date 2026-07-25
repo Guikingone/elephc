@@ -47,6 +47,19 @@ class C { use A, B; }
     );
 }
 
+/// Verifies that incompatible constants imported from two traits abort class composition.
+#[test]
+fn test_error_trait_constant_conflict_must_be_compatible() {
+    expect_error(
+        r#"<?php
+trait A { public const VALUE = 1; }
+trait B { public const VALUE = 2; }
+class C { use A, B; }
+"#,
+        "incompatible duplicate trait constant 'VALUE'",
+    );
+}
+
 /// Verifies that circular trait composition (trait A uses B, B uses A) is detected
 /// and reported as an error.
 #[test]
@@ -74,6 +87,25 @@ $s = new Secret();
 echo $s->value;
 "#,
         "Cannot access protected property: Secret::value",
+    );
+}
+
+/// Verifies sibling subclasses cannot access a protected property declared by one another.
+#[test]
+fn test_error_sibling_cannot_access_child_protected_property() {
+    expect_error(
+        r#"<?php
+class ProtectedRoot {}
+class ProtectedLeft extends ProtectedRoot {
+    public static function read(ProtectedRight $right): int {
+        return $right->value;
+    }
+}
+class ProtectedRight extends ProtectedRoot {
+    protected int $value = 7;
+}
+"#,
+        "Cannot access protected property: ProtectedRight::value",
     );
 }
 
@@ -643,13 +675,64 @@ fn test_error_reflection_function_constructor_unknown_function() {
     );
 }
 
-/// Verifies that `new ReflectionFunction()` rejects dynamic function names
-/// because runtime function reflection lookup metadata is not available.
+/// Verifies that `new ReflectionFunction()` accepts a string-typed dynamic function name for
+/// resolution through the runtime callable registry.
 #[test]
-fn test_error_reflection_function_constructor_dynamic_function_name() {
-    expect_error(
+fn test_reflection_function_constructor_dynamic_function_name_compiles() {
+    expect_ok(
         "<?php function reflected_function($a) {} $f = 'reflected_function'; $r = new ReflectionFunction($f);",
-        "requires a string literal function name",
+    );
+}
+
+/// Verifies an assignment in a negated condition replaces an earlier reflection subtype that
+/// only exists on branches which have already returned.
+#[test]
+fn test_negated_condition_assignment_replaces_returned_branch_reflection_type() {
+    expect_ok(
+        r#"<?php
+class ReflectionFlowFactory {
+    public function getFactory(): mixed {
+        return null;
+    }
+
+    public function getClassName(): ?string {
+        return DateTime::class;
+    }
+
+    public function getReflectionClass(?string $class): ?ReflectionClass {
+        return null === $class ? null : new ReflectionClass($class);
+    }
+
+    public function resolve(): ?ReflectionFunctionAbstract {
+        if (is_string($factory = $this->getFactory())) {
+            $r = new ReflectionFunction($factory);
+            return $r;
+        }
+
+        if ($factory) {
+            return new ReflectionMethod(DateTime::class, "format");
+        }
+
+        $class = $this->getClassName();
+        if (!$r = $this->getReflectionClass($class)) {
+            return null;
+        }
+        if (!$r = $r->getConstructor()) {
+            return null;
+        }
+        return $r;
+    }
+}
+"#,
+    );
+}
+
+/// Verifies PHP's `ReflectionParameter implements Reflector` relationship is available to
+/// ordinary function-argument compatibility checks.
+#[test]
+fn test_reflection_parameter_is_assignable_to_reflector() {
+    expect_ok(
+        "<?php function accepts_reflector(Reflector $reflector): void {} function pass_parameter(ReflectionParameter $parameter): void { accepts_reflector($parameter); }",
     );
 }
 

@@ -14,6 +14,10 @@ use crate::span::Span;
 use crate::types::{normalized_array_key_type, PhpType, TypeEnv};
 
 use super::super::super::Checker;
+use super::properties::{
+    array_family_bool_void_union_accepts_write, is_php_array_key_type,
+    type_satisfies_array_access,
+};
 
 /// Internal data for static property assignment resolution.
 /// Holds the resolved class, declaring class, declared-type status, and current property type.
@@ -128,7 +132,7 @@ pub(super) fn check_static_property_array_push(
 
 /// Type-checks an indexed array assignment `Class::$prop[index] = value`.
 ///
-/// Infers the index and value types, resolves the property target, validates integer index,
+/// Infers the index and value types, resolves the property target, validates PHP array keys,
 /// validates element-type compatibility against declared types, merges element types when the
 /// property is untyped, and updates the property type. Short-circuits for `ArrayAccess` objects.
 pub(super) fn check_static_property_array_assign(
@@ -150,12 +154,11 @@ pub(super) fn check_static_property_array_assign(
         }
         return Ok(());
     }
-    if let PhpType::Object(class_name) = &target.prop_ty {
-        if checker.object_type_implements_interface(class_name, "ArrayAccess") {
-            return Ok(());
-        }
+    if type_satisfies_array_access(checker, &target.prop_ty) {
+        return Ok(());
     }
-    if idx_ty != PhpType::Int && idx_ty != PhpType::Mixed {
+    let normalized_idx_ty = normalized_array_key_type(index, idx_ty);
+    if !is_php_array_key_type(&normalized_idx_ty) {
         return Err(CompileError::new(span, "Array index must be integer"));
     }
 
@@ -204,6 +207,12 @@ pub(super) fn check_static_property_array_assign(
                 key,
                 value: Box::new(merged_value),
             }
+        }
+        PhpType::Union(members) if array_family_bool_void_union_accepts_write(&members) => {
+            // PHP auto-vivifies a nullable/false array-valued static property on indexed write.
+            // Keep the declared union storage shape; EIR mutates its boxed cell in place through
+            // the same mixed-array runtime helper used for instance properties.
+            PhpType::Union(members)
         }
         other => {
             return Err(CompileError::new(

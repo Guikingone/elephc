@@ -152,7 +152,7 @@ impl Checker {
                 };
                 self.check_known_callable_call(
                     &effective_sig,
-                    &normalized_args,
+                    args,
                     expr.span,
                     env,
                     &format!("Constructor '{}::__construct'", class_name),
@@ -255,7 +255,7 @@ impl Checker {
         )?;
         self.check_known_callable_call(
             &sig,
-            &normalized_args,
+            args,
             expr.span,
             env,
             &format!("Constructor '{}::__construct'", class_name),
@@ -439,7 +439,8 @@ impl Checker {
     /// against PHP's real `Closure|string $function` signature.
     ///
     /// - A `Str`-typed literal keeps the existing behavior: the named function must exist and
-    ///   its attribute metadata must be materializable.
+    ///   its attribute metadata must be materializable. A non-literal `Str` is accepted for
+    ///   resolution through the EIR runtime callable registry.
     /// - A first-class callable targeting a plain free function (`target(...)`) is treated
     ///   exactly like passing that function's name as a string literal (php -n verified:
     ///   `(new ReflectionFunction($fn(...)))->getName()` returns the real function name).
@@ -463,17 +464,14 @@ impl Checker {
             .expect("ReflectionFunction constructor arity was validated");
         let arg_ty = self.infer_type(arg, env)?;
         if matches!(arg_ty, PhpType::Str) {
-            let function_name = self.reflection_string_literal_arg(
-                "ReflectionFunction",
-                "function name",
-                Some(arg),
-                env,
-            )?;
+            let ExprKind::StringLiteral(function_name) = &arg.kind else {
+                return Ok(());
+            };
             if self
-                .reflection_function_signature(&function_name)?
+                .reflection_function_signature(function_name)?
                 .is_some()
             {
-                return self.validate_reflection_function_attrs(&function_name, expr);
+                return self.validate_reflection_function_attrs(function_name, expr);
             }
             return Err(CompileError::new(
                 expr.span,
@@ -895,8 +893,9 @@ impl Checker {
     /// constructor call, accepting a non-literal `Str`-typed expression: a string literal
     /// resolves immediately (`Some(name)`, the compile-time member validation path); any other
     /// `Str`-typed expression returns `None`, routing the construction to the EIR dynamic
-    /// member dispatcher instead of erroring. A non-`Str` argument is still a compile-time type
-    /// error — PHP does not weak-coerce the member-name argument (php -n verified).
+    /// member dispatcher instead of erroring. Gradual `Mixed`/union expressions also route to
+    /// that dispatcher, which verifies the runtime tag before treating the payload as a string.
+    /// Concrete non-string types remain compile-time errors.
     fn reflection_member_name_arg(
         &mut self,
         reflection_type: &str,
@@ -906,14 +905,18 @@ impl Checker {
     ) -> Result<Option<String>, CompileError> {
         let arg = arg.expect("reflection constructor arity was validated");
         let arg_ty = self.infer_type(arg, env)?;
-        if !matches!(arg_ty, PhpType::Str) {
-            return Err(CompileError::new(
-                arg.span,
-                &format!(
-                    "{}::__construct() {} argument must be a string",
-                    reflection_type, label
-                ),
-            ));
+        match arg_ty.codegen_repr() {
+            PhpType::Mixed | PhpType::Union(_) => return Ok(None),
+            PhpType::Str => {}
+            _ => {
+                return Err(CompileError::new(
+                    arg.span,
+                    &format!(
+                        "{}::__construct() {} argument must be a string",
+                        reflection_type, label
+                    ),
+                ));
+            }
         }
         match &arg.kind {
             ExprKind::StringLiteral(value) => Ok(Some(value.clone())),

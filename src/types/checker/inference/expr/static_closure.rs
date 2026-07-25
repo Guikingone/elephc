@@ -741,9 +741,9 @@ fn instanceof_target_must_not_use_this(
 // dispatching to the closure's lexical class, not the rebound one). `closure_body_free_of_self_scope`
 // is the JURY-mandated gate: PROVEN absence of `$this`/`self::`/`static::`/`parent::` anywhere in
 // the body, recursively including nested closures/arrow functions, is what makes rebinding sound —
-// property access on a PARAMETER typed as (or a subclass of) the rebound scope is then authorized
-// against that scope instead of the closure's lexically enclosing class (see `BoundScopeContext`).
-
+// property access on an eligible typed parameter or a non-captured closure-local variable is then
+// authorized against that scope instead of the closure's lexically enclosing class (see
+// `BoundScopeContext`).
 
 
 

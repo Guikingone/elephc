@@ -617,11 +617,17 @@ fn parse_variable(
             Token::LParen => {
                 *pos += 1;
                 if parse_first_class_callable_parens(tokens, pos)? {
-                    // `$callable(...)` is the first-class-callable form: it creates a closure from the
-                    // callable held in `$callable`. In elephc's closed world a callable-typed variable
-                    // already *is* a callable value, so the closure-creation form evaluates to that
-                    // value directly and can be stored and invoked like any other callable.
-                    return Ok(Expr::new(ExprKind::Variable(name), span));
+                    // `$callable(...)` creates a Closure from the value held in `$callable`.
+                    // Model it as an `__invoke` first-class method target so invokable objects
+                    // materialize a real callable descriptor. The lowering keeps this an identity
+                    // operation when the variable already contains a callable descriptor.
+                    return Ok(Expr::new(
+                        ExprKind::FirstClassCallable(CallableTarget::Method {
+                            object: Box::new(Expr::new(ExprKind::Variable(name), span)),
+                            method: "__invoke".to_string(),
+                        }),
+                        span,
+                    ));
                 }
                 let args = parse_args(tokens, pos, span)?;
                 let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);

@@ -26,6 +26,9 @@ pub(super) fn lower(
                 "method_exists",
             )
         }),
+        RuntimeFnId::MemoryGetUsage => Some({
+            crate::codegen::lower_inst::builtins::system::lower_memory_get_usage(ctx, inst)
+        }),
         RuntimeFnId::PropertyExists => Some({
             crate::codegen::lower_inst::builtins::lower_member_exists(
                 ctx,

@@ -334,8 +334,16 @@ fn lower_numeric_binary(
     right: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
-    let lhs = lower_expr(ctx, left);
-    let rhs = lower_expr(ctx, right);
+    let mut lhs = lower_expr(ctx, left);
+    let mut rhs = lower_expr(ctx, right);
+    if matches!(op, BinOp::Add) {
+        if is_datetime_fractional_unix_format_for_ir(ctx, left) {
+            lhs = coerce_to_float(ctx, lhs, left);
+        }
+        if is_datetime_fractional_unix_format_for_ir(ctx, right) {
+            rhs = coerce_to_float(ctx, rhs, right);
+        }
+    }
     if matches!(op, BinOp::Add) {
         if let Some((op, result_ty)) = array_union_plan(ctx, lhs.value, rhs.value) {
             return ctx.emit_value(
@@ -576,20 +584,29 @@ fn lower_gradual_array_union(
     rhs: LoweredValue,
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    let lhs_ty = ctx.builder.value_php_type(lhs.value).codegen_repr();
-    let rhs_ty = ctx.builder.value_php_type(rhs.value).codegen_repr();
+    let lhs_static_ty = ctx.builder.value_php_type(lhs.value);
+    let rhs_static_ty = ctx.builder.value_php_type(rhs.value);
+    let lhs_ty = lhs_static_ty.codegen_repr();
+    let rhs_ty = rhs_static_ty.codegen_repr();
     let lhs_array = matches!(lhs_ty, PhpType::Array(_) | PhpType::AssocArray { .. });
     let rhs_array = matches!(rhs_ty, PhpType::Array(_) | PhpType::AssocArray { .. });
     let lhs_boxed = matches!(lhs_ty, PhpType::Mixed | PhpType::Union(_));
     let rhs_boxed = matches!(rhs_ty, PhpType::Mixed | PhpType::Union(_));
+    let both_boxed_array_unions =
+        array_family_only_union(&lhs_static_ty) && array_family_only_union(&rhs_static_ty);
     // Convert the single boxed operand to a concrete owned hash; remember which value was the
-    // converted temporary so it can be released after the union consumes it.
-    let (left_value, right_value, converted_temp) = if lhs_array && rhs_boxed {
+    // converted temporary so it can be released after the union consumes it. When control-flow
+    // boxed both operands as array-only unions, convert and release both temporaries.
+    let (left_value, right_value, converted_temps) = if lhs_array && rhs_boxed {
         let converted = convert_mixed_array_to_assoc_hash(ctx, rhs.value, expr.span);
-        (lhs.value, converted, converted)
+        (lhs.value, converted, vec![converted])
     } else if lhs_boxed && rhs_array {
         let converted = convert_mixed_array_to_assoc_hash(ctx, lhs.value, expr.span);
-        (converted, rhs.value, converted)
+        (converted, rhs.value, vec![converted])
+    } else if lhs_boxed && rhs_boxed && both_boxed_array_unions {
+        let left = convert_mixed_array_to_assoc_hash(ctx, lhs.value, expr.span);
+        let right = convert_mixed_array_to_assoc_hash(ctx, rhs.value, expr.span);
+        (left, right, vec![left, right])
     } else {
         return None;
     };
@@ -602,12 +619,30 @@ fn lower_gradual_array_union(
         union_op.default_effects(),
         Some(expr.span),
     );
-    let converted = LoweredValue {
-        value: converted_temp,
-        ir_type: value_ir_type(&ctx.builder.value_php_type(converted_temp)),
-    };
-    crate::ir_lower::ownership::release_if_owned(ctx, converted, Some(expr.span));
+    for converted_temp in converted_temps {
+        let converted = LoweredValue {
+            value: converted_temp,
+            ir_type: value_ir_type(&ctx.builder.value_php_type(converted_temp)),
+        };
+        crate::ir_lower::ownership::release_if_owned(ctx, converted, Some(expr.span));
+    }
     Some(result)
+}
+
+/// Returns true when `ty` is a non-empty boxed union whose every member is an array-family type.
+///
+/// The checker admits two boxed operands to PHP array `+` only under this invariant. Mirroring
+/// that closed predicate here prevents ordinary `Mixed + Mixed` numeric expressions from being
+/// routed through the hash converter.
+fn array_family_only_union(ty: &PhpType) -> bool {
+    let PhpType::Union(members) = ty else {
+        return false;
+    };
+    !members.is_empty()
+        && members.iter().all(|member| {
+            matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })
+                || array_family_only_union(member)
+        })
 }
 
 /// Merges indexed-array element types supported by the current EIR storage model.
@@ -659,6 +694,42 @@ fn array_union_value_type(left: &PhpType, right: &PhpType) -> PhpType {
 fn should_use_mixed_numeric_binop(lhs: IrType, rhs: IrType) -> bool {
     !matches!(lhs, IrType::I64 | IrType::F64)
         || !matches!(rhs, IrType::I64 | IrType::F64)
+}
+
+/// Returns whether EIR should coerce a DateTime-family `format('U.u')` result to float.
+///
+/// This mirrors the checker proof for the one PHP format whose output is always
+/// a decimal Unix timestamp, while retaining ordinary string semantics for all
+/// other `format()` methods and format strings.
+fn is_datetime_fractional_unix_format_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    expr: &Expr,
+) -> bool {
+    let ExprKind::MethodCall {
+        object,
+        method,
+        args,
+    } = &expr.kind
+    else {
+        return false;
+    };
+    if !method.eq_ignore_ascii_case("format")
+        || !matches!(
+            args.as_slice(),
+            [Expr {
+                kind: ExprKind::StringLiteral(format),
+                ..
+            }] if format == "U.u"
+        )
+    {
+        return false;
+    }
+    instance_callable_object_class(ctx, object).is_some_and(|class_name| {
+        matches!(
+            class_name.trim_start_matches('\\'),
+            "DateTime" | "DateTimeImmutable" | "DateTimeInterface"
+        )
+    })
 }
 
 /// Emits a mixed-numeric EIR opcode with the operation immediate required by the backend.
@@ -1275,9 +1346,20 @@ fn lower_logical_binary(
     });
 
     ctx.builder.position_at_end(rhs_block);
+    // The RHS of `&&` runs only when the LHS is true, so statically-known flow facts on the LHS
+    // refine subtype-only calls and nullable scalar operations in this block. The false complement
+    // needed by `||` is generally not representable and remains conservatively unrefined.
+    let narrowed_locals = if matches!(op, BinOp::And) {
+        crate::ir_lower::stmt::apply_condition_then_narrowing(ctx, left)
+    } else {
+        Vec::new()
+    };
     let rhs = lower_expr(ctx, right);
     let rhs = ctx.truthy(rhs, Some(right.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, rhs, expr.span);
+    for (name, original) in narrowed_locals {
+        ctx.set_local_logical_type(&name, original);
+    }
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(const_block);
@@ -1411,14 +1493,25 @@ fn lower_null_coalesce(
     take_owned_temp(ctx, &temp_name, expr.span)
 }
 
-/// Lowers the value side of `??`, suppressing undefined-offset warnings from
-/// native array reads while preserving nullsafe-chain lazy evaluation.
+/// Lowers the value side of `??`, suppressing undefined-offset warnings from native array reads,
+/// preserving nullsafe-chain lazy evaluation, and returning null directly for a definitely
+/// undeclared property instead of attempting an ordinary property read.
 fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value: &Expr) -> LoweredValue {
     if let Some(value) = nullsafe_chain::lower_with_missing_warning(ctx, value, false) {
         return value;
     }
     if let ExprKind::ArrayAccess { array, index } = &value.kind {
         return lower_array_access_with_missing_warning(ctx, array, index, value, false);
+    }
+    if let ExprKind::PropertyAccess { object, property } = &value.kind {
+        if matches!(
+            property_isset_action(ctx, object, property),
+            Some(IssetPropertyAction::AlwaysFalse)
+        ) {
+            let object = lower_expr(ctx, object);
+            crate::ir_lower::ownership::release_if_owned(ctx, object, Some(value.span));
+            return lower_null(ctx, value);
+        }
     }
     lower_expr(ctx, value)
 }
@@ -1432,6 +1525,34 @@ fn null_coalesce_result_type(
     let value_ty = strip_void_from_union(ctx.builder.value_php_type(value)).codegen_repr();
     let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
     wider_type_for_merge(&value_ty, &default_ty)
+}
+
+/// Returns the flow-sensitive local type after a self-targeted `??=` assignment.
+///
+/// Frame storage may need to widen to `Mixed` when the non-null prior value and default use
+/// different representations, but the logical type remains their normalized union. Keeping that
+/// distinction lets later guards narrow `object|callable` even though both values share a boxed
+/// local slot.
+pub(super) fn null_coalesce_assignment_logical_type(
+    ctx: &LoweringContext<'_, '_>,
+    existing: &PhpType,
+    default: &Expr,
+) -> PhpType {
+    let default_ty = materialized_expr_type_for_merge(ctx, default);
+    match existing {
+        PhpType::Void => default_ty,
+        PhpType::Mixed => PhpType::Mixed,
+        PhpType::Union(members) if members.iter().any(|member| *member == PhpType::Void) => {
+            let mut resolved = members
+                .iter()
+                .filter(|member| **member != PhpType::Void)
+                .cloned()
+                .collect::<Vec<_>>();
+            resolved.push(default_ty);
+            normalize_union_members(resolved).unwrap_or(PhpType::Void)
+        }
+        _ => existing.clone(),
+    }
 }
 
 /// Chooses the wider materialized type for branch-local merge storage.
@@ -2266,8 +2387,9 @@ fn emit_builtin_call_value(
             // the already-lowered operands to the descriptor's parameter types here —
             // in place, without materializing any trailing default the runtime op does
             // not accept. Mirrors main's `coerce_scalar_arg_to_param_storage`.
-            let operands = match crate::builtins::registry::function_sig(name) {
-                Some(reg_sig) => coerce_operands_to_params(ctx, &reg_sig, operands),
+            let registry_signature = crate::builtins::registry::function_sig(name);
+            let operands = match registry_signature.as_ref() {
+                Some(reg_sig) => coerce_operands_to_params(ctx, reg_sig, operands),
                 None => operands,
             };
             let lowered = crate::builtins::semantics::lower_registry_call(
@@ -2304,11 +2426,12 @@ fn emit_builtin_call_value(
                     ReturnArgAlias::Unknown
                 }
             };
-            release_owned_call_arg_temporaries(
+            release_owned_call_arg_temporaries_with_signature(
                 ctx,
                 &operands,
                 Some(call.value),
                 &return_alias,
+                registry_signature.as_ref(),
                 span,
             );
             return call;
@@ -4419,7 +4542,9 @@ pub(crate) fn static_callable_binding_for_expr(
         ExprKind::ArrayLiteral(items) => static_array_callable_descriptor_target(ctx, items)
             .or_else(|| instance_array_callable_target(ctx, items)),
         ExprKind::FirstClassCallable(CallableTarget::Method { object, method }) => {
-            resolve_instance_method_callable(ctx, object, method.clone(), false)
+            resolve_object_static_method_callable(ctx, object, method.clone()).or_else(|| {
+                resolve_instance_method_callable(ctx, object, method.clone(), false)
+            })
         }
         ExprKind::Variable(name) => ctx.static_callable_local(name),
         _ => None,
@@ -4845,6 +4970,20 @@ fn resolve_static_method_callable(
 ) -> Option<StaticCallableBinding> {
     static_method_implementation_signature(ctx, &receiver, &method)?;
     Some(StaticCallableBinding::StaticMethod { receiver, method })
+}
+
+/// Resolves PHP's object-syntax form for a statically declared method callable.
+fn resolve_object_static_method_callable(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    method: String,
+) -> Option<StaticCallableBinding> {
+    let class_name = instance_callable_object_class(ctx, object)?;
+    resolve_static_method_callable(
+        ctx,
+        StaticReceiver::Named(Name::from(class_name)),
+        method,
+    )
 }
 
 /// Resolves a first-class instance-method callable to signature metadata only.
@@ -7930,7 +8069,9 @@ fn array_builtin_return_type(
         "array_merge" => array_merge_builtin_return_type(ctx, operands),
         "array_replace" => array_replace_builtin_return_type(ctx, operands),
         "array_splice" | "array_filter" | "array_diff" | "array_intersect" | "array_diff_key"
-        | "array_intersect_key" => array_preserve_first_builtin_return_type(ctx, operands),
+        | "array_intersect_key" | "array_change_key_case" => {
+            array_preserve_first_builtin_return_type(ctx, operands)
+        }
         "in_array" => Some(PhpType::Bool),
         "array_is_list" => Some(PhpType::Bool),
         "array_key_first" | "array_key_last" => Some(PhpType::Mixed),
@@ -8346,6 +8487,8 @@ fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Expr], expr: 
         match &item.kind {
             ExprKind::Spread(inner) => {
                 let source = lower_expr(ctx, inner);
+                let source =
+                    lower_gradual_array_literal_spread_source(ctx, source, item.span);
                 if matches!(
                     ctx.builder.value_php_type(source.value).codegen_repr(),
                     PhpType::AssocArray { .. }
@@ -8364,6 +8507,47 @@ fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Expr], expr: 
         lower_array_literal_as_hash_from_lowered(ctx, items, &lowered, expr)
     } else {
         lower_array_literal_as_indexed_from_lowered(ctx, items, &lowered, expr)
+    }
+}
+
+/// Converts a gradual or iterable array-literal spread source into an owned hash.
+///
+/// Boxed Mixed/union values use the strict runtime array guard; `Iterable` values reuse
+/// `iterator_to_array()` so Traversable keys follow PHP's unpacking rules.
+fn lower_gradual_array_literal_spread_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let source_ty = ctx.builder.value_php_type(source.value).codegen_repr();
+    let hash_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
+    match source_ty {
+        PhpType::Mixed | PhpType::Union(_) => {
+            let converted = ctx.emit_value(
+                Op::MixedToHash,
+                vec![source.value],
+                None,
+                hash_ty,
+                Op::MixedToHash.default_effects(),
+                Some(span),
+            );
+            if ctx.value_is_owning_temporary(source) {
+                crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+            }
+            converted
+        }
+        PhpType::Iterable => emit_builtin_call_value(
+            ctx,
+            "iterator_to_array",
+            vec![source.value],
+            hash_ty,
+            span,
+            None,
+        ),
+        _ => return source,
     }
 }
 
@@ -9075,6 +9259,10 @@ pub(super) fn method_call_expr_type_for_ir(
     let class_name = instance_callable_object_class(ctx, object)?;
     let method_key = php_symbol_key(method);
     class_method_signature(ctx, &class_name, &method_key)
+        .or_else(|| {
+            let receiver = StaticReceiver::Named(class_name.clone().into());
+            static_method_implementation_signature(ctx, &receiver, &method_key)
+        })
         .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
 }
 
@@ -9413,15 +9601,20 @@ fn lower_scalar_receiver_associative_get(
 /// `Op::MixedToHash` unboxes the value and produces a freshly cloned/rebuilt owned hash via
 /// `__rt_mixed_to_owned_hash` (asserting array-ness at the boundary; a non-array payload
 /// fatals). The source array is never mutated, and the result is an independent owned hash
-/// with a balanced refcount, so a single release frees it. The caller is responsible for
-/// releasing the returned owning temporary (builtin-call argument cleanup and the array-union
-/// lowering both do this). A concretely non-`Mixed`/union operand must not be passed here.
+/// with a balanced refcount. An owning source expression (for example `HashGet`) is released
+/// after the clone; borrowed local loads remain untouched. The caller is responsible for
+/// releasing the returned owning temporary. A concrete non-`Mixed`/union operand is invalid.
 fn convert_mixed_array_to_assoc_hash(
     ctx: &mut LoweringContext<'_, '_>,
     value: crate::ir::ValueId,
     span: Span,
 ) -> crate::ir::ValueId {
-    ctx.emit_value(
+    let source = LoweredValue {
+        value,
+        ir_type: value_ir_type(&ctx.builder.value_php_type(value)),
+    };
+    let converted = ctx
+        .emit_value(
         Op::MixedToHash,
         vec![value],
         None,
@@ -9432,7 +9625,11 @@ fn convert_mixed_array_to_assoc_hash(
         Op::MixedToHash.default_effects(),
         Some(span),
     )
-    .value
+        .value;
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
+    converted
 }
 
 /// Returns the indexed-array element `codegen_repr` for a value, or `None` for a non-array.
@@ -9824,7 +10021,12 @@ fn lower_ternary(
 
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    let narrowed_locals =
+        crate::ir_lower::stmt::apply_condition_then_narrowing(ctx, condition);
     store_expr_into_temp(ctx, &temp_name, result_type.clone(), then_expr, expr.span);
+    for (name, original) in narrowed_locals {
+        ctx.set_local_logical_type(&name, original);
+    }
     let then_reachable = !ctx.builder.insertion_block_is_terminated();
     let then_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
@@ -11141,7 +11343,20 @@ fn lower_new_object(
         );
     }
     let sig = constructor_signature(ctx, class_name).cloned();
-    let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let mut operands = lower_args_with_signature(ctx, sig.as_ref(), args);
+    if let (Some(sig), Some(callee_key)) = (
+        sig.as_ref(),
+        constructor_arity_hungry_callee_key(ctx, class_name),
+    ) {
+        func_args_intrinsics::maybe_append_hidden_argc_operand(
+            ctx,
+            &callee_key,
+            sig,
+            args,
+            expr.span,
+            &mut operands,
+        );
+    }
     let php_type = PhpType::Object(class_name.as_str().to_string());
     emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span)
 }
@@ -11253,13 +11468,31 @@ fn lower_reflection_function_constructor_operands(
     Some(vec![lower_expr(ctx, arg).value])
 }
 
-/// Lowers PHP `clone $object` to a shallow object-copy opcode and optional `__clone()` hook.
+/// Lowers PHP `clone $object` to the fixed-class shallow-copy path when the concrete class is
+/// known, or to the runtime-checked clone helper for generic/gradual object-capable values.
 fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let object = lower_expr(ctx, inner);
     let object_ty = ctx.builder.value_php_type(object.value);
     let Some((class_name, false)) = singular_object_class(&object_ty) else {
-        unreachable!("clone expressions must be type-checked as non-null objects before lowering");
+        return ctx.emit_value(
+            Op::ObjectClone,
+            vec![object.value],
+            None,
+            object_ty,
+            Op::ObjectClone.default_effects(),
+            Some(expr.span),
+        );
     };
+    if class_name.is_empty() {
+        return ctx.emit_value(
+            Op::ObjectClone,
+            vec![object.value],
+            None,
+            object_ty,
+            Op::ObjectClone.default_effects(),
+            Some(expr.span),
+        );
+    }
     let class_name = class_name.to_string();
     let data = ctx.intern_class_name(&class_name);
     let result_ty = PhpType::Object(class_name.clone());
@@ -11538,6 +11771,24 @@ fn constructor_signature<'a>(
         .and_then(|class_info| class_info.methods.get(&key))
 }
 
+/// Resolves the concrete constructor implementation key used by a fixed-class allocation.
+fn constructor_arity_hungry_callee_key(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &Name,
+) -> Option<String> {
+    let class_name = class_name.as_str().trim_start_matches('\\');
+    let method_key = php_symbol_key("__construct");
+    let class_info = ctx.classes.get(class_name)?;
+    let implementation = class_info
+        .method_impl_classes
+        .get(&method_key)
+        .map(String::as_str)
+        .unwrap_or(class_name);
+    let callee_key = format!("{}::{}", implementation, method_key);
+    ctx.is_arity_hungry_callee(&callee_key)
+        .then_some(callee_key)
+}
+
 /// Lowers an object property read.
 fn lower_property_get(
     ctx: &mut LoweringContext<'_, '_>,
@@ -11697,11 +11948,12 @@ pub(crate) fn lower_ref_assign_call(
     ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
 }
 
-/// Lowers `$target =& $arr[idx]`: promotes the indexed-array element's inline storage to a
-/// reference cell and binds `$target` to it non-owning. The returned cell pointer addresses
-/// the element within the array payload, so writes through `$target` propagate to `$arr[idx]`
-/// and vice versa. The array must remain live while the alias is in use (the local does not
-/// own the storage). Operands: the lowered array value and the lowered index value.
+/// Lowers `$target =& $arr[idx]` through an addressable element cell.
+///
+/// Homogeneous string arrays keep their two-word indexed element slots so `{ptr,len}` remains
+/// intact. Other packed arrays are de-packed because only hash buckets carry the per-element
+/// reference tag needed for gradual type changes. A concrete target alias reads the hash cell in
+/// its native representation; a widened target keeps boxed-Mixed storage.
 pub(crate) fn lower_ref_assign_array_elem(
     ctx: &mut LoweringContext<'_, '_>,
     target: &str,
@@ -11712,25 +11964,68 @@ pub(crate) fn lower_ref_assign_array_elem(
         return;
     };
     let array_value = lower_expr(ctx, array);
-    let mut index_value = lower_expr(ctx, index);
-    index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
-    // Use the array's declared element type (the inline storage shape), not the
-    // null-capable `TaggedScalar` result type that `array_access_result_type` widens
-    // Int elements to. The ref-cell aliases the raw element slot, so loads and stores
-    // through the alias must match the element's storage width, not the read result.
-    let value_type = match ctx.builder.value_php_type(array_value.value).codegen_repr() {
-        PhpType::Array(elem_ty) => normalize_value_php_type(*elem_ty),
-        _ => array_access_result_type(ctx, array_value.value, Op::ArrayGet, source),
+    let inferred_target_ty = normalize_value_php_type(ctx.local_type(target).codegen_repr());
+    let target_ty = match inferred_target_ty {
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::TaggedScalar => {
+            inferred_target_ty
+        }
+        PhpType::Str => PhpType::Str,
+        _ => PhpType::Mixed,
     };
+    if array_value.ir_type == IrType::Heap(IrHeapKind::Array) && target_ty == PhpType::Str {
+        let index_value = lower_expr(ctx, index);
+        let index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+        let cell_ptr = ctx.emit_value(
+            Op::LoadArrayElemRefCell,
+            vec![array_value.value, index_value.value],
+            None,
+            target_ty.clone(),
+            Op::LoadArrayElemRefCell.default_effects(),
+            Some(span),
+        );
+        ctx.bind_local_ref_cell_ptr(target, cell_ptr, target_ty, Some(span));
+        return;
+    }
+    let (hash_value, promotion) = if let IrType::Heap(IrHeapKind::Array) = array_value.ir_type {
+        let current_ty = ctx.builder.value_php_type(array_value.value);
+        let element_ty = super::stmt::reference_element_type(&current_ty);
+        let assoc_ty =
+            super::stmt::promoted_assoc_array_type(current_ty, element_ty);
+        let hash = ctx.emit_value(
+            Op::ArrayToHash,
+            vec![array_value.value],
+            None,
+            assoc_ty.clone(),
+            Op::ArrayToHash.default_effects(),
+            Some(span),
+        );
+        let writeback = match &array.kind {
+            ExprKind::Variable(name) => Some((name.clone(), assoc_ty)),
+            _ => None,
+        };
+        (hash, writeback)
+    } else {
+        (array_value, None)
+    };
+    let index_value = lower_expr(ctx, index);
     let cell_ptr = ctx.emit_value(
-        Op::LoadArrayElemRefCell,
-        vec![array_value.value, index_value.value],
+        Op::HashRefElement,
+        vec![hash_value.value, index_value.value],
         None,
-        value_type.clone(),
-        Op::LoadArrayElemRefCell.default_effects(),
+        target_ty.clone(),
+        Op::HashRefElement.default_effects(),
         Some(span),
     );
-    ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+    if let Some((array_name, assoc_ty)) = promotion {
+        ctx.store_prepared_mutated_local(
+            &array_name,
+            hash_value,
+            assoc_ty.clone(),
+            Some(span),
+        );
+        ctx.set_local_type_exact(&array_name, assoc_ty);
+    }
+    ctx.adopt_ref_cell(target, cell_ptr, target_ty, Some(span));
 }
 
 /// Lowers a named property read once the receiver is already evaluated.
@@ -12309,6 +12604,11 @@ fn lower_method_call(
             return value;
         }
     }
+    if let Some(value) =
+        lower_static_method_call_through_object(ctx, object, method, args, expr)
+    {
+        return value;
+    }
     if matches!(
         ctx.builder.value_php_type(object.value).codegen_repr(),
         PhpType::Callable
@@ -12329,7 +12629,20 @@ fn lower_method_call(
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
     let mut operands = vec![object.value];
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
-    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let mut arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    if let (Some(sig), Some(callee_key)) = (
+        sig.as_ref(),
+        instance_method_arity_hungry_callee_key(ctx, object.value, dispatch_method),
+    ) {
+        func_args_intrinsics::maybe_append_hidden_argc_operand(
+            ctx,
+            &callee_key,
+            sig,
+            args,
+            expr.span,
+            &mut arg_values,
+        );
+    }
     operands.extend(arg_values.iter().copied());
     let data = ctx.intern_string(dispatch_method);
     let call = ctx.emit_value(
@@ -14977,6 +15290,11 @@ fn lower_method_call_with_receiver(
     {
         return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
     }
+    if let Some(value) =
+        lower_static_method_call_through_object(ctx, object, method, args, expr)
+    {
+        return value;
+    }
     let magic_args;
     let (dispatch_method, args) =
         if let Some(args) = magic_call_dispatch_args(ctx, object.value, method, args, expr.span) {
@@ -15072,6 +15390,15 @@ fn release_owned_call_arg_temporaries_with_signature(
     span: Span,
 ) {
     for (parameter_index, value) in args.iter().enumerate() {
+        if signature.is_some_and(|signature| {
+            signature
+                .ref_params
+                .get(parameter_index)
+                .copied()
+                .unwrap_or(false)
+        }) {
+            continue;
+        }
         let php_type = ctx.builder.value_php_type(*value);
         let lowered = LoweredValue {
             value: *value,
@@ -15220,7 +15547,11 @@ fn method_signature(
     let key = php_symbol_key(method);
     if let Some((class_name, _)) = singular_object_class(&object_ty) {
         let normalized = class_name.trim_start_matches('\\');
-        return class_method_signature(ctx, normalized, &key).cloned();
+        if let Some(signature) = class_method_signature(ctx, normalized, &key) {
+            return Some(signature.clone());
+        }
+        let receiver = StaticReceiver::Named(normalized.to_string().into());
+        return static_method_implementation_signature(ctx, &receiver, &key).cloned();
     }
     if dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
         if ctx.has_eval_barrier() {
@@ -15229,6 +15560,41 @@ fn method_signature(
         return common_dynamic_method_signature(ctx, &key);
     }
     None
+}
+
+/// Resolves the one hidden-argc method implementation reachable from this receiver.
+///
+/// Singular class receivers use their vtable implementation metadata. Gradual/interface
+/// receivers are accepted only when the checker marked exactly one implementation for the
+/// method name, matching `func_args_scan`'s global unambiguity gate.
+fn instance_method_arity_hungry_callee_key(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    method: &str,
+) -> Option<String> {
+    let method_key = php_symbol_key(method);
+    let object_ty = ctx.builder.value_php_type(object);
+    if let Some((class_name, _)) = singular_object_class(&object_ty) {
+        let class_name = class_name.trim_start_matches('\\');
+        if let Some(class_info) = ctx.classes.get(class_name) {
+            let implementation = class_info
+                .method_impl_classes
+                .get(&method_key)
+                .map(String::as_str)
+                .unwrap_or(class_name);
+            let callee_key = format!("{}::{}", implementation, method_key);
+            if ctx.is_arity_hungry_callee(&callee_key) {
+                return Some(callee_key);
+            }
+        }
+    }
+    let suffix = format!("::{}", method_key);
+    let mut candidates = ctx
+        .func_args_functions
+        .iter()
+        .filter(|candidate| candidate.ends_with(&suffix));
+    let candidate = candidates.next()?.clone();
+    candidates.next().is_none().then_some(candidate)
 }
 
 /// Returns the conservative return-to-argument alias summary for a method dispatch.
@@ -15421,6 +15787,83 @@ fn dynamic_method_receiver_needs_mixed_fallback(php_type: &PhpType) -> bool {
     }
 }
 
+/// Lowers PHP's `$object->declaredStaticMethod(...)` syntax as a static call whose
+/// hidden called-class id comes from the evaluated receiver object.
+///
+/// The receiver is still evaluated before the arguments and remains an operand until
+/// codegen has read its runtime class id. This preserves late-static dispatch for a
+/// base-typed receiver that actually contains a subclass object.
+fn lower_static_method_call_through_object(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let object_ty = ctx.builder.value_php_type(object.value);
+    let (class_name, _) = singular_object_class(&object_ty)?;
+    let class_name = class_name.trim_start_matches('\\');
+    let method_key = php_symbol_key(method);
+    let class_info = ctx.classes.get(class_name)?;
+    if class_info.methods.contains_key(&method_key)
+        || !class_info.static_methods.contains_key(&method_key)
+    {
+        return None;
+    }
+
+    let receiver = StaticReceiver::Named(class_name.to_string().into());
+    let sig = static_method_implementation_signature(ctx, &receiver, method).cloned()?;
+    let mut visible_operands = lower_args_with_signature(ctx, Some(&sig), args);
+    if let Some(callee_key) = static_method_arity_hungry_callee_key(ctx, &receiver, method) {
+        func_args_intrinsics::maybe_append_hidden_argc_operand(
+            ctx,
+            &callee_key,
+            &sig,
+            args,
+            expr.span,
+            &mut visible_operands,
+        );
+    }
+    let visible_operands =
+        coerce_int_backed_enum_string_argument(ctx, &receiver, method, visible_operands, expr);
+    let visible_operands = coerce_datetime_create_from_format_integer_subject(
+        ctx,
+        &receiver,
+        method,
+        visible_operands,
+        expr,
+    );
+    let mut operands = Vec::with_capacity(visible_operands.len() + 1);
+    operands.push(object.value);
+    operands.extend(visible_operands.iter().copied());
+    let name = format!("{}::{}", receiver_name(&receiver), method);
+    let data = ctx.intern_string(&name);
+    let nominal_result =
+        normalize_value_php_type(sig.return_type.clone().codegen_repr());
+    let result_type = static_method_late_static_return_for_ir(ctx, &receiver, method)
+        .map(|return_type| late_static_return_type_for_ir(ctx, &return_type, class_name))
+        .unwrap_or(nominal_result);
+    let call = ctx.emit_value(
+        Op::StaticMethodCall,
+        operands,
+        Some(Immediate::Data(data)),
+        result_type,
+        Op::StaticMethodCall.default_effects(),
+        Some(expr.span),
+    );
+    let return_alias = static_method_return_arg_alias(ctx, &receiver, method);
+    release_owned_call_arg_temporaries_with_signature(
+        ctx,
+        &visible_operands,
+        Some(call.value),
+        &return_alias,
+        Some(&sig),
+        expr.span,
+    );
+    release_owning_receiver_temporary(ctx, object, expr.span);
+    Some(call)
+}
+
 /// Lowers a static method call.
 fn lower_static_method_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -15476,9 +15919,29 @@ fn lower_static_method_call(
     let sig = static_method_implementation_signature(ctx, receiver, dispatch_method)
         .or_else(|| lexical_instance_static_call_signature(ctx, receiver, dispatch_method))
         .cloned();
-    let operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    let mut operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    if let (Some(sig), Some(callee_key)) = (
+        sig.as_ref(),
+        static_method_arity_hungry_callee_key(ctx, receiver, dispatch_method),
+    ) {
+        func_args_intrinsics::maybe_append_hidden_argc_operand(
+            ctx,
+            &callee_key,
+            sig,
+            call_args,
+            expr.span,
+            &mut operands,
+        );
+    }
     let operands =
         coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
+    let operands = coerce_datetime_create_from_format_integer_subject(
+        ctx,
+        receiver,
+        dispatch_method,
+        operands,
+        expr,
+    );
     let name = format!("{}::{}", receiver_name(receiver), dispatch_method);
     let data = ctx.intern_string(&name);
     let result_type = sig
@@ -15521,6 +15984,37 @@ fn lower_static_method_call(
     call
 }
 
+/// Stringifies an integer `DateTime::createFromFormat()` subject before static dispatch.
+///
+/// PHP's coercive call mode accepts scalar integers for the method's declared `string`
+/// `$datetime` parameter. The checker admits that one builtin boundary explicitly; this
+/// lowering keeps the canonical method ABI unchanged by materializing an owned string operand.
+fn coerce_datetime_create_from_format_integer_subject(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+    mut operands: Vec<crate::ir::ValueId>,
+    expr: &Expr,
+) -> Vec<crate::ir::ValueId> {
+    if php_symbol_key(method) != "createfromformat" || operands.len() < 2 {
+        return operands;
+    }
+    let Some(class_name) = static_receiver_class_name(ctx, receiver) else {
+        return operands;
+    };
+    if !matches!(
+        class_name.trim_start_matches('\\'),
+        "DateTime" | "DateTimeImmutable"
+    ) {
+        return operands;
+    }
+    let subject = lowered_value_from_id(ctx, operands[1]);
+    if ctx.builder.value_php_type(subject.value).codegen_repr() == PhpType::Int {
+        operands[1] = coerce_to_string_at_span(ctx, subject, Some(expr.span)).value;
+    }
+    operands
+}
+
 /// Returns preserved late-static return syntax for EIR static dispatch.
 fn static_method_late_static_return_for_ir(
     ctx: &LoweringContext<'_, '_>,
@@ -15546,7 +16040,14 @@ fn static_late_binding_receiver_type_for_ir(
     receiver: &StaticReceiver,
 ) -> Option<String> {
     match receiver {
-        StaticReceiver::Named(name) => Some(name.as_str().trim_start_matches('\\').to_string()),
+        StaticReceiver::Named(_)
+            if static_receiver_binds_current_instance(ctx, receiver) =>
+        {
+            ctx.current_class.clone()
+        }
+        StaticReceiver::Named(name) => {
+            Some(name.as_str().trim_start_matches('\\').to_string())
+        }
         StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => {
             ctx.current_class.clone()
         }
@@ -15784,6 +16285,25 @@ fn static_method_implementation_signature<'a>(
         .and_then(|class_info| class_info.static_methods.get(&key))
 }
 
+/// Resolves the concrete hidden-argc implementation for a static method call.
+fn static_method_arity_hungry_callee_key(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+) -> Option<String> {
+    let class_name = static_receiver_class_name(ctx, receiver)?;
+    let method_key = php_symbol_key(method);
+    let receiver_info = ctx.classes.get(&class_name)?;
+    let implementation = receiver_info
+        .static_method_impl_classes
+        .get(&method_key)
+        .map(String::as_str)
+        .unwrap_or(class_name.as_str());
+    let callee_key = format!("{}::{}", implementation, method_key);
+    ctx.is_arity_hungry_callee(&callee_key)
+        .then_some(callee_key)
+}
+
 /// Returns the declared result type for a static method call before its arguments are lowered.
 pub(super) fn static_method_call_expr_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
@@ -15812,12 +16332,30 @@ fn lexical_instance_static_call_signature<'a>(
     receiver: &StaticReceiver,
     method: &str,
 ) -> Option<&'a FunctionSig> {
-    if !matches!(receiver, StaticReceiver::Self_ | StaticReceiver::Parent) {
+    if !static_receiver_binds_current_instance(ctx, receiver) {
         return None;
     }
     let class_name = static_receiver_class_name(ctx, receiver)?;
     let key = php_symbol_key(method);
     class_method_signature(ctx, &class_name, &key)
+}
+
+/// Returns whether static-call syntax lexically binds the current `$this` instance.
+fn static_receiver_binds_current_instance(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+) -> bool {
+    match receiver {
+        StaticReceiver::Self_ | StaticReceiver::Parent => true,
+        StaticReceiver::Named(name) => {
+            let Some(current_class) = ctx.current_class.as_deref() else {
+                return false;
+            };
+            let receiver_class = name.as_str().trim_start_matches('\\');
+            is_same_or_descendant_class(ctx, current_class, receiver_class)
+        }
+        StaticReceiver::Static => false,
+    }
 }
 
 /// Resolves a static receiver to a concrete class name when lexical metadata is available.
@@ -15851,12 +16389,33 @@ fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, target: &Callab
             );
         }
     }
-    let operands = if let CallableTarget::Method { object, .. } = target {
-        vec![lower_expr(ctx, object).value]
+    let mut target_name = callable_target_name(target);
+    let operands = if let CallableTarget::Method { object, method } = target {
+        if let Some(StaticCallableBinding::StaticMethod { receiver, .. }) =
+            resolve_object_static_method_callable(ctx, object, method.clone())
+        {
+            let evaluated_receiver = lower_expr(ctx, object);
+            crate::ir_lower::ownership::release_if_owned(
+                ctx,
+                evaluated_receiver,
+                Some(expr.span),
+            );
+            target_name = format!("{}::{}", receiver_name(&receiver), method);
+            Vec::new()
+        } else {
+            let receiver = lower_expr(ctx, object);
+            if method == "__invoke" {
+                let receiver_ty = ctx.builder.value_php_type(receiver.value).codegen_repr();
+                if !matches!(receiver_ty, PhpType::Object(_)) {
+                    return receiver;
+                }
+            }
+            vec![receiver.value]
+        }
     } else {
         Vec::new()
     };
-    let data = ctx.intern_string(&callable_target_name(target));
+    let data = ctx.intern_string(&target_name);
     ctx.emit_value(
         Op::FirstClassCallableNew,
         operands,
@@ -15924,14 +16483,22 @@ fn lower_object_class_name(
     expr: &Expr,
 ) -> LoweredValue {
     let object = lower_expr(ctx, object);
-    emit_builtin_call_value(
-        ctx,
-        "get_class",
+    let result = ctx.emit_value(
+        Op::ObjectClassName,
         vec![object.value],
-        PhpType::Str,
-        expr.span,
         None,
-    )
+        PhpType::Str,
+        Op::ObjectClassName.default_effects(),
+        Some(expr.span),
+    );
+    release_owned_call_arg_temporaries(
+        ctx,
+        &[object.value],
+        Some(result.value),
+        &ReturnArgAlias::None,
+        expr.span,
+    );
+    result
 }
 
 /// Lowers a scoped constant read.
@@ -16227,17 +16794,35 @@ fn lower_yield(ctx: &mut LoweringContext<'_, '_>, key: Option<&Expr>, value: Opt
 
 /// Lowers `yield from`.
 ///
-/// `yield from <generator|Traversable>` lowers to `Op::GeneratorYieldFrom`, which
-/// the backend delegates to `__rt_gen_delegate` (forwarding sent values and
-/// producing the inner generator's return value). `yield from <array>` is
-/// desugared here into an iterator loop that re-yields each key/value pair,
-/// reusing the foreach iterator opcodes; its result is PHP null.
+/// Generator operands delegate through `Op::GeneratorYieldFrom`, forwarding sent values and
+/// producing the inner return value. Arrays and non-Generator Traversable objects reuse the
+/// foreach iterator opcodes and return PHP null. A gradual `Iterable` operand is runtime-dispatched
+/// between those paths after being boxed once for the Generator class check.
 fn lower_yield_from(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
     let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
-    if matches!(source_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-        return lower_yield_from_array(ctx, value, expr);
+    if matches!(
+        source_ty,
+        PhpType::Array(_) | PhpType::AssocArray { .. }
+    ) || matches!(
+        &source_ty,
+        PhpType::Object(name) if name.trim_start_matches('\\') != "Generator"
+    ) {
+        return lower_yield_from_iterable_source(ctx, value, expr, true);
     }
+    if matches!(source_ty, PhpType::Iterable | PhpType::Mixed | PhpType::Union(_)) {
+        return lower_dynamic_yield_from_iterable(ctx, value, expr);
+    }
+    lower_yield_from_generator(ctx, value, expr, true)
+}
+
+/// Lowers one statically Generator-typed delegation and optionally releases its source owner.
+fn lower_yield_from_generator(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    expr: &Expr,
+    release_source: bool,
+) -> LoweredValue {
     let result = ctx.emit_value(
         Op::GeneratorYieldFrom,
         vec![value.value],
@@ -16250,20 +16835,99 @@ fn lower_yield_from(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr
     // temporary (`yield from inner()`) nothing else frees it once delegation
     // ends, so release it here; a borrowed local (`yield from $g`) keeps its
     // owner and must not be released (it would double-free at scope end).
-    if ctx.value_is_owning_temporary(value) {
+    if release_source && ctx.value_is_owning_temporary(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
     }
     result
 }
 
-/// Desugars `yield from <array>` into an iterator loop that re-yields each
-/// key/value pair, returning a boxed PHP null (arrays have no delegated return
-/// value). Reuses the foreach iterator opcodes so every array kind (indexed,
-/// associative, by-element-type) is handled by the existing iterator lowering.
-fn lower_yield_from_array(
+/// Runtime-dispatches a gradual `Iterable`/`Mixed` value between Generator delegation and
+/// ordinary iteration.
+fn lower_dynamic_yield_from_iterable(
     ctx: &mut LoweringContext<'_, '_>,
     source: LoweredValue,
     expr: &Expr,
+) -> LoweredValue {
+    let source_ty = ctx.builder.value_php_type(source.value).codegen_repr();
+    let source_is_boxed = matches!(source_ty, PhpType::Mixed | PhpType::Union(_));
+    let boxed = ctx.emit_value(
+        Op::MixedBox,
+        vec![source.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedBox.default_effects(),
+        Some(expr.span),
+    );
+    let generator_name = ctx.intern_class_name("Generator");
+    let is_generator = ctx.emit_value(
+        Op::InstanceOf,
+        vec![boxed.value],
+        Some(Immediate::Data(generator_name)),
+        PhpType::Bool,
+        Op::InstanceOf.default_effects(),
+        Some(expr.span),
+    );
+    let result_type = PhpType::Mixed;
+    let result_temp = ctx.declare_owned_hidden_temp(result_type.clone());
+    let generator_block = ctx
+        .builder
+        .create_named_block("yieldfrom.dynamic.generator", Vec::new());
+    let iterable_block = ctx
+        .builder
+        .create_named_block("yieldfrom.dynamic.iterable", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("yieldfrom.dynamic.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_generator.value,
+        then_target: generator_block,
+        then_args: Vec::new(),
+        else_target: iterable_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(generator_block);
+    let delegated = lower_yield_from_generator(ctx, source, expr, false);
+    store_value_into_temp(
+        ctx,
+        &result_temp,
+        result_type.clone(),
+        delegated,
+        expr.span,
+    );
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(iterable_block);
+    let iterated = lower_yield_from_iterable_source(ctx, source, expr, false);
+    store_value_into_temp(
+        ctx,
+        &result_temp,
+        result_type,
+        iterated,
+        expr.span,
+    );
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    if !source_is_boxed {
+        crate::ir_lower::ownership::release_if_owned(ctx, boxed, Some(expr.span));
+    }
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(expr.span));
+    }
+    take_owned_temp(ctx, &result_temp, expr.span)
+}
+
+/// Desugars an array or non-Generator Traversable source into an iterator loop.
+///
+/// Each key/value pair is re-yielded and the expression returns boxed PHP null. The existing
+/// iterator opcodes handle indexed arrays, associative arrays, concrete Iterator objects,
+/// IteratorAggregate objects, and gradual `Iterable` runtime kinds on every supported target.
+fn lower_yield_from_iterable_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    expr: &Expr,
+    release_source: bool,
 ) -> LoweredValue {
     let span = expr.span;
     let iterator = ctx.emit_value(
@@ -16337,9 +17001,9 @@ fn lower_yield_from_array(
     }
 
     ctx.builder.position_at_end(exit);
-    // The iterator borrows a freshly-created array (e.g. a literal): release it
-    // once iteration ends, mirroring `lower_foreach`.
-    if ctx.value_is_owning_temporary(source) {
+    // The iterator borrows a freshly-created source (e.g. an array literal): release it once
+    // iteration ends unless a dynamic outer dispatch owns the single shared cleanup.
+    if release_source && ctx.value_is_owning_temporary(source) {
         crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
     }
     let null_value = ctx
@@ -16395,7 +17059,7 @@ fn lower_instanceof(
 
 /// Resolves lexical `instanceof` target keywords to concrete class names when possible.
 ///
-/// Shared with `crate::ir_lower::stmt::apply_instanceof_then_narrowing`, which reuses it to narrow
+/// Shared with `crate::ir_lower::stmt::apply_condition_then_narrowing`, which reuses it to narrow
 /// an `instanceof`-guarded receiver in an `if` then-branch.
 pub(crate) fn instanceof_target_name(ctx: &LoweringContext<'_, '_>, name: &str) -> String {
     match name.trim_start_matches('\\') {
@@ -16616,9 +17280,27 @@ fn short_ternary_merge_result_type(
     value: &Expr,
     default: &Expr,
 ) -> PhpType {
-    let value_ty = materialized_expr_type_for_merge(ctx, value).codegen_repr();
+    let value_ty =
+        short_ternary_truthy_result_type(materialized_expr_type_for_merge(ctx, value)).codegen_repr();
     let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
     wider_type_for_merge(&value_ty, &default_ty)
+}
+
+/// Removes statically impossible values from the truthy arm of a short ternary merge.
+fn short_ternary_truthy_result_type(ty: PhpType) -> PhpType {
+    match ty {
+        PhpType::Void | PhpType::False | PhpType::Never => PhpType::Never,
+        PhpType::Union(members) => {
+            let reachable = members
+                .into_iter()
+                .filter(|member| {
+                    !matches!(member, PhpType::Void | PhpType::False | PhpType::Never)
+                })
+                .collect::<Vec<_>>();
+            normalize_union_members(reachable).unwrap_or(PhpType::Never)
+        }
+        other => other,
+    }
 }
 
 /// Chooses a ternary branch merge type without erasing PHP null branches.

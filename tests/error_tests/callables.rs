@@ -115,9 +115,8 @@ array_map('dyn', [1, 2, 3]);
     );
 }
 
-/// Gated surface: a method body calling `func_num_args()`/`func_get_args()`/`func_get_arg()`
-/// is rejected at compile time (methods are never marked arity-hungry — virtual dispatch
-/// means a call site cannot always know which concrete override runs).
+/// Verifies an arity-hungry virtual method stays rejected when another runtime
+/// implementation can occupy the same dispatch slot.
 #[test]
 fn test_error_func_num_args_in_method_body() {
     expect_error(
@@ -125,7 +124,11 @@ fn test_error_func_num_args_in_method_body() {
 class C {
     function m($a) { return func_num_args(); }
 }
-(new C())->m(1);
+class D extends C {
+    function m($a) { return $a; }
+}
+$value = true ? new C() : new D();
+$value->m(1);
 "#,
         "this compiler does not support in methods",
     );

@@ -132,12 +132,13 @@ impl Checker {
         return_type: &Option<TypeExpr>,
         body: &[Stmt],
         captures: &[String],
+        capture_refs: &[String],
         by_ref_return: bool,
         span: Span,
         env: &TypeEnv,
         param_hints: &[PhpType],
     ) -> Result<FunctionSig, CompileError> {
-        let closure_sig = self.prepare_closure_signature_context_with_param_hints(
+        let mut closure_sig = self.prepare_closure_signature_context_with_param_hints(
             params,
             variadic,
             variadic_by_ref,
@@ -146,8 +147,32 @@ impl Checker {
             env,
             param_hints,
         )?;
-        let (return_type, declared_return) =
-            self.resolve_closure_return_type(body, return_type, span, &closure_sig.env)?;
+        let mut closure_ref_params = closure_sig
+            .params
+            .iter()
+            .zip(closure_sig.ref_params.iter())
+            .filter(|(_, is_ref)| **is_ref)
+            .map(|((name, _), _)| name.clone())
+            .collect::<Vec<_>>();
+        closure_ref_params.extend(capture_refs.iter().cloned());
+        self.closure_depth += 1;
+        let previous_by_ref_return = self.current_by_ref_return;
+        self.current_by_ref_return = by_ref_return;
+        let body_result = self.with_local_storage_context(closure_ref_params, |checker| {
+            for stmt in body {
+                checker.check_stmt(stmt, &mut closure_sig.env)?;
+            }
+            Ok(())
+        });
+        self.current_by_ref_return = previous_by_ref_return;
+        self.closure_depth -= 1;
+        let (_, return_infos) = body_result?;
+        let (return_type, declared_return) = self.resolve_closure_return_type_from_infos(
+            body,
+            return_type,
+            span,
+            &return_infos,
+        )?;
         Ok(FunctionSig {
             params: closure_sig.params,
             param_type_exprs: closure_sig.param_type_exprs,
@@ -175,6 +200,24 @@ impl Checker {
         span: Span,
         env: &TypeEnv,
     ) -> Result<(PhpType, bool), CompileError> {
+        let mut return_infos = Vec::new();
+        for stmt in body {
+            self.collect_return_infos(stmt, env, &mut return_infos);
+        }
+        self.resolve_closure_return_type_from_infos(body, return_type, span, &return_infos)
+    }
+
+    /// Resolves a closure return contract from types captured during flow-sensitive body checking.
+    ///
+    /// Unlike the compatibility fallback in `resolve_closure_return_type`, these observations do
+    /// not re-read early returns through the callable's final environment after later assignments.
+    pub(crate) fn resolve_closure_return_type_from_infos(
+        &mut self,
+        body: &[Stmt],
+        return_type: &Option<TypeExpr>,
+        span: Span,
+        all_return_infos: &[super::super::functions::ReturnInfo],
+    ) -> Result<(PhpType, bool), CompileError> {
         if super::super::yield_validation::body_contains_yield(body) {
             let generator_ty = PhpType::Object("Generator".to_string());
             if let Some(type_ann) = return_type {
@@ -192,11 +235,6 @@ impl Checker {
             return Ok((generator_ty, false));
         }
 
-        let mut all_return_infos = Vec::new();
-        for stmt in body {
-            self.collect_return_infos(stmt, env, &mut all_return_infos);
-        }
-
         if let Some(type_ann) = return_type {
             let declared_ret =
                 self.resolve_declared_return_type_hint(type_ann, span, "Closure")?;
@@ -211,7 +249,7 @@ impl Checker {
                 return Ok((declared_ret, true));
             }
 
-            for return_info in &all_return_infos {
+            for return_info in all_return_infos {
                 self.require_compatible_return_type(
                     &declared_ret,
                     &return_info.ty,
@@ -258,7 +296,7 @@ impl Checker {
                 return_type,
                 body,
                 captures,
-                capture_refs: _,
+                capture_refs,
                 by_ref_return,
                 ..
             } => self
@@ -269,6 +307,7 @@ impl Checker {
                     return_type,
                     body,
                     captures,
+                    capture_refs,
                     *by_ref_return,
                     expr.span,
                     env,
@@ -290,6 +329,10 @@ impl Checker {
             ExprKind::StaticMethodCall {
                 receiver, method, ..
             } => self.resolve_static_method_return_callable_sig(receiver, method, false),
+            ExprKind::StringLiteral(name) => {
+                let builtin_name = php_symbol_key(name.trim_start_matches('\\'));
+                Ok(crate::types::builtin_call_sig(&builtin_name))
+            }
             ExprKind::Variable(var_name) => Ok(self.callable_sigs.get(var_name).cloned()),
             ExprKind::ArrayAccess { array, .. } => {
                 if let ExprKind::Variable(array_name) = &array.kind {

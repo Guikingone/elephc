@@ -224,12 +224,12 @@ pub(super) fn check_types_impl(
         .map(|(name, class)| (name.clone(), class.methods.clone()))
         .collect();
 
-    // Fold class-constant references used as defaults — property defaults (`public int $y = A::X;`)
-    // and method/constructor parameter defaults (`__construct(int $n = self::MAX)`) — into the
-    // referenced constant's literal value. Runs on the complete `class_map` so it is independent of
-    // class declaration order, and rewrites in place so both type inference and codegen default
-    // emission see a literal instead of a `ScopedConstantAccess`.
-    resolve_const_default_references(&mut class_map);
+    // Fold class/interface-constant references used as defaults — property defaults
+    // (`public int $y = A::X;`) and method/constructor parameter defaults
+    // (`__construct(int $n = Contract::MAX)`) — into the referenced constant's literal value.
+    // Runs on both complete declaration maps so it is independent of declaration order, and
+    // rewrites in place so both type inference and codegen default emission see a literal.
+    resolve_const_default_references(&mut class_map, &interface_map);
 
     let mut next_interface_id = 0u64;
     let mut building_interfaces = HashSet::new();
@@ -258,6 +258,13 @@ pub(super) fn check_types_impl(
             &mut next_class_id,
             &mut building,
         ) {
+            // A flattened declaration is only a forward declaration until its
+            // complete schema builds. Keeping a failed class in
+            // `declared_classes` makes later `new`/static/member references
+            // treat the unavailable wrapper as known, producing misleading
+            // secondary "Undefined class" errors instead of the existing
+            // absent-optional-dependency fallback.
+            checker.declared_classes.remove(&class_name);
             errors.extend(error.flatten());
         }
     }
@@ -340,27 +347,20 @@ pub(super) fn check_types_impl(
 
     checker.prescan_extern_decls(program, &mut errors);
 
-    let (global_env, initial_top_level_errors) = checker.check_top_level_program(program);
-
-    checker.resolve_unchecked_functions(&mut errors);
     // Enum method bodies are not part of `flattened_classes` (enums are registered separately via
     // the enum schema pass), so they would otherwise skip body checking entirely. Flatten them
     // into method-checkable units here — their signatures already live in `checker.classes`.
-    let mut methods_to_check = flattened_classes.clone();
-    methods_to_check.extend(flatten_enum_methods(program, &flattened_enums));
-    checker.type_check_methods_until_stable(&methods_to_check, &global_env, &mut errors)?;
-    patch_builtin_spl_storage_signatures(&mut checker);
-    apply_implicit_stringable_interfaces(&mut checker.classes);
-
-    // Detect functions/methods that call func_num_args()/func_get_args()/func_get_arg()
-    // and relax their signature to accept unlimited trailing positional arguments (reusing
-    // the variadic call-argument machinery), BEFORE the authoritative call-site check below
-    // validates every call in the program against these signatures.
-    let fn_decl_bodies: HashMap<String, Vec<Stmt>> = checker
-        .fn_decls
+    // A declaration whose schema failed (missing optional parent/interface,
+    // invalid inheritance contract, etc.) has no trustworthy method
+    // signature or enclosing class state. Exclude its bodies from inference:
+    // checking them only adds cascades from code that cannot be reached as a
+    // valid class in this closed world.
+    let mut methods_to_check: Vec<_> = flattened_classes
         .iter()
-        .map(|(name, decl)| (name.clone(), decl.body.clone()))
+        .filter(|class| checker.classes.contains_key(&class.name))
+        .cloned()
         .collect();
+    methods_to_check.extend(flatten_enum_methods(program, &flattened_enums));
     let class_method_bodies: HashMap<String, Vec<(String, bool, Vec<Stmt>)>> = methods_to_check
         .iter()
         .map(|class| {
@@ -374,13 +374,46 @@ pub(super) fn check_types_impl(
             )
         })
         .collect();
+
+    // Method schemas are already complete, so relax safe arity-hungry methods before even
+    // the provisional top-level pass. Otherwise a legacy surplus-argument constructor call
+    // records an initial arity error that is intentionally not suppressible as ordinary type
+    // inference noise, even though the authoritative pass later sees the relaxed signature.
+    let mut no_functions = HashMap::new();
+    checker.func_args_functions = mark_func_args_functions(
+        &mut no_functions,
+        &HashMap::new(),
+        &mut checker.classes,
+        &class_method_bodies,
+    );
+
+    let (global_env, initial_top_level_errors) = checker.check_top_level_program(program);
+
+    checker.resolve_unchecked_functions(&mut errors);
+
+    // Detect functions/methods that call func_num_args()/func_get_args()/func_get_arg()
+    // and relax their signature to accept unlimited trailing positional arguments (reusing
+    // the variadic call-argument machinery), BEFORE method bodies and the authoritative
+    // top-level call-site pass validate calls against these signatures.
+    let fn_decl_bodies: HashMap<String, Vec<Stmt>> = checker
+        .fn_decls
+        .iter()
+        .map(|(name, decl)| (name.clone(), decl.body.clone()))
+        .collect();
     checker.func_args_functions = mark_func_args_functions(
         &mut checker.functions,
         &fn_decl_bodies,
         &mut checker.classes,
         &class_method_bodies,
     );
-    errors.extend(validate_func_args_method_bodies(&class_method_bodies));
+    errors.extend(validate_func_args_method_bodies(
+        &class_method_bodies,
+        &checker.func_args_functions,
+    ));
+
+    checker.type_check_methods_until_stable(&methods_to_check, &global_env, &mut errors)?;
+    patch_builtin_spl_storage_signatures(&mut checker);
+    apply_implicit_stringable_interfaces(&mut checker.classes);
 
     let (final_global_env, final_top_level_errors) = checker.check_top_level_program(program);
     for (initial_errors, final_errors) in initial_top_level_errors

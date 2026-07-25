@@ -16,6 +16,24 @@
 
 use super::*;
 
+/// Verifies the canonical builtin catalog exposes `get_class_methods()` to
+/// `function_exists()` and case-insensitive namespace fallback before its EIR metadata bake.
+#[test]
+fn test_get_class_methods_catalog_supports_case_insensitive_namespace_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Inspect;
+class Sample {
+    public function alpha(): void {}
+}
+$methods = GeT_ClAsS_MeThOdS(new Sample());
+echo \function_exists("GET_CLASS_METHODS") ? "Y:" : "N:";
+echo $methods[0];
+"#,
+    );
+    assert_eq!(out, "Y:alpha");
+}
+
 /// Verifies `ReflectionClass::isAbstract()`/`isFinal()`/`isInterface()`/
 /// `isInstantiable()`/`isTrait()`/`getShortName()` against a small
 /// abstract/concrete hierarchy. php -n verified: an abstract class reports
@@ -498,6 +516,35 @@ var_dump($r->getFileName());
     assert_eq!(out, "bool(false)\n");
 }
 
+/// Verifies declaration-line accessors remain callable on `ReflectionClass` and fail loudly
+/// with catchable exceptions while elephc has no source-line metadata to report.
+#[test]
+fn test_reflection_class_line_accessors_throw_catchable_exceptions() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectClassLineTarget {}
+
+$class = new ReflectionClass(ReflectClassLineTarget::class);
+try {
+    $class->getStartLine();
+    echo "start-missed";
+} catch (\ReflectionException $ignored) {
+    echo "start";
+}
+echo "|";
+try {
+    $class->getEndLine();
+    echo "end-missed";
+} catch (\ReflectionException $ignored) {
+    echo "end";
+}
+echo "|";
+echo $class->getName();
+"#,
+    );
+    assert_eq!(out, "start|end|ReflectClassLineTarget");
+}
+
 /// Verifies `ReflectionMethod::getFileName()` resolves to the file of the class that ACTUALLY
 /// DECLARES the method, not the constructor's `class_name` argument (php -n verified:
 /// `(new ReflectionMethod('Dog', 'speak'))->getFileName()` for a `speak()` inherited from
@@ -752,6 +799,36 @@ echo $rfArrow->getNumberOfParameters();
     assert_eq!(out, "2|1|2|x|1");
 }
 
+/// Verifies `ReflectionFunction::isStatic()` distinguishes ordinary closures, static closures,
+/// named functions, and first-class callables for static versus receiver-bound methods.
+#[test]
+fn test_reflection_function_reports_callable_staticness() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectStaticnessTarget {
+    public static function staticTarget(): void {}
+    public function instanceTarget(): void {}
+}
+
+function namedTarget(): void {}
+
+function reflectStaticness(Closure $callable): void {
+    echo (new ReflectionFunction($callable))->isStatic() ? "1" : "0";
+}
+
+reflectStaticness(function (): void {});
+reflectStaticness(static function (): void {});
+reflectStaticness(namedTarget(...));
+reflectStaticness(ReflectStaticnessTarget::staticTarget(...));
+$target = new ReflectStaticnessTarget();
+reflectStaticness($target->instanceTarget(...));
+echo (new ReflectionFunction(function (): void {}))->isStatic() ? "1" : "0";
+echo (new ReflectionFunction(static function (): void {}))->isStatic() ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "0101001");
+}
+
 /// Verifies `getName()`/`getShortName()`/`getFileName()` THROW a catchable `\ReflectionException`
 /// for a closure-LITERAL-backed `ReflectionFunction` instance instead of fabricating a value —
 /// PHP's real closure name embeds the declaring file/function and line (php -n VERIFIED PHP 8.5
@@ -886,6 +963,54 @@ try {
 "#,
     );
     assert_eq!(out, "name|1|1|caught");
+}
+
+/// Verifies gradual member-name operands resolve when their runtime payload is a string and throw
+/// a catchable `TypeError` before dispatch when the payload has another tag.
+#[test]
+fn test_reflection_member_dynamic_mixed_names_require_runtime_strings() {
+    let out = compile_and_run(
+        r#"<?php
+function gradualReflectionMemberName(mixed $value): mixed { return $value; }
+class ElephcDynMixedMember {
+    public string $name = "value";
+    public function run(): string { return "ok"; }
+}
+
+$method = new ReflectionMethod(
+    ElephcDynMixedMember::class,
+    gradualReflectionMemberName("run"),
+);
+echo $method->getName();
+echo "|";
+$property = new ReflectionProperty(
+    ElephcDynMixedMember::class,
+    gradualReflectionMemberName("name"),
+);
+echo $property->getName();
+echo "|";
+try {
+    new ReflectionMethod(
+        ElephcDynMixedMember::class,
+        gradualReflectionMemberName(42),
+    );
+    echo "no-method-error";
+} catch (TypeError $error) {
+    echo "M";
+}
+echo "|";
+try {
+    new ReflectionProperty(
+        ElephcDynMixedMember::class,
+        gradualReflectionMemberName(42),
+    );
+    echo "no-property-error";
+} catch (TypeError $error) {
+    echo "P";
+}
+"#,
+    );
+    assert_eq!(out, "run|name|M|P");
 }
 
 /// Verifies `ReflectionClass::getMethod()`/`getProperty()` delegate to the SAME dynamic
@@ -1779,8 +1904,8 @@ reflect(function ($x) { return $x; });
 }
 
 /// Heap-cleanliness: constructing a dynamic `ReflectionFunction` instance and reading its backed
-/// slots (`getNumberOfParameters()`/`isAnonymous()`/`getName()`) must not leak the object, its
-/// persisted name string, or the unboxed Mixed cell along the way.
+/// slots must not leak the object, its persisted name string, callable descriptor, or unboxed
+/// Mixed cell along the way.
 #[test]
 fn test_reflection_function_dynamic_closure_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -1790,6 +1915,7 @@ function reflect(mixed $c) {
     echo $rf->getNumberOfParameters();
     echo $rf->isAnonymous() ? "1" : "0";
     echo $rf->getName();
+    $closure = $rf->getClosure();
 }
 function run(): void {
     reflect(function ($x, $y) { return $x + $y; });

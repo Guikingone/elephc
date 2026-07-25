@@ -178,6 +178,28 @@ echo $object->n, "\n";
     assert_eq!(out, "cloned\n42 hello\n42\n");
 }
 
+/// Verifies a value declared explicitly as `mixed` reaches the runtime object-kind clone path,
+/// preserves its boxed representation, and still dispatches the concrete class's `__clone` hook.
+#[test]
+fn test_clone_explicit_mixed_object() {
+    let out = compile_and_run(
+        r#"<?php
+class MixedCloneValue {
+    public int $value;
+    public function __construct(int $value) { $this->value = $value; }
+    public function __clone(): void { $this->value++; }
+}
+function duplicate(mixed $value): mixed {
+    return clone $value;
+}
+$original = new MixedCloneValue(41);
+$copy = duplicate($original);
+echo $original->value, ":", $copy->value;
+"#,
+    );
+    assert_eq!(out, "41:42");
+}
+
 /// Verifies that repeated cloning under churn stays GC-clean: a tight loop cloning
 /// objects with string, array, and object properties must not corrupt the heap or
 /// double-free shared children. The final cloned value is asserted for correctness.

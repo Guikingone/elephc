@@ -26,6 +26,9 @@ pub(super) fn lower_array_shift(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let elem_ty = array_shift_element_type(ctx.value_php_type(array)?)?;
     require_array_shift_result_type(&inst.result_php_type.codegen_repr())?;
     let source_local = super::source_load_local_slot(ctx, array)?;
+    if let Some(slot) = source_local {
+        ctx.release_mutated_source_local_owner(slot, array)?;
+    }
     ensure_unique_array_shift_source(ctx, array)?;
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;

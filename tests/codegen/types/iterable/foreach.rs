@@ -105,6 +105,32 @@ fn test_foreach_over_untyped_parameter_with_mixed_runtime_array() {
     assert_eq!(out, "1;2;3;");
 }
 
+/// Verifies uncalled methods still infer a gradual ABI for an untyped parameter consumed by
+/// `foreach`; without body-driven promotion the legacy `Int` placeholder rejects both bodies.
+#[test]
+fn test_foreach_promotes_uncalled_method_untyped_parameters_to_mixed() {
+    let out = compile_and_run(
+        "<?php
+        class DeferredForeach {
+            public function instanceItems($items): void {
+                foreach ($items as $item) {
+                    echo $item;
+                }
+            }
+
+            public static function staticItems($items): void {
+                foreach ($items as $item) {
+                    echo $item;
+                }
+            }
+        }
+
+        echo 'ready';
+        ",
+    );
+    assert_eq!(out, "ready");
+}
+
 /// Verifies `foreach` over a `mixed` parameter containing an associative array with mixed types
 /// outputs correct keys and string/integer values.
 #[test]
@@ -291,6 +317,25 @@ foreach ($u as $v) {
 "#,
     );
     assert_eq!(out, "1|2|3|");
+}
+
+/// Verifies a `Traversable` parameter dispatches both direct iterators and aggregates at runtime.
+#[test]
+fn test_foreach_over_traversable_interface_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function dump_traversable(Traversable $items): void {
+    foreach ($items as $key => $value) {
+        echo "[" . $key . ":" . $value . "]";
+    }
+    echo "|";
+}
+
+dump_traversable(new ArrayIterator(["direct" => "I"]));
+dump_traversable(new ArrayObject(["aggregate" => "A"]));
+"#,
+    );
+    assert_eq!(out, "[direct:I]|[aggregate:A]|");
 }
 
 /// N2 family sweep probe, JURY ADDENDUM item 3 ("foreach over a union: handle the object tag

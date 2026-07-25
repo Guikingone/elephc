@@ -93,6 +93,14 @@ foreach ($settings as $key => $value) {
     echo "  " . $key . " = " . $value . "\n";
 }
 
+// Normalize string keys without changing integer keys or mutating the source
+$headers = ["Content-Type" => "text/plain", "X-Trace" => "enabled", 7 => "numeric"];
+$normalizedHeaders = array_change_key_case($headers, CASE_LOWER);
+echo "\nNormalized headers:\n";
+foreach ($normalizedHeaders as $key => $value) {
+    echo "  " . $key . " = " . $value . "\n";
+}
+
 // Indexed and associative operands share the same normalized key space
 $base = ["slot 0", "slot 1"];
 $labels = ["1" => "ignored duplicate", "01" => "string key", "name" => "display"];

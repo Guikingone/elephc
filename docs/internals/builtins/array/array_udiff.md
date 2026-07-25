@@ -2,7 +2,7 @@
 title: "array_udiff() — internals"
 description: "Compiler internals for array_udiff(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 40
+  order: 41
 ---
 
 ## `array_udiff()` — internals

@@ -2,7 +2,7 @@
 title: "array_walk_recursive() — internals"
 description: "Compiler internals for array_walk_recursive(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 46
+  order: 47
 ---
 
 ## `array_walk_recursive()` — internals

@@ -316,6 +316,68 @@ foreach (outer() as $x) { echo $x; }
     assert_eq!(out, "12");
 }
 
+/// Verifies an `iterable` parameter dispatches arrays through ordinary iteration and Generator
+/// objects through delegated send/return semantics.
+#[test]
+fn test_generator_yield_from_iterable_parameter_runtime_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+function dynamic_inner(): iterable {
+    $sent = yield 1;
+    yield $sent;
+    return 9;
+}
+
+function dynamic_outer(iterable $source): iterable {
+    $return = yield from $source;
+    echo "return=", is_null($return) ? "null" : $return, ";";
+}
+
+foreach (dynamic_outer([2, 3]) as $value) {
+    echo $value;
+}
+echo "|";
+
+$generator = dynamic_outer(dynamic_inner());
+echo $generator->current(), ":";
+echo $generator->send(7), ":";
+$generator->next();
+"#,
+    );
+    assert_eq!(out, "23return=null;|1:7:return=9;");
+}
+
+/// Verifies a gradual `mixed` source uses the same runtime array/Generator split as `iterable`,
+/// preserving delegated send/return behavior without statically accepting concrete scalars.
+#[test]
+fn test_generator_yield_from_mixed_parameter_runtime_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+function mixed_dynamic_inner(): iterable {
+    $sent = yield 4;
+    yield $sent;
+    return 11;
+}
+
+function mixed_dynamic_outer(mixed $source): iterable {
+    $return = yield from $source;
+    echo "return=", is_null($return) ? "null" : $return, ";";
+}
+
+foreach (mixed_dynamic_outer([5, 6]) as $value) {
+    echo $value;
+}
+echo "|";
+
+$generator = mixed_dynamic_outer(mixed_dynamic_inner());
+echo $generator->current(), ":";
+echo $generator->send(8), ":";
+$generator->next();
+"#,
+    );
+    assert_eq!(out, "56return=null;|4:8:return=11;");
+}
+
 /// Verifies `yield from $a` where `$a` is an array-TYPED VARIABLE (parameter
 /// declared `array $a`). Previously the syntactic gate only accepted an array
 /// LITERAL; the type-based gate now accepts any array-typed operand, which

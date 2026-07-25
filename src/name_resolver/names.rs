@@ -390,11 +390,12 @@ fn is_builtin_global_constant(name: &str) -> bool {
     ) {
         return true;
     }
-    // Shared source-of-truth slices for JSON, stream/socket, session, error-level, PHP runtime,
-    // preg/PCRE, string-function, sort, mbstring, filter, upload-error, parse_url,
+    // Shared source-of-truth slices for array, JSON, stream/socket, session, error-level, PHP
+    // runtime, preg/PCRE, string-function, sort, mbstring, filter, upload-error, parse_url,
     // tokenizer, XML, and pcntl signal constants.
-    crate::types::json_constants::JSON_INT_CONSTANTS
+    crate::types::array_constants::ARRAY_INT_CONSTANTS
         .iter()
+        .chain(crate::types::json_constants::JSON_INT_CONSTANTS.iter())
         .chain(crate::types::stream_constants::STREAM_INT_CONSTANTS.iter())
         .chain(crate::types::session_constants::SESSION_INT_CONSTANTS.iter())
         .chain(crate::types::error_constants::ERROR_LEVEL_CONSTANTS.iter())

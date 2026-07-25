@@ -26,6 +26,7 @@ use crate::ir::{
 use crate::names::{
     function_symbol, ir_global_symbol, method_symbol, php_symbol_key, static_method_symbol,
 };
+use crate::parser::ast::Visibility;
 use crate::types::{callable_wrapper_sig, first_class_callable_builtin_sig, FunctionSig, PhpType};
 
 use super::context::FunctionContext;
@@ -109,6 +110,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ConstNull => lower_const_null(ctx, &inst),
         Op::ConstStr => strings::lower_const_str(ctx, &inst),
         Op::ConstClassName => strings::lower_const_class_name(ctx, &inst),
+        Op::ObjectClassName => builtins::types::lower_object_class_name(ctx, &inst),
         Op::LoadCalledClassId => strings::lower_load_called_class_id(ctx, &inst),
         Op::LoadLocal => lower_load_local(ctx, &inst),
         Op::StoreLocal => lower_store_local(ctx, &inst),
@@ -999,13 +1001,21 @@ fn emit_instance_method_first_class_callable(
             target
         ))
     })?;
-    let receiver_ty = ctx.value_php_type(receiver)?;
-    let PhpType::Object(class_name) = receiver_ty.codegen_repr() else {
+    let receiver_ty = ctx.value_php_type(receiver)?.codegen_repr();
+    let PhpType::Object(class_name) = receiver_ty else {
+        if matches!(receiver_ty, PhpType::Mixed | PhpType::Union(_)) {
+            emit_mixed_receiver_first_class_callable(ctx, receiver, method_name)?;
+            return Ok(true);
+        }
         return Err(CodegenIrError::unsupported(format!(
             "instance first-class callable '{}' with receiver PHP type {:?}",
             target, receiver_ty
         )));
     };
+    if class_name.is_empty() {
+        emit_object_receiver_first_class_callable(ctx, receiver, method_name)?;
+        return Ok(true);
+    }
     let normalized_class = class_name.trim_start_matches('\\').to_string();
     let method_key = php_symbol_key(method_name);
     let class_info = ctx
@@ -1070,6 +1080,279 @@ fn emit_instance_method_first_class_callable(
     );
     emit_runtime_descriptor_with_receiver_capture(ctx, &descriptor_label, receiver, &receiver_ty)?;
     Ok(true)
+}
+
+/// Materializes a receiver-bound callable when the receiver is boxed as `Mixed`.
+///
+/// The runtime object class selects one concrete method descriptor; non-object values and
+/// classes without an accessible emitted method retain PHP's fatal behavior.
+fn emit_mixed_receiver_first_class_callable(
+    ctx: &mut FunctionContext<'_>,
+    receiver: ValueId,
+    method_name: &str,
+) -> Result<()> {
+    let candidates = mixed_first_class_method_candidates(ctx, method_name);
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    let fatal_label = ctx.next_label("mixed_first_class_callable_invalid_receiver");
+    let done_label = ctx.next_label("mixed_first_class_callable_done");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "mixed_first_class_callable_{}",
+                label_fragment(&candidate.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    ctx.load_value_to_result(receiver)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_mixed_method_object_payload_or_fatal(ctx, receiver_reg, &fatal_label);
+    emit_mixed_first_class_method_dispatch(
+        ctx,
+        receiver_reg,
+        &candidates,
+        &match_labels,
+        &fatal_label,
+    );
+
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let template = callables::runtime_instance_method_descriptor_template(
+            ctx,
+            &candidate.class_name,
+            method_name,
+            &candidate.method_key,
+            &candidate.impl_class,
+            &candidate.sig,
+        )?;
+        let receiver_ty = PhpType::Object(candidate.class_name.clone());
+        emit_runtime_descriptor_with_unboxed_receiver_capture(
+            ctx,
+            &template.descriptor_label,
+            receiver_reg,
+            &receiver_ty,
+        );
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&fatal_label);
+    emit_method_call_on_null_fatal(ctx, method_name);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Materializes a receiver-bound callable when an `object` hint erased the concrete class.
+///
+/// The receiver is already an unboxed object payload, so runtime class-id dispatch can select
+/// and capture the concrete method without passing through Mixed unboxing.
+fn emit_object_receiver_first_class_callable(
+    ctx: &mut FunctionContext<'_>,
+    receiver: ValueId,
+    method_name: &str,
+) -> Result<()> {
+    let candidates = mixed_first_class_method_candidates(ctx, method_name);
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    let fatal_label = ctx.next_label("object_first_class_callable_invalid_receiver");
+    let done_label = ctx.next_label("object_first_class_callable_done");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "object_first_class_callable_{}",
+                label_fragment(&candidate.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    ctx.load_value_to_reg(receiver, receiver_reg)?;
+    emit_mixed_first_class_method_dispatch(
+        ctx,
+        receiver_reg,
+        &candidates,
+        &match_labels,
+        &fatal_label,
+    );
+
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let template = callables::runtime_instance_method_descriptor_template(
+            ctx,
+            &candidate.class_name,
+            method_name,
+            &candidate.method_key,
+            &candidate.impl_class,
+            &candidate.sig,
+        )?;
+        let receiver_ty = PhpType::Object(candidate.class_name.clone());
+        emit_runtime_descriptor_with_unboxed_receiver_capture(
+            ctx,
+            &template.descriptor_label,
+            receiver_reg,
+            &receiver_ty,
+        );
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&fatal_label);
+    emit_method_call_on_null_fatal(ctx, method_name);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Collects accessible concrete method implementations for a gradual callable receiver.
+fn mixed_first_class_method_candidates(
+    ctx: &FunctionContext<'_>,
+    method_name: &str,
+) -> Vec<MixedFirstClassMethodCandidate> {
+    let method_key = php_symbol_key(method_name);
+    let mut candidates = Vec::new();
+    for (class_name, class_info) in &ctx.module.class_infos {
+        let Some(sig) = class_info.methods.get(&method_key) else {
+            continue;
+        };
+        let declaring_class = class_info
+            .method_declaring_classes
+            .get(&method_key)
+            .map(String::as_str)
+            .unwrap_or(class_name.as_str());
+        let visibility = class_info
+            .method_visibilities
+            .get(&method_key)
+            .unwrap_or(&Visibility::Public);
+        if !codegen_can_access_member(ctx, declaring_class, visibility) {
+            continue;
+        }
+        let impl_class = class_info
+            .method_impl_classes
+            .get(&method_key)
+            .cloned()
+            .unwrap_or_else(|| class_name.clone());
+        if !class_method_body_exists(ctx, &impl_class, &method_key) {
+            continue;
+        }
+        candidates.push(MixedFirstClassMethodCandidate {
+            class_id: class_info.class_id,
+            class_name: class_name.clone(),
+            method_key: method_key.clone(),
+            impl_class,
+            sig: sig.clone(),
+        });
+    }
+    candidates.sort_by_key(|candidate| candidate.class_id);
+    candidates
+}
+
+/// Returns whether the current EIR method scope can access a declared member.
+fn codegen_can_access_member(
+    ctx: &FunctionContext<'_>,
+    declaring_class: &str,
+    visibility: &Visibility,
+) -> bool {
+    let current_class = ctx
+        .function
+        .name
+        .rsplit_once("::")
+        .map(|(class_name, _)| class_name);
+    match visibility {
+        Visibility::Public => true,
+        Visibility::Protected => current_class.is_some_and(|current| {
+            current == declaring_class
+                || codegen_is_subclass_of(ctx, current, declaring_class)
+                || codegen_is_subclass_of(ctx, declaring_class, current)
+        }),
+        Visibility::Private => current_class == Some(declaring_class),
+    }
+}
+
+/// Returns whether `class_name` inherits from `ancestor_name`.
+fn codegen_is_subclass_of(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    ancestor_name: &str,
+) -> bool {
+    let mut current = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .and_then(|class_info| class_info.parent.as_deref());
+    while let Some(parent) = current {
+        if parent == ancestor_name {
+            return true;
+        }
+        current = ctx
+            .module
+            .class_infos
+            .get(parent)
+            .and_then(|class_info| class_info.parent.as_deref());
+    }
+    false
+}
+
+/// Emits class-id branches for first-class method descriptors selected from a Mixed receiver.
+fn emit_mixed_first_class_method_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    receiver_reg: &str,
+    candidates: &[MixedFirstClassMethodCandidate],
+    match_labels: &[String],
+    fatal_label: &str,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("ldr x9, [{}]", receiver_reg)); // load the runtime receiver class id for callable selection
+            for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+                abi::emit_load_int_immediate(ctx.emitter, "x10", candidate.class_id as i64);
+                ctx.emitter.instruction("cmp x9, x10");                         // compare this concrete callable receiver class id
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // capture the matching concrete method descriptor
+            }
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("mov r11, QWORD PTR [{}]", receiver_reg)); // load the runtime receiver class id for callable selection
+            for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+                abi::emit_load_int_immediate(ctx.emitter, "r10", candidate.class_id as i64);
+                ctx.emitter.instruction("cmp r11, r10");                        // compare this concrete callable receiver class id
+                ctx.emitter.instruction(&format!("je {}", label));              // capture the matching concrete method descriptor
+            }
+        }
+    }
+    abi::emit_jump(ctx.emitter, fatal_label);
+}
+
+/// Allocates a runtime callable descriptor and captures an already-unboxed object receiver.
+fn emit_runtime_descriptor_with_unboxed_receiver_capture(
+    ctx: &mut FunctionContext<'_>,
+    descriptor_label: &str,
+    receiver_reg: &str,
+    receiver_ty: &PhpType,
+) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let descriptor_reg = abi::nested_call_reg(ctx.emitter);
+    let total_bytes = callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + 16;
+    move_reg_to_int_result(ctx, receiver_reg);
+    abi::emit_incref_if_refcounted(ctx.emitter, receiver_ty);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, total_bytes as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    ctx.emitter
+        .instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); // keep the runtime callable descriptor while copying its static header
+    callable_descriptor::emit_copy_static_descriptor_to_runtime(
+        ctx.emitter,
+        descriptor_reg,
+        descriptor_label,
+    );
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    callable_descriptor::emit_store_current_result_to_runtime_capture(
+        ctx.emitter,
+        descriptor_reg,
+        0,
+        receiver_ty,
+    );
+    if descriptor_reg != result_reg {
+        ctx.emitter
+            .instruction(&format!("mov {}, {}", result_reg, descriptor_reg)); // return the receiver-bound callable descriptor
+    }
 }
 
 /// Emits an entry wrapper that receives visible args followed by a captured called-class id.
@@ -4387,10 +4670,15 @@ fn lower_generator_yield(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 /// reaching the backend, so the operand here is always a Generator/Traversable.
 fn lower_generator_yield_from(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let operand = expect_operand(inst, 0)?;
+    let operand_ty = ctx.value_php_type(operand)?.codegen_repr();
     let target = ctx.emitter.target;
     let arg0 = abi::int_arg_reg_name(target, 0);
     let result_reg = abi::int_result_reg(ctx.emitter);
-    ctx.load_value_to_result(operand)?; // inner generator pointer (borrowed)
+    ctx.load_value_to_result(operand)?;
+    if matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)) {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
+    }
     if arg0 != result_reg {
         ctx.emitter
             .instruction(&format!("mov {}, {}", arg0, result_reg)); // pass the inner generator as delegate argument 0
@@ -5254,6 +5542,15 @@ struct MixedMethodCandidate {
     dispatch: MethodDispatchKind,
 }
 
+/// Concrete descriptor candidate for first-class method syntax on a gradual receiver.
+struct MixedFirstClassMethodCandidate {
+    class_id: u64,
+    class_name: String,
+    method_key: String,
+    impl_class: String,
+    sig: FunctionSig,
+}
+
 /// Outgoing call argument state that must be cleaned up after the call returns.
 struct CallArgMaterialization {
     overflow_bytes: usize,
@@ -5297,6 +5594,7 @@ enum CalledClassIdArg {
     Immediate(u64),
     Local(LocalSlotId),
     ThisObject(LocalSlotId),
+    ObjectValue(ValueId),
 }
 
 /// Resolves method implementation class, canonical key, return type, and ABI arity.
@@ -5317,18 +5615,29 @@ fn resolve_method_call_target(
             normalized, method_name
         ))
     })?;
-    let expected_args = callee_sig.params.len() + 1;
+    let impl_class = class_info
+        .method_impl_classes
+        .get(&method_key)
+        .cloned()
+        .unwrap_or_else(|| normalized.to_string());
+    let (params, ref_params) = emitted_class_method_abi(ctx, &impl_class, &method_key, false)
+        .unwrap_or_else(|| {
+            (
+                callee_sig
+                    .params
+                    .iter()
+                    .map(|(_, ty)| ty.codegen_repr())
+                    .collect(),
+                callee_sig.ref_params.clone(),
+            )
+        });
+    let expected_args = params.len() + 1;
     if operand_count != expected_args {
         return Err(CodegenIrError::unsupported(format!(
             "method call to {}::{} with {} operands for {} ABI params",
             normalized, method_name, operand_count, expected_args
         )));
     }
-    let impl_class = class_info
-        .method_impl_classes
-        .get(&method_key)
-        .cloned()
-        .unwrap_or_else(|| normalized.to_string());
     let dynamic_slot = class_info.vtable_slots.get(&method_key).copied();
     let has_direct_body = class_method_already_emitted(ctx, &impl_class, &method_key, false);
     if !has_direct_body && dynamic_slot.is_none() {
@@ -5346,12 +5655,8 @@ fn resolve_method_call_target(
         impl_class,
         method_key,
         dynamic_slot,
-        params: callee_sig
-            .params
-            .iter()
-            .map(|(_, ty)| ty.codegen_repr())
-            .collect(),
-        ref_params: callee_sig.ref_params.clone(),
+        params,
+        ref_params,
         return_ty: callee_sig.return_type.clone(),
         by_ref_return: callee_sig.by_ref_return,
     })
@@ -5384,6 +5689,42 @@ fn emit_dynamic_instance_method_call(ctx: &mut FunctionContext<'_>, slot: usize)
     }
     abi::emit_load_from_address(ctx.emitter, dispatch_reg, dispatch_reg, slot * 8);
     abi::emit_call_reg(ctx.emitter, dispatch_reg);
+}
+
+/// Returns the caller-visible ABI parameters from an emitted EIR class-method body.
+///
+/// The first EIR parameter is always the hidden receiver or called-class id, so callers
+/// materialize the remaining parameters. Reading the emitted function keeps hidden ABI
+/// extensions such as `__fga_argc` in sync without exposing them in `FunctionSig`.
+fn emitted_class_method_abi(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    method_key: &str,
+    is_static: bool,
+) -> Option<(Vec<PhpType>, Vec<bool>)> {
+    let function = ctx.module.class_methods.iter().find(|function| {
+        function.flags.is_static == is_static
+            && function
+                .name
+                .rsplit_once("::")
+                .is_some_and(|(candidate_class, candidate_method)| {
+                    candidate_class == class_name && php_symbol_key(candidate_method) == method_key
+                })
+    })?;
+    Some((
+        function
+            .params
+            .iter()
+            .skip(1)
+            .map(|param| param.php_type.codegen_repr())
+            .collect(),
+        function
+            .params
+            .iter()
+            .skip(1)
+            .map(|param| param.by_ref)
+            .collect(),
+    ))
 }
 
 /// Returns true when the current EIR module includes the target class method body.
@@ -5609,7 +5950,7 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         ))
     })?;
     let Some(callee_sig) = impl_info.static_methods.get(&method_key) else {
-        if is_lexical_instance_static_receiver(receiver_label)
+        if static_call_binds_current_instance(ctx, receiver_label, receiver.as_str())
             && receiver_info.methods.contains_key(&method_key)
         {
             return lower_lexical_instance_static_method_call(
@@ -5624,20 +5965,37 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             target
         )));
     };
-    if inst.operands.len() != callee_sig.params.len() {
-        return Err(CodegenIrError::unsupported(format!(
-            "static method call to {} with {} operands for {} params",
-            target,
-            inst.operands.len(),
-            callee_sig.params.len()
-        )));
-    }
-    let param_types = callee_sig
-        .params
-        .iter()
-        .map(|(_, ty)| ty.codegen_repr())
-        .collect::<Vec<_>>();
-    let dynamic_static_slot = if late_bound_static {
+    let (param_types, ref_params) =
+        emitted_class_method_abi(ctx, impl_class, &method_key, true).unwrap_or_else(|| {
+            (
+                callee_sig
+                    .params
+                    .iter()
+                    .map(|(_, ty)| ty.codegen_repr())
+                    .collect(),
+                callee_sig.ref_params.clone(),
+            )
+        });
+    let (called_class_id, visible_operands, called_through_object) =
+        if inst.operands.len() == param_types.len() {
+            (called_class_id, inst.operands.as_slice(), false)
+        } else if inst.operands.len() == param_types.len() + 1
+            && objects::nullable_object_receiver_class(ctx, inst.operands[0])?.is_some()
+        {
+            (
+                CalledClassIdArg::ObjectValue(inst.operands[0]),
+                &inst.operands[1..],
+                true,
+            )
+        } else {
+            return Err(CodegenIrError::unsupported(format!(
+                "static method call to {} with {} operands for {} params",
+                target,
+                inst.operands.len(),
+                param_types.len()
+            )));
+        };
+    let dynamic_static_slot = if late_bound_static || called_through_object {
         receiver_info.static_vtable_slots.get(&method_key).copied()
     } else {
         None
@@ -5661,9 +6019,9 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     let call_args = materialize_static_method_call_args_with_refs(
         ctx,
         &called_class_id,
-        &inst.operands,
+        visible_operands,
         &param_types,
-        &callee_sig.ref_params,
+        &ref_params,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
@@ -5854,9 +6212,27 @@ fn is_late_bound_static_receiver(receiver: &str) -> bool {
     receiver.trim_start_matches('\\') == "static"
 }
 
-/// Returns true when PHP static-call syntax should bind an instance method lexically.
-fn is_lexical_instance_static_receiver(receiver: &str) -> bool {
-    matches!(receiver.trim_start_matches('\\'), "self" | "parent")
+/// Returns true when PHP static-call syntax should bind the current `$this` instance.
+///
+/// Besides `self::` and `parent::`, PHP permits an explicit ancestor class name from a
+/// compatible descendant instance scope. `static::` remains a separate late-bound dispatch path.
+fn static_call_binds_current_instance(
+    ctx: &FunctionContext<'_>,
+    receiver_label: &str,
+    resolved_receiver: &str,
+) -> bool {
+    match receiver_label.trim_start_matches('\\') {
+        "self" | "parent" => true,
+        "static" => false,
+        _ => {
+            let Ok(current_class) = current_method_class(ctx) else {
+                return false;
+            };
+            let resolved_receiver = resolved_receiver.trim_start_matches('\\');
+            current_class == resolved_receiver
+                || codegen_is_subclass_of(ctx, current_class, resolved_receiver)
+        }
+    }
 }
 
 /// Returns the class name encoded in the current EIR class-method function name.
@@ -6189,6 +6565,28 @@ fn materialize_called_class_id(
                 0,
             );
         }
+        CalledClassIdArg::ObjectValue(value) => {
+            let source_ty = ctx.load_value_to_result(*value)?;
+            match source_ty.codegen_repr() {
+                PhpType::Object(_) => {}
+                PhpType::Mixed => {
+                    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+                    move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
+                }
+                other => {
+                    return Err(CodegenIrError::invalid_module(format!(
+                        "object-call static method receiver has PHP type {:?}",
+                        other
+                    )));
+                }
+            }
+            abi::emit_load_from_address(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                abi::int_result_reg(ctx.emitter),
+                0,
+            );
+        }
     }
     Ok(())
 }
@@ -6338,6 +6736,10 @@ fn callee_mixed_param_is_truthiness_only(callee: &Function, param_index: usize) 
                 loaded_values.push(result);
             }
             (_, Some(Immediate::LocalSlot(candidate))) if *candidate == slot => return false,
+            (
+                _,
+                Some(Immediate::LocalSlotPair { first, second }),
+            ) if *first == slot || *second == slot => return false,
             _ => {}
         }
     }
@@ -7332,6 +7734,16 @@ pub(super) fn coerce_loaded_local_to_result_type(
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
             Ok(())
         }
+        (PhpType::Mixed, PhpType::Array(elem))
+            if elem.codegen_repr() == PhpType::Mixed =>
+        {
+            // A flow guard can prove that a boxed union is an indexed array without proving its
+            // runtime slot layout. Rebuild it as a real `array<mixed>` so subsequent typed array
+            // operations do not interpret homogeneous int/string slots as Mixed-cell pointers.
+            move_int_result_to_first_arg(ctx);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_array_or_fatal");
+            Ok(())
+        }
         (PhpType::Mixed, PhpType::Array(_))
         | (PhpType::Mixed, PhpType::AssocArray { .. })
         | (PhpType::Mixed, PhpType::Callable)
@@ -7349,6 +7761,14 @@ pub(super) fn coerce_loaded_local_to_result_type(
                 abi::int_result_reg(ctx.emitter),
                 0x7fff_ffff_ffff_fffe,
             );
+            Ok(())
+        }
+        (PhpType::TaggedScalar, PhpType::Int) => {
+            // A truthy/null guard can refine an inline `int|null` slot to `Int` without changing
+            // its two-word frame storage. Materialize the integer payload for the narrowed SSA
+            // result; the null-to-zero fallback is PHP-compatible if a conservative path reaches
+            // this conversion without the flow fact.
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
             Ok(())
         }
         (_, PhpType::TaggedScalar) => {
@@ -7372,7 +7792,9 @@ pub(super) fn coerce_loaded_local_to_result_type(
 /// de-packing store (e.g. `$t = []; $t[$k] = &$v;` in a function body): stores write the
 /// raw heap pointer without conversion, so a load whose flow type is still the packed
 /// array reads back exactly the packed pointer that was stored — both types are one
-/// heap-pointer word. The de-pack itself is an explicit `ArrayToHash` in the EIR stream,
+/// heap-pointer word. Any two object class types likewise share the same object-pointer
+/// representation; an `instanceof` guard may refine only the logical class without changing
+/// frame storage. The array de-pack itself is an explicit `ArrayToHash` in the EIR stream,
 /// never part of the load.
 fn local_load_types_share_storage(source_ty: &PhpType, result_ty: &PhpType) -> bool {
     if source_ty == result_ty {
@@ -7386,6 +7808,7 @@ fn local_load_types_share_storage(source_ty: &PhpType, result_ty: &PhpType) -> b
         ) | (PhpType::Array(_), PhpType::Array(_))
             | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
             | (PhpType::AssocArray { .. }, PhpType::Array(_))
+            | (PhpType::Object(_), PhpType::Object(_))
     )
 }
 
@@ -7557,10 +7980,13 @@ fn lower_local_ref_ensure(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             abi::store_at_offset_scratch(ctx.emitter, "rax", owner_offset, scratch);
         }
     }
+    // Persist the returned cell pointer before `mark_promoted_ref_cell` writes the dynamic
+    // representation flag through the integer result register.
+    store_if_result(ctx, inst)?;
     ctx.mark_promoted_ref_cell(main_slot);
     ctx.mark_adopted_ref_cell_owner(owner_slot);
     ctx.mark_adopted_ref_cell_local(main_slot);
-    store_if_result(ctx, inst)
+    Ok(())
 }
 
 /// Lowers `AdoptRefCell`: binds the target local slot as an OWNING alias to a pre-existing

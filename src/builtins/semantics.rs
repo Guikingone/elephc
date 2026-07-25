@@ -411,12 +411,22 @@ pub fn callable_accepts_string_source(source: Option<&PhpType>) -> bool {
 
 /// Accepts the dynamic string-like sources supported by shared `strlen` validation.
 pub fn callable_accepts_strlen_source(source: Option<&PhpType>) -> bool {
-    source.is_none_or(|source| {
-        matches!(
-            source.codegen_repr(),
-            PhpType::Mixed | PhpType::Str | PhpType::Union(_)
-        )
-    })
+    source.is_none_or(strlen_accepts_source)
+}
+
+/// Returns whether PHP weak scalar coercion can supply a string to `strlen`.
+pub fn strlen_accepts_source(source: &PhpType) -> bool {
+    matches!(
+        source.codegen_repr(),
+        PhpType::Str
+            | PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::Void
+            | PhpType::TaggedScalar
+            | PhpType::Mixed
+            | PhpType::Union(_)
+    )
 }
 
 /// Lowers one registry builtin through its complete backend-neutral semantic descriptor.

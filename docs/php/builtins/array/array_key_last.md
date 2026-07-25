@@ -2,7 +2,7 @@
 title: "array_key_last()"
 description: "Gets the last key of an array."
 sidebar:
-  order: 20
+  order: 21
 ---
 
 ## array_key_last()

@@ -190,6 +190,60 @@ pub(crate) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction
     store_if_result(ctx, inst)
 }
 
+/// Lowers `array_change_key_case()` through representation-aware clone helpers.
+///
+/// Packed arrays contain only integer keys, so a shallow clone is already the
+/// correct result. Associative hashes are rebuilt by the runtime so converted
+/// string keys are rehashed and case-collision updates preserve insertion order.
+pub(crate) fn lower_array_change_key_case(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "array_change_key_case", 1, 2)?;
+    let array = expect_operand(inst, 0)?;
+    let array_ty = ctx.value_php_type(array)?.codegen_repr();
+
+    if let Some(mode) = inst.operands.get(1).copied() {
+        resolve_int_operand_to_result(ctx, mode, "array_change_key_case case mode")?;
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        ctx.load_value_to_result(array)?;
+        let mode_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+        abi::emit_pop_reg(ctx.emitter, mode_reg);
+    } else {
+        ctx.load_value_to_result(array)?;
+        let mode_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+        abi::emit_load_int_immediate(ctx.emitter, mode_reg, 0);
+    }
+
+    match array_ty {
+        PhpType::Array(_) => {
+            if ctx.emitter.target.arch == Arch::X86_64 {
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the packed array to the shape-preserving shallow clone helper
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_array_clone_shallow");
+        }
+        PhpType::AssocArray { .. } => {
+            if ctx.emitter.target.arch == Arch::X86_64 {
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the associative array beside the already staged case mode
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_array_change_key_case_hash");
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            if ctx.emitter.target.arch == Arch::X86_64 {
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the boxed gradual array beside the already staged case mode
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_array_change_key_case_mixed");
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "array_change_key_case requires an array-compatible representation, got {:?}",
+                other
+            )));
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `array_is_list(array $array): bool`.
 ///
 /// All array representations (packed indexed array, associative hash, or a boxed
@@ -225,11 +279,18 @@ pub(crate) fn lower_array_replace(ctx: &mut FunctionContext<'_>, inst: &Instruct
         ));
     }
     // The common two-argument form goes through the shared two-hash choreography, which
-    // converts a scalar indexed input (e.g. `array_replace([10, 20, 30], [1 => 99])`) to an
-    // owned hash before the last-wins overlay and releases the converted temporaries after.
+    // converts an indexed input (including nested heap-backed elements) to an owned hash
+    // before the last-wins overlay and releases the converted temporaries after.
     // The N-argument loop below keeps the associative-hash fast path for 1 and 3+ arguments.
     if inst.operands.len() == 2 {
-        return lower_two_hash_arg_builtin(ctx, inst, "array_replace", "__rt_array_replace", None);
+        return lower_two_hash_arg_builtin(
+            ctx,
+            inst,
+            "array_replace",
+            "__rt_array_replace",
+            None,
+            true,
+        );
     }
     // Require every argument to be an associative hash with the SAME codegen
     // representation as the first. `__rt_hash_replace_into` copies source entries
@@ -348,6 +409,12 @@ fn lower_mixed_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 pub(crate) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_unique", 1, 2)?;
     let array = expect_operand(inst, 0)?;
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return lower_mixed_array_unique(ctx, inst);
+    }
     let elem_ty =
         eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_unique")?;
     ctx.load_value_to_result(array)?;
@@ -355,6 +422,47 @@ pub(crate) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instructi
         ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the dedup helper argument
     }
     abi::emit_call_label(ctx.emitter, array_unique_runtime_helper(&elem_ty));
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `array_unique()` for a boxed `Mixed`/union operand after a strict array assertion.
+///
+/// The assertion rebuilds an independently owned `array<mixed>`. The Mixed-aware unique helper
+/// compares PHP string representations rather than Mixed-cell addresses, returns a separate
+/// retained clone, and the intermediate is released after the clone has acquired every survivor.
+fn lower_mixed_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    ctx.load_value_to_result(array)?;
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the boxed gradual operand to the strict array assertion
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_array_or_fatal");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");                              // preserve the rebuilt array for release after de-duplication
+            abi::emit_call_label(ctx.emitter, "__rt_array_unique_mixed");
+            abi::emit_pop_reg(ctx.emitter, "x1");                               // recover the rebuilt intermediate array
+            abi::emit_push_reg(ctx.emitter, "x0");                              // preserve the unique result across intermediate release
+            ctx.emitter.instruction("mov x0, x1");                              // pass the rebuilt intermediate to kind-aware release
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            abi::emit_pop_reg(ctx.emitter, "x0");                               // restore the independently owned unique result
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the rebuilt array to the Mixed-aware unique helper
+            abi::emit_push_reg(ctx.emitter, "rdi");                             // preserve the rebuilt array for release after de-duplication
+            abi::emit_call_label(ctx.emitter, "__rt_array_unique_mixed");
+            abi::emit_pop_reg(ctx.emitter, "rcx");                              // recover the rebuilt intermediate array
+            abi::emit_push_reg(ctx.emitter, "rax");                             // preserve the unique result across intermediate release
+            ctx.emitter.instruction("mov rdi, rcx");                            // pass the rebuilt intermediate to kind-aware release
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            abi::emit_pop_reg(ctx.emitter, "rax");                              // restore the independently owned unique result
+        }
+    }
+    crate::codegen::emit_array_value_type_stamp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &PhpType::Mixed,
+    );
     store_if_result(ctx, inst)
 }
 
@@ -484,14 +592,14 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             );
         }
         PhpType::Str => {
-            let callback_elem_ty = PhpType::Mixed;
+            let callback_elem_ty = array_map_descriptor_callback_result_element_type(inst)?;
             let result_elem_ty = array_map_result_element_type(inst, &callback_elem_ty)?;
             lower_runtime_string_descriptor_callback(
                 ctx,
                 callback,
                 Some(&PhpType::Array(Box::new(elem_ty.clone()))),
                 vec![elem_ty.clone()],
-                PhpType::Mixed,
+                callback_elem_ty.clone(),
                 "array_map",
                 |ctx, wrapper_label, env_bytes| {
                     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
@@ -1393,11 +1501,17 @@ fn require_array_like_operand(ty: PhpType, name: &str) -> Result<()> {
 
 /// Validates a two-input hash builtin operand and reports whether it must be converted to a hash.
 ///
-/// Associative arrays are used directly; scalar indexed arrays (`int`/`float`/`bool` elements) are
-/// converted to integer-keyed hashes at runtime. Any other shape is unsupported.
-fn two_hash_operand_needs_conversion(ty: PhpType, name: &str) -> Result<bool> {
+/// Associative arrays are used directly; supported indexed arrays are converted to
+/// integer-keyed hashes at runtime. Recursive merge callers may opt into heap-backed
+/// indexed elements because their runtime helper preserves nested payload ownership.
+fn two_hash_operand_needs_conversion(
+    ty: PhpType,
+    name: &str,
+    allow_heap_backed_indexed_elements: bool,
+) -> Result<bool> {
     match ty.codegen_repr() {
         PhpType::AssocArray { .. } => Ok(false),
+        PhpType::Array(_) if allow_heap_backed_indexed_elements => Ok(true),
         PhpType::Array(elem) if matches!(*elem, PhpType::Int | PhpType::Float | PhpType::Bool) => {
             Ok(true)
         }
@@ -1424,6 +1538,8 @@ fn emit_convert_indexed_to_hash(ctx: &mut FunctionContext<'_>) {
 ///
 /// `mode` is loaded into the third argument register for `array_diff_assoc` (0) /
 /// `array_intersect_assoc` (1). The result hash pointer is left in the integer result register.
+/// `allow_heap_backed_indexed_elements` enables conversion of nested indexed values for
+/// recursive merge helpers whose runtime ownership path retains those payloads.
 /// Mirrors the legacy two-hash choreography but sources operands from EIR values.
 fn lower_two_hash_arg_builtin(
     ctx: &mut FunctionContext<'_>,
@@ -1431,12 +1547,21 @@ fn lower_two_hash_arg_builtin(
     name: &str,
     runtime_label: &str,
     mode: Option<i64>,
+    allow_heap_backed_indexed_elements: bool,
 ) -> Result<()> {
     super::ensure_arg_count(inst, name, 2)?;
     let first = expect_operand(inst, 0)?;
     let second = expect_operand(inst, 1)?;
-    let conv0 = two_hash_operand_needs_conversion(ctx.value_php_type(first)?, name)?;
-    let conv1 = two_hash_operand_needs_conversion(ctx.value_php_type(second)?, name)?;
+    let conv0 = two_hash_operand_needs_conversion(
+        ctx.value_php_type(first)?,
+        name,
+        allow_heap_backed_indexed_elements,
+    )?;
+    let conv1 = two_hash_operand_needs_conversion(
+        ctx.value_php_type(second)?,
+        name,
+        allow_heap_backed_indexed_elements,
+    )?;
     let result_reg = abi::int_result_reg(ctx.emitter);
 
     // -- materialize first operand into the result register, convert if indexed, then spill --
@@ -1531,6 +1656,7 @@ pub(crate) fn lower_array_replace_recursive(
         "array_replace_recursive",
         "__rt_array_replace_recursive",
         None,
+        true,
     )
 }
 
@@ -1545,6 +1671,7 @@ pub(crate) fn lower_array_diff_assoc(
         "array_diff_assoc",
         "__rt_assoc_diff_intersect",
         Some(0),
+        false,
     )
 }
 
@@ -1559,6 +1686,7 @@ pub(crate) fn lower_array_intersect_assoc(
         "array_intersect_assoc",
         "__rt_assoc_diff_intersect",
         Some(1),
+        false,
     )
 }
 
@@ -1573,6 +1701,7 @@ pub(crate) fn lower_array_merge_recursive(
         "array_merge_recursive",
         "__rt_array_merge_recursive",
         None,
+        false,
     )
 }
 
@@ -2732,7 +2861,8 @@ fn array_map_callback_array_element_type(ty: PhpType) -> Result<PhpType> {
                     | PhpType::Void
                     | PhpType::Never
                     | PhpType::Mixed
-            ) {
+            ) || elem.is_refcounted()
+            {
                 return Ok(elem);
             }
             Err(CodegenIrError::unsupported(format!(
@@ -5964,16 +6094,16 @@ fn lower_array_search_string_needle_in_int_array(
         Arch::AArch64 => {
             ctx.load_string_value_to_regs(needle, "x1", "x2")?;                 // load needle string (x1=ptr, x2=len) from frame slot
             abi::emit_call_label(ctx.emitter, "__rt_str_to_int");                // convert string (x1/x2) to integer result in x0
-            ctx.emitter.instruction("mov x9, x0");                               // save the converted integer while loading the array
+            ctx.emitter.instruction("mov x9, x0");                              // save the converted integer while loading the array
             ctx.load_value_to_reg(array, "x0")?;
-            ctx.emitter.instruction("mov x1, x9");                               // restore the converted integer as the scalar needle argument
+            ctx.emitter.instruction("mov x1, x9");                              // restore the converted integer as the scalar needle argument
         }
         Arch::X86_64 => {
             ctx.load_string_value_to_regs(needle, "rax", "rdx")?;               // load needle string (rax=ptr, rdx=len) from frame slot
             abi::emit_call_label(ctx.emitter, "__rt_str_to_int");                // convert string (rax/rdx) to integer result in rax
-            ctx.emitter.instruction("mov r9, rax");                              // save the converted integer while loading the array
+            ctx.emitter.instruction("mov r9, rax");                             // save the converted integer while loading the array
             ctx.load_value_to_reg(array, "rdi")?;
-            ctx.emitter.instruction("mov rsi, r9");                              // restore the converted integer as the scalar needle argument
+            ctx.emitter.instruction("mov rsi, r9");                             // restore the converted integer as the scalar needle argument
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_search");

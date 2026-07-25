@@ -532,6 +532,48 @@ fn test_user_function_by_ref_output_defines_previously_undefined_variable() {
     assert_eq!(out, "42");
 }
 
+/// A named argument bound to a later by-reference parameter defines the caller variable using
+/// the signature's parameter-name mapping, matching Symfony's `parsedName: $parsedName` calls.
+#[test]
+fn test_named_by_ref_output_defines_previously_undefined_variable() {
+    let out = compile_and_run(
+        "<?php
+        class Target {
+            static function parseName(
+                string $value,
+                ?string &$ignored = null,
+                ?string &$parsedName = null
+            ): string {
+                $parsedName = $value;
+                return $value;
+            }
+        }
+        Target::parseName(\"binding\", parsedName: $parsedName);
+        echo $parsedName;",
+    );
+    assert_eq!(out, "binding");
+}
+
+/// A variable assigned either of two builtin function-name literals preserves their shared
+/// signature, so invoking it defines the common by-reference `$matches` output parameter.
+#[test]
+fn test_conditional_builtin_name_callable_defines_by_ref_output() {
+    let out = compile_and_run(
+        "<?php
+        function run_match(bool $all): array {
+            $match = $all ? 'preg_match_all' : 'preg_match';
+            try {
+                $match('/a/', 'a', $matches);
+            } finally {
+            }
+            return $matches;
+        }
+        echo count(run_match(false)), \"\\n\";
+        echo count(run_match(true)), \"\\n\";",
+    );
+    assert_eq!(out, "1\n1\n");
+}
+
 /// A previously-undefined plain variable passed to an interface-typed method call's by-reference
 /// out-parameter becomes defined after the call, matching the plain-class-receiver case: an
 /// interface-typed receiver (e.g. a constructor-promoted `private MarshallerInterface

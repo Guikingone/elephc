@@ -2,7 +2,7 @@
 title: "uasort() — internals"
 description: "Compiler internals for uasort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 61
+  order: 62
 ---
 
 ## `uasort()` — internals

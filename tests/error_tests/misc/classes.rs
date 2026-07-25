@@ -527,6 +527,16 @@ fn test_error_self_instance_method_from_static_method() {
     );
 }
 
+/// Verifies an unrelated class scope cannot turn a named non-static call into an implicit
+/// `$this` dispatch.
+#[test]
+fn test_error_unrelated_named_instance_method_static_call() {
+    expect_error(
+        "<?php class Target { public function value() { return 1; } } class Caller { public function run() { return Target::value(); } } echo (new Caller())->run();",
+        "Cannot call instance method statically: Target::value",
+    );
+}
+
 /// Verifies the error diagnostic for circular inheritance.
 #[test]
 fn test_error_circular_inheritance() {

@@ -13,9 +13,9 @@
 //!   owned `array<mixed>` by delegating to `__rt_array_from_mixed`, so the result reads back
 //!   through the ordinary boxed-Mixed indexed-array path.
 //! - Every other payload (`false`/bool, null, scalar, associative array, object) fatals with a
-//!   `TypeError`, unlike the quiet `__rt_mixed_to_owned_hash` / `__rt_mixed_count` boundary that
-//!   silently yields an empty array / 0. This matches PHP 8, where `array_reverse(false)` and
-//!   `array_column(false, …)` throw.
+//!   `TypeError`. Unlike `__rt_mixed_to_owned_hash`, this helper accepts indexed arrays only;
+//!   unlike `__rt_mixed_count`, it never quietly maps a non-array to zero. This matches PHP 8,
+//!   where `array_reverse(false)` and `array_column(false, …)` throw.
 //! - The boxed Mixed argument is only borrowed; the returned array is independently owned
 //!   (refcount 1), so a single release frees it.
 

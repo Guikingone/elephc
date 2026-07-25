@@ -367,7 +367,11 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::DynamicStaticPropertyAccess { property, .. } => {
             expr_effect(property).with_may_throw()
         }
-        ExprKind::ObjectClassName { object } => expr_effect(object),
+        // `$value::class` reads runtime object metadata and throws `TypeError` when a gradual
+        // operand holds a non-object, so an unused read must remain observable to DCE.
+        ExprKind::ObjectClassName { object } => expr_effect(object)
+            .with_side_effects()
+            .with_may_throw(),
         ExprKind::NewScopedObject { args, .. } => combine_effects(args.iter().map(expr_effect))
             .with_side_effects()
             .with_may_throw(),

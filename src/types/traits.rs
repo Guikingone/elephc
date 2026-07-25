@@ -48,6 +48,7 @@ struct TraitDeclInfo {
     trait_uses: Vec<TraitUse>,
     properties: Vec<ClassProperty>,
     methods: Vec<ClassMethod>,
+    constants: Vec<ClassConst>,
     span: Span,
 }
 
@@ -58,6 +59,7 @@ struct TraitDeclInfo {
 struct ExpandedTrait {
     properties: Vec<ClassProperty>,
     methods: Vec<ClassMethod>,
+    constants: Vec<ClassConst>,
 }
 
 #[derive(Clone)]
@@ -96,7 +98,7 @@ pub fn flatten_classes(
                 trait_uses,
                 properties,
                 methods,
-                constants: _,
+                constants,
             } => {
                 let trait_key = php_symbol_key(name);
                 if class_like_keys.contains(&trait_key) || !trait_keys.insert(trait_key) {
@@ -112,6 +114,7 @@ pub fn flatten_classes(
                         trait_uses: trait_uses.clone(),
                         properties: properties.clone(),
                         methods: methods.clone(),
+                        constants: constants.clone(),
                         span: stmt.span,
                     },
                 );
@@ -157,20 +160,21 @@ pub fn flatten_classes(
                     errors.extend(error.flatten());
                     continue;
                 }
-                let (imported_props, imported_methods) = match expand::resolve_trait_uses(
-                    trait_uses,
-                    &trait_map,
-                    &mut cache,
-                    &mut stack,
-                    &format!("class {}", name),
-                    stmt.span,
-                ) {
-                    Ok(result) => result,
-                    Err(error) => {
-                        errors.extend(error.flatten());
-                        continue;
-                    }
-                };
+                let (imported_props, imported_methods, imported_constants) =
+                    match expand::resolve_trait_uses(
+                        trait_uses,
+                        &trait_map,
+                        &mut cache,
+                        &mut stack,
+                        &format!("class {}", name),
+                        stmt.span,
+                    ) {
+                        Ok(result) => result,
+                        Err(error) => {
+                            errors.extend(error.flatten());
+                            continue;
+                        }
+                    };
                 let merged_props = match merge::merge_properties(
                     &imported_props,
                     properties,
@@ -196,6 +200,18 @@ pub fn flatten_classes(
                         continue;
                     }
                 };
+                let merged_constants = match merge::merge_constants(
+                    imported_constants,
+                    constants,
+                    stmt.span,
+                    &format!("class {}", name),
+                ) {
+                    Ok(constants) => constants,
+                    Err(error) => {
+                        errors.extend(error.flatten());
+                        continue;
+                    }
+                };
                 let (merged_props, merged_methods) =
                     crate::magic_constants::bind_trait_class_constants(
                         merged_props,
@@ -213,7 +229,7 @@ pub fn flatten_classes(
                     properties: merged_props,
                     methods: merged_methods,
                     attributes: stmt.attributes.clone(),
-                    constants: constants.clone(),
+                    constants: merged_constants,
                     used_traits: used_trait_names(trait_uses),
                     trait_aliases: used_trait_aliases(trait_uses, &trait_map),
                 });
@@ -232,20 +248,21 @@ pub fn flatten_classes(
                     errors.extend(error.flatten());
                     continue;
                 }
-                let (imported_props, imported_methods) = match expand::resolve_trait_uses(
-                    trait_uses,
-                    &trait_map,
-                    &mut cache,
-                    &mut stack,
-                    &format!("enum {}", name),
-                    stmt.span,
-                ) {
-                    Ok(result) => result,
-                    Err(error) => {
-                        errors.extend(error.flatten());
-                        continue;
-                    }
-                };
+                let (imported_props, imported_methods, imported_constants) =
+                    match expand::resolve_trait_uses(
+                        trait_uses,
+                        &trait_map,
+                        &mut cache,
+                        &mut stack,
+                        &format!("enum {}", name),
+                        stmt.span,
+                    ) {
+                        Ok(result) => result,
+                        Err(error) => {
+                            errors.extend(error.flatten());
+                            continue;
+                        }
+                    };
                 if let Some(property) = imported_props.first() {
                     errors.push(CompileError::new(
                         property.span,
@@ -260,6 +277,18 @@ pub fn flatten_classes(
                     &format!("enum {}", name),
                 ) {
                     Ok(methods) => methods,
+                    Err(error) => {
+                        errors.extend(error.flatten());
+                        continue;
+                    }
+                };
+                let merged_constants = match merge::merge_constants(
+                    imported_constants,
+                    constants,
+                    stmt.span,
+                    &format!("enum {}", name),
+                ) {
+                    Ok(constants) => constants,
                     Err(error) => {
                         errors.extend(error.flatten());
                         continue;
@@ -287,7 +316,7 @@ pub fn flatten_classes(
                         properties: Vec::new(),
                         methods: merged_methods,
                         attributes: stmt.attributes.clone(),
-                        constants: constants.clone(),
+                        constants: merged_constants,
                         used_traits: used_trait_names(trait_uses),
                         trait_aliases: used_trait_aliases(trait_uses, &trait_map),
                     },

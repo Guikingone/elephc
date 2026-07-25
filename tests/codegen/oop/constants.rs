@@ -78,6 +78,54 @@ echo Child::VERSION;
     assert_eq!(out, "7");
 }
 
+/// Verifies nested trait constants flatten into a consuming class and compatible duplicates
+/// from traits plus the class declaration collapse to one usable class constant.
+#[test]
+fn test_trait_constants_flatten_into_consuming_class() {
+    let out = compile_and_run(
+        r#"<?php
+trait Seed {
+    public const VALUE = 6;
+}
+trait NestedSeed {
+    use Seed;
+
+    public function read(): int {
+        return self::VALUE;
+    }
+}
+trait CompatibleSeed {
+    public const VALUE = 6;
+}
+class Box {
+    use NestedSeed, CompatibleSeed;
+
+    public const VALUE = 6;
+}
+echo Box::VALUE, (new Box())->read();
+"#,
+    );
+    assert_eq!(out, "66");
+}
+
+/// Verifies a typed property default resolves an inherited interface constant to its literal.
+#[test]
+fn test_property_default_resolves_inherited_interface_constant() {
+    let out = compile_and_run(
+        r#"<?php
+interface DefaultLevel {
+    public const LEVEL = 7;
+}
+interface SpecializedDefaultLevel extends DefaultLevel {}
+class ConfigWithInterfaceDefault {
+    public int $level = SpecializedDefaultLevel::LEVEL;
+}
+echo (new ConfigWithInterfaceDefault())->level;
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
 /// Verifies class constant expression can reference self constant.
 #[test]
 fn test_class_constant_expression_can_reference_self_constant() {

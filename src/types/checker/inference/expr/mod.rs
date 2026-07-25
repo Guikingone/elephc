@@ -21,6 +21,7 @@ mod class_refs;
 mod effects;
 pub(crate) mod static_closure;
 use super::super::type_compat::type_is_gradual_object_family;
+use super::super::builtins::array_arg_is_gradually_acceptable;
 use super::super::Checker;
 use super::syntactic::wider_type_syntactic;
 use static_closure::body_must_not_use_this;
@@ -35,6 +36,11 @@ impl Checker {
     /// references. The result feeds statement checking, function call
     /// validation, and optimizer-visible type metadata.
     pub fn infer_type(&mut self, expr: &Expr, env: &TypeEnv) -> Result<PhpType, CompileError> {
+        if let Some(evaluated) = self.evaluated_expr_types.get(&expr.span) {
+            if evaluated.kind == std::mem::discriminant(&expr.kind) {
+                return Ok(evaluated.ty.clone());
+            }
+        }
         match &expr.kind {
             // `IncludeValue` is a transient parser node fully expanded by the resolver;
             // it can never reach this pass.
@@ -141,19 +147,40 @@ impl Checker {
                 default,
             } => {
                 self.infer_type(subject, env)?;
+                let narrows_between_arms =
+                    matches!(subject.kind, ExprKind::BoolLiteral(true));
+                let mut fallthrough_env = env.clone();
                 let mut result_ty: Option<PhpType> = None;
                 for (conditions, result) in arms {
-                    for c in conditions {
-                        self.infer_type(c, env)?;
+                    let mut arm_env = fallthrough_env.clone();
+                    if narrows_between_arms && conditions.len() == 1 {
+                        let condition = &conditions[0];
+                        self.infer_type(condition, &fallthrough_env)?;
+                        if let Some(guard) =
+                            self.guard_narrowing(condition, &fallthrough_env)?
+                        {
+                            arm_env.insert(guard.var.clone(), guard.then_ty);
+                            fallthrough_env.insert(guard.var, guard.else_ty);
+                        } else {
+                            for (var, then_ty) in
+                                self.and_chain_then_narrowings(condition, &fallthrough_env)
+                            {
+                                arm_env.insert(var, then_ty);
+                            }
+                        }
+                    } else {
+                        for condition in conditions {
+                            self.infer_type(condition, &fallthrough_env)?;
+                        }
                     }
-                    let ty = self.match_arm_result_type(result, env)?;
+                    let ty = self.match_arm_result_type(result, &arm_env)?;
                     result_ty = Some(match result_ty {
                         Some(acc) => merge_match_arm_result_type(self, acc, ty),
                         None => ty,
                     });
                 }
                 if let Some(d) = default {
-                    let ty = self.match_arm_result_type(d, env)?;
+                    let ty = self.match_arm_result_type(d, &fallthrough_env)?;
                     result_ty = Some(match result_ty {
                         Some(acc) => merge_match_arm_result_type(self, acc, ty),
                         None => ty,
@@ -165,16 +192,31 @@ impl Checker {
                 if elems.is_empty() {
                     return Ok(PhpType::Array(Box::new(PhpType::Never)));
                 }
-                if elems.iter().any(|elem| {
-                    matches!(
-                        &elem.kind,
-                        ExprKind::Spread(inner)
-                            if matches!(
-                                self.infer_type(inner, env),
-                                Ok(PhpType::AssocArray { .. })
-                            )
-                    )
-                }) {
+                let mut requires_hash_spread = false;
+                for elem in elems {
+                    let ExprKind::Spread(inner) = &elem.kind else {
+                        continue;
+                    };
+                    let spread_ty = self.infer_type(inner, env)?;
+                    match &spread_ty {
+                        PhpType::Array(_) => {}
+                        PhpType::AssocArray { .. } | PhpType::Iterable => {
+                            requires_hash_spread = true;
+                        }
+                        PhpType::Mixed | PhpType::Union(_)
+                            if array_arg_is_gradually_acceptable(&spread_ty) =>
+                        {
+                            requires_hash_spread = true;
+                        }
+                        other => {
+                            return Err(CompileError::new(
+                                elem.span,
+                                &format!("Spread operator requires an array, got {:?}", other),
+                            ));
+                        }
+                    }
+                }
+                if requires_hash_spread {
                     let value_ty = self.assoc_spread_literal_value_type(elems, env);
                     return Ok(PhpType::AssocArray {
                         key: Box::new(PhpType::Mixed),
@@ -389,6 +431,7 @@ impl Checker {
             }
             ExprKind::ShortTernary { value, default } => {
                 let value_ty = self.match_arm_result_type(value, env)?;
+                let value_ty = short_ternary_truthy_result_type(self, value_ty);
                 let default_ty = self.match_arm_result_type(default, env)?;
                 Ok(merge_match_arm_result_type(self, value_ty, default_ty))
             }
@@ -467,7 +510,16 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             ExprKind::NullCoalesce { value, default } => {
-                let vt = self.infer_type(value, env)?;
+                let vt = if let ExprKind::PropertyAccess { object, property } = &value.kind {
+                    self.infer_property_null_coalesce_type(
+                        object,
+                        property,
+                        value,
+                        env,
+                    )?
+                } else {
+                    self.infer_type(value, env)?
+                };
                 let dt = self.infer_type(default, env)?;
                 if Self::union_contains_void(&vt) {
                     Ok(wider_type_syntactic(&self.strip_void_from_union(&vt), &dt))
@@ -548,16 +600,14 @@ impl Checker {
                 match ty {
                     PhpType::Array(elem_ty) => Ok(*elem_ty),
                     PhpType::AssocArray { value, .. } => Ok(*value),
-                    // A union is only accepted here when EVERY member is an array family
-                    // type (no member can hold a non-array at runtime). This intentionally
-                    // does NOT reuse `array_arg_is_gradually_acceptable`'s "any member is an
-                    // array" rule, and does NOT accept the `Mixed`/`Iterable` top types: the
-                    // EIR spread lowering unpacks the operand as an array with no runtime
-                    // array/Traversable guard, so accepting a genuinely gradual operand
-                    // (bare `Mixed`, `array|false`, `Iterable`) trades a loud checker error
-                    // for a runtime SIGSEGV or silent garbage read (correction round 1 —
-                    // see spec addendum). Adding a runtime is_array/Traversable guard is a
-                    // separate follow-up.
+                    // Outside array literals, a union is only accepted when EVERY member is an
+                    // array-family type (no member can hold a non-array at runtime). This
+                    // intentionally does NOT reuse `array_arg_is_gradually_acceptable`'s "any
+                    // member is an array" rule and does NOT accept the `Mixed`/`Iterable` top
+                    // types: call/general-spread lowering has no runtime array/Traversable guard.
+                    // Array-literal inference handles those operands in its parent arm and emits
+                    // the dedicated Mixed guard or `iterator_to_array()` conversion during EIR
+                    // lowering.
                     PhpType::Union(ref members)
                         if !members.is_empty()
                             && members.iter().all(|member| {
@@ -569,9 +619,9 @@ impl Checker {
                     {
                         Ok(PhpType::Mixed)
                     }
-                    _ => Err(CompileError::new(
+                    other => Err(CompileError::new(
                         expr.span,
-                        "Spread operator requires an array",
+                        &format!("Spread operator requires an array, got {:?}", other),
                     )),
                 }
             }
@@ -593,12 +643,16 @@ impl Checker {
             }
             ExprKind::Clone(inner) => {
                 let ty = self.infer_type(inner, env)?;
-                match ty {
-                    PhpType::Object(class_name) => {
-                        self.check_clone_visibility(&class_name, expr.span)?;
-                        Ok(PhpType::Object(class_name))
-                    }
-                    _ => Err(CompileError::new(expr.span, "clone requires an object value")),
+                if let PhpType::Object(class_name) = &ty {
+                    self.check_clone_visibility(class_name, expr.span)?;
+                }
+                if clone_operand_may_hold_object(&ty) {
+                    Ok(ty)
+                } else {
+                    Err(CompileError::new(
+                        expr.span,
+                        "clone requires an object value",
+                    ))
                 }
             }
             ExprKind::NewDynamic { name_expr, args } => {
@@ -679,15 +733,7 @@ impl Checker {
             }
             ExprKind::ObjectClassName { object } => {
                 let object_type = self.infer_type(object, env)?;
-                let object_only = match &object_type {
-                    PhpType::Object(_) => true,
-                    PhpType::Union(members) => {
-                        !members.is_empty()
-                            && members.iter().all(|member| matches!(member, PhpType::Object(_)))
-                    }
-                    _ => false,
-                };
-                if !object_only {
+                if !object_class_name_operand_may_hold_object(&object_type) {
                     return Err(CompileError::new(
                         expr.span,
                         &format!("Cannot use \"::class\" on {}", object_type),
@@ -753,18 +799,21 @@ impl Checker {
             }
             ExprKind::YieldFrom(inner) => {
                 let inner_ty = self.infer_type(inner, env)?;
-                // `yield from` accepts an array (any syntactic form — literal,
-                // variable, or a call returning an array) OR a Generator-typed
-                // operand (a generator function/method call, or a Generator-typed
-                // variable). Codegen (`lower_yield_from`) dispatches on the SAME
-                // type distinction: arrays lower to an iterator loop, everything
-                // else to `__rt_gen_delegate`, which requires a real `Generator`.
-                // `type_accepts(Object("Generator"), _)` is false for
-                // `Mixed`/`Iterable`/unions, so those stay rejected — matching what
-                // the runtime delegate can actually drive.
+                // `yield from` accepts arrays, the gradual `iterable` family, concrete
+                // Iterator/IteratorAggregate objects, and Generator. EIR dispatches an
+                // `Iterable` or `Mixed` value at runtime so Generator keeps delegated
+                // send/return semantics while arrays and other Traversable values use the
+                // existing iterator loop. A statically non-iterable concrete type remains
+                // rejected; `Mixed` is the gradual boundary and receives a runtime type check.
                 let supported = matches!(
                     inner_ty.codegen_repr(),
-                    PhpType::Array(_) | PhpType::AssocArray { .. }
+                    PhpType::Array(_)
+                        | PhpType::AssocArray { .. }
+                        | PhpType::Iterable
+                        | PhpType::Mixed
+                ) || matches!(
+                    &inner_ty,
+                    PhpType::Object(name) if self.object_type_implements_iterable(name)
                 ) || self.type_accepts(&PhpType::Object("Generator".to_string()), &inner_ty);
                 if !supported {
                     return Err(CompileError::new(
@@ -796,12 +845,11 @@ impl Checker {
             .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", name)))
     }
 
-    /// Returns the element type of an array literal that contains at least one
-    /// spread of an associative array.
+    /// Returns the element type of a hash-backed array literal spread.
     ///
-    /// Iterates over `elems`, extracting the value type from each `Spread` that
-    /// wraps an `AssocArray`. All spread value types must agree, otherwise
-    /// `Mixed` is returned. Non-spread elements are ignored.
+    /// Extracts value types from concrete spread arrays; gradual and iterable operands contribute
+    /// `Mixed`. All spread value types must agree, otherwise `Mixed` is returned. Non-spread
+    /// elements are ignored.
     fn assoc_spread_literal_value_type(&mut self, elems: &[Expr], env: &TypeEnv) -> PhpType {
         let mut value_ty = PhpType::Never;
         for elem in elems {
@@ -863,6 +911,31 @@ impl Checker {
     }
 }
 
+/// Returns whether `ty` can carry an object at runtime and may therefore reach PHP's clone
+/// runtime guard. Definite scalars, arrays, resources, pointers, and null are rejected by the
+/// checker; gradual `Mixed`/`Iterable` values and unions with an object-capable member defer the
+/// final object-kind check to `__rt_object_clone`.
+fn clone_operand_may_hold_object(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(_) | PhpType::Mixed | PhpType::Iterable | PhpType::Never => true,
+        PhpType::Union(members) => members.iter().any(clone_operand_may_hold_object),
+        _ => false,
+    }
+}
+
+/// Returns whether `ty` can carry an object for PHP's runtime-checked `$value::class` operation.
+/// Definite non-object types stay compile errors, while `Mixed` and unions containing an object
+/// defer the final tag check to `Op::ObjectClassName`.
+fn object_class_name_operand_may_hold_object(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(_) | PhpType::Mixed => true,
+        PhpType::Union(members) => members
+            .iter()
+            .any(object_class_name_operand_may_hold_object),
+        _ => false,
+    }
+}
+
 impl Checker {
     /// Checks whether the current scope may invoke a class's `__clone` hook.
     ///
@@ -914,6 +987,8 @@ fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
 /// `Never`-typed arms (`throw`, normalized at the call site) defer to the
 /// other arm's type, `Void`-typed arms (checker `null`) keep the merge
 /// nullable so the null arm's value survives return-type-driven coercion.
+/// Indexed-array and associative-array pairs retain their common container
+/// representation, widening incompatible element/key types to `Mixed`.
 /// Object pairs, including supported `false`/null sentinels, retain a normalized
 /// union so declared object-union returns and member validation remain precise;
 /// every other heterogeneous pair widens to `Mixed` so each arm's runtime value
@@ -934,10 +1009,65 @@ fn merge_match_arm_result_type(checker: &Checker, acc: PhpType, next: PhpType) -
     if next == PhpType::Void {
         return nullable_match_arm_type(acc);
     }
-    if object_union_match_arm_type(&acc) && object_union_match_arm_type(&next) {
-        return merge_object_union_match_arm_types(checker, acc, next);
+    match (acc, next) {
+        (PhpType::Array(left), PhpType::Array(right)) => {
+            let element = checker
+                .merge_array_element_type(&left, &right)
+                .unwrap_or(PhpType::Mixed);
+            return PhpType::Array(Box::new(element));
+        }
+        (
+            PhpType::AssocArray {
+                key: left_key,
+                value: left_value,
+            },
+            PhpType::AssocArray {
+                key: right_key,
+                value: right_value,
+            },
+        ) => {
+            let key = checker
+                .merge_array_element_type(&left_key, &right_key)
+                .unwrap_or(PhpType::Mixed);
+            let value = checker
+                .merge_array_element_type(&left_value, &right_value)
+                .unwrap_or(PhpType::Mixed);
+            return PhpType::AssocArray {
+                key: Box::new(key),
+                value: Box::new(value),
+            };
+        }
+        (acc, next) => {
+            if object_union_match_arm_type(&acc) && object_union_match_arm_type(&next) {
+                return merge_object_union_match_arm_types(checker, acc, next);
+            }
+        }
     }
     PhpType::Mixed
+}
+
+/// Removes members that cannot reach the truthy arm of PHP's short ternary operator.
+///
+/// `null`, literal `false`, and `never` always select the default expression. Other scalar
+/// types remain because their static type can contain both truthy and falsy runtime values.
+fn short_ternary_truthy_result_type(checker: &Checker, ty: PhpType) -> PhpType {
+    match ty {
+        PhpType::Void | PhpType::False | PhpType::Never => PhpType::Never,
+        PhpType::Union(members) => {
+            let reachable = members
+                .into_iter()
+                .filter(|member| {
+                    !matches!(member, PhpType::Void | PhpType::False | PhpType::Never)
+                })
+                .collect::<Vec<_>>();
+            if reachable.is_empty() {
+                PhpType::Never
+            } else {
+                checker.normalize_union_type(reachable)
+            }
+        }
+        other => other,
+    }
 }
 
 /// Joins object/sentinel branch types at their existing compatible supertype

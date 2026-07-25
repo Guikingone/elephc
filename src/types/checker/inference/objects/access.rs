@@ -7,6 +7,9 @@
 //!
 //! Key details:
 //! - Object inference depends on flattened class metadata, visibility, inheritance, and declared property types.
+//! - The bare `object` pseudo-type uses an empty nominal name and requires runtime property dispatch.
+//! - Null-coalescing property probes treat a definitely absent property as PHP null without
+//!   performing an ordinary property read.
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
@@ -15,6 +18,56 @@ use crate::types::{PhpType, TypeEnv};
 use super::super::super::Checker;
 
 impl Checker {
+    /// Infers the value side of `$object->property ?? $fallback`.
+    ///
+    /// PHP applies `isset` semantics here: a definitely undeclared property on a known class is
+    /// absent and contributes `Void` (null) instead of raising the ordinary undefined-property
+    /// diagnostic. Declared, magic, dynamic, and uncertain receivers retain normal property
+    /// inference so their result type and visibility rules remain unchanged.
+    pub(crate) fn infer_property_null_coalesce_type(
+        &mut self,
+        object: &Expr,
+        property: &str,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let object_ty = self.infer_type(object, env)?;
+        let class_name = match &object_ty {
+            PhpType::Object(class_name) => Some(class_name.clone()),
+            PhpType::Union(_) => self.union_single_object_class(&object_ty),
+            _ => None,
+        };
+        if class_name.as_deref().is_some_and(|class_name| {
+            self.null_coalesce_property_is_definitely_absent(class_name, property)
+        }) {
+            return Ok(PhpType::Void);
+        }
+        self.infer_property_access_type(object, property, expr, env)
+    }
+
+    /// Returns whether a known class has no declared, magic, dynamic, or descendant property
+    /// surface that could satisfy a null-coalescing probe.
+    fn null_coalesce_property_is_definitely_absent(
+        &self,
+        class_name: &str,
+        property: &str,
+    ) -> bool {
+        if class_name.is_empty()
+            || crate::types::checker::builtin_stdclass::is_stdclass(class_name)
+        {
+            return false;
+        }
+        let Some(class_info) = self.classes.get(class_name) else {
+            return false;
+        };
+        class_info.visible_property(property).is_none()
+            && !class_info.methods.contains_key("__get")
+            && !class_info.allow_dynamic_properties
+            && self
+                .abstract_descendant_property_type(class_name, property)
+                .is_none()
+    }
+
     /// Infers the type of a property access expression (`$obj->prop`).
     ///
     /// Returns the declared property type on class/object, handles `Mixed`
@@ -217,6 +270,9 @@ impl Checker {
         receiver: &Expr,
         expr: &Expr,
     ) -> Result<PhpType, CompileError> {
+        if class_name.is_empty() {
+            return Ok(PhpType::Mixed);
+        }
         if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
             return Ok(PhpType::Mixed);
         }
@@ -270,6 +326,11 @@ impl Checker {
                 // value is statically `Mixed` because we cannot infer it.
                 return Ok(PhpType::Mixed);
             }
+            if let Some(ty) =
+                self.abstract_descendant_property_type(class_name, property)
+            {
+                return Ok(ty);
+            }
             return Err(CompileError::new(
                 expr.span,
                 &format!("Undefined property: {}::{}", class_name, property),
@@ -279,6 +340,52 @@ impl Checker {
             expr.span,
             &format!("Undefined class: {}", class_name),
         ))
+    }
+
+    /// Resolves a property exposed by at least one concrete child of an abstract receiver.
+    ///
+    /// PHP permits a value typed as an abstract base to hold different concrete children. A
+    /// property present on only some children is therefore a runtime-checked read: matching
+    /// children expose their declared type, while a non-matching child warns and yields null.
+    fn abstract_descendant_property_type(
+        &self,
+        class_name: &str,
+        property: &str,
+    ) -> Option<PhpType> {
+        let base = self.classes.get(class_name)?;
+        if !base.is_abstract {
+            return None;
+        }
+        let mut property_types = Vec::new();
+        let mut has_missing_concrete_child = false;
+        for (candidate_name, candidate) in &self.classes {
+            if candidate.is_abstract
+                || candidate_name == class_name
+                || !self.is_subclass_of(candidate_name, class_name)
+            {
+                continue;
+            }
+            let visible = candidate.visible_property(property).and_then(|(_, (_, ty))| {
+                let visibility = candidate
+                    .property_visibilities
+                    .get(property)
+                    .cloned()
+                    .unwrap_or(crate::parser::ast::Visibility::Public);
+                (visibility == crate::parser::ast::Visibility::Public).then_some(ty.clone())
+            });
+            if let Some(ty) = visible {
+                property_types.push(ty);
+            } else {
+                has_missing_concrete_child = true;
+            }
+        }
+        if property_types.is_empty() {
+            return None;
+        }
+        if has_missing_concrete_child {
+            property_types.push(PhpType::Void);
+        }
+        Some(self.normalize_union_type(property_types))
     }
 
     /// Returns precise SPL runtime storage metadata for callback-filter internals.
@@ -541,9 +648,14 @@ impl Checker {
 
     /// Infers the type of `$this` inside a class method.
     ///
-    /// Errors if called from a static method or outside a class context.
-    /// Returns `PhpType::Object(current_class)` for valid contexts.
+    /// A non-static closure declared inside a static method has no enclosing receiver, but PHP
+    /// permits it to reference `$this` so `Closure::bind()` can install one later; that receiver
+    /// remains `Mixed`. Direct static-method use still errors, as does top-level use outside a
+    /// bindable closure. Instance methods resolve to `Object(current_class)`.
     pub(crate) fn infer_this_type(&mut self, expr: &Expr) -> Result<PhpType, CompileError> {
+        if self.current_method_is_static && self.closure_depth > 0 {
+            return Ok(PhpType::Mixed);
+        }
         if self.current_method_is_static {
             return Err(CompileError::new(
                 expr.span,

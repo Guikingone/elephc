@@ -77,6 +77,49 @@ fn test_if_block_member_path_not_narrowed() {
     expect_ok(&fixture("if ($this->x instanceof J) { $this->x->extra(); }"));
 }
 
+/// Verifies a divergent negated property guard keeps its complement through a nested `if`.
+/// This is the common framework shape that validates a specialized output before using it.
+#[test]
+fn test_divergent_negated_property_guard_narrows_nested_if() {
+    expect_ok(
+        "<?php \
+         interface BaseOutput { public function write(): void; } \
+         class SectionOutput implements BaseOutput { \
+             public function write(): void {} \
+             public function clear(int $lines): void {} \
+         } \
+         class NestedPropertyGuard { \
+             public function __construct(private BaseOutput $output) {} \
+             private function countLines(): int { return 1; } \
+             public function render(bool $alreadyRendered): void { \
+                 if (!$this->output instanceof SectionOutput) { throw new Exception('bad'); } \
+                 if ($alreadyRendered) { $this->output->clear($this->countLines()); } \
+             } \
+         }",
+    );
+}
+
+/// Verifies a function-call argument keeps the type computed before that argument's method call invalidates property facts.
+#[test]
+fn test_guarded_property_method_argument_keeps_evaluated_type() {
+    expect_ok(
+        "<?php \
+         interface BaseOutput {} \
+         final class SectionOutput implements BaseOutput { \
+             public function lineCount(): int { return 1; } \
+         } \
+         function consume(int $count, string $message): void {} \
+         final class Renderer { \
+             public function __construct(private BaseOutput $output) {} \
+             public function render(string $message): void { \
+                 if ($this->output instanceof SectionOutput) { \
+                     consume($this->output->lineCount(), $message); \
+                 } \
+             } \
+         }",
+    );
+}
+
 /// Regression — the variable-rooted ternary narrowing (WIN A) still works: a plain
 /// `$v instanceof J ? $v->extra() : null` accepts, proving the added member-path
 /// branch did not disturb the existing variable-guard path.

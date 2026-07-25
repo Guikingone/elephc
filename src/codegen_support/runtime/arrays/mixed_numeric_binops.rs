@@ -1,21 +1,22 @@
 //! Purpose:
-//! Emits runtime helpers for arithmetic on boxed Mixed numeric values.
-//! Centralizes PHP integer-overflow promotion for dynamic int|float results.
+//! Emits runtime helpers for arithmetic and array union on boxed Mixed values.
+//! Centralizes PHP integer-overflow promotion and dynamic `+` dispatch.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::arrays`.
 //!
 //! Key details:
-//! - Helpers return a boxed Mixed cell so callers can observe either integer or double at runtime.
+//! - Helpers return a boxed Mixed cell so callers can observe scalar or array results at runtime.
+//! - Dynamic add performs left-biased PHP array union only when both payloads are arrays.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::{abi, platform::Arch};
 
-/// Dispatches to architecture-specific helpers for add/sub/mul on boxed Mixed numeric values.
+/// Dispatches to architecture-specific helpers for add/sub/mul on boxed Mixed values.
 ///
 /// For ARM64 emits `__rt_mixed_numeric_add/sub/mul` that unbox operands, classify each
-/// payload as integer or double, and compute in integer or floating-point arithmetic with
-/// PHP integer-overflow promotion (overflowing integers are promoted to double).
+/// payload as an array, integer, or double, and either performs PHP array union for add or
+/// numeric arithmetic with PHP integer-overflow promotion.
 ///
 /// For x86_64 emits the equivalent Linux x86_64 ABI helpers under the same symbol names.
 ///
@@ -50,6 +51,14 @@ pub fn emit_mixed_numeric_binops(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_unbox");                                 // inspect the right boxed payload tag and value words
     emitter.instruction("str x0, [sp, #32]");                                   // save the right runtime value tag for numeric dispatch
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the left runtime value tag
+    emitter.instruction("sub x10, x9, #4");                                     // normalize indexed/associative array tags to the range 0..1
+    emitter.instruction("cmp x10, #1");                                         // does the left operand hold either supported array payload?
+    emitter.instruction("b.ls __rt_mixed_numeric_array_path");                  // any array payload requires PHP array-union validation
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the right runtime value tag for array classification
+    emitter.instruction("sub x10, x9, #4");                                     // normalize indexed/associative array tags to the range 0..1
+    emitter.instruction("cmp x10, #1");                                         // does the right operand hold either supported array payload?
+    emitter.instruction("b.ls __rt_mixed_numeric_array_path");                  // any array payload requires PHP array-union validation
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the left runtime value tag for float classification
     emitter.instruction("cmp x9, #2");                                          // does the left operand hold a double payload?
     emitter.instruction("b.eq __rt_mixed_numeric_float_path");                  // any double payload makes the whole operation double-valued
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the right runtime value tag
@@ -135,6 +144,50 @@ pub fn emit_mixed_numeric_binops(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #2");                                          // runtime tag 2 = double
     emitter.instruction("bl __rt_mixed_from_value");                            // box the double result into a Mixed cell
 
+    // -- dynamic add: arrays union only with arrays; every mixed pairing is a TypeError --
+    emitter.label("__rt_mixed_numeric_array_path");
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the selected arithmetic opcode for array validation
+    emitter.instruction("cbnz x9, __rt_mixed_numeric_array_type_error");        // subtraction and multiplication never accept array operands
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the left runtime value tag
+    emitter.instruction("sub x10, x9, #4");                                     // normalize the left array tag to the accepted range 0..1
+    emitter.instruction("cmp x10, #1");                                         // is the left payload an indexed or associative array?
+    emitter.instruction("b.hi __rt_mixed_numeric_array_type_error");            // reject an array paired with a scalar left operand
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the right runtime value tag
+    emitter.instruction("sub x10, x9, #4");                                     // normalize the right array tag to the accepted range 0..1
+    emitter.instruction("cmp x10, #1");                                         // is the right payload an indexed or associative array?
+    emitter.instruction("b.hi __rt_mixed_numeric_array_type_error");            // reject an array paired with a scalar right operand
+    emitter.instruction("ldr x0, [sp, #0]");                                    // load the boxed left array for owned hash conversion
+    emitter.instruction("bl __rt_mixed_to_owned_hash");                         // convert the left array to a fresh Mixed-valued hash
+    emitter.instruction("str x0, [sp, #40]");                                   // save the owned left hash across the right conversion
+    emitter.instruction("ldr x0, [sp, #8]");                                    // load the boxed right array for owned hash conversion
+    emitter.instruction("bl __rt_mixed_to_owned_hash");                         // convert the right array to a fresh Mixed-valued hash
+    emitter.instruction("str x0, [sp, #56]");                                   // save the owned right hash across the union
+    emitter.instruction("ldr x1, [sp, #56]");                                   // load the right hash as the second union operand
+    emitter.instruction("ldr x0, [sp, #40]");                                   // load the left hash whose duplicate keys must win
+    emitter.instruction("bl __rt_hash_union");                                  // create the left-biased PHP array union
+    emitter.instruction("str x0, [sp, #48]");                                   // save the owned result hash while releasing conversions
+    emitter.instruction("ldr x0, [sp, #40]");                                   // reload the temporary left conversion for release
+    emitter.instruction("bl __rt_decref_hash");                                 // release the temporary owned left hash
+    emitter.instruction("ldr x0, [sp, #56]");                                   // reload the temporary right conversion for release
+    emitter.instruction("bl __rt_decref_hash");                                 // release the temporary owned right hash
+    emitter.instruction("ldr x1, [sp, #48]");                                   // load the result hash as the Mixed payload
+    emitter.instruction("mov x2, xzr");                                         // associative-array payloads do not use a high word
+    emitter.instruction("mov x0, #5");                                          // runtime tag 5 = associative array
+    emitter.instruction("bl __rt_mixed_from_value");                            // box and retain the array union result
+    emitter.instruction("str x0, [sp, #40]");                                   // preserve the boxed result while dropping the raw owner
+    emitter.instruction("ldr x0, [sp, #48]");                                   // reload the unboxed result hash owner
+    emitter.instruction("bl __rt_decref_hash");                                 // transfer sole result ownership to the Mixed box
+    emitter.instruction("ldr x0, [sp, #40]");                                   // restore the boxed array union result
+    emitter.instruction("b __rt_mixed_numeric_done");                           // restore the helper frame and return the boxed array
+
+    emitter.label("__rt_mixed_numeric_array_type_error");
+    abi::emit_symbol_address(emitter, "x1", "_array_arg_type_error_msg");
+    emitter.instruction("mov x2, #78");                                         // pass the shared gradual array TypeError message length
+    emitter.instruction("mov x0, #2");                                          // write the dynamic operand diagnostic to stderr
+    emitter.syscall(4);
+    emitter.instruction("mov x0, #70");                                         // use EX_SOFTWARE after the invalid operand pairing
+    emitter.syscall(1);
+
     emitter.label("__rt_mixed_numeric_done");
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the helper stack frame
@@ -163,9 +216,8 @@ fn emit_aarch64_entry(emitter: &mut Emitter, label: &str, opcode: i64) {
 /// allocates 80 bytes of stack space, loads the opcode into r10, and jumps to the shared
 /// `__rt_mixed_numeric_common_linux_x86_64` implementation.
 ///
-/// The common handler unboxes both operands, classifies each as integer or double, and
-/// dispatches to the appropriate arithmetic path with PHP integer-overflow promotion
-/// (overflowing integers are converted to double before the operation).
+/// The common handler unboxes both operands, dispatches add on two arrays to PHP array union,
+/// and otherwise classifies numeric operands as integer or double with overflow promotion.
 fn emit_mixed_numeric_binops_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_numeric_binops ---");
@@ -185,6 +237,14 @@ fn emit_mixed_numeric_binops_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the boxed right operand pointer for unboxing
     emitter.instruction("call __rt_mixed_unbox");                               // inspect the right boxed payload tag and value words
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the right runtime value tag for numeric dispatch
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 4");                         // does the left operand hold an indexed array payload?
+    emitter.instruction("je __rt_mixed_numeric_array_path_linux_x86_64");       // any array payload requires PHP array-union validation
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 5");                         // does the left operand hold an associative array payload?
+    emitter.instruction("je __rt_mixed_numeric_array_path_linux_x86_64");       // any array payload requires PHP array-union validation
+    emitter.instruction("cmp QWORD PTR [rbp - 40], 4");                         // does the right operand hold an indexed array payload?
+    emitter.instruction("je __rt_mixed_numeric_array_path_linux_x86_64");       // any array payload requires PHP array-union validation
+    emitter.instruction("cmp QWORD PTR [rbp - 40], 5");                         // does the right operand hold an associative array payload?
+    emitter.instruction("je __rt_mixed_numeric_array_path_linux_x86_64");       // any array payload requires PHP array-union validation
     emitter.instruction("cmp QWORD PTR [rbp - 32], 2");                         // does the left operand hold a double payload?
     emitter.instruction("je __rt_mixed_numeric_float_path_linux_x86_64");       // any double payload makes the whole operation double-valued
     emitter.instruction("cmp QWORD PTR [rbp - 40], 2");                         // does the right operand hold a double payload?
@@ -267,6 +327,52 @@ fn emit_mixed_numeric_binops_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor rsi, rsi");                                        // double payloads do not use a high word
     emitter.instruction("mov rax, 2");                                          // runtime tag 2 = double
     emitter.instruction("call __rt_mixed_from_value");                          // box the double result into a Mixed cell
+
+    // -- dynamic add: arrays union only with arrays; every mixed pairing is a TypeError --
+    emitter.label("__rt_mixed_numeric_array_path_linux_x86_64");
+    emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // is the selected dynamic operation addition?
+    emitter.instruction("jne __rt_mixed_numeric_array_type_error_linux_x86_64"); // subtraction and multiplication never accept array operands
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the left runtime value tag
+    emitter.instruction("sub r10, 4");                                          // normalize the left array tag to the accepted range 0..1
+    emitter.instruction("cmp r10, 1");                                          // is the left payload an indexed or associative array?
+    emitter.instruction("ja __rt_mixed_numeric_array_type_error_linux_x86_64"); // reject an array paired with a scalar left operand
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the right runtime value tag
+    emitter.instruction("sub r10, 4");                                          // normalize the right array tag to the accepted range 0..1
+    emitter.instruction("cmp r10, 1");                                          // is the right payload an indexed or associative array?
+    emitter.instruction("ja __rt_mixed_numeric_array_type_error_linux_x86_64"); // reject an array paired with a scalar right operand
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // load the boxed left array for owned hash conversion
+    emitter.instruction("call __rt_mixed_to_owned_hash");                       // convert the left array to a fresh Mixed-valued hash
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the owned left hash across the right conversion
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // load the boxed right array for owned hash conversion
+    emitter.instruction("call __rt_mixed_to_owned_hash");                       // convert the right array to a fresh Mixed-valued hash
+    emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save the owned right hash across the union
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // load the left hash whose duplicate keys must win
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 72]");                       // load the right hash as the second union operand
+    emitter.instruction("call __rt_hash_union");                                // create the left-biased PHP array union
+    emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // save the owned result hash while releasing conversions
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the temporary left conversion for release
+    emitter.instruction("call __rt_decref_hash");                               // release the temporary owned left hash
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // reload the temporary right conversion for release
+    emitter.instruction("call __rt_decref_hash");                               // release the temporary owned right hash
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // load the result hash as the Mixed payload
+    emitter.instruction("xor rsi, rsi");                                        // associative-array payloads do not use a high word
+    emitter.instruction("mov rax, 5");                                          // runtime tag 5 = associative array
+    emitter.instruction("call __rt_mixed_from_value");                          // box and retain the array union result
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // preserve the boxed result while dropping the raw owner
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // reload the unboxed result hash owner
+    emitter.instruction("call __rt_decref_hash");                               // transfer sole result ownership to the Mixed box
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // restore the boxed array union result
+    emitter.instruction("jmp __rt_mixed_numeric_done_linux_x86_64");            // restore the helper frame and return the boxed array
+
+    emitter.label("__rt_mixed_numeric_array_type_error_linux_x86_64");
+    emitter.instruction("mov edi, 2");                                          // write the dynamic operand diagnostic to stderr
+    abi::emit_symbol_address(emitter, "rsi", "_array_arg_type_error_msg");
+    emitter.instruction("mov edx, 78");                                         // pass the shared gradual array TypeError message length
+    emitter.instruction("mov eax, 1");                                          // select the Linux write syscall
+    emitter.instruction("syscall");                                             // emit the invalid dynamic operand diagnostic
+    emitter.instruction("mov edi, 70");                                         // use EX_SOFTWARE after the invalid operand pairing
+    emitter.instruction("mov eax, 60");                                         // select the Linux exit syscall
+    emitter.instruction("syscall");                                             // terminate after the dynamic operand TypeError
 
     emitter.label("__rt_mixed_numeric_done_linux_x86_64");
     emitter.instruction("add rsp, 80");                                         // release the helper stack frame

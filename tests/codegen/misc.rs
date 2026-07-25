@@ -254,6 +254,25 @@ echo $x;
     assert_eq!(out, "9");
 }
 
+/// Verifies a nullable local becomes non-null after `??=` even when the assignment is nested in a
+/// comparison, allowing a following decrement to use the filled integer value.
+#[test]
+fn test_null_coalesce_assignment_in_comparison_narrows_nullable_int() {
+    let out = compile_and_run(
+        r#"<?php
+function remaining(?int $limit): int {
+    if (1 > $limit ??= 100) {
+        throw new InvalidArgumentException("positive limit required");
+    }
+    --$limit;
+    return $limit;
+}
+echo remaining(null), ":", remaining(4);
+"#,
+    );
+    assert_eq!(out, "99:3");
+}
+
 /// Verifies null-coalescing assignment leaves a non-null string unchanged.
 #[test]
 fn test_null_coalesce_assignment_keeps_non_null_string() {

@@ -283,6 +283,23 @@ echo WithoutDefault::$value;
     );
 }
 
+/// Verifies an indexed write auto-vivifies a nullable static array from its explicit null
+/// default, matching PHP's write-context behavior.
+#[test]
+fn test_nullable_static_array_index_write_autovivifies_null() {
+    let out = compile_and_run(
+        r#"<?php
+class NullableStaticArray {
+    public static ?array $values = null;
+}
+
+NullableStaticArray::$values["answer"] = 42;
+echo NullableStaticArray::$values["answer"];
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
 /// Verifies that a nullable-int (`?int`) instance property round-trips through the inline
 /// tagged-scalar slot: a `= null` default reads as null, an int store reads the int back, a
 /// null store reads back null, and the `NULL_SENTINEL` integer `-9223372036854775806` stores

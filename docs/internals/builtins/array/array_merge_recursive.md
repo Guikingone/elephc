@@ -2,7 +2,7 @@
 title: "array_merge_recursive() — internals"
 description: "Compiler internals for array_merge_recursive(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 24
+  order: 25
 ---
 
 ## `array_merge_recursive()` — internals

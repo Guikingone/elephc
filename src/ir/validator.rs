@@ -412,7 +412,7 @@ fn validate_opcode_rules(
         | EvalClassExists | EvalConstantExists | EvalConstantFetch | ConcatReset | GcCollect | Nop => {
             check_count(inst_id, inst, 0, "0")
         }
-        EvalLiteralCall | EvalFunctionCallArray | EvalScopeGet => {
+        EvalLiteralCall | EvalFunctionCallArray | EvalScopeGet | ObjectClassName => {
             check_count(inst_id, inst, 1, "1")
         }
         EvalScopeSet => check_count(inst_id, inst, 2, "2"),

@@ -10,6 +10,7 @@
 //! - `expect_warning` asserts the source type-checks and carries the absent-class warning; the
 //!   softened typo detection is the accepted cost of compiling frameworks with optional dependencies.
 //! - Reserved-word/syntax errors must still hard-error, so the tolerance is not over-broad.
+//! - Unrelated same-named methods must not refine calls made through an absent dependency.
 
 use super::*;
 
@@ -54,6 +55,51 @@ fn test_absent_class_static_call_warns_not_errors() {
     );
 }
 
+/// Verifies an absent dependency receiver is not spuriously refined from unrelated methods with
+/// the same name. Distinct `prepare()` return types make the receiver result genuinely gradual;
+/// the following opaque driver call must therefore remain `Mixed` instead of becoming `A|B`.
+#[test]
+fn test_absent_class_method_result_ignores_unrelated_candidate_return_union() {
+    expect_warning(
+        r#"<?php
+class HtmlResponse {}
+class FileResponse {}
+class HtmlController {
+    public function prepare(string $request): HtmlResponse { return new HtmlResponse(); }
+}
+class FileController {
+    public function prepare(string $request): FileResponse { return new FileResponse(); }
+}
+class OptionalAdapter {
+    private \Missing\Connection $connection;
+    public function execute(): void {
+        $statement = $this->connection->prepare("SELECT 1");
+        $statement->bindValue(1, 1);
+    }
+}
+"#,
+        ABSENT_MESSAGE,
+    );
+}
+
+/// Verifies an `instanceof`-narrowed optional extension receiver still produces a gradual method
+/// result, so guarded iteration does not inherit the legacy integer fallback.
+#[test]
+fn test_absent_class_instanceof_method_result_is_mixed() {
+    expect_warning(
+        r#"<?php
+function visitOptionalHosts(mixed $client): void {
+    if ($client instanceof \Missing\ClusterClient) {
+        foreach ($client->hosts() as $host) {
+            echo $host;
+        }
+    }
+}
+"#,
+        ABSENT_MESSAGE,
+    );
+}
+
 /// Verifies `catch (AbsentException $e)` is tolerated with a warning instead of an
 /// "Undefined class" error (an uninstalled optional-dependency exception simply never matches).
 #[test]
@@ -82,5 +128,43 @@ fn test_new_on_known_interface_still_errors() {
     expect_error(
         "<?php interface I {} function f() { return new I(); }",
         "Cannot instantiate interface",
+    );
+}
+
+/// A declaration whose schema failed must not remain in the closed-world declaration set:
+/// later references should not add a misleading `Undefined class` cascade for the wrapper itself.
+#[test]
+fn test_failed_class_schema_is_not_treated_as_declared() {
+    let error = check_source_full(
+        r#"<?php
+class OptionalWrapper extends MissingBase {
+    public function prepare($items): void {
+        array_unshift($items, "default");
+    }
+}
+function makeWrapper() {
+    return new OptionalWrapper();
+}
+"#,
+    )
+    .expect_err("the missing parent must keep the declaration invalid");
+    let messages: Vec<String> = error.flatten().into_iter().map(|item| item.message).collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("MissingBase")),
+        "expected the missing-parent diagnostic, got: {messages:?}"
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.contains("Undefined class: OptionalWrapper")),
+        "failed declarations must not create secondary undefined-class diagnostics: {messages:?}"
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.contains("array_unshift() first argument")),
+        "method bodies of unavailable declarations must not be checked: {messages:?}"
     );
 }

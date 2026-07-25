@@ -475,6 +475,14 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
     let reflected_method = reflection_method_binding_for_expr(ctx, value);
     let reflected_args = reflection_arg_array_binding_for_expr(value);
     let fiber_start_sig = crate::ir_lower::fibers::start_sig_for_expr(ctx, value);
+    let null_coalesce_logical_type =
+        self_targeted_null_coalesce_default(name, value).map(|default| {
+            crate::ir_lower::expr::null_coalesce_assignment_logical_type(
+                ctx,
+                &ctx.local_type(name),
+                default,
+            )
+        });
     let callable_array = lower_callable_array_for_assignment(ctx, value, static_callable.as_ref());
     let lowered = callable_array
         .as_ref()
@@ -488,6 +496,9 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
         .unwrap_or_else(|| lower_expr(ctx, value));
     let (lowered, php_type) = contextualize_array_assignment(ctx, name, value, lowered, span);
     ctx.store_local(name, lowered, php_type, Some(span));
+    if let Some(logical_type) = null_coalesce_logical_type {
+        ctx.set_local_logical_type(name, logical_type);
+    }
     let callable_result = if direct_closure {
         ctx.take_pending_static_callable_result()
     } else {
@@ -520,6 +531,24 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
     }
     if let Some(sig) = fiber_start_sig {
         ctx.bind_fiber_start_sig(name, sig);
+    }
+}
+
+/// Returns the default of a self-targeted null-coalescing assignment.
+///
+/// The parser represents `$value ??= $default` as an ordinary assignment whose value is a
+/// `NullCoalesce` expression. Other assignments must continue to adopt their stored value type.
+fn self_targeted_null_coalesce_default<'a>(name: &str, value: &'a Expr) -> Option<&'a Expr> {
+    let ExprKind::NullCoalesce {
+        value: current,
+        default,
+    } = &value.kind
+    else {
+        return None;
+    };
+    match &current.kind {
+        ExprKind::Variable(current_name) if current_name == name => Some(default),
+        _ => None,
     }
 }
 
@@ -616,7 +645,7 @@ fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, source: &Ex
 /// first `$t[$k] = &$v`) widens to `Mixed`: a reference-bound element is always read back
 /// through the Mixed tag-dispatch path, and stamping the promoted hash's value type `Void`
 /// would make every later element read an unsupported `hash_get` of `Void`.
-fn reference_element_type(container: &PhpType) -> PhpType {
+pub(super) fn reference_element_type(container: &PhpType) -> PhpType {
     let element_ty = match container.codegen_repr() {
         PhpType::AssocArray { value, .. } => (*value).clone(),
         PhpType::Array(element) => (*element).clone(),
@@ -877,7 +906,7 @@ fn lower_ref_append_into_local_hash(
     // On the ArrayToHash (indexed-container) path the op cannot auto-store the relocated hash (it
     // traces to `ArrayToHash`, not `LoadLocal`), so write it back explicitly.
     if let Some((name, assoc_ty)) = promotion {
-        ctx.store_mutated_local(&name, new_hash, assoc_ty.clone(), Some(span));
+        ctx.store_prepared_mutated_local(&name, new_hash, assoc_ty.clone(), Some(span));
         ctx.set_local_type_exact(&name, assoc_ty);
     }
 }
@@ -910,7 +939,7 @@ fn lower_ref_assign_local_element_explicit_key(
         Some(span),
     );
     if let Some((name, assoc_ty)) = promotion {
-        ctx.store_mutated_local(&name, new_hash, assoc_ty.clone(), Some(span));
+        ctx.store_prepared_mutated_local(&name, new_hash, assoc_ty.clone(), Some(span));
         ctx.set_local_type_exact(&name, assoc_ty);
     }
 }
@@ -1013,7 +1042,7 @@ fn lower_ref_assign_local_nested_append(
     // Only the ArrayToHash (indexed-container) case needs an explicit write-back: there `outer`
     // traces to `ArrayToHash`, not a `LoadLocal`, so the `HashSet` codegen cannot auto-store it.
     if let Some((_, assoc_ty)) = promotion {
-        ctx.store_mutated_local(outer_name, outer, assoc_ty.clone(), Some(span));
+        ctx.store_prepared_mutated_local(outer_name, outer, assoc_ty.clone(), Some(span));
         ctx.set_local_type_exact(outer_name, assoc_ty);
     }
 }
@@ -1071,7 +1100,7 @@ fn lower_if_chain(
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());
     ctx.restore_local_types(split_types.clone());
-    apply_instanceof_then_narrowing(ctx, condition);
+    let _ = apply_condition_then_narrowing(ctx, condition);
     lower_block(ctx, then_body);
     let then_initialized = ctx.initialized_slots_snapshot();
     let then_types = ctx.local_types_snapshot();
@@ -1086,6 +1115,7 @@ fn lower_if_chain(
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
     ctx.restore_local_types(split_types.clone());
+    apply_condition_else_narrowing(ctx, condition);
     let else_reachable =
         if let Some(((next_condition, next_body), rest)) = elseif_clauses.split_first() {
             lower_if_chain(ctx, next_condition, next_body, rest, else_body, merge, span)
@@ -1128,32 +1158,243 @@ fn lower_if_chain(
     merge_reachable
 }
 
-/// Refines the flow-sensitive local types for an `if`'s then-branch using `instanceof` guards in
-/// the condition, mirroring the type checker's narrowing so the EIR backend sees the concrete
-/// class. Without this, a call to a method that exists only on the concrete subtype (accepted by
-/// the checker via `instanceof` narrowing) is lowered on the declared interface type, resolves to
-/// no signature, and falls back to `Mixed` — which mis-types by-reference-return ref-cell chains
-/// and crashes. Handles `$var instanceof Class` directly and both operands of a top-level `&&`
-/// chain; other guard shapes (member-path receivers, `||`, ternary) keep the runtime class-id
-/// fallback and are out of scope here.
-fn apply_instanceof_then_narrowing(ctx: &mut LoweringContext<'_, '_>, condition: &Expr) {
+/// Refines flow-sensitive local types for a condition's true branch, mirroring the type checker so
+/// the EIR backend loads a value with the proven representation. Handles concrete-class
+/// `instanceof`, `is_array()` on a local or local assignment, bare-local truthiness that removes
+/// nullable/literal-false union arms, and both operands of a top-level `&&` chain. Member-path
+/// receivers and `||` remain outside this local-type overlay. Returns each narrowed local's
+/// original logical type so expression and loop lowerers can restore facts after the guarded
+/// region.
+pub(crate) fn apply_condition_then_narrowing(
+    ctx: &mut LoweringContext<'_, '_>,
+    condition: &Expr,
+) -> Vec<(String, PhpType)> {
+    if let Some(var) = is_array_guard_local(condition) {
+        let original = ctx.local_type(var);
+        ctx.set_local_logical_type(var, PhpType::Array(Box::new(PhpType::Mixed)));
+        return vec![(var.to_string(), original)];
+    }
+    if let Some((var, closure_matches)) = closure_instanceof_guard_local(condition) {
+        let original = ctx.local_type(var);
+        if let Some(narrowed) = narrow_closure_guard_type(&original, closure_matches) {
+            ctx.set_local_logical_type(var, narrowed);
+            return vec![(var.to_string(), original)];
+        }
+    }
     match &condition.kind {
+        ExprKind::Variable(var) => {
+            let original = ctx.local_type(var);
+            let Some(narrowed) = truthy_local_type(&original) else {
+                return Vec::new();
+            };
+            ctx.set_local_logical_type(var, narrowed);
+            vec![(var.clone(), original)]
+        }
         ExprKind::InstanceOf { value, target: InstanceOfTarget::Name(name) } => {
             if let ExprKind::Variable(var) = &value.kind {
                 let class_name = crate::ir_lower::expr::instanceof_target_name(ctx, name.as_str());
                 // Only narrow to a statically-known CLASS (the off-interface-method case). Narrowing
                 // to an interface would not resolve the method and is a needless de-refinement.
                 if ctx.classes.contains_key(&class_name) {
-                    ctx.set_local_type(var, PhpType::Object(class_name));
+                    let original = ctx.local_type(var);
+                    ctx.set_local_logical_type(var, PhpType::Object(class_name));
+                    return vec![(var.clone(), original)];
                 }
             }
+            Vec::new()
         }
         ExprKind::BinaryOp { left, op: BinOp::And, right } => {
-            apply_instanceof_then_narrowing(ctx, left);
-            apply_instanceof_then_narrowing(ctx, right);
+            let mut saved = apply_condition_then_narrowing(ctx, left);
+            for (var, original) in apply_condition_then_narrowing(ctx, right) {
+                if !saved.iter().any(|(saved_var, _)| saved_var == &var) {
+                    saved.push((var, original));
+                }
+            }
+            saved
         }
-        _ => {}
+        _ => Vec::new(),
     }
+}
+
+/// Applies representable type facts on a condition's false edge.
+///
+/// The false edge of `$value instanceof Concrete` can drop `Concrete` and its descendants
+/// from a union. Unlike an `&&` false edge this complement is not disjunctive, so it can be
+/// represented exactly and lets both branches converge after the true branch overwrites the
+/// local with the same remaining type. For `!$value`, the false edge is `$value`'s truthy edge and
+/// can remove whole nullable/literal-false union arms. For `!is_array($value)`, the false edge
+/// proves the local (or local assignment target) is a concrete gradual array.
+fn apply_condition_else_narrowing(ctx: &mut LoweringContext<'_, '_>, condition: &Expr) {
+    if let Some((var, closure_matches)) = closure_instanceof_guard_local(condition) {
+        let original = ctx.local_type(var);
+        if let Some(narrowed) = narrow_closure_guard_type(&original, !closure_matches) {
+            ctx.set_local_logical_type(var, narrowed);
+        }
+        return;
+    }
+    if let ExprKind::Not(inner) = &condition.kind {
+        if let Some(var) = is_array_guard_local(inner) {
+            ctx.set_local_logical_type(var, PhpType::Array(Box::new(PhpType::Mixed)));
+            return;
+        }
+        if let ExprKind::Variable(var) = &inner.kind {
+            let original = ctx.local_type(var);
+            if let Some(narrowed) = truthy_local_type(&original) {
+                ctx.set_local_logical_type(var, narrowed);
+            }
+        }
+        return;
+    }
+    let ExprKind::InstanceOf {
+        value,
+        target: InstanceOfTarget::Name(name),
+    } = &condition.kind
+    else {
+        return;
+    };
+    let ExprKind::Variable(var) = &value.kind else {
+        return;
+    };
+    let target = crate::ir_lower::expr::instanceof_target_name(ctx, name.as_str());
+    let PhpType::Union(members) = ctx.local_type(var) else {
+        return;
+    };
+    let remaining: Vec<PhpType> = members
+        .into_iter()
+        .filter(|member| {
+            let PhpType::Object(class_name) = member else {
+                return true;
+            };
+            !class_is_same_or_descendant(ctx, class_name, &target)
+        })
+        .collect();
+    let narrowed = match remaining.as_slice() {
+        [] => return,
+        [only] => only.clone(),
+        _ => PhpType::Union(remaining),
+    };
+    ctx.set_local_logical_type(var, narrowed);
+}
+
+/// Returns a local guarded by `instanceof Closure` and whether the condition's true edge proves
+/// that local is a closure. A leading `!` flips the proof to the false edge.
+fn closure_instanceof_guard_local(condition: &Expr) -> Option<(&str, bool)> {
+    let (condition, matches_closure) = match &condition.kind {
+        ExprKind::Not(inner) => (inner.as_ref(), false),
+        _ => (condition, true),
+    };
+    let ExprKind::InstanceOf {
+        value,
+        target: InstanceOfTarget::Name(name),
+    } = &condition.kind
+    else {
+        return None;
+    };
+    if php_symbol_key(name.as_str().trim_start_matches('\\')) != "closure" {
+        return None;
+    }
+    let ExprKind::Variable(var) = &value.kind else {
+        return None;
+    };
+    Some((var, matches_closure))
+}
+
+/// Refines a local type for one edge of an `instanceof Closure` guard.
+///
+/// `Callable` is Elephc's concrete closure-descriptor representation. Matching edges retain only
+/// callable arms, while complement edges remove them and preserve all non-callable alternatives.
+fn narrow_closure_guard_type(original: &PhpType, matches_closure: bool) -> Option<PhpType> {
+    let member_matches =
+        |member: &PhpType| matches!(member.codegen_repr(), PhpType::Callable);
+    match original {
+        PhpType::Union(members) => {
+            let mut kept = members
+                .iter()
+                .filter(|member| member_matches(member) == matches_closure)
+                .cloned()
+                .collect::<Vec<_>>();
+            match kept.len() {
+                0 if matches_closure => Some(PhpType::Callable),
+                0 => None,
+                1 => kept.pop(),
+                _ => Some(PhpType::Union(kept)),
+            }
+        }
+        member if member_matches(member) == matches_closure => Some(member.clone()),
+        PhpType::Mixed if matches_closure => Some(PhpType::Callable),
+        _ => None,
+    }
+}
+
+/// Returns the local proven to be an array by a one-argument `is_array()` condition.
+///
+/// The receiver may be read directly or be the local target of an assignment expression such as
+/// `is_array($service ??= [])`; lowering has already executed that assignment before applying the
+/// branch-local logical type.
+fn is_array_guard_local(condition: &Expr) -> Option<&str> {
+    let ExprKind::FunctionCall { name, args } = &condition.kind else {
+        return None;
+    };
+    if args.len() != 1
+        || php_symbol_key(name.as_str().trim_start_matches('\\')).as_str() != "is_array"
+    {
+        return None;
+    }
+    local_guard_receiver_name(&args[0])
+}
+
+/// Returns the local name read or assigned by a branch guard receiver.
+fn local_guard_receiver_name(receiver: &Expr) -> Option<&str> {
+    match &receiver.kind {
+        ExprKind::Variable(var) => Some(var.as_str()),
+        ExprKind::Assignment { target, .. } => match &target.kind {
+            ExprKind::Variable(var) => Some(var.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Removes complete falsey union arms from a local type for a path known to be truthy.
+///
+/// Null (`Void`) and literal `False` can be excluded precisely. Broader scalar/container types
+/// remain because their falsey subsets (`0`, `""`, and `[]`) have no separate `PhpType` variant.
+fn truthy_local_type(original: &PhpType) -> Option<PhpType> {
+    let PhpType::Union(members) = original else {
+        return None;
+    };
+    let remaining: Vec<PhpType> = members
+        .iter()
+        .filter(|member| !matches!(member, PhpType::Void | PhpType::False))
+        .cloned()
+        .collect();
+    if remaining.is_empty() || remaining.len() == members.len() {
+        return None;
+    }
+    Some(match remaining.as_slice() {
+        [only] => only.clone(),
+        _ => PhpType::Union(remaining),
+    })
+}
+
+/// Returns whether `class_name` equals or descends from `ancestor`.
+fn class_is_same_or_descendant(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    ancestor: &str,
+) -> bool {
+    let mut current = Some(class_name.trim_start_matches('\\'));
+    let ancestor = ancestor.trim_start_matches('\\');
+    while let Some(class) = current {
+        if crate::names::php_symbol_key(class) == crate::names::php_symbol_key(ancestor) {
+            return true;
+        }
+        current = ctx
+            .classes
+            .get(class)
+            .and_then(|class_info| class_info.parent.as_deref());
+    }
+    false
 }
 
 /// Merges the flow-sensitive local-type facts from the reachable branches of an `if`.
@@ -1244,16 +1485,12 @@ fn lower_ifdef(
     ctx.clear_static_callable_locals();
 }
 
-/// Widens locals whose indexed-array element type joins to `mixed` across the loop body's
-/// push sites (issue #452) and materializes the promotion once before the loop. Loop bodies
-/// are lowered in a single pass, so without this an early `$a[] = <scalar>` site is emitted
-/// as a raw push against the pre-promotion element type even though the back edge brings the
-/// promoted `array<mixed>` around, writing an unboxed scalar into boxed-cell storage on
-/// iterations >= 2. Converting the array up front (in place, same pointer) and fixing its
-/// type to `array<mixed>` makes every push site box its value. `overrides` supplies types
-/// for names bound by the loop itself (the `foreach` value/key variables) so a push of the
-/// loop variable joins with its real element type. Locals without a materialized slot yet
-/// (first assigned inside the body, hence fresh every iteration) are left untouched.
+/// Widens loop-grown indexed arrays to `array<mixed>` and materializes the promotion once.
+///
+/// Besides ordinary pushes (issue #452), this covers entry-empty roots autovivified by nested
+/// writes: an earlier read on the next iteration must use the boxed element representation
+/// produced later in the previous iteration. `overrides` supplies types for names bound by the
+/// loop itself. Locals without a materialized entry slot are left untouched.
 fn widen_loop_grown_arrays(
     ctx: &mut LoweringContext<'_, '_>,
     body: &[Stmt],
@@ -1275,14 +1512,14 @@ fn widen_loop_grown_arrays(
             }
             Some(ctx.local_type(name))
         };
-        crate::types::checker::loop_grown_mixed_array_pushes(
+        crate::types::checker::loop_grown_array_widenings(
             body,
             update,
             &lookup,
             &mut |expr| infer_loop_growth_value_type(ctx, expr),
         )
     };
-    for name in names {
+    for (name, target_type) in names {
         if !ctx.local_slots.contains_key(&name) {
             continue;
         }
@@ -1290,16 +1527,20 @@ fn widen_loop_grown_arrays(
         if array_value.ir_type != IrType::Heap(crate::ir::IrHeapKind::Array) {
             continue;
         }
-        let mixed_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+        let op = if matches!(&target_type, PhpType::AssocArray { .. }) {
+            Op::ArrayToHash
+        } else {
+            Op::ArrayToMixed
+        };
         let converted = ctx.emit_value(
-            Op::ArrayToMixed,
+            op,
             vec![array_value.value],
             None,
-            mixed_array_ty.clone(),
-            Op::ArrayToMixed.default_effects(),
+            target_type.clone(),
+            op.default_effects(),
             span,
         );
-        ctx.store_mutated_local(&name, converted, mixed_array_ty, span);
+        ctx.store_mutated_local(&name, converted, target_type, span);
     }
 }
 
@@ -1387,6 +1628,7 @@ fn lower_while(ctx: &mut LoweringContext<'_, '_>, condition: &Expr, body: &[Stmt
 
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(body_block);
+    let narrowed_locals = apply_condition_then_narrowing(ctx, condition);
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,
         continue_block: header,
@@ -1394,6 +1636,9 @@ fn lower_while(ctx: &mut LoweringContext<'_, '_>, condition: &Expr, body: &[Stmt
     });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
+    for (name, original) in narrowed_locals {
+        ctx.set_local_logical_type(&name, original);
+    }
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
@@ -1522,6 +1767,24 @@ fn release_persisted_string_operand(
     // `$_GET[$k] = $v`) must NOT be released here, or the container's stored copy
     // would be freed out from under it.
     if matches!(ty.codegen_repr(), PhpType::Str) && ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+}
+
+/// Releases an owning value after a boxed-Mixed nested writer retained or copied it.
+///
+/// `__rt_mixed_array_set` consumes the fresh Mixed box materialized by codegen, not the original
+/// EIR operand: concrete heap values are retained into that box, while an already-Mixed operand is
+/// incremented before the call. Borrowed local loads remain owned by their slots and are untouched.
+fn release_retained_nested_write_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) {
+    let ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    if matches!(ty, PhpType::Str) {
+        release_persisted_string_operand(ctx, value, span);
+    } else if ctx.value_is_owning_temporary(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
 }
@@ -1721,7 +1984,7 @@ fn lower_mixed_key_array_set(
 }
 
 /// Returns the associative type produced by a string-key write to an indexed array.
-fn promoted_assoc_array_type(current_ty: PhpType, value_ty: PhpType) -> PhpType {
+pub(super) fn promoted_assoc_array_type(current_ty: PhpType, value_ty: PhpType) -> PhpType {
     let value_ty = normalize_array_write_element_type(value_ty.codegen_repr());
     let assoc_value_ty = match current_ty.codegen_repr() {
         PhpType::Array(elem_ty) if is_empty_indexed_array_element(elem_ty.as_ref()) => value_ty,
@@ -1743,22 +2006,32 @@ fn promoted_assoc_array_type(current_ty: PhpType, value_ty: PhpType) -> PhpType 
 
 /// Lowers a nested array assignment that already carries an expression target.
 ///
-/// A NESTED write (2+ index levels) whose base is a reference-bound LOCAL (`$x = &$arr[0]` then
-/// `$x[1][0] = 9`) routes through `lower_nested_ref_bound_local_assign`, which materializes each
-/// intermediate as an owned hidden temp (COW-splitting it from the parent slot), writes the leaf
-/// value into the innermost temp via the matching in-place set op, then walks back up the chain
-/// writing each mutated temp into its parent so the mutation reaches the kind-6 ref cell. Every
-/// other base shape takes the innermost-key split below or the generic 2-operand `RuntimeCall`
-/// fallback.
+/// Reference-bound local chains and homogeneous indexed matrices materialize each intermediate as
+/// an owned hidden temp (COW-splitting it from the parent slot), write the leaf, then walk back up
+/// the chain to publish every mutated child. Other base shapes take the innermost-key split below
+/// or the generic 2-operand `RuntimeCall` fallback.
 fn lower_nested_array_assign(
     ctx: &mut LoweringContext<'_, '_>,
     target: &Expr,
     value: &Expr,
     span: Span,
 ) {
-    if let Some((name, chain)) = nested_ref_bound_local_chain(ctx, target) {
-        lower_nested_ref_bound_local_assign(ctx, name, &chain, value, span);
+    if lower_nested_static_ref_array_assign(ctx, target, value, span) {
         return;
+    }
+    if let Some((name, chain)) = nested_local_chain(target) {
+        let root_is_ref_bound = ctx.is_ref_bound_local(name);
+        if root_is_ref_bound || concrete_local_nested_chain(ctx, name, &chain) {
+            lower_nested_local_assign_with_parent_writeback(
+                ctx,
+                name,
+                &chain,
+                value,
+                span,
+                root_is_ref_bound,
+            );
+            return;
+        }
     }
     // Lowering the FULL target as an expression routes the write through the
     // read helper (`__rt_mixed_array_get`), which returns a detached fresh box
@@ -1782,7 +2055,7 @@ fn lower_nested_array_assign(
             Some(span),
         );
         release_persisted_string_operand(ctx, key, span);
-        release_persisted_string_operand(ctx, value, span);
+        release_retained_nested_write_operand(ctx, value, span);
         // Parent subscript reads of Mixed/refcounted elements are owning
         // temporaries (`ArrayGet`/`HashGet`/`RuntimeCall` return a +1 caller
         // reference — fresh, retained, or installed by autovivification). The
@@ -1805,13 +2078,11 @@ fn lower_nested_array_assign(
     );
 }
 
-/// Walks an `ArrayAccess` chain (`$x[1][0]`, `$x["a"]["b"]`) to its root `ExprKind::Variable`,
-/// returning `(name, indices)` when the root local is currently reference-bound (a kind-6 adopted
-/// owner whose loads/stores route through `LoadRefCell`/`StoreRefCell`). The indices are collected
-/// outermost-first and the chain length is at least 2 (single-level `ArrayAccess{Variable}` routes
-/// to `StmtKind::ArrayAssign` before reaching here). Returns `None` for any non-variable root
-/// (property / static-property / dynamic-property base) so those stay on the generic path.
-fn nested_ref_bound_local_chain<'a>(ctx: &LoweringContext<'_, '_>, target: &'a Expr) -> Option<(&'a str, Vec<&'a Expr>)> {
+/// Walks an `ArrayAccess` chain to its root local and returns outermost-first indices.
+///
+/// The parser routes single-level writes to `StmtKind::ArrayAssign`, so callers receive at least
+/// two indices here. Property/static-property roots return `None` and keep their dedicated paths.
+fn nested_local_chain(target: &Expr) -> Option<(&str, Vec<&Expr>)> {
     let mut indices: Vec<&Expr> = Vec::new();
     let mut node = target;
     loop {
@@ -1821,20 +2092,68 @@ fn nested_ref_bound_local_chain<'a>(ctx: &LoweringContext<'_, '_>, target: &'a E
                 node = array;
             }
             ExprKind::Variable(name) => {
-                if ctx.is_ref_bound_local(name) {
-                    // outermost-first: the indices were collected innermost-first while walking down.
-                    indices.reverse();
-                    return Some((name, indices));
-                }
-                return None;
+                // Outermost-first: walking from the assignment leaf collected them in reverse.
+                indices.reverse();
+                return Some((name, indices));
             }
             _ => return None,
         }
     }
 }
 
-/// Lowers a NESTED write (2+ index levels) through a reference-bound LOCAL `$name`, mirroring the
-/// SLICE-2 `lower_ref_assign_local_nested_append` explicit per-level write-back:
+/// Returns whether a plain local chain is a concrete-container write-back candidate.
+///
+/// Indexed containers require integer-shaped keys; associative containers accept proven integer
+/// or string keys. This covers homogeneous matrices and maps containing concrete indexed arrays,
+/// while boxed Mixed, gradual-key, and autovivifying chains retain their existing lowering.
+fn concrete_local_nested_chain(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    chain: &[&Expr],
+) -> bool {
+    let mut container_ty = ctx.local_type(name).codegen_repr();
+    for (position, key) in chain.iter().enumerate() {
+        let key_ty = nested_index_static_type(ctx, key);
+        let element_ty = match container_ty {
+            PhpType::Array(element_ty)
+                if matches!(key_ty, PhpType::Int | PhpType::Bool) =>
+            {
+                element_ty
+            }
+            PhpType::AssocArray { value, .. }
+                if matches!(key_ty, PhpType::Int | PhpType::Bool | PhpType::Str) =>
+            {
+                value
+            }
+            _ => return false,
+        };
+        if position + 1 == chain.len() {
+            return true;
+        }
+        container_ty = element_ty.codegen_repr();
+    }
+    false
+}
+
+/// Returns the statically proven type of one nested-write key.
+///
+/// The general syntactic key inferer deliberately reports variables as `Mixed`. Nested local
+/// write-back can use the lowering's flow-sensitive local fact instead, retaining both integer
+/// loop counters and string map keys.
+fn nested_index_static_type(ctx: &LoweringContext<'_, '_>, key: &Expr) -> PhpType {
+    match &key.kind {
+        ExprKind::Variable(name) => ctx.local_type(name).codegen_repr(),
+        _ => index_expr_key_type(ctx, key).codegen_repr(),
+    }
+}
+
+/// Lowers a nested local write with explicit child-to-parent write-back.
+///
+/// Reference-bound locals use this for every container shape. Plain locals use it only for
+/// homogeneous indexed chains, where reading an inner array retains it and a leaf mutation may
+/// COW-split; writing the mutated child back into each parent is therefore mandatory.
+///
+/// The algorithm mirrors the SLICE-2 `lower_ref_assign_local_nested_append` discipline:
 ///
 /// 1. **Head** — `load_local(name)` emits `LoadRefCell` yielding the alias inner (the aliased
 ///    array/hash/Mixed box). When the inner is `Heap(Array)` and the first key is a string/Mixed
@@ -1853,12 +2172,13 @@ fn nested_ref_bound_local_chain<'a>(ctx: &LoweringContext<'_, '_>, target: &'a E
 ///    mutation leaves the cell pointer unchanged, and a redundant `__rt_ref_cell_store` would
 ///    decref the still-aliased inner to zero and free it (a use-after-free). Each temp's redundant
 ///    share is released with the temp's actual type after its write-back (SLICE-2 discipline).
-fn lower_nested_ref_bound_local_assign(
+fn lower_nested_local_assign_with_parent_writeback(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     chain: &[&Expr],
     value: &Expr,
     span: Span,
+    root_is_ref_bound: bool,
 ) {
     let depth = chain.len();
     debug_assert!(depth >= 2, "nested ref-bound assign requires 2+ index levels");
@@ -1910,7 +2230,7 @@ fn lower_nested_ref_bound_local_assign(
         temp_types.push(element_ty.clone());
         // A vivified first-level read writes a new hash into the head at index 0, which may
         // relocate the head → the cell must be updated at the tail.
-        if i == 0 && vivified {
+        if i == 0 && vivified && root_is_ref_bound {
             needs_storeback = true;
         }
         // The temp becomes the container for the next level. Reload from the temp slot so the
@@ -1934,38 +2254,59 @@ fn lower_nested_ref_bound_local_assign(
 
     // 4. Per-level write-back: walk from the deepest temp up to the head, writing each mutated
     //    temp into its parent at the matching index. After each write-back, release the temp's
-    //    redundant share (SLICE-2 `:787-803` discipline) ONLY when the parent's set op RETAINS
-    //    the value (`HashSet` incref's before storing). `ArraySet` and `__rt_mixed_array_set`
-    //    CONSUME the value (transfer ownership without incref), so the temp no longer holds a
-    //    live reference — releasing it would double-free the sole remaining share in the parent
-    //    slot. In the consumed case, only clear the slot.
+    //    redundant share (SLICE-2 `:787-803` discipline) when the parent's set op RETAINS the
+    //    value (`HashSet` and concrete refcounted `ArraySet`). Boxed-Mixed array/runtime setters
+    //    consume the owned child while boxing it, so those paths only clear the temp slot.
     for i in (1..(depth - 1)).rev() {
         let child = ctx.load_local(&temp_names[i], Some(span));
         let parent = ctx.load_local(&temp_names[i - 1], Some(span));
         let parent_ir = parent.ir_type;
+        let parent_ty = temp_types[i - 1].clone();
         write_nested_element_in_place(
             ctx,
             parent,
-            temp_types[i - 1].clone(),
+            parent_ty.clone(),
             indices[i],
             child,
             span,
         );
-        let consumed = !matches!(parent_ir, IrType::Heap(IrHeapKind::Hash));
+        let consumed = nested_parent_consumes_child(parent_ir, &parent_ty);
         release_owned_hidden_temp(ctx, &temp_names[i], temp_types[i].clone(), consumed, span);
     }
     // Final write-back: temp[0] → head at index[0].
     let child0 = ctx.load_local(&temp_names[0], Some(span));
     let head_ir = head.ir_type;
     write_nested_element_in_place(ctx, head, head_ty.clone(), indices[0], child0, span);
-    let head_consumed = !matches!(head_ir, IrType::Heap(IrHeapKind::Hash));
+    let head_consumed = nested_parent_consumes_child(head_ir, &head_ty);
     release_owned_hidden_temp(ctx, &temp_names[0], temp_types[0].clone(), head_consumed, span);
 
     // 5. Tail: store the (possibly relocated) head back into the ref cell ONLY when a relocation
     //    happened. In-place mutation leaves the cell pointer unchanged; a redundant
     //    `__rt_ref_cell_store` would decref the still-aliased inner to zero and free it.
     if needs_storeback {
+        debug_assert!(
+            root_is_ref_bound,
+            "plain indexed nested chains cannot relocate their root"
+        );
         ctx.store_mutated_local(name, head, head_ty, Some(span));
+    }
+}
+
+/// Returns whether a nested parent write transfers the owned child out of its temp slot.
+///
+/// Concrete refcounted indexed arrays call `__rt_array_set_refcounted`, which retains the
+/// incoming payload; the temp must therefore release its original share after write-back.
+/// Mixed-element arrays and boxed-Mixed receivers instead consume the owned child while boxing
+/// or installing it. Hash setters retain their incoming refcounted payload like concrete arrays.
+fn nested_parent_consumes_child(parent_ir: IrType, parent_ty: &PhpType) -> bool {
+    match parent_ir {
+        IrType::Heap(IrHeapKind::Hash) => false,
+        IrType::Heap(IrHeapKind::Array) => matches!(
+            parent_ty.codegen_repr(),
+            PhpType::Array(element_ty) if element_ty.codegen_repr() == PhpType::Mixed
+        ),
+        IrType::Heap(IrHeapKind::Mixed) | IrType::Heap(IrHeapKind::Union) => true,
+        _ => true,
     }
 }
 
@@ -2024,12 +2365,17 @@ fn read_nested_element_into_owned_temp(
 
             ctx.builder.position_at_end(vivify_block);
             ctx.restore_initialized_slots(split_initialized);
+            let vivify_op = if matches!(element_ty.codegen_repr(), PhpType::Array(_)) {
+                Op::ArrayNew
+            } else {
+                Op::HashNew
+            };
             let vivified = ctx.emit_value(
-                Op::HashNew,
+                vivify_op,
                 Vec::new(),
                 Some(Immediate::Capacity(0)),
                 element_ty.clone(),
-                Op::HashNew.default_effects(),
+                vivify_op.default_effects(),
                 Some(span),
             );
             store_value_into_temp(ctx, temp_name, element_ty, vivified, span);
@@ -2129,7 +2475,7 @@ fn write_nested_element_in_place(
                 Some(span),
             );
             release_persisted_string_operand(ctx, key, span);
-            release_persisted_string_operand(ctx, value, span);
+            release_retained_nested_write_operand(ctx, value, span);
         }
         _ => {
             // Defensive: the checker gates scalar-as-array for reference-bound bases. Fall back to
@@ -2153,10 +2499,9 @@ fn write_nested_element_in_place(
 /// `unset`, which would widen the slot toward `Void`/`Mixed` and decref through the wrong helper,
 /// leaking the heap object).
 ///
-/// After an `ArraySet` or 3-operand `__rt_mixed_array_set` write-back, the value is CONSUMED
-/// (ownership transferred to the slot without incref), so the temp no longer holds a live
-/// reference — releasing it would decref the sole remaining share (the parent slot's) to zero and
-/// free it, creating a dangling pointer in the parent. In that case, only clear the slot.
+/// Boxed-Mixed `ArraySet` and 3-operand `__rt_mixed_array_set` consume the owned child while
+/// boxing/installing it, so the temp no longer holds a live reference and is only cleared.
+/// Concrete refcounted `ArraySet` instead retains the child and therefore uses `consumed = false`.
 fn release_owned_hidden_temp(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -2195,6 +2540,17 @@ fn lower_nested_assign_parent(
             return parent;
         }
     }
+    // Generic array properties use boxed-Mixed elements. Preserve write-through
+    // semantics for `$object->property[$outer][$inner] = value`: the outer
+    // fetch may promote the property to hash storage or relocate it, so publish
+    // that container back to the property before returning the stored child.
+    if let ExprKind::PropertyAccess { object, property } = &array.kind {
+        if let Some(parent) =
+            lower_property_parent_fetch_for_write(ctx, object, property, index, expr)
+        {
+            return parent;
+        }
+    }
     // Boxed Mixed receivers: chains recurse with for-write semantics; other
     // receiver shapes evaluate once as plain reads of the receiver cell.
     let receiver = if matches!(array.kind, ExprKind::ArrayAccess { .. }) {
@@ -2223,13 +2579,89 @@ fn lower_nested_assign_parent(
     lower_array_access_from_lowered_receiver(ctx, receiver, index, expr)
 }
 
+/// Lowers a two-level write through a static-property hash element's shared array cell.
+///
+/// `C::$a[$outer][$inner] = value` must mutate the raw indexed-array payload stored inside the
+/// reference cell created by `C::$a[$alias] = &C::$a[$outer]`. Reading the bucket normally would
+/// retain and COW-detach that payload. This path borrows the cell, loads its raw `array<mixed>`
+/// inner value, and performs the leaf `ArraySet` so backend relocation writes through the cell.
+fn lower_nested_static_ref_array_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    value: &Expr,
+    span: Span,
+) -> bool {
+    let ExprKind::ArrayAccess {
+        array: parent,
+        index: inner_index,
+    } = &target.kind
+    else {
+        return false;
+    };
+    let ExprKind::ArrayAccess {
+        array: root,
+        index: outer_index,
+    } = &parent.kind
+    else {
+        return false;
+    };
+    let ExprKind::StaticPropertyAccess { receiver, property } = &root.kind else {
+        return false;
+    };
+    let Some(property_ty) = static_property_type(ctx, receiver, property) else {
+        return false;
+    };
+    if !matches!(
+        property_ty.codegen_repr(),
+        PhpType::Array(_) | PhpType::AssocArray { .. }
+    ) {
+        return false;
+    }
+    let mut hash = load_static_property_as(ctx, receiver, property, property_ty, span);
+    if hash.ir_type == IrType::Heap(IrHeapKind::Array) {
+        let current_ty = ctx.builder.value_php_type(hash.value);
+        let element_ty = reference_element_type(&current_ty);
+        let assoc_ty = promoted_assoc_array_type(current_ty, element_ty);
+        hash = ctx.emit_value(
+            Op::ArrayToHash,
+            vec![hash.value],
+            None,
+            assoc_ty,
+            Op::ArrayToHash.default_effects(),
+            Some(span),
+        );
+    }
+    if hash.ir_type != IrType::Heap(IrHeapKind::Hash) {
+        return false;
+    }
+    let key = lower_expr(ctx, outer_index);
+    let inner_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    let cell = ctx.emit_value(
+        Op::HashRefElement,
+        vec![hash.value, key.value],
+        None,
+        inner_ty.clone(),
+        Op::HashRefElement.default_effects(),
+        Some(span),
+    );
+    store_static_property(ctx, receiver, property, hash.value, span);
+    let temp = ctx.declare_hidden_temp(inner_ty.clone());
+    ctx.bind_local_ref_cell_ptr(&temp, cell, inner_ty.clone(), Some(span));
+    let parent = ctx.load_local(&temp, Some(span));
+    let inner_key = lower_expr(ctx, inner_index);
+    let value = lower_expr(ctx, value);
+    write_nested_element_in_place(ctx, parent, inner_ty, inner_key, value, span);
+    true
+}
+
 /// Lowers `$local[key]` as the parent of a nested assignment when the local
 /// holds a concrete container (`array<mixed>` or a Mixed-valued assoc array):
 /// `__rt_array_ensure_elem_for_write` autovivifies the element in write
 /// context, the possibly promoted/reallocated container is stored back into
 /// the local, and the guaranteed-present element is re-read as the parent
-/// cell. Returns `None` for shapes without a concrete for-write lowering
-/// (typed element arrays, non-Int/Str key expressions).
+/// cell. Gradual keys promote indexed storage to a Mixed-key hash so integer
+/// and string runtime keys share one sound representation. Returns `None` for
+/// shapes without a concrete for-write lowering.
 fn lower_local_parent_fetch_for_write(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -2297,6 +2729,24 @@ fn lower_local_parent_fetch_for_write(
                     );
                     Some(lower_hash_parent_fetch_for_write(ctx, name, hash, assoc_ty, index, span))
                 }
+                PhpType::Mixed | PhpType::Union(_) => {
+                    // A gradual key may normalize to either an integer or a
+                    // string at runtime. Hash storage represents both key
+                    // shapes, whereas the plain-read fallback returns a
+                    // detached missing-value cell and drops the nested write.
+                    let array_value = ctx.load_local(name, Some(span));
+                    let assoc_ty = promoted_assoc_array_type(local_ty, PhpType::Mixed);
+                    ctx.prepare_mutated_local_owner(name, array_value, assoc_ty.clone(), Some(span));
+                    let hash = ctx.emit_value(
+                        Op::ArrayToHash,
+                        vec![array_value.value],
+                        None,
+                        assoc_ty.clone(),
+                        Op::ArrayToHash.default_effects(),
+                        Some(span),
+                    );
+                    Some(lower_hash_parent_fetch_for_write(ctx, name, hash, assoc_ty, index, span))
+                }
                 _ => None,
             }
         }
@@ -2332,14 +2782,97 @@ fn lower_hash_parent_fetch_for_write(
         Some(span),
     );
     ctx.store_prepared_mutated_local(name, ensured, assoc_ty, Some(span));
-    ctx.emit_value(
+    let parent = ctx.emit_value(
         Op::HashGet,
         vec![ensured.value, key.value],
         None,
         PhpType::Mixed,
         Op::HashGet.default_effects(),
         Some(span),
-    )
+    );
+    if ctx.value_is_owning_temporary(key) {
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+    } else {
+        release_persisted_string_operand(ctx, key, span);
+    }
+    parent
+}
+
+/// Ensures `$object->property[$index]` exists as the parent of a nested write.
+///
+/// Generic PHP `array` properties use Mixed element storage but may hold either
+/// indexed or hash runtime storage. The fetch-for-write helper COW-splits and
+/// autovivifies the requested child, then `PropSet` publishes a promoted or
+/// relocated container back into the property. Re-reading through the
+/// heap-kind-aware mixed-key path returns the stored boxed child so the leaf
+/// write cannot land in a detached missing-value cell.
+fn lower_property_parent_fetch_for_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    index: &Expr,
+    parent_expr: &Expr,
+) -> Option<LoweredValue> {
+    let span = parent_expr.span;
+    let object = lower_expr(ctx, object);
+    let property_ty = object_property_type(ctx, object.value, property)?;
+    let property_ty = property_ty.codegen_repr();
+    let read_op = match &property_ty {
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => {
+            Op::ArrayGetMixedKey
+        }
+        PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed => {
+            Op::HashGet
+        }
+        _ => return None,
+    };
+    let data = ctx.intern_string(property);
+    let property_value = ctx.emit_value(
+        Op::PropGet,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        property_ty.clone(),
+        Op::PropGet.default_effects(),
+        Some(span),
+    );
+    let property_value =
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
+    let key = lower_expr(ctx, index);
+    let ensured = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![property_value.value, key.value],
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+        property_ty.clone(),
+        effects_lookup::runtime_effects(),
+        Some(span),
+    );
+    ctx.emit_void(
+        Op::PropSet,
+        vec![object.value, ensured.value],
+        Some(Immediate::Data(data)),
+        Op::PropSet.default_effects(),
+        Some(span),
+    );
+    let parent = ctx.emit_value(
+        read_op,
+        vec![ensured.value, key.value],
+        None,
+        PhpType::Mixed,
+        read_op.default_effects(),
+        Some(span),
+    );
+    release_rewritten_property_value_after_retaining_store(
+        ctx,
+        &property_ty,
+        ensured,
+        span,
+    );
+    if ctx.value_is_owning_temporary(key) {
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+    } else {
+        release_persisted_string_operand(ctx, key, span);
+    }
+    Some(parent)
 }
 
 /// Lowers `$array[] = value`.
@@ -2419,7 +2952,7 @@ fn coerce_indexed_array_set_value(
     value: LoweredValue,
     span: Option<Span>,
 ) -> LoweredValue {
-    match array_ty.codegen_repr() {
+    let coerced = match array_ty.codegen_repr() {
         PhpType::Array(elem_ty)
             if elem_ty.codegen_repr() == PhpType::Int
                 && matches!(
@@ -2430,7 +2963,14 @@ fn coerce_indexed_array_set_value(
             coerce_to_int(ctx, value, span)
         }
         _ => value,
+    };
+    // Mixed checked-arithmetic and miss-capable reads are detached boxes once narrowed to a raw
+    // integer. The array setter consumes only the coerced scalar, so release an owning source box
+    // here just like `coerce_buffer_set_value`; otherwise every concrete array write leaks it.
+    if coerced.value != value.value && ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, span);
     }
+    coerced
 }
 
 /// Returns true when a refcounted indexed-array assignment should use Mixed slots.
@@ -2854,7 +3394,17 @@ fn lower_switch(
     // happens on a case body (especially one that returns) does not leak into the
     // post-switch code where that body never ran.
     let no_match_types = ctx.local_types_snapshot();
-    lower_switch_bodies(ctx, cases, default, &blocks, default_block, exit);
+    let no_match_initialized = ctx.initialized_slots_snapshot();
+    lower_switch_bodies(
+        ctx,
+        cases,
+        default,
+        &blocks,
+        default_block,
+        exit,
+        &no_match_types,
+        &no_match_initialized,
+    );
     let body_types = ctx.local_types_snapshot();
     let merged = join_local_types(ctx, no_match_types, &body_types);
     ctx.restore_local_types(merged);
@@ -2997,10 +3547,15 @@ fn lower_switch_bodies(
     blocks: &[BlockId],
     default_block: BlockId,
     exit: BlockId,
+    switch_entry_types: &crate::types::TypeEnv,
+    switch_entry_initialized: &HashSet<LocalSlotId>,
 ) {
     let default_index = default
         .and_then(|default| switch_default_source_index(cases, default))
         .unwrap_or(cases.len());
+    let mut merged_body_types = switch_entry_types.clone();
+    let mut merged_body_initialized = switch_entry_initialized.clone();
+    let mut previous_falls_through = false;
     ctx.clear_static_callable_locals();
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,
@@ -3009,24 +3564,50 @@ fn lower_switch_bodies(
     });
     for index in 0..=cases.len() {
         if default.is_some() && default_index == index {
+            restore_switch_body_entry(
+                ctx,
+                switch_entry_types,
+                switch_entry_initialized,
+                previous_falls_through,
+            );
             ctx.builder.position_at_end(default_block);
             if let Some(default) = default {
                 lower_block(ctx, default);
             }
-            if !ctx.builder.insertion_block_is_terminated() {
+            let terminated = ctx.builder.insertion_block_is_terminated();
+            merge_switch_body_path(
+                ctx,
+                &mut merged_body_types,
+                &mut merged_body_initialized,
+            );
+            if !terminated {
                 branch_to(ctx, blocks.get(index).copied().unwrap_or(exit));
             }
+            previous_falls_through = !terminated;
             ctx.clear_static_callable_locals();
         }
         if let Some((_, body)) = cases.get(index) {
+            restore_switch_body_entry(
+                ctx,
+                switch_entry_types,
+                switch_entry_initialized,
+                previous_falls_through,
+            );
             ctx.builder.position_at_end(blocks[index]);
             lower_block(ctx, body);
-            if !ctx.builder.insertion_block_is_terminated() {
+            let terminated = ctx.builder.insertion_block_is_terminated();
+            merge_switch_body_path(
+                ctx,
+                &mut merged_body_types,
+                &mut merged_body_initialized,
+            );
+            if !terminated {
                 branch_to(
                     ctx,
                     switch_next_body_block(index + 1, blocks, default_index, default_block, exit),
                 );
             }
+            previous_falls_through = !terminated;
             ctx.clear_static_callable_locals();
         }
     }
@@ -3036,7 +3617,57 @@ fn lower_switch_bodies(
     }
     ctx.loop_stack.pop();
     ctx.builder.position_at_end(exit);
+    ctx.restore_local_types(merged_body_types);
+    ctx.restore_initialized_slots(merged_body_initialized);
     ctx.clear_static_callable_locals();
+}
+
+/// Restores the logical entry facts for one directly-dispatched switch body.
+///
+/// A body that can also be reached by lexical fallthrough joins that predecessor
+/// with the direct-dispatch entry. A terminated predecessor contributes no
+/// fallthrough facts, so the sibling starts from the switch entry unchanged.
+fn restore_switch_body_entry(
+    ctx: &mut LoweringContext<'_, '_>,
+    switch_entry_types: &crate::types::TypeEnv,
+    switch_entry_initialized: &HashSet<LocalSlotId>,
+    previous_falls_through: bool,
+) {
+    if !previous_falls_through {
+        ctx.restore_local_types(switch_entry_types.clone());
+        ctx.restore_initialized_slots(switch_entry_initialized.clone());
+        return;
+    }
+    let fallthrough_types = ctx.local_types_snapshot();
+    let fallthrough_initialized = ctx.initialized_slots_snapshot();
+    ctx.restore_local_types(join_local_types(
+        ctx,
+        switch_entry_types.clone(),
+        &fallthrough_types,
+    ));
+    ctx.restore_initialized_slots(
+        switch_entry_initialized
+            .intersection(&fallthrough_initialized)
+            .copied()
+            .collect(),
+    );
+}
+
+/// Joins one lowered switch body into the conservative facts at the exit block.
+fn merge_switch_body_path(
+    ctx: &LoweringContext<'_, '_>,
+    merged_types: &mut crate::types::TypeEnv,
+    merged_initialized: &mut HashSet<LocalSlotId>,
+) {
+    *merged_types = join_local_types(
+        ctx,
+        std::mem::take(merged_types),
+        &ctx.local_types_snapshot(),
+    );
+    *merged_initialized = merged_initialized
+        .intersection(&ctx.initialized_slots_snapshot())
+        .copied()
+        .collect();
 }
 
 /// Returns the source-order insertion point for a non-empty switch default body.
@@ -4449,6 +5080,27 @@ fn lower_static_property_array_assign(
         return;
     }
 
+    // Gradual typing: a declared `?array`/`array|false` static property uses boxed union storage.
+    // PHP auto-vivifies null/false on an indexed write, and `__rt_mixed_array_set` performs that
+    // transition in place. Loading the boxed cell and mutating it therefore updates the static
+    // slot directly; no separate store-back is required.
+    if let Some(raw_property_ty) = raw_static_property_type(ctx, receiver, property).filter(
+        |ty| matches!(ty, PhpType::Union(members) if is_gradual_array_bool_void_union(members)),
+    ) {
+        let property_value =
+            load_static_property_as(ctx, receiver, property, raw_property_ty.codegen_repr(), span);
+        let index = lower_expr(ctx, index);
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![property_value.value, index.value, value.value],
+            None,
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        return;
+    }
+
     let property_value = if let Some(property_ty) = static_property_type(ctx, receiver, property)
         .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty))
     {
@@ -4909,7 +5561,7 @@ fn lower_property_array_assign(
         return;
     }
 
-    if let Some(property_ty) = object_property_type(ctx, object.value, property)
+    if let Some(property_ty) = raw_object_property_type(ctx, object.value, property)
         .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty))
     {
         let data = ctx.intern_string(property);
@@ -5521,13 +6173,23 @@ fn static_property_type(
     receiver: &StaticReceiver,
     property: &str,
 ) -> Option<PhpType> {
+    raw_static_property_type(ctx, receiver, property)
+        .map(|property_ty| normalize_value_php_type(property_ty.codegen_repr()))
+}
+
+/// Resolves a static property's declared PHP type without erasing union metadata.
+fn raw_static_property_type(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+) -> Option<PhpType> {
     let class_name = static_receiver_class_name(ctx, receiver)?;
     ctx.classes
         .get(class_name.as_str())?
         .static_properties
         .iter()
         .find(|(name, _)| name == property)
-        .map(|(_, property_ty)| normalize_value_php_type(property_ty.codegen_repr()))
+        .map(|(_, property_ty)| property_ty.clone())
 }
 
 /// Resolves a static receiver to a concrete class name when lexical metadata is available.
@@ -5606,7 +6268,7 @@ fn is_gradual_array_bool_void_union(members: &[PhpType]) -> bool {
     for member in members {
         match member {
             PhpType::Array(_) | PhpType::AssocArray { .. } => saw_array = true,
-            PhpType::Bool | PhpType::Void => {}
+            PhpType::Bool | PhpType::False | PhpType::Void => {}
             _ => return false,
         }
     }

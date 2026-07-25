@@ -8,11 +8,15 @@
 //! Key details:
 //! - Tag 5 (associative): shallow-clones the payload hash (`__rt_hash_clone_shallow`).
 //! - Tag 4 (indexed): rebuilds a hash, boxing each element via `__rt_mixed_array_get`.
-//! - Null/non-array payloads return a fresh empty hash (quiet, like `__rt_mixed_count`).
+//! - Null/non-array payloads terminate with the shared gradual array-boundary `TypeError`.
 //! - The returned hash is independently owned (refcount 1), so a single release frees it.
 
+use crate::codegen::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen::platform::Arch;
+
+/// Length in bytes of the shared `_array_arg_type_error_msg` fatal string.
+const ARRAY_ARG_TYPE_ERROR_MSG_LEN: usize = 78;
 
 /// Emits the `__rt_mixed_to_owned_hash` runtime helper. Dispatches per target.
 pub fn emit_mixed_to_owned_hash(emitter: &mut Emitter) {
@@ -37,13 +41,13 @@ fn emit_mixed_to_owned_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                    // establish the local frame
     emitter.instruction("str x0, [sp, #0]");                                    // save the boxed Mixed receiver pointer
 
-    emitter.instruction("cbz x0, __rt_mixed_to_owned_hash_empty");              // null receiver → fresh empty hash
+    emitter.instruction("cbz x0, __rt_mixed_to_owned_hash_bad");                // null is not a valid gradual array operand
     emitter.instruction("ldr x9, [x0]");                                        // load the Mixed runtime tag
     emitter.instruction("cmp x9, #5");                                          // tag 5 = associative array?
     emitter.instruction("b.eq __rt_mixed_to_owned_hash_assoc");                 // shallow-clone the hash payload
     emitter.instruction("cmp x9, #4");                                          // tag 4 = indexed array?
     emitter.instruction("b.eq __rt_mixed_to_owned_hash_indexed");               // rebuild a hash from the indexed array
-    emitter.instruction("b __rt_mixed_to_owned_hash_empty");                    // any other payload → fresh empty hash
+    emitter.instruction("b __rt_mixed_to_owned_hash_bad");                      // reject every non-array payload at the gradual boundary
 
     // -- associative: clone the payload hash for an independent owned copy --
     emitter.label("__rt_mixed_to_owned_hash_assoc");
@@ -96,7 +100,7 @@ fn emit_mixed_to_owned_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return the rebuilt hash
 
-    // -- null/non-array: return a fresh empty hash --
+    // -- defensive null payload: return a fresh empty hash --
     emitter.label("__rt_mixed_to_owned_hash_empty");
     emitter.instruction("mov x0, #1");                                          // minimum non-zero hash capacity
     emitter.instruction("mov x1, #7");                                          // table value_type 7 = boxed Mixed entries
@@ -104,6 +108,15 @@ fn emit_mixed_to_owned_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return the empty hash
+
+    // -- non-array payload: emit the TypeError and terminate the process --
+    emitter.label("__rt_mixed_to_owned_hash_bad");
+    abi::emit_symbol_address(emitter, "x1", "_array_arg_type_error_msg");
+    emitter.instruction(&format!("mov x2, #{}", ARRAY_ARG_TYPE_ERROR_MSG_LEN)); // pass the gradual array fatal message length
+    emitter.instruction("mov x0, #2");                                          // write the gradual array diagnostic to stderr
+    emitter.syscall(4);
+    emitter.instruction("mov x0, #70");                                         // use EX_SOFTWARE after the fatal type violation
+    emitter.syscall(1);
 }
 
 /// Emits `__rt_mixed_to_owned_hash` for x86_64.
@@ -121,13 +134,13 @@ fn emit_mixed_to_owned_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the boxed Mixed receiver pointer
 
     emitter.instruction("test rdi, rdi");                                       // null receiver → fresh empty hash
-    emitter.instruction("je __rt_mixed_to_owned_hash_empty");                   // branch to the empty-hash path
+    emitter.instruction("je __rt_mixed_to_owned_hash_bad");                     // null is not a valid gradual array operand
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the Mixed runtime tag
     emitter.instruction("cmp r10, 5");                                          // tag 5 = associative array?
     emitter.instruction("je __rt_mixed_to_owned_hash_assoc");                   // shallow-clone the hash payload
     emitter.instruction("cmp r10, 4");                                          // tag 4 = indexed array?
     emitter.instruction("je __rt_mixed_to_owned_hash_indexed");                 // rebuild a hash from the indexed array
-    emitter.instruction("jmp __rt_mixed_to_owned_hash_empty");                  // any other payload → fresh empty hash
+    emitter.instruction("jmp __rt_mixed_to_owned_hash_bad");                    // reject every non-array payload at the gradual boundary
 
     emitter.label("__rt_mixed_to_owned_hash_assoc");
     emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // load the hash payload pointer
@@ -186,4 +199,15 @@ fn emit_mixed_to_owned_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // restore the stack pointer
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the empty hash
+
+    // -- non-array payload: emit the TypeError and terminate the process --
+    emitter.label("__rt_mixed_to_owned_hash_bad");
+    emitter.instruction("mov edi, 2");                                          // write the gradual array diagnostic to stderr
+    abi::emit_symbol_address(emitter, "rsi", "_array_arg_type_error_msg");
+    emitter.instruction(&format!("mov edx, {}", ARRAY_ARG_TYPE_ERROR_MSG_LEN)); // pass the gradual array fatal message length
+    emitter.instruction("mov eax, 1");                                          // select the Linux write syscall
+    emitter.instruction("syscall");                                             // emit the gradual array fatal diagnostic
+    emitter.instruction("mov edi, 70");                                         // use EX_SOFTWARE after the fatal type violation
+    emitter.instruction("mov eax, 60");                                         // select the Linux exit syscall
+    emitter.instruction("syscall");                                             // terminate after the gradual array type error
 }

@@ -9,6 +9,22 @@
 
 use super::*;
 
+/// Verifies Symfony-demanded core constants resolve from a namespace and materialize the
+/// PHP 8.5.6 values shared by the checker, name resolver, and EIR constant prescan.
+#[test]
+fn test_symfony_core_constant_values_and_namespace_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Constants;
+echo CASE_LOWER, ",", CASE_UPPER, ",", EXTR_SKIP, ",", FILEINFO_MIME_TYPE, ",";
+echo T_WHITESPACE, ",", PHP_OUTPUT_HANDLER_REMOVABLE, ",", LIBXML_NONET, ",";
+echo LIBXML_ERR_WARNING, ",", INI_SCANNER_RAW, ",", T_COMMENT, ",", T_DOC_COMMENT, ",";
+echo PHP_OUTPUT_HANDLER_CLEANABLE, ",", PHP_OUTPUT_HANDLER_FLUSHABLE, ",", LIBXML_COMPACT;
+"#,
+    );
+    assert_eq!(out, "0,1,1,16,397,64,2048,1,1,392,393,16,32,65536");
+}
+
 /// Tests that `gettype(42)` returns "integer".
 #[test]
 fn test_gettype_int() {
@@ -212,6 +228,33 @@ echo get_debug_type(new Mailer());
 "#,
     );
     assert_eq!(out, "Mailer");
+}
+
+/// Verifies gradual `$value::class` resolves object payloads and throws a catchable, type-specific
+/// `TypeError` when the same `mixed` call site receives a non-object payload.
+#[test]
+fn test_object_class_name_runtime_checks_mixed_payload() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeObjectClassName {}
+
+function runtimeClassName(mixed $value): string {
+    return $value::class;
+}
+
+echo runtimeClassName(new RuntimeObjectClassName()), "|";
+try {
+    runtimeClassName(42);
+    echo "missed";
+} catch (\TypeError $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "RuntimeObjectClassName|Cannot use \"::class\" on int"
+    );
 }
 
 /// Verifies `get_debug_type()` dispatches on the runtime tag of a boxed Mixed value, including the

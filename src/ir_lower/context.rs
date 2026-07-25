@@ -866,7 +866,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// `func_num_args`/`func_get_args`/`func_get_arg` at its own scope and therefore expects
     /// the hidden trailing arity-count ABI operand at direct call sites.
     pub(crate) fn is_arity_hungry_callee(&self, callee_key: &str) -> bool {
-        self.func_args_functions.contains(callee_key)
+        if self.func_args_functions.contains(callee_key) {
+            return true;
+        }
+        let Some((class_name, method_name)) = callee_key.split_once("::") else {
+            return false;
+        };
+        self.func_args_functions.contains(&format!(
+            "{}::{}",
+            class_name,
+            crate::names::php_symbol_key(method_name)
+        ))
     }
 
     /// Returns `true` when the function/method body currently being lowered is itself
@@ -881,10 +891,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn self_signature(&self) -> Option<&'m FunctionSig> {
         if let Some((class_name, method_name)) = self.owner_name.split_once("::") {
             let class = self.classes.get(class_name)?;
+            let method_key = crate::names::php_symbol_key(method_name);
             class
                 .methods
-                .get(method_name)
-                .or_else(|| class.static_methods.get(method_name))
+                .get(&method_key)
+                .or_else(|| class.static_methods.get(&method_key))
         } else {
             self.functions.get(&self.owner_name)
         }
@@ -1373,7 +1384,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             )
             && matches!(previous_type.codegen_repr(), PhpType::Int);
         if is_ref_bound {
-            let value = self.box_typed_array_for_mixed_ref_cell(value, &previous_type, span);
             // A hoisted `LocalRefEnsure` local (loop-ref-bound `$p` from `$a[]=&$p`) has its
             // frame storage pre-widened to `Mixed` by `prewiden_loop_carried_locals`, but the
             // cell's inner value is the ACTUAL source value (e.g. `array<int>`), not a Mixed box.
@@ -1389,6 +1399,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             } else {
                 previous_type.clone()
             };
+            let value = self.box_typed_array_for_mixed_ref_cell(value, &cell_ty, span);
             self.store_ref_cell_slot(slot, value, cell_ty, span);
         } else {
             self.store_slot_with_op(slot, value, op, span);
@@ -1591,7 +1602,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.store_mutated_local_impl(name, value, php_type, span, true)
     }
 
-    /// Stores a mutation result whose previous boxed local owner was released beforehand.
+    /// Stores a mutation result whose previous local owner was released or consumed beforehand.
     pub(crate) fn store_prepared_mutated_local(
         &mut self,
         name: &str,
@@ -1777,6 +1788,48 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.mark_ref_bound_local(name);
         self.initialized_slots.insert(slot);
         self.initialized_slots.insert(owner_slot);
+    }
+
+    /// Binds `target` as an owning alias to a pre-existing refcounted array-element cell.
+    ///
+    /// The hash element retains one share while a hidden owner slot retains the local's share.
+    /// Later whole-value stores therefore route through `StoreRefCell`, and scope cleanup releases
+    /// the adopted cell with the refcount-aware path instead of freeing borrowed element storage.
+    pub(crate) fn adopt_ref_cell(
+        &mut self,
+        target: &str,
+        cell_ptr: LoweredValue,
+        value_type: PhpType,
+        span: Option<Span>,
+    ) {
+        self.clear_static_callable_local(target);
+        self.clear_reflection_class_local(target);
+        self.clear_reflection_function_local(target);
+        self.clear_reflection_property_local(target);
+        self.clear_reflection_method_local(target);
+        self.clear_reflection_arg_array_local(target);
+        self.clear_fiber_start_sig(target);
+        self.release_replaced_local_before_ref_alias(target, span);
+        let target_slot = self.declare_local(target, value_type.clone());
+        let owner_slot = self.declare_ref_cell_owner(target, value_type.clone());
+        self.set_local_type(target, value_type.clone());
+        self.builder.emit_with_effects(
+            Op::AdoptRefCell,
+            vec![cell_ptr.value],
+            Some(Immediate::LocalSlotPair {
+                first: target_slot,
+                second: owner_slot,
+            }),
+            IrType::Void,
+            value_type,
+            Ownership::NonHeap,
+            Op::AdoptRefCell.default_effects(),
+            span,
+        );
+        self.mark_ref_bound_local(target);
+        self.initialized_slots.insert(target_slot);
+        self.initialized_slots.insert(owner_slot);
+        self.adopted_ref_bound_locals.insert(target.to_string());
     }
 
 
@@ -2827,4 +2880,3 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
         }
     }
 }
-

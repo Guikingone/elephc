@@ -23,6 +23,9 @@
 //!   slots, fixing write-through for 3+ level chains (#553 residual).
 //! - A string key on an indexed payload promotes the payload to hash storage
 //!   via `__rt_mixed_cell_promote_to_hash` (PHP arrays accept mixed keys);
+//!   existing typed hash entries are boxed and reinstalled before being
+//!   returned, so nested writes mutate the stored element rather than a
+//!   detached read conversion.
 //!   incompatible scalar parents are NOT converted: the stored cell is
 //!   returned unchanged and the following set drops the write.
 //! - `__rt_array_ensure_elem_for_write(container, tag, key_lo, key_hi)` wraps
@@ -127,9 +130,10 @@ fn emit_mixed_cell_promote_to_hash_aarch64(emitter: &mut Emitter) {
 /// Write-context lookup: missing indexed elements (beyond length), null gap
 /// slots, and boxed `Mixed(null)` slots are autovivified as empty arrays
 /// whose cells are installed into the parent storage; missing hash keys are
-/// inserted the same way. Existing non-null cells are returned retained
-/// (STORED, so the following set writes through the parent). Non-container
-/// receivers fall back to `__rt_mixed_array_get` read semantics.
+/// inserted the same way. Existing non-null cells are returned retained;
+/// typed hash entries are first boxed and reinstalled so every returned
+/// container cell is STORED and the following set writes through the parent.
+/// Non-container receivers fall back to `__rt_mixed_array_get` read semantics.
 fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_array_get_for_write ---");
@@ -254,7 +258,7 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_hash_get");                                    // x0=found, x1=value_lo, x2=value_hi, x3=value_tag
     emitter.instruction("cbz x0, __rt_mixed_array_gfw_assoc_create");           // missing keys autovivify a fresh element
     emitter.instruction("cmp x3, #7");                                          // is the entry already a boxed Mixed cell?
-    emitter.instruction("b.ne __rt_mixed_array_gfw_assoc_box");                 // typed entries keep the plain reader's detached-box behavior
+    emitter.instruction("b.ne __rt_mixed_array_gfw_assoc_box");                 // typed entries must be boxed back into the parent before write-through
     emitter.instruction("cbz x1, __rt_mixed_array_gfw_assoc_create");           // defensive: boxed entries without a cell are treated as missing
     emitter.instruction("ldr x9, [x1]");                                        // load the stored cell's payload tag
     emitter.instruction("cmp x9, #8");                                          // does the entry hold a boxed Mixed(null)?
@@ -264,10 +268,11 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_array_gfw_return");                       // existing elements are returned as-is (set decides compatibility)
     emitter.label("__rt_mixed_array_gfw_assoc_box");
     emitter.instruction("mov x0, x3");                                          // x0 = value_tag for mixed_from_value (x1/x2 hold the payload)
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the typed entry into a detached Mixed cell (read-path parity)
-    emitter.instruction("b __rt_mixed_array_gfw_return");                       // the following set drops writes through detached boxes
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the typed entry while retaining or persisting its payload
+    emitter.instruction("b __rt_mixed_array_gfw_assoc_install");                // replace the typed bucket with the boxed write-through cell
     emitter.label("__rt_mixed_array_gfw_assoc_create");
     emitter.instruction("bl __rt_mixed_new_empty_array_cell");                  // allocate the autovivified empty-array cell
+    emitter.label("__rt_mixed_array_gfw_assoc_install");
     emitter.instruction("str x0, [sp, #32]");                                   // save the fresh child cell across the hash insertion
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the receiver cell
     emitter.instruction("ldr x0, [x9, #8]");                                    // reload the current hash pointer
@@ -519,7 +524,7 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // was the key found?
     emitter.instruction("je __rt_mixed_array_gfw_assoc_create");                // missing keys autovivify a fresh element
     emitter.instruction("cmp rcx, 7");                                          // is the entry already a boxed Mixed cell?
-    emitter.instruction("jne __rt_mixed_array_gfw_assoc_box");                  // typed entries keep the plain reader's detached-box behavior
+    emitter.instruction("jne __rt_mixed_array_gfw_assoc_box");                  // typed entries must be boxed back into the parent before write-through
     emitter.instruction("test rdi, rdi");                                       // defensive: boxed entries without a cell are treated as missing
     emitter.instruction("je __rt_mixed_array_gfw_assoc_create");                // branch to the autovivify path
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the stored cell's payload tag
@@ -532,10 +537,11 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_array_gfw_return");                     // existing elements are returned as-is (set decides compatibility)
     emitter.label("__rt_mixed_array_gfw_assoc_box");
     emitter.instruction("mov rax, rcx");                                        // rax = value_tag for mixed_from_value (rdi/rsi hold the payload)
-    emitter.instruction("call __rt_mixed_from_value");                          // box the typed entry into a detached Mixed cell (read-path parity)
-    emitter.instruction("jmp __rt_mixed_array_gfw_return");                     // the following set drops writes through detached boxes
+    emitter.instruction("call __rt_mixed_from_value");                          // box the typed entry while retaining or persisting its payload
+    emitter.instruction("jmp __rt_mixed_array_gfw_assoc_install");              // replace the typed bucket with the boxed write-through cell
     emitter.label("__rt_mixed_array_gfw_assoc_create");
     emitter.instruction("call __rt_mixed_new_empty_array_cell");                // allocate the autovivified empty-array cell
+    emitter.label("__rt_mixed_array_gfw_assoc_install");
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the fresh child cell across the hash insertion
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the receiver cell
     emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // reload the current hash pointer

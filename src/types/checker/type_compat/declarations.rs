@@ -32,6 +32,17 @@ impl Checker {
         span: crate::span::Span,
         context: &str,
     ) -> Result<PhpType, CompileError> {
+        let resolved;
+        let type_expr = if let Some(current_class) = self.current_class.as_deref() {
+            let parent = self
+                .classes
+                .get(current_class)
+                .and_then(|class_info| class_info.parent.as_deref());
+            resolved = type_expr.substitute_relative_class_types(current_class, parent);
+            &resolved
+        } else {
+            type_expr
+        };
         let ty = self.resolve_type_expr(type_expr, span)?;
         match ty {
             PhpType::Void => Err(CompileError::new(
@@ -60,16 +71,13 @@ impl Checker {
                 "never can only be used as a standalone return type",
             ));
         }
-        if type_expr.contains_late_static() {
-            if let Some(current_class) = self.current_class.as_deref() {
-                let parent = self
-                    .classes
-                    .get(current_class)
-                    .and_then(|class_info| class_info.parent.as_deref());
-                let resolved =
-                    type_expr.substitute_relative_class_types(current_class, parent);
-                return self.resolve_type_expr(&resolved, span);
-            }
+        if let Some(current_class) = self.current_class.as_deref() {
+            let parent = self
+                .classes
+                .get(current_class)
+                .and_then(|class_info| class_info.parent.as_deref());
+            let resolved = type_expr.substitute_relative_class_types(current_class, parent);
+            return self.resolve_type_expr(&resolved, span);
         }
         self.resolve_type_expr(type_expr, span)
     }
@@ -385,14 +393,16 @@ impl Checker {
         effective_sig
     }
 
-    /// Temporarily replaces the checker's active ref params, globals, and statics stacks with
-    /// the given values while running `f`. Saves and restores all state afterward to avoid
-    /// leaking context across nested checks.
+    /// Temporarily replaces callable-local checker state while running `f`.
+    ///
+    /// Active ref params, globals, statics, loop state, and return observations are scoped to the
+    /// callable and restored afterward. The returned vector contains each `return` type captured
+    /// at its actual flow-sensitive checking point.
     pub(crate) fn with_local_storage_context<T, F>(
         &mut self,
         ref_param_names: Vec<String>,
         f: F,
-    ) -> Result<T, CompileError>
+    ) -> Result<(T, Vec<super::super::functions::ReturnInfo>), CompileError>
     where
         F: FnOnce(&mut Self) -> Result<T, CompileError>,
     {
@@ -417,8 +427,13 @@ impl Checker {
         self.break_continue_depth = 0;
         self.finally_break_continue_bases.clear();
         self.in_callable_body = true;
+        self.active_return_info_scopes.push(Vec::new());
 
         let result = f(self);
+        let return_infos = self
+            .active_return_info_scopes
+            .pop()
+            .expect("callable return observation scope must remain balanced");
 
         self.active_ref_params = saved_ref_params;
         self.declared_byref_param_locals = saved_declared_byref;
@@ -430,7 +445,7 @@ impl Checker {
         self.finally_break_continue_bases = saved_finally_break_continue_bases;
         self.in_callable_body = saved_in_callable_body;
 
-        result
+        result.map(|value| (value, return_infos))
     }
 }
 

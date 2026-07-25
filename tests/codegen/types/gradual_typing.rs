@@ -316,6 +316,91 @@ fn test_gradual_array_union_with_mixed_operand() {
     assert_eq!(out, "125");
 }
 
+/// Two locals whose control-flow types are unions made exclusively of indexed/associative array
+/// shapes remain valid operands for PHP's left-biased `+=` array union. Both locals use boxed
+/// storage, so this also verifies that the two temporary hash conversions are released.
+#[test]
+fn test_array_only_union_operands_support_compound_array_union() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$left = ['shared' => 'left', 'left' => 'kept'];
+if ($argc > 10) {
+    $left = [0 => 'left-zero'];
+}
+
+$right = ['shared' => 'right', 'right' => 'added'];
+if ($argc > 10) {
+    $right = [0 => 'right-zero'];
+}
+
+$left += $right;
+echo $left['shared'], ':', $left['left'], ':', $left['right'];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "left:kept:added");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Two `array|false` operands use PHP's runtime meaning of `+`: two array payloads form a
+/// left-biased union, while two false payloads remain numeric. The boxed conversions and result
+/// must also leave the heap balanced.
+#[test]
+fn test_array_or_false_union_operands_dispatch_array_or_numeric_addition() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function maybe_array(bool $returnArray, string $key): array|false {
+    if ($returnArray) {
+        return [$key => $key];
+    }
+    return false;
+}
+
+$left = maybe_array(true, 'left');
+$right = maybe_array(true, 'right');
+$union = $left + $right;
+$zero = maybe_array(false, 'unused-left') + maybe_array(false, 'unused-right');
+echo $union['left'], ':', $union['right'], ':', $zero;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "left:right:0");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// An `array|false` runtime mismatch must preserve PHP's `TypeError` instead of numerically
+/// coercing the array payload through the generic Mixed integer cast.
+#[test]
+fn test_array_or_false_union_mismatched_addition_fatals() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function maybe_array(bool $returnArray): array|false {
+    return $returnArray ? ['value'] : false;
+}
+
+echo maybe_array(true) + maybe_array(false);
+"#,
+    );
+    assert!(
+        !out.success,
+        "array plus false should fatal, stdout={:?}",
+        out.stdout
+    );
+    assert!(
+        out.stderr.contains("TypeError"),
+        "unexpected stderr: {:?}",
+        out.stderr
+    );
+}
+
 /// Regression: a `string` parameter reassigned to an `int` on the **then** branch of an `if`
 /// (which returns) must not leak its `int` type onto the else/fall-through path where the
 /// reassignment never ran. Before branch-scoped local-type tracking, the else path read the
@@ -378,6 +463,35 @@ echo s("7"), "|", s("elephc"), "|", s("abc");
 "#,
     );
     assert_eq!(out, "digit:7|elephc|abc");
+}
+
+/// Verifies a terminated switch case cannot widen a local used by a sibling case.
+#[test]
+fn test_break_terminated_switch_case_assignment_does_not_leak_to_sibling_case() {
+    let out = compile_and_run(
+        r#"<?php
+function renderChoice(
+    int $mode,
+    array $choices,
+    string|bool|int|float|null $default,
+): string {
+    switch ($mode) {
+        case 1:
+            $default = explode(",", (string) $default);
+            break;
+        case 2:
+            return (string) ($choices[$default] ?? $default);
+        default:
+            return "";
+    }
+
+    return "fallback";
+}
+
+echo renderChoice(2, ["primary" => "green"], "primary");
+"#,
+    );
+    assert_eq!(out, "green");
 }
 
 /// Regression: a `string` parameter reassigned to an `int` inside a `do…while` body must be
@@ -644,6 +758,28 @@ echo $fs->box("f", "s", 1, 2.5, [9]);
 "#,
     );
     assert_eq!(out, "f:4");
+}
+
+/// A static `mixed ...$args` variadic keeps its declared gradual element type across repeated
+/// heterogeneous calls instead of specializing to the first call's string argument.
+#[test]
+fn test_static_mixed_variadic_accepts_heterogeneous_args() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticFs {
+    private static function box(string $func, mixed ...$args): string {
+        return $func . ":" . count($args);
+    }
+
+    public static function run(): string {
+        return self::box("first", "value") . "|" . self::box("second", 7, false);
+    }
+}
+
+echo StaticFs::run();
+"#,
+    );
+    assert_eq!(out, "first:1|second:2");
 }
 
 // --- Family G (sound covariance): a union of subtypes into their common base compiles + runs ---

@@ -41,6 +41,19 @@ echo $b[0];
     assert_eq!(out, "11");
 }
 
+/// Verifies `array_map()` may pass an element to a zero-parameter user closure, which ignores
+/// the surplus argument like PHP user-defined callables do.
+#[test]
+fn test_array_map_zero_parameter_closure_ignores_element_argument() {
+    let out = compile_and_run(
+        r#"<?php
+$values = array_map(static fn (): string => "?", [10, 20]);
+echo $values[0] . $values[1];
+"#,
+    );
+    assert_eq!(out, "??");
+}
+
 // Tests `array_map` with a typed builtin callback (`strlen`) applied to string values,
 // verifying mixed-type result handling in array_map codegen.
 /// Verifies that array map string values to ints.
@@ -57,6 +70,44 @@ echo $b[1];
 "#,
     );
     assert_eq!(out, "2,4");
+}
+
+/// Verifies a builtin callback determines `array_map()`'s output element type, so consuming an
+/// integer returned by `strlen` through `array_pop()` remains valid numeric arithmetic.
+#[test]
+fn test_array_map_builtin_return_type_flows_to_array_pop() {
+    let source = r#"<?php
+$lengths = array_map('strlen', explode('.', 'service.inner'));
+echo $lengths[0] . ':';
+echo 1 + array_pop($lengths);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "7:6");
+}
+
+/// Verifies `array_map()` passes object elements through the pointer-sized callback ABI.
+#[test]
+fn test_array_map_object_elements() {
+    let out = compile_and_run(
+        r#"<?php
+final class Box {
+    public int $value;
+
+    public function __construct(int $value) {
+        $this->value = $value;
+    }
+
+    public function getValue(): int {
+        return $this->value;
+    }
+}
+
+$items = [new Box(2), new Box(3)];
+$values = array_map(static fn (Box $box): int => $box->getValue(), $items);
+echo $values[0] + $values[1];
+"#,
+    );
+    assert_eq!(out, "5");
 }
 
 /// Tests `array_map` with a string-literal builtin callback (`'trim'`) at

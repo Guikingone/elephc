@@ -25,8 +25,9 @@ impl Checker {
     ///
     /// For non-static methods, `$this` is inserted into the per-method `TypeEnv` as an
     /// `Object` of the declaring class. Parameters are resolved against declared type hints
-    /// or inferred from the class signature; variadic parameters use `PhpType::Array(Int)`
-    /// as a fallback.
+    /// or inferred from the class signature. An untyped parameter that has no observed call-site
+    /// specialization is checked as gradual `Mixed`, matching its EIR ABI; variadic parameters
+    /// use `PhpType::Array(Int)` as a fallback.
     ///
     /// Sets `self.current_class`, `self.current_method`, and `self.current_method_is_static`
     /// during body checking to enable context-sensitive diagnostics.
@@ -99,11 +100,12 @@ impl Checker {
                                 declared
                             }
                         } else {
-                            sig_params
+                            let inferred = sig_params
                                 .as_ref()
                                 .and_then(|p| p.get(i))
                                 .map(|(_, t)| t.clone())
-                                .unwrap_or(PhpType::Int)
+                                .unwrap_or(PhpType::Int);
+                            self.method_body_param_type(class, method, i, inferred)
                         };
                         // PHP's __unserialize($data) always receives the associative
                         // array produced by __serialize(); a bare `array` hint resolves
@@ -213,16 +215,23 @@ impl Checker {
                         self.exit_callable_var_scope(saved_callable_var_scope);
                         return Err(error);
                     }
+                    let Ok((_, observed_return_infos)) = body_check_result else {
+                        unreachable!("method body structural errors return above")
+                    };
                     let method_has_errors = !method_errors.is_empty();
                     pass_errors.extend(method_errors);
 
-                    // `update_method_return_type` re-infers `return` expression types (e.g. a
-                    // pipe/callable-variable invocation) via `collect_return_infos`, which reads
-                    // `self.callable_sigs`/`self.closure_return_types` the SAME way the body
-                    // check did — so the callable var scope must stay open through this call,
-                    // not just through the body-statement loop above.
+                    // Callable metadata must stay live while return callable/array signatures are
+                    // collected. Scalar/object return types themselves come from the observations
+                    // captured at each flow-sensitive `return` checking point.
                     if !method_has_errors {
-                        self.update_method_return_type(class, method, &method_env, &mut pass_errors);
+                        self.update_method_return_type(
+                            class,
+                            method,
+                            &method_env,
+                            &observed_return_infos,
+                            &mut pass_errors,
+                        );
                     }
                     // Persist any specialization this method's body produced for its OWN
                     // declared callable params into the cross-call cache BEFORE restoring the
@@ -251,6 +260,35 @@ impl Checker {
             method_passes_remaining -= 1;
         }
         Ok(())
+    }
+
+    /// Returns the effective body-checking type for one untyped method parameter.
+    ///
+    /// Class schemas retain `Int` as the legacy unspecialized sentinel. A real call records the
+    /// parameter in `param_specialization_seen`, including the all-integer case where the stored
+    /// type remains `Int`. Without that evidence, PHP's untyped parameter is gradual `Mixed`;
+    /// using the sentinel in its body creates false diagnostics and disagrees with
+    /// `eir_signature_with_php_param_contracts()`, which already boxes the parameter.
+    fn method_body_param_type(
+        &self,
+        class: &FlattenedClass,
+        method: &ClassMethod,
+        index: usize,
+        inferred: PhpType,
+    ) -> PhpType {
+        if inferred != PhpType::Int {
+            return inferred;
+        }
+        let owner = if method.is_static {
+            format!("static:{}::{}", class.name, method.name)
+        } else {
+            format!("{}::{}", class.name, php_symbol_key(&method.name))
+        };
+        if self.param_specialization_seen.contains(&(owner, index)) {
+            inferred
+        } else {
+            PhpType::Mixed
+        }
     }
 
     /// Patches untyped constructor parameters with property types when the constructor
@@ -316,13 +354,12 @@ impl Checker {
         class: &FlattenedClass,
         method: &ClassMethod,
         method_env: &TypeEnv,
+        return_infos: &[super::functions::ReturnInfo],
         pass_errors: &mut Vec<CompileError>,
     ) {
-        let mut return_infos = Vec::new();
         let mut callable_return_sigs = Vec::new();
         let mut callable_array_return_sigs = Vec::new();
         for stmt in &method.body {
-            self.collect_return_infos(stmt, method_env, &mut return_infos);
             self.collect_return_callable_sigs(stmt, method_env, &mut callable_return_sigs);
             self.collect_return_callable_array_sigs(
                 stmt,
@@ -420,7 +457,7 @@ impl Checker {
                     // :never methods are allowed to have no return statements (they always throw/exit/loop).
                     let skip_compat_check = matches!(declared, PhpType::Never);
                     if !skip_compat_check {
-                        for return_info in &return_infos {
+                        for return_info in return_infos {
                             if let Err(error) = self.require_compatible_return_type(
                                 &declared,
                                 &return_info.ty,

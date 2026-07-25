@@ -44,6 +44,23 @@ echo $ni ? "y" : "n";
     );
 }
 
+/// Verifies the canonical catalog enables PHP's case-insensitive global-builtin
+/// fallback for an `iconv()` call written inside a namespace.
+#[test]
+fn test_iconv_catalog_supports_case_insensitive_namespace_fallback() {
+    assert!(
+        check_source(
+            r#"<?php
+namespace Symfony\Component\String;
+$converted = ICONV("UTF-8", "ASCII", "abc");
+echo $converted;
+"#
+        )
+        .is_ok(),
+        "namespaced case-insensitive iconv() should resolve through the global builtin catalog",
+    );
+}
+
 /// Verifies the `|false`-union return types: `grapheme_stripos`/`iconv_strpos` yield
 /// `int|false`, `grapheme_substr`/`iconv`/`normalizer_normalize` yield `string|false`,
 /// and `grapheme_str_split` yields `array|false`, so a strict `=== false` check

@@ -365,6 +365,100 @@ pub(crate) fn lower_class_name_lookup(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `$value::class`, resolving raw objects directly and enforcing PHP's object-only
+/// runtime guard for boxed `Mixed`/union operands.
+pub(crate) fn lower_object_class_name(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "object_class_name", 1)?;
+    let value = expect_operand(inst, 0)?;
+    match ctx.raw_value_php_type(value)? {
+        PhpType::Object(_) => {
+            ctx.load_value_to_result(value)?;
+            emit_dynamic_object_class_name(ctx, "get_class");
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_mixed_object_class_name_or_type_error(ctx, value)?;
+        }
+        other => {
+            return Err(CodegenIrError::invalid_module(format!(
+                "object_class_name received statically non-object operand {:?}",
+                other
+            )));
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Unboxes a gradual value for `$value::class`, returning the runtime object name for tag 6 and
+/// throwing a catchable `TypeError` with the concrete PHP type name for every other tag.
+fn emit_mixed_object_class_name_or_type_error(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let object_label = ctx.next_label("object_class_name_object");
+    let int_label = ctx.next_label("object_class_name_int");
+    let string_label = ctx.next_label("object_class_name_string");
+    let float_label = ctx.next_label("object_class_name_float");
+    let bool_label = ctx.next_label("object_class_name_bool");
+    let array_label = ctx.next_label("object_class_name_array");
+    let null_label = ctx.next_label("object_class_name_null");
+    let resource_label = ctx.next_label("object_class_name_resource");
+    let other_label = ctx.next_label("object_class_name_other");
+    let done_label = ctx.next_label("object_class_name_done");
+
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    super::emit_branch_on_gettype_mixed_tag(ctx, 6, &object_label);
+    super::emit_branch_on_gettype_mixed_tag(ctx, 0, &int_label);
+    super::emit_branch_on_gettype_mixed_tag(ctx, 1, &string_label);
+    super::emit_branch_on_gettype_mixed_tag(ctx, 2, &float_label);
+    super::emit_branch_on_gettype_mixed_tag(ctx, 3, &bool_label);
+    super::emit_branch_on_gettype_mixed_tag(ctx, 4, &array_label);
+    super::emit_branch_on_gettype_mixed_tag(ctx, 5, &array_label);
+    super::emit_branch_on_gettype_mixed_tag(ctx, 8, &null_label);
+    super::emit_branch_on_gettype_mixed_tag(ctx, 9, &resource_label);
+    abi::emit_jump(ctx.emitter, &other_label);
+
+    ctx.emitter.label(&object_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // expose the unboxed object pointer to class-name lookup
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdi");                            // expose the unboxed object pointer to class-name lookup
+        }
+    }
+    emit_dynamic_object_class_name(ctx, "get_class");
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    emit_object_class_name_type_error_case(ctx, &int_label, "int");
+    emit_object_class_name_type_error_case(ctx, &string_label, "string");
+    emit_object_class_name_type_error_case(ctx, &float_label, "float");
+    emit_object_class_name_type_error_case(ctx, &bool_label, "bool");
+    emit_object_class_name_type_error_case(ctx, &array_label, "array");
+    emit_object_class_name_type_error_case(ctx, &null_label, "null");
+    emit_object_class_name_type_error_case(ctx, &resource_label, "resource");
+    emit_object_class_name_type_error_case(ctx, &other_label, "non-object");
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits one wrong-runtime-tag branch for `$value::class` as a catchable PHP `TypeError`.
+fn emit_object_class_name_type_error_case(
+    ctx: &mut FunctionContext<'_>,
+    label: &str,
+    type_name: &str,
+) {
+    ctx.emitter.label(label);
+    super::super::exceptions::emit_type_error(
+        ctx,
+        &format!("Cannot use \"::class\" on {}", type_name),
+    );
+}
+
 /// Lowers `is_a()` and `is_subclass_of()` for object operands and literal targets.
 pub(crate) fn lower_is_a_relation(
     ctx: &mut FunctionContext<'_>,

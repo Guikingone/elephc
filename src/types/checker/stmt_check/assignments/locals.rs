@@ -44,7 +44,9 @@ fn null_coalesce_assignment_default<'a>(name: &str, value: &'a Expr) -> Option<&
 ///
 /// Combines the existing type of `existing` with the inferred type of `default_ty`,
 /// returning the merged type or an error if the types are incompatible.
-/// Handles special cases: `Void` existing types, `Mixed`, and union types.
+/// Inferred locals and parameters may be rebound to the default's type when their
+/// current flow type is nullable; only explicit typed-local declarations enforce
+/// their declared contract across the write.
 ///
 /// Returns `Ok(PhpType)` with the resolved type, or `Err` if the null-coalescing
 /// assignment would violate type constraints.
@@ -62,9 +64,37 @@ fn null_coalesce_assignment_type(
     if *existing == PhpType::Mixed {
         return Ok(PhpType::Mixed);
     }
-    if matches!(existing, PhpType::Union(_)) {
+    if !checker.declared_typed_locals.contains(name) {
+        if let PhpType::Union(members) = existing {
+            if members.iter().any(|member| *member == PhpType::Void) {
+                let mut resolved = members
+                    .iter()
+                    .filter(|member| **member != PhpType::Void)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                resolved.push(default_ty.clone());
+                return Ok(checker.normalize_union_type(resolved));
+            }
+        }
+        // A non-null inferred flow type makes `??=` a no-op. PHP parameter hints
+        // constrain entry only, so they deliberately do not turn later local
+        // assignments into declared typed-local contracts.
+        return Ok(existing.clone());
+    }
+    if let PhpType::Union(members) = existing {
         if *default_ty == PhpType::Void || checker.type_accepts(existing, default_ty) {
-            return Ok(existing.clone());
+            if !members.iter().any(|member| *member == PhpType::Void)
+                || *default_ty == PhpType::Void
+            {
+                return Ok(existing.clone());
+            }
+            let mut resolved: Vec<PhpType> = members
+                .iter()
+                .filter(|member| **member != PhpType::Void)
+                .cloned()
+                .collect();
+            resolved.push(default_ty.clone());
+            return Ok(checker.normalize_union_type(resolved));
         }
         return Err(CompileError::new(
             span,
@@ -205,7 +235,18 @@ pub(super) fn check_assign(
     };
     metadata_result?;
     update_reflection_class_assignment_metadata(checker, name, reflection_class_target);
-    merge_local_assignment_type(checker, name, &ty, span, env)
+    let result = merge_local_assignment_type(checker, name, &ty, span, env);
+    // `??=` guarantees that its target holds the expression's non-null result after evaluation,
+    // even when nested in a conditional expression where ordinary assignments are joined with the
+    // pre-condition environment. Keep that flow fact for inferred locals; explicitly typed local
+    // declarations retain their declared contract in the environment.
+    if result.is_ok()
+        && null_coalesce_default.is_some()
+        && !checker.declared_typed_locals.contains(name)
+    {
+        env.insert(name.to_string(), ty);
+    }
+    result
 }
 
 /// Type-checks a reference alias assignment (`$target =& <source>`).
@@ -266,23 +307,31 @@ pub(super) fn check_ref_assign(
             clear_callable_metadata(checker, target);
             Ok(())
         }
-        ExprKind::ArrayAccess { array, index } => {
-            let array_ty = checker.infer_type(array, env)?;
-            let index_ty = checker.infer_type(index, env)?;
-            if !matches!(array_ty, PhpType::Array(_)) {
+        ExprKind::ArrayAccess { array, .. } => {
+            if !matches!(array.kind, ExprKind::Variable(_)) {
                 return Err(CompileError::new(
                     span,
-                    "Reference assignment to an array element requires an indexed array",
+                    "Reference to an array element is only supported on a plain array variable",
                 ));
             }
-            if !matches!(index_ty, PhpType::Int) {
-                return Err(CompileError::new(
-                    span,
-                    "Reference assignment to an array element requires an integer index",
-                ));
+            let element_ty = checker.infer_type(source, env)?;
+            if let ExprKind::Variable(array_name) = &array.kind {
+                if element_ty.codegen_repr() != PhpType::Str
+                    && matches!(
+                        env.get(array_name).map(PhpType::codegen_repr),
+                        Some(PhpType::Array(_)) | Some(PhpType::AssocArray { .. })
+                    )
+                {
+                    env.insert(
+                        array_name.clone(),
+                        PhpType::AssocArray {
+                            key: Box::new(PhpType::Mixed),
+                            value: Box::new(PhpType::Mixed),
+                        },
+                    );
+                }
             }
-            let target_ty = checker.infer_type(source, env)?;
-            env.insert(target.to_string(), target_ty);
+            env.insert(target.to_string(), element_ty);
             checker.active_ref_params.insert(target.to_string());
             clear_callable_metadata(checker, target);
             Ok(())
@@ -387,9 +436,8 @@ pub(super) fn check_ref_assign_to_target(
     match &target.kind {
         ExprKind::PropertyAccess { object, property } => {
             let object_ty = checker.infer_type(object, env)?;
-            if let Some(class) =
-                crate::types::checker::single_object_class_name(&object_ty)
-            {
+            let target_class = crate::types::checker::single_object_class_name(&object_ty);
+            if let Some(class) = &target_class {
                 checker
                     .reference_property_promotions
                     .insert((class.clone(), property.clone()));
@@ -397,7 +445,20 @@ pub(super) fn check_ref_assign_to_target(
                 // cell must not be freed by the destructor (double-free guard).
                 checker
                     .reference_property_rebind_targets
-                    .insert((class, property.clone()));
+                    .insert((class.clone(), property.clone()));
+                // An untyped property starts as `Void`. A variable-source reference bind first
+                // stores the variable's value into that property, so refine the property exactly
+                // like an ordinary assignment before inferring the reference-cell type.
+                if let ExprKind::Variable(source_name) = &source.kind {
+                    if let Some(source_ty) = env.get(source_name).cloned() {
+                        super::properties::refine_object_property_type(
+                            checker,
+                            class,
+                            property,
+                            &source_ty,
+                        );
+                    }
+                }
             }
             // A property source shares its ref-cell, so promote it as well.
             if let ExprKind::PropertyAccess {
@@ -688,9 +749,9 @@ impl Checker {
 
 /// Updates callability metadata when assigning a callable expression to a variable.
 ///
-/// When `ty` is `Callable`, extracts and stores the callable signature, closure return
-/// type, capture list, and first-class callable target on the checker. When `ty` is not
-/// callable, clears any previously stored metadata for `name`.
+/// When `ty` is `Callable`, or a string expression statically resolves to a builtin callable,
+/// extracts and stores the callable signature, closure return type, capture list, and first-class
+/// callable target on the checker. Other non-callable values clear previously stored metadata.
 ///
 /// This ensures that subsequent uses of the variable can resolve its callable signature
 /// and closure metadata. Handles closures, variables, array access, and first-class callables.
@@ -703,7 +764,7 @@ pub(super) fn update_callable_assignment_metadata(
 ) -> Result<(), CompileError> {
     update_callable_array_assignment_metadata(checker, name, callable_source, env)?;
 
-    if *ty == PhpType::Callable {
+    if matches!(ty, PhpType::Callable | PhpType::Str) {
         if let Some(sig) = checker.resolve_expr_callable_sig(callable_source, env)? {
             checker
                 .closure_return_types
@@ -1075,10 +1136,10 @@ fn resolve_class_name<'a>(checker: &'a Checker, class_name: &str) -> Option<&'a 
 
 /// Merges the assigned type into the type environment for the given variable.
 ///
-/// For an **inferred** local, the resulting type is the flow-insensitive JOIN of the existing
-/// type and the newly assigned type: a single concrete type when they merge (e.g. `int` then
-/// `bool`), otherwise their least-upper-bound union (which lowers to boxed `Mixed` storage).
-/// Reassignment of an inferred local is never rejected — PHP locals are gradually typed.
+/// For an **inferred** local in a sequential statement stream, the newly assigned type becomes
+/// the current flow type. Under branch or loop control flow, the result conservatively joins the
+/// existing and assigned types because that write may not execute. EIR separately widens the
+/// frame slot's storage type while lowering each store.
 ///
 /// For a **declared-typed** local (`Type $x = ...`), the declared hint is enforced: a
 /// merge-compatible value or a gradual `Mixed`/union source keeps the declared type, while a
@@ -1108,6 +1169,10 @@ fn merge_local_assignment_type(
                     name, existing, ty
                 ),
             ));
+        }
+        if checker.conditional_assignment_depth == 0 {
+            env.insert(name.to_string(), ty.clone());
+            return Ok(());
         }
         // Inferred local: gradual reassignment widens to the least-upper-bound join instead of
         // rejecting. A union join lowers to a boxed `Mixed` slot for the whole scope, so the

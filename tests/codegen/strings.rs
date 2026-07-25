@@ -48,6 +48,23 @@ echo $length("héllo", "8bit");"#,
     assert_eq!(out, "5:6:3:6:2:6");
 }
 
+/// Verifies gradual string and encoding operands reach `mb_strlen()`'s existing dynamic
+/// materialization path while preserving UTF-8 and null-default behavior.
+#[test]
+fn test_mb_strlen_gradual_string_and_encoding_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+function gradual_mb_strlen(mixed $value, mixed $encoding): int {
+    return mb_strlen($value, $encoding);
+}
+
+echo gradual_mb_strlen("héllo", "UTF-8"), ":";
+echo gradual_mb_strlen("日本語", null);
+"#,
+    );
+    assert_eq!(out, "5:3");
+}
+
 /// Verifies malformed and truncated UTF-8 follows PHP mbstring substitution boundaries.
 #[test]
 fn test_mb_strlen_malformed_utf8() {

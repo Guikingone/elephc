@@ -183,6 +183,31 @@ impl Checker {
         allow_unknown_named_variadic: bool,
         env: &TypeEnv,
     ) -> Result<Vec<Expr>, CompileError> {
+        let (normalized_args, _) = self.normalize_call_args_with_default_mask(
+            sig,
+            args,
+            span,
+            callee_desc,
+            trim_trailing_defaults,
+            allow_unknown_named_variadic,
+            env,
+        )?;
+        Ok(normalized_args)
+    }
+
+    /// Normalizes call arguments and records which regular parameter slots were synthesized from
+    /// declaration defaults rather than supplied by the caller.
+    #[allow(clippy::too_many_arguments)]
+    fn normalize_call_args_with_default_mask(
+        &self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        callee_desc: &str,
+        trim_trailing_defaults: bool,
+        allow_unknown_named_variadic: bool,
+        env: &TypeEnv,
+    ) -> Result<(Vec<Expr>, Vec<bool>), CompileError> {
         let assoc_spread_sources = assoc_spread_sources(args, env);
         let plan = call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
             sig,
@@ -194,6 +219,11 @@ impl Checker {
             &assoc_spread_sources,
         )
         .map_err(|err| call_arg_plan_error(sig, callee_desc, err))?;
+        let default_regular_args = plan
+            .regular_args
+            .iter()
+            .map(|arg| matches!(arg, call_args::PlannedRegularArg::Default(_)))
+            .collect();
         let mut normalized_args = plan.normalized_args();
         // Only plain positional call sites (no named/spread arguments) are eligible: the real
         // AST-level rewrite in `crate::optimize::callable_coercion` (which runs post-check, since
@@ -208,7 +238,7 @@ impl Checker {
         {
             self.coerce_callable_string_args(sig, &mut normalized_args);
         }
-        Ok(normalized_args)
+        Ok((normalized_args, default_regular_args))
     }
 
     /// Coerces literal string-callable arguments at `Callable`-typed regular-parameter
@@ -384,6 +414,7 @@ impl Checker {
             caller_env,
             callee_desc,
             false,
+            false,
         )
     }
 
@@ -404,6 +435,30 @@ impl Checker {
             caller_env,
             callee_desc,
             true,
+            false,
+        )
+    }
+
+    /// Validates a user-defined callback while allowing it to ignore surplus positional values.
+    ///
+    /// PHP passes the callback surface's full argument list, but user functions and closures read
+    /// only their declared parameters. Internal builtins keep their own strict arity validation.
+    pub(crate) fn check_known_user_callback_call(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<PhpType, CompileError> {
+        self.check_known_callable_call_with_options(
+            sig,
+            args,
+            span,
+            caller_env,
+            callee_desc,
+            false,
+            true,
         )
     }
 
@@ -416,8 +471,17 @@ impl Checker {
         caller_env: &TypeEnv,
         callee_desc: &str,
         allow_by_ref_spread: bool,
+        allow_extra_positional: bool,
     ) -> Result<PhpType, CompileError> {
-        let normalized_args = self.normalize_named_call_args(sig, args, span, callee_desc, caller_env)?;
+        let (normalized_args, default_regular_args) = self.normalize_call_args_with_default_mask(
+            sig,
+            args,
+            span,
+            callee_desc,
+            false,
+            true,
+            caller_env,
+        )?;
         let args = normalized_args.as_slice();
         let effective_arg_count = args
             .iter()
@@ -433,7 +497,8 @@ impl Checker {
         // vector and the callee reads only its declared params, so surplus args are ABI-safe.
         // Direct user-function/method calls are NOT covered by this prefix and keep the strict
         // upper bound below (elephc's direct-call ABI materializes exact params).
-        let is_callable_var_invocation = callee_desc.starts_with("callable $");
+        let is_callable_var_invocation =
+            allow_extra_positional || callee_desc.starts_with("callable $");
 
         if sig.ref_params.iter().any(|is_ref| *is_ref) && has_spread && !allow_by_ref_spread {
             return Err(CompileError::new(
@@ -490,7 +555,12 @@ impl Checker {
                 continue;
             }
             if param_idx < regular_param_count {
-                if sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                let uses_default = default_regular_args
+                    .get(param_idx)
+                    .copied()
+                    .unwrap_or(false);
+                if !uses_default
+                    && sig.ref_params.get(param_idx).copied().unwrap_or(false)
                     && !self.is_by_ref_argument_lvalue(arg, caller_env)?
                 {
                     let param_name = sig
@@ -507,7 +577,8 @@ impl Checker {
                     ));
                 }
                 if let Some((param_name, expected_ty)) = sig.params.get(param_idx) {
-                    if sig.declared_params.get(param_idx).copied().unwrap_or(false)
+                    if !uses_default
+                        && sig.declared_params.get(param_idx).copied().unwrap_or(false)
                         && sig.ref_params.get(param_idx).copied().unwrap_or(false)
                         && !super::is_by_ref_property_arg(arg)
                     {

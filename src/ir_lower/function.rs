@@ -800,7 +800,8 @@ pub(crate) fn lower_class_method(
         body_params.insert(0, ("this".to_string(), this_type));
     }
     function.params.extend(function_params(&signature));
-    let is_arity_hungry = check_result.func_args_functions.contains(&name);
+    let arity_key = format!("{}::{}", class_name, crate::names::php_symbol_key(method_name));
+    let is_arity_hungry = check_result.func_args_functions.contains(&arity_key);
     if is_arity_hungry {
         function.params.push(arity_hungry_hidden_argc_param());
         env.insert(
@@ -1195,6 +1196,7 @@ pub(crate) fn lower_closure_function(
         body,
         captures,
         parent.classes,
+        parent.current_class.as_deref(),
     );
     signature.by_ref_return = by_ref_return;
     lower_closure_function_with_signature(
@@ -1232,6 +1234,7 @@ pub(crate) fn lower_closure_function_with_context(
         body,
         captures,
         parent.classes,
+        parent.current_class.as_deref(),
     );
     signature.by_ref_return = by_ref_return;
     for (idx, (_, type_ann, _, _)) in params.iter().enumerate() {
@@ -1432,22 +1435,9 @@ fn lower_body_into_function(
         if global_names.contains(name) {
             continue;
         }
-        // A Mixed-repr PARAMETER arrives as a CALLER-owned boxed cell: the caller
-        // materializes the box (e.g. `__rt_mixed_from_value` for a literal argument) and
-        // releases its own share after the call returns. `__rt_ref_cell_ensure` adopts the
-        // slot word by MOVE (no incref), so without a dedicated share the cell and the
-        // caller both consume the box's single refcount → bad-refcount fatal / UAF reads
-        // through the entry. Acquire the incoming box first so the cell's adoption is
-        // backed by its own +1. Non-Mixed params need no share: scalars are copied by
-        // value and array/hash arguments transfer their handle to the callee (verified
-        // heap-clean), so an extra acquire there would leak instead.
-        let is_mixed_repr_param = params
-            .iter()
-            .any(|(param, ty)| param == name && ty.codegen_repr() == PhpType::Mixed);
-        if is_mixed_repr_param {
-            let incoming = ctx.load_local(name, None);
-            crate::ir_lower::ownership::acquire_if_refcounted(&mut ctx, incoming, None);
-        }
+        // `LocalSlotAnalysis` classifies `LocalRefEnsure` as a ref-cell rewrite, so the
+        // function prologue retains any by-value refcounted parameter before this move adopts
+        // the slot's share. A second EIR acquire here would leave the adopted payload over-retained.
         ctx.ensure_local_ref_cell(name, None);
         ctx.mark_hoisted_ref_ensure_local(name);
     }
@@ -1926,9 +1916,41 @@ fn closure_signature_from_ast(
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    current_class: Option<&str>,
 ) -> FunctionSig {
-    let mut signature =
-        signature_from_ast_with_variadic(params, return_type, variadic, variadic_by_ref);
+    let parent = current_class
+        .and_then(|class_name| classes.get(class_name))
+        .and_then(|class_info| class_info.parent.as_deref());
+    let resolved_params = params
+        .iter()
+        .map(|(name, type_ann, default, by_ref)| {
+            (
+                name.clone(),
+                type_ann.as_ref().map(|type_ann| {
+                    current_class.map_or_else(
+                        || type_ann.clone(),
+                        |class_name| {
+                            type_ann.substitute_relative_class_types(class_name, parent)
+                        },
+                    )
+                }),
+                default.clone(),
+                *by_ref,
+            )
+        })
+        .collect::<Vec<_>>();
+    let resolved_return = return_type.map(|return_type| {
+        current_class.map_or_else(
+            || return_type.clone(),
+            |class_name| return_type.substitute_relative_class_types(class_name, parent),
+        )
+    });
+    let mut signature = signature_from_ast_with_variadic(
+        &resolved_params,
+        resolved_return.as_ref(),
+        variadic,
+        variadic_by_ref,
+    );
     if crate::types::checker::yield_validation::body_contains_yield(body) {
         signature.return_type = PhpType::Object("Generator".to_string());
         return signature;

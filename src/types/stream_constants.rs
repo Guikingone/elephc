@@ -1,6 +1,7 @@
 //! Purpose:
-//! Defines PHP stream / stream-adjacent constants exposed as integer constants.
-//! Single source of truth for `STREAM_*`, `PSFS_*`, `FILE_*`, and `GLOB_*` values.
+//! Defines PHP stream / I/O-adjacent constants exposed as integer constants.
+//! Single source of truth for `STREAM_*`, `PSFS_*`, `FILE_*`, `FILEINFO_*`, output-buffer,
+//! INI-scanner, and `GLOB_*` values.
 //!
 //! Called from:
 //! - `crate::types::checker::driver::init` when registering predefined constants.
@@ -27,6 +28,12 @@
 //!   `STREAM_INT_CONSTANTS` table below.
 
 pub(crate) const STREAM_INT_CONSTANTS: &[(&str, i64)] = &[
+    // Core I/O-adjacent extension flags.
+    ("FILEINFO_MIME_TYPE", 16),
+    ("INI_SCANNER_RAW", 1),
+    ("PHP_OUTPUT_HANDLER_CLEANABLE", 16),
+    ("PHP_OUTPUT_HANDLER_FLUSHABLE", 32),
+    ("PHP_OUTPUT_HANDLER_REMOVABLE", 64),
     // Client / server connection flags.
     ("STREAM_CLIENT_PERSISTENT", 1),
     ("STREAM_CLIENT_ASYNC_CONNECT", 2),
@@ -190,6 +197,23 @@ mod tests {
             .find(|(name, _)| *name == "STREAM_CLIENT_CONNECT")
             .expect("STREAM_CLIENT_CONNECT defined");
         assert_eq!(entry.1, 4);
+    }
+
+    /// Verifies Symfony-demanded I/O-adjacent flags against PHP 8.5.6.
+    #[test]
+    fn io_adjacent_flags_match_php() {
+        let value_of = |name: &str| {
+            STREAM_INT_CONSTANTS
+                .iter()
+                .find(|(constant_name, _)| *constant_name == name)
+                .unwrap_or_else(|| panic!("{name} defined"))
+                .1
+        };
+        assert_eq!(value_of("FILEINFO_MIME_TYPE"), 16);
+        assert_eq!(value_of("INI_SCANNER_RAW"), 1);
+        assert_eq!(value_of("PHP_OUTPUT_HANDLER_CLEANABLE"), 16);
+        assert_eq!(value_of("PHP_OUTPUT_HANDLER_FLUSHABLE"), 32);
+        assert_eq!(value_of("PHP_OUTPUT_HANDLER_REMOVABLE"), 64);
     }
 
     /// Verifies the stream constant invariant for no duplicate constant names.

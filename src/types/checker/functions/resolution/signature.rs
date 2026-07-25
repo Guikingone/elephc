@@ -133,7 +133,6 @@ impl Checker {
         self.functions.insert(name.to_string(), provisional_sig);
 
         let mut return_type = PhpType::Void;
-        let mut all_return_infos = Vec::new();
         let mut callable_return_sigs = Vec::new();
         let mut callable_array_return_sigs = Vec::new();
         let mut errors = Vec::new();
@@ -152,7 +151,6 @@ impl Checker {
                 if let Err(error) = checker.check_stmt(stmt, &mut local_env) {
                     errors.extend(error.flatten());
                 }
-                checker.collect_return_infos(stmt, &local_env, &mut all_return_infos);
                 checker.collect_return_callable_sigs(stmt, &local_env, &mut callable_return_sigs);
                 checker.collect_return_callable_array_sigs(
                     stmt,
@@ -176,7 +174,7 @@ impl Checker {
             }
         }
         self.exit_callable_var_scope(saved_callable_var_scope);
-        body_check_result?;
+        let (_, all_return_infos) = body_check_result?;
         if !errors.is_empty() {
             return Err(CompileError::from_many(errors));
         }

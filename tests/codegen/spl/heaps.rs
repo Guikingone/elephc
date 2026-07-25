@@ -172,6 +172,29 @@ echo count($storage);
     assert_eq!(out, "2:yes:right:0=left;1=RIGHT:stable:1");
 }
 
+/// Verifies a nullable `SplObjectStorage` property remains indexable after null-coalescing
+/// initialization, including object-key assignment and readback.
+#[test]
+fn test_nullable_spl_object_storage_property_array_access() {
+    let out = compile_and_run(
+        r#"<?php
+class StorageHolder {
+    private ?SplObjectStorage $storage = null;
+
+    public function store(object $key): string {
+        $this->storage ??= new SplObjectStorage();
+        $this->storage[$key] = "stored";
+        return $this->storage[$key];
+    }
+}
+
+$key = new stdClass();
+echo (new StorageHolder())->store($key);
+"#,
+    );
+    assert_eq!(out, "stored");
+}
+
 /// Verifies `SplObjectStorage::addAll`, `removeAll`, and `removeAllExcept`.
 #[test]
 fn test_spl_object_storage_bulk_operations() {

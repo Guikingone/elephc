@@ -312,6 +312,26 @@ if ($cb) {
     assert_eq!(out, "5");
 }
 
+/// Tests the parenthesized expression-call form on a `Callable|Void` union.
+///
+/// This uses `($cb)(...)`, which follows `ExprCall` rather than the direct variable-call
+/// path, and verifies both forms share the same gradual callable dispatch.
+#[test]
+fn test_callable_void_union_parenthesized_expr_call() {
+    let out = compile_and_run(
+        r#"<?php
+function get_expr_cb(bool $ok) {
+    if ($ok) {
+        return fn($v) => $v + 1;
+    }
+}
+$cb = get_expr_cb(true);
+echo ($cb)(5);
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
 /// Tests calling a value typed as `Closure` (i.e. `Object("Closure")`).
 ///
 /// A function returning `Closure` is called as `$h(21)`. Exercises the

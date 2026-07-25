@@ -2,7 +2,7 @@
 title: "array_multisort() — internals"
 description: "Compiler internals for array_multisort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 25
+  order: 26
 ---
 
 ## `array_multisort()` — internals

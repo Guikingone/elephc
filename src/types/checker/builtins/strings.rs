@@ -44,7 +44,7 @@ pub(super) fn check_builtin(
             // false/null → ""). Mixed inputs flow through __rt_mixed_strlen
             // at codegen time which reads the cell tag and returns the
             // length of the coerced representation.
-            if !matches!(ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_)) {
+            if !crate::builtins::semantics::strlen_accepts_source(&ty) {
                 return Err(CompileError::new(span, "strlen() argument must be string"));
             }
             Ok(Some(PhpType::Int))

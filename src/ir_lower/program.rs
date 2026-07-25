@@ -559,6 +559,7 @@ fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
             }
         }
     }
+    features.include_transitive_codegen_dependencies();
     features
 }
 

@@ -1,7 +1,7 @@
 //! Purpose:
 //! Integration tests for `func_num_args()`, `func_get_args()`, and `func_get_arg()` — the
 //! hidden arity-count/variadic-tail ABI extension threaded through direct free-function
-//! calls only (see `crate::types::checker::func_args_scan`).
+//! calls and closed-world-unambiguous methods (see `crate::types::checker::func_args_scan`).
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -197,6 +197,36 @@ echo fx(...[7, 8]);
 "#,
     );
     assert_eq!(out, "2:7,8");
+}
+
+/// Verifies constructors and non-overridden instance methods preserve surplus legacy
+/// arguments, including the Symfony-compatible zero-declared-parameter method shape.
+#[test]
+fn test_func_args_intrinsics_in_unambiguous_methods() {
+    let out = compile_and_run(
+        r#"<?php
+class LegacyOptions {
+    private array $constructorArgs;
+
+    public function __construct($modern = true) {
+        $this->constructorArgs = func_get_args();
+    }
+
+    public function constructorCount(): int {
+        return count($this->constructorArgs);
+    }
+
+    public function legacyFlag(/* bool $enabled = true */): bool {
+        return !func_num_args() || func_get_arg(0);
+    }
+}
+
+$options = new LegacyOptions(true, "deprecated", 7);
+echo $options->constructorCount(), ":";
+echo $options->legacyFlag(false) ? "on" : "off";
+"#,
+    );
+    assert_eq!(out, "3:off");
 }
 
 // Gated dynamic-invoker forms (first-class-callable syntax, dynamic-length spread, and a

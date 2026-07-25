@@ -2,7 +2,7 @@
 title: "array_pad() — internals"
 description: "Compiler internals for array_pad(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 26
+  order: 27
 ---
 
 ## `array_pad()` — internals

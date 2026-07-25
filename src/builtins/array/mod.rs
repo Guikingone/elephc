@@ -15,6 +15,7 @@
 
 pub mod array_all;
 pub mod array_any;
+pub mod array_change_key_case;
 pub mod array_chunk;
 pub mod array_column;
 pub mod array_combine;

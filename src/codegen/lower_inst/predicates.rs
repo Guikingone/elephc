@@ -7,6 +7,8 @@
 //! Key details:
 //! - PHP string truthiness is special: only `""` and `"0"` are false.
 //! - Mixed predicates unbox the runtime cell before comparing the concrete tag.
+//! - Predicate dispatch follows the effective codegen representation, so a source `int|null`
+//!   union uses inline `TaggedScalar` truthiness rather than boxed-Mixed helpers.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -20,7 +22,7 @@ use crate::codegen::{CodegenIrError, Result};
 /// Lowers scalar PHP truthiness into a concrete boolean integer result.
 pub(super) fn lower_is_truthy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    match ctx.raw_value_php_type(value)? {
+    match ctx.value_php_type(value)? {
         PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Pointer(_) => {
             ctx.load_value_to_result(value)?;
             emit_int_result_nonzero_bool(ctx);

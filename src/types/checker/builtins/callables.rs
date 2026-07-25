@@ -228,12 +228,13 @@ pub(crate) fn check_array_callback_builtin_call(
             return_type,
             body,
             captures,
+            capture_refs,
             *by_ref_return,
             callback.span,
             env,
             &param_hints,
         )?;
-        return checker.check_known_callable_call(
+        return checker.check_known_user_callback_call(
             &sig,
             &callback_args,
             span,
@@ -884,7 +885,8 @@ pub(crate) fn check_callback_builtin_call(
             ));
         }
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
-            return checker.check_known_callable_call(&sig, callback_args, span, env, label);
+            return checker
+                .check_known_user_callback_call(&sig, callback_args, span, env, label);
         }
         if let Some(decl) = checker.fn_decls.get(cb_name.as_str()).cloned() {
             let effective_arg_count = callback_args.len();
@@ -899,13 +901,13 @@ pub(crate) fn check_callback_builtin_call(
                         ),
                     ));
                 }
-            } else if effective_arg_count < required || effective_arg_count > decl.params.len() {
+            } else if effective_arg_count < required {
                 return Err(CompileError::new(
                     span,
                     &format!(
-                        "Function '{}' expects {} arguments, got {}",
+                        "Function '{}' expects at least {} arguments, got {}",
                         cb_name,
-                        Checker::format_fixed_or_range_arity(required, decl.params.len()),
+                        required,
                         effective_arg_count
                     ),
                 ));
@@ -942,7 +944,8 @@ pub(crate) fn check_callback_builtin_call(
     }
 
     if let Some(sig) = checker.resolve_expr_callable_sig(callback, env)? {
-        return checker.check_known_callable_call(&sig, callback_args, span, env, label);
+        return checker
+            .check_known_user_callback_call(&sig, callback_args, span, env, label);
     }
 
     if let Some(ret_ty) =

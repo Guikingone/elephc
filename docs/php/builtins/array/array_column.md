@@ -2,7 +2,7 @@
 title: "array_column()"
 description: "Returns the values from a single column of an array of arrays."
 sidebar:
-  order: 4
+  order: 5
 ---
 
 ## array_column()

@@ -11,8 +11,8 @@
 //!   arity-count/variadic-tail ABI extension through call sites and callee prologues.
 //!
 //! Key details:
-//! - "Closed-world": only DIRECT free-function and method calls get the hidden ABI
-//!   extension. Closures are intentionally out of scope for this pass (see
+//! - "Closed-world": only DIRECT free-function calls and methods with an unambiguous
+//!   implementation get the hidden ABI extension. Closures are intentionally out of scope (see
 //!   `detect::body_calls_func_args_intrinsic`, which stops at `Closure` boundaries) and
 //!   are rejected defensively in `crate::ir_lower` if reached.
 //! - `mark_func_args_functions` mutates each matched signature's `variadic` slot in place
@@ -257,19 +257,28 @@ pub(crate) fn dynamic_spread_call_error(
     )
 }
 
-/// Scans every class method body for a call to `func_num_args`/`func_get_args`/
-/// `func_get_arg` and returns one `CompileError` per method that has one — methods are
-/// intentionally never marked arity-hungry (see `mark_func_args_functions`'s doc comment:
-/// virtual dispatch means a call site cannot always know which concrete override runs), so
-/// a method body using one of these builtins is rejected at compile time here instead of
-/// risking a call-site ABI mismatch.
+/// Scans every class method body for an unsupported call to `func_num_args`/
+/// `func_get_args`/`func_get_arg` and returns one `CompileError` per rejected method.
+///
+/// `marked` contains methods whose closed-world implementation is unambiguous and can
+/// therefore receive the hidden argc operand safely. Methods outside that set stay loud:
+/// virtual dispatch could otherwise select an override with a different ABI.
 pub(crate) fn validate_func_args_method_bodies(
     class_method_bodies: &std::collections::HashMap<String, Vec<(String, bool, Vec<crate::parser::ast::Stmt>)>>,
+    marked: &HashSet<String>,
 ) -> Vec<CompileError> {
     let mut errors = Vec::new();
     for (class_name, methods) in class_method_bodies {
         for (method_name, _is_static, body) in methods {
             if !body_calls_func_args_intrinsic(body) {
+                continue;
+            }
+            let method_key = format!(
+                "{}::{}",
+                class_name,
+                crate::names::php_symbol_key(method_name)
+            );
+            if marked.contains(&method_key) {
                 continue;
             }
             let span = first_func_args_intrinsic_span(body).unwrap_or(crate::span::Span::dummy());
@@ -303,23 +312,20 @@ fn first_func_args_intrinsic_span(body: &[crate::parser::ast::Stmt]) -> Option<c
 /// Computes the set of user function/method canonical keys whose body calls
 /// `func_num_args`/`func_get_args`/`func_get_arg` at its own scope, mutating each such
 /// signature via `ensure_variadic_for_func_args`. Free functions are keyed by their
-/// canonical name (matching `CheckResult::functions`).
+/// canonical name (matching `CheckResult::functions`). Methods are keyed as
+/// `"ClassName::lowercase_method_key"`.
 ///
-/// METHODS ARE INTENTIONALLY NOT MARKED (scope cut): a method call site's receiver has a
-/// STATIC type that may be a base class/interface, while the concrete implementation that
-/// actually runs is chosen by virtual dispatch at runtime — a subclass could override the
-/// method WITHOUT calling `func_get_args()` while the base implementation does (or vice
-/// versa), so a single call site cannot always know at compile time whether the hidden ABI
-/// extension is needed. `class_method_bodies`/`classes` are accepted (and still scanned) so
-/// method bodies that DO call these intrinsics fail LOUD — `crate::ir_lower::expr::func_args_intrinsics::lower_func_args_intrinsic`
-/// panics with a precise message instead of a call-site ABI mismatch reading garbage — rather
-/// than silently miscompiling. See `crate::ir_lower::function::lower_class_method`, which
-/// still carries the (currently dead, for future extension) call-site plumbing.
+/// A non-constructor method is marked only when every class exposing that method name
+/// dispatches to the same implementation. This deliberately strong closed-world condition
+/// keeps gradual/interface receiver calls safe too: one call shape can never select a
+/// non-arity-hungry unrelated implementation at runtime. Constructors are direct allocation
+/// targets and are therefore marked independently; ordinary singular receiver calls to
+/// `__construct` still resolve their concrete implementation before appending argc.
 pub(crate) fn mark_func_args_functions(
     functions: &mut std::collections::HashMap<String, FunctionSig>,
     fn_decl_bodies: &std::collections::HashMap<String, Vec<crate::parser::ast::Stmt>>,
-    _classes: &mut std::collections::HashMap<String, crate::types::ClassInfo>,
-    _class_method_bodies: &std::collections::HashMap<String, Vec<(String, bool, Vec<crate::parser::ast::Stmt>)>>,
+    classes: &mut std::collections::HashMap<String, crate::types::ClassInfo>,
+    class_method_bodies: &std::collections::HashMap<String, Vec<(String, bool, Vec<crate::parser::ast::Stmt>)>>,
 ) -> HashSet<String> {
     let mut marked = HashSet::new();
     for (name, body) in fn_decl_bodies {
@@ -332,5 +338,103 @@ pub(crate) fn mark_func_args_functions(
         ensure_variadic_for_func_args(sig);
         marked.insert(name.clone());
     }
+    let mut method_candidates = Vec::new();
+    for (class_name, methods) in class_method_bodies {
+        for (method_name, is_static, body) in methods {
+            if body_calls_func_args_intrinsic(body) {
+                method_candidates.push((
+                    class_name.clone(),
+                    crate::names::php_symbol_key(method_name),
+                    *is_static,
+                ));
+            }
+        }
+    }
+    for (class_name, method_key, is_static) in method_candidates {
+        if method_key != "__construct"
+            && !method_has_one_closed_world_implementation(
+                classes,
+                &class_name,
+                &method_key,
+                is_static,
+            )
+        {
+            continue;
+        }
+        relax_method_implementation_signatures(classes, &class_name, &method_key, is_static);
+        marked.insert(format!("{}::{}", class_name, method_key));
+    }
     marked
+}
+
+/// Returns whether every class exposing `method_key` dispatches to `owner`.
+///
+/// This is intentionally global rather than descendant-only: a `Mixed` receiver dispatches
+/// by method name across unrelated classes, so mixing one hidden-argc implementation with
+/// one ordinary implementation would make its call operand layout ambiguous.
+fn method_has_one_closed_world_implementation(
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    owner: &str,
+    method_key: &str,
+    is_static: bool,
+) -> bool {
+    let mut implementations = HashSet::new();
+    for (class_name, class_info) in classes {
+        let (signatures, implementation_classes) = if is_static {
+            (
+                &class_info.static_methods,
+                &class_info.static_method_impl_classes,
+            )
+        } else {
+            (&class_info.methods, &class_info.method_impl_classes)
+        };
+        if !signatures.contains_key(method_key) {
+            continue;
+        }
+        implementations.insert(
+            implementation_classes
+                .get(method_key)
+                .cloned()
+                .unwrap_or_else(|| class_name.clone()),
+        );
+    }
+    implementations.len() == 1 && implementations.contains(owner)
+}
+
+/// Adds the synthetic variadic tail to the owning method signature and every inherited
+/// signature copy that still dispatches to that implementation.
+fn relax_method_implementation_signatures(
+    classes: &mut std::collections::HashMap<String, crate::types::ClassInfo>,
+    owner: &str,
+    method_key: &str,
+    is_static: bool,
+) {
+    let affected_classes: Vec<String> = classes
+        .iter()
+        .filter_map(|(class_name, class_info)| {
+            let implementation_classes = if is_static {
+                &class_info.static_method_impl_classes
+            } else {
+                &class_info.method_impl_classes
+            };
+            let implementation = implementation_classes
+                .get(method_key)
+                .map(String::as_str)
+                .unwrap_or(class_name);
+            (implementation == owner).then(|| class_name.clone())
+        })
+        .collect();
+    for class_name in affected_classes {
+        let Some(class_info) = classes.get_mut(&class_name) else {
+            continue;
+        };
+        let signatures = if is_static {
+            &mut class_info.static_methods
+        } else {
+            &mut class_info.methods
+        };
+        if let Some(signature) = signatures.get_mut(method_key) {
+            ensure_variadic_for_func_args(signature);
+        }
+    }
 }

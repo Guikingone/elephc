@@ -179,6 +179,30 @@ var_dump($n instanceof Iterator);
     assert_eq!(out, "3bool(true)\n");
 }
 
+/// Verifies a concrete `self` return covariantly satisfies `RecursiveIterator`'s nullable
+/// `getChildren(): ?RecursiveIterator` contract while the implementing class is being built.
+#[test]
+fn test_recursive_iterator_get_children_accepts_covariant_self_return() {
+    let out = compile_and_run(
+        r#"<?php
+class SelfReturningNode implements RecursiveIterator {
+    public function __construct(private int $depth) {}
+    public function getChildren(): self { return new self($this->depth + 1); }
+    public function hasChildren(): bool { return true; }
+    public function current(): mixed { return $this->depth; }
+    public function key(): mixed { return $this->depth; }
+    public function next(): void {}
+    public function valid(): bool { return true; }
+    public function rewind(): void {}
+}
+
+$node = new SelfReturningNode(3);
+echo $node->getChildren()->current();
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
 /// Verifies `SplSubject`/`SplObserver` attach/detach/notify/update contract,
 /// including `instanceof` for both interfaces.
 #[test]

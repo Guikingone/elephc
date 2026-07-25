@@ -274,6 +274,10 @@ pub enum Op {
     ConstNull,
     ConstBool,
     ConstClassName,
+    /// Resolves the concrete runtime class name for `$value::class`. A raw object operand reads
+    /// its class id directly; a boxed `Mixed`/union operand is tag-checked and throws a catchable
+    /// `TypeError` when its runtime value is not an object. Result: `Str`.
+    ObjectClassName,
     ConstEnumCase,
     LoadCalledClassId,
     DataAddr,
@@ -854,6 +858,14 @@ impl Op {
                     | E::ALLOC_HEAP
                     | E::WRITES_HEAP
             }
+            ObjectClassName => {
+                E::READS_HEAP
+                    | E::MAY_THROW
+                    | E::READS_GLOBAL
+                    | E::WRITES_GLOBAL
+                    | E::ALLOC_HEAP
+                    | E::WRITES_HEAP
+            }
             Acquire | Release | EnsureOwned => E::REFCOUNT_OP | E::WRITES_HEAP,
             GcCollect => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
             ClassConstant => E::MAY_DEOPT,
@@ -897,6 +909,7 @@ impl Op {
             ConstNull => "const_null",
             ConstBool => "const_bool",
             ConstClassName => "const_class_name",
+            ObjectClassName => "object_class_name",
             ConstEnumCase => "const_enum_case",
             LoadCalledClassId => "load_called_class_id",
             DataAddr => "data_addr",

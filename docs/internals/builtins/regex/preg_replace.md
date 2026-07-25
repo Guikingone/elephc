@@ -23,8 +23,8 @@ sidebar:
 ## Semantic descriptor
 
 - **Target strategy**: `runtime_call`
-- **Validation**: `signature`
-- **Result type source**: `declared`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
@@ -39,12 +39,13 @@ sidebar:
 ## Signature summary
 
 ```php
-function preg_replace(string $pattern, string $replacement, string $subject): string
+function preg_replace(string $pattern, string $replacement, string $subject, int $limit = -1, int $count = null): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 3 arguments.
+- **Arity**: takes 3–5 arguments (2 optional).
+- **By-reference parameters**: `$count`.
 
 ## Eval interpreter (magician)
 

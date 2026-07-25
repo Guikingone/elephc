@@ -51,6 +51,24 @@ fn test_self_typed_variadic_param() {
     assert_eq!(out, "abc");
 }
 
+/// Verifies that `self` in a closure parameter resolves against the lexically enclosing class.
+#[test]
+fn test_self_typed_closure_param_inside_method() {
+    let out = compile_and_run(
+        "<?php
+        final class Formatter {
+            public function label(): string { return 'ok'; }
+            public function run(): string {
+                $format = static fn(self $value): string => $value->label();
+                return $format($this);
+            }
+        }
+        echo (new Formatter())->run();
+        ",
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Regression: a `self`-typed VARIADIC parameter on an ENUM method must be rewritten to the
 /// enum name like regular parameters and return types. The enum schema path uses its own
 /// relative-type substitution, which previously skipped the variadic-param type.

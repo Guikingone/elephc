@@ -2,7 +2,7 @@
 title: "sort() — internals"
 description: "Compiler internals for sort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 60
+  order: 61
 ---
 
 ## `sort()` — internals

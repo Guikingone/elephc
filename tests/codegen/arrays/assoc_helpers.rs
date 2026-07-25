@@ -11,6 +11,67 @@ use crate::support::*;
 
 // --- Associative array function tests ---
 
+/// Verifies `array_change_key_case()` converts only string keys, preserves integer
+/// keys and insertion order, and applies PHP's last-value-wins collision rule.
+#[test]
+fn test_array_change_key_case_assoc_keys_and_collisions() {
+    let out = compile_and_run(
+        r#"<?php
+$source = ["First" => "one", "FIRST" => "two", 7 => "integer", "é" => "accent"];
+$lower = array_change_key_case($source);
+$upper = array_change_key_case($source, CASE_UPPER);
+
+foreach ($lower as $key => $value) {
+    echo $key . "=" . $value . ";";
+}
+echo "|";
+foreach ($upper as $key => $value) {
+    echo $key . "=" . $value . ";";
+}
+echo "|" . $source["First"] . "," . $source["FIRST"];
+"#,
+    );
+    assert_eq!(
+        out,
+        "first=two;7=integer;é=accent;|FIRST=two;7=integer;é=accent;|one,two"
+    );
+}
+
+/// Verifies the builtin registry exposes case-insensitive namespace fallback and
+/// first-class callable syntax while packed integer-key arrays remain unchanged.
+#[test]
+fn test_array_change_key_case_callable_namespace_fallback_and_packed_clone() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo;
+
+$convert = ARRAY_CHANGE_KEY_CASE(...);
+$assoc = $convert(["Header" => 1], CASE_LOWER);
+$packed = $convert(["A", "B"], CASE_UPPER);
+echo function_exists("array_change_key_case") ? "yes|" : "no|";
+echo $assoc["header"] . "|" . $packed[0] . $packed[1];
+"#,
+    );
+    assert_eq!(out, "yes|1|AB");
+}
+
+/// Verifies the rebuilt associative array retains nested refcounted values after
+/// the source owners are released.
+#[test]
+fn test_array_change_key_case_retains_nested_values() {
+    let out = compile_and_run(
+        r#"<?php
+$child = [7];
+$source = ["Nested" => $child];
+$changed = array_change_key_case($source, CASE_UPPER);
+unset($source);
+unset($child);
+echo $changed["NESTED"][0];
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
 /// Verifies array_key_exists() returns true for present keys and false for absent ones.
 /// Fixture: two-element string-keyed assoc array, two lookups (one present, one absent).
 #[test]

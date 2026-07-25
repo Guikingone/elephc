@@ -10,12 +10,14 @@
 //!   2 arguments, so `min_args: 2, max_args: 2` reproduce that enforcement in
 //!   `check_arity` only; `function_sig` and the parity gate keep the variadic shape.
 //! - `check` validates that the second argument is an indexed array and infers the
-//!   callback return element type; the result preserves the input array element type
-//!   unless the callback returns Mixed.
+//!   callback return element type; the mapped array uses that return type, not the
+//!   input array's element type.
+//! - Refcounted object elements use the same pointer-sized callback ABI as other
+//!   8-byte array slots; they do not require a checker-only rejection.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::semantics::{
-    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+    runtime_fn_semantics, BuiltinResultType, BuiltinSemantics,
 };
 use crate::errors::CompileError;
 use crate::types::PhpType;
@@ -34,16 +36,11 @@ builtin! {
     php_manual: "https://www.php.net/manual/en/function.array-map.php",
 }
 
-/// Builds semantics with a boxed Mixed result for runtime-selected callback shapes.
+/// Builds semantics that reuse the callback-sensitive result recorded by the checker.
 const fn array_map_semantics() -> BuiltinSemantics {
     let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayMap);
-    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics.result_type = BuiltinResultType::Checked;
     semantics
-}
-
-/// Returns Mixed because a string or descriptor callback can select its result ABI at runtime.
-fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
-    PhpType::Mixed
 }
 
 /// Returns the mapped array type for an `array_map` call.
@@ -55,12 +52,6 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
     match arr_ty {
         PhpType::Array(elem_ty) => {
-            if matches!(elem_ty.as_ref(), PhpType::Object(_)) {
-                return Err(CompileError::new(
-                    cx.span,
-                    "array_map() does not yet support object array elements",
-                ));
-            }
             let callback_arg_types = [elem_ty.as_ref().clone()];
             let callback_ret_ty =
                 crate::types::checker::builtins::check_array_callback_builtin_call(
@@ -71,12 +62,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                     cx.env,
                     "array_map() callback",
                 )?;
-            let result_elem_ty = if callback_ret_ty == PhpType::Mixed {
-                Box::new(PhpType::Mixed)
-            } else {
-                elem_ty
-            };
-            Ok(PhpType::Array(result_elem_ty))
+            Ok(PhpType::Array(Box::new(callback_ret_ty)))
         }
         // Gradual boundary: a `Mixed` or union-containing-array argument is accepted;
         // the element type is unknown, so the callback is checked against a `Mixed`

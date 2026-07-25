@@ -181,13 +181,13 @@ fn buffer_element_accepts_assignment(expected: &PhpType, actual: &PhpType) -> bo
 /// Validates a nested array assignment like `$arr[$i] = $value` where the target itself is an array access.
 ///
 /// Type-checks the array, index, and value expressions, then validates that the array type supports
-/// nested offset assignment. Allows `Mixed` and objects implementing `ArrayAccess`; rejects strings
-/// and plain arrays.
+/// nested offset assignment. Allows `Mixed`, empty-array misses that can autovivify, and objects
+/// implementing `ArrayAccess`; rejects strings and unsupported concrete container unions.
 ///
 /// Errors:
 /// - Target is not an array access expression
 /// - Target is a string (string offset assignment not supported)
-/// - Target type does not support nested assignment (not `Mixed` or `ArrayAccess`)
+/// - Target type does not support nested assignment (not gradual/autovivifiable or `ArrayAccess`)
 pub(super) fn check_nested_array_assign(
     checker: &mut Checker,
     target: &Expr,
@@ -211,8 +211,19 @@ pub(super) fn check_nested_array_assign(
     let root_is_ref_bound = nested_array_access_root_variable(target)
         .map(|name| checker.active_ref_params.contains(name))
         .unwrap_or(false);
+    let root_is_concrete_local =
+        nested_local_access_chain_is_concrete(checker, target, env);
+    let static_property_chain_is_supported =
+        nested_static_property_chain_is_supported(checker, target, env);
     match arr_ty {
-        PhpType::Mixed => Ok(()),
+        PhpType::Mixed => {
+            record_empty_root_nested_write(target, env);
+            Ok(())
+        }
+        PhpType::Never if nested_array_access_root_started_empty(target, env) => {
+            record_empty_root_nested_write(target, env);
+            Ok(())
+        }
         PhpType::Str => Err(CompileError::new(
             span,
             "String offset assignment is not supported",
@@ -223,6 +234,16 @@ pub(super) fn check_nested_array_assign(
             Ok(())
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Union(_) if root_is_ref_bound => {
+            Ok(())
+        }
+        // A homogeneous matrix (`array<array<T>>`) can preserve its concrete element type:
+        // EIR lowering COW-splits every intermediate into an owned temp, mutates the leaf,
+        // then writes each child back into its parent. Restrict this path to indexed roots
+        // and statically-integer keys; gradual/string keys still need the boxed-Mixed
+        // autovivification path and must remain loud until that representation is selected.
+        PhpType::Array(_) | PhpType::AssocArray { .. }
+            if root_is_concrete_local || static_property_chain_is_supported =>
+        {
             Ok(())
         }
         // KEPT LOUD (campaign H1, PART C): a `array|false`/`?array` nested target
@@ -247,18 +268,159 @@ pub(super) fn check_nested_array_assign(
     }
 }
 
+/// Returns whether a local-rooted nested chain has a concrete container at every level.
+///
+/// Indexed arrays require integer-shaped keys, while associative arrays accept proven integer
+/// or string keys. This mirrors the explicit EIR child-to-parent write-back path, allowing both
+/// homogeneous matrices and maps whose values are concrete indexed arrays.
+fn nested_local_access_chain_is_concrete(
+    checker: &mut Checker,
+    target: &Expr,
+    env: &TypeEnv,
+) -> bool {
+    let Some(root_name) = nested_array_access_root_variable(target) else {
+        return false;
+    };
+    let Some(mut container_ty) = env.get(root_name).cloned() else {
+        return false;
+    };
+    let mut keys = Vec::new();
+    let mut node = target;
+    loop {
+        match &node.kind {
+            ExprKind::ArrayAccess { array, index } => {
+                keys.push(index.as_ref());
+                node = array;
+            }
+            ExprKind::Variable(_) => break,
+            _ => return false,
+        }
+    }
+    keys.reverse();
+    for key in keys {
+        let Ok(key_ty) = checker.infer_type(key, env) else {
+            return false;
+        };
+        let key_ty = normalized_array_key_type(key, key_ty).codegen_repr();
+        container_ty = match container_ty.codegen_repr() {
+            PhpType::Array(element_ty) if key_ty == PhpType::Int => *element_ty,
+            PhpType::AssocArray { value, .. }
+                if matches!(key_ty, PhpType::Int | PhpType::Str | PhpType::Mixed) =>
+            {
+                *value
+            }
+            _ => return false,
+        };
+    }
+    true
+}
+
+/// Returns whether a two-level static-property write matches the dedicated EIR lowering.
+///
+/// `C::$cache[$outer][$inner] = value` is supported after a preceding static-element `=&` alias
+/// has promoted the property schema to associative reference-cell storage. The outer key must be
+/// a valid PHP hash key and the inner tuple/list key integer-shaped. Ordinary static arrays remain
+/// loud because the specialized lowering requires the shared cell installed by that alias.
+fn nested_static_property_chain_is_supported(
+    checker: &mut Checker,
+    target: &Expr,
+    env: &TypeEnv,
+) -> bool {
+    let ExprKind::ArrayAccess {
+        array: parent,
+        index: inner_key,
+    } = &target.kind
+    else {
+        return false;
+    };
+    let ExprKind::ArrayAccess {
+        array: root,
+        index: outer_key,
+    } = &parent.kind
+    else {
+        return false;
+    };
+    if !matches!(root.kind, ExprKind::StaticPropertyAccess { .. }) {
+        return false;
+    }
+    let Ok(root_ty) = checker.infer_type(root, env) else {
+        return false;
+    };
+    if !matches!(root_ty.codegen_repr(), PhpType::AssocArray { .. }) {
+        return false;
+    }
+    let Ok(outer_ty) = checker.infer_type(outer_key, env) else {
+        return false;
+    };
+    let outer_ty = normalized_array_key_type(outer_key, outer_ty).codegen_repr();
+    if !matches!(outer_ty, PhpType::Int | PhpType::Str | PhpType::Mixed) {
+        return false;
+    }
+    let Ok(inner_ty) = checker.infer_type(inner_key, env) else {
+        return false;
+    };
+    normalized_array_key_type(inner_key, inner_ty).codegen_repr() == PhpType::Int
+}
+
+/// Returns whether a nested access chain starts from a local currently typed as an empty array.
+fn nested_array_access_root_started_empty(target: &Expr, env: &TypeEnv) -> bool {
+    nested_array_access_root(target)
+        .and_then(|(name, _)| env.get(name))
+        .is_some_and(
+            |ty| matches!(ty, PhpType::Array(elem) if matches!(elem.as_ref(), PhpType::Never)),
+        )
+}
+
+/// Records the storage shape produced when a nested write autovivifies an empty local.
+///
+/// Integer keys that preserve packed storage widen the root to `array<mixed>`. String,
+/// null, non-zero literal integer, and gradual keys use a Mixed-key hash, matching the
+/// EIR path that promotes ambiguous runtime keys before fetching the parent for write.
+fn record_empty_root_nested_write(target: &Expr, env: &mut TypeEnv) {
+    let Some((name, root_index)) = nested_array_access_root(target) else {
+        return;
+    };
+    if !matches!(
+        env.get(name),
+        Some(PhpType::Array(elem)) if matches!(elem.as_ref(), PhpType::Never)
+    ) {
+        return;
+    }
+    let key_ty = normalized_array_key_type(root_index, PhpType::Mixed);
+    let updated = if matches!(key_ty, PhpType::Int)
+        && !static_array_key_forces_hash_storage(root_index)
+    {
+        PhpType::Array(Box::new(PhpType::Mixed))
+    } else {
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        }
+    };
+    env.insert(name.to_string(), updated);
+}
+
+/// Returns the root local and its first key for a nested `ArrayAccess` chain.
+fn nested_array_access_root(target: &Expr) -> Option<(&str, &Expr)> {
+    let mut node = target;
+    loop {
+        match &node.kind {
+            ExprKind::ArrayAccess { array, index } => {
+                if let ExprKind::Variable(name) = &array.kind {
+                    return Some((name, index));
+                }
+                node = array;
+            }
+            _ => return None,
+        }
+    }
+}
+
 /// Walks an `ArrayAccess` chain (`$x[1][0]`, `$x["a"]["b"]`) to its root `ExprKind::Variable`,
 /// returning the variable name. Returns `None` if the chain bottoms out in a non-variable
 /// expression (property/static-property/dynamic-property base).
 fn nested_array_access_root_variable(target: &Expr) -> Option<&str> {
-    let mut node = target;
-    loop {
-        match &node.kind {
-            ExprKind::ArrayAccess { array, index: _ } => node = array,
-            ExprKind::Variable(name) => return Some(name),
-            _ => return None,
-        }
-    }
+    nested_array_access_root(target).map(|(name, _)| name)
 }
 
 /// Returns true when `ty` is a scalar PHP value that cannot be indexed as an array (int, float,

@@ -274,6 +274,20 @@ echo gettype(pick(7)), "|", pick(7), "|", gettype(pick(0)), "|", pick(0);
     assert_eq!(out, "integer|7|string|fallback");
 }
 
+/// Verifies a nullable integer cannot contribute `null` through the truthy arm of `?:`.
+#[test]
+fn test_short_ternary_nullable_int_converges_to_int() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(?int $value): int {
+    return $value ?: 9;
+}
+echo pick(null), "|", pick(5);
+"#,
+    );
+    assert_eq!(out, "9|5");
+}
+
 /// Regression for issue #494: inferred ternary returns must retain nullability
 /// for object/null branches, including the assignment-effects path.
 #[test]

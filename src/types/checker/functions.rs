@@ -15,6 +15,7 @@ mod returns;
 
 use crate::parser::ast::{Expr, ExprKind};
 
+pub(crate) use returns::ReturnInfo;
 
 /// Returns true when `arg` is a non-nullsafe instance property fetch eligible for
 /// by-reference copy-in/copy-out lowering.

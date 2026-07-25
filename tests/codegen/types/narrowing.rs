@@ -13,6 +13,8 @@
 //! - Ternary-branch narrowing (`guard ? then : else`) mirrors the `if`/`else` narrowing: the guarded
 //!   variable is narrowed to its then-type in the then-branch and its else-type in the else-branch,
 //!   scoped to each branch so it never leaks past the ternary.
+//! - Pure `&&` conditions narrow every proven local in `if` and `while` bodies, including the
+//!   assignment-plus-`instanceof` loop shape used by Symfony's child-definition traversal.
 
 use super::*;
 
@@ -32,6 +34,222 @@ fn test_literal_false_type_and_strict_guard_runtime() {
         "#,
     );
     assert_eq!(out, "false:9");
+}
+
+/// Verifies a truthy local guard removes the nullable arm before numeric use without claiming
+/// that the false branch excludes the still-representable integer zero.
+#[test]
+fn test_truthy_guard_narrows_nullable_int_for_numeric_use() {
+    let out = compile_and_run_capture(
+        r#"<?php
+        function negateTruthy(?int $lines): int {
+            if ($lines) {
+                return -$lines;
+            }
+            return 0;
+        }
+        echo negateTruthy(3), ":", negateTruthy(null), ":", negateTruthy(0);
+        "#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "-3:0:0");
+}
+
+/// Verifies a divergent negated `is_array()` guard narrows the target of an inline `??=`
+/// assignment, leaving a concrete array for a following by-reference mutation.
+#[test]
+fn test_negated_is_array_guard_narrows_null_coalesce_assignment_target() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+        function consume(array|string|null $service): int {
+            if (is_string($service)) {
+                return -1;
+            }
+            if (!is_array($service ??= [])) {
+                throw new InvalidArgumentException("array required");
+            }
+            $before = count($service);
+            array_shift($service);
+            return 10 * $before + count($service);
+        }
+        echo consume([1, 2]), ":", consume(null), ":", consume("alias");
+        "#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "21:0:-1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the narrowed by-ref array store-back to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a truthiness-tested assignment replaces a nullable parameter's flow type on both
+/// branches, so a divergent falsey branch leaves the assigned array available to mutation.
+#[test]
+fn test_negated_truthy_assignment_replaces_nullable_array_after_return() {
+    let out = compile_and_run(
+        r#"<?php
+        function formatAlternatives(?array $alternatives = null): string {
+            if (null === $alternatives) {
+                if (!$alternatives = array_keys(["one" => 1, "two" => 2])) {
+                    return "empty";
+                }
+            }
+            $last = array_pop($alternatives);
+            return implode(",", $alternatives).":".$last;
+        }
+        echo formatAlternatives(), "|", formatAlternatives(["x", "y"]);
+        "#,
+    );
+    assert_eq!(out, "one:two|x:y");
+}
+
+/// Verifies ternary arms with different indexed element types retain their shared array container.
+#[test]
+fn test_conditional_array_reassignment_keeps_array_container_type() {
+    let out = compile_and_run(
+        r#"<?php
+function itemCount(string $value, bool $numeric): int {
+    if ('' === $value) {
+        return 0;
+    } else {
+        $value = $numeric ? [1] : explode(",", $value);
+        return count($value);
+    }
+}
+
+echo itemCount("a,b", false), ":", itemCount("x", true);
+"#,
+    );
+    assert_eq!(out, "2:1");
+}
+
+/// Verifies `??=` rebinds inferred parameter/local flow types without enforcing entry hints.
+#[test]
+fn test_null_coalesce_assignment_rebinds_nullable_inferred_locals() {
+    let out = compile_and_run(
+        r#"<?php
+function takeFirst(?array $values, mixed $fallback): string {
+    $values ??= $fallback;
+    if (!is_array($values)) {
+        return "invalid";
+    }
+    return array_shift($values);
+}
+
+function runDefault(?object $application): int {
+    $application ??= static fn () => 7;
+    return $application();
+}
+
+function canonical(?string $input): ?string {
+    $value = null;
+    if ($input && false !== $pos = strpos($input, ";")) {
+        $value = trim(substr($input, 0, $pos));
+    }
+    if (!$value ??= $input) {
+        return null;
+    }
+    return $value;
+}
+
+echo takeFirst(null, ["first"]), ":", runDefault(null), ":", canonical("text/plain");
+"#,
+    );
+    assert_eq!(out, "first:7:text/plain");
+}
+
+/// Verifies `!== false` narrows an `array_search()` result to its integer success arm
+/// inside the guarded branch before the value is reused as an indexed-array key.
+#[test]
+fn test_strict_not_false_guard_narrows_array_search_result() {
+    let out = compile_and_run(
+        r#"<?php
+        $values = ["first", "REMOTE_ADDR", "last"];
+        $index = array_search("REMOTE_ADDR", $values, true);
+        if ($index !== false) {
+            unset($values[$index]);
+        }
+        $values = array_values($values);
+        echo count($values), ":", $values[0], ":", $values[1];
+        "#,
+    );
+    assert_eq!(out, "2:first:last");
+}
+
+/// Verifies a negated `is_array()` guard around an assignment leaves the successful array arm
+/// precise after a divergent body, including a following by-reference array mutation.
+#[test]
+fn test_negated_is_array_assignment_guard_narrows_fallthrough() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+        function prependCandidate(mixed $candidate): string {
+            $values = [];
+            if (!is_array($values = $candidate)) {
+                throw new InvalidArgumentException("array required");
+            }
+            array_unshift($values, 9);
+            return count($values).":".$values[0].":".$values[1];
+        }
+        echo prependCandidate([2]);
+        "#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2:9:2");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the narrowed Mixed-array unshift path to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a `match (true)` arm result sees every narrowing proven by its `&&` condition.
+/// The first guard makes the mixed value indexable both in the second guard and in the result.
+#[test]
+fn test_match_true_and_chain_narrows_arm_result() {
+    let out = compile_and_run(
+        r#"<?php
+function firstInt(mixed $value): int {
+    return match (true) {
+        is_array($value) && is_int($value[0]) => $value[0],
+        default => 0,
+    };
+}
+
+echo firstInt([7]), ':', firstInt('no');
+"#,
+    );
+    assert_eq!(out, "7:0");
+}
+
+/// Verifies a local overwritten with the same object type on both `if` branches
+/// keeps that converged object type for a following nested property write.
+#[test]
+fn test_if_both_branches_overwrite_local_with_same_object_type() {
+    let out = compile_and_run(
+        r#"<?php
+        final class BranchBox {
+            public array $attributes = [];
+        }
+        function render(bool $alternate): string {
+            $value = "source";
+            if ($alternate) {
+                $value = new BranchBox();
+            } else {
+                $value = new BranchBox();
+            }
+            $value->attributes["language"] = "php";
+            return $value->attributes["language"];
+        }
+        echo render(false), ":", render(true);
+        "#,
+    );
+    assert_eq!(out, "php:php");
 }
 
 /// Verifies a builtin `int|false` result keeps the literal-false member precise, allowing the
@@ -171,6 +389,41 @@ fn test_instanceof_narrowing_two_object_union() {
         "#,
     );
     assert_eq!(out, "A|notA");
+}
+
+/// Verifies a subtype-only method remains available in true bodies guarded by a pure `&&`,
+/// including a `while` condition whose first operand assigns a nullable value. The narrowing must
+/// affect both checking and EIR method lowering without escaping to unguarded code.
+#[test]
+fn test_instanceof_and_chain_narrows_if_and_while_bodies() {
+    let out = compile_and_run(
+        r#"<?php
+        class Definition {
+            public function getClass(): ?string { return null; }
+        }
+        class ChildDefinition extends Definition {
+            public function getParent(): string { return "parent"; }
+        }
+        function fromIf(Definition $definition): string {
+            if ($definition instanceof ChildDefinition && strlen($definition->getParent()) > 0) {
+                return $definition->getParent();
+            }
+            return "none";
+        }
+        function fromTernary(Definition $definition): string {
+            return $definition instanceof ChildDefinition ? $definition->getParent() : "none";
+        }
+        function fromWhile(Definition $definition): string {
+            while ((null === $class = $definition->getClass()) && $definition instanceof ChildDefinition) {
+                return $definition->getParent();
+            }
+            return $class ?? "none";
+        }
+        echo fromIf(new ChildDefinition()), "|", fromTernary(new ChildDefinition()), "|",
+            fromWhile(new ChildDefinition());
+        "#,
+    );
+    assert_eq!(out, "parent|parent|parent");
 }
 
 /// Verifies the full overload pattern: an `is_int` guard stores the int into a typed property,
@@ -479,4 +732,102 @@ fn test_ternary_narrowing_does_not_leak() {
         "#,
     );
     assert_eq!(out, "5\n");
+}
+
+/// Verifies both edges of an `instanceof` guard converge after the guarded object branch
+/// overwrites the union local with the false-edge scalar type.
+#[test]
+fn test_instanceof_branch_reassignment_converges_local_type() {
+    let out = compile_and_run(
+        r#"<?php
+class TaggedName {
+    public function getTag(): string {
+        return "from-object";
+    }
+}
+
+function printTag(string $tag): void {
+    echo $tag, "\n";
+}
+
+function normalizeTag(string|TaggedName $tag): void {
+    if ($tag instanceof TaggedName) {
+        $tag = $tag->getTag();
+    }
+    printTag($tag);
+}
+
+normalizeTag(new TaggedName());
+normalizeTag("already-string");
+"#,
+    );
+    assert_eq!(out, "from-object\nalready-string\n");
+}
+
+/// Verifies an always-true null guard keeps the type assigned on its only reachable exit.
+#[test]
+fn test_null_guard_reassignment_keeps_only_reachable_type() {
+    let out = compile_and_run(
+        r#"<?php
+function printInitializedItems(): void {
+    $items = null;
+    if (null === $items) {
+        $items = ["A", "B"];
+    }
+    foreach ($items as $item) {
+        echo $item;
+    }
+}
+
+printInitializedItems();
+"#,
+    );
+    assert_eq!(out, "AB");
+}
+
+/// Verifies an unconditional sequential assignment replaces the local's current flow type.
+#[test]
+fn test_sequential_reassignment_replaces_current_flow_type() {
+    let out = compile_and_run(
+        r#"<?php
+class SequentialAssignmentValue {
+    public function label(): string {
+        return "object";
+    }
+}
+
+function printSequentialAssignment(SequentialAssignmentValue $value): void {
+    echo $value->label();
+}
+
+function replaceSequentialAssignment(): void {
+    $value = "stale";
+    $value = new SequentialAssignmentValue();
+    printSequentialAssignment($value);
+}
+
+replaceSequentialAssignment();
+"#,
+    );
+    assert_eq!(out, "object");
+}
+
+/// Verifies a diverging negative `is_numeric` guard preserves numeric strings for arithmetic
+/// without treating an unguarded string as numeric.
+#[test]
+fn test_is_numeric_guard_narrows_string_for_arithmetic() {
+    let out = compile_and_run(
+        r#"<?php
+function scaleNumericString(string $value) {
+    if (!is_numeric($value)) {
+        throw new InvalidArgumentException("not numeric");
+    }
+
+    return $value * 2;
+}
+
+echo scaleNumericString("12");
+"#,
+    );
+    assert_eq!(out, "24");
 }

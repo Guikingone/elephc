@@ -1001,6 +1001,20 @@ echo $im->format("Y-m-d H:i:s");
     assert_eq!(out, "2020-06-15 00:00:00");
 }
 
+/// PHP's coercive call mode accepts an integer timestamp as the string subject
+/// of `createFromFormat("U", ...)`; the EIR call boundary must stringify it.
+#[test]
+fn test_create_from_format_coerces_integer_subject() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$im = DateTimeImmutable::createFromFormat("U", 0);
+echo $im->format("Y-m-d H:i:s");
+"#,
+    );
+    assert_eq!(out, "1970-01-01 00:00:00");
+}
+
 /// Verifies a range of format specifiers: two-digit year `y`, no-leading-zero `n`/`j`, the `U`
 /// timestamp specifier, 12-hour `h` with am/pm `A`, and a literal `/` separator.
 #[test]
@@ -2456,6 +2470,18 @@ echo fmt($d), "|", (epoch($d) > 0 ? "pos" : "neg");
 "#,
     );
     assert_eq!(out, "2021|pos");
+}
+
+/// Verifies the guaranteed numeric `U.u` DateTime format can participate in float addition.
+#[test]
+fn test_datetime_fractional_unix_format_is_numeric_in_arithmetic() {
+    let out = compile_and_run(
+        r#"<?php
+$date = (new DateTimeImmutable())->setTimestamp(0);
+echo 0.5 + $date->format("U.u");
+"#,
+    );
+    assert_eq!(out, "0.5");
 }
 
 /// Verifies that calling a method on an `instanceof`-narrowed (`mixed` → `DateTimeInterface`)

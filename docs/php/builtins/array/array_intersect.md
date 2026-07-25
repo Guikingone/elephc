@@ -2,7 +2,7 @@
 title: "array_intersect()"
 description: "Computes the intersection of arrays."
 sidebar:
-  order: 14
+  order: 15
 ---
 
 ## array_intersect()

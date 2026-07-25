@@ -1858,6 +1858,15 @@ fn object_iterator_source(
     class_name: &str,
 ) -> IteratorSourceKind {
     if ctx.module.interface_infos.contains_key(class_name) {
+        if class_name == "Traversable"
+            || (interface_extends_interface(ctx, class_name, "Traversable")
+                && !interface_extends_interface(ctx, class_name, "Iterator"))
+        {
+            // `Traversable` deliberately exposes no iteration methods. Dispatch its runtime
+            // object through the dynamic iterable path, which probes IteratorAggregate first
+            // and otherwise drives the concrete Iterator implementation.
+            return IteratorSourceKind::DynamicIterable;
+        }
         return IteratorSourceKind::Interface {
             interface_name: class_name.to_string(),
             aggregate_class_name: None,

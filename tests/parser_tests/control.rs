@@ -563,14 +563,18 @@ fn test_static_var_comma_list_parses() {
         if name == "b" && matches!(init.kind, ExprKind::Null)));
 }
 
-/// Verifies the dynamic first-class-callable form `$cb(...)` parses to the variable's value: in
-/// elephc's closed world a callable-typed variable already is a callable, so the closure-creation
-/// form is the variable itself rather than a `ClosureCall`.
+/// Verifies the dynamic first-class-callable form `$cb(...)` preserves closure creation as an
+/// `__invoke` method target, allowing invokable object values to materialize a descriptor.
 #[test]
-fn test_dynamic_first_class_callable_parses_to_variable() {
+fn test_dynamic_first_class_callable_parses_to_invoke_target() {
     let stmts = parse_source("<?php $x = $cb(...);");
     let StmtKind::Assign { value, .. } = &stmts[0].kind else {
         panic!("expected assignment");
     };
-    assert!(matches!(&value.kind, ExprKind::Variable(name) if name == "cb"));
+    assert!(matches!(
+        &value.kind,
+        ExprKind::FirstClassCallable(CallableTarget::Method { object, method })
+            if method == "__invoke"
+                && matches!(&object.kind, ExprKind::Variable(name) if name == "cb")
+    ));
 }

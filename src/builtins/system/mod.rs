@@ -51,6 +51,7 @@ pub mod json_last_error_msg;
 pub mod json_support;
 pub mod json_validate;
 pub mod localtime;
+pub mod memory_get_usage;
 pub mod microtime;
 pub mod mktime;
 pub mod passthru;

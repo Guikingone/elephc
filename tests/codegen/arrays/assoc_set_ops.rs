@@ -378,6 +378,24 @@ foreach ($r as $k => $v) { echo "$k:$v "; }
     assert_eq!(out, "0:1 1:99 2:3 3:40 ");
 }
 
+/// Verifies `array_replace()` converts indexed inputs with nested heap-backed values while
+/// preserving shallow right-wins replacement and balanced ownership.
+#[test]
+fn test_array_replace_nested_indexed_inputs() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$rows = array_replace(array_fill(0, 2, []), [1 => ["stored"]]);
+echo count($rows);
+echo "|";
+echo count($rows[0]);
+echo "|";
+echo $rows[1][0];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2|0|stored");
+}
+
 /// Verifies array_replace_recursive() accepts scalar indexed inputs (converted to hashes).
 /// Fixture: [1,2,3] replaced by {1:9} → 0:1 1:9 2:3.
 #[test]
@@ -389,6 +407,21 @@ foreach ($r as $k => $v) { echo "$k:$v "; }
 "#,
     );
     assert_eq!(out, "0:1 1:9 2:3 ");
+}
+
+/// Verifies `array_replace_recursive()` accepts nested indexed-array inputs such as
+/// the empty row matrices produced by `array_fill()`.
+#[test]
+fn test_array_replace_recursive_nested_indexed_inputs() {
+    let out = compile_and_run(
+        r#"<?php
+$rows = array_replace_recursive(array_fill(0, 2, []), []);
+foreach ($rows as $key => $row) {
+    echo $key, ":", count($row), ";";
+}
+"#,
+    );
+    assert_eq!(out, "0:0;1:0;");
 }
 
 /// Verifies array_diff_assoc() accepts indexed inputs, keeping first-array entries whose

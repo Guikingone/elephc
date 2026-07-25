@@ -30,6 +30,23 @@ fn test_and_instanceof_guard_narrows_from_first_operand() {
     );
 }
 
+/// A stable property guarded by `instanceof` is narrowed for the right-hand side of the same
+/// short-circuit `&&`, so subtype-only methods resolve there.
+#[test]
+fn test_and_property_instanceof_guard_narrows_rhs() {
+    expect_ok(
+        "<?php \
+         interface BaseValue {} \
+         interface SpecializedValue extends BaseValue { public function matches(): bool; } \
+         class Holder { \
+             public function __construct(private BaseValue $value) {} \
+             public function matches(): bool { \
+                 return $this->value instanceof SpecializedValue && $this->value->matches(); \
+             } \
+         }",
+    );
+}
+
 /// The narrowing from operand 0 threads to EVERY later operand of the same `&&` chain, not just the
 /// one immediately after the guard: both `$q->m()` calls (operands 1 and 2) see `$q` as `CQ`.
 #[test]

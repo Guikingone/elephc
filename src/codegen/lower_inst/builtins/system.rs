@@ -136,6 +136,48 @@ pub(crate) fn lower_microtime(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `memory_get_usage(real_usage = false)` from Elephc allocator counters.
+///
+/// The default form returns `_gc_live`, the sum of currently-live heap payload bytes.
+/// The `real_usage` form returns `_heap_off`, the committed bump-arena extent, which includes
+/// headers and freed blocks retained for reuse. Both counters are maintained identically on all
+/// supported targets by `__rt_heap_alloc` / `__rt_heap_free`.
+pub(crate) fn lower_memory_get_usage(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "memory_get_usage", 0, 1)?;
+    let result = abi::int_result_reg(ctx.emitter);
+    let Some(real_usage) = inst.operands.first().copied() else {
+        abi::emit_load_symbol_to_reg(ctx.emitter, result, "_gc_live", 0);
+        return store_if_result(ctx, inst);
+    };
+    require_integer_like(
+        ctx.load_value_to_result(real_usage)?,
+        "memory_get_usage real_usage",
+    )?;
+    let live_label = ctx.next_label("memory_get_usage_live");
+    let done_label = ctx.next_label("memory_get_usage_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                              // did the caller request committed arena usage?
+            ctx.emitter.instruction(&format!("b.eq {live_label}"));             // use live payload bytes for false
+            abi::emit_load_symbol_to_reg(ctx.emitter, result, "_heap_off", 0);
+            ctx.emitter.instruction(&format!("b {done_label}"));                // skip the live-byte fallback
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did the caller request committed arena usage?
+            ctx.emitter.instruction(&format!("jz {live_label}"));               // use live payload bytes for false
+            abi::emit_load_symbol_to_reg(ctx.emitter, result, "_heap_off", 0);
+            ctx.emitter.instruction(&format!("jmp {done_label}"));              // skip the live-byte fallback
+        }
+    }
+    ctx.emitter.label(&live_label);
+    abi::emit_load_symbol_to_reg(ctx.emitter, result, "_gc_live", 0);
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `mktime(hour, minute, second, month, day, year)` through the runtime helper.
 pub(crate) fn lower_mktime(
     ctx: &mut FunctionContext<'_>,

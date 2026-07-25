@@ -21,11 +21,14 @@
 //!   wholesale, so they re-type even an ALREADY-defined variable (PHP replaces it regardless of
 //!   its prior value — e.g. a subject reused as the out-param). IN-OUT params (sort, array_push, …)
 //!   keep the caller's existing type and are only used to define currently-undefined variables.
-//! - Positional argument shapes only: calls using named or spread arguments bail so
-//!   the positional parameter mapping cannot be misaligned.
+//! - Named arguments use the canonical call-argument planner before by-reference
+//!   outputs are matched; dynamic spread elements remain unpromoted because their
+//!   runtime parameter mapping cannot be proven statically.
 
 use crate::names::{php_symbol_key, Name};
-use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
+use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver};
+use crate::types::call_args::{plan_call_args, PlannedRegularArg};
+use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::super::super::Checker;
@@ -111,7 +114,7 @@ impl Checker {
             if env.contains_key(var_name) && !builtin_out_only_ref_param(builtin_name, index) {
                 continue;
             }
-            let inserted_ty = builtin_out_param_type(builtin_name, index);
+            let inserted_ty = builtin_out_param_type(builtin_name, index, args);
             outputs.push((var_name.clone(), inserted_ty));
         }
         outputs
@@ -158,6 +161,21 @@ impl Checker {
     ) -> Vec<(String, PhpType)> {
         let method_key = php_symbol_key(method);
         let Some(sig) = self.resolve_method_sig_for_by_ref(object_type, &method_key) else {
+            return Vec::new();
+        };
+        Self::sig_undefined_by_ref_variable_outputs(sig, args, env)
+    }
+
+    /// Returns undefined caller variables bound to by-reference parameters when invoking a local
+    /// whose callable signature was resolved from a closure, first-class callable, or finite
+    /// builtin function-name expression.
+    pub(crate) fn callable_variable_by_ref_outputs(
+        &self,
+        var: &str,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Vec<(String, PhpType)> {
+        let Some(sig) = self.callable_sigs.get(var) else {
             return Vec::new();
         };
         Self::sig_undefined_by_ref_variable_outputs(sig, args, env)
@@ -587,14 +605,21 @@ impl Checker {
                 self.collect_nested_by_ref_outputs(property, env, out);
             }
             ExprKind::ExprCall { callee, args } => {
+                if let ExprKind::Variable(var) = &callee.kind {
+                    out.extend(self.callable_variable_by_ref_outputs(var, args, env));
+                }
                 self.collect_nested_by_ref_outputs(callee, env, out);
                 for arg in args {
                     self.collect_nested_by_ref_outputs(arg, env, out);
                 }
             }
-            ExprKind::ClosureCall { args, .. }
-            | ExprKind::NewObject { args, .. }
-            | ExprKind::NewScopedObject { args, .. } => {
+            ExprKind::ClosureCall { var, args } => {
+                out.extend(self.callable_variable_by_ref_outputs(var, args, env));
+                for arg in args {
+                    self.collect_nested_by_ref_outputs(arg, env, out);
+                }
+            }
+            ExprKind::NewObject { args, .. } | ExprKind::NewScopedObject { args, .. } => {
                 for arg in args {
                     self.collect_nested_by_ref_outputs(arg, env, out);
                 }
@@ -606,9 +631,10 @@ impl Checker {
     /// Collects `(name, type)` pairs for plain `$variable` arguments that are bound to a
     /// by-reference parameter and are not yet defined in `env`.
     ///
-    /// Bails (returns empty) when the call uses named or spread arguments, because the positional
-    /// parameter mapping used here would otherwise be misaligned. The inserted type matches call
-    /// validation: declared parameter types verbatim, `Mixed` for undeclared parameters.
+    /// Resolves named arguments through the shared call-argument planner so their source variables
+    /// are matched against the correct parameter positions. Dynamic spread elements are skipped
+    /// because their runtime parameter mapping is not statically known. The inserted type matches
+    /// call validation: declared parameter types verbatim, `Mixed` for undeclared parameters.
     fn sig_undefined_by_ref_variable_outputs(
         sig: &FunctionSig,
         args: &[Expr],
@@ -617,22 +643,17 @@ impl Checker {
         if !sig.ref_params.iter().any(|is_ref| *is_ref) {
             return Vec::new();
         }
-        if args
-            .iter()
-            .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)))
-        {
-            return Vec::new();
-        }
+
         let mut outputs = Vec::new();
-        for (index, arg) in args.iter().enumerate() {
+        let mut collect_output = |index: usize, arg: &Expr| {
             let ExprKind::Variable(var_name) = &arg.kind else {
-                continue;
+                return;
             };
             if !sig.ref_params.get(index).copied().unwrap_or(false) {
-                continue;
+                return;
             }
             if env.contains_key(var_name) {
-                continue;
+                return;
             }
             let inserted_ty = if sig.declared_params.get(index).copied().unwrap_or(false) {
                 sig.params
@@ -643,7 +664,42 @@ impl Checker {
                 PhpType::Mixed
             };
             outputs.push((var_name.clone(), inserted_ty));
+        };
+
+        if args
+            .iter()
+            .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
+        {
+            let call_span = args
+                .first()
+                .map(|arg| arg.span)
+                .unwrap_or_else(crate::span::Span::dummy);
+            let Ok(plan) = plan_call_args(
+                sig,
+                args,
+                call_span,
+                false,
+                sig.variadic.is_some(),
+            ) else {
+                return Vec::new();
+            };
+            for (index, arg) in plan.regular_args.iter().enumerate() {
+                if let PlannedRegularArg::Source { expr, .. } = arg {
+                    collect_output(index, expr);
+                }
+            }
+        } else {
+            if args
+                .iter()
+                .any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+            {
+                return Vec::new();
+            }
+            for (index, arg) in args.iter().enumerate() {
+                collect_output(index, arg);
+            }
         }
+
         outputs
     }
 }
@@ -685,15 +741,25 @@ fn builtin_out_only_ref_param(name: &str, index: usize) -> bool {
 // Retained for the checker unit tests and pending re-integration after the
 // origin/main merge; not reachable from the production checker paths yet.
 #[allow(dead_code)]
-fn builtin_out_param_type(builtin: &str, index: usize) -> PhpType {
+fn builtin_out_param_type(builtin: &str, index: usize, args: &[Expr]) -> PhpType {
     let lower = builtin.to_ascii_lowercase();
     match lower.as_str() {
+        // With PREG_OFFSET_CAPTURE each preg_match capture becomes [string, int].
+        "preg_match" if index == 2 && preg_flags_may_capture_offsets(args) => {
+            PhpType::Array(Box::new(PhpType::Array(Box::new(PhpType::Mixed))))
+        }
         // preg_match(&$matches): array of full-match + capture-group strings.
         "preg_match" if index == 2 => PhpType::Array(Box::new(PhpType::Str)),
+        // With PREG_OFFSET_CAPTURE each preg_match_all leaf becomes [string, int].
+        "preg_match_all" if index == 2 && preg_flags_may_capture_offsets(args) => {
+            PhpType::Array(Box::new(PhpType::Array(Box::new(PhpType::Array(
+                Box::new(PhpType::Mixed),
+            )))))
+        }
         // preg_match_all(&$matches): array of (full-match list, capture-group list).
-        "preg_match_all" if index == 2 => PhpType::Array(Box::new(PhpType::Array(Box::new(
-            PhpType::Str,
-        )))),
+        "preg_match_all" if index == 2 => {
+            PhpType::Array(Box::new(PhpType::Array(Box::new(PhpType::Str))))
+        }
         // preg_replace(&$count): int replacement count.
         "preg_replace" if index == 4 => PhpType::Int,
         // parse_str(&$result): associative array of parsed key => value pairs.
@@ -707,6 +773,41 @@ fn builtin_out_param_type(builtin: &str, index: usize) -> PhpType {
     }
 }
 
+/// Returns whether a preg call's flags can produce `[string, int]` capture pairs.
+///
+/// Known literal/constant bitmasks retain the precise string-only shape when the
+/// offset bit is absent. A dynamic flags expression is conservatively treated as
+/// possibly offset-capturing so later indexing uses boxed `Mixed` leaf values.
+fn preg_flags_may_capture_offsets(args: &[Expr]) -> bool {
+    let Some(flags) = args.get(3) else {
+        return false;
+    };
+    preg_static_int_value(flags).map_or(true, |value| value & 256 != 0)
+}
+
+/// Evaluates the literal and preg-constant bitwise expressions accepted as static flag masks.
+fn preg_static_int_value(expr: &Expr) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::ConstRef(name) => PREG_INT_CONSTANTS
+            .iter()
+            .find_map(|(constant, value)| (*constant == name.as_str()).then_some(*value)),
+        ExprKind::Negate(inner) => preg_static_int_value(inner).map(|value| -value),
+        ExprKind::BitNot(inner) => preg_static_int_value(inner).map(|value| !value),
+        ExprKind::BinaryOp { left, op, right } => {
+            let left = preg_static_int_value(left)?;
+            let right = preg_static_int_value(right)?;
+            match op {
+                BinOp::BitAnd => Some(left & right),
+                BinOp::BitOr => Some(left | right),
+                BinOp::BitXor => Some(left ^ right),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -714,6 +815,68 @@ mod tests {
     /// Convenience: the nested-array type `preg_match_all`'s `$matches` out-param produces.
     fn preg_match_all_matches_type() -> PhpType {
         PhpType::Array(Box::new(PhpType::Array(Box::new(PhpType::Str))))
+    }
+
+    /// Builds an expression referring to PHP's offset-capture preg flag.
+    fn preg_offset_capture_expr() -> Expr {
+        Expr::new(
+            ExprKind::ConstRef(Name::unqualified("PREG_OFFSET_CAPTURE")),
+            crate::span::Span::dummy(),
+        )
+    }
+
+    /// Verifies `preg_match` offset captures are typed as `[string, int]` pairs.
+    #[test]
+    fn test_preg_match_offset_capture_output_has_mixed_pair_leaves() {
+        let args = [
+            Expr::string_lit("/x/"),
+            Expr::string_lit("x"),
+            Expr::var("matches"),
+            preg_offset_capture_expr(),
+        ];
+        assert_eq!(
+            builtin_out_param_type("preg_match", 2, &args),
+            PhpType::Array(Box::new(PhpType::Array(Box::new(PhpType::Mixed)))),
+        );
+    }
+
+    /// Verifies `preg_match_all` offset captures retain the extra occurrence and pair levels.
+    #[test]
+    fn test_preg_match_all_offset_capture_output_has_nested_mixed_pairs() {
+        let args = [
+            Expr::string_lit("/x/"),
+            Expr::string_lit("xx"),
+            Expr::var("matches"),
+            Expr::binop(
+                Expr::new(
+                    ExprKind::ConstRef(Name::unqualified("PREG_SET_ORDER")),
+                    crate::span::Span::dummy(),
+                ),
+                BinOp::BitOr,
+                preg_offset_capture_expr(),
+            ),
+        ];
+        assert_eq!(
+            builtin_out_param_type("preg_match_all", 2, &args),
+            PhpType::Array(Box::new(PhpType::Array(Box::new(PhpType::Array(
+                Box::new(PhpType::Mixed),
+            ))))),
+        );
+    }
+
+    /// Verifies a known zero preg flag keeps the precise string-only matches shape.
+    #[test]
+    fn test_preg_match_zero_flags_keep_string_capture_type() {
+        let args = [
+            Expr::string_lit("/x/"),
+            Expr::string_lit("x"),
+            Expr::var("matches"),
+            Expr::int_lit(0),
+        ];
+        assert_eq!(
+            builtin_out_param_type("preg_match", 2, &args),
+            PhpType::Array(Box::new(PhpType::Str)),
+        );
     }
 
     /// Verifies the OUT-only classifier lists exactly the four wholesale-overwrite builtin

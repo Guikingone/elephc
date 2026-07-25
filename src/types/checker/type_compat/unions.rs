@@ -58,6 +58,19 @@ impl Checker {
         match expected {
             PhpType::Mixed => true,
             PhpType::Bool if matches!(actual, PhpType::False) => true,
+            PhpType::Callable => match actual {
+                PhpType::Object(name)
+                    if name
+                        .trim_start_matches('\\')
+                        .eq_ignore_ascii_case("Closure") =>
+                {
+                    true
+                }
+                PhpType::Union(members) => members
+                    .iter()
+                    .all(|member| self.type_accepts(expected, member)),
+                _ => false,
+            },
             // PHP coercive mode: scalars accept Mixed with runtime narrowing.
             PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str
                 if matches!(actual, PhpType::Mixed) =>
@@ -195,19 +208,33 @@ impl Checker {
     }
 
     /// Returns true when `member` — a non-matching member of a union source — is acceptable
-    /// alongside the matching member when the union flows into the concrete `target`. Null
-    /// and void map to the boxed-null tag and are accepted for any target family; an extra
-    /// scalar is accepted only for a scalar target (PHP coercive cast), while class and array
-    /// targets reject any non-null extra member as a real type error.
+    /// alongside the matching member when the union flows into the concrete `target`. Null and
+    /// void map to the boxed-null tag and are accepted for any target family.
+    ///
+    /// A concrete NON-object target physically receives a boxed cell for a union argument
+    /// (`PhpType::Union(_).codegen_repr() == Mixed`) and coerces it at the call/return boundary
+    /// with defined, memory-safe runtime semantics (string/array/scalar casts, or a graceful
+    /// "could not be converted" fatal) — identical to the already-accepted `mixed` source — so any
+    /// extra member is deferred to runtime. The single deliberate exception is `false`: a
+    /// `false` alongside a scalar (`int|false`, `string|false`) stays a hard error to preserve the
+    /// sentinel-return diagnostic, because a silent `false`→`0`/`""` coercion is the classic
+    /// `strpos()`/`fgetc()` footgun (`0` is a valid offset).
+    ///
+    /// OBJECT targets are excluded entirely (`_ => false`): elephc emits no runtime instanceof
+    /// guard at an object boundary, so a wrongly-typed extra member would be bit-read as the wrong
+    /// object (a SIGSEGV risk) and must stay loud.
     fn gradual_other_member_coercible(&self, target: &PhpType, member: &PhpType) -> bool {
         if matches!(member, PhpType::Void | PhpType::Never | PhpType::Mixed) {
             return true;
         }
         match target {
-            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str => matches!(
-                member,
-                PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str
-            ),
+            PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::Str
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Iterable => !matches!(member, PhpType::False),
             _ => false,
         }
     }

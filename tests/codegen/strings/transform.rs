@@ -154,6 +154,18 @@ fn test_str_replace_multiple() {
     assert_eq!(out, "Hell0 W0rld");
 }
 
+/// Verifies `strlen` applies PHP weak scalar coercion both directly and as an `array_map` callback.
+#[test]
+fn test_strlen_weak_scalar_coercion_including_callback() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", array_map("strlen", [12, 345])), ":";
+echo strlen(123), ":", strlen(1.5), ":", strlen(true), ":", strlen(false), ":", strlen(null);
+"#,
+    );
+    assert_eq!(out, "2,3:3:3:1:0:0");
+}
+
 /// Verifies str_replace with an array `$search` and a single-string `$replace` replaces every
 /// search needle with the one replacement, processing search elements in order.
 #[test]

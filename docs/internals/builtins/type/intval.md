@@ -16,33 +16,35 @@ sidebar:
 
 ### Lowering notes
 
-- Uses the `eir_primitive` strategy from the single-source builtin descriptor.
-- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.intval` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
 ## Semantic descriptor
 
-- **Target strategy**: `eir_primitive`
-- **Validation**: `signature`
-- **Result type source**: `declared`
-- **Result ownership**: `non_heap`
-- **Effects**: `shared`
+- **Target strategy**: `runtime_call`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `may_alias_arguments`
+- **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `dynamic`
+- **Callable policy**: `dynamic_target`
 - **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
 
-- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
+- **Typed EIR target**: `runtime.intval`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 
 ```php
-function intval(mixed $value): int
+function intval(mixed $value, int $base = 10): int
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–2 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

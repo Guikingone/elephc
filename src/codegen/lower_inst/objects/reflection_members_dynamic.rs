@@ -17,6 +17,8 @@
 //! Key details:
 //! - Class names and method names are PHP case-insensitive (both case-folded before the compare
 //!   chains); property names are case-sensitive and compared byte-for-byte.
+//! - Gradual member-name operands are unboxed and runtime-checked as strings before dispatch;
+//!   non-string values throw a catchable `TypeError`.
 //! - Matched (class, member) arms reuse the same `emit_reflection_owner_object` metadata bake
 //!   the literal construction path uses, so both routes produce identical objects.
 //! - The candidate class set is the same pay-for-use, real-declaration-span set the dynamic
@@ -358,8 +360,8 @@ fn emit_member_class_argument_type_error_throw(ctx: &mut FunctionContext<'_>, ki
 }
 
 /// Loads the member-name query into the dispatcher's arg2/arg3 registers (`x2`/`x3` on AArch64,
-/// `rdx`/`rcx` on x86_64). The checker guarantees a `Str`-typed argument, but its EIR
-/// representation may still be a boxed `Mixed` cell, which is unboxed here.
+/// `rdx`/`rcx` on x86_64). Concrete strings load directly. Gradual `Mixed`/union values are
+/// unboxed and must carry the runtime string tag; other tags throw a catchable `TypeError`.
 fn emit_member_name_query_to_arg_regs(
     ctx: &mut FunctionContext<'_>,
     member_operand: ValueId,
@@ -373,12 +375,21 @@ fn emit_member_name_query_to_arg_regs(
         PhpType::Mixed | PhpType::Union(_) => {
             ctx.load_value_to_result(member_operand)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            let string_label = ctx.next_label("reflect_member_name_string");
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #1");                      // does the gradual member name carry the runtime string tag?
+                    ctx.emitter.instruction(&format!("b.eq {}", string_label)); // continue only for a runtime string member name
+                    emit_member_name_argument_type_error_throw(ctx, kind);
+                    ctx.emitter.label(&string_label);
                     ctx.emitter.instruction("mov x3, x2");                      // move the unboxed member-name length into the dispatcher's arg3
                     ctx.emitter.instruction("mov x2, x1");                      // move the unboxed member-name pointer into the dispatcher's arg2
                 }
                 Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 1");                      // does the gradual member name carry the runtime string tag?
+                    ctx.emitter.instruction(&format!("je {}", string_label));   // continue only for a runtime string member name
+                    emit_member_name_argument_type_error_throw(ctx, kind);
+                    ctx.emitter.label(&string_label);
                     ctx.emitter.instruction("mov rcx, rdx");                    // move the unboxed member-name length into the dispatcher's arg3
                     ctx.emitter.instruction("mov rdx, rdi");                    // move the unboxed member-name pointer into the dispatcher's arg2
                 }
@@ -393,6 +404,22 @@ fn emit_member_name_query_to_arg_regs(
         }
     }
     Ok(())
+}
+
+/// Throws a catchable `\TypeError` when a gradual member-name operand is not a runtime string.
+fn emit_member_name_argument_type_error_throw(
+    ctx: &mut FunctionContext<'_>,
+    kind: MemberKind,
+) {
+    let message: &[u8] = match kind {
+        MemberKind::Method => {
+            b"ReflectionMethod::__construct(): Argument #2 ($method) must be of type ?string"
+        }
+        MemberKind::Property => {
+            b"ReflectionProperty::__construct(): Argument #2 ($property) must be of type string"
+        }
+    };
+    emit_reflection_dynamic_type_error_throw(ctx, message);
 }
 
 /// Returns true when the module contains at least one dynamic-argument

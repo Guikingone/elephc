@@ -1282,6 +1282,21 @@ fn test_end_returns_last_element() {
     assert_eq!(out, "30");
 }
 
+/// Verifies the canonical builtin catalog exposes `end()` to `function_exists()` and lets
+/// case-insensitive unqualified calls inside a namespace fall back to the global builtin.
+#[test]
+fn test_end_catalog_supports_case_insensitive_namespace_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Catalog;
+$values = [10, 20, 30];
+echo \function_exists("EnD") ? "Y:" : "N:";
+echo EnD($values);
+"#,
+    );
+    assert_eq!(out, "Y:30");
+}
+
 /// Verifies `end()` on an empty array returns `false`, matching PHP's empty-array behavior.
 /// `var_dump` renders the boxed `false` result so the bool type is observable.
 #[test]
