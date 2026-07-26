@@ -537,3 +537,48 @@ fn test_include_with_dirname_levels_zero_fails() {
         "main.php",
     ));
 }
+
+/// Verifies a lazily-autoloaded (PSR-4) class whose method assigns an unresolvable runtime-dynamic
+/// `require`/`include` into typed properties compiles to a working binary. Such a store degrades to
+/// a diverging runtime-fatal stub: the direct `$this->bundles = require $p;` (array-typed) is
+/// replaced by the stub (dropping the store, which has no `prop_set mixed -> Array` lowering), while
+/// the nested `is_object($this->container = include $p)` (object-typed) keeps the hoist's `mixed`
+/// seed (representation-safe for an object property). The degraded branch is guarded off at runtime,
+/// so the program returns normally — proving the shape both compiles AND runs, not merely that the
+/// checker's earlier impossible `got Int` mismatch disappears.
+#[test]
+fn test_lenient_dynamic_include_into_typed_properties_compiles() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                "{ \"autoload\": { \"psr-4\": { \"App\\\\\": \"src/\" } } }",
+            ),
+            (
+                "src/Loader.php",
+                r#"<?php
+namespace App;
+class Loader {
+    public array $bundles = [];
+    public ?object $container = null;
+    public function load(string $p): string {
+        if ($p === '') {
+            $this->bundles = require $p;
+            if (is_file($p) && \is_object($this->container = include $p)) {
+                return "loaded";
+            }
+        }
+        return "ok";
+    }
+}
+"#,
+            ),
+            (
+                "main.php",
+                "<?php\nuse App\\Loader;\n$l = new Loader();\necho $l->load(\"x\");\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}

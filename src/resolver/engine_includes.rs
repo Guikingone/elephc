@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::errors::CompileError;
 use crate::names::Name;
-use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind, TypeExpr};
 use crate::span::Span;
 
 use super::declarations::strip_discoverable_declarations;
@@ -34,6 +34,42 @@ pub(super) enum IncludeValueCapture {
     Assign(String),
     /// `return require X;` — return the include's value from the enclosing function.
     Return,
+}
+
+/// Lowers a `$obj->prop = require $dynamic;` / `Class::$prop = require $dynamic;` whose include
+/// path is an unresolvable runtime-dynamic string under lenient lowering directly to the diverging
+/// runtime-fatal stub, dropping the property store entirely.
+///
+/// Such a store is dead: the include is evaluated (and fatals) before the assignment completes, so
+/// the value never reaches the property. Routing it through the normal value-include hoist instead
+/// seeds a hidden `mixed` temporary and captures it into the typed property — which is
+/// representation-safe for object/union properties but has no EIR lowering for an *array*-typed
+/// property (`prop_set mixed -> Array` is unsupported), turning the checker-level fix into a
+/// codegen false-green (`$this->bundles = require $cachePath;` in Symfony's Kernel). Emitting only
+/// the stub keeps that store out of both the checker and the backend. Nested/conditional include
+/// stores (`... && is_object($this->container = include $p)`, `$x = $c ? require $p : []`) are not
+/// direct property statements and stay on the hoist path, where the `mixed` seed is EIR-safe
+/// (object property / untyped local).
+///
+/// Returns `None` (fall through to normal resolution) unless the statement is exactly a
+/// property/static-property assignment whose direct right-hand side is a degraded runtime-dynamic
+/// include; a statically-invalid path is left to raise its usual hard error.
+pub(super) fn try_expand_degraded_property_include(
+    stmt: &Stmt,
+    state: &ResolveState,
+) -> Option<Vec<Stmt>> {
+    let value = match &stmt.kind {
+        StmtKind::PropertyAssign { value, .. }
+        | StmtKind::StaticPropertyAssign { value, .. } => value,
+        _ => return None,
+    };
+    let ExprKind::IncludeValue { path, .. } = &value.kind else {
+        return None;
+    };
+    if !(state.lenient_dynamic_includes && fold_include_path(path, state).is_err()) {
+        return None;
+    }
+    dynamic_include_fatal_stub(path, stmt.span)
 }
 
 /// Resolves a single include/require statement by parsing the target file,
@@ -247,6 +283,18 @@ pub(super) fn expand_value_include(
         }
     }
 
+    // An unresolvable runtime-dynamic path under lenient lowering degrades to a diverging
+    // runtime-fatal stub (`resolve_include_stmt` returns the `dynamic_include_fatal_stub` body).
+    // For a non-`Return` capture (`$x = require $dynamic;`, or the hoisted temp for a nested
+    // `... = include $dynamic`), the stub cannot early-return as the `Return` case above does, so
+    // the temp is still seeded and captured into the host statement. Because the file is
+    // unresolvable, the value it would "return" is genuinely unknown — typing the seed `mixed`
+    // (rather than the `int(1)` no-return default) keeps that capture representation-safe to store
+    // into any typed target the host assigns it to. The stub diverges before the store, so the
+    // value is never observed at runtime; this only prevents an impossible `got Int` type error
+    // (e.g. `$this->container = require $cachePath;` where `$container` is object-typed).
+    let degraded_dynamic = state.lenient_dynamic_includes && fold_include_path(path, state).is_err();
+
     let tmp = format!(
         "__elephc_inc_{}",
         VALUE_INCLUDE_COUNTER.fetch_add(1, Ordering::Relaxed)
@@ -286,13 +334,11 @@ pub(super) fn expand_value_include(
             let captured_return = rewrite_first_include_return(&mut wrapped, &tmp);
             // Pre-seed the default include value of `1` when the included body cannot set the
             // temporary itself: either it has no top-level `return`, or it is an `_once` include
-            // whose guarded body may be skipped on a repeat include.
+            // whose guarded body may be skipped on a repeat include. For a degraded runtime-fatal
+            // dynamic include the seed is typed `mixed` instead (see `degraded_dynamic` above): the
+            // unresolvable file's value is unknown, and the diverging stub means it is never read.
             if !captured_return || once {
-                out.push(assign_temp(
-                    &tmp,
-                    Expr::new(ExprKind::IntLiteral(1), span),
-                    span,
-                ));
+                out.push(seed_include_temp(&tmp, degraded_dynamic, span));
             }
             out.extend(wrapped);
         }
@@ -381,6 +427,27 @@ fn concat(left: Expr, right: Expr, span: Span) -> Expr {
         },
         span,
     )
+}
+
+/// Builds the include temporary's default-value seed. The seed value is always the `int(1)`
+/// no-return default; when `mixed_typed` is set (a degraded runtime-fatal dynamic include), the
+/// seed is emitted as a `mixed`-typed local declaration so the temp — captured into a typed host
+/// target the diverging stub never actually reaches — types as `mixed` rather than `int`, keeping
+/// the store representation-safe instead of raising an impossible `got Int` mismatch.
+fn seed_include_temp(temp: &str, mixed_typed: bool, span: Span) -> Stmt {
+    let value = Expr::new(ExprKind::IntLiteral(1), span);
+    if mixed_typed {
+        Stmt::new(
+            StmtKind::TypedAssign {
+                type_expr: TypeExpr::Named(Name::unqualified("mixed")),
+                name: temp.to_string(),
+                value,
+            },
+            span,
+        )
+    } else {
+        assign_temp(temp, value, span)
+    }
 }
 
 /// Builds a `<temp> = <value>;` assignment statement for the hidden include temporary.

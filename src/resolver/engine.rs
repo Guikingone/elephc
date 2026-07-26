@@ -17,7 +17,10 @@ use crate::parser::ast::{CatchClause, ClassMethod, ExprKind, Stmt, StmtKind};
 
 use super::contains::stmt_has_value_include;
 use super::discovery::FunctionVariantRegistry;
-use super::engine_includes::{expand_value_include, resolve_include_stmt, IncludeValueCapture};
+use super::engine_includes::{
+    expand_value_include, resolve_include_stmt, try_expand_degraded_property_include,
+    IncludeValueCapture,
+};
 use super::hoist_includes::hoist_value_includes_in_stmt;
 use super::include_path::fold_include_path;
 use super::state::{
@@ -90,6 +93,15 @@ pub(super) fn resolve_stmts(
     let mut result = Vec::new();
 
     for stmt in stmts {
+        // A `$obj->prop = require $dynamic;` whose degraded runtime-fatal include would otherwise
+        // seed a hidden `mixed` temporary captured into the typed property lowers directly to the
+        // diverging stub, dropping the dead store (see `try_expand_degraded_property_include`): the
+        // include fatals before the assignment, and `prop_set mixed -> Array` has no EIR lowering.
+        if let Some(stub) = try_expand_degraded_property_include(&stmt, state) {
+            result.extend(stub);
+            continue;
+        }
+
         // Expression-position includes (`$x = require X;` / `return require X;`) are expanded
         // before generic expression resolution so the included file's statements are inlined into
         // the caller's scope rather than resolved as an opaque sub-expression.
