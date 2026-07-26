@@ -55,6 +55,18 @@ pub(super) fn lower_filter_var_int(
 ) -> Result<()> {
     super::ensure_arg_count(inst, "filter_var", 1)?;
     let value = expect_operand(inst, 0)?;
+    emit_filter_var_int_result(ctx, value, null_on_failure)?;
+    store_if_result(ctx, inst)
+}
+
+/// Emits the boxed `Mixed` `FILTER_VALIDATE_INT` result for `value` into the integer
+/// result register, without storing it. Shared by `lower_filter_var_int` and the
+/// range-constrained variant.
+fn emit_filter_var_int_result(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    null_on_failure: bool,
+) -> Result<()> {
     match ctx.value_php_type(value)?.codegen_repr() {
         PhpType::Int => {
             ctx.load_value_to_result(value)?;
@@ -87,6 +99,45 @@ pub(super) fn lower_filter_var_int(
             )))
         }
     }
+    Ok(())
+}
+
+/// Lowers `filter_var$int_range`/`filter_var$int_range_nof`: `FILTER_VALIDATE_INT`
+/// with a compile-time-constant `min_range`/`max_range` constraint. Operands are the
+/// value plus the (already-resolved, `PHP_INT_MIN`/`PHP_INT_MAX`-defaulted) bounds.
+///
+/// Produces the base `FILTER_VALIDATE_INT` boxed result, then hands it to
+/// `__rt_filter_int_range`, which returns the result unchanged when it is a non-int
+/// failure passthrough or an int within `[min, max]`, and otherwise releases it and
+/// returns the range-failure value (`false`, or `null` for the `_nof` variant).
+pub(super) fn lower_filter_var_int_range(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    null_on_failure: bool,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "filter_var", 3)?;
+    let value = expect_operand(inst, 0)?;
+    let min = expect_operand(inst, 1)?;
+    let max = expect_operand(inst, 2)?;
+    emit_filter_var_int_result(ctx, value, null_on_failure)?;
+    // Result box is in the integer result register (arg0 of `__rt_filter_int_range`);
+    // load the bounds into the remaining argument registers (a `ConstI64` operand loads
+    // as a direct frame-slot read, so the result register is preserved), then the fail
+    // mode immediate.
+    let fail_is_null = i64::from(null_on_failure);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(min, "x1")?;
+            ctx.load_value_to_reg(max, "x2")?;
+            abi::emit_load_int_immediate(ctx.emitter, "x3", fail_is_null);
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(min, "rdi")?;
+            ctx.load_value_to_reg(max, "rsi")?;
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", fail_is_null);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_filter_int_range");
     store_if_result(ctx, inst)
 }
 

@@ -109,6 +109,8 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "filter_var$default_nof" => filter::lower_filter_var_default(ctx, inst, true),
         "filter_var$int" => filter::lower_filter_var_int(ctx, inst, false),
         "filter_var$int_nof" => filter::lower_filter_var_int(ctx, inst, true),
+        "filter_var$int_range" => filter::lower_filter_var_int_range(ctx, inst, false),
+        "filter_var$int_range_nof" => filter::lower_filter_var_int_range(ctx, inst, true),
         "filter_var$float" => filter::lower_filter_var_float(ctx, inst, false),
         "filter_var$float_nof" => filter::lower_filter_var_float(ctx, inst, true),
         "filter_var$bool" => filter::lower_filter_var_bool(ctx, inst, false),

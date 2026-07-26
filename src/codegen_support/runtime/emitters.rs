@@ -645,6 +645,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // trimmer first, then the int/float/bool validators that call it plus
     // __rt_cstr (io, above) and __rt_strcasecmp (strings, above).
     filter::emit_filter_trim_ws(emitter);
+    filter::emit_filter_int_range(emitter);
     filter::emit_filter_validate_int(emitter);
     filter::emit_filter_validate_float(emitter);
     filter::emit_filter_validate_bool_str(emitter);

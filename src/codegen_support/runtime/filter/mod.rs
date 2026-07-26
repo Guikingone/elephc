@@ -14,6 +14,7 @@
 //!   that generic numeric-string parsing accepts, so validation must not be
 //!   delegated to a parser with a different accepted grammar.
 
+mod int_range;
 mod trim_ws;
 mod validate_bool;
 mod validate_float;
@@ -21,6 +22,9 @@ mod validate_int;
 mod validate_ip4;
 mod validate_ip6;
 
+/// Refines a `FILTER_VALIDATE_INT` result against a compile-time `min_range`/
+/// `max_range` constraint.
+pub use int_range::emit_filter_int_range;
 /// Trims PHP-filter whitespace (`{0x09, 0x0A, 0x0B, 0x0D, 0x20}`, NOT form feed)
 /// from both ends of a PHP string.
 pub use trim_ws::emit_filter_trim_ws;

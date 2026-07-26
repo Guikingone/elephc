@@ -47,6 +47,34 @@ pub(super) fn lower_static_filter_var(
     } else {
         516 // FILTER_DEFAULT (== FILTER_UNSAFE_RAW)
     };
+    // FILTER_VALIDATE_INT with a compile-time integer range constraint
+    // (`['options' => ['min_range' => C, 'max_range' => C]]`). The checker accepts the
+    // SAME shape via `static_filter_int_range_options`. Lowers to `filter_var$int_range`
+    // carrying the value plus the resolved bounds (absent bound → PHP_INT_MIN/MAX), so
+    // the codegen INT filter can reject out-of-range results.
+    if filter_id == 257 && args.len() == 3 {
+        if let Some(range) =
+            crate::types::filter_constants::static_filter_int_range_options(&args[2])
+        {
+            let null_on_failure = range.flags & 134_217_728 != 0;
+            let synthetic_name = if null_on_failure {
+                "filter_var$int_range_nof"
+            } else {
+                "filter_var$int_range"
+            };
+            let value = super::lower_expr(ctx, &args[0]);
+            let min = super::lower_int_literal(ctx, range.min_range.unwrap_or(i64::MIN), expr);
+            let max = super::lower_int_literal(ctx, range.max_range.unwrap_or(i64::MAX), expr);
+            return Some(super::emit_builtin_call_value(
+                ctx,
+                synthetic_name,
+                vec![value.value, min.value, max.value],
+                PhpType::Mixed,
+                expr.span,
+                None,
+            ));
+        }
+    }
     // Resolve flags from a constant int OR a `['flags' => <const>]`-only array literal, using the
     // SAME shared resolver the checker uses so an accepted call always lowers (the checker already
     // rejected every array carrying an `options` entry or a non-constant flags value).

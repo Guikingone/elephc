@@ -122,6 +122,78 @@ pub(crate) fn static_filter_options_flags(expr: &crate::parser::ast::Expr) -> Op
     }
 }
 
+/// Compile-time-resolved `FILTER_VALIDATE_INT` `$options` array carrying an integer
+/// range constraint (`['options' => ['min_range' => C, 'max_range' => C]]`, with an
+/// optional constant `'flags'` entry). `min_range`/`max_range` are `None` when absent
+/// (unbounded on that side).
+pub(crate) struct FilterIntRangeOptions {
+    /// The effective `flags` bitmask (0 when no `'flags'` entry is present).
+    pub flags: i64,
+    /// The inclusive lower bound, or `None` when `min_range` is absent.
+    pub min_range: Option<i64>,
+    /// The inclusive upper bound, or `None` when `max_range` is absent.
+    pub max_range: Option<i64>,
+}
+
+/// Parses a `filter_var()` 3rd-argument `$options` array for `FILTER_VALIDATE_INT`
+/// using the `['options' => ['min_range' => C, 'max_range' => C]]` form (optionally
+/// with a constant `'flags'` entry). Returns `Some` only when every value is a
+/// compile-time constant, the only `options` keys are `min_range`/`max_range`, and at
+/// least one of them is present; returns `None` for any non-constant value, an
+/// unsupported option key (`regexp`/`default`), or any other array shape.
+///
+/// Shared by `crate::types::checker::builtins::system` and
+/// `crate::ir_lower::expr::filter` so the checker and lowering stay in lock-step (an
+/// accepted call always lowers). Only meaningful for `FILTER_VALIDATE_INT`; the caller
+/// gates on the filter id.
+pub(crate) fn static_filter_int_range_options(
+    expr: &crate::parser::ast::Expr,
+) -> Option<FilterIntRangeOptions> {
+    use crate::parser::ast::ExprKind;
+    let ExprKind::ArrayLiteralAssoc(pairs) = &expr.kind else {
+        return None;
+    };
+    let mut flags = 0i64;
+    let mut min_range = None;
+    let mut max_range = None;
+    let mut saw_options = false;
+    for (key, value) in pairs {
+        let ExprKind::StringLiteral(key_name) = &key.kind else {
+            return None;
+        };
+        match key_name.as_str() {
+            "flags" => flags = static_filter_int(value)?,
+            "options" => {
+                let ExprKind::ArrayLiteralAssoc(inner) = &value.kind else {
+                    return None;
+                };
+                for (inner_key, inner_value) in inner {
+                    let ExprKind::StringLiteral(inner_name) = &inner_key.kind else {
+                        return None;
+                    };
+                    match inner_name.as_str() {
+                        "min_range" => min_range = Some(static_filter_int(inner_value)?),
+                        "max_range" => max_range = Some(static_filter_int(inner_value)?),
+                        // `regexp`/`default`/anything else is not implemented; keep
+                        // the call loud rather than silently drop the constraint.
+                        _ => return None,
+                    }
+                }
+                saw_options = true;
+            }
+            _ => return None,
+        }
+    }
+    if !saw_options || (min_range.is_none() && max_range.is_none()) {
+        return None;
+    }
+    Some(FilterIntRangeOptions {
+        flags,
+        min_range,
+        max_range,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::FILTER_INT_CONSTANTS;

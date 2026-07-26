@@ -238,14 +238,21 @@ expect_builtin_arity_error!(
     "filter_var(): filter 1024 is not supported yet"
 );
 
-// The array-form `$options` with an `options` sub-array (min_range/max_range/regexp/default)
-// stays loud: those need runtime range/pattern validation the INT filter does not implement.
-// The `['flags' => <const>]`-only form, by contrast, is now accepted (it is identical to passing
-// the integer flags directly) — see `test_filter_var_bool_array_flags_only_options` in
-// `tests/codegen/filter_var.rs`.
+// An `options` sub-array with an UNSUPPORTED key (`regexp`/`default`) stays loud: those
+// need runtime pattern/default handling the INT filter does not implement. The
+// `min_range`/`max_range` INT-range form, by contrast, is now accepted — see
+// `test_filter_var_int_min_range` in `tests/codegen/filter_var.rs`.
 expect_builtin_arity_error!(
     test_error_filter_var_array_form_options,
-    "<?php filter_var(\"42\", FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);",
+    "<?php filter_var(\"42\", FILTER_VALIDATE_INT, ['options' => ['default' => 5]]);",
+    "filter_var(): array-form $options"
+);
+
+// The `min_range` range option is only implemented for FILTER_VALIDATE_INT; the same
+// array form on FILTER_VALIDATE_FLOAT still needs runtime range validation, so it stays loud.
+expect_builtin_arity_error!(
+    test_error_filter_var_float_range_options,
+    "<?php filter_var(\"4.2\", FILTER_VALIDATE_FLOAT, ['options' => ['min_range' => 0]]);",
     "filter_var(): array-form $options"
 );
 

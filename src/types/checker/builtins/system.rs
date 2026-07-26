@@ -1293,6 +1293,29 @@ pub(super) fn check_builtin(
                     ),
                 ));
             }
+            // FILTER_VALIDATE_INT with a compile-time-constant integer range
+            // constraint (`['options' => ['min_range' => C, 'max_range' => C]]`,
+            // optional constant `flags`). ir_lower resolves the SAME options via
+            // `static_filter_int_range_options`, so an accepted call always lowers.
+            if filter_id == 257 && args.len() == 3 {
+                if let Some(range) =
+                    crate::types::filter_constants::static_filter_int_range_options(&args[2])
+                {
+                    // Only NULL_ON_FAILURE / REQUIRE_SCALAR (verified no-op) are
+                    // honored, matching the scalar filters' allowed-flags set.
+                    const RANGE_ALLOWED_FLAGS: i64 = 134_217_728 | 33_554_432;
+                    if range.flags & !RANGE_ALLOWED_FLAGS != 0 {
+                        return Err(CompileError::new(
+                            span,
+                            &format!(
+                                "filter_var(): flag combination {} is not supported yet",
+                                range.flags
+                            ),
+                        ));
+                    }
+                    return Ok(Some(PhpType::Mixed));
+                }
+            }
             let flags = if args.len() == 3 {
                 // Resolve the effective flags int, accepting either a constant integer flags
                 // expression or the `['flags' => <const>]`-only array form (semantically

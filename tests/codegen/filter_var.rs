@@ -504,3 +504,51 @@ foreach (["42", "nope"] as $v) {
     );
     assert_eq!(out, "42,NULL,");
 }
+
+/// Verifies `FILTER_VALIDATE_INT` with a compile-time `min_range` constraint
+/// (`['options' => ['min_range' => 0]]`): valid non-negative ints pass, negative ints
+/// and non-int input become `false`. This is the Symfony `DateTimeValueResolver`
+/// `false !== filter_var($v, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]])`
+/// idiom.
+#[test]
+fn test_filter_var_int_min_range() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["5", "-3", "0", "abc"] as $v) {
+    $r = filter_var($v, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+    echo var_export($r, true), ",";
+}
+"#,
+    );
+    assert_eq!(out, "5,false,0,false,");
+}
+
+/// Verifies `FILTER_VALIDATE_INT` with both `min_range` and `max_range`: only values
+/// inside the inclusive `[10, 20]` window pass; the bounds themselves are inclusive.
+#[test]
+fn test_filter_var_int_min_max_range() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["15", "25", "5", "10", "20"] as $v) {
+    $r = filter_var($v, FILTER_VALIDATE_INT, ['options' => ['min_range' => 10, 'max_range' => 20]]);
+    echo var_export($r, true), ",";
+}
+"#,
+    );
+    assert_eq!(out, "15,false,false,10,20,");
+}
+
+/// Verifies the range constraint combined with `FILTER_NULL_ON_FAILURE`: an
+/// out-of-range value becomes `null` (not `false`), an in-range value stays an int.
+#[test]
+fn test_filter_var_int_range_null_on_failure() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["-5", "7"] as $v) {
+    $r = filter_var($v, FILTER_VALIDATE_INT, ['flags' => FILTER_NULL_ON_FAILURE, 'options' => ['min_range' => 0]]);
+    echo var_export($r, true), ",";
+}
+"#,
+    );
+    assert_eq!(out, "NULL,7,");
+}
