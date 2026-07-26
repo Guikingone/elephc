@@ -435,6 +435,14 @@ pub enum Op {
     /// Carries an `Immediate::StrBitOp` mode; produces a concat-scratch string
     /// via `__rt_str_bitwise` (And/Xor → min length, Or → max length + tail copy).
     StrBitwise,
+    /// PHP runtime-polymorphic bitwise operator (`&`/`|`/`^`) when at least one
+    /// operand is a dynamic `Mixed`/union value and the other is a string or also
+    /// dynamic, so the string-vs-integer choice can only be made at runtime.
+    /// Carries an `Immediate::StrBitOp` mode; both operands are boxed to `Mixed`
+    /// and `__rt_mixed_bitwise` dispatches: both strings → bytewise string result,
+    /// array/object operand → TypeError fatal, otherwise integer bitwise. Produces
+    /// a freshly boxed `Mixed` cell (int or string payload).
+    MixedBitwise,
     StrLen,
     StrPersist,
     StrCharAt,
@@ -760,6 +768,10 @@ impl Op {
             // `(array)` reads the boxed source, allocates a fresh boxed-Mixed array,
             // and retains every boxed element it appends.
             ArrayCast => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
+            // Reads both boxed operands, allocates a fresh boxed-Mixed result
+            // (int or persisted string), retains/persists the payload, and fatals
+            // when a runtime array/object operand is paired with a bitwise operator.
+            MixedBitwise => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
             MixedBox | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | BufferNew | GeneratorNew => {
@@ -1014,6 +1026,7 @@ impl Op {
             MixedCastString => "mixed_cast_string",
             StrConcat => "str_concat",
             StrBitwise => "str_bitwise",
+            MixedBitwise => "mixed_bitwise",
             StrLen => "str_len",
             StrPersist => "str_persist",
             StrCharAt => "str_char_at",

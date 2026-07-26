@@ -177,6 +177,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::HashToMixed => hashes::lower_hash_to_mixed(ctx, &inst),
         Op::StrConcat => strings::lower_str_concat(ctx, &inst),
         Op::StrBitwise => strings::lower_str_bitwise(ctx, &inst),
+        Op::MixedBitwise => arithmetic::lower_mixed_bitwise_op(ctx, &inst),
         Op::StrLen => strings::lower_str_len(ctx, &inst),
         Op::StrCharAt => strings::lower_str_char_at(ctx, &inst),
         Op::StrOffsetSet => strings::lower_str_offset_set(ctx, &inst),

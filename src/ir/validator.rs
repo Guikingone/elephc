@@ -328,7 +328,7 @@ fn validate_instruction_immediate(
         MixedNumericBinop => require_immediate(inst_id, inst, "mixed numeric op", |imm| {
             matches!(imm, Imm::MixedNumericOp(_))
         }),
-        StrBitwise => require_immediate(inst_id, inst, "string bitwise op", |imm| {
+        StrBitwise | MixedBitwise => require_immediate(inst_id, inst, "string bitwise op", |imm| {
             matches!(imm, Imm::StrBitOp(_))
         }),
         Cast => require_immediate(inst_id, inst, "cast target", |imm| {
@@ -426,7 +426,7 @@ fn validate_opcode_rules(
             check_binary(function, inst_id, inst, IrType::I64, "I64")
         }
         FAdd | FSub | FMul | FDiv | FPow => check_binary(function, inst_id, inst, IrType::F64, "F64"),
-        MixedNumericBinop => check_count(inst_id, inst, 2, "2"),
+        MixedNumericBinop | MixedBitwise => check_count(inst_id, inst, 2, "2"),
         INeg | IBitNot => check_unary(function, inst_id, inst, IrType::I64, "I64"),
         FNeg => check_unary(function, inst_id, inst, IrType::F64, "F64"),
         ICmp => check_binary(function, inst_id, inst, IrType::I64, "I64"),

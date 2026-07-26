@@ -396,6 +396,18 @@ fn lower_numeric_binary(
     {
         return lower_string_bitwise(ctx, lhs, rhs, op, expr);
     }
+    // Runtime-polymorphic bitwise: a dynamic operand (`Mixed`/union that could hold
+    // a string) paired with a string or another dynamic operand cannot statically
+    // choose bytewise-string vs integer semantics. This mirrors the checker's
+    // `PhpType::Mixed` result (see `crate::types::checker::inference::ops`), so both
+    // layers agree the value is a boxed `Mixed`. `<<`/`>>` never take this path.
+    if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor)
+        && is_string_or_dynamic_bitwise_ir(lhs.ir_type)
+        && is_string_or_dynamic_bitwise_ir(rhs.ir_type)
+        && (is_dynamic_bitwise_ir(lhs.ir_type) || is_dynamic_bitwise_ir(rhs.ir_type))
+    {
+        return lower_mixed_bitwise(ctx, lhs, rhs, op, expr);
+    }
     if matches!(
         op,
         BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight
@@ -850,6 +862,61 @@ fn lower_string_bitwise(
     release_binary_operand_temporary(ctx, lhs, expr.span);
     if rhs.value != lhs.value {
         release_binary_operand_temporary(ctx, rhs, expr.span);
+    }
+    result
+}
+
+/// Returns whether an operand IR type is dynamic for bitwise dispatch — a boxed
+/// `Mixed` or union whose runtime payload could be a string. Mirrors the checker's
+/// `is_dynamic_bitwise_operand` (`Mixed`/union) in `IrType` terms so the lowering
+/// and the checker route the exact same operand pairings to `Op::MixedBitwise`.
+fn is_dynamic_bitwise_ir(ty: IrType) -> bool {
+    matches!(
+        ty,
+        IrType::Heap(IrHeapKind::Mixed) | IrType::Heap(IrHeapKind::Union)
+    )
+}
+
+/// Returns whether an operand IR type is a concrete string or a dynamic bitwise
+/// operand. Mirrors the checker's `is_string_or_dynamic_bitwise_operand`.
+fn is_string_or_dynamic_bitwise_ir(ty: IrType) -> bool {
+    ty == IrType::Str || is_dynamic_bitwise_ir(ty)
+}
+
+/// Lowers a runtime-polymorphic bitwise operator (`&`/`|`/`^`) whose operands
+/// cannot statically choose between PHP's bytewise-string and integer semantics.
+///
+/// Both operands are passed to `Op::MixedBitwise`, which boxes each to `Mixed`
+/// (via the codegen boxing path) and calls `__rt_mixed_bitwise`: both-string →
+/// bytewise string result, array/object → TypeError fatal, otherwise integer
+/// bitwise. The result is a freshly boxed owned `Mixed` cell. Operand temporaries
+/// are released with the same borrowed-aware pattern as `lower_mixed_numeric_binary`.
+fn lower_mixed_bitwise(
+    ctx: &mut LoweringContext<'_, '_>,
+    lhs: LoweredValue,
+    rhs: LoweredValue,
+    op: &BinOp,
+    expr: &Expr,
+) -> LoweredValue {
+    let kind = match op {
+        BinOp::BitAnd => StrBitKind::And,
+        BinOp::BitOr => StrBitKind::Or,
+        BinOp::BitXor => StrBitKind::Xor,
+        // `lower_numeric_binary` only routes And/Or/Xor here.
+        _ => unreachable!("lower_mixed_bitwise only handles &/|/^"),
+    };
+    let result = ctx.emit_value(
+        Op::MixedBitwise,
+        vec![lhs.value, rhs.value],
+        Some(Immediate::StrBitOp(kind)),
+        PhpType::Mixed,
+        Op::MixedBitwise.default_effects(),
+        Some(expr.span),
+    );
+    for operand in [lhs, rhs] {
+        if ctx.value_needs_release_after_retaining_store(operand) {
+            crate::ir_lower::ownership::release_if_owned(ctx, operand, Some(expr.span));
+        }
     }
     result
 }
@@ -15556,7 +15623,13 @@ fn call_result_may_alias_arg(
     };
     if matches!(
         ctx.builder.value_defining_op(arg),
-        Some(Op::MixedNumericBinop | Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul)
+        Some(
+            Op::MixedNumericBinop
+                | Op::MixedBitwise
+                | Op::ICheckedAdd
+                | Op::ICheckedSub
+                | Op::ICheckedMul
+        )
     ) {
         return false;
     }

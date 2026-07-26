@@ -933,6 +933,7 @@ impl<'a> FunctionContext<'a> {
             inst.op,
             Op::Acquire
                 | Op::MixedNumericBinop
+                | Op::MixedBitwise
                 | Op::ICheckedAdd
                 | Op::ICheckedSub
                 | Op::ICheckedMul

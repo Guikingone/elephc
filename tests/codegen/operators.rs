@@ -689,6 +689,58 @@ fn test_integer_bitwise_unaffected_by_string_path() {
     assert_eq!(out, "2:7:4");
 }
 
+// --- runtime-polymorphic Mixed bitwise (`Op::MixedBitwise` / `__rt_mixed_bitwise`) ---
+
+/// A dynamic `Mixed` operand (a `mixed`-returning call whose runtime payload is a
+/// string) `&` a string literal must take PHP's bytewise-string path at runtime:
+/// `"\xF5" & "\xF0"` is `"\xF0"`. This is the QuestionHelper UTF-8 detection shape.
+#[test]
+fn test_mixed_bitwise_string_and_literal_bytewise() {
+    let out = compile_and_run(
+        r#"<?php function m(): mixed { return "\xF5"; } $x = m(); echo bin2hex($x & "\xF0");"#,
+    );
+    assert_eq!(out, "f0");
+}
+
+/// Both operands dynamic strings must be bytewise (`&`/`|`/`^`), and the results
+/// match PHP: `"AB" & "AB"` == "AB", `"AB" | "  "` == "ab", `"AB" ^ "AB"` == 0000.
+#[test]
+fn test_mixed_bitwise_both_dynamic_strings() {
+    let out = compile_and_run(
+        r#"<?php function m(): mixed { return "AB"; }
+$a = m(); $b = m();
+echo ($a & $b), ":", ($a | "  "), ":", bin2hex($a ^ $b);"#,
+    );
+    assert_eq!(out, "AB:ab:0000");
+}
+
+/// A dynamic `Mixed` operand holding an int opposite a string literal is NOT both
+/// strings, so PHP uses the integer path with string→int coercion: `5 & "3"` == 1,
+/// `5 | "2"` == 7, `5 ^ "1"` == 4.
+#[test]
+fn test_mixed_bitwise_int_payload_vs_string_uses_int_path() {
+    let out = compile_and_run(
+        r#"<?php function m(): mixed { return 5; }
+$x = m();
+echo ($x & "3"), ":", ($x | "2"), ":", ($x ^ "1");"#,
+    );
+    assert_eq!(out, "1:7:4");
+}
+
+/// The Mixed bitwise result must be released on reassignment/discard: a tight loop
+/// building bytewise-string results must not leak (verified here as a correctness
+/// smoke — the heap-debug leak check runs in the manual verification).
+#[test]
+fn test_mixed_bitwise_loop_result_correct() {
+    let out = compile_and_run(
+        r#"<?php function m(): mixed { return "\xF5\xAA"; }
+$acc = 0;
+for ($i = 0; $i < 100; $i++) { $r = m() & "\xF0\x0F"; $acc += strlen($r); }
+echo $acc;"#,
+    );
+    assert_eq!(out, "200");
+}
+
 /// Regression for #397: loose equality with a Mixed operand holding a float
 /// must not truncate the float to int before comparison. `1.5 == 1` must be
 /// false, `1.5 == 1.5` must be true.

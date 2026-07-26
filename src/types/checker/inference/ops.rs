@@ -170,6 +170,21 @@ impl Checker {
                 {
                     return Ok(PhpType::Str);
                 }
+                // Runtime-polymorphic dispatch: when a dynamic operand (`Mixed`/union
+                // that could hold a string at runtime) meets a `string` operand — or
+                // both operands are dynamic — the choice between bytewise-string and
+                // integer bitwise can only be made at runtime, so the result type is
+                // `Mixed`. `crate::ir_lower::expr` routes exactly this case to
+                // `Op::MixedBitwise` / `__rt_mixed_bitwise`. `<<`/`>>` are never string
+                // operators and fall through to the integer-operand check below.
+                if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor)
+                    && is_string_or_dynamic_bitwise_operand(self, &lt)
+                    && is_string_or_dynamic_bitwise_operand(self, &rt)
+                    && (is_dynamic_bitwise_operand(self, &lt)
+                        || is_dynamic_bitwise_operand(self, &rt))
+                {
+                    return Ok(PhpType::Mixed);
+                }
                 let lt_ok = is_integer_operand_type(self, &lt);
                 let rt_ok = is_integer_operand_type(self, &rt);
                 if !lt_ok || !rt_ok {
@@ -1478,6 +1493,21 @@ fn is_integer_operand_type(checker: &Checker, ty: &PhpType) -> bool {
             | PhpType::Void
             | PhpType::Mixed
     ) || checker.is_union_with_mixed_int_dispatch(ty)
+}
+
+/// Returns `true` if `ty` is a dynamic bitwise operand — a value whose runtime
+/// payload could be a string, so `&`/`|`/`^` cannot statically choose between the
+/// bytewise-string path and the integer path. That is `Mixed` or a union that
+/// dispatches through the mixed integer path (e.g. `string|false`).
+fn is_dynamic_bitwise_operand(checker: &Checker, ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Mixed) || checker.is_union_with_mixed_int_dispatch(ty)
+}
+
+/// Returns `true` if `ty` is either a concrete `string` or a dynamic bitwise
+/// operand. Used with `is_dynamic_bitwise_operand` to detect the runtime
+/// string-vs-integer bitwise dispatch handled by `Op::MixedBitwise`.
+fn is_string_or_dynamic_bitwise_operand(checker: &Checker, ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Str) || is_dynamic_bitwise_operand(checker, ty)
 }
 
 /// Returns `true` if `ty` uses mixed numeric dispatch — i.e., the result type

@@ -244,6 +244,67 @@ pub(super) fn lower_mixed_numeric_binop(
     store_if_result(ctx, inst)
 }
 
+/// Lowers a runtime-polymorphic bitwise operator (`&`/`|`/`^`) on operands that
+/// cannot statically choose PHP's bytewise-string vs integer semantics.
+///
+/// Both operands are boxed to Mixed and passed to `__rt_mixed_bitwise` together
+/// with the operator mode (0=And, 1=Or, 2=Xor). The helper returns a freshly boxed
+/// Mixed result (a string when both operands are strings, otherwise an integer),
+/// and fatals on a runtime array/object operand. Temporary operand boxes created
+/// here for concrete (non-Mixed) operands are released after the call, mirroring
+/// `lower_mixed_numeric_binop`.
+pub(super) fn lower_mixed_bitwise_op(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    let mode = expect_str_bit_op(inst)?.as_mode();
+    let lhs_ty = ctx.value_php_type(lhs)?;
+    let rhs_ty = ctx.value_php_type(rhs)?;
+    let left_box_temp = !is_mixed_like(&lhs_ty);
+    let right_box_temp = !is_mixed_like(&rhs_ty);
+
+    materialize_value_as_mixed(ctx, lhs, &lhs_ty)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    materialize_value_as_mixed(ctx, rhs, &rhs_ty)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", mode);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", mode);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_bitwise");
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    if left_box_temp {
+        decref_mixed_temp_at(ctx, 32);
+    }
+    if right_box_temp {
+        decref_mixed_temp_at(ctx, 16);
+    }
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    store_if_result(ctx, inst)
+}
+
+/// Extracts the `StrBitKind` mode carried by a `MixedBitwise` instruction's immediate.
+fn expect_str_bit_op(inst: &Instruction) -> Result<crate::ir::StrBitKind> {
+    match inst.immediate {
+        Some(Immediate::StrBitOp(kind)) => Ok(kind),
+        _ => Err(CodegenIrError::invalid_module(format!(
+            "{} missing string bitwise op immediate",
+            inst.op.name()
+        ))),
+    }
+}
+
 /// Returns true when a PHP type is already represented as a boxed Mixed pointer.
 fn is_mixed_like(ty: &PhpType) -> bool {
     matches!(ty.codegen_repr(), PhpType::Mixed)
