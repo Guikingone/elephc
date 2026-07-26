@@ -143,7 +143,14 @@ fn lower_expr_dispatch(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowere
             *is_static,
         ),
         ExprKind::NamedArg { value, .. } => lower_expr(ctx, value),
-        ExprKind::Spread(inner) => lower_expr(ctx, inner),
+        ExprKind::Spread(inner) => {
+            // A spread materialized as a plain value (e.g. the variadic-tail fallthrough in
+            // `lower_args`) unboxes a gradual `Mixed`/`Iterable` source through the runtime
+            // array guard into a concrete packed `array<mixed>`; a concrete array is returned
+            // unchanged.
+            let source = lower_expr(ctx, inner);
+            lower_gradual_call_spread_source(ctx, source, expr.span)
+        }
         ExprKind::ClosureCall { var, args } => lower_closure_call(ctx, var, args, expr),
         ExprKind::ExprCall { callee, args } => lower_expr_call(ctx, callee, args, expr),
         ExprKind::ConstRef(name) => constants::lower_const_ref(ctx, name, expr),
@@ -4092,6 +4099,7 @@ fn lower_indexed_descriptor_invoker_arg_array(
     for arg in args {
         if let ExprKind::Spread(inner) = &arg.kind {
             let source = lower_expr(ctx, inner);
+            let source = lower_gradual_call_spread_source(ctx, source, arg.span);
             lower_indexed_array_spread_into_array(ctx, array, source, Some(&elem_ty), arg.span);
             continue;
         }
@@ -6526,6 +6534,10 @@ fn lower_positional_spread_args_with_signature(
 
     let spread_type = indexed_spread_source_type(ctx, inner)?;
     let spread = lower_expr(ctx, inner);
+    // A gradual `Mixed`/`Iterable` source is unboxed through the runtime array guard into the
+    // concrete packed `array<mixed>` that `spread_type` promised; a concrete array passes
+    // through unchanged.
+    let spread = lower_gradual_call_spread_source(ctx, spread, args[spread_idx].span);
     let temp_name = ctx.declare_hidden_temp(spread_type.clone());
     store_value_into_temp(ctx, &temp_name, spread_type, spread, args[spread_idx].span);
     let spread_expr = Expr::new(ExprKind::Variable(temp_name), inner.span);
@@ -6618,6 +6630,11 @@ fn indexed_spread_source_type(
     .codegen_repr();
     if matches!(ty, PhpType::Array(_)) {
         Some(ty)
+    } else if matches!(ty, PhpType::Mixed | PhpType::Iterable) {
+        // Gradual source: `lower_gradual_call_spread_source` materializes a concrete packed
+        // `array<mixed>` (via the runtime array guard) before the positional element reads, so
+        // a fixed-arity `f(...$mixed)` unpacks by integer index just like a concrete array.
+        Some(PhpType::Array(Box::new(PhpType::Mixed)))
     } else {
         None
     }
@@ -8574,6 +8591,42 @@ fn lower_gradual_array_literal_spread_source(
         ),
         _ => return source,
     }
+}
+
+/// Converts a gradual call-argument spread source (`f(...$mixed)`) into an owned concrete
+/// PACKED `array<mixed>` so the existing concrete-array spread machinery (variadic-tail
+/// materialization, fixed-arity positional element reads, and the descriptor/`call_user_func`
+/// argument-container builders) expands it unchanged for every call kind.
+///
+/// A concrete indexed/associative source is returned untouched. A boxed `Mixed`/union or an
+/// `Iterable` source is first routed through `lower_gradual_array_literal_spread_source`, which
+/// unboxes the value via `Op::MixedToHash` (a runtime array guard that raises a clean
+/// `TypeError` fatal on a non-array payload — never a SIGSEGV) or converts a `Traversable`
+/// through `iterator_to_array()`. The resulting hash is then re-packed with `array_values()`
+/// into a sequential integer-keyed `array<mixed>`, matching PHP's positional
+/// argument-unpacking semantics. The intermediate hash temporary is released here; the packed
+/// result is owned by the caller and released by the normal call-argument cleanup.
+fn lower_gradual_call_spread_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let source_ty = ctx.builder.value_php_type(source.value).codegen_repr();
+    if !matches!(source_ty, PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable) {
+        return source;
+    }
+    let hash = lower_gradual_array_literal_spread_source(ctx, source, span);
+    // `emit_builtin_call_value` releases the owned intermediate hash after `array_values`
+    // consumes it (see `release_owned_call_arg_temporaries_with_signature`), so no extra
+    // release is emitted here.
+    emit_builtin_call_value(
+        ctx,
+        "array_values",
+        vec![hash.value],
+        PhpType::Array(Box::new(PhpType::Mixed)),
+        span,
+        None,
+    )
 }
 
 /// Lowers an indexed array literal using a contextual element storage type.
@@ -11053,6 +11106,7 @@ fn lower_untyped_descriptor_invoker_indexed_container(
     for arg in args {
         if let ExprKind::Spread(inner) = &arg.kind {
             let source = lower_expr(ctx, inner);
+            let source = lower_gradual_call_spread_source(ctx, source, arg.span);
             lower_indexed_array_spread_into_array(ctx, array, source, Some(&elem_ty), arg.span);
             continue;
         }
@@ -11103,6 +11157,7 @@ fn lower_untyped_descriptor_invoker_hash_container(
             }
             ExprKind::Spread(inner) => {
                 let source = lower_expr(ctx, inner);
+                let source = lower_gradual_call_spread_source(ctx, source, arg.span);
                 next_positional_key = lower_untyped_descriptor_invoker_spread_into_hash(
                     ctx,
                     hash,

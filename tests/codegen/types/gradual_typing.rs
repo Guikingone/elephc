@@ -659,13 +659,22 @@ echo (read($h) ?? "N"), "|", (read(null) ?? "N");
     assert_eq!(out, "7|N");
 }
 
-// NOTE: a `test_gradual_spread_mixed_into_variadic` case previously lived here (spreading a
-// `mixed`-typed parameter that holds an array into a variadic callee). Correction round 1
-// reverted that acceptance: the EIR spread lowering unpacks its operand as an array with no
-// runtime array/Traversable guard, so a `mixed` (or otherwise non-provably-array) spread
-// operand is a loud checker error again — see `test_error_spread_mixed_stays_loud` in
-// `tests/error_tests/type_system.rs`. Plain array-spread-into-variadic (never gradual) is
-// already covered by `tests/codegen/types/named_arguments/spread.rs`.
+/// Re-enabled after the call-argument spread runtime guard landed: spreading a `mixed`-typed
+/// parameter that holds an array into a variadic callee now materializes a concrete packed
+/// `array<mixed>` through the runtime array guard (`Op::MixedToHash` + `array_values()`) before
+/// the variadic tail is built, so it unpacks correctly. (Correction round 1 had reverted the
+/// original acceptance because the lowering lacked that guard.)
+#[test]
+fn test_gradual_spread_mixed_into_variadic() {
+    let out = compile_and_run(
+        r#"<?php
+function total(...$xs) { $t = 0; foreach ($xs as $x) { $t += $x; } return $t; }
+function go(mixed $a) { return total(...$a); }
+echo go([1, 2, 3, 4]);
+"#,
+    );
+    assert_eq!(out, "10");
+}
 
 /// Verifies list-unpacking a `Mixed` right-hand side that holds an array binds each
 /// positional target. PHP: `[$a, $b] = [10, 20]` gives `$a + $b == 30`.

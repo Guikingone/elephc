@@ -1388,19 +1388,18 @@ fn test_gradual_nullsafe_method_on_mixed_accepted() {
     expect_ok("<?php function f(mixed $x): mixed { return $x?->doThing(); }");
 }
 
-/// R3 boundary (correction round 1): spreading a `mixed` value stays loud. The EIR spread
-/// lowering unpacks its operand as an array with no runtime array/Traversable guard, so
-/// accepting a `mixed` operand here would trade this loud checker error for a runtime
-/// SIGSEGV / silent garbage read (`function go(mixed $a){return total(...$a);} go(5)` and a
-/// `mixed`-holding-string both corrupted at runtime before this revert). php-check: PHP
-/// raises a catchable `TypeError: Only arrays and Traversables can be unpacked` at runtime,
-/// so elephc keeping this a compile-time error is conservative, not a regression.
+/// Gradual accept: a call-argument spread of a `mixed` value type-checks. The EIR call-arg
+/// spread lowering now materializes a concrete packed `array<mixed>` through a runtime array
+/// guard (`Op::MixedToHash` + `array_values()`), so a `mixed` operand that holds an array
+/// unpacks correctly and a non-array payload raises a clean `TypeError` fatal (matching PHP's
+/// "Only arrays and Traversables can be unpacked") instead of the earlier SIGSEGV/garbage read
+/// that forced correction round 1's revert. Runtime behavior is covered by the
+/// `compile_and_run` cases in `tests/codegen/callables/state_and_variadics.rs`.
 #[test]
-fn test_error_spread_mixed_stays_loud() {
-    expect_error(
+fn test_gradual_spread_mixed_accepted() {
+    expect_ok(
         "<?php function g(int ...$xs): int { return 0; } \
          function f(mixed $args): int { return g(...$args); }",
-        "Spread operator requires an array",
     );
 }
 
@@ -1414,16 +1413,15 @@ fn test_error_spread_non_iterable_stays_loud() {
     );
 }
 
-/// R3 boundary (correction round 1): spreading a union that CAN hold a non-array member
-/// (`array|false`) stays loud even though one member is an array — the operand is not
-/// PROVABLY an array at runtime, and the EIR spread lowering has no runtime guard to catch
-/// the `false` case. php-check: PHP raises `TypeError` unpacking a non-iterable.
+/// Gradual accept: a call-argument spread of a union that contains an array member
+/// (`array|false`) type-checks. The value is not provably an array, but the runtime array
+/// guard in the call-arg spread lowering unpacks the array case and raises a clean
+/// `TypeError` fatal for the `false` case (PHP fatals identically), so accepting it is sound.
 #[test]
-fn test_error_spread_array_or_false_union_stays_loud() {
-    expect_error(
+fn test_gradual_spread_array_or_false_union_accepted() {
+    expect_ok(
         "<?php function g(int ...$xs): int { return 0; } \
          function f(array|false $x): int { return g(...$x); }",
-        "Spread operator requires an array",
     );
 }
 

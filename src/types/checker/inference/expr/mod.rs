@@ -600,23 +600,18 @@ impl Checker {
                 match ty {
                     PhpType::Array(elem_ty) => Ok(*elem_ty),
                     PhpType::AssocArray { value, .. } => Ok(*value),
-                    // Outside array literals, a union is only accepted when EVERY member is an
-                    // array-family type (no member can hold a non-array at runtime). This
-                    // intentionally does NOT reuse `array_arg_is_gradually_acceptable`'s "any
-                    // member is an array" rule and does NOT accept the `Mixed`/`Iterable` top
-                    // types: call/general-spread lowering has no runtime array/Traversable guard.
-                    // Array-literal inference handles those operands in its parent arm and emits
-                    // the dedicated Mixed guard or `iterator_to_array()` conversion during EIR
-                    // lowering.
-                    PhpType::Union(ref members)
-                        if !members.is_empty()
-                            && members.iter().all(|member| {
-                                matches!(
-                                    member,
-                                    PhpType::Array(_) | PhpType::AssocArray { .. }
-                                )
-                            }) =>
-                    {
+                    // Gradual boundary: a `Mixed`, an `Iterable`, or a union containing an
+                    // array member is accepted just like the array-literal spread arm. The
+                    // call-argument spread lowering routes such operands through a runtime
+                    // array guard (`Op::MixedToHash` + `array_values()`, which raises a clean
+                    // `TypeError` fatal on a non-array payload — never a SIGSEGV) or through
+                    // `iterator_to_array()` for a `Traversable`, materializing a concrete
+                    // packed `array<mixed>` before the existing concrete-array spread
+                    // machinery expands it. The element type is unknown, so it widens to
+                    // `Mixed`. A statically-proven non-iterable (int/string/object) stays
+                    // loud in the fallthrough arm.
+                    PhpType::Mixed | PhpType::Iterable => Ok(PhpType::Mixed),
+                    PhpType::Union(_) if array_arg_is_gradually_acceptable(&ty) => {
                         Ok(PhpType::Mixed)
                     }
                     other => Err(CompileError::new(

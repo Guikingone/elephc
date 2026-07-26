@@ -900,6 +900,78 @@ spreadValues(42);
     );
 }
 
+/// Verifies a call-argument spread of a `mixed` operand into a fixed-arity user function
+/// unpacks its elements positionally through the runtime array guard.
+#[test]
+fn test_call_arg_spread_mixed_into_fixed_arity() {
+    let out = compile_and_run(
+        r#"<?php
+function add($a, $b) { return $a + $b; }
+function f(mixed $x) { return add(...$x); }
+echo f([2, 3]);
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies a call-argument spread of a `mixed` operand into a method (variadic) works via the
+/// runtime array guard, matching the common Symfony `$obj->method(...$args)` shape.
+#[test]
+fn test_call_arg_spread_mixed_into_method() {
+    let out = compile_and_run(
+        r#"<?php
+class C { function join2(...$n) { return implode("-", $n); } }
+function f(mixed $args) { $c = new C(); return $c->join2(...$args); }
+echo f(["a", "b", "c"]);
+"#,
+    );
+    assert_eq!(out, "a-b-c");
+}
+
+/// Verifies a call-argument spread of a `mixed` operand into a dynamic method call
+/// (`$obj->{$name}(...$args)`) works — the RedisTrait shape that dominates the Symfony fix.
+#[test]
+fn test_call_arg_spread_mixed_into_dynamic_method() {
+    let out = compile_and_run(
+        r#"<?php
+class C { function join2(...$n) { return implode(",", $n); } }
+function f(mixed $args) { $c = new C(); $m = "join2"; return $c->{$m}(...$args); }
+echo f(["x", "y"]);
+"#,
+    );
+    assert_eq!(out, "x,y");
+}
+
+/// Verifies a call-argument spread of a `mixed` operand into a closure/callable variable works.
+#[test]
+fn test_call_arg_spread_mixed_into_closure() {
+    let out = compile_and_run(
+        r#"<?php
+function f(mixed $args) { $fn = fn($a, $b) => $a . $b; return $fn(...$args); }
+echo f(["p", "q"]);
+"#,
+    );
+    assert_eq!(out, "pq");
+}
+
+/// Safety: a call-argument spread of a `mixed` operand holding a non-array scalar raises a
+/// clean `TypeError` fatal (PHP: "Only arrays and Traversables can be unpacked") instead of a
+/// SIGSEGV or a garbage read.
+#[test]
+fn test_call_arg_spread_mixed_scalar_faults_cleanly() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+function add($a, $b) { return $a + $b; }
+function f(mixed $x) { return add(...$x); }
+echo f(5);
+"#,
+    );
+    assert!(
+        err.contains("array builtin argument must be of type array"),
+        "unexpected gradual call-arg spread diagnostic: {err}"
+    );
+}
+
 /// Verifies an array literal accepts an `iterable` operand and preserves its string keys.
 #[test]
 fn test_array_literal_spread_iterable_runtime_dispatch() {
