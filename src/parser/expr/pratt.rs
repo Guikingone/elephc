@@ -23,6 +23,7 @@ use super::assignment_targets::{
 use super::calls::parse_first_class_callable_parens;
 use super::parse_args;
 use super::prefix::parse_prefix;
+use super::prefix_complex::build_dynamic_method_first_class_callable;
 use super::parse_expr;
 
 /// Parses an expression using Pratt parsing, starting with a prefix expression and
@@ -161,6 +162,13 @@ fn parse_expr_bp_inner(
                 };
                 if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
                     *pos += 1; // consume '('
+                    if parse_first_class_callable_parens(tokens, pos)? {
+                        // `$obj::$method(...)` / `$cls::method(...)` — a first-class callable bound
+                        // to a runtime-named static/scoped method on a dynamic receiver. Reuse the
+                        // same `[receiver, method]` callable as the call form, wrapped in a Closure.
+                        lhs = build_dynamic_method_first_class_callable(lhs, member, span);
+                        continue;
+                    }
                     let dynamic_args = crate::parser::expr::parse_args(tokens, pos, span)?;
                     let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                     reject_named_args_in_dynamic_call(&dynamic_args, span)?;
@@ -200,6 +208,22 @@ fn parse_expr_bp_inner(
                     ObjectMember::Dynamic(property) => {
                         if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
                             *pos += 1; // consume '('
+                            if parse_first_class_callable_parens(tokens, pos)? {
+                                // `$obj->$method(...)` — a first-class callable bound to a
+                                // runtime-named instance method. Reuse the same `[$obj, $method]`
+                                // callable as the call form, wrapped in a Closure. PHP forbids
+                                // combining the nullsafe operator with Closure creation.
+                                if nullsafe {
+                                    return Err(CompileError::new(
+                                        arrow_span,
+                                        "Cannot combine nullsafe operator with Closure creation",
+                                    ));
+                                }
+                                lhs = build_dynamic_method_first_class_callable(
+                                    lhs, property, arrow_span,
+                                );
+                                continue;
+                            }
                             let dynamic_args =
                                 crate::parser::expr::parse_args(tokens, pos, arrow_span)?;
                             let arrow_span = crate::parser::expr::span_through_prev_token(tokens, *pos, arrow_span);

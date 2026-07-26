@@ -2223,3 +2223,39 @@ echo segmentCount("/a/b/../c");
     );
     assert_eq!(out, "2");
 }
+
+/// Verifies the dynamic-method first-class-callable forms `$obj->$name(...)` (instance),
+/// `Class::$name(...)` (named-class static) and `$cls::$name(...)` (runtime class-name static) —
+/// where the method name is a runtime value — each build a genuine `Closure` that dispatches by the
+/// runtime-resolved method name. Exercises two static-method closures in one scope that share the
+/// method-name capture with distinct receivers (a class-constant one and a runtime-string one): the
+/// shapes that regress when the desugar collapses its synthesized nodes onto one span key.
+#[test]
+fn test_dynamic_method_first_class_callable() {
+    let out = compile_and_run(
+        r#"<?php
+class Greeter {
+    public function greet(string $x): string { return "hi $x"; }
+    public static function shout(string $x): string { return "HI $x"; }
+}
+class Other {
+    public static function shout(string $x): string { return "YO $x"; }
+}
+
+$obj = new Greeter();
+$m = "greet";
+$instance = $obj->$m(...);
+
+$sm = "shout";
+$viaClassConst = Greeter::$sm(...);
+$cls = "Other";
+$viaVar = $cls::$sm(...);
+
+echo ($instance instanceof Closure ? "C" : "?"), ":",
+     $instance("bob"), ":",
+     $viaClassConst("a"), ":",
+     $viaVar("b");
+"#,
+    );
+    assert_eq!(out, "C:hi bob:HI a:YO b");
+}

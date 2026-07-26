@@ -39,17 +39,24 @@ use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
 /// - The vendor guard's then-branch declares `deepclone_to_array()` etc. delegating to
 ///   `Symfony\Polyfill\DeepClone\DeepClone::toArray()`/`fromArray()`/`hydrate()`, which PSR-4
 ///   autoload then has to resolve and PARSE (`vendor/symfony/polyfill-deepclone/DeepClone.php`,
-///   ~97 KB). That file uses DYNAMIC first-class-callable syntax elephc's parser does not support
-///   at all — `return $name(...);`, `$obj->$name(...)`, `$obj::$name(...)` (callee is a runtime
-///   variable, not a literal name) — and fails with a hard parse error ("Unexpected token: RParen"
-///   at `DeepClone.php:1268`), which `crate::pipeline::compile()` treats as fatal
-///   (`process::exit(1)` right after reporting it).
+///   ~97 KB). That file used DYNAMIC first-class-callable syntax the parser once rejected
+///   outright — `return $name(...);`, `$obj->$name(...)`, `$obj::$name(...)` (callee is a runtime
+///   variable, not a literal name), which failed at `DeepClone.php:1268` ("Unexpected token:
+///   RParen"). Those three forms now PARSE (see `crate::parser::expr::prefix_complex`'s
+///   `build_dynamic_method_first_class_callable`), but the file still does NOT parse fully: it also
+///   uses reference-assignment to a DYNAMICALLY-named object property — `$object->$name = &$value;`
+///   (`DeepClone.php:1928` and four sibling sites) — which the parser still rejects ("Reference
+///   assignment target must be a variable, array element, or object property"), because elephc's
+///   ref-cell property machinery is keyed on a COMPILE-TIME `(class, property)` pair and has no
+///   runtime-named-property alias support. A parse failure anywhere in the file is fatal to the
+///   whole compile (`crate::pipeline::compile()` `process::exit(1)` right after reporting it).
 /// - Verified with the `--web` sentinel on `examples/symfony-app`: leaving the guard un-pruned
-///   collapses the diagnostic corpus from 864 real errors (spanning the whole app) down to 83
-///   parse-cascade errors from ONLY `DeepClone.php` — the entire rest of the program is never even
+///   collapses the whole-app diagnostic corpus down to a handful of parse-cascade errors from ONLY
+///   `DeepClone.php` (originally 83 at the `:1268` FCC stop; ~20 today at the `:1928`
+///   ref-assign-to-dynamic-property stop) — the entire rest of the program is never even
 ///   type-checked, since the pipeline aborts at the parse stage. That is an anomalous drop per this
 ///   campaign's sentinel discipline, not a fix: it trades 4 clean, informative "Undefined function"
-///   diagnostics for hiding ~99% of the corpus's signal.
+///   diagnostics for hiding almost all of the corpus's signal.
 /// - So these three stay pruned — NOT because elephc provides a working reimplementation (it does
 ///   not; no catalog entry, no prelude, no EIR lowering exists for any of them), but because
 ///   pruning the guard is the only way to keep the unparseable vendor body out of the reference

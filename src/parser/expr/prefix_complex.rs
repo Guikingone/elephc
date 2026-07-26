@@ -312,6 +312,79 @@ fn infer_arrow_captures(
     captures
 }
 
+/// Builds the arrow-function closure that a dynamic-name method first-class callable desugars to.
+///
+/// PHP's `$obj->$name(...)`, `$obj::$name(...)`, and `Class::$name(...)` each produce a genuine
+/// `Closure` that dispatches a *runtime-named* method on a receiver. elephc models this as
+/// `fn (...$args) => call_user_func([receiver, method], ...$args)`: the arrow function captures
+/// `receiver` and `method` by value at creation (matching PHP's bind-once semantics), and its body
+/// reuses the exact runtime dynamic-dispatch path already used by the call form
+/// `$obj->$name(args)`. Wrapping it in an arrow closure yields a real `Closure`-typed value through
+/// the existing closure machinery, so no new AST variant, checker case, or runtime is required.
+///
+/// `receiver` is the first `call_user_func` array element: the object expression for the `->`/`::`
+/// object forms, or a `Class::class` / `self::class` constant for the named/scoped static forms.
+/// `method` is the expression naming the method (e.g. the `$name` variable, or a bareword's string).
+pub(super) fn build_dynamic_method_first_class_callable(
+    receiver: Expr,
+    method: Expr,
+    span: Span,
+) -> Expr {
+    // A distinctive synthetic parameter name a real receiver/method expression will not shadow, so
+    // the arrow-capture inference never mistakes it for an outer variable that needs capturing.
+    const FCC_ARGS: &str = "__elephc_fcc_args";
+    // Downstream lowering/codegen passes key some per-call-site metadata by span — notably the
+    // static-callable-array descriptor selection, which folds a `[C::class, $m]` literal by the
+    // ArrayLiteral's span. A hand-written `fn (...$a) => call_user_func([C::class, $m], ...$a)`
+    // gives every node a distinct span, and in particular the `[...]` literal spans a *range*
+    // distinct from either element. Reusing one point span across the array and its own
+    // `ClassConstant` element collides that key and mis-selects a descriptor when two such closures
+    // share a scope. Mirror the hand-written shape: span the callable array across both elements
+    // (distinct from either) and give the `call_user_func` call the method's span.
+    let callable_span = Span::with_end(
+        receiver.span.line,
+        receiver.span.col,
+        method.span.end_line,
+        method.span.end_col,
+    );
+    let call_span = method.span;
+    let forwarded = Expr::new(
+        ExprKind::Spread(Box::new(Expr::new(
+            ExprKind::Variable(FCC_ARGS.to_string()),
+            span,
+        ))),
+        span,
+    );
+    let callable = Expr::new(ExprKind::ArrayLiteral(vec![receiver, method]), callable_span);
+    let body_expr = Expr::new(
+        ExprKind::FunctionCall {
+            name: crate::names::Name::unqualified("call_user_func"),
+            args: vec![callable, forwarded],
+        },
+        call_span,
+    );
+    let params: Vec<(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)> = Vec::new();
+    let variadic = Some(FCC_ARGS.to_string());
+    let captures = infer_arrow_captures(&body_expr, &params, variadic.as_ref());
+    let body = vec![Stmt::new(StmtKind::Return(Some(body_expr)), span)];
+    Expr::new(
+        ExprKind::Closure {
+            params,
+            variadic,
+            variadic_by_ref: false,
+            variadic_type: None,
+            return_type: None,
+            body,
+            is_arrow: true,
+            is_static: false,
+            by_ref_return: false,
+            captures,
+            capture_refs: vec![],
+        },
+        span,
+    )
+}
+
 /// Records every simple-`$variable` assignment target inside an arrow-function body into `bound`.
 ///
 /// Walks the body expression looking for `Assignment` targets that are a plain `Variable(name)`
@@ -849,12 +922,31 @@ pub(super) fn parse_named_expr(
         let member = match tokens.get(*pos).map(|(token, _)| token) {
             Some(Token::Variable(property)) => {
                 let property = property.clone();
+                let property_span = tokens[*pos].1.span;
                 *pos += 1;
                 if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
                     // `C::$method(args)` is a dynamic static method call. Desugar to
                     // `call_user_func([C::class, $method], ...args)` so it reuses the runtime
                     // dynamic-dispatch path, exactly like the variable-receiver form `$c::$m()`.
                     *pos += 1; // consume '('
+                    if parse_first_class_callable_parens(tokens, pos)? {
+                        // `C::$method(...)` — a first-class callable bound to a runtime-named static
+                        // method. Reuse the same `[C::class, $method]` callable as the call form,
+                        // wrapped in a Closure. Keep the method name's own span so no two
+                        // synthesized nodes collapse onto one span key (see the helper's note).
+                        let class_const = Expr::new(
+                            ExprKind::ClassConstant {
+                                receiver: StaticReceiver::Named(name.clone()),
+                            },
+                            span,
+                        );
+                        let method_expr = Expr::new(ExprKind::Variable(property), property_span);
+                        return Ok(build_dynamic_method_first_class_callable(
+                            class_const,
+                            method_expr,
+                            span,
+                        ));
+                    }
                     let dynamic_args = parse_args(tokens, pos, span)?;
                     let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                     crate::parser::expr::pratt::reject_named_args_in_dynamic_call(

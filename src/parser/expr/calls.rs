@@ -49,6 +49,7 @@ pub(super) fn parse_scoped_static_call(
     let method = match tokens.get(*pos).map(|(token, _)| token) {
         Some(Token::Variable(property)) => {
             let property = property.clone();
+            let property_span = tokens[*pos].1.span;
             *pos += 1;
             // `self::$method(args)` / `static::$method(args)` / `parent::$method(args)` is a dynamic
             // static method call (the method name lives in `$method`). Desugar to
@@ -58,6 +59,21 @@ pub(super) fn parse_scoped_static_call(
             // static binding. Without a following `(` it stays a static property access.
             if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::LParen)) {
                 *pos += 1; // consume '('
+                if parse_first_class_callable_parens(tokens, pos)? {
+                    // `self::$method(...)` / `static::$method(...)` / `parent::$method(...)` — a
+                    // first-class callable bound to a runtime-named static method. Reuse the same
+                    // `[receiver::class, $method]` callable as the call form, wrapped in a Closure.
+                    // Keep the method name's own span so no two synthesized nodes collapse onto one
+                    // span key (see the helper's note).
+                    let class_const =
+                        Expr::new(ExprKind::ClassConstant { receiver: receiver.clone() }, span);
+                    let method_expr = Expr::new(ExprKind::Variable(property), property_span);
+                    return Ok(super::prefix_complex::build_dynamic_method_first_class_callable(
+                        class_const,
+                        method_expr,
+                        span,
+                    ));
+                }
                 let dynamic_args = crate::parser::expr::parse_args(tokens, pos, span)?;
                 crate::parser::expr::pratt::reject_named_args_in_dynamic_call(&dynamic_args, span)?;
                 let class_const = Expr::new(ExprKind::ClassConstant { receiver: receiver.clone() }, span);
