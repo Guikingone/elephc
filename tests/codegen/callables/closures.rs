@@ -1860,6 +1860,83 @@ echo $reader();
     );
 }
 
+/// Regression test (Symfony `MicroKernelTrait::getBuildDir`): the single-`return $this->prop`
+/// shape `Closure::bind(fn () => $this->warmupDir, $this, Kernel::class)()` reads a PRIVATE
+/// property authorized by the rebound scope. `crate::ir_lower` lowers exactly this shape by
+/// boxing `$newThis` as the closure's `$this`; the checker authorizes the `$this` receiver
+/// against the literal scope only for this form. php-verified: `/warm` then `/build`.
+#[test]
+fn test_closure_bind_this_single_property_read_private() {
+    let out = compile_and_run(
+        r#"<?php
+class Kernel {
+    private ?string $warmupDir = null;
+    public function __construct(?string $w) { $this->warmupDir = $w; }
+    public function getBuildDir(): string { return "/build"; }
+}
+class AppKernel extends Kernel {
+    public function probe(): string {
+        return \Closure::bind(fn () => $this->warmupDir, $this, Kernel::class)() ?? $this->getBuildDir();
+    }
+}
+echo (new AppKernel("/warm"))->probe(), (new AppKernel(null))->probe();
+"#,
+    );
+    assert_eq!(out, "/warm/build");
+}
+
+/// Regression test (keep-loud boundary): a `$this`-using `Closure::bind` body that is NOT the
+/// single-`return $this->prop` shape codegen lowers (here an ARRAY of property reads — Symfony's
+/// `TraceableCommand` idiom) must stay a loud checker diagnostic, never a silent accept whose
+/// codegen would diverge.
+#[test]
+fn test_closure_bind_this_array_body_stays_loud() {
+    let out = compile_expect_check_error(
+        r#"<?php
+class Command {
+    private ?string $code = null;
+    public function __construct(?string $c) { $this->code = $c; }
+}
+class TraceableCommand extends Command {
+    public function probe(Command $command): void {
+        [$code] = \Closure::bind(fn () => [$this->code], $command, Command::class)();
+        echo $code ?? "null";
+    }
+}
+(new TraceableCommand(null))->probe(new Command("x"));
+"#,
+    );
+    assert!(
+        out.contains("Cannot access private property"),
+        "expected the non-single-property $this bind shape to stay loud, got: {}",
+        out
+    );
+}
+
+/// Regression test (keep-loud boundary): the `$this` single-property bind authorizes the receiver
+/// ONLY against the literal `$scope`. A wrong scope (unrelated to the property's declaring class)
+/// must stay loud, so the relaxation never blanket-authorizes a private access.
+#[test]
+fn test_closure_bind_this_single_property_wrong_scope_stays_loud() {
+    let out = compile_expect_check_error(
+        r#"<?php
+class A { private int $secret = 7; public function __construct(int $x) { $this->secret = $x; } }
+class Unrelated {}
+class Probe extends A {
+    public function go(): int {
+        return \Closure::bind(fn () => $this->secret, $this, Unrelated::class)();
+    }
+}
+echo (new Probe(9))->go();
+"#,
+    );
+    assert!(
+        out.contains("Cannot access private property"),
+        "expected a wrong bind scope to keep the private access loud, got: {}",
+        out
+    );
+}
+
 // --- Untyped closure/arrow-fn parameter is Mixed inside the body (PHP semantics) ---
 
 /// An untyped arrow-function parameter with no contextual hint is `Mixed` inside the body, so

@@ -109,6 +109,27 @@ class ProtectedRight extends ProtectedRoot {
     );
 }
 
+/// Verifies the `$this instanceof Sibling` dead-branch relaxation does NOT extend to a non-`$this`
+/// receiver: a value narrowed via `instanceof` to an unrelated class can genuinely BE that class at
+/// runtime, so a protected read from an unrelated scope must stay loud (PHP fatals here). Only a
+/// `$this` receiver is provably dead in the current class's scope.
+#[test]
+fn test_error_instanceof_narrowed_protected_on_non_this_receiver() {
+    expect_error(
+        r#"<?php
+class NarrowRight {
+    protected int $value = 7;
+}
+class NarrowProbe {
+    public function read(object $x): int {
+        return $x instanceof NarrowRight ? $x->value : 0;
+    }
+}
+"#,
+        "Cannot access protected property: NarrowRight::value",
+    );
+}
+
 /// Verifies that declaring two classes differing only by case (Box vs box) reports
 /// "Duplicate class declaration: box".
 #[test]

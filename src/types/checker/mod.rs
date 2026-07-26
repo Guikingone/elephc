@@ -369,6 +369,12 @@ pub(crate) struct BoundScopeContext {
     /// Variables imported from the lexical scope by value or by reference. They remain outside
     /// the deliberately narrow visibility relaxation even when their inferred object type fits.
     pub(crate) captured_variables: HashSet<String>,
+    /// Set only for the `Closure::bind(fn () => $this->prop, $newThis, Scope::class)` shape whose
+    /// body is exactly `return $this->prop` — the single form `crate::ir_lower` lowers directly by
+    /// boxing `$newThis` as the closure's `$this` capture. When set, `can_access_property`
+    /// authorizes a `$this` receiver against `scope_class`. Left `false` for the parameter-based
+    /// relaxation, whose body is proven free of `$this`.
+    pub(crate) this_receiver_scope: bool,
 }
 
 #[derive(Clone)]

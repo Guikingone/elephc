@@ -305,3 +305,38 @@ fn test_dynamic_class_constant_object_evaluated_once() {
     );
     assert_eq!(out, "m42");
 }
+
+/// Regression test (Symfony routing `AddTrait`): a PROTECTED property accessed on `$this` narrowed
+/// via `instanceof` to a class the current class can never be (single-inheritance siblings) is a
+/// statically-dead branch. PHP checks visibility only when the fetch runs, and that fetch never
+/// runs here, so the checker must accept it (not a spurious "Cannot access protected property").
+/// The `AddTrait` is composed into `CollectionConfigurator`, whose `$this instanceof
+/// RouteConfigurator` guard is always false — the protected `RouteConfigurator::$parentConfigurator`
+/// read is unreachable. php-verified: prints `r1:coll`.
+#[test]
+fn test_this_instanceof_incompatible_sibling_protected_read_dead_branch() {
+    let out = compile_and_run(
+        r#"<?php
+class RouteConfigurator {
+    public function __construct(protected ?RouteConfigurator $parentConfigurator = null) {}
+}
+class CollectionConfigurator {
+    use AddTrait;
+    public function __construct(private ?CollectionConfigurator $parentConfigurator = null) {}
+    public function hasParent(): bool { return $this->parentConfigurator !== null; }
+}
+trait AddTrait {
+    public function add(string $n): string {
+        $p = $this instanceof CollectionConfigurator
+            ? "coll"
+            : ($this instanceof RouteConfigurator
+                ? ($this->parentConfigurator !== null ? "has" : "no")
+                : "null");
+        return $n . ":" . $p;
+    }
+}
+echo (new CollectionConfigurator())->add("r1");
+"#,
+    );
+    assert_eq!(out, "r1:coll");
+}

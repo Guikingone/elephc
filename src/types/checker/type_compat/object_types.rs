@@ -46,6 +46,24 @@ impl Checker {
         }
     }
 
+    /// Returns true when no single runtime object can be an instance of both class `a` and class
+    /// `b`. Only reasons about concrete/abstract classes (both present in `self.classes`): PHP is
+    /// single-inheritance, so two distinct classes neither of which derives from the other can
+    /// never share an instance. Interfaces are co-implementable and so are excluded (a miss in
+    /// `self.classes` returns `false`, i.e. "cannot prove incompatible"). Used to recognize a
+    /// statically-dead `$this instanceof B` guard inside a method of an unrelated class `a`.
+    pub(crate) fn classes_are_instanceof_incompatible(&self, a: &str, b: &str) -> bool {
+        let a = a.trim_start_matches('\\');
+        let b = b.trim_start_matches('\\');
+        if a == b {
+            return false;
+        }
+        if !self.classes.contains_key(a) || !self.classes.contains_key(b) {
+            return false;
+        }
+        !self.is_subclass_of(a, b) && !self.is_subclass_of(b, a)
+    }
+
     /// Returns true if `class_name` is or inherits from `ancestor_name` (excluding self equality).
     /// Walks the parent chain via `class_info.parent`.
     pub(crate) fn is_subclass_of(&self, class_name: &str, ancestor_name: &str) -> bool {
@@ -553,9 +571,46 @@ impl Checker {
             if self.can_access_member(declaring_class, visibility) {
                 return true;
             }
+            // Dead `$this instanceof Sibling` branch relaxation. A protected access on `$this`
+            // narrowed to a class the current class can never be (a distinct class in a separate
+            // single-inheritance chain) is statically unreachable: `$this` is always an instance
+            // of the current class or a subclass, and single inheritance forbids any such value
+            // from also being an instance of an unrelated class, so the guarded access never
+            // executes. PHP checks visibility only when the fetch runs, so it never faults here
+            // either. This is the Symfony `AddTrait` pattern (`$this instanceof RouteConfigurator
+            // ? $this->parentConfigurator : ...` composed into the sibling `CollectionConfigurator`).
+            // Private members stay strict (a private property is never reachable through a
+            // narrowed-to-another-class receiver), and a non-`$this` receiver still faults, so a
+            // genuinely external protected access keeps erroring.
+            if matches!(visibility, Visibility::Protected)
+                && matches!(receiver.kind, crate::parser::ast::ExprKind::This)
+            {
+                if let Some(current) = self.current_class.as_deref() {
+                    if self.classes_are_instanceof_incompatible(current, declaring_class) {
+                        return true;
+                    }
+                }
+            }
             let Some(context) = self.bound_scope_context.as_ref() else {
                 return false;
             };
+            // A `Closure::bind(fn () => $this->prop, $newThis, Scope::class)` rebinds `$this` to
+            // `$newThis` with `Scope` as the visibility scope. When the context authorizes the
+            // `$this` receiver (only the single-`return $this->prop` shape codegen lowers directly),
+            // the access is checked against `scope_class` exactly as PHP checks the rebound scope.
+            if context.this_receiver_scope
+                && matches!(receiver.kind, crate::parser::ast::ExprKind::This)
+            {
+                return match visibility {
+                    Visibility::Public => true,
+                    Visibility::Protected => {
+                        context.scope_class == declaring_class
+                            || self.is_subclass_of(&context.scope_class, declaring_class)
+                            || self.is_subclass_of(declaring_class, &context.scope_class)
+                    }
+                    Visibility::Private => context.scope_class == declaring_class,
+                };
+            }
             let crate::parser::ast::ExprKind::Variable(name) = &receiver.kind else {
                 return false;
             };
