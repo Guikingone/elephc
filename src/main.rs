@@ -8,6 +8,7 @@
 //! Key details:
 //! - Keep startup thin so CLI validation and pipeline behavior stay in dedicated modules.
 
+mod ast_usage;
 mod autoload;
 mod builtins;
 mod cli;
@@ -17,6 +18,7 @@ mod conditional;
 mod errors;
 mod eval_aot;
 mod exports;
+mod filter_var_prelude;
 mod image_prelude;
 mod intrinsics;
 #[allow(dead_code, unused_imports)]
@@ -32,6 +34,7 @@ mod magic_constants;
 mod name_resolver;
 mod names;
 mod optimize;
+mod parse_ini_prelude;
 mod parser;
 mod pdo_prelude;
 mod pipeline;

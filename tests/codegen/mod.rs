@@ -49,6 +49,7 @@ mod late_bound_functions;
 mod shutdown_functions;
 mod system;
 mod filter_var;
+mod parse_ini_file;
 mod json;
 mod serialize;
 mod regressions;

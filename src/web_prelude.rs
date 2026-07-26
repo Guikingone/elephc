@@ -21,7 +21,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::parser::ast::{Program, StmtKind};
 
-mod usage;
+// The AST function-reference scanner lives in the shared `crate::ast_usage` module so the
+// pay-for-use prelude injectors (web, parse_ini, filter_var) all decide injection from the
+// same exhaustive walk; this alias keeps the historical `usage::` call sites unchanged.
+use crate::ast_usage as usage;
 
 /// Maintained PHP minor selected for version-dependent compatibility behavior.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

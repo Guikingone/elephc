@@ -552,3 +552,66 @@ foreach (["-5", "7"] as $v) {
     );
     assert_eq!(out, "NULL,7,");
 }
+
+// --- Part C: dynamic (runtime) $filter dispatch -----------------------------
+// A non-literal `$filter` is routed to the `__elephc_filter_var_dyn` prelude
+// helper (see `crate::filter_var_prelude` and `crate::ir_lower::expr::filter`),
+// which dispatches the runtime id to the SAME literal per-filter lowering. Every
+// expected value below is php-verified (PHP 8.5.6 local, `php -n`).
+
+/// A runtime `$filter` int dispatches INT/FLOAT/BOOL/IP/DEFAULT correctly,
+/// including the false/failure cases and `FILTER_NULL_ON_FAILURE` as an int flag.
+#[test]
+fn test_filter_var_dynamic_filter_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+$fi = FILTER_VALIDATE_INT; $ff = FILTER_VALIDATE_FLOAT; $fb = FILTER_VALIDATE_BOOL;
+$fip = FILTER_VALIDATE_IP; $fd = FILTER_DEFAULT;
+var_dump(filter_var("42", $fi));
+var_dump(filter_var("x", $fi));
+var_dump(filter_var("3.5", $ff));
+var_dump(filter_var("on", $fb));
+var_dump(filter_var("nan", $fb));
+var_dump(filter_var("nan", $fb, FILTER_NULL_ON_FAILURE));
+var_dump(filter_var("10.0.0.1", $fip));
+var_dump(filter_var(7, $fd));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(42)\nbool(false)\nfloat(3.5)\nbool(true)\nbool(false)\nNULL\nstring(8) \"10.0.0.1\"\nstring(1) \"7\"\n"
+    );
+}
+
+/// A runtime `$filter` restricts `FILTER_VALIDATE_IP` by the IPv4/IPv6 family
+/// flags, matching PHP (a v6 literal fails the v4-only filter and vice versa).
+#[test]
+fn test_filter_var_dynamic_ip_family_flags() {
+    let out = compile_and_run(
+        r#"<?php
+$f = FILTER_VALIDATE_IP;
+var_dump(filter_var("::1", $f, FILTER_FLAG_IPV6));
+var_dump(filter_var("::1", $f, FILTER_FLAG_IPV4));
+var_dump(filter_var("1.2.3.4", $f, FILTER_FLAG_IPV4));
+"#,
+    );
+    assert_eq!(out, "string(3) \"::1\"\nbool(false)\nstring(7) \"1.2.3.4\"\n");
+}
+
+/// A runtime `$filter` with array-form `$options` (`['flags' => ...]`), both a
+/// literal array and an array-typed variable, honors `FILTER_NULL_ON_FAILURE`:
+/// a failure becomes `null`, a success stays typed.
+#[test]
+fn test_filter_var_dynamic_array_options() {
+    let out = compile_and_run(
+        r#"<?php
+$fi = FILTER_VALIDATE_INT;
+var_dump(filter_var("bad", $fi, ['flags' => FILTER_NULL_ON_FAILURE]));
+var_dump(filter_var("99", $fi, ['flags' => FILTER_NULL_ON_FAILURE]));
+$opts = ['flags' => FILTER_NULL_ON_FAILURE];
+var_dump(filter_var("bad", $fi, $opts));
+var_dump(filter_var("55", $fi, $opts));
+"#,
+    );
+    assert_eq!(out, "NULL\nint(99)\nNULL\nint(55)\n");
+}

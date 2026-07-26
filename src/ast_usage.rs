@@ -1,13 +1,20 @@
 //! Purpose:
-//! Collects function references and dynamic-call hazards from user/web-prelude AST.
-//! Drives pay-for-use injection and declaration reachability for `--web` helpers.
+//! Collects function references and dynamic-call hazards from a parsed AST.
+//! Shared by the pay-for-use prelude injectors (`crate::web_prelude`,
+//! `crate::parse_ini_prelude`, `crate::filter_var_prelude`) so each decides
+//! whether to inject its elephc-PHP standard-library helper from the SAME
+//! battle-tested, exhaustive AST walk instead of duplicating a per-prelude
+//! scanner.
 //!
 //! Called from:
 //! - `crate::web_prelude::inject_if_web()` before the web prelude is combined with user code.
+//! - `crate::parse_ini_prelude::inject_if_used()` / `crate::filter_var_prelude::inject_if_used()`.
 //!
 //! Key details:
 //! - Literal `function_exists`, `is_callable`, and callback names count as references.
 //! - Unknown dynamic calls conservatively disable function pruning.
+//! - The statement/expression matches are exhaustive with NO wildcard arm, so a new
+//!   AST node kind is a compile error here rather than a silently-missed reference.
 
 use std::collections::HashSet;
 
@@ -19,26 +26,26 @@ use crate::parser::ast::{
 
 /// Function-reference summary for one AST subtree.
 #[derive(Clone, Debug, Default)]
-pub(super) struct Usage {
-    pub(super) functions: HashSet<String>,
-    pub(super) dynamic_function_call: bool,
+pub(crate) struct Usage {
+    pub(crate) functions: HashSet<String>,
+    pub(crate) dynamic_function_call: bool,
 }
 
 impl Usage {
     /// Merges another subtree summary into this one.
-    pub(super) fn merge(&mut self, other: Self) {
+    pub(crate) fn merge(&mut self, other: Self) {
         self.functions.extend(other.functions);
         self.dynamic_function_call |= other.dynamic_function_call;
     }
 
     /// Returns true when a PHP function is referenced case-insensitively.
-    pub(super) fn references(&self, name: &str) -> bool {
+    pub(crate) fn references(&self, name: &str) -> bool {
         self.functions.contains(&php_symbol_key(name))
     }
 }
 
 /// Collects direct and literal-indirect function references from a program.
-pub(super) fn collect(program: &Program) -> Usage {
+pub(crate) fn collect(program: &Program) -> Usage {
     let mut usage = Usage::default();
     for stmt in program {
         scan_stmt(stmt, &mut usage);
@@ -47,7 +54,7 @@ pub(super) fn collect(program: &Program) -> Usage {
 }
 
 /// Collects references from one statement and all nested AST children.
-pub(super) fn collect_stmt(stmt: &Stmt) -> Usage {
+pub(crate) fn collect_stmt(stmt: &Stmt) -> Usage {
     let mut usage = Usage::default();
     scan_stmt(stmt, &mut usage);
     usage

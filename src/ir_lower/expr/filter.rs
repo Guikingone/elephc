@@ -42,6 +42,29 @@ pub(super) fn lower_static_filter_var(
     if crate::types::call_args::has_named_args(args) || args.iter().any(super::is_spread_arg) {
         return None;
     }
+    // A dynamic (runtime, non-constant) `$filter` cannot select a synthetic per-filter builtin at
+    // compile time. Route it to a `__elephc_filter_var_dyn*` prelude helper (injected whenever
+    // `filter_var` is referenced — see `crate::filter_var_prelude`), which dispatches the runtime
+    // id to the SAME literal per-filter lowering. The checker accepts this shape as `Mixed`.
+    //
+    // A statically array-typed `$options` (`['flags' => ...]` literal, or an array-typed variable)
+    // is routed to the `array`-parameter shim, so the array never crosses a `mixed` parameter (an
+    // array boxed into `mixed` is a pre-existing elephc gap — element access fatals at runtime).
+    // Everything else (int flags, no options, or a `mixed`-typed options) takes the int-flags
+    // helper; a `mixed`-typed options that holds an array at runtime is the documented residual.
+    if args.len() >= 2 && static_int_value(&args[1]).is_none() {
+        let helper = if args.len() == 3 && options_arg_is_array_typed(ctx, &args[2]) {
+            crate::filter_var_prelude::DYN_FILTER_VAR_ARR_NAME
+        } else {
+            crate::filter_var_prelude::DYN_FILTER_VAR_NAME
+        };
+        return Some(super::lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(helper),
+            args,
+            expr,
+        ));
+    }
     let filter_id = if args.len() >= 2 {
         static_int_value(&args[1])?
     } else {
@@ -134,6 +157,22 @@ pub(super) fn lower_static_filter_var(
         expr.span,
         None,
     ))
+}
+
+/// Returns whether the `filter_var()` `$options` argument is statically array-typed, so the
+/// dynamic-`$filter` routing can send it to the `array`-parameter helper instead of the `mixed`
+/// one. Recognizes an array literal directly, or a plain variable whose lowered logical type is an
+/// array/associative array. A `mixed`-typed variable returns `false` (routed to the int helper),
+/// which is the documented residual for a `mixed`-boxed array.
+fn options_arg_is_array_typed(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) => true,
+        ExprKind::Variable(name) => matches!(
+            ctx.local_types.get(name),
+            Some(PhpType::Array(_) | PhpType::AssocArray { .. })
+        ),
+        _ => false,
+    }
 }
 
 /// Attempts to evaluate an expression as a static integer at compile time

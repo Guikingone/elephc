@@ -8,6 +8,8 @@
 //! Key details:
 //! - Public module boundaries here are part of the crate-facing compiler API.
 
+/// Shared exhaustive AST function-reference scanner driving pay-for-use prelude injection.
+pub(crate) mod ast_usage;
 pub mod autoload;
 /// Builtin catalog and signature metadata snapshots.
 pub mod builtin_metadata;
@@ -25,6 +27,8 @@ pub mod errors;
 mod eval_aot;
 /// `#[Export]` attribute scan for cdylib emission.
 pub mod exports;
+/// Conditionally-injected dynamic-`$filter` `filter_var()` helper prelude.
+pub mod filter_var_prelude;
 /// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
 pub mod image_prelude;
 /// Intrinsic call handling.
@@ -47,6 +51,8 @@ pub mod name_resolver;
 pub mod names;
 /// Optimizer passes.
 pub mod optimize;
+/// Conditionally-injected `parse_ini_file()` standard-library prelude.
+pub mod parse_ini_prelude;
 /// Parser for PHP syntax.
 pub mod parser;
 /// PDO (SQLite) standard-library prelude injection.

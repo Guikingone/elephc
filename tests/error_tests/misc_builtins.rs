@@ -193,18 +193,25 @@ expect_builtin_arity_error!(
 );
 
 // -- filter_var() scope-boundary loud diagnostics ---------------------------
-// Locked decisions (see the deliverable report): a non-literal $filter is kept
-// loud at the checker (simplest sound option); VALIDATE_IP/EMAIL/URL/MAC/DOMAIN/
-// REGEXP, array-form $options, and unsupported flags (REQUIRE_ARRAY/FORCE_ARRAY/
-// CALLBACK) are all kept loud rather than mis-validated. FILTER_REQUIRE_SCALAR is
-// accepted as a verified no-op (see `test_filter_var_require_scalar_flag_accepted`
-// in `tests/codegen/filter_var.rs`).
+// Locked decisions (see the deliverable report): a non-literal $filter is now
+// SUPPORTED — it is routed to the `__elephc_filter_var_dyn` prelude, which
+// dispatches the runtime id to the same literal per-filter lowering (see
+// `crate::filter_var_prelude` and `tests/codegen/filter_var.rs`'s Part C). The
+// unsupported LITERAL filters (EMAIL/URL/MAC/DOMAIN/REGEXP) and unsupported flags
+// (REQUIRE_ARRAY/FORCE_ARRAY/CALLBACK) are still kept loud rather than
+// mis-validated. FILTER_REQUIRE_SCALAR is accepted as a verified no-op (see
+// `test_filter_var_require_scalar_flag_accepted` in `tests/codegen/filter_var.rs`).
 
-expect_builtin_arity_error!(
-    test_error_filter_var_non_literal_filter_id,
-    "<?php function f(int $filter) { return filter_var(\"42\", $filter); }",
-    "filter_var(): a dynamic (non-compile-time-constant) $filter is not supported yet"
-);
+/// A non-literal (runtime) `$filter` now type-checks: it is dispatched at runtime
+/// by the `__elephc_filter_var_dyn` prelude, so the checker accepts the call as
+/// `Mixed` instead of rejecting it.
+#[test]
+fn test_filter_var_dynamic_filter_id_accepted() {
+    assert!(
+        check_source("<?php function f(int $filter) { return filter_var(\"42\", $filter); }").is_ok(),
+        "a dynamic (runtime) filter_var() $filter should type-check"
+    );
+}
 
 expect_builtin_arity_error!(
     test_error_filter_var_unsupported_validate_email,

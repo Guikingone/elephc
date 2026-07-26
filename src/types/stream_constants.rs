@@ -30,7 +30,9 @@
 pub(crate) const STREAM_INT_CONSTANTS: &[(&str, i64)] = &[
     // Core I/O-adjacent extension flags.
     ("FILEINFO_MIME_TYPE", 16),
+    ("INI_SCANNER_NORMAL", 0),
     ("INI_SCANNER_RAW", 1),
+    ("INI_SCANNER_TYPED", 2),
     ("PHP_OUTPUT_HANDLER_CLEANABLE", 16),
     ("PHP_OUTPUT_HANDLER_FLUSHABLE", 32),
     ("PHP_OUTPUT_HANDLER_REMOVABLE", 64),
@@ -210,7 +212,9 @@ mod tests {
                 .1
         };
         assert_eq!(value_of("FILEINFO_MIME_TYPE"), 16);
+        assert_eq!(value_of("INI_SCANNER_NORMAL"), 0);
         assert_eq!(value_of("INI_SCANNER_RAW"), 1);
+        assert_eq!(value_of("INI_SCANNER_TYPED"), 2);
         assert_eq!(value_of("PHP_OUTPUT_HANDLER_CLEANABLE"), 16);
         assert_eq!(value_of("PHP_OUTPUT_HANDLER_FLUSHABLE"), 32);
         assert_eq!(value_of("PHP_OUTPUT_HANDLER_REMOVABLE"), 64);

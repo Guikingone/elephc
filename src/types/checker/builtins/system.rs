@@ -1275,10 +1275,16 @@ pub(super) fn check_builtin(
                 match filter_static_int_value(&args[1]) {
                     Some(v) => v,
                     None => {
-                        return Err(CompileError::new(
-                            span,
-                            "filter_var(): a dynamic (non-compile-time-constant) $filter is not supported yet",
-                        ))
+                        // A dynamic (runtime) `$filter` is routed to the
+                        // `__elephc_filter_var_dyn` prelude helper by
+                        // `crate::ir_lower::expr::filter::lower_static_filter_var`, which dispatches
+                        // the runtime id to the SAME per-filter literal lowering. Type-check the
+                        // remaining argument and accept the call as `Mixed` (the filtered value,
+                        // `false`, or `null`), exactly as the literal path is typed.
+                        if let Some(options) = args.get(2) {
+                            checker.infer_type(options, env)?;
+                        }
+                        return Ok(Some(PhpType::Mixed));
                     }
                 }
             } else {

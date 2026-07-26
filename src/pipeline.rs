@@ -18,10 +18,10 @@ use crate::codegen::platform::{Platform, Target};
 use crate::codegen::Emit;
 use crate::timings::CompileTimings;
 use crate::{
-    autoload, codegen, conditional, debug_info, errors, exports, ir, ir_lower, ir_passes, lexer,
-    linker, list_id_prelude, magic_constants, name_resolver, optimize, parser, pdo_prelude,
-    resolver, runtime_cache, shutdown_prelude, source_map, tree_shake, tz_prelude, types,
-    var_export_prelude, web_prelude,
+    autoload, codegen, conditional, debug_info, errors, exports, filter_var_prelude, ir, ir_lower,
+    ir_passes, lexer, linker, list_id_prelude, magic_constants, name_resolver, optimize,
+    parse_ini_prelude, parser, pdo_prelude, resolver, runtime_cache, shutdown_prelude, source_map,
+    tree_shake, tz_prelude, types, var_export_prelude, web_prelude,
 };
 
 /// Holds the paths for all compilation output files (assembly, object, binary, source map).
@@ -281,6 +281,23 @@ pub(crate) fn compile(config: CliConfig) {
     let phase_started = Instant::now();
     let ast = shutdown_prelude::inject_if_used(ast);
     timings.record_since("shutdown-prelude", phase_started);
+
+    // Inject the parse_ini_file prelude (a pure elephc-PHP INI parser) only when the program
+    // references parse_ini_file and does not declare its own. Same pipeline stage and rationale as
+    // var_export_prelude: after autoload + the conditional-function hoist (so PSR-4 autoloaded
+    // usage is detected) and before the checker collects functions. Namespaced bare calls resolve
+    // to this global via `name_resolver::PRELUDE_GLOBAL_FUNCTIONS`.
+    let phase_started = Instant::now();
+    let ast = parse_ini_prelude::inject_if_used(ast);
+    timings.record_since("parse-ini-prelude", phase_started);
+
+    // Inject the dynamic-`$filter` filter_var helper prelude when the program references
+    // filter_var. A dynamic (non-literal) `$filter` call is routed to `__elephc_filter_var_dyn`
+    // by `crate::ir_lower::expr::filter`; the helper must be a declared function by then, so it is
+    // injected here (same stage as var_export_prelude, before the checker).
+    let phase_started = Instant::now();
+    let ast = filter_var_prelude::inject_if_used(ast);
+    timings.record_since("filter-var-prelude", phase_started);
 
     let phase_started = Instant::now();
     let ast = optimize::fold_constants(ast);
