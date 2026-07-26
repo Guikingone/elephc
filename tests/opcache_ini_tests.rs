@@ -19,8 +19,11 @@
 //! - The probe programs narrow with `is_array()` before indexing/counting because
 //!   `ini_get_all` is `array|false` (its return hint is deliberately omitted so ordinary
 //!   union return inference handles the exits — see `CLI_INI_GET_ALL_TEMPLATE`). Sorted
-//!   order is checked with an explicit `strcmp` walk rather than `sort()`/`array_keys()`,
-//!   which do not accept a narrowed union element type on this branch.
+//!   order is checked with an explicit `strcmp` walk rather than `sort()`, which does not
+//!   accept a narrowed union element type on this branch. (`array_keys()` no longer has that
+//!   restriction — it accepts a `mixed` argument and dispatches on the runtime tag; see
+//!   `tests/array_result_type_tests.rs`. The `strcmp` walk is kept anyway because it pins the
+//!   ORDER of the rendered key list, which a key-set comparison would not.)
 
 use std::fs;
 use std::path::{Path, PathBuf};

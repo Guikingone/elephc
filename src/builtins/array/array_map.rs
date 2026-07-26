@@ -46,11 +46,26 @@ fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
     PhpType::Mixed
 }
 
+/// Returns the element type of the array `array_map` produces for a callback returning
+/// `callback_ret_ty`.
+///
+/// The mapped array holds the CALLBACK's results, so the callback return type — not the input
+/// element type — decides the element type. `null`/`never` returns have no element
+/// representation of their own and a union is boxed at runtime anyway, so both collapse to
+/// `Mixed`, which is the type the runtime cells actually carry.
+fn mapped_element_type(callback_ret_ty: PhpType) -> PhpType {
+    match callback_ret_ty {
+        PhpType::Void | PhpType::Never | PhpType::Union(_) => PhpType::Mixed,
+        other => other,
+    }
+}
+
 /// Returns the mapped array type for an `array_map` call.
 ///
 /// Validates that the second argument is an indexed array, checks the callback
 /// with its contextual element type, and derives the result element type from the callback
-/// return type. Arity (exactly 2 args) is pre-validated by `check_arity`.
+/// return type through `mapped_element_type`. Arity (exactly 2 args) is pre-validated by
+/// `check_arity`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
     match arr_ty {
@@ -71,12 +86,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                     cx.env,
                     "array_map() callback",
                 )?;
-            let result_elem_ty = if callback_ret_ty == PhpType::Mixed {
-                Box::new(PhpType::Mixed)
-            } else {
-                elem_ty
-            };
-            Ok(PhpType::Array(result_elem_ty))
+            Ok(PhpType::Array(Box::new(mapped_element_type(callback_ret_ty))))
         }
         _ => Err(CompileError::new(
             cx.span,

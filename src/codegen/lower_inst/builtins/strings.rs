@@ -2338,7 +2338,11 @@ fn implode_runtime_label(ctx: &FunctionContext<'_>, inst: &Instruction) -> Resul
     let array = expect_operand(inst, 1)?;
     match ctx.value_php_type(array)? {
         PhpType::Array(elem_ty) => match elem_ty.codegen_repr() {
-            PhpType::Int | PhpType::Bool => Ok("__rt_implode_int"),
+            // PHP stringifies bool elements as "1"/"" — NOT as the "1"/"0" that
+            // `__rt_implode_int`'s `__rt_itoa` pass would produce — so bool arrays get their
+            // own renderer. `PhpType::False` reaches this arm as `Bool` through `codegen_repr`.
+            PhpType::Bool => Ok("__rt_implode_bool"),
+            PhpType::Int => Ok("__rt_implode_int"),
             PhpType::Str | PhpType::Mixed | PhpType::Never => Ok("__rt_implode"),
             other => Err(CodegenIrError::unsupported(format!(
                 "implode array element PHP type {:?}",

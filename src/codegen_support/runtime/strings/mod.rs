@@ -37,6 +37,7 @@ mod str_ends_with;
 mod str_replace;
 mod explode;
 mod implode;
+mod implode_bool;
 mod implode_int;
 mod ucwords;
 mod str_ireplace;
@@ -142,6 +143,8 @@ pub use implode::emit_implode;
 /// Emit implode (join array to string) helper.
 pub use implode_int::emit_implode_int;
 /// Emit integer-optimized implode helper.
+pub use implode_bool::emit_implode_bool;
+/// Emit bool-element implode helper (`true` → `"1"`, `false` → `""`).
 pub use ucwords::emit_ucwords;
 /// Emit uppercase-words helper.
 pub use str_ireplace::emit_str_ireplace;
