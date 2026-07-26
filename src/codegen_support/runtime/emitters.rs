@@ -311,6 +311,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_mixed_abs(emitter);
     arrays::emit_mixed_instanceof(emitter);
     arrays::emit_iterable_unsupported_kind(emitter);
+    arrays::emit_foreach_non_iterable_warning(emitter);
     arrays::emit_iterable_write_stdout(emitter);
     arrays::emit_mixed_cast_bool(emitter);
     arrays::emit_mixed_cast_float(emitter);

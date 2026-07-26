@@ -276,10 +276,17 @@ fn test_by_ref_foreach_nested_json_decode_assoc_payloads() {
     assert_eq!(out, "101|102");
 }
 
-/// Verifies that a fatal error during `foreach` over a non-iterable `mixed` preserves prior side effects;
-/// "S" is echoed before the fatal error, confirming `side()` ran before the foreach check.
+/// Verifies `foreach` over a non-iterable `mixed` WARNS and continues instead of aborting, and
+/// that side effects sequenced before the loop are preserved: "S" is echoed by `side()` before
+/// the foreach check runs.
+///
+/// This test used to pin the opposite behavior — a compiler-internal
+/// `Fatal error: foreach over iterable with unsupported kind` and exit code 70. Reference PHP
+/// 8.5.6 (`php -d xdebug.mode=off`) prints `S` on stdout,
+/// `Warning: foreach() argument must be of type array|object, int given` on stderr, and exits 0;
+/// elephc now matches, minus the ` in <file> on line <n>` tail it does not synthesize.
 #[test]
-fn test_mixed_foreach_fatal_preserves_prior_side_effects() {
+fn test_mixed_foreach_over_non_iterable_warns_and_preserves_prior_side_effects() {
     let out = compile_and_run_capture(
         "<?php
         function side(): mixed {
@@ -292,11 +299,11 @@ fn test_mixed_foreach_fatal_preserves_prior_side_effects() {
         }
         ",
     );
-    assert!(!out.success, "program unexpectedly succeeded");
+    assert!(out.success, "program unexpectedly failed: {}", out.stderr);
     assert_eq!(out.stdout, "S");
-    assert!(
-        out.stderr
-            .contains("Fatal error: foreach over iterable with unsupported kind"),
+    assert_eq!(
+        out.stderr,
+        "Warning: foreach() argument must be of type array|object, int given\n",
         "{}",
         out.stderr
     );

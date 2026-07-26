@@ -357,6 +357,14 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _diag_undefined_array_key_quote\n_diag_undefined_array_key_quote:\n    .ascii \"\\\"\"\n");
     out.push_str(".globl _diag_undefined_array_key_suffix\n_diag_undefined_array_key_suffix:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _diag_array_offset_on_null\n_diag_array_offset_on_null:\n    .ascii \"Warning: Trying to access array offset on null\\n\"\n");
+    // -- one complete message per foreach() argument type, shared with the helper emitter --
+    // `__rt_warn_foreach_non_iterable` derives every `write()` length from the same table,
+    // so the bytes here and the immediates there can never drift apart.
+    for (label, message) in
+        crate::codegen_support::runtime::arrays::FOREACH_NON_ITERABLE_MESSAGES
+    {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     out.push_str(".globl _fiber_msg_already_started\n_fiber_msg_already_started:\n    .ascii \"Cannot start a fiber that has already been started\"\n");
     out.push_str(".globl _fiber_msg_not_suspended\n_fiber_msg_not_suspended:\n    .ascii \"Cannot resume a fiber that is not suspended\"\n");
     out.push_str(".globl _fiber_msg_throw_not_suspended\n_fiber_msg_throw_not_suspended:\n    .ascii \"Cannot resume a fiber that is not suspended\"\n");

@@ -7,6 +7,13 @@
 //!
 //! Key details:
 //! - Branch and loop handling must preserve PHP execution order and conservative type environments.
+//! - A `foreach` over a PHP-visible non-iterable (`int`, `string`, `bool`, `null`, `float`,
+//!   `resource`) is a WARNING, not an error: php-src raises
+//!   `foreach() argument must be of type array|object, <type> given` at runtime and keeps
+//!   going, so rejecting it would make elephc refuse a program PHP runs. Codegen emits the
+//!   matching runtime warning and skips the loop
+//!   (`IteratorSourceKind::NonIterable` in `crate::codegen::lower_inst::iterators`).
+//!   Compiler-internal types with no PHP spelling stay a hard error.
 
 use crate::errors::CompileError;
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
@@ -53,6 +60,27 @@ fn restore_narrowed_var(env: &mut TypeEnv, var: &str, saved: &Option<PhpType>) {
         None => {
             env.remove(var);
         }
+    }
+}
+
+/// Names a `foreach` source that PHP accepts but can never iterate, or `None` when the type
+/// has no PHP-visible spelling and must stay a hard compile error.
+///
+/// The names match what php-src prints in `foreach() argument must be of type array|object,
+/// <name> given` (captured from PHP 8.5.6): `int`, `float`, `string`, `null`, `resource`, and
+/// `true`/`false` for booleans. Only `PhpType::False` pins the boolean value at compile time;
+/// a general `bool` is reported as `bool` here, while the RUNTIME warning emitted by
+/// `__rt_warn_foreach_non_iterable` always prints the real `true`/`false`.
+fn non_iterable_foreach_argument_name(ty: &PhpType) -> Option<&'static str> {
+    match ty {
+        PhpType::Int => Some("int"),
+        PhpType::Float => Some("float"),
+        PhpType::Str => Some("string"),
+        PhpType::False => Some("false"),
+        PhpType::Bool => Some("bool"),
+        PhpType::Void => Some("null"),
+        PhpType::Resource(_) => Some("resource"),
+        _ => None,
     }
 }
 
@@ -138,6 +166,31 @@ impl Checker {
                     arr_ty,
                     PhpType::Iterable | PhpType::Mixed | PhpType::Union(_)
                 ) {
+                    if let Some(k) = key_var {
+                        env.insert(k.clone(), PhpType::Mixed);
+                        self.clear_foreach_callable_metadata(k);
+                    }
+                    env.insert(value_var.clone(), PhpType::Mixed);
+                    self.clear_foreach_callable_metadata(value_var);
+                } else if let Some(type_name) = non_iterable_foreach_argument_name(&arr_ty) {
+                    // php-src does NOT reject this: `ZEND_FE_RESET_R` raises
+                    // `foreach() argument must be of type array|object, <type> given`
+                    // (E_WARNING), skips the loop body, and execution continues. Mirroring
+                    // that as a hard error would make elephc reject a program PHP runs, so
+                    // the diagnostic is a compile warning and codegen emits the same
+                    // runtime warning (`IteratorSourceKind::NonIterable` in
+                    // `src/codegen/lower_inst/iterators.rs`). Compiler-internal types
+                    // (`Packed`, `Pointer`, `Buffer`, `Never`, `Callable`, `TaggedScalar`)
+                    // have no PHP-visible spelling and stay a hard error below.
+                    self.warnings.push(crate::errors::CompileWarning::new(
+                        stmt.span,
+                        &format!(
+                            "foreach() argument must be of type array|object, {} given; the loop body will never run",
+                            type_name
+                        ),
+                    ));
+                    // The body is still type-checked, so bind both loop variables the way
+                    // the `Mixed` source path does.
                     if let Some(k) = key_var {
                         env.insert(k.clone(), PhpType::Mixed);
                         self.clear_foreach_callable_metadata(k);

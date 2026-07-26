@@ -131,6 +131,7 @@ mod natsort;
 mod object_free_deep;
 mod range;
 mod incref;
+mod foreach_non_iterable_warning;
 mod iterable_unsupported_kind;
 mod iterable_write_stdout;
 mod mixed_abs;
@@ -381,6 +382,10 @@ pub use heap_kind::emit_heap_kind;
 /// Emit heap kind check helper.
 pub use heap_free::emit_heap_free;
 /// Emit heap free helper.
+pub use foreach_non_iterable_warning::{
+    emit_foreach_non_iterable_warning, FOREACH_NON_ITERABLE_MESSAGES,
+};
+/// Emit the PHP `foreach()` non-iterable-argument warning helper.
 pub use iterable_unsupported_kind::emit_iterable_unsupported_kind;
 /// Emit unsupported iterable kind error helper.
 pub use iterable_write_stdout::emit_iterable_write_stdout;
