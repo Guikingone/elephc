@@ -7,8 +7,8 @@
 //!
 //! Key details:
 //! - `check` narrows the declared `Mixed` return to `Array<Str>` and, when the optional
-//!   `$zend_extensions` flag is present, requires it to be a literal bool/int (AOT requirement:
-//!   the list is selected at compile time).
+//!   `$zend_extensions` flag is present, requires it to be a bool/int: a literal picks the list at
+//!   compile time, a dynamic bool/int picks between the two baked lists at runtime.
 //! - The regular and Zend extension lists are resolved at codegen against compile-time-known sets.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
@@ -31,16 +31,23 @@ builtin! {
 
 /// Validates the optional flag argument and narrows the return type to `Array<Str>`.
 ///
-/// The list of extension names is selected at compile time, so the `$zend_extensions` flag,
-/// when written explicitly, must be a literal bool or int. A missing argument uses the default
-/// (regular extension list). Returns `Array<Str>`.
+/// Both candidate lists of extension names are known at compile time, so the `$zend_extensions`
+/// flag only has to be a bool or an int: a literal selects one list during lowering, and any other
+/// bool/int expression selects between the two baked lists at runtime. Other types are rejected
+/// because the lowering has no runtime truthiness conversion for them. A missing argument uses the
+/// default (regular extension list). Returns `Array<Str>`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     if let Some(flag) = cx.args.first() {
-        cx.checker.infer_type(flag, cx.env)?;
-        if !matches!(flag.kind, ExprKind::BoolLiteral(_) | ExprKind::IntLiteral(_)) {
+        let flag_ty = cx.checker.infer_type(flag, cx.env)?;
+        if !matches!(flag.kind, ExprKind::BoolLiteral(_) | ExprKind::IntLiteral(_))
+            && !matches!(
+                flag_ty.codegen_repr(),
+                PhpType::Bool | PhpType::False | PhpType::Int
+            )
+        {
             return Err(CompileError::new(
                 cx.span,
-                "get_loaded_extensions() argument must be a literal bool or int in AOT mode",
+                "get_loaded_extensions() argument must be a bool or int in AOT mode",
             ));
         }
     }

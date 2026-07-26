@@ -3155,6 +3155,13 @@ echo count($a), "|",
 /// Verifies `function_exists()` returns `true` for the procedural date/time aliases that the
 /// name resolver rewrites into OOP/built-in expressions (e.g. `date_create`, `idate`,
 /// `gmstrftime`). PHP's introspection must recognize the same surface that the resolver sees.
+///
+/// The aliases live in the global namespace only, so a QUALIFIED spelling is `false`: reference
+/// PHP 8.5.6 prints `bool(false)` for `function_exists('\\foo\\bar\\idate')` and `bool(true)`
+/// for `function_exists('\\date_create')` (a single leading separator is accepted). An earlier
+/// revision of this test asserted `true` for the qualified form, mirroring the resolver's
+/// last-namespace-segment rewrite rule; that spelling is now `false` on both the literal and the
+/// dynamic `function_exists($name)` path, which is what PHP reports.
 #[test]
 fn test_function_exists_date_procedural_aliases() {
     let out = compile_and_run(
@@ -3196,7 +3203,8 @@ echo function_exists("\\foo\\bar\\idate") ? "1" : "0";
 echo function_exists("does_not_exist_alias_xyz") ? "1" : "0";
 "#,
     );
-    assert_eq!(out, "1".repeat(34) + "0");
+    // 33 recognized spellings, then the qualified `\foo\bar\idate` and the unknown name, both false.
+    assert_eq!(out, "1".repeat(33) + "00");
 }
 
 /// Verifies `mktime`/`gmmktime` accept PHP 8.0+'s optional arguments: omitted trailing components

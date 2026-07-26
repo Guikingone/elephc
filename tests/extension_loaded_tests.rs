@@ -218,3 +218,58 @@ fn dynamic_argument_tracks_linked_bridges() {
         "dynamic loop with --with-pdo: PDO flips to loaded, others unchanged"
     );
 }
+
+/// Verifies `get_loaded_extensions($flag)` accepts a NON-LITERAL flag: both candidate lists are
+/// compile-time constants, so the emitted code selects between two baked arrays at runtime instead
+/// of failing the compile with "argument must be a literal bool or int".
+///
+/// Reference PHP 8.5.6 with OPcache loaded prints exactly this sequence for the same probe:
+/// `get_loaded_extensions(false)` lists both `json` and `Zend OPcache` (a Zend extension is also a
+/// regular module), while `get_loaded_extensions(true)` lists `Zend OPcache` but not `json`. The
+/// literal column proves the dynamic branch selects the same lists the fold does.
+#[test]
+fn get_loaded_extensions_accepts_a_dynamic_flag() {
+    let dir = make_test_dir("ext_dyn_flag");
+    let src = "<?php \
+        $regular = false; $zend = true; \
+        var_dump(in_array('json', get_loaded_extensions($regular))); \
+        var_dump(in_array('Zend OPcache', get_loaded_extensions($regular))); \
+        var_dump(in_array('json', get_loaded_extensions($zend))); \
+        var_dump(in_array('Zend OPcache', get_loaded_extensions($zend))); \
+        var_dump(in_array('json', get_loaded_extensions(false))); \
+        var_dump(in_array('Zend OPcache', get_loaded_extensions(true)));";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    assert_eq!(
+        run_binary(&bin),
+        "bool(true)\nbool(true)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\n",
+        "a dynamic flag must select the same regular/Zend lists a literal flag folds to"
+    );
+}
+
+/// Verifies the dynamic-flag branch still reports this compilation's linked bridges: a value that
+/// only reaches the call site through a function parameter cannot be const-folded, so both arms
+/// must be materialized and the false arm must still contain the `--with-pdo` bridge.
+#[test]
+fn get_loaded_extensions_dynamic_flag_tracks_linked_bridges() {
+    let src = "<?php \
+        function names(bool $zend): string { return implode(',', get_loaded_extensions($zend)); } \
+        echo str_contains(names(false), 'PDO') ? 'T' : 'F'; \
+        echo str_contains(names(true), 'PDO') ? 'T' : 'F'; \
+        echo str_contains(names(true), 'Zend OPcache') ? 'T' : 'F';";
+
+    let without = make_test_dir("ext_dyn_flag_nopdo");
+    let bin = compile_with_flags(&without, src, "app", &[]);
+    assert_eq!(
+        run_binary(&bin),
+        "FFT",
+        "without --with-pdo neither list mentions PDO; the Zend list still has Zend OPcache"
+    );
+
+    let with = make_test_dir("ext_dyn_flag_pdo");
+    let bin = compile_with_flags(&with, src, "app", &["--with-pdo"]);
+    assert_eq!(
+        run_binary(&bin),
+        "TFT",
+        "with --with-pdo the regular list gains PDO while the Zend list is unaffected"
+    );
+}

@@ -114,6 +114,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
 
     // Callable introspection runtime functions
     callables::emit_is_callable_runtime(emitter);
+    callables::emit_function_exists_lookup(emitter);
     callables::emit_callable_descriptor_release(emitter);
     callables::emit_closure_bind(emitter);
 

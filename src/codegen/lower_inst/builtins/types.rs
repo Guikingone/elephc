@@ -403,11 +403,12 @@ pub(crate) fn lower_get_declared_names(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `get_loaded_extensions($zend_extensions)` as a const-folded string array.
+/// Lowers `get_loaded_extensions($zend_extensions)` as a string array.
 ///
-/// The optional flag selects between the regular extension list (default / literal `false`) and
-/// the Zend extension list (literal `true`). The `check` hook guarantees the argument is a literal
-/// bool, so the selection is resolved at compile time and baked into the emitted array.
+/// The optional flag selects between the regular extension list (default / `false`) and the Zend
+/// extension list (`true`). BOTH lists are known at compile time, so a literal flag bakes exactly
+/// one of them into the emitted array; a dynamic flag emits both behind a runtime branch (see
+/// [`lower_dynamic_get_loaded_extensions`]) rather than failing the compile.
 ///
 /// The regular (non-Zend) list is the always-present core set followed by the canonical names of
 /// the bridges actually linked into this compilation (`crate::codegen::linked_extensions()`, e.g.
@@ -418,27 +419,85 @@ pub(crate) fn lower_get_loaded_extensions(
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count_between(inst, "get_loaded_extensions", 0, 1)?;
-    let zend_extensions = match inst.operands.first() {
-        Some(value) => const_bool_operand(ctx, *value)?.ok_or_else(|| {
-            CodegenIrError::unsupported("get_loaded_extensions with non-literal flag argument")
-        })?,
-        None => false,
+    let flag = inst.operands.first().copied();
+    let constant_flag = match flag {
+        Some(value) => const_bool_operand(ctx, value)?,
+        None => Some(false),
     };
-    let set = if zend_extensions {
-        super::ZEND_LOADED_EXTENSIONS
-    } else {
-        super::CORE_LOADED_EXTENSIONS
-    };
-    let mut names: Vec<String> = set.iter().map(|name| (*name).to_string()).collect();
-    if !zend_extensions {
-        for ext in crate::codegen::linked_extensions() {
-            if !names.iter().any(|name| name.eq_ignore_ascii_case(&ext)) {
-                names.push(ext);
-            }
+    match (constant_flag, flag) {
+        (Some(zend_extensions), _) => {
+            emit_string_array(ctx, &loaded_extension_names(zend_extensions))?
+        }
+        (None, Some(value)) => lower_dynamic_get_loaded_extensions(ctx, value)?,
+        (None, None) => unreachable!("a missing flag always folds to false"),
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Returns the extension-name list `get_loaded_extensions($zend_extensions)` reports.
+///
+/// Single source of truth for the const-folded and the runtime-selected forms, so they can never
+/// report different sets.
+fn loaded_extension_names(zend_extensions: bool) -> Vec<String> {
+    if zend_extensions {
+        return super::ZEND_LOADED_EXTENSIONS
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect();
+    }
+    let mut names: Vec<String> = super::CORE_LOADED_EXTENSIONS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    for extension in crate::codegen::linked_extensions() {
+        if !names.iter().any(|name| name.eq_ignore_ascii_case(&extension)) {
+            names.push(extension);
         }
     }
-    emit_string_array(ctx, &names)?;
-    store_if_result(ctx, inst)
+    names
+}
+
+/// Lowers `get_loaded_extensions($flag)` for a flag that is only known at runtime.
+///
+/// Both candidate lists are compile-time constants, so the emitted code just picks between two
+/// fully baked arrays with a PHP-truthiness test on the flag. Each branch runs the same
+/// [`emit_string_array`] sequence and leaves an `Array<Str>` pointer in the integer result
+/// register, so the two arms agree in shape as well as in type — nothing observes a different
+/// representation depending on which branch ran.
+fn lower_dynamic_get_loaded_extensions(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let flag_type = ctx.value_php_type(value)?.codegen_repr();
+    if !matches!(flag_type, PhpType::Bool | PhpType::False | PhpType::Int) {
+        return Err(CodegenIrError::unsupported(format!(
+            "get_loaded_extensions with a {:?} flag argument",
+            flag_type
+        )));
+    }
+    ctx.load_value_to_result(value)?;
+    let zend_label = ctx.next_label("get_loaded_extensions_zend");
+    let done_label = ctx.next_label("get_loaded_extensions_done");
+    let flag_reg = abi::int_result_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #0", flag_reg));          // did the caller ask for the Zend extension list?
+            ctx.emitter.instruction(&format!("b.ne {}", zend_label));           // a truthy flag selects the Zend list
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("test {}, {}", flag_reg, flag_reg));      // did the caller ask for the Zend extension list?
+            ctx.emitter.instruction(&format!("jne {}", zend_label));            // a truthy flag selects the Zend list
+        }
+    }
+    emit_string_array(ctx, &loaded_extension_names(false))?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&zend_label);
+    emit_string_array(ctx, &loaded_extension_names(true))?;
+
+    ctx.emitter.label(&done_label);
+    Ok(())
 }
 
 /// Reads a literal boolean operand produced by a constant instruction, or `None` when non-literal.

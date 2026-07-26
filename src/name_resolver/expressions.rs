@@ -703,80 +703,88 @@ fn rewrite_date_procedural_alias(name: &str, args: &[Expr]) -> Option<ExprKind> 
     }
 }
 
-/// Reports whether `name` matches one of PHP's procedural date/time aliases, regardless of arity.
+/// The lowercase names of PHP's procedural date/time aliases, in one enumerable place.
 ///
 /// Mirrors the name set in `rewrite_date_procedural_alias` (the alias arms there minus their
-/// arity guards) so `function_exists()` and other introspection builtins can recognize the
-/// same procedural surface that the resolver rewrites. Comparison is case-insensitive on the
-/// last namespace segment, matching the resolver's behavior.
+/// arity guards). This is the single source of truth behind both
+/// [`is_date_procedural_alias`] (the predicate) and [`date_procedural_alias_names`] (the
+/// enumeration): the dynamic `function_exists($name)` lowering bakes the enumeration into the
+/// binary while the literal `function_exists('name')` fold calls the predicate, so keeping one
+/// list makes it structurally impossible for the two paths to disagree about these names.
+pub(crate) const DATE_PROCEDURAL_ALIASES: &[&str] = &[
+    "idate",
+    "mktime",
+    "gmmktime",
+    "date_create",
+    "date_create_immutable",
+    "date_create_from_format",
+    "date_create_immutable_from_format",
+    "date_parse_from_format",
+    "date_parse",
+    "date_sun_info",
+    "date_sunrise",
+    "date_sunset",
+    "strptime",
+    "timezone_name_from_abbr",
+    "cal_to_jd",
+    "cal_from_jd",
+    "cal_days_in_month",
+    "cal_info",
+    "gregoriantojd",
+    "jdtogregorian",
+    "juliantojd",
+    "jdtojulian",
+    "frenchtojd",
+    "jdtofrench",
+    "jewishtojd",
+    "jdtojewish",
+    "jddayofweek",
+    "jdmonthname",
+    "jdtounix",
+    "unixtojd",
+    "easter_days",
+    "easter_date",
+    "gettimeofday",
+    "date_get_last_errors",
+    "strftime",
+    "gmstrftime",
+    "timezone_open",
+    "timezone_identifiers_list",
+    "timezone_location_get",
+    "timezone_transitions_get",
+    "timezone_abbreviations_list",
+    "timezone_version_get",
+    "date_interval_create_from_date_string",
+    "date_diff",
+    "date_format",
+    "date_add",
+    "date_sub",
+    "date_modify",
+    "date_timestamp_get",
+    "date_timestamp_set",
+    "date_timezone_get",
+    "date_timezone_set",
+    "date_offset_get",
+    "date_date_set",
+    "date_isodate_set",
+    "date_time_set",
+    "date_interval_format",
+    "timezone_name_get",
+    "timezone_offset_get",
+];
+
+/// Reports whether `name` matches one of PHP's procedural date/time aliases, regardless of arity.
+///
+/// Consults [`DATE_PROCEDURAL_ALIASES`] so `function_exists()` and other introspection builtins
+/// recognize the same procedural surface that the resolver rewrites. Comparison is
+/// case-insensitive on the last namespace segment, matching the resolver's behavior.
 pub(crate) fn is_date_procedural_alias(name: &str) -> bool {
     let bare = name
         .rsplit('\\')
         .next()
         .unwrap_or("")
         .to_ascii_lowercase();
-    matches!(
-        bare.as_str(),
-        "idate"
-            | "mktime"
-            | "gmmktime"
-            | "date_create"
-            | "date_create_immutable"
-            | "date_create_from_format"
-            | "date_create_immutable_from_format"
-            | "date_parse_from_format"
-            | "date_parse"
-            | "date_sun_info"
-            | "date_sunrise"
-            | "date_sunset"
-            | "strptime"
-            | "timezone_name_from_abbr"
-            | "cal_to_jd"
-            | "cal_from_jd"
-            | "cal_days_in_month"
-            | "cal_info"
-            | "gregoriantojd"
-            | "jdtogregorian"
-            | "juliantojd"
-            | "jdtojulian"
-            | "frenchtojd"
-            | "jdtofrench"
-            | "jewishtojd"
-            | "jdtojewish"
-            | "jddayofweek"
-            | "jdmonthname"
-            | "jdtounix"
-            | "unixtojd"
-            | "easter_days"
-            | "easter_date"
-            | "gettimeofday"
-            | "date_get_last_errors"
-            | "strftime"
-            | "gmstrftime"
-            | "timezone_open"
-            | "timezone_identifiers_list"
-            | "timezone_location_get"
-            | "timezone_transitions_get"
-            | "timezone_abbreviations_list"
-            | "timezone_version_get"
-            | "date_interval_create_from_date_string"
-            | "date_diff"
-            | "date_format"
-            | "date_add"
-            | "date_sub"
-            | "date_modify"
-            | "date_timestamp_get"
-            | "date_timestamp_set"
-            | "date_timezone_get"
-            | "date_timezone_set"
-            | "date_offset_get"
-            | "date_date_set"
-            | "date_isodate_set"
-            | "date_time_set"
-            | "date_interval_format"
-            | "timezone_name_get"
-            | "timezone_offset_get"
-    )
+    DATE_PROCEDURAL_ALIASES.contains(&bare.as_str())
 }
 
 /// Returns the inclusive `(min, max)` argument-count range that

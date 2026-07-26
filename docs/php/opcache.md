@@ -676,9 +676,10 @@ $name = 'JSON';
 var_dump(extension_loaded($name));   // true
 ```
 
-`get_loaded_extensions()`'s optional flag must be a literal `bool`/`int` — the
-list is selected at compile time, so a dynamic flag is a compile error. Pinned by
-`tests/extension_loaded_tests.rs`.
+`get_loaded_extensions()`'s optional flag must be a `bool`/`int`, but it does not
+have to be a literal: both candidate lists (regular and Zend) are compile-time
+constants, so a literal flag bakes one of them in and a dynamic flag selects
+between the two at run time. Pinned by `tests/extension_loaded_tests.rs`.
 
 ## Comparing against reference PHP
 
@@ -732,7 +733,7 @@ on macOS arm64.
 | Per-directive environment override | Does not exist (`PHP_INI_opcache_jit`, `opcache_jit`, `opcache.jit` in the environment all do nothing) | `ELEPHC_INI_*` re-points 44 of the 54 directives at run time | An elephc extension, not parity: an AOT binary has no `php.ini` to edit |
 | `extension_loaded()` under `eval()` | n/a | Reports only the core set, so `extension_loaded('PDO')` is `false` under `eval()` even in a `--with-pdo` build | The eval interpreter runs at compile time with no link step |
 | OPcache file functions under `eval()` | n/a | `opcache_is_script_cached()` / `opcache_invalidate()` / `opcache_compile_file()` / `opcache_is_script_cached_in_file_cache()` always return `false` (and `opcache_jit_blacklist()` `null`), with no notice | The eval interpreter has no AOT binary and therefore no manifest |
-| `get_loaded_extensions()` argument | Accepts any expression | Must be a literal `bool`/`int` | The list is selected at compile time |
+| `get_loaded_extensions()` argument | Accepts any expression | Must be a `bool`/`int` (literal or dynamic) | Both candidate lists are compile-time constants, so a dynamic flag selects between them at run time; a non-bool/int argument has no runtime truthiness conversion |
 
 Compatibility notes (**not** divergences, called out because they are easy to
 mistake for one): `opcache_get_status()`'s top-level key order and the position

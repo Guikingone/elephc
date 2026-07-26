@@ -427,7 +427,7 @@ Namespace syntax is preserved through parsing and include resolution, then norma
 - tracks the current `namespace` scope
 - applies `use`, `use function`, and `use const` aliases, including group-use forms
 - resolves class/interface/trait/function/constant references to canonical fully-qualified names
-- rewrites supported string-literal callbacks such as `call_user_func("name", ...)` to the resolved target name; `function_exists("name")` keeps PHP's literal-name introspection semantics instead
+- rewrites supported string-literal callbacks such as `call_user_func("name", ...)` to the resolved target name; `function_exists($name)` keeps PHP's introspection semantics instead — a literal name is not namespace-resolved, and a dynamic name is matched at run time against the declared-function set baked into the binary
 - flattens namespace-only AST statements so downstream passes operate on a simpler canonical AST
 
 `src/names.rs` is the shared utility layer for this work. It defines the internal `Name` representation plus common helpers for:

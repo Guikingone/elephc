@@ -52,8 +52,12 @@ elephc follows PHP's symbol case rules:
 String-literal callback names follow the same resolution rules as function calls.
 
 `function_exists()` is introspection rather than invocation: its string argument
-is checked as a literal global or fully-qualified function name. It does not
-apply the current namespace or `use function` imports to an unqualified string.
+is checked as a global or fully-qualified function name (a single leading `\` is
+accepted, as in PHP). It does not apply the current namespace or `use function`
+imports to an unqualified string. The name does not have to be a literal: a
+literal const-folds at compile time, while any other `string` expression is
+matched case-insensitively at run time against the set of functions the binary
+declares — that set is fixed by the AOT link, so both forms always agree.
 
 ## Include / Require
 ```php
