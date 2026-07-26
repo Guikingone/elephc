@@ -352,6 +352,13 @@ define("PI", 3.14159);
 |---|---|---|
 | `PHP_EOL` | string | `"\n"` |
 | `PHP_OS` | string | `"Darwin"` on macOS targets, `"Linux"` on Linux targets |
+| `PHP_VERSION` | string | The targeted PHP language version, `"8.<minor>.0"` for `--php-version` (`"8.5.0"` by default) |
+| `PHP_VERSION_ID` | int | `major * 10000 + minor * 100 + release`, e.g. `80500` |
+| `PHP_MAJOR_VERSION` | int | `8` |
+| `PHP_MINOR_VERSION` | int | `2` … `5`, following `--php-version` |
+| `PHP_RELEASE_VERSION` | int | `0` — elephc targets a language profile, not a patch release |
+| `PHP_EXTRA_VERSION` | string | `""` |
+| `PHP_SAPI` | string | `"cli"`, or `"cli-server"` under `--web` |
 | `DIRECTORY_SEPARATOR` | string | `"/"` |
 | `STDIN` | resource | Standard input stream |
 | `STDOUT` | resource | Standard output stream |

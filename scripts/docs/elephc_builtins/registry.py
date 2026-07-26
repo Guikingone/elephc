@@ -1197,6 +1197,10 @@ def slug(name: str) -> str:
 # `check_builtin()` arms (which sometimes narrow to the wrong type, e.g.
 # `array_shift` returns `mixed`, not the array element type).
 RETURN_TYPE_OVERRIDES: Dict[str, str] = {
+    # phpversion() is `string`, phpversion($extension) is `string|false`; the
+    # registry records the union-covering `Mixed` for the whole arity, so the
+    # documented return type is recovered here (reference PHP's own signature).
+    "phpversion": "string|false",
     # array_shift / array_pop return the shifted element which is `mixed`
     # in PHP's loose type system.
     "array_shift": "mixed",
@@ -1281,7 +1285,7 @@ DESCRIPTION_OVERRIDES: Dict[str, str] = {
     "print_r": "Prints human-readable information about a variable.",
     "var_dump": "Dumps information about a variable, including its type and value.",
     "var_export": "Outputs or returns a parsable string representation of a variable.",
-    "phpversion": "Returns the current PHP version information.",
+    "phpversion": "Returns the targeted PHP language version, or one extension's version.",
     "php_uname": "Returns information about the operating system PHP is running on.",
 }
 

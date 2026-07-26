@@ -868,10 +868,18 @@ value, return `false`, and emit the same suppressible duplicate-constant warning
 as AOT `define()`.
 
 Eval predefined constants include `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`,
-`PHP_INT_MAX`, `INF`, `NAN`, `PATHINFO_*`, `FNM_*`, `ARRAY_FILTER_USE_*`,
-`COUNT_*`, and the supported `PREG_*` / `JSON_*` constants. `defined()` sees
-these names, including an optional leading `\`, and `define()` cannot replace
-them.
+`PHP_INT_MAX`, `INF`, `NAN`, the `PHP_VERSION*` / `PHP_SAPI` version surface,
+`PATHINFO_*`, `FNM_*`, `ARRAY_FILTER_USE_*`, `COUNT_*`, and the supported
+`PREG_*` / `JSON_*` constants. `defined()` sees these names, including an
+optional leading `\`, and `define()` cannot replace them.
+
+The eval interpreter is a separate crate with no access to `--php-version` or
+`--web`, so the version surface reports the DEFAULT profile: `PHP_VERSION`
+`"8.5.0"`, `PHP_VERSION_ID` `80500`, `PHP_SAPI` `"cli"`, `phpversion()`
+`"8.5.0"`. On a default-profile CLI binary that is identical to the compiled
+surface; a binary compiled `--php-version 8.2` or `--web` reports its own
+profile natively while `eval()` still reports the default. This is the same
+documented divergence `opcache_reset()` has in eval.
 
 ## Builtins available through eval
 

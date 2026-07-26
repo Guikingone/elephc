@@ -94,7 +94,7 @@ pub(in crate::interpreter) fn eval_builtin_network_env_call(
         "ip2long" => eval_builtin_ip2long(args, context, scope, values),
         "long2ip" => eval_builtin_long2ip(args, context, scope, values),
         "php_uname" => eval_builtin_php_uname(args, context, scope, values),
-        "phpversion" => eval_builtin_phpversion(args, values),
+        "phpversion" => eval_builtin_phpversion(args, context, scope, values),
         "putenv" => eval_builtin_putenv(args, context, scope, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }
@@ -216,12 +216,11 @@ pub(in crate::interpreter) fn eval_network_env_values_result(
             };
             eval_ip2long_result(*value, values)
         }
-        "phpversion" => {
-            if !evaluated_args.is_empty() {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            eval_phpversion_result(values)
-        }
+        "phpversion" => match evaluated_args {
+            [] => eval_phpversion_result(values),
+            [extension] => eval_phpversion_extension_result(*extension, values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
         "putenv" => {
             let [assignment] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);

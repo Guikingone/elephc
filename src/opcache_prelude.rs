@@ -99,7 +99,10 @@ use crate::opcache::directives::{
 };
 use crate::opcache::state::opcache_cache_enabled_with_overrides;
 
-mod detect;
+/// The reference-detection walk. Shared with `crate::version_prelude`, which needs exactly
+/// the same "does this program mention this function name" question for its own pay-for-use
+/// gating; duplicating the exhaustive AST traversal would be a second thing to keep correct.
+pub(crate) mod detect;
 
 /// Returns whether a compile-time `--ini` override was supplied for directive `name`.
 ///

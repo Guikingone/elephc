@@ -102,9 +102,16 @@ fn declared_builtin_registry_derives_time_and_env_metadata() {        for name i
             eval_declared_builtin_default_value("php_uname", 0),
             Some(EvalBuiltinDefaultValue::String("a"))
         );
+        // `phpversion(?string $extension = null)`: the optional extension selector, whose
+        // shape must stay identical to the static catalog's (asserted by
+        // `tests/builtin_parity_tests.rs::shared_builtin_signature_shape_matches_static_signatures`).
         assert_eq!(
             eval_declared_builtin_param_names("phpversion"),
-            Some([].as_slice())
+            Some(["extension"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("phpversion", 0),
+            Some(EvalBuiltinDefaultValue::Null)
         );
         assert_eq!(
             eval_declared_builtin_param_names("getenv"),

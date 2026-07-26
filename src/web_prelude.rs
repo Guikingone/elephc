@@ -50,6 +50,12 @@ impl PhpVersion {
     }
 
     /// Returns PHP's numeric `PHP_VERSION_ID` representation for this profile.
+    ///
+    /// This is exactly `major() * 10000 + minor() * 100 + release()` — the reference
+    /// formula, verified against PHP 8.5.6 (`php -r 'echo PHP_VERSION_ID;'` → `80506`
+    /// for `8.5.6`). Because elephc pins [`Self::release`] to `0` (see
+    /// [`Self::version_string`]), the ids stay at the `.0` boundary of each profile.
+    /// `version_id_matches_components` below asserts the identity for every profile.
     pub const fn version_id(self) -> u32 {
         match self {
             Self::Php82 => 80200,
@@ -57,6 +63,106 @@ impl PhpVersion {
             Self::Php84 => 80400,
             Self::Php85 => 80500,
         }
+    }
+
+    /// Returns the `PHP_VERSION` / `phpversion()` string elephc reports for this profile.
+    ///
+    /// # THE VERSION RULE (and why the patch component is always `0`)
+    ///
+    /// elephc targets a PHP **language profile** selected by `--php-version` (8.2/8.3/8.4/8.5),
+    /// not a specific upstream patch release. There is no PHP 8.5.6 runtime inside a compiled
+    /// binary to report the patch level of, so the only honest patch component is the one that
+    /// names the profile itself: `8.<minor>.0`.
+    ///
+    /// This is the SAME rule the OPcache surface already applies —
+    /// `opcache_get_configuration()['version']['version']` reports `8.5.0` where reference PHP
+    /// 8.5.6 reports `8.5.6` (documented in `docs/php/opcache.md`). Reporting `8.5.0` here keeps
+    /// the two surfaces from contradicting each other inside one binary, and it keeps
+    /// `PHP_VERSION_ID` ([`Self::version_id`]) — which already existed and already encoded the
+    /// `.0` boundary — consistent with the string rather than forcing a choice between them.
+    ///
+    /// Consequence for feature detection, which is what this surface is really for:
+    /// `PHP_VERSION_ID >= 80500` answers exactly the question `--php-version 8.5` answers, and
+    /// `version_compare(PHP_VERSION, '8.5', '>=')` agrees with it. The only thing a caller
+    /// cannot learn is a patch level elephc genuinely does not have.
+    pub const fn version_string(self) -> &'static str {
+        match self {
+            Self::Php82 => "8.2.0",
+            Self::Php83 => "8.3.0",
+            Self::Php84 => "8.4.0",
+            Self::Php85 => "8.5.0",
+        }
+    }
+
+    /// Returns `PHP_MAJOR_VERSION` for this profile (always `8` across the maintained set).
+    pub const fn major(self) -> u32 {
+        self.version_id() / 10000
+    }
+
+    /// Returns `PHP_MINOR_VERSION` for this profile (`2`..=`5`).
+    pub const fn minor(self) -> u32 {
+        (self.version_id() / 100) % 100
+    }
+
+    /// Returns `PHP_RELEASE_VERSION` for this profile — always `0`, see [`Self::version_string`].
+    pub const fn release(self) -> u32 {
+        self.version_id() % 100
+    }
+
+    /// Returns `PHP_EXTRA_VERSION` — always the empty string.
+    ///
+    /// Reference PHP uses this for suffixes such as `-dev` or `RC1`; a released 8.5.6 reports
+    /// `""` (verified). elephc's profiles are never pre-release, so `""` is exact, not a
+    /// divergence.
+    pub const fn extra_version(self) -> &'static str {
+        ""
+    }
+
+    /// Returns the `zend_version()` string for this profile.
+    ///
+    /// The Zend Engine major track runs four behind PHP's (PHP 8.x ships Zend Engine 4.x;
+    /// reference PHP 8.5.6 reports `4.5.6`), and its minor moves with PHP's minor. elephc
+    /// therefore reports `4.<minor>.0`, applying the same patch-is-`0` rule as
+    /// [`Self::version_string`] for the same reason: there is no engine build to have a patch
+    /// level. It is a *language-profile* claim, not a claim to be Zend.
+    pub const fn zend_version(self) -> &'static str {
+        match self {
+            Self::Php82 => "4.2.0",
+            Self::Php83 => "4.3.0",
+            Self::Php84 => "4.4.0",
+            Self::Php85 => "4.5.0",
+        }
+    }
+}
+
+/// Returns the `PHP_SAPI` / `php_sapi_name()` string for an elephc compile mode.
+///
+/// elephc has exactly two runtime shapes, and they map onto reference SAPI names as follows:
+///
+/// - default (no `--web`): **`cli`**. The binary is a one-shot program driven by `argv`, writing
+///   to stdout, exactly what reference PHP's `cli` SAPI describes.
+/// - `--web` / `--with-web`: **`cli-server`**. The binary embeds its own HTTP listener and serves
+///   requests itself, with no external web server, no FastCGI channel and no module host — which
+///   is precisely what reference PHP's built-in server (`php -S`) is, and it is the only
+///   reference SAPI name that describes "a standalone PHP binary that speaks HTTP". Reporting
+///   `fpm-fcgi` or `apache2handler` would claim a process model (a pool manager, an Apache
+///   module) that does not exist here, and library code branches on those names to reach for
+///   `fastcgi_finish_request()` / `apache_*` functions elephc does not provide.
+///
+/// Why this matters more than cosmetics: framework code gates on `PHP_SAPI === 'cli'` (Symfony's
+/// `Debug`/`ErrorHandler` and Laravel's `runningInConsole()` both do) to decide whether it is in
+/// a console or a request. Reporting `cli` under `--web` would put every such library on the
+/// console path inside an HTTP request. `cli-server` is on the "web" side of every such test
+/// while still being a name libraries already know.
+///
+/// This is the single source of truth for the SAPI name: `PHP_SAPI` (baked by
+/// `codegen_support::prescan::collect_constants`) and `php_sapi_name()` (rendered by
+/// `crate::version_prelude`) both read it.
+pub const fn sapi_name(web: bool) -> &'static str {
+    if web {
+        "cli-server"
+    } else {
+        "cli"
     }
 }
 
@@ -2041,6 +2147,95 @@ mod tests {
     fn parse(source: &str) -> Program {
         let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
         crate::parser::parse(&tokens).expect("fixture must parse")
+    }
+
+    /// Every maintained profile in declaration order, for exhaustive table checks.
+    const ALL_PROFILES: [PhpVersion; 4] = [
+        PhpVersion::Php82,
+        PhpVersion::Php83,
+        PhpVersion::Php84,
+        PhpVersion::Php85,
+    ];
+
+    /// `PHP_VERSION_ID` must be the reference formula applied to the reported components.
+    ///
+    /// The formula was verified against reference PHP 8.5.6:
+    /// `php -d xdebug.mode=off -r 'echo PHP_VERSION_ID;'` prints `80506`, i.e.
+    /// `8 * 10000 + 5 * 100 + 6`. This is the test that makes a binary reporting
+    /// `PHP_VERSION 8.5.0` with `PHP_VERSION_ID 80506` impossible.
+    #[test]
+    fn version_id_matches_components() {
+        for profile in ALL_PROFILES {
+            assert_eq!(
+                profile.version_id(),
+                profile.major() * 10000 + profile.minor() * 100 + profile.release(),
+                "{profile:?} version_id must equal major*10000 + minor*100 + release",
+            );
+        }
+    }
+
+    /// The reported version STRING must spell out exactly the reported components.
+    #[test]
+    fn version_string_matches_components() {
+        for profile in ALL_PROFILES {
+            assert_eq!(
+                profile.version_string(),
+                format!(
+                    "{}.{}.{}{}",
+                    profile.major(),
+                    profile.minor(),
+                    profile.release(),
+                    profile.extra_version(),
+                ),
+                "{profile:?} version_string must spell out its own components",
+            );
+            assert_eq!(profile.major(), 8, "every maintained profile is PHP 8.x");
+            assert_eq!(
+                profile.release(),
+                0,
+                "{profile:?} pins the patch component to 0 (see version_string docs)",
+            );
+            assert_eq!(profile.extra_version(), "");
+        }
+    }
+
+    /// `zend_version()` tracks the profile minor on the Zend Engine 4.x track.
+    ///
+    /// Reference PHP 8.5.6 reports Zend Engine `4.5.6`; elephc reports `4.5.0` under the same
+    /// patch-is-0 rule as `PHP_VERSION`.
+    #[test]
+    fn zend_version_tracks_profile_minor() {
+        for profile in ALL_PROFILES {
+            assert_eq!(
+                profile.zend_version(),
+                format!("4.{}.{}", profile.minor(), profile.release()),
+                "{profile:?} zend_version must be 4.<minor>.<release>",
+            );
+        }
+    }
+
+    /// The SAPI name is decided by compile mode and nothing else.
+    #[test]
+    fn sapi_name_follows_compile_mode() {
+        assert_eq!(sapi_name(false), "cli");
+        assert_eq!(sapi_name(true), "cli-server");
+    }
+
+    /// `--php-version` spellings must round-trip to the profile they name.
+    #[test]
+    fn parsed_spelling_round_trips_to_version_string() {
+        for (spelling, profile) in [
+            ("8.2", PhpVersion::Php82),
+            ("8.3", PhpVersion::Php83),
+            ("8.4", PhpVersion::Php84),
+            ("8.5", PhpVersion::Php85),
+        ] {
+            assert_eq!(PhpVersion::parse(spelling), Some(profile));
+            assert!(
+                profile.version_string().starts_with(spelling),
+                "{profile:?} must report the profile it was selected by",
+            );
+        }
     }
 
     /// Returns whether an injected program declares a free function.

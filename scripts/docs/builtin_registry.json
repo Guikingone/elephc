@@ -34858,7 +34858,7 @@
   {
     "area": "Misc",
     "canonical_name": "phpversion",
-    "description": "Returns the current PHP version information.",
+    "description": "Returns the targeted PHP language version, or one extension's version.",
     "eval": {
       "area": "network_env",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/network_env/phpversion.rs",
@@ -34867,7 +34867,13 @@
         "values"
       ],
       "kind": "registry",
-      "params": [],
+      "params": [
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "extension"
+        }
+      ],
       "required_param_count": 0,
       "supported": true,
       "variadic": null
@@ -34879,15 +34885,17 @@
     "lowering": {
       "checker_file": null,
       "checker_line": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
-      "codegen_line": 423,
+      "codegen_file": "src/codegen/lower_inst/builtins.rs",
+      "codegen_function": "lower_phpversion",
+      "codegen_line": null,
       "notes": [
-        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
-        "Emits the typed EIR target `runtime.phpversion` through `BuiltinLoweringContext`.",
-        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+        "Fully const-folded from the compilation's `--php-version` profile; no `__rt_*` helper for the version itself.",
+        "`phpversion()` emits a static string; `phpversion($extension)` emits the version string or `false`, boxed as `Mixed` (the `string|false` union).",
+        "Extension membership reuses `extension_is_loaded()` / the `extension_loaded()` candidate table, scanned with `__rt_strcasecmp` for a non-literal name."
       ],
-      "runtime_helpers": [],
+      "runtime_helpers": [
+        "__rt_strcasecmp"
+      ],
       "sig_arm": null,
       "sig_file": "src/builtins/system/phpversion.rs",
       "sig_line": null
@@ -34932,7 +34940,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "shared",
       "runtime_functions": [
         "phpversion"
       ],
@@ -34943,12 +34951,20 @@
         "linux-x86_64"
       ],
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": false
       }
     },
     "sig": {
-      "params": [],
-      "return_type": "string",
+      "params": [
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "extension",
+          "type": "?string"
+        }
+      ],
+      "return_type": "string|false",
       "variadic": null
     },
     "slug": "phpversion",

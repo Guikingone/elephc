@@ -61,6 +61,43 @@ thread_local! {
     /// report linked bridges alongside the always-present core set. Thread-local
     /// so parallel test runs don't interfere.
     static LINKED_EXTENSIONS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// The PHP language profile this compilation targets (`--php-version`) and
+    /// whether it is a `--web` build. Together they are the SINGLE source of
+    /// truth for the reported PHP version surface (`PHP_VERSION`, `PHP_SAPI`,
+    /// `phpversion()`, `zend_version()`, …). Set via [`set_compile_profile`] at
+    /// the very top of `pipeline::compile`; read by
+    /// `codegen_support::prescan::collect_constants` and by the `phpversion()`
+    /// const-fold, both of which sit far below the pipeline's parameter lists.
+    ///
+    /// Seeded into a thread-local for the same reason [`LINKED_EXTENSIONS`] is:
+    /// the fold happens deep in per-instruction lowering and in EIR lowering,
+    /// where threading two more parameters through every entry point would be
+    /// far more invasive than the value is worth. The default — the newest
+    /// maintained profile, non-web — is exactly what an unconfigured caller
+    /// (unit tests, `tests/codegen` harnesses) should observe, so nothing has to
+    /// set it to behave correctly.
+    static COMPILE_PROFILE: Cell<(crate::web_prelude::PhpVersion, bool)> =
+        const { Cell::new((crate::web_prelude::PhpVersion::Php85, false)) };
+}
+
+/// Records the PHP language profile and SAPI mode of the current compilation.
+///
+/// Called once from `pipeline::compile` before any prelude runs, so every later
+/// phase (prescan constants, EIR lowering, per-instruction lowering) observes the
+/// same pair. Read via [`compile_php_version`] / [`compile_is_web_sapi`].
+pub fn set_compile_profile(php_version: crate::web_prelude::PhpVersion, web: bool) {
+    COMPILE_PROFILE.with(|profile| profile.set((php_version, web)));
+}
+
+/// Returns the PHP language profile this compilation targets (default: the newest
+/// maintained profile, matching `--php-version`'s own default).
+pub(crate) fn compile_php_version() -> crate::web_prelude::PhpVersion {
+    COMPILE_PROFILE.with(|profile| profile.get().0)
+}
+
+/// Returns whether this compilation is a `--web` build (default: `false`, i.e. CLI).
+pub(crate) fn compile_is_web_sapi() -> bool {
+    COMPILE_PROFILE.with(|profile| profile.get().1)
 }
 
 /// Sets the number of autoload rules registered.

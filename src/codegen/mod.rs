@@ -45,8 +45,8 @@ pub(crate) use crate::codegen_support::{
     tls, visibility,
 };
 pub(crate) use crate::codegen_support::{
-    autoload_rule_count, declared_class_names, declared_interface_names, declared_trait_names,
-    linked_extensions,
+    autoload_rule_count, compile_php_version, declared_class_names,
+    declared_interface_names, declared_trait_names, linked_extensions,
     emit_array_value_type_stamp, emit_box_current_owned_value_as_mixed,
     emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed, emit_callback_wrapper,
     emit_extern_callback_trampoline, emit_fiber_wrapper,
@@ -60,7 +60,8 @@ pub use crate::codegen_support::{
     RuntimeFeatures,
 };
 pub use crate::codegen_support::{
-    prepare_declared_name_order, set_autoload_rule_count, set_linked_extensions,
+    prepare_declared_name_order, set_autoload_rule_count, set_compile_profile,
+    set_linked_extensions,
 };
 
 use std::collections::{HashMap, HashSet};

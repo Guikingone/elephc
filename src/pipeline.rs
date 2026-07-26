@@ -65,6 +65,11 @@ pub(crate) fn compile(config: CliConfig) {
     } = config;
     let filename = filename.as_str();
     codegen::set_null_repr(null_repr);
+    // Record the PHP language profile and SAPI mode BEFORE any prelude or lowering runs: it is
+    // the single source of truth for the reported version surface (`PHP_VERSION` and friends,
+    // `PHP_SAPI`, `phpversion()`), which is baked far below this function's parameter list — in
+    // `codegen_support::prescan::collect_constants` and in the `phpversion()` const-fold.
+    codegen::set_compile_profile(php_version, web);
     crate::strict_php::set_enabled(strict_php);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
     let output_paths = output_paths(filename, target, emit);
@@ -259,6 +264,14 @@ pub(crate) fn compile(config: CliConfig) {
     let phase_started = Instant::now();
     let ast = web_prelude::inject_if_web(ast, web, php_version, &ini_overrides);
     timings.record_since("web-prelude", phase_started);
+
+    // Inject the PHP version-surface functions (`zend_version`, `php_sapi_name`,
+    // `ini_restore`) the program actually references. Runs AFTER the web prelude so a
+    // `--web` build's own declarations are already present and the redeclaration guard sees
+    // them, and before name resolution so a namespaced caller resolves to the injection.
+    let phase_started = Instant::now();
+    let ast = crate::version_prelude::inject_if_used(ast, php_version);
+    timings.record_since("version-prelude", phase_started);
 
     let phase_started = Instant::now();
     let ast = match name_resolver::resolve(ast) {

@@ -72,5 +72,8 @@ pub mod types;
 pub mod tz_prelude;
 /// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
 pub mod var_export_prelude;
+/// Conditionally-injected PHP version-surface prelude (`zend_version`, `php_sapi_name`,
+/// `ini_restore`).
+pub mod version_prelude;
 /// Conditionally-injected `--web` request prelude (extern declarations for bridge getters).
 pub mod web_prelude;

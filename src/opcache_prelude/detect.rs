@@ -29,14 +29,14 @@ use crate::parser::ast::{
 /// Returns whether any top-level statement references `target` (an OPcache prelude
 /// function name, already lowercase), so that function must be injected ahead of user
 /// code.
-pub(super) fn program_references(program: &[Stmt], target: &str) -> bool {
+pub(crate) fn program_references(program: &[Stmt], target: &str) -> bool {
     program.iter().any(|stmt| stmt_refs(stmt, target))
 }
 
 /// Returns whether the program already declares its own `target` function (at top level
 /// or inside a namespace/guard/synthetic block), in which case that prelude function
 /// must not be injected so the user definition wins and there is no redeclaration error.
-pub(super) fn program_declares(program: &[Stmt], target: &str) -> bool {
+pub(crate) fn program_declares(program: &[Stmt], target: &str) -> bool {
     program.iter().any(|stmt| stmt_declares(stmt, target))
 }
 

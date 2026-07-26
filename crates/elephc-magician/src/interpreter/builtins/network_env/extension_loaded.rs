@@ -63,8 +63,16 @@ pub(in crate::interpreter) fn eval_extension_loaded_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let name = values.string_bytes(extension)?;
     let name = String::from_utf8_lossy(&name);
-    let is_loaded = CORE_LOADED_EXTENSIONS
+    values.bool_value(eval_extension_is_loaded(name.as_ref()))
+}
+
+/// Returns whether `name` is in eval's known extension set, compared case-insensitively.
+///
+/// The single membership predicate for the eval interpreter: `extension_loaded()` and
+/// `phpversion($extension)` both go through it, so the two can never disagree — the same
+/// invariant `extension_is_loaded` enforces on the native side.
+pub(in crate::interpreter) fn eval_extension_is_loaded(name: &str) -> bool {
+    CORE_LOADED_EXTENSIONS
         .iter()
-        .any(|candidate| candidate.eq_ignore_ascii_case(name.as_ref()));
-    values.bool_value(is_loaded)
+        .any(|candidate| candidate.eq_ignore_ascii_case(name))
 }

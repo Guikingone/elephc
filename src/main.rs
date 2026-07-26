@@ -50,6 +50,7 @@ mod timings;
 mod types;
 mod tz_prelude;
 mod var_export_prelude;
+mod version_prelude;
 mod web_prelude;
 
 /// Entry point for the `elephc` binary.

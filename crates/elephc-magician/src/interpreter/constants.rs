@@ -189,8 +189,49 @@ pub(super) const EVAL_WEEKDAY_NAMES: &[&str; 7] = &[
 pub(super) const EVAL_WEEKDAY_SHORT_NAMES: &[&str; 7] =
     &["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-/// Root package manifest used to mirror native `phpversion()` in the eval crate.
-pub(super) const EVAL_ROOT_CARGO_TOML: &str = include_str!("../../../../Cargo.toml");
+/// The PHP LANGUAGE version the eval interpreter reports for `PHP_VERSION`, `phpversion()`
+/// and the `PHP_*_VERSION` component constants.
+///
+/// KEEP IN SYNC with `crate::web_prelude::PhpVersion::version_string()` in the compiler for
+/// the DEFAULT profile.
+///
+/// Fixed to the newest maintained profile (8.5), for the same reason
+/// `EVAL_OPCACHE_PHP_VERSION_ID` in `builtins/network_env/opcache_reset.rs` is: the eval
+/// interpreter is a separate crate with no access to the compiler's `--php-version` flag, and
+/// most eval use is compile-time const-folding. DOCUMENTED DIVERGENCE: a binary compiled
+/// `--php-version 8.2` reports `8.2.0` natively but `8.5.0` from inside `eval()`. The native
+/// surface is the one user code normally observes; the eval surface matches it exactly on the
+/// default profile.
+///
+/// The patch component is `0` by the same rule the compiler applies — elephc targets a
+/// language profile, not an upstream patch release. Reference PHP 8.5.6 reports `8.5.6`.
+pub(super) const EVAL_PHP_VERSION: &str = "8.5.0";
+
+/// `PHP_VERSION_ID` for [`EVAL_PHP_VERSION`]: `major * 10000 + minor * 100 + release`, the
+/// reference formula (verified: PHP 8.5.6 reports `80506`).
+pub(super) const EVAL_PHP_VERSION_ID: i64 = 80500;
+
+/// `PHP_MAJOR_VERSION` for [`EVAL_PHP_VERSION`].
+pub(super) const EVAL_PHP_MAJOR_VERSION: i64 = 8;
+
+/// `PHP_MINOR_VERSION` for [`EVAL_PHP_VERSION`].
+pub(super) const EVAL_PHP_MINOR_VERSION: i64 = 5;
+
+/// `PHP_RELEASE_VERSION` for [`EVAL_PHP_VERSION`] — always `0`, see [`EVAL_PHP_VERSION`].
+pub(super) const EVAL_PHP_RELEASE_VERSION: i64 = 0;
+
+/// `PHP_EXTRA_VERSION` — the empty string, exactly as reference PHP reports for a release
+/// build (verified on 8.5.6).
+pub(super) const EVAL_PHP_EXTRA_VERSION: &str = "";
+
+/// `PHP_SAPI` reported from inside `eval()`.
+///
+/// KEEP IN SYNC with `crate::web_prelude::sapi_name()` in the compiler. The eval interpreter
+/// has no runtime SAPI — it evaluates at compile time and most use is const-folding — so it
+/// reports the CLI default, the same choice `opcache_reset` makes with `is_web_sapi = false`.
+/// DOCUMENTED DIVERGENCE: inside a `--web` binary, native `PHP_SAPI` is `cli-server` while
+/// `eval('echo PHP_SAPI;')` reports `cli`.
+pub(super) const EVAL_PHP_SAPI: &str = "cli";
 
 pub(super) const DEFINE_ALREADY_DEFINED_WARNING: &str =
     "Warning: define(): Constant already defined\n";

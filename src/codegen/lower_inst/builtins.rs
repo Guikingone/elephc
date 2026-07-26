@@ -520,14 +520,108 @@ fn emit_type_name_result(ctx: &mut FunctionContext<'_>, type_name: &[u8]) {
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
 }
 
-/// Lowers `phpversion()` as the compiler package version string.
-pub(crate) fn lower_phpversion(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "phpversion", 0)?;
-    let (label, len) = ctx.data.add_string(env!("CARGO_PKG_VERSION").as_bytes());
+/// Emits the reported PHP version string into the string result registers.
+///
+/// The value is `crate::web_prelude::PhpVersion::version_string()` for the compilation's
+/// `--php-version` profile — the PHP LANGUAGE version elephc targets, never elephc's own
+/// package version. Reference PHP 8.5.6 reports `8.5.6` here; elephc reports `8.5.0`, the
+/// same deliberate `.0` divergence `opcache_get_configuration()['version']['version']` already
+/// makes (see `PhpVersion::version_string` for the rule).
+fn emit_reported_php_version(ctx: &mut FunctionContext<'_>) {
+    let version = crate::codegen::compile_php_version().version_string();
+    let (label, len) = ctx.data.add_string(version.as_bytes());
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+}
+
+/// Lowers `phpversion()` and `phpversion($extension)`.
+///
+/// - `phpversion()` folds to a static string (result type `Str`).
+/// - `phpversion($extension)` folds to `string|false`, which the backend represents as a
+///   boxed `Mixed` cell (result type `Mixed`, matching the builtin's `eir_result_type`). A
+///   loaded extension yields the SAME version string as `phpversion()` — reference PHP reports
+///   the interpreter's own version for every bundled extension (verified on 8.5.6: `Core`,
+///   `json`, `pcre`, `Zend OPcache`, … all report `8.5.6`), and every extension elephc reports
+///   as loaded is a bundled-equivalent, so there is no per-extension version to track. An
+///   unknown extension yields `false`.
+///
+/// MEMBERSHIP IS `extension_loaded()`'s, EXACTLY: both the literal fold and the dynamic
+/// membership test go through [`extension_is_loaded`] / [`dynamic_extension_loaded_candidates`],
+/// so `phpversion($e) !== false` and `extension_loaded($e)` cannot disagree — including for the
+/// bridges linked into this particular compilation.
+///
+/// WHY THE DECISION LIVES HERE AND NOT IN THE CHECKER: the effective extension set is
+/// core ∪ `crate::codegen::linked_extensions()`, and the linked set is only complete after type
+/// checking (it includes bridges auto-detected from `check_result.required_libraries`). A
+/// checker-side or EIR-side fold would therefore see a SMALLER set than this one and could
+/// answer `false` where codegen answers a string. Typing the whole one-argument arity as
+/// `string|false` keeps the single decision point here, where the set is truthful.
+pub(crate) fn lower_phpversion(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count_between(inst, "phpversion", 0, 1)?;
+    let Some(value) = inst.operands.first().copied() else {
+        emit_reported_php_version(ctx);
+        return store_if_result(ctx, inst);
+    };
+    if let Some(extension_name) = maybe_const_string_operand(ctx, value)? {
+        if extension_is_loaded(&extension_name) {
+            emit_reported_php_version(ctx);
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+        } else {
+            emit_static_bool(ctx, false);
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+        }
+    } else {
+        lower_dynamic_phpversion(ctx, value)?;
+    }
     store_if_result(ctx, inst)
+}
+
+/// Lowers a dynamic (non-literal) `phpversion($name)` over the effective extension set.
+///
+/// Same shape as [`lower_dynamic_extension_loaded`] — the runtime string is materialized into
+/// one 16-byte temporary stack slot and compared against every baked candidate with
+/// `__rt_strcasecmp`, matching PHP's case-insensitive extension-name lookup (verified on
+/// reference 8.5.6: `phpversion('core')` and `phpversion('Core')` both return the version).
+/// Only the *answer* differs: a match yields the boxed version string, a miss yields boxed
+/// `false`.
+///
+/// The temporary slot must be released on BOTH exits, and the boxing happens after the
+/// branches rejoin only for the matched arm, because the two arms box different tags. Each arm
+/// therefore boxes its own value and jumps to the shared release.
+fn lower_dynamic_phpversion(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    if ctx.value_php_type(value)?.codegen_repr() != PhpType::Str {
+        return Err(CodegenIrError::unsupported(
+            "phpversion with non-string dynamic extension name",
+        ));
+    }
+    let candidates = dynamic_extension_loaded_candidates();
+    if candidates.is_empty() {
+        emit_static_bool(ctx, false);
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+        return Ok(());
+    }
+
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+
+    let matched_label = ctx.next_label("phpversion_dynamic_match");
+    let done_label = ctx.next_label("phpversion_dynamic_done");
+    for candidate in &candidates {
+        emit_branch_if_saved_string_matches_ci(ctx, candidate.as_bytes(), &matched_label);
+    }
+    emit_static_bool(ctx, false);
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&matched_label);
+    emit_reported_php_version(ctx);
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+
+    ctx.emitter.label(&done_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
 }
 
 /// Lowers `defined("NAME")` for compile-time string constant names.

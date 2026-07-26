@@ -21,11 +21,86 @@ sidebar:
 | `define()` | `define($name, $value): bool` | Define a compile-time global constant with a string-literal name |
 | `defined()` | `defined($name): bool` | Check whether a string-literal constant name is defined |
 | `php_uname()` | `php_uname($mode = "a"): string` | Get system information from the target runtime |
-| `phpversion()` | `phpversion(): string` | Get the elephc package version from `Cargo.toml` |
+| `phpversion()` | `phpversion(?string $extension = null): string\|false` | Get the targeted PHP language version, or one extension's version (`false` if it is not loaded) |
+| `zend_version()` | `zend_version(): string` | Get the Zend Engine version for the compile target |
+| `php_sapi_name()` | `php_sapi_name(): string` | Get the SAPI name (`"cli"`, or `"cli-server"` under `--web`) |
+| `ini_restore()` | `ini_restore(string $option): void` | Restore a directive to its startup value — a no-op, see below |
 | `exec()` | `exec($command): string` | Execute command, return output |
 | `shell_exec()` | `shell_exec($command): string` | Execute via shell, return output |
 | `system()` | `system($command): string` | Execute, output to stdout |
 | `passthru()` | `passthru($command): void` | Execute, pass raw output |
+
+## PHP version surface
+
+elephc targets a PHP **language profile** selected by `--php-version`
+(`8.2`/`8.3`/`8.4`/`8.5`, default `8.5`), not a specific upstream patch release.
+The whole version surface therefore reports `8.<minor>.0`:
+
+| Symbol | `--php-version 8.5` | `--php-version 8.2` |
+|---|---|---|
+| `PHP_VERSION` | `"8.5.0"` | `"8.2.0"` |
+| `PHP_VERSION_ID` | `80500` | `80200` |
+| `PHP_MAJOR_VERSION` | `8` | `8` |
+| `PHP_MINOR_VERSION` | `5` | `2` |
+| `PHP_RELEASE_VERSION` | `0` | `0` |
+| `PHP_EXTRA_VERSION` | `""` | `""` |
+| `phpversion()` | `"8.5.0"` | `"8.2.0"` |
+| `zend_version()` | `"4.5.0"` | `"4.2.0"` |
+
+`PHP_VERSION_ID` uses PHP's formula, `major * 10000 + minor * 100 + release`
+(reference PHP 8.5.6 reports `80506`), so the id and the string always agree.
+
+This is the same rule the OPcache surface already applies:
+`opcache_get_configuration()['version']['version']` reports `8.5.0` too, and the
+two are guaranteed to match inside one binary.
+
+**Divergence from reference PHP.** Reference PHP 8.5.6 reports `8.5.6`,
+`80506`, `PHP_RELEASE_VERSION` `6` and Zend `4.5.6`. elephc has no patch release
+to report — there is no PHP runtime inside the compiled binary — so the patch
+component is `0`. Feature detection is unaffected: `PHP_VERSION_ID >= 80500`
+answers exactly the question `--php-version 8.5` answers. `PHP_EXTRA_VERSION`
+and `PHP_MAJOR_VERSION`/`PHP_MINOR_VERSION` match reference exactly.
+
+`phpversion($extension)` returns that same version string for a loaded
+extension and `false` for anything else, matching reference PHP, where every
+bundled extension reports the interpreter's own version. Membership is exactly
+`extension_loaded()`'s — the same core set plus the bridges this binary links —
+so `phpversion($e) !== false` and `extension_loaded($e)` always agree. Names are
+compared case-insensitively, as in reference PHP.
+
+### `PHP_SAPI` / `php_sapi_name()`
+
+| Compile mode | Reported |
+|---|---|
+| default (CLI binary) | `"cli"` |
+| `--web` / `--with-web` | `"cli-server"` |
+
+`cli` matches reference PHP exactly. `cli-server` is elephc's documented choice
+for `--web`: the binary embeds its own HTTP listener with no external web
+server, no FastCGI channel and no module host, which is precisely what reference
+PHP's built-in server is — and it is the only reference SAPI name that describes
+a standalone PHP binary speaking HTTP. It matters because library code gates on
+`PHP_SAPI === 'cli'` to tell a console run from a request; reporting `cli` under
+`--web` would put every such library on the console path inside an HTTP request.
+
+### `ini_restore()`
+
+`ini_restore()` is a no-op returning `void` (reference PHP returns `void` too).
+Every INI value in elephc is baked into the binary at compile time and nothing
+can change it at runtime — `ini_set()` already reports failure for every key for
+that reason — so a directive is *always already* at its startup value. "Restore
+it to the startup value" is therefore an exact no-op, not an approximation.
+
+### Availability
+
+`zend_version()`, `php_sapi_name()` and `ini_restore()` are pay-for-use: they
+are declared only in binaries whose source mentions them, exactly like
+`ini_get()`/`ini_set()`/`ini_get_all()`. A program that declares its own
+function of the same name keeps it.
+
+Inside `eval()`, the interpreter has no access to `--php-version` or `--web` and
+reports the default profile: `PHP_VERSION` `"8.5.0"`, `PHP_SAPI` `"cli"`. On a
+default-profile CLI binary that is identical to the compiled surface.
 
 `define()` returns `true` the first time a constant is defined at runtime. Duplicate attempts keep the first value, return `false`, and emit a suppressible runtime warning. `defined()` currently requires a string literal in AOT mode.
 
