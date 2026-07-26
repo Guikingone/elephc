@@ -39,7 +39,11 @@ use super::eval_callable_helpers::EvalCallableDescriptorSupport;
 const BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES: &[&str] = &[
     "Error",
     "TypeError",
+    "ArgumentCountError",
     "ValueError",
+    "ArithmeticError",
+    "DivisionByZeroError",
+    "AssertionError",
     "UnhandledMatchError",
     "Exception",
     "LogicException",

@@ -4084,7 +4084,13 @@ fn ir_backend_handles_isset_builtin() {
     );
 }
 
-/// Verifies `intdiv()` division-by-zero follows the legacy fatal diagnostic.
+/// Verifies an UNCAUGHT `intdiv()` division-by-zero names PHP's `DivisionByZeroError`.
+///
+/// This test previously pinned a bare `Fatal error: division by zero`, which was
+/// uncatchable: no `catch` clause could ever observe it. The zero-divisor guard now
+/// raises reference PHP 8.5.6's `DivisionByZeroError` with php-src's `Division by
+/// zero` wording, so an uncaught one still exits non-zero — it just names the class.
+/// The catchable side lives in `error_class_hierarchy_tests`.
 #[test]
 fn ir_backend_handles_intdiv_division_by_zero() {
     let run = compile_ir_backend_and_run("intdiv_zero", "<?php echo intdiv(1, 0);", &[]);
@@ -4098,7 +4104,7 @@ fn ir_backend_handles_intdiv_division_by_zero() {
     );
     let stderr = String::from_utf8(run.stderr).expect("intdiv stderr should be utf8");
     assert!(
-        stderr.contains("Fatal error: division by zero"),
+        stderr.contains("Uncaught DivisionByZeroError: Division by zero"),
         "unexpected intdiv stderr: {stderr}"
     );
 }

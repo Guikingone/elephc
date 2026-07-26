@@ -935,8 +935,11 @@ fn is_builtin_throwable_payload_class(class_name: &str) -> bool {
         class_name,
         "Error"
             | "TypeError"
+            | "ArgumentCountError"
             | "ValueError"
             | "ArithmeticError"
+            | "DivisionByZeroError"
+            | "AssertionError"
             | "UnhandledMatchError"
             | "Exception"
             | "RuntimeException"
@@ -1536,11 +1539,14 @@ fn is_dynamic_new_mixed_aot_candidate(class_name: &str) -> bool {
 /// Builtin class names with allocation paths that are safe for dynamic `new`.
 fn supported_dynamic_new_builtin_class_names() -> &'static [&'static str] {
     &[
+        "ArgumentCountError",
         "ArrayIterator",
         "ArrayObject",
+        "AssertionError",
         "BadFunctionCallException",
         "BadMethodCallException",
         "CallbackFilterIterator",
+        "DivisionByZeroError",
         "DomainException",
         "Error",
         "ArithmeticError",
@@ -1576,13 +1582,16 @@ fn supported_dynamic_new_builtin_class_names() -> &'static [&'static str] {
 fn known_dynamic_new_builtin_class_names() -> &'static [&'static str] {
     &[
         "AppendIterator",
+        "ArgumentCountError",
         "ArrayIterator",
         "ArrayObject",
+        "AssertionError",
         "BadFunctionCallException",
         "BadMethodCallException",
         "CachingIterator",
         "CallbackFilterIterator",
         "DirectoryIterator",
+        "DivisionByZeroError",
         "DomainException",
         "EmptyIterator",
         "Error",

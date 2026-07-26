@@ -215,6 +215,10 @@ pub(crate) fn emit_runtime_data_user(
         ("_spl_type_error_class_id", "TypeError"),
         ("_spl_value_error_class_id", "ValueError"),
         ("_spl_arithmetic_error_class_id", "ArithmeticError"),
+        // Emitted for the `intdiv($a, 0)` / `$a % 0` zero-divisor guards, which
+        // raise reference PHP's catchable DivisionByZeroError from codegen with
+        // no EIR class reference to hang the id off.
+        ("_spl_division_by_zero_error_class_id", "DivisionByZeroError"),
     ] {
         let class_id = all_class_id_by_name
             .get(class_name)

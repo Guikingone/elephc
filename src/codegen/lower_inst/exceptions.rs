@@ -26,6 +26,21 @@ pub(super) fn emit_type_error(ctx: &mut FunctionContext<'_>, message: &str) {
     emit_static_exception(ctx, "TypeError", "_spl_type_error_class_id", message);
 }
 
+/// Throws a catchable PHP `DivisionByZeroError` carrying a static message.
+///
+/// Reference PHP raises this `ArithmeticError` subclass — not a bare fatal — for a
+/// zero divisor, so `catch (DivisionByZeroError $e)`, `catch (ArithmeticError $e)`,
+/// `catch (Error $e)`, and `catch (Throwable $e)` all match. Callers pass php-src's
+/// own wording (`"Division by zero"` / `"Modulo by zero"`).
+pub(super) fn emit_division_by_zero_error(ctx: &mut FunctionContext<'_>, message: &str) {
+    emit_static_exception(
+        ctx,
+        "DivisionByZeroError",
+        "_spl_division_by_zero_error_class_id",
+        message,
+    );
+}
+
 /// Throws a catchable PHP `Error` whose message is a runtime string value.
 pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) -> Result<()> {
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);

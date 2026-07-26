@@ -329,12 +329,19 @@ fn collect_emitted_class_names(
     // descriptors in the user-asm tables, the catch-time inheritance
     // walk in __rt_exception_matches sees a -1 parent for the thrown
     // class and reports no match.
+    // The Error branch is seeded whole for the same reason as the JSON note above:
+    // `intdiv($a, 0)` throws a DivisionByZeroError from a codegen guard that has no
+    // EIR class reference, so its descriptor (and every ancestor's) must be present
+    // or __rt_exception_matches walks into a -1 parent and reports no match.
     for builtin in [
         "Throwable",
         "Error",
         "TypeError",
+        "ArgumentCountError",
         "ValueError",
         "ArithmeticError",
+        "DivisionByZeroError",
+        "AssertionError",
         "UnhandledMatchError",
         "Exception",
         "LogicException",

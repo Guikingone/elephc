@@ -34,15 +34,18 @@ use walk::{collect_declared_fqns, collect_reference_points};
 /// `stdClass`, `Iterator`). Seeded into the declared FQN set so references to these
 /// types are never treated as autoload demands.
 const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
+    "ArgumentCountError",
     "ArrayAccess",
     "AppendIterator",
     "ArrayIterator",
     "ArrayObject",
+    "AssertionError",
     "BadFunctionCallException",
     "BadMethodCallException",
     "CachingIterator",
     "CallbackFilterIterator",
     "Countable",
+    "DivisionByZeroError",
     "DomainException",
     "EmptyIterator",
     "Error",
