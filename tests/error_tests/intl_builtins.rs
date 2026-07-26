@@ -181,7 +181,7 @@ expect_builtin_arity_error!(
 /// `NFKC_CF = 48` constant, since elephc emulates an intl-present environment.
 /// Code guarded by `\defined('Normalizer::NFKC_CF')` (symfony/string's
 /// `AbstractUnicodeString::folded()`) then type-checks. See
-/// `builtin_types::normalizer::supplement_intl_normalizer_constants`.
+/// `builtin_types::normalizer::inject_builtin_normalizer`.
 #[test]
 fn test_normalizer_nfkc_cf_constant_resolves() {
     expect_ok(
@@ -194,8 +194,8 @@ echo Normalizer::FORM_C;
 }
 
 /// Negative control for the `Normalizer::NFKC_CF` supplement: a genuinely undefined
-/// constant on the same class still errors, so the supplement adds only the one real
-/// intl constant and never blanket-accepts arbitrary class constants.
+/// constant on the same class still errors, so the supplement adds only the real
+/// intl constants and never blanket-accepts arbitrary class constants.
 #[test]
 fn test_normalizer_fake_constant_still_errors() {
     expect_error(
@@ -204,5 +204,30 @@ class Normalizer { public const FORM_C = 16; }
 echo Normalizer::TOTALLY_FAKE;
 "#,
         "Undefined class constant: Normalizer::TOTALLY_FAKE",
+    );
+}
+
+/// Regression: with no user/vendor `Normalizer` in scope, elephc injects a builtin
+/// constants-only `Normalizer` class (it emulates an ext-intl-present environment), so
+/// the ext-intl constants resolve without any declaration. Previously such a reference
+/// degraded to an absent-optional-dependency `ScopedConstantGet(Mixed)` the backend
+/// rejected. See `builtin_types::normalizer::inject_builtin_normalizer`.
+#[test]
+fn test_normalizer_injected_constants_resolve() {
+    expect_ok(r#"<?php echo Normalizer::NFKC_CF, Normalizer::FORM_C, Normalizer::FORM_KC_CF;"#);
+}
+
+/// Negative control for the injected (no-declaration) `Normalizer`: a genuinely undefined
+/// constant still errors loudly, and the deprecated PHP-8-removed `NONE` constant is not
+/// resurrected — the injection provides only the real PHP 8.5 ext-intl constant set.
+#[test]
+fn test_normalizer_injected_fake_constant_still_errors() {
+    expect_error(
+        r#"<?php echo Normalizer::NO_SUCH_CONST;"#,
+        "Undefined class constant: Normalizer::NO_SUCH_CONST",
+    );
+    expect_error(
+        r#"<?php echo Normalizer::NONE;"#,
+        "Undefined class constant: Normalizer::NONE",
     );
 }

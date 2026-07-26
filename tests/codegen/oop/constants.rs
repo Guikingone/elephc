@@ -561,3 +561,15 @@ echo read_limit();
     );
     assert_eq!(out, "2");
 }
+
+/// Verifies scoped constants on the builtin ext-intl `Normalizer` class fold to their literal
+/// integer value at codegen (elephc emulates an ext-intl-present environment), matching the
+/// values a real PHP 8.5 ext-intl build reports. Regression guard for the previous
+/// "unsupported EIR backend feature: scoped constant Normalizer::FORM_C" codegen error.
+#[test]
+fn test_builtin_normalizer_constants_fold() {
+    let out = compile_and_run(
+        r#"<?php echo Normalizer::NFKC_CF, ",", Normalizer::FORM_C, ",", Normalizer::NFD, ",", Normalizer::FORM_KC_CF;"#,
+    );
+    assert_eq!(out, "48,16,4,48");
+}

@@ -72,7 +72,8 @@ pub(crate) use datetime::inject_builtin_datetime;
 /// Injects the builtin `DatePeriod` Iterator class (the `(start, interval, end)` form).
 pub(crate) use date_period::inject_builtin_date_period;
 
-/// Supplements an already-registered `Normalizer` class (e.g. the
-/// symfony/polyfill-intl-normalizer stub) with the ext-intl `NFKC_CF = 48` class
-/// constant, so vendor code guarded by `\defined('Normalizer::NFKC_CF')` type-checks.
-pub(crate) use normalizer::supplement_intl_normalizer_constants;
+/// Registers the ext-intl `Normalizer` class constants: injects a builtin constants-only
+/// `Normalizer` class when none exists, or supplements a vendor-stub `Normalizer` with the
+/// ext-intl constants it omits (notably `NFKC_CF`/`FORM_KC_CF`). Both the checker and the
+/// codegen constant fold then resolve `Normalizer::FORM_C`, `Normalizer::NFKC_CF`, etc.
+pub(crate) use normalizer::inject_builtin_normalizer;
