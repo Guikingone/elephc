@@ -470,3 +470,37 @@ foreach ($data as $v) {
     );
     assert_eq!(out, "10.0.0.1,false,");
 }
+
+/// Verifies the `['flags' => <const>]`-only array-form `$options` is accepted and behaves
+/// identically to passing the same integer flags directly (PHP semantics:
+/// `filter_var($v, $f, ['flags' => X])` == `filter_var($v, $f, X)`). This is Symfony's
+/// `RequestAttributeValueResolver` idiom
+/// (`filter_var($v, FILTER_VALIDATE_BOOL, ['flags' => FILTER_NULL_ON_FAILURE | FILTER_REQUIRE_SCALAR])`).
+/// php-verified (PHP 8.5.6): `1`/`yes` -> true, `off` -> false, `banana` -> null.
+#[test]
+fn test_filter_var_bool_array_flags_only_options() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["yes", "off", "banana"] as $v) {
+    $r = filter_var($v, FILTER_VALIDATE_BOOL, ['flags' => FILTER_NULL_ON_FAILURE | FILTER_REQUIRE_SCALAR]);
+    echo var_export($r, true), ",";
+}
+"#,
+    );
+    assert_eq!(out, "true,false,NULL,");
+}
+
+/// Verifies the `['flags' => <const>]` array-form on `FILTER_VALIDATE_INT` matches the
+/// bare integer-flags form (null on non-int failure with `FILTER_NULL_ON_FAILURE`).
+#[test]
+fn test_filter_var_int_array_flags_only_options() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["42", "nope"] as $v) {
+    $r = filter_var($v, FILTER_VALIDATE_INT, ['flags' => FILTER_NULL_ON_FAILURE]);
+    echo var_export($r, true), ",";
+}
+"#,
+    );
+    assert_eq!(out, "42,NULL,");
+}

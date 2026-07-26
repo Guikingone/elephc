@@ -1294,30 +1294,38 @@ pub(super) fn check_builtin(
                 ));
             }
             let flags = if args.len() == 3 {
-                match &args[2].kind {
-                    ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) => {
-                        return Err(CompileError::new(
-                            span,
-                            "filter_var(): array-form $options (['flags' => ..., 'options' => ...]) is not supported yet",
-                        ));
-                    }
-                    _ => {}
-                }
-                let options_ty = checker.infer_type(&args[2], env)?;
-                if matches!(options_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-                    return Err(CompileError::new(
-                        span,
-                        "filter_var(): array-form $options (['flags' => ..., 'options' => ...]) is not supported yet",
-                    ));
-                }
-                match filter_static_int_value(&args[2]) {
+                // Resolve the effective flags int, accepting either a constant integer flags
+                // expression or the `['flags' => <const>]`-only array form (semantically
+                // identical in PHP). `static_filter_options_flags` returns `None` for an array
+                // carrying an `options` entry (min_range/max_range/regexp — unimplemented) or any
+                // non-constant shape; `crate::ir_lower::expr::filter` uses the SAME resolver, so an
+                // accepted call always lowers.
+                match crate::types::filter_constants::static_filter_options_flags(&args[2]) {
                     Some(v) => v,
-                    None => {
-                        return Err(CompileError::new(
-                            span,
-                            "filter_var(): a dynamic (non-compile-time-constant) $options is not supported yet",
-                        ))
-                    }
+                    None => match &args[2].kind {
+                        ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) => {
+                            return Err(CompileError::new(
+                                span,
+                                "filter_var(): array-form $options (['flags' => ..., 'options' => ...]) is not supported yet",
+                            ));
+                        }
+                        _ => {
+                            let options_ty = checker.infer_type(&args[2], env)?;
+                            if matches!(
+                                options_ty,
+                                PhpType::Array(_) | PhpType::AssocArray { .. }
+                            ) {
+                                return Err(CompileError::new(
+                                    span,
+                                    "filter_var(): array-form $options (['flags' => ..., 'options' => ...]) is not supported yet",
+                                ));
+                            }
+                            return Err(CompileError::new(
+                                span,
+                                "filter_var(): a dynamic (non-compile-time-constant) $options is not supported yet",
+                            ));
+                        }
+                    },
                 }
             } else {
                 0

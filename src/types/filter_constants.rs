@@ -57,6 +57,71 @@ pub(crate) const FILTER_INT_CONSTANTS: &[(&str, i64)] = &[
     ("FILTER_FLAG_IPV6", 2_097_152),
 ];
 
+/// Evaluates an expression as a static integer at compile time against the `ext/filter` constant
+/// table. Handles integer literals, `FILTER_*` constant references, unary negation, and the
+/// bitwise `&`/`|`/`^` combinators used to build flag masks (`FILTER_NULL_ON_FAILURE | ...`).
+///
+/// Shared source of truth for `crate::types::checker::builtins::system` and
+/// `crate::ir_lower::expr::filter`, which walk the same `&Expr` AST when statically resolving a
+/// literal `filter_var()` filter id or flags value.
+pub(crate) fn static_filter_int(expr: &crate::parser::ast::Expr) -> Option<i64> {
+    use crate::parser::ast::{BinOp, ExprKind};
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::ConstRef(name) => FILTER_INT_CONSTANTS
+            .iter()
+            .find_map(|(constant, value)| (*constant == name.as_str()).then_some(*value)),
+        ExprKind::Negate(inner) => static_filter_int(inner).map(|value| -value),
+        ExprKind::BinaryOp { left, op, right } => {
+            let left = static_filter_int(left)?;
+            let right = static_filter_int(right)?;
+            match op {
+                BinOp::BitAnd => Some(left & right),
+                BinOp::BitOr => Some(left | right),
+                BinOp::BitXor => Some(left ^ right),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Resolves a `filter_var()` 3rd-argument `$options` expression to its effective integer FLAGS
+/// bitmask at compile time, or `None` when it cannot be represented as a static flags int.
+///
+/// Accepts either a directly-constant integer flags expression (`FILTER_NULL_ON_FAILURE | ...`)
+/// or the array form `['flags' => <constant int>]` carrying ONLY a `flags` entry — the two are
+/// semantically identical in PHP (`filter_var($v, $f, ['flags' => X])` ==
+/// `filter_var($v, $f, X)`). Returns `None` for any array that also carries an `options` entry
+/// (`min_range`/`max_range`/`regexp`/`default` — not implemented), a non-constant flags value, a
+/// positional array, or any other shape, so the checker and `crate::ir_lower::expr::filter` keep
+/// such calls loud in lock-step (no checker-accepts / codegen-fails divergence).
+pub(crate) fn static_filter_options_flags(expr: &crate::parser::ast::Expr) -> Option<i64> {
+    use crate::parser::ast::ExprKind;
+    match &expr.kind {
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            let mut flags = 0i64;
+            let mut saw_flags = false;
+            for (key, value) in pairs {
+                let ExprKind::StringLiteral(key_name) = &key.kind else {
+                    return None;
+                };
+                match key_name.as_str() {
+                    "flags" => {
+                        flags = static_filter_int(value)?;
+                        saw_flags = true;
+                    }
+                    // 'options' (min_range/max_range/regexp/default) and any other key are not
+                    // implemented; keep the call loud rather than silently mis-validate.
+                    _ => return None,
+                }
+            }
+            saw_flags.then_some(flags)
+        }
+        _ => static_filter_int(expr),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::FILTER_INT_CONSTANTS;

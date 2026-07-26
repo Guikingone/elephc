@@ -47,8 +47,11 @@ pub(super) fn lower_static_filter_var(
     } else {
         516 // FILTER_DEFAULT (== FILTER_UNSAFE_RAW)
     };
+    // Resolve flags from a constant int OR a `['flags' => <const>]`-only array literal, using the
+    // SAME shared resolver the checker uses so an accepted call always lowers (the checker already
+    // rejected every array carrying an `options` entry or a non-constant flags value).
     let flags = if args.len() == 3 {
-        static_int_value(&args[2])?
+        crate::types::filter_constants::static_filter_options_flags(&args[2])?
     } else {
         0
     };

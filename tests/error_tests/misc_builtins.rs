@@ -238,11 +238,29 @@ expect_builtin_arity_error!(
     "filter_var(): filter 1024 is not supported yet"
 );
 
+// The array-form `$options` with an `options` sub-array (min_range/max_range/regexp/default)
+// stays loud: those need runtime range/pattern validation the INT filter does not implement.
+// The `['flags' => <const>]`-only form, by contrast, is now accepted (it is identical to passing
+// the integer flags directly) — see `test_filter_var_bool_array_flags_only_options` in
+// `tests/codegen/filter_var.rs`.
 expect_builtin_arity_error!(
     test_error_filter_var_array_form_options,
-    "<?php filter_var(\"42\", FILTER_VALIDATE_INT, ['flags' => FILTER_NULL_ON_FAILURE]);",
+    "<?php filter_var(\"42\", FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);",
     "filter_var(): array-form $options"
 );
+
+/// Verifies the `['flags' => <const>]`-only array-form `$options` type-checks (accepted as
+/// identical to the integer-flags form), while an `options`-carrying array stays loud above.
+#[test]
+fn test_filter_var_array_flags_only_options_accepted() {
+    assert!(
+        check_source(
+            "<?php $r = filter_var(\"x\", FILTER_VALIDATE_BOOL, ['flags' => FILTER_NULL_ON_FAILURE | FILTER_REQUIRE_SCALAR]); echo $r;"
+        )
+        .is_ok(),
+        "a `['flags' => <const>]`-only array-form options should type-check",
+    );
+}
 
 expect_builtin_arity_error!(
     test_error_filter_var_non_literal_options,
