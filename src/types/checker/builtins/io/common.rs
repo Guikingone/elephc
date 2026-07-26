@@ -44,7 +44,19 @@ pub(crate) fn ensure_stream_resource(
 ///
 /// Returns true if `checker.type_accepts(expected, actual)` is true, if `actual` is `Mixed`,
 /// or if `actual` is a `Union` containing at least one resource-accepting member while all
-/// members are either resource-accepting or `Bool`. Called only by `ensure_stream_resource`.
+/// members are either resource-accepting, `Bool`/`False`, or `Void` (PHP null). Called only
+/// by `ensure_stream_resource`.
+///
+/// The `Null`/`Bool` members are gradually accepted because a resource union such as
+/// `fopen()`'s `resource|false` routinely widens to `resource<stream>|bool|null` once the
+/// handle flows through an `if ($h = fopen(...))` guard whose sibling branch assigns
+/// `$h = null` (Symfony's `KernelTrait::warmUp` is the canonical shape). PHP itself only
+/// rejects a non-resource argument at runtime, and the stream builtins lower through
+/// `emit_unbox_stream_or_type_error`, which unboxes a real resource from the Mixed cell and
+/// otherwise raises PHP's exact `must be of type resource, <type> given` TypeError. Accepting
+/// the union therefore defers to the same runtime check PHP performs, without ever passing a
+/// non-resource fd to the syscall. A bare `Null` (not a union) still stays loud because it
+/// can never carry a resource.
 fn stream_arg_accepts(checker: &Checker, expected: &PhpType, actual: &PhpType) -> bool {
     if checker.type_accepts(expected, actual) || matches!(actual, PhpType::Mixed) {
         return true;
@@ -54,13 +66,13 @@ fn stream_arg_accepts(checker: &Checker, expected: &PhpType, actual: &PhpType) -
             let has_resource = members
                 .iter()
                 .any(|member| checker.type_accepts(expected, member));
-            let only_resource_or_false = members
+            let only_resource_bool_or_null = members
                 .iter()
                 .all(|member| {
                     checker.type_accepts(expected, member)
-                        || matches!(member, PhpType::Bool | PhpType::False)
+                        || matches!(member, PhpType::Bool | PhpType::False | PhpType::Void)
                 });
-            has_resource && only_resource_or_false
+            has_resource && only_resource_bool_or_null
         }
         _ => false,
     }

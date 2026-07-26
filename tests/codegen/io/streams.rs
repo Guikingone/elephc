@@ -72,6 +72,38 @@ unlink("resource.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Regression: a `fopen()` handle guarded by `if ($h = fopen(...))` widens to
+/// `resource<stream>|bool|null` once a sibling branch assigns `$h = null` (Symfony's
+/// `KernelTrait::warmUp` shape). The stream builtins must gradually accept that union and
+/// unbox the real resource at runtime, so `flock`/`fwrite`/`fclose` all operate on the fd.
+#[test]
+fn test_stream_builtins_accept_resource_bool_null_union() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+function warm(string $path): string {
+    if ($lock = fopen($path, 'w+')) {
+        if (false) {
+            fclose($lock);
+            $lock = null;
+            return "no-lock";
+        } elseif (true) {
+            $ok = flock($lock, LOCK_EX);
+            fwrite($lock, "hi");
+            flock($lock, LOCK_UN);
+            fclose($lock);
+            return $ok ? "released" : "lock-failed";
+        }
+    }
+    return "no-open";
+}
+echo warm("union_lock.txt");
+unlink("union_lock.txt");
+"#,
+    );
+    assert_eq!(out, "released", "unexpected output: {out}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies fopen() returns false with a warning when opening a non-existent file for reading.
 #[test]
 fn test_fopen_missing_returns_false_and_warns() {
