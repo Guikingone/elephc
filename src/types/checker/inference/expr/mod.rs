@@ -501,13 +501,22 @@ impl Checker {
             }
             ExprKind::BitNot(inner) => {
                 let ty = self.infer_type(inner, env)?;
-                if !matches!(ty, PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void) {
-                    return Err(CompileError::new(
-                        expr.span,
-                        "Bitwise NOT requires integer operand",
-                    ));
+                if matches!(ty, PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void) {
+                    return Ok(PhpType::Int);
                 }
-                Ok(PhpType::Int)
+                // Runtime-polymorphic unary NOT: a dynamic operand (`Mixed`/union that could hold a
+                // string at runtime, e.g. `fread()`'s `string|false`) cannot statically choose
+                // between PHP's bytewise-string NOT and integer NOT, so the result type is `Mixed`.
+                // `crate::ir_lower::expr` routes exactly this case to `Op::MixedBitwiseNot` /
+                // `__rt_mixed_bitwise_not`, mirroring the binary `~`/`&`/`|`/`^` dispatch. A concrete
+                // array/object operand cannot be a bitwise operand and stays a loud compile error.
+                if super::ops::is_dynamic_bitwise_operand(self, &ty) {
+                    return Ok(PhpType::Mixed);
+                }
+                Err(CompileError::new(
+                    expr.span,
+                    "Bitwise NOT requires integer operand",
+                ))
             }
             ExprKind::NullCoalesce { value, default } => {
                 let vt = if let ExprKind::PropertyAccess { object, property } = &value.kind {
@@ -559,6 +568,18 @@ impl Checker {
                     .get(name.as_str())
                     .cloned()
                     .or_else(|| self.eval_barrier_active.then_some(PhpType::Mixed))
+                    // A platform-conditional PHP predefined constant (e.g. the Windows-only
+                    // `PHP_WINDOWS_VERSION_*` family) is genuinely defined on another platform,
+                    // not on this AOT target. PHP defers undefined-constant resolution to runtime,
+                    // so tolerate the reference as `Mixed` here; `lower_const_ref` lowers it to the
+                    // same `__rt_constant` runtime lookup PHP performs, which throws a catchable
+                    // `\Error` on a miss (harmless in the dead Windows branches these sit behind).
+                    // A truly-undefined constant (typo / genuine gap) is NOT on the curated list
+                    // and stays the loud compile-time error below.
+                    .or_else(|| {
+                        super::super::builtins::is_platform_conditional_constant(name.as_str())
+                            .then_some(PhpType::Mixed)
+                    })
                     .ok_or_else(|| {
                         CompileError::new(expr.span, &format!("Undefined constant: {}", name))
                     })

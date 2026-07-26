@@ -741,6 +741,53 @@ echo $acc;"#,
     assert_eq!(out, "200");
 }
 
+// --- runtime-polymorphic unary Mixed bitwise NOT (`Op::MixedBitwiseNot` / `__rt_mixed_bitwise_not`) ---
+
+/// A dynamic `Mixed` operand holding a string must take PHP's bytewise-NOT path at runtime:
+/// `~"A"` is `"\xBE"` (each byte complemented), `~"AB"` is `"\xBE\xBD"`.
+#[test]
+fn test_mixed_bitwise_not_string_bytewise() {
+    let out = compile_and_run(
+        r#"<?php function m(): mixed { return "A"; } function n(): mixed { return "AB"; }
+$a = m(); $b = n();
+echo bin2hex(~$a), ":", bin2hex(~$b);"#,
+    );
+    assert_eq!(out, "be:bebd");
+}
+
+/// A dynamic `Mixed` operand holding an int must take the integer NOT path: `~5` == -6,
+/// `~0` == -1, matching PHP's two's-complement bitwise NOT.
+#[test]
+fn test_mixed_bitwise_not_int_path() {
+    let out = compile_and_run(
+        r#"<?php function m(): mixed { return 5; } function z(): mixed { return 0; }
+$a = m(); $b = z();
+echo (~$a), ":", (~$b);"#,
+    );
+    assert_eq!(out, "-6:-1");
+}
+
+/// A concrete integer operand still takes the fast `Op::IBitNot` path (`~5` == -6), unaffected
+/// by the runtime-polymorphic routing.
+#[test]
+fn test_int_bitwise_not_unaffected_by_mixed_path() {
+    let out = compile_and_run("<?php $x = 5; echo ~$x, ':', ~0;");
+    assert_eq!(out, "-6:-1");
+}
+
+/// The Mixed bitwise NOT result must be released on reassignment/discard: a tight loop
+/// building bytewise-NOT string results must not leak (verified here as a correctness smoke).
+#[test]
+fn test_mixed_bitwise_not_loop_result_correct() {
+    let out = compile_and_run(
+        r#"<?php function m(): mixed { return "\xF5\xAA"; }
+$acc = 0;
+for ($i = 0; $i < 100; $i++) { $r = ~m(); $acc += strlen($r); }
+echo $acc;"#,
+    );
+    assert_eq!(out, "200");
+}
+
 /// Regression for #397: loose equality with a Mixed operand holding a float
 /// must not truncate the float to int before comparison. `1.5 == 1` must be
 /// false, `1.5 == 1.5` must be true.

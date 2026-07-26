@@ -443,6 +443,12 @@ pub enum Op {
     /// array/object operand → TypeError fatal, otherwise integer bitwise. Produces
     /// a freshly boxed `Mixed` cell (int or string payload).
     MixedBitwise,
+    /// PHP runtime-polymorphic unary bitwise NOT (`~$x`) on a dynamic `Mixed`/union operand
+    /// whose runtime payload could be a string, so the string-vs-integer choice can only be
+    /// made at runtime. The single operand is boxed to `Mixed` and `__rt_mixed_bitwise_not`
+    /// dispatches: string → bytewise NOT string result (each byte `~b`), array/object operand →
+    /// TypeError fatal, otherwise integer NOT (`~i`). Produces a freshly boxed `Mixed` cell.
+    MixedBitwiseNot,
     StrLen,
     StrPersist,
     StrCharAt,
@@ -772,6 +778,10 @@ impl Op {
             // (int or persisted string), retains/persists the payload, and fatals
             // when a runtime array/object operand is paired with a bitwise operator.
             MixedBitwise => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
+            // Reads the boxed operand, allocates a fresh boxed-Mixed result (int or persisted
+            // NOT-string), retains/persists the payload, and fatals when the runtime payload is
+            // an array/object operand.
+            MixedBitwiseNot => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
             MixedBox | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | BufferNew | GeneratorNew => {
@@ -1027,6 +1037,7 @@ impl Op {
             StrConcat => "str_concat",
             StrBitwise => "str_bitwise",
             MixedBitwise => "mixed_bitwise",
+            MixedBitwiseNot => "mixed_bitwise_not",
             StrLen => "str_len",
             StrPersist => "str_persist",
             StrCharAt => "str_char_at",

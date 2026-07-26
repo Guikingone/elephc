@@ -2044,6 +2044,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::InvokerRefArg
                     | Op::MixedNumericBinop
                     | Op::MixedBitwise
+                    | Op::MixedBitwiseNot
                     | Op::ICheckedAdd
                     | Op::ICheckedSub
                     | Op::ICheckedMul
@@ -2796,6 +2797,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Some(
                 Op::MixedNumericBinop
                     | Op::MixedBitwise
+                    | Op::MixedBitwiseNot
                     | Op::ICheckedAdd
                     | Op::ICheckedSub
                     | Op::ICheckedMul

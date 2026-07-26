@@ -77,7 +77,7 @@ fn lower_expr_dispatch(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowere
         ExprKind::InstanceOf { value, target } => lower_instanceof(ctx, value, target, expr),
         ExprKind::Negate(inner) => lower_numeric_unary(ctx, inner, Op::INeg, Op::FNeg, expr),
         ExprKind::Not(inner) => lower_not(ctx, inner, expr),
-        ExprKind::BitNot(inner) => lower_int_unary(ctx, inner, Op::IBitNot, expr),
+        ExprKind::BitNot(inner) => lower_bit_not(ctx, inner, expr),
         ExprKind::Throw(inner) => lower_throw_expr(ctx, inner, expr),
         ExprKind::ErrorSuppress(inner) => lower_error_suppress(ctx, inner, expr),
         ExprKind::Print(inner) => lower_print(ctx, inner, expr),
@@ -1313,8 +1313,54 @@ fn lower_numeric_unary(
 }
 
 /// Lowers an integer unary operation.
-fn lower_int_unary(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, op: Op, expr: &Expr) -> LoweredValue {
+/// Lowers PHP's unary bitwise NOT (`~$x`).
+///
+/// A concrete integer/bool operand takes the fast `Op::IBitNot` path. A dynamic operand
+/// (`Mixed`/union whose runtime payload could be a string) cannot statically choose between
+/// PHP's bytewise-string NOT and integer NOT, so it is routed to `Op::MixedBitwiseNot` /
+/// `__rt_mixed_bitwise_not`, mirroring the runtime-polymorphic binary `&`/`|`/`^` dispatch. The
+/// checker (`crate::types::checker::inference::ops::is_dynamic_bitwise_operand`) keys on the same
+/// operand predicate, so both layers agree the result is a boxed `Mixed`.
+fn lower_bit_not(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
+    if is_dynamic_bitwise_ir(value.ir_type) {
+        return lower_mixed_bitwise_not(ctx, value, expr);
+    }
+    lower_int_unary_value(ctx, value, Op::IBitNot, expr)
+}
+
+/// Lowers the runtime-polymorphic unary NOT of a boxed `Mixed`/union operand.
+///
+/// The operand is passed to `Op::MixedBitwiseNot`, which boxes it to `Mixed` (via the codegen
+/// boxing path) and calls `__rt_mixed_bitwise_not`: string → bytewise NOT string, array/object →
+/// TypeError fatal, otherwise integer NOT. The result is a freshly boxed owned `Mixed` cell; the
+/// operand temporary is released with the same borrowed-aware pattern as `lower_mixed_bitwise`.
+fn lower_mixed_bitwise_not(
+    ctx: &mut LoweringContext<'_, '_>,
+    operand: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let result = ctx.emit_value(
+        Op::MixedBitwiseNot,
+        vec![operand.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedBitwiseNot.default_effects(),
+        Some(expr.span),
+    );
+    if ctx.value_needs_release_after_retaining_store(operand) {
+        crate::ir_lower::ownership::release_if_owned(ctx, operand, Some(expr.span));
+    }
+    result
+}
+
+/// Lowers an already-lowered operand through an integer unary opcode (`~`/`-` int path).
+fn lower_int_unary_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    op: Op,
+    expr: &Expr,
+) -> LoweredValue {
     if value.ir_type == IrType::I64 {
         ctx.emit_value(op, vec![value.value], None, PhpType::Int, op.default_effects(), Some(expr.span))
     } else if value.ir_type == IrType::TaggedScalar {
@@ -15626,6 +15672,7 @@ fn call_result_may_alias_arg(
         Some(
             Op::MixedNumericBinop
                 | Op::MixedBitwise
+                | Op::MixedBitwiseNot
                 | Op::ICheckedAdd
                 | Op::ICheckedSub
                 | Op::ICheckedMul

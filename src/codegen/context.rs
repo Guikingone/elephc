@@ -934,6 +934,7 @@ impl<'a> FunctionContext<'a> {
             Op::Acquire
                 | Op::MixedNumericBinop
                 | Op::MixedBitwise
+                | Op::MixedBitwiseNot
                 | Op::ICheckedAdd
                 | Op::ICheckedSub
                 | Op::ICheckedMul

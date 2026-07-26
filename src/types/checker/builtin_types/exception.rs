@@ -171,6 +171,36 @@ pub(super) fn builtin_exception_previous_property() -> ClassProperty {
     }
 }
 
+/// Returns a synthetic `ClassProperty` for PHP's private `$trace` backtrace on builtin Exception classes.
+///
+/// Typed `array` and `private`, matching PHP's real `Exception`/`Error` class shape (the backtrace
+/// is a private property on the base class). This is a type-contract-only declaration so reflection
+/// over the property resolves — e.g. `new ReflectionProperty(Exception::class, 'trace')`, which
+/// Symfony's `ErrorHandler`/`var-exporter` use to inject a backtrace. The compact runtime Throwable
+/// payload does not store a backtrace array, so `private` visibility (no external direct read) keeps
+/// the declaration honest: `getTrace()` still returns the empty-array intrinsic. Default is `[]`.
+pub(super) fn builtin_exception_trace_property() -> ClassProperty {
+    ClassProperty {
+        name: "trace".to_string(),
+        visibility: Visibility::Private,
+        set_visibility: None,
+        type_expr: Some(array_type()),
+        hooks: PropertyHooks::none(),
+        readonly: false,
+        is_final: false,
+        is_static: false,
+        is_abstract: false,
+        by_ref: false,
+        is_promoted: false,
+        default: Some(Expr::new(
+            ExprKind::ArrayLiteral(Vec::new()),
+            crate::span::Span::dummy(),
+        )),
+        span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a synthetic `ClassMethod` for `Exception::getCode()`.
 /// Body returns `$this->code` cast to `int`.
 pub(super) fn builtin_exception_get_code_method() -> ClassMethod {

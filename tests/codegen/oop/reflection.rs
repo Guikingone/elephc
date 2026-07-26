@@ -282,6 +282,25 @@ echo $rp->getModifiers();
     assert_eq!(out, "33");
 }
 
+/// Verifies `new ReflectionProperty(Exception::class|Error::class, 'trace')` resolves the
+/// private `$trace` backtrace property PHP declares on the Throwable base classes, so reflection
+/// over it works (`getName()` == "trace"). Symfony's `ErrorHandler`/`var-exporter` construct this
+/// reflector to inject a backtrace; the property is a type-contract-only declaration matching PHP's
+/// class shape (the compact runtime Throwable payload does not store a backtrace array).
+#[test]
+fn test_reflection_property_throwable_trace() {
+    let out = compile_and_run(
+        r#"<?php
+$r = new ReflectionProperty(\Exception::class, 'trace');
+echo $r->getName();
+echo ":";
+$r2 = new ReflectionProperty(\Error::class, 'trace');
+echo $r2->getName();
+"#,
+    );
+    assert_eq!(out, "trace:trace");
+}
+
 /// Verifies `ReflectionProperty::getModifiers()`/`hasType()` against real
 /// property declarations, including a static protected property (php -n
 /// verified bit values as above).

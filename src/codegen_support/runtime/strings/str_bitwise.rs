@@ -53,6 +53,8 @@ pub fn emit_str_bitwise(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_str_bitwise_or");                            // branch to the OR overlap loop
     emitter.instruction("cmp x5, #2");                                          // test the mode: 2 = XOR
     emitter.instruction("b.eq __rt_str_bitwise_xor");                           // branch to the XOR overlap loop
+    emitter.instruction("cmp x5, #3");                                          // test the mode: 3 = NOT (unary complement)
+    emitter.instruction("b.eq __rt_str_bitwise_not");                           // branch to the NOT operand loop
 
     // -- AND (mode 0): out[i] = left[i] & right[i] over the overlap --
     emitter.label("__rt_str_bitwise_and");
@@ -92,6 +94,15 @@ pub fn emit_str_bitwise(emitter: &mut Emitter) {
     emitter.instruction("strb w13, [x8], #1");                                  // store the result byte, advance the destination
     emitter.instruction("sub x11, x11, #1");                                    // one fewer overlap byte remaining
     emitter.instruction("b __rt_str_bitwise_xor");                              // continue the XOR overlap loop
+
+    // -- NOT (mode 3): out[i] = ~left[i] over the operand length; the right operand is unused --
+    emitter.label("__rt_str_bitwise_not");
+    emitter.instruction("cbz x11, __rt_str_bitwise_finish");                    // no operand bytes left -> finish
+    emitter.instruction("ldrb w13, [x1], #1");                                  // load next byte from the operand, advance
+    emitter.instruction("mvn w13, w13");                                        // bitwise complement of the operand byte
+    emitter.instruction("strb w13, [x8], #1");                                  // store the complemented byte, advance the destination
+    emitter.instruction("sub x11, x11, #1");                                    // one fewer operand byte remaining
+    emitter.instruction("b __rt_str_bitwise_not");                              // continue the NOT operand loop
 
     // -- publish the result length into the concat buffer and return --
     emitter.label("__rt_str_bitwise_finish");
@@ -152,6 +163,8 @@ fn emit_str_bitwise_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_str_bitwise_or");                              // branch to the OR overlap loop
     emitter.instruction("cmp rcx, 2");                                          // mode 2 = XOR
     emitter.instruction("je __rt_str_bitwise_xor");                             // branch to the XOR overlap loop
+    emitter.instruction("cmp rcx, 3");                                          // mode 3 = NOT (unary complement)
+    emitter.instruction("je __rt_str_bitwise_not");                             // branch to the NOT operand loop
 
     // -- AND (mode 0): out[i] = left[i] & right[i] over the overlap --
     emitter.label("__rt_str_bitwise_and");
@@ -206,6 +219,18 @@ fn emit_str_bitwise_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("dec r11");                                             // one fewer overlap byte remaining
     emitter.instruction("jmp __rt_str_bitwise_xor");                            // continue the XOR overlap loop
 
+    // -- NOT (mode 3): out[i] = ~left[i] over the operand length; the right operand is unused --
+    emitter.label("__rt_str_bitwise_not");
+    emitter.instruction("test r11, r11");                                       // check whether operand bytes remain
+    emitter.instruction("je __rt_str_bitwise_finish");                          // no operand bytes left -> finish
+    emitter.instruction("mov al, BYTE PTR [r8]");                               // load next byte from the operand
+    emitter.instruction("not al");                                              // bitwise complement of the operand byte
+    emitter.instruction("mov BYTE PTR [r10], al");                              // store the complemented byte
+    emitter.instruction("inc r8");                                              // advance the operand cursor
+    emitter.instruction("inc r10");                                             // advance the destination cursor
+    emitter.instruction("dec r11");                                             // one fewer operand byte remaining
+    emitter.instruction("jmp __rt_str_bitwise_not");                            // continue the NOT operand loop
+
     // -- publish the result length into the concat buffer and return --
     emitter.label("__rt_str_bitwise_finish");
     crate::codegen::abi::emit_symbol_address(emitter, "r8", "_concat_off");
@@ -238,6 +263,8 @@ mod tests {
         assert!(asm.contains("orr w13, w13, w14"));
         assert!(asm.contains("eor w13, w13, w14"));
         assert!(asm.contains("__rt_str_bitwise_or_tail_loop:\n"));
+        assert!(asm.contains("__rt_str_bitwise_not:\n"));
+        assert!(asm.contains("mvn w13, w13"));
     }
 
     /// Verifies the x86_64 helper uses native byte-op loops for all three operators
@@ -253,5 +280,7 @@ mod tests {
         assert!(asm.contains("or al, BYTE PTR [r9]\n"));
         assert!(asm.contains("xor al, BYTE PTR [r9]\n"));
         assert!(asm.contains("mov rax, QWORD PTR [rbp - 56]\n"));
+        assert!(asm.contains("__rt_str_bitwise_not:\n"));
+        assert!(asm.contains("not al\n"));
     }
 }

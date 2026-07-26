@@ -459,6 +459,8 @@ pub use mixed_is_empty::emit_mixed_is_empty;
 /// Emit Mixed emptiness check helper.
 pub use mixed_numeric_binops::emit_mixed_numeric_binops;
 pub use mixed_bitwise::emit_mixed_bitwise;
+/// Emit Mixed unary bitwise NOT helper.
+pub use mixed_bitwise::emit_mixed_bitwise_not;
 /// Emit Mixed numeric binary operations helper.
 pub use int_checked_binops::emit_int_checked_binops;
 /// Emit checked integer add/sub/mul helpers with overflow-to-float promotion.

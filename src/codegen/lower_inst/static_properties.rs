@@ -1268,6 +1268,7 @@ fn value_is_owned_mixed_store_temporary(ctx: &FunctionContext<'_>, value: ValueI
             | crate::ir::Op::ICheckedMul
             | crate::ir::Op::MixedNumericBinop
             | crate::ir::Op::MixedBitwise
+            | crate::ir::Op::MixedBitwiseNot
             | crate::ir::Op::MixedBox
     ))
 }

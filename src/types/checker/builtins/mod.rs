@@ -17,6 +17,7 @@ pub(crate) mod late_bound;
 mod language_constructs;
 mod mbstring;
 pub(crate) mod numeric;
+pub(crate) mod platform_constants;
 mod strings;
 mod system;
 pub(crate) mod spl;
@@ -41,6 +42,7 @@ pub(crate) use callables::{
     runtime_callable_array_type,
 };
 pub(crate) use late_bound::is_late_bound_undefined_function;
+pub(crate) use platform_constants::is_platform_conditional_constant;
 
 impl Checker {
     /// Records an external link library required on every target.

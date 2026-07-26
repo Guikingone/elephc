@@ -227,6 +227,141 @@ fn emit_mixed_bitwise_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the boxed Mixed result in rax
 }
 
+/// Emits the `__rt_mixed_bitwise_not` runtime helper for PHP's runtime-polymorphic unary NOT (`~$x`).
+///
+/// The single operand is a boxed `Mixed` cell on entry. A string payload produces a bytewise NOT
+/// string (`~b` per byte) via `__rt_str_bitwise`'s mode-3 (NOT) path, then persists and boxes the
+/// result as a Mixed string; a runtime array/object operand is a PHP `TypeError` (loud fatal);
+/// every other payload coerces to int and boxes the integer complement `~i`. Mirrors the binary
+/// `__rt_mixed_bitwise` dispatch, unary.
+///
+/// Input:  AArch64 x0=operand Mixed*
+///         x86_64  rax=operand Mixed*
+/// Output: boxed Mixed pointer in the integer result register (x0 / rax)
+pub fn emit_mixed_bitwise_not(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_mixed_bitwise_not_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: mixed_bitwise_not ---");
+    emitter.label_global("__rt_mixed_bitwise_not");
+
+    emitter.instruction("sub sp, sp, #32");                                     // allocate a helper frame for the boxed operand and saved regs
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // establish a stable helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the boxed operand pointer for the int cast
+
+    // -- unbox the operand and reject array/object payloads --
+    emitter.instruction("bl __rt_mixed_unbox");                                 // x0=tag, x1=value_lo, x2=value_hi
+    emitter.instruction("cmp x0, #4");                                          // does the operand hold an indexed array?
+    emitter.instruction("b.eq __rt_mixed_bitwise_not_type_error");             // arrays are never valid bitwise operands
+    emitter.instruction("cmp x0, #5");                                          // does the operand hold an associative array?
+    emitter.instruction("b.eq __rt_mixed_bitwise_not_type_error");             // arrays are never valid bitwise operands
+    emitter.instruction("cmp x0, #6");                                          // does the operand hold an object?
+    emitter.instruction("b.eq __rt_mixed_bitwise_not_type_error");             // objects are never valid bitwise operands
+    emitter.instruction("cmp x0, #1");                                          // is the operand a string?
+    emitter.instruction("b.ne __rt_mixed_bitwise_not_int");                    // any non-string payload forces the integer path
+
+    // -- string operand -> PHP bytewise NOT string result --
+    emitter.instruction("mov x3, x1");                                          // right_ptr = left_ptr (NOT ignores the right operand)
+    emitter.instruction("mov x4, x2");                                          // right_len = left_len so the min length is the operand length
+    emitter.instruction("mov x5, #3");                                          // mode 3 = bytewise NOT
+    emitter.instruction("bl __rt_str_bitwise");                                 // x1=result pointer, x2=result length in concat scratch
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the bytewise NOT string result
+    emitter.instruction("b __rt_mixed_bitwise_not_done");                       // return the boxed string result
+
+    // -- integer path: coerce to int, complement, then box the integer result --
+    emitter.label("__rt_mixed_bitwise_not_int");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the boxed operand for the int cast
+    emitter.instruction("bl __rt_mixed_cast_int");                              // coerce the operand to int via PHP rules
+    emitter.instruction("mvn x1, x0");                                          // ~i (two's-complement bitwise NOT)
+    emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer
+    emitter.instruction("mov x2, #0");                                          // integer payloads do not use a high word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the integer NOT result
+    emitter.instruction("b __rt_mixed_bitwise_not_done");                       // return the boxed integer result
+
+    // -- runtime array/object operand: PHP TypeError (loud fatal) --
+    emitter.label("__rt_mixed_bitwise_not_type_error");
+    abi::emit_symbol_address(emitter, "x1", "_array_arg_type_error_msg");
+    emitter.instruction("mov x2, #78");                                         // pass the shared gradual operand TypeError message length
+    emitter.instruction("mov x0, #2");                                          // write the invalid operand diagnostic to stderr
+    emitter.syscall(4);
+    emitter.instruction("mov x0, #70");                                         // use EX_SOFTWARE after the invalid operand
+    emitter.syscall(1);
+
+    emitter.label("__rt_mixed_bitwise_not_done");
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the helper stack frame
+    emitter.instruction("ret");                                                 // return the boxed Mixed result in x0
+}
+
+/// Emits the x86_64 Linux variant of `__rt_mixed_bitwise_not`.
+///
+/// Uses the System V AMD64 ABI as used by the sibling Mixed helpers: the boxed operand pointer in
+/// rax (the register `__rt_mixed_unbox` reads). The result is a boxed Mixed pointer returned in rax.
+fn emit_mixed_bitwise_not_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: mixed_bitwise_not ---");
+    emitter.label_global("__rt_mixed_bitwise_not");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame base
+    emitter.instruction("sub rsp, 16");                                         // reserve an aligned slot for the boxed operand
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the boxed operand pointer for the int cast
+
+    // -- unbox the operand and reject array/object payloads --
+    emitter.instruction("call __rt_mixed_unbox");                               // rax=tag, rdi=value_lo, rdx=value_hi
+    emitter.instruction("cmp rax, 4");                                          // does the operand hold an indexed array?
+    emitter.instruction("je __rt_mixed_bitwise_not_type_error_linux_x86_64");   // arrays are never valid bitwise operands
+    emitter.instruction("cmp rax, 5");                                          // does the operand hold an associative array?
+    emitter.instruction("je __rt_mixed_bitwise_not_type_error_linux_x86_64");   // arrays are never valid bitwise operands
+    emitter.instruction("cmp rax, 6");                                          // does the operand hold an object?
+    emitter.instruction("je __rt_mixed_bitwise_not_type_error_linux_x86_64");   // objects are never valid bitwise operands
+    emitter.instruction("cmp rax, 1");                                          // is the operand a string?
+    emitter.instruction("jne __rt_mixed_bitwise_not_int_linux_x86_64");         // any non-string payload forces the integer path
+
+    // -- string operand -> PHP bytewise NOT string result --
+    emitter.instruction("mov rsi, rdx");                                        // right_len = left_len (NOT ignores the right operand)
+    emitter.instruction("mov rax, rdi");                                        // left_ptr = operand pointer (rdi stays as right_ptr)
+    emitter.instruction("mov rcx, 3");                                          // mode 3 = bytewise NOT
+    emitter.instruction("call __rt_str_bitwise");                               // rax=result pointer, rdx=result length in concat scratch
+    emitter.instruction("mov rdi, rax");                                        // move the result pointer into the from_value low payload register
+    emitter.instruction("mov rsi, rdx");                                        // move the result length into the from_value high payload register
+    emitter.instruction("mov rax, 1");                                          // runtime tag 1 = string
+    emitter.instruction("call __rt_mixed_from_value");                          // persist and box the bytewise NOT string result
+    emitter.instruction("jmp __rt_mixed_bitwise_not_done_linux_x86_64");        // return the boxed string result
+
+    // -- integer path: coerce to int, complement, then box the integer result --
+    emitter.label("__rt_mixed_bitwise_not_int_linux_x86_64");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the boxed operand for the int cast
+    emitter.instruction("call __rt_mixed_cast_int");                            // coerce the operand to int via PHP rules
+    emitter.instruction("not rax");                                             // ~i (two's-complement bitwise NOT)
+    emitter.instruction("mov rdi, rax");                                        // move the integer result into the from_value low payload register
+    emitter.instruction("xor rsi, rsi");                                        // integer payloads do not use a high word
+    emitter.instruction("mov rax, 0");                                          // runtime tag 0 = integer
+    emitter.instruction("call __rt_mixed_from_value");                          // box the integer NOT result
+    emitter.instruction("jmp __rt_mixed_bitwise_not_done_linux_x86_64");        // return the boxed integer result
+
+    // -- runtime array/object operand: PHP TypeError (loud fatal) --
+    emitter.label("__rt_mixed_bitwise_not_type_error_linux_x86_64");
+    emitter.instruction("mov edi, 2");                                          // write the invalid operand diagnostic to stderr
+    abi::emit_symbol_address(emitter, "rsi", "_array_arg_type_error_msg");
+    emitter.instruction("mov edx, 78");                                         // pass the shared gradual operand TypeError message length
+    emitter.instruction("mov eax, 1");                                          // select the Linux write syscall
+    emitter.instruction("syscall");                                             // emit the invalid operand diagnostic
+    emitter.instruction("mov edi, 70");                                         // use EX_SOFTWARE after the invalid operand
+    emitter.instruction("mov eax, 60");                                         // select the Linux exit syscall
+    emitter.instruction("syscall");                                             // terminate after the operand TypeError
+
+    emitter.label("__rt_mixed_bitwise_not_done_linux_x86_64");
+    emitter.instruction("add rsp, 16");                                         // release the helper stack frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed Mixed result in rax
+}
+
 #[cfg(test)]
 mod tests {
     use crate::codegen::platform::{Arch, Platform, Target};
@@ -264,5 +399,36 @@ mod tests {
         assert!(asm.contains("and rax, rcx\n"));
         assert!(asm.contains("or rax, rcx\n"));
         assert!(asm.contains("xor rax, rcx\n"));
+    }
+
+    /// Verifies the AArch64 unary NOT helper emits the global symbol, the string (mode-3
+    /// `__rt_str_bitwise`) and integer (`mvn`) dispatch paths, and the array/object TypeError fatal.
+    #[test]
+    fn test_emit_mixed_bitwise_not_arm64_emits_all_paths() {
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_mixed_bitwise_not(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("__rt_mixed_bitwise_not:\n"));
+        assert!(asm.contains("mov x5, #3"));
+        assert!(asm.contains("bl __rt_str_bitwise"));
+        assert!(asm.contains("bl __rt_mixed_cast_int"));
+        assert!(asm.contains("mvn x1, x0"));
+        assert!(asm.contains("__rt_mixed_bitwise_not_type_error:\n"));
+    }
+
+    /// Verifies the x86_64 unary NOT helper emits the shared dispatch, the mode-3 string path, the
+    /// integer `not` path, and returns the boxed result via the SysV integer result register.
+    #[test]
+    fn test_emit_mixed_bitwise_not_linux_x86_64_emits_all_paths() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_mixed_bitwise_not(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("__rt_mixed_bitwise_not:\n"));
+        assert!(asm.contains("mov rcx, 3\n"));
+        assert!(asm.contains("call __rt_str_bitwise"));
+        assert!(asm.contains("call __rt_mixed_cast_int"));
+        assert!(asm.contains("not rax\n"));
     }
 }

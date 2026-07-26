@@ -205,14 +205,35 @@ fn test_error_bitwise_shift_string_unaffected() {
     );
 }
 
-/// Tests that unary `~` on a string rejects it with the
-/// "Bitwise NOT requires integer operand" error.
+/// Tests that unary `~` on a concrete string rejects it with the
+/// "Bitwise NOT requires integer operand" error. Concrete-string unary NOT is a pre-existing
+/// gap (mirrors the binary bitwise family, whose runtime-polymorphic path only covers dynamic
+/// `Mixed`/union operands, not concrete strings); only a dynamic operand routes to the runtime
+/// `__rt_mixed_bitwise_not` helper (see `test_bitwise_not_mixed_operand_ok`).
 #[test]
 fn test_error_bitwise_not_string() {
     expect_error(
         r#"<?php echo ~"hello";"#,
         "Bitwise NOT requires integer operand",
     );
+}
+
+/// Tests that unary `~` on a concrete array operand stays a loud compile error — an array can
+/// never be a bitwise operand.
+#[test]
+fn test_error_bitwise_not_array() {
+    expect_error(
+        r#"<?php $a = [1, 2]; echo ~$a;"#,
+        "Bitwise NOT requires integer operand",
+    );
+}
+
+/// Tests that unary `~` on a dynamic `Mixed` operand type-checks cleanly: the string-vs-integer
+/// choice is deferred to the runtime `__rt_mixed_bitwise_not` helper, mirroring the binary
+/// runtime-polymorphic `&`/`|`/`^` dispatch.
+#[test]
+fn test_bitwise_not_mixed_operand_ok() {
+    expect_ok(r#"<?php function bnot(mixed $x): mixed { return ~$x; } echo bnot(5);"#);
 }
 
 /// Tests that the spaceship operator `<=>` with an array operand is rejected with the

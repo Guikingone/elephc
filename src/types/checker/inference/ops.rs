@@ -1499,7 +1499,7 @@ fn is_integer_operand_type(checker: &Checker, ty: &PhpType) -> bool {
 /// payload could be a string, so `&`/`|`/`^` cannot statically choose between the
 /// bytewise-string path and the integer path. That is `Mixed` or a union that
 /// dispatches through the mixed integer path (e.g. `string|false`).
-fn is_dynamic_bitwise_operand(checker: &Checker, ty: &PhpType) -> bool {
+pub(super) fn is_dynamic_bitwise_operand(checker: &Checker, ty: &PhpType) -> bool {
     matches!(ty, PhpType::Mixed) || checker.is_union_with_mixed_int_dispatch(ty)
 }
 

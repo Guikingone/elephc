@@ -170,6 +170,44 @@ fn test_error_namespace_undefined_constant_no_define() {
     );
 }
 
+/// A curated platform-conditional predefined constant (the Windows-only
+/// `PHP_WINDOWS_VERSION_*` family, genuinely defined on Windows PHP but not this target) is
+/// tolerated as `Mixed` instead of a hard "Undefined constant". PHP defers undefined-constant
+/// resolution to runtime, so the reference compiles (and lowers to `__rt_constant`, which throws
+/// a catchable `\Error` on a miss). This is the VarDumper `CliDumper::isWindowsTrueColor()` shape.
+#[test]
+fn test_platform_conditional_windows_constant_tolerated() {
+    expect_ok(
+        r#"<?php
+function tc(): string {
+    if ('\\' === DIRECTORY_SEPARATOR) {
+        return sprintf('%s.%s.%s', PHP_WINDOWS_VERSION_MAJOR, PHP_WINDOWS_VERSION_MINOR, PHP_WINDOWS_VERSION_BUILD);
+    }
+    return '0';
+}
+echo tc();"#,
+    );
+}
+
+/// A platform-conditional constant is tolerated even referenced unqualified inside a namespace
+/// (the namespaced attempt form still resolves to the bare global name), matching PHP's namespace
+/// fallback to the global constant.
+#[test]
+fn test_platform_conditional_windows_constant_namespaced() {
+    expect_ok("<?php namespace Demo\\App; echo PHP_WINDOWS_VERSION_BUILD;");
+}
+
+/// A typo in a curated platform constant name is NOT on the allowlist and stays a loud
+/// compile-time "Undefined constant" — the tolerance is EXACT-name only, no fuzzy matching, so
+/// the typo-detection signal is preserved.
+#[test]
+fn test_platform_conditional_constant_typo_stays_loud() {
+    expect_error(
+        "<?php echo PHP_WINDOWS_VERSON_MAJOR;",
+        "Undefined constant",
+    );
+}
+
 /// Verifies that `define()` with a single argument (missing value) yields a wrong-args diagnostic.
 #[test]
 fn test_error_define_wrong_args() {

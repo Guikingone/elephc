@@ -108,6 +108,32 @@ pub(super) fn lower_const_ref(
     if let Some((value, php_type)) = ctx.constant_value(name.as_str()) {
         return lower_constant_value(ctx, value, php_type, expr);
     }
+    // A curated platform-conditional constant (e.g. the Windows-only `PHP_WINDOWS_VERSION_*`
+    // family) has no prescanned metadata and no runtime `define()` global slot on this target, so
+    // the `LoadGlobal` fallback below would reference a nonexistent global. The checker already
+    // tolerated the reference as `Mixed` (see `is_platform_conditional_constant`); lower it to the
+    // same `constant("NAME")` runtime lookup PHP performs, which resolves through `__rt_constant`
+    // and throws a catchable `\Error` on a miss — byte-faithful whether the (dead) branch is ever
+    // reached. The bare global name is used so the thrown message matches PHP's namespace fallback.
+    if crate::types::checker::builtins::is_platform_conditional_constant(name.as_str()) {
+        let bare = name
+            .as_str()
+            .trim_start_matches('\\')
+            .rsplit('\\')
+            .next()
+            .unwrap_or_else(|| name.as_str());
+        let lookup = Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::unqualified("constant"),
+                args: vec![Expr::new(
+                    ExprKind::StringLiteral(bare.to_string()),
+                    expr.span,
+                )],
+            },
+            expr.span,
+        );
+        return super::lower_expr(ctx, &lookup);
+    }
     if ctx.has_eval_barrier() || ctx.eval_executed() {
         // Barrier-free AOT evals can still define constants dynamically; the
         // fetch needs the eval context, so make sure its slot exists.
