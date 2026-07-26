@@ -61,6 +61,25 @@ component is `0`. Feature detection is unaffected: `PHP_VERSION_ID >= 80500`
 answers exactly the question `--php-version 8.5` answers. `PHP_EXTRA_VERSION`
 and `PHP_MAJOR_VERSION`/`PHP_MINOR_VERSION` match reference exactly.
 
+**Why understate rather than claim the reference patch.** elephc's observable
+surface is verified against a specific reference build, but that is not the same
+as shipping that build's bug fixes: elephc is a reimplementation, not a PHP
+runtime, so "our behavior matches 8.5.6" does not license the claim "we contain
+every fix through 8.5.6". The two directions fail differently, and only one of
+them fails safely:
+
+| Reported | Code gating `>= 8.5.6` | Consequence |
+|---|---|---|
+| `8.5.0` | takes the OLD branch, applies a workaround | redundant work, harmless |
+| `8.5.6` | takes the NEW branch, assumes a fix is present | breaks if elephc lacks it |
+
+Understating makes callers do unnecessary work; overstating makes them skip
+protections. The cost is real and worth knowing: a caller gating on a PATCH
+version (`version_compare(PHP_VERSION, '8.5.6', '>=')`) sees this binary as older
+than the behavior it actually implements. Gating on a MINOR version — by far the
+common case — is unaffected. If elephc ever tracks patch-level fixes explicitly,
+this choice should be revisited.
+
 `phpversion($extension)` returns that same version string for a loaded
 extension and `false` for anything else, matching reference PHP, where every
 bundled extension reports the interpreter's own version. Membership is exactly
@@ -82,6 +101,17 @@ PHP's built-in server is — and it is the only reference SAPI name that describ
 a standalone PHP binary speaking HTTP. It matters because library code gates on
 `PHP_SAPI === 'cli'` to tell a console run from a request; reporting `cli` under
 `--web` would put every such library on the console path inside an HTTP request.
+
+**Known caveat.** In reference PHP, `cli-server` is the *development* server, and
+some libraries treat that name as a signal to enable development behavior —
+verbose error pages, disabled caching, relaxed static-file handling. A `--web`
+binary is not a development server, so a library keying on that connotation may
+behave more loosely than intended. The alternative — inventing a SAPI name
+outside php-src's vocabulary — trades this for a value no library recognizes at
+all, and would break code that validates `PHP_SAPI` against the known set. If a
+deployment hits the development-mode reading in practice, that trade is worth
+reopening; the console-detection idiom, which is the dominant use by a wide
+margin, answers correctly either way.
 
 ### `ini_restore()`
 
