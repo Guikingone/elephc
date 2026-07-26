@@ -345,6 +345,39 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
     store_if_result(ctx, inst)
 }
 
+/// Lowers a PHP string offset assignment (`$s[$i] = $c`) into a `__rt_string_offset_set` call.
+///
+/// Operands are the source string, the integer byte offset, and the replacement string.
+/// The runtime helper never mutates the source in place: it copies the source bytes into
+/// the shared concat scratch, right-pads with spaces when the offset is past the end, and
+/// writes the replacement's first byte at the offset, returning a fresh scratch string.
+/// Because the source is only read, aliases stay copy-on-write safe; the fresh result is
+/// persisted into the destination local by the surrounding `store_local` lowering.
+///
+/// The offset value is loaded first so the subsequent string frame-slot loads (which target
+/// distinct ABI registers) cannot clobber the offset when it homes in a string ABI register.
+pub(super) fn lower_str_offset_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let string = expect_operand(inst, 0)?;
+    let index = expect_operand(inst, 1)?;
+    let replacement = expect_operand(inst, 2)?;
+    require_string(ctx.value_php_type(string)?, inst)?;
+    require_string(ctx.value_php_type(replacement)?, inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            require_integer_like(ctx.load_value_to_reg(index, "x3")?, inst)?;
+            ctx.load_string_value_to_regs(replacement, "x4", "x5")?;
+            ctx.load_string_value_to_regs(string, "x1", "x2")?;
+        }
+        Arch::X86_64 => {
+            require_integer_like(ctx.load_value_to_reg(index, "rdi")?, inst)?;
+            ctx.load_string_value_to_regs(replacement, "rsi", "rcx")?;
+            ctx.load_string_value_to_regs(string, "rax", "rdx")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_string_offset_set");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers string persistence by copying the string into runtime-owned storage.
 pub(super) fn lower_str_persist(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;

@@ -2051,6 +2051,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::StrBitwise
                     | Op::StrPersist
                     | Op::StrCharAt
+                    | Op::StrOffsetSet
                     | Op::StrInterpolate
                     | Op::ArrayNew
                     | Op::HashNew

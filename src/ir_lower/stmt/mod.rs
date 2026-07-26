@@ -1836,6 +1836,13 @@ fn lower_array_assign(
     let array_value = ctx.load_local(array, Some(span));
     let mut index_value = lower_expr(ctx, index);
     let mut value_value = lower_expr(ctx, value);
+    // `$s[$i] = $c` on a string local writes the replacement's first byte at byte
+    // offset `$i` (right-padding with spaces past the end). The checker only accepts
+    // this for a plain string local with an int-like offset and a string value.
+    if array_value.ir_type == IrType::Str {
+        lower_string_offset_set(ctx, array, array_value, index_value, value_value, index, span);
+        return;
+    }
     let op = array_set_op(array_value.ir_type);
     // A literal string index always means a hash key, so promote the destination
     // to associative storage like PHP. A boxed Mixed/Union index may hold either
@@ -1898,6 +1905,36 @@ fn lower_array_assign(
         Some(span),
     );
     release_persisted_string_operand(ctx, index_value, span);
+    release_persisted_string_operand(ctx, value_value, span);
+}
+
+/// Lowers `$s[$i] = $c` on a plain string local (PHP string offset assignment).
+///
+/// The `Op::StrOffsetSet` runtime helper reads the source string, writes the replacement's
+/// first byte at byte offset `$i` (right-padding with spaces when `$i >= strlen`), and returns
+/// a FRESH concat-scratch string — it never mutates the source in place, so aliases created by
+/// `$b = $a` stay copy-on-write safe. The fresh result is persisted into the destination local
+/// by `store_local`, which also releases the previous owner (matching `$s = <new string>`). The
+/// replacement operand is released afterwards only when it is a fresh owning temporary.
+fn lower_string_offset_set(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    array_value: LoweredValue,
+    index_value: LoweredValue,
+    value_value: LoweredValue,
+    index: &Expr,
+    span: Span,
+) {
+    let offset = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+    let result = ctx.emit_value(
+        Op::StrOffsetSet,
+        vec![array_value.value, offset.value, value_value.value],
+        None,
+        PhpType::Str,
+        Op::StrOffsetSet.default_effects(),
+        Some(span),
+    );
+    ctx.store_local(array, result, PhpType::Str, Some(span));
     release_persisted_string_operand(ctx, value_value, span);
 }
 

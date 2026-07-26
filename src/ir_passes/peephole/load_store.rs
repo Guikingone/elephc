@@ -201,6 +201,7 @@ fn consumes_operands_by_value(op: Op) -> bool {
             | StrBitwise
             | StrLen
             | StrCharAt
+            | StrOffsetSet
             | StrInterpolate
             | StrPersist
             | EchoValue

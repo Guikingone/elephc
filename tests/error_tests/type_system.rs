@@ -71,12 +71,15 @@ fn test_error_property_array_write_array_key_is_rejected() {
     );
 }
 
-/// Verifies that assigning to a string offset (character replacement) is rejected.
-/// Input: `$s = "hello"; $s[0] = "H";` — offset assignment on a string is unsupported.
+/// Verifies that string offset assignment with a NON-string replacement stays loud.
+/// Input: `$s = "hello"; $s[0] = 65;` — the plain-local string case with a string
+/// replacement and an int-coercible offset is now supported, but a non-string
+/// replacement (PHP coerces it to a string first) is not lowered yet and must remain a
+/// compile-time error instead of silently miscompiling.
 #[test]
-fn test_error_string_offset_assignment_is_not_supported() {
+fn test_error_string_offset_assignment_non_string_value_is_not_supported() {
     expect_error(
-        "<?php $s = \"hello\"; $s[0] = \"H\";",
+        "<?php $s = \"hello\"; $s[0] = 65;",
         "String offset assignment is not supported",
     );
 }

@@ -885,6 +885,7 @@ pub(crate) fn string_op_uses_scratch_storage(op: Op) -> bool {
             | Op::StrConcat
             | Op::StrBitwise
             | Op::StrCharAt
+            | Op::StrOffsetSet
             | Op::StrInterpolate
             | Op::RuntimeCall
     )

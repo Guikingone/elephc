@@ -438,6 +438,14 @@ pub enum Op {
     StrLen,
     StrPersist,
     StrCharAt,
+    /// PHP string offset assignment (`$s[$i] = $c`). Reads the source string, the
+    /// integer byte offset, and the replacement string; writes the replacement's
+    /// FIRST byte at `$i` (right-padding with spaces when `$i >= strlen`), and
+    /// produces a fresh concat-scratch string. Never mutates the source in place,
+    /// so aliases are copy-on-write safe. Negative offsets index from the end;
+    /// out-of-range negatives and an empty replacement are no-ops (source copied
+    /// through unchanged).
+    StrOffsetSet,
     StrInterpolate,
     ConcatReset,
     WriteStrStdout,
@@ -741,6 +749,9 @@ impl Op {
             IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL,
             IToStr | FToStr | ResourceToStr | StrConcat | StrBitwise | StrCharAt | StrInterpolate
             | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
+            // Reads the source string bytes and writes the mutated copy into the
+            // shared concat scratch; the empty-replacement/out-of-range cases warn.
+            StrOffsetSet => E::READS_HEAP | E::ALLOC_CONCAT | E::MAY_WARN,
             ConcatReset => E::WRITES_GLOBAL,
             Cast => E::READS_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL,
             // `(object)` reads the boxed source, allocates a fresh stdClass and its
@@ -1006,6 +1017,7 @@ impl Op {
             StrLen => "str_len",
             StrPersist => "str_persist",
             StrCharAt => "str_char_at",
+            StrOffsetSet => "str_offset_set",
             StrInterpolate => "str_interpolate",
             ConcatReset => "concat_reset",
             WriteStrStdout => "write_str_stdout",

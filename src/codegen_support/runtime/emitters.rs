@@ -45,6 +45,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_ftoa(emitter);
     strings::emit_concat(emitter);
     strings::emit_str_bitwise(emitter);
+    strings::emit_string_offset_set(emitter);
     strings::emit_atoi(emitter);
     strings::emit_str_eq(emitter);
     strings::emit_str_to_number(emitter);

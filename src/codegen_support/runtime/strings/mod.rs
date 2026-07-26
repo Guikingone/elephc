@@ -11,6 +11,7 @@
 mod itoa;
 mod concat;
 mod str_bitwise;
+mod string_offset_set;
 mod ftoa;
 mod str_eq;
 mod str_loose_eq;
@@ -105,6 +106,8 @@ pub use concat::emit_concat;
 /// Emit string concatenation helper.
 pub use str_bitwise::emit_str_bitwise;
 /// Emit PHP bytewise string operator helper (`&`/`|`/`^` on two strings).
+pub use string_offset_set::emit_string_offset_set;
+/// Emit PHP string offset assignment helper (`$s[$i] = $c`).
 pub use ftoa::emit_ftoa;
 /// Emit float-to-string conversion helper.
 pub use str_eq::emit_str_eq;

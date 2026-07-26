@@ -454,6 +454,12 @@ fn validate_opcode_rules(
             check_operand_type(function, inst_id, inst, 0, IrType::Str, "Str")?;
             check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
         }
+        StrOffsetSet => {
+            check_count(inst_id, inst, 3, "3")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Str, "Str")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;
+            check_operand_type(function, inst_id, inst, 2, IrType::Str, "Str")
+        }
         BufferNew => check_unary(function, inst_id, inst, IrType::I64, "I64"),
         LoadLocal | LoadRefCell | LoadGlobal | LoadStaticLocal | LoadStaticProperty
         | LoadStaticPropRefCell | LoadReflectionStaticProperty

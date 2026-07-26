@@ -145,6 +145,7 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
             | Op::StrConcat
             | Op::StrBitwise
             | Op::StrCharAt
+            | Op::StrOffsetSet
             | Op::StrInterpolate
     ))
 }

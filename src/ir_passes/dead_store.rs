@@ -207,7 +207,7 @@ fn op_is_value_only_consumer(op: Op) -> bool {
             | ResourceToStr | Cast | MixedBox | MixedUnbox | MixedCastBool | MixedCastInt
             | MixedCastFloat | MixedCastString
             // String value operations.
-            | StrConcat | StrBitwise | StrLen | StrPersist | StrCharAt | StrInterpolate
+            | StrConcat | StrBitwise | StrLen | StrPersist | StrCharAt | StrOffsetSet | StrInterpolate
             // Output operations consume their operand by value.
             | EchoValue | PrintValue | WriteStdout | WriteStrStdout | VarDump | PrintR | Warn
             // Stores copy the value into other storage; they never alias the source slot.

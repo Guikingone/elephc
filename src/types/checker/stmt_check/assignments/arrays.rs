@@ -45,6 +45,24 @@ pub(super) fn check_array_assign(
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
     if arr_ty == PhpType::Str {
+        // PHP string offset assignment (`$s[$i] = $c`): write the replacement's first byte at
+        // byte offset `$i`. Supported for a plain string local with an int-coercible offset and
+        // a string replacement; the runtime helper copies the source into fresh storage (never
+        // mutating a shared string in place), so aliases stay copy-on-write safe. The offset may
+        // be a boxed `Mixed`/scalar (a widened integer loop counter such as `$s[++$j]`): the
+        // lowering coerces it to int via the same `__rt_mixed_cast_int` path PHP uses. A
+        // reference-bound local would need a write-through path and stays loud, as does a
+        // non-string replacement (PHP coerces it, but that coercion is not lowered yet).
+        let offset_is_int_coercible = matches!(
+            idx_ty.codegen_repr(),
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Mixed
+        );
+        let value_is_string = matches!(val_ty.codegen_repr(), PhpType::Str);
+        if offset_is_int_coercible && value_is_string && !checker.active_ref_params.contains(array)
+        {
+            // The local stays a string; leave `env` unchanged.
+            return Ok(());
+        }
         return Err(CompileError::new(
             span,
             "String offset assignment is not supported",
