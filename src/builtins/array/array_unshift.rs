@@ -39,15 +39,25 @@ builtin! {
 /// call is rejected. Returns `Int` — the new element count.
 ///
 /// Gradual-typing note: this hook intentionally stays STRICT (concrete array only). Relaxing it
-/// to accept a `Mixed`/union receiver was investigated and rejected as unsafe — the EIR dynamic
-/// path (`crate::codegen::lower_inst::builtins::arrays::unshift::lower_array_unshift_dynamic`)
-/// (a) supports only `Int`/`Bool` prepended values (an array/`Mixed` value — as in Symfony's
-/// `ContainerBuilder::prependExtensionConfig`'s `array_unshift($this->extensionConfigs[$name],
-/// $config)` — hits an unsupported EIR backend error, producing no binary), and (b) corrupts the
-/// refcount when the receiver is a direct function parameter (proven `bad refcount` under
-/// `--heap-debug`). Accepting the receiver would move the diagnostic from the counted checker
-/// phase to the uncounted backend phase without producing working code (a false-green), so the
-/// gap is kept loud pending a value-generalized, ownership-correct dynamic path.
+/// to accept a `Mixed`/union receiver was investigated and rejected as unsafe. The two Symfony
+/// call sites — `ContainerBuilder::prependExtensionConfig` and `FileLoader`'s importing branch,
+/// both `array_unshift($this->extensionConfigs[$name], $config)` — expose TWO independent
+/// blockers:
+///  (a) the prepended value is an ARRAY (`$config`), whereas the EIR dynamic path
+///      (`crate::codegen::lower_inst::builtins::arrays::unshift::lower_array_unshift_dynamic`)
+///      only handles `Int`/`Bool` prepended values; a value-generalized prepend (boxing the
+///      value as a Mixed cell, mirroring the landed `array_shift` / `array_combine` Mixed paths)
+///      is solvable, BUT
+///  (b) the RECEIVER is a nested property-array-element (`$this->extensionConfigs[$name]`), not a
+///      plain local. The by-ref writeback used by `array_pop` / `array_shift` relies on
+///      `source_load_local_slot`, which only targets a direct `LoadLocal` (returns `None` here),
+///      so the shared-cell divergence branch would publish a fresh Mixed cell with NOWHERE to
+///      store it — the mutation to `$this->extensionConfigs[$name]` would be silently dropped (a
+///      write-through false-green, the exact failure the [[refprop-nested-append-writethrough]]
+///      gap describes; it blocks PassConfig/PhpDumper). Accepting the receiver would move the
+///      diagnostic from the counted checker phase to a dropped writeback, so the gap is kept loud
+///      pending nested property-element write-through support plus a value-generalized dynamic
+///      path.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     cx.checker.infer_type(&cx.args[1], cx.env)?;
