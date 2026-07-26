@@ -551,6 +551,79 @@ fn test_array_pop_empty() {
     assert_eq!(out, "");
 }
 
+/// Verifies `array_pop()` on a Mixed receiver mutates the caller's INDEXED array in place and
+/// returns the removed element (gradual-typing dynamic path). Regression for the runtime-tag
+/// dispatched `lower_array_pop_dynamic` (tag 4 = indexed).
+#[test]
+fn test_array_pop_mixed_indexed() {
+    let out = compile_and_run(
+        "<?php function f(mixed $a){ $x = array_pop($a); return $x . \"|\" . implode(\",\", $a); } echo f([1, 2, 3]);",
+    );
+    assert_eq!(out, "3|1,2");
+}
+
+/// Verifies `array_pop()` on a Mixed receiver whose runtime value is an ASSOCIATIVE hash removes
+/// the insertion-order tail entry in place and returns its value (tag 5 = hash path).
+#[test]
+fn test_array_pop_mixed_assoc() {
+    let out = compile_and_run(
+        "<?php function f(mixed $a){ $x = array_pop($a); return $x . \"|\" . json_encode($a); } echo f(['a' => 1, 'b' => 2, 'c' => 3]);",
+    );
+    assert_eq!(out, "3|{\"a\":1,\"b\":2}");
+}
+
+/// Verifies copy-on-write: popping a Mixed receiver that aliases a sibling variable (`$b = $a;`)
+/// must not corrupt the alias — the sibling keeps the original array.
+#[test]
+fn test_array_pop_mixed_cow_alias() {
+    let out = compile_and_run(
+        "<?php function f(mixed $a){ $b = $a; $x = array_pop($a); return $x . \"|\" . json_encode($a) . \"|\" . json_encode($b); } echo f([1, 2, 3]);",
+    );
+    assert_eq!(out, "3|[1,2]|[1,2,3]");
+}
+
+/// Verifies a Mixed receiver holding a heterogeneous (boxed-Mixed element) array pops the last
+/// element with the correct runtime type and leaves the rest intact.
+#[test]
+fn test_array_pop_mixed_heterogeneous() {
+    let out = compile_and_run(
+        "<?php function f(mixed $a){ $x = array_pop($a); return json_encode($x) . \"|\" . json_encode($a); } echo f([1, 'two', 3.0]);",
+    );
+    assert_eq!(out, "3|[1,\"two\"]");
+}
+
+/// Verifies `array_pop()` on an empty Mixed array returns null and leaves the array empty.
+#[test]
+fn test_array_pop_mixed_empty() {
+    let out = compile_and_run(
+        "<?php function f(mixed $a){ $x = array_pop($a); return var_export($x, true) . \"|\" . count($a); } echo f([]);",
+    );
+    assert_eq!(out, "NULL|0");
+}
+
+/// Verifies by-value semantics: `array_pop()` on a Mixed parameter must not mutate the caller's
+/// original array variable (the parameter is a copy).
+#[test]
+fn test_array_pop_mixed_by_value_caller_unchanged() {
+    let out = compile_and_run(
+        "<?php function f(mixed $a){ array_pop($a); } $arr = [1, 2, 3]; f($arr); echo count($arr);",
+    );
+    assert_eq!(out, "3");
+}
+
+/// Verifies a non-array runtime value behind a checker-accepted Mixed receiver throws PHP's exact
+/// catchable `\TypeError` from `array_pop()`.
+#[test]
+fn test_array_pop_mixed_non_array_throws_type_error() {
+    let out = compile_and_run(
+        "<?php function f(mixed $a){ try { array_pop($a); } catch (\\TypeError $e) { echo $e->getMessage(); } } f(42);",
+    );
+    assert_eq!(
+        out,
+        "array_pop(): Argument #1 ($array) must be of type array, int given"
+    );
+}
+
 /// Verifies in array found.
 #[test]
 fn test_in_array_found() {

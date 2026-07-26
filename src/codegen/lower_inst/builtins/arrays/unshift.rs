@@ -197,7 +197,7 @@ fn lower_array_unshift_dynamic(
             ctx.emitter.instruction(&format!("jmp {}", wrong_tag_label));       // any other runtime tag is not array-shaped
         }
     }
-    emit_array_unshift_union_wrong_tag_dispatch(ctx, &wrong_tag_label);
+    emit_mixed_array_mutate_wrong_tag_dispatch(ctx, &wrong_tag_label, "array_unshift");
 
     ctx.emitter.label(&ok_label);
     // -- force independent ownership of the unboxed array pointer before mutating --
@@ -275,26 +275,29 @@ fn lower_array_unshift_dynamic(
 }
 
 /// Dispatches on the `__rt_mixed_unbox` result (tag in the int-result register, payload low word
-/// in `__rt_mixed_unbox`'s own payload-lo register — both still untouched since the tag-4
-/// comparison) to throw a catchable `\TypeError` matching PHP's real `array_unshift(): Argument #1 ($array)
-/// must be of type array, X given` wording. php -n VERIFIED for the common scalar/null/bool
-/// cases (see `tests/codegen/oop/reflection.rs`-style probes in `tests/codegen/arrays/`):
-/// `array_unshift(false, 1)` → `"...false given"`, `array_unshift(null, 1)` →
-/// `"...null given"`, `array_unshift("s", 1)` → `"...string given"`. An associative/hash-shaped
-/// runtime promotion (tag 5) and compound tags (object/resource/callable/reference-cell) share a
-/// generic `"...object given"` fallback rather than PHP's exact per-type wording — a scoped,
-/// documented simplification: this compiler's `array_unshift()` runtime helper only understands
-/// the flat indexed-array header layout, so a genuinely associative array reaching this dynamic
-/// path cannot be soundly mutated in place either way.
-fn emit_array_unshift_union_wrong_tag_dispatch(ctx: &mut FunctionContext<'_>, entry_label: &str) {
-    let int_label = ctx.next_label("array_unshift_union_te_int");
-    let string_label = ctx.next_label("array_unshift_union_te_string");
-    let float_label = ctx.next_label("array_unshift_union_te_float");
-    let bool_label = ctx.next_label("array_unshift_union_te_bool");
-    let true_label = ctx.next_label("array_unshift_union_te_true");
-    let false_label = ctx.next_label("array_unshift_union_te_false");
-    let null_label = ctx.next_label("array_unshift_union_te_null");
-    let generic_label = ctx.next_label("array_unshift_union_te_generic");
+/// in `__rt_mixed_unbox`'s own payload-lo register — both still untouched since the array-tag
+/// comparison) to throw a catchable `\TypeError` matching PHP's real
+/// `<fn_name>(): Argument #1 ($array) must be of type array, X given` wording. Shared by the
+/// `array_unshift` / `array_pop` / `array_shift` dynamic Mixed paths (`fn_name` selects the exact
+/// wording). php -n VERIFIED for the common scalar/null/bool cases: `array_pop(false)` →
+/// `"...false given"`, `array_pop(null)` → `"...null given"`, `array_pop("s")` →
+/// `"...string given"`. Compound tags (object/resource/callable/reference-cell) share a generic
+/// `"...object given"` fallback rather than PHP's exact per-type wording — a scoped, documented
+/// simplification. This wrong-tag path only fires when the runtime value behind a checker-accepted
+/// Mixed/union receiver is genuinely non-array-shaped.
+pub(super) fn emit_mixed_array_mutate_wrong_tag_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    entry_label: &str,
+    fn_name: &str,
+) {
+    let int_label = ctx.next_label("array_mutate_te_int");
+    let string_label = ctx.next_label("array_mutate_te_string");
+    let float_label = ctx.next_label("array_mutate_te_float");
+    let bool_label = ctx.next_label("array_mutate_te_bool");
+    let true_label = ctx.next_label("array_mutate_te_true");
+    let false_label = ctx.next_label("array_mutate_te_false");
+    let null_label = ctx.next_label("array_mutate_te_null");
+    let generic_label = ctx.next_label("array_mutate_te_generic");
 
     ctx.emitter.label(entry_label);
     match ctx.emitter.target.arch {
@@ -334,26 +337,28 @@ fn emit_array_unshift_union_wrong_tag_dispatch(ctx: &mut FunctionContext<'_>, en
         }
     }
 
-    emit_array_unshift_union_type_error_case(ctx, &int_label, "int");
-    emit_array_unshift_union_type_error_case(ctx, &string_label, "string");
-    emit_array_unshift_union_type_error_case(ctx, &float_label, "float");
-    emit_array_unshift_union_type_error_case(ctx, &true_label, "true");
-    emit_array_unshift_union_type_error_case(ctx, &false_label, "false");
-    emit_array_unshift_union_type_error_case(ctx, &null_label, "null");
-    emit_array_unshift_union_type_error_case(ctx, &generic_label, "object");
+    emit_mixed_array_mutate_type_error_case(ctx, &int_label, fn_name, "int");
+    emit_mixed_array_mutate_type_error_case(ctx, &string_label, fn_name, "string");
+    emit_mixed_array_mutate_type_error_case(ctx, &float_label, fn_name, "float");
+    emit_mixed_array_mutate_type_error_case(ctx, &true_label, fn_name, "true");
+    emit_mixed_array_mutate_type_error_case(ctx, &false_label, fn_name, "false");
+    emit_mixed_array_mutate_type_error_case(ctx, &null_label, fn_name, "null");
+    emit_mixed_array_mutate_type_error_case(ctx, &generic_label, fn_name, "object");
 }
 
-/// Emits one concrete `array_unshift()` wrong-tag branch: labels it, then throws a catchable
-/// `\TypeError` with PHP's exact message for `given_type`.
-fn emit_array_unshift_union_type_error_case(
+/// Emits one concrete by-reference array-mutator wrong-tag branch: labels it, then throws a
+/// catchable `\TypeError` with PHP's exact message for `fn_name` and `given_type` (shared by
+/// `array_unshift` / `array_pop` / `array_shift` dynamic Mixed paths).
+fn emit_mixed_array_mutate_type_error_case(
     ctx: &mut FunctionContext<'_>,
     case_label: &str,
+    fn_name: &str,
     given_type: &str,
 ) {
     ctx.emitter.label(case_label);
     let message = format!(
-        "array_unshift(): Argument #1 ($array) must be of type array, {} given",
-        given_type
+        "{}(): Argument #1 ($array) must be of type array, {} given",
+        fn_name, given_type
     );
     emit_throw_static_type_error(ctx, &message);
 }

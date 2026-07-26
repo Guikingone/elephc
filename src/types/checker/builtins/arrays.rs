@@ -71,6 +71,11 @@ pub(super) fn check_builtin(
             match ty {
                 PhpType::Array(elem_ty) => Ok(Some(*elem_ty)),
                 PhpType::AssocArray { value, .. } => Ok(Some(*value)),
+                // A Mixed / array-containing-union receiver is accepted under the gradual-typing
+                // boundary: codegen's dynamic path (`lower_array_pop_dynamic`) unboxes the runtime
+                // Mixed cell and mutates the caller's array in place, dispatching on the indexed
+                // vs associative runtime kind. Proven non-array scalars stay rejected.
+                _ if array_arg_is_gradually_acceptable(&ty) => Ok(Some(PhpType::Mixed)),
                 _ => Err(CompileError::new(span, "array_pop() argument must be array")),
             }
         }

@@ -400,6 +400,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_mixed_cast_string(emitter);
     arrays::emit_mixed_count(emitter);
     arrays::emit_end_boxed(emitter);
+    arrays::emit_mixed_box_raw(emitter);
+    arrays::emit_indexed_pop(emitter);
+    arrays::emit_hash_pop(emitter);
     arrays::emit_mixed_to_owned_hash(emitter);
     arrays::emit_mixed_free_deep(emitter);
     arrays::emit_mixed_is_empty(emitter);

@@ -101,6 +101,7 @@ mod decref_hash;
 mod decref_mixed;
 mod decref_object;
 mod end_boxed;
+mod mixed_pop_shift;
 mod mixed_array_or_fatal;
 mod mixed_array_payload_or_fatal;
 mod mixed_to_owned_hash;
@@ -354,6 +355,8 @@ pub use decref_mixed::emit_decref_mixed;
 /// Emit Mixed reference decrement helper.
 pub use end_boxed::emit_end_boxed;
 /// Emit the `end()` last-element helper for boxed Mixed arrays.
+pub use mixed_pop_shift::{emit_hash_pop, emit_indexed_pop, emit_mixed_box_raw};
+/// Emit the in-place `array_pop()` container helpers for a boxed Mixed / union receiver.
 pub use mixed_to_owned_hash::emit_mixed_to_owned_hash;
 /// Emit the gradual-boundary Mixed-array to owned-hash conversion helper.
 pub use hash_count::emit_hash_count;

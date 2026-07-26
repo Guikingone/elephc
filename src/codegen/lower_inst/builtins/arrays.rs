@@ -1367,6 +1367,12 @@ pub(crate) fn lower_range(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 pub(crate) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_pop", 1)?;
     let array = expect_operand(inst, 0)?;
+    // A checker-accepted Mixed / array-containing-union receiver arrives here as `PhpType::Mixed`
+    // (its runtime value is a boxed Mixed cell). Route it through the runtime-tag-dispatched
+    // in-place path instead of the compile-time-known indexed-array sequence below.
+    if matches!(ctx.value_php_type(array)?.codegen_repr(), PhpType::Mixed) {
+        return lower_array_pop_dynamic(ctx, inst, array);
+    }
     let elem_ty = array_pop_element_type(ctx.value_php_type(array)?)?;
     require_array_pop_result_type(&inst.result_php_type.codegen_repr())?;
     let source_local = source_load_local_slot(ctx, array)?;
@@ -1379,6 +1385,169 @@ pub(crate) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         Arch::X86_64 => lower_array_pop_x86_64(ctx, array, &elem_ty)?,
     }
     store_if_result(ctx, inst)
+}
+
+/// Lowers `array_pop($array)` when `$array` is a checker-accepted Mixed / array-union receiver.
+///
+/// The by-ref slot holds a boxed Mixed cell. This unboxes it, dispatches on the runtime array kind
+/// (tag 4 = indexed, tag 5 = associative hash), removes the LAST element IN PLACE via the
+/// kind-specific container helper (`__rt_indexed_pop` / `__rt_hash_pop`), reboxes the mutated
+/// container into a FRESH Mixed cell written back into the by-ref slot, and returns the removed
+/// element (boxed Mixed). Any non-array runtime tag throws a catchable `\TypeError` matching PHP.
+///
+/// Ownership mirrors `array_unshift`'s dynamic path: an unconditional `__rt_incref` on the unboxed
+/// container forces `__rt_*_ensure_unique` to copy-on-write split (so cell-shared aliases like
+/// `$b = $a;` stay intact); the synthetic reference is released with `__rt_decref_any` once the
+/// mutated container is safely rewrapped, and the original cell reference the by-ref slot held is
+/// released with `__rt_decref_mixed`.
+fn lower_array_pop_dynamic(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+) -> Result<()> {
+    require_array_pop_result_type(&inst.result_php_type.codegen_repr())?;
+    let source_local = source_load_local_slot(ctx, array)?;
+
+    ctx.load_value_to_result(array)?;                                          // load $array's current boxed Mixed cell pointer
+    let old_cell_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_reserve_temporary_stack(ctx.emitter, 48);                        // [sp+0]=container, [sp+16]=old cell, [sp+32]=new cell, [sp+40]=removed value
+    abi::emit_store_to_sp(ctx.emitter, old_cell_reg, 16);                      // preserve the old Mixed cell pointer across everything below
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                     // tag in result reg, payload lo/hi in the unbox pair
+
+    let indexed_label = ctx.next_label("array_pop_dyn_indexed");
+    let hash_label = ctx.next_label("array_pop_dyn_hash");
+    let wrong_tag_label = ctx.next_label("array_pop_dyn_wrong_tag");
+    let finish_label = ctx.next_label("array_pop_dyn_finish");
+    // `__rt_mixed_unbox` output: AArch64 tag=x0, payload_lo=x1; x86_64 tag=rax, payload_lo=rdi.
+    // The payload-lo register stays live until the kind branch consumes it (cmp/jump only touch flags).
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                            // tag 4 = indexed array?
+            ctx.emitter.instruction(&format!("b.eq {}", indexed_label));
+            ctx.emitter.instruction("cmp x0, #5");                            // tag 5 = associative hash?
+            ctx.emitter.instruction(&format!("b.eq {}", hash_label));
+            ctx.emitter.instruction(&format!("b {}", wrong_tag_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                            // tag 4 = indexed array?
+            ctx.emitter.instruction(&format!("je {}", indexed_label));
+            ctx.emitter.instruction("cmp rax, 5");                            // tag 5 = associative hash?
+            ctx.emitter.instruction(&format!("je {}", hash_label));
+            ctx.emitter.instruction(&format!("jmp {}", wrong_tag_label));
+        }
+    }
+    unshift::emit_mixed_array_mutate_wrong_tag_dispatch(ctx, &wrong_tag_label, "array_pop");
+
+    ctx.emitter.label(&indexed_label);
+    emit_array_pop_dyn_kind(ctx, "__rt_indexed_pop", 4, &finish_label);
+    ctx.emitter.label(&hash_label);
+    emit_array_pop_dyn_kind(ctx, "__rt_hash_pop", 5, &finish_label);
+
+    ctx.emitter.label(&finish_label);
+    // Publish the bound Mixed cell (the reused borrowed cell for the in-place case, or the fresh
+    // diverged cell for the shared-cell case) into the SSA value's home and the by-ref local slot.
+    // NOTE: the OLD Mixed cell is never released here — a Mixed / union parameter is a BORROW, so
+    // the CALLER owns the boxed argument cell and decrefs it after the call returns; releasing it
+    // here would double-free the caller's argument.
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 32);
+    ctx.store_result_value(array)?;
+    if let Some(slot) = source_local {
+        ctx.store_value_to_local(slot, array)?;
+    }
+    // Load the removed element (boxed Mixed) as the PHP-visible result.
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 40);
+    abi::emit_release_temporary_stack(ctx.emitter, 48);
+    store_if_result(ctx, inst)
+}
+
+/// Emits one runtime-kind branch of `array_pop`'s dynamic path.
+///
+/// Two sub-paths, chosen at runtime by the argument CELL's refcount:
+/// - Cell refcount == 1 (the common case: the boxed argument cell is not shared with a sibling
+///   PHP variable): call `container_helper` WITHOUT forcing a clone (it copy-on-write splits the
+///   container only if the underlying array is genuinely shared with a persistent holder), then
+///   rebind the SAME borrowed cell's payload to the mutated container in place. This is leak-free:
+///   the caller still owns and frees the (now-mutated) cell.
+/// - Cell refcount > 1 (the cell is aliased, e.g. `$b = $a;`): force a copy-on-write split and
+///   publish a FRESH diverged cell so the sibling keeps the original array. The fresh cell is not
+///   reclaimed until scope end (matching the pre-existing copy-on-write leak of the concrete
+///   `array_pop` path), but aliasing stays correct.
+///
+/// `container_helper` returns the unique container plus the removed boxed value; `rebox_tag`
+/// is 4 (indexed) or 5 (hash).
+fn emit_array_pop_dyn_kind(
+    ctx: &mut FunctionContext<'_>,
+    container_helper: &str,
+    rebox_tag: i64,
+    finish_label: &str,
+) {
+    let inplace_label = ctx.next_label("array_pop_dyn_inplace");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 16);      // x9 = old (borrowed) Mixed cell
+            ctx.emitter.instruction("ldr w10, [x9, #-12]");                  // w10 = cell refcount from the uniform heap header
+            ctx.emitter.instruction("cmp w10, #1");                          // is the argument cell unshared?
+            ctx.emitter.instruction(&format!("b.eq {}", inplace_label));     // reuse the borrowed cell in place when unshared
+            // -- shared cell: diverge into a fresh cell so the sibling variable keeps the original --
+            ctx.emitter.instruction("mov x0, x1");                           // move the unboxed container pointer into the incref argument register
+            abi::emit_call_label(ctx.emitter, "__rt_incref");               // synthetic extra owner forces the copy-on-write split below
+            abi::emit_call_label(ctx.emitter, container_helper);            // x0 = unique container, x1 = removed boxed value
+            abi::emit_store_to_sp(ctx.emitter, "x0", 0);                     // save the mutated container pointer
+            abi::emit_store_to_sp(ctx.emitter, "x1", 40);                    // save the removed boxed value
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);       // x1 = container pointer (mixed_from_value payload lo)
+            ctx.emitter.instruction("mov x2, xzr");                          // container payloads use only the low word
+            ctx.emitter.instruction(&format!("mov x0, #{}", rebox_tag));     // runtime array tag for the reboxed cell
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");      // retain the container into a brand-new boxed cell
+            abi::emit_store_to_sp(ctx.emitter, "x0", 32);                    // publish the fresh diverged cell
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);       // reload the container for the synthetic release
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");           // drop the synthetic owner; the fresh cell now owns the container
+            ctx.emitter.instruction(&format!("b {}", finish_label));
+            // -- unshared cell: mutate the container and rebind the borrowed cell's payload in place --
+            ctx.emitter.label(&inplace_label);
+            ctx.emitter.instruction("mov x0, x1");                           // move the unboxed container pointer into the helper argument register
+            abi::emit_call_label(ctx.emitter, container_helper);            // x0 = unique container, x1 = removed boxed value (no forced clone)
+            abi::emit_store_to_sp(ctx.emitter, "x1", 40);                    // save the removed boxed value
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 16);      // x9 = the borrowed cell to rebind
+            ctx.emitter.instruction("str x0, [x9, #8]");                     // cell payload low word = mutated container
+            ctx.emitter.instruction("str xzr, [x9, #16]");                   // container payloads leave the high word clear
+            ctx.emitter.instruction(&format!("mov x11, #{}", rebox_tag));    // normalize the cell tag to the container kind
+            ctx.emitter.instruction("str x11, [x9]");                        // stamp the runtime tag in the reused cell
+            abi::emit_store_to_sp(ctx.emitter, "x9", 32);                    // publish the reused (in-place mutated) cell
+            ctx.emitter.instruction(&format!("b {}", finish_label));
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r9", 16);      // r9 = old (borrowed) Mixed cell
+            ctx.emitter.instruction("mov ecx, DWORD PTR [r9 - 12]");         // ecx = cell refcount from the uniform heap header
+            ctx.emitter.instruction("cmp ecx, 1");                           // is the argument cell unshared?
+            ctx.emitter.instruction(&format!("je {}", inplace_label));       // reuse the borrowed cell in place when unshared
+            // -- shared cell: diverge into a fresh cell so the sibling variable keeps the original --
+            ctx.emitter.instruction("mov rax, rdi");                         // move the unboxed container pointer into the incref argument register
+            abi::emit_call_label(ctx.emitter, "__rt_incref");               // synthetic extra owner forces the copy-on-write split below
+            ctx.emitter.instruction("mov rdi, rax");                         // pass the container pointer to the kind-specific helper
+            abi::emit_call_label(ctx.emitter, container_helper);            // rax = unique container, rdx = removed boxed value
+            abi::emit_store_to_sp(ctx.emitter, "rax", 0);                    // save the mutated container pointer
+            abi::emit_store_to_sp(ctx.emitter, "rdx", 40);                   // save the removed boxed value
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);      // rdi = container pointer (mixed_from_value payload lo)
+            ctx.emitter.instruction("xor rsi, rsi");                         // container payloads use only the low word
+            ctx.emitter.instruction(&format!("mov rax, {}", rebox_tag));     // runtime array tag for the reboxed cell
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");      // retain the container into a brand-new boxed cell
+            abi::emit_store_to_sp(ctx.emitter, "rax", 32);                   // publish the fresh diverged cell
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 0);      // reload the container for the synthetic release
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");           // drop the synthetic owner; the fresh cell now owns the container
+            ctx.emitter.instruction(&format!("jmp {}", finish_label));
+            // -- unshared cell: mutate the container and rebind the borrowed cell's payload in place --
+            ctx.emitter.label(&inplace_label);
+            ctx.emitter.instruction("mov rdi, rdi");                         // the unboxed container pointer is already the helper argument
+            abi::emit_call_label(ctx.emitter, container_helper);            // rax = unique container, rdx = removed boxed value (no forced clone)
+            abi::emit_store_to_sp(ctx.emitter, "rdx", 40);                   // save the removed boxed value
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r9", 16);      // r9 = the borrowed cell to rebind
+            ctx.emitter.instruction("mov QWORD PTR [r9 + 8], rax");          // cell payload low word = mutated container
+            ctx.emitter.instruction("mov QWORD PTR [r9 + 16], 0");           // container payloads leave the high word clear
+            ctx.emitter.instruction(&format!("mov QWORD PTR [r9], {}", rebox_tag)); // stamp the runtime tag in the reused cell
+            abi::emit_store_to_sp(ctx.emitter, "r9", 32);                    // publish the reused (in-place mutated) cell
+            ctx.emitter.instruction(&format!("jmp {}", finish_label));
+        }
+    }
 }
 
 /// Lowers `array_shift()` for indexed arrays by compacting slots and boxing `T|null` as Mixed.

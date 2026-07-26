@@ -45,12 +45,18 @@ fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
 ///
 /// The `array` argument is re-inferred to drive the return type. Arity (exactly 1) is
 /// pre-validated by the registry. `Array(elem)` yields the element type; `AssocArray`
-/// yields the value type; any other type is a compile error.
+/// yields the value type; a Mixed / array-containing-union receiver is accepted under the
+/// gradual-typing boundary and yields `Mixed` (codegen's `lower_array_pop_dynamic` unboxes the
+/// runtime Mixed cell and mutates the caller's array in place, dispatching on the indexed vs
+/// associative runtime kind); any proven non-array type is a compile error.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     match ty {
         PhpType::Array(elem) => Ok(*elem),
         PhpType::AssocArray { value, .. } => Ok(*value),
+        _ if crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&ty) => {
+            Ok(PhpType::Mixed)
+        }
         _ => Err(CompileError::new(cx.span, "array_pop() argument must be array")),
     }
 }
