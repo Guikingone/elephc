@@ -1687,9 +1687,14 @@ echo "|";
 print_r($map["n"]);
 echo "]";
 "#;
+    // The nested `["a"]` slot dumps its elements: `var_dump` recurses into nested
+    // arrays, so this pins the recursive body rather than the empty `array(2) {\n}`
+    // shell it reported before. Verified byte-for-byte against reference PHP 8.5.6
+    // (`php -d xdebug.mode=off`), which prints the same two elements.
     assert_eq!(
         compile_and_run_ir_backend("mixed_assoc_array_slots", source),
-        "int(42)\nstring(5) \"hello\"\nbool(true)\nNULL\narray(2) {\n}\n[hello|]"
+        "int(42)\nstring(5) \"hello\"\nbool(true)\nNULL\n\
+         array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n[hello|]"
     );
 }
 
