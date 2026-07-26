@@ -1053,15 +1053,34 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && matches!(php_type.codegen_repr(), PhpType::Callable);
         let transfer_source_to_store =
             transfer_callable_source_to_store || transfer_catch_source_to_store;
+        // A `static` local outlives the frame, so a store into one must take its OWN
+        // reference. The backend's `lower_store_static_local` already does that via
+        // `emit_incref_if_refcounted`, but `PhpType::is_refcounted()` does NOT list
+        // `PhpType::Str` — so that incref is a silent no-op for STRINGS specifically, while
+        // `release_source_after_store` below still fires. `static $s = ""; $s = f($x);`
+        // therefore stored the callee's buffer and then freed it, leaving the static
+        // pointing at freed memory that rendered as whatever the allocator handed out next.
+        //
+        // Retain here for the string case ONLY. Widening this to every static would
+        // DOUBLE-count Mixed/Array/Object statics, which the backend already increfs
+        // (`static $n = 0; $n = $n + 1;` widens to Mixed through `ichecked_add` and
+        // regressed `test_http_response_path_leaves_no_live_heap_blocks` that way).
+        // The paired release of the PREVIOUS occupant is emitted below.
+        let static_local_store_needs_string_retain = previous_kind == LocalKind::StaticLocal
+            && matches!(
+                self.builder.value_php_type(value.value).codegen_repr(),
+                PhpType::Str
+            );
+        let store_retains_value = uses_global
+            || previous_kind == LocalKind::PhpLocal
+            || static_local_store_needs_string_retain;
         // Retain before cleanup because a borrowed result can alias the old slot.
-        let value = if (uses_global || previous_kind == LocalKind::PhpLocal)
+        let value = if store_retains_value
             && !transfer_source_to_store
             && !self.is_ref_bound_local(name)
         {
             crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
-        } else if (uses_global || previous_kind == LocalKind::PhpLocal)
-            && !transfer_source_to_store
-        {
+        } else if store_retains_value && !transfer_source_to_store {
             // For ref-bound locals, acquire only when NOT narrowing Mixed→Int.
             // When the source is Mixed and the ref cell's previous type is Int,
             // the ref cell store narrows via __rt_mixed_cast_int, consuming the
@@ -1108,6 +1127,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && !self.loop_stack.is_empty()
         {
             self.release_stored_local_value_before_overwrite(name, slot, span);
+        }
+        // Pairs the string-only retain above. A `static` local is live from
+        // `init_static_local` onwards and survives every return, so a reassignment always
+        // overwrites a real occupant — releasing it here is what keeps the new reference
+        // from turning into a leak that grows by one buffer per call. The initializer of a
+        // string static is a `const_str` with persistent ownership, so the first call's
+        // release is a no-op that the backend filters out.
+        //
+        // This deliberately calls `release_stored_local_value` rather than the
+        // `..._before_overwrite` variant: the latter falls back to `Op::ReleaseLocalSlot`
+        // for storage types that are not lifetime-tracked, and that op addresses a FRAME
+        // slot, whereas a static local's value lives in a global symbol.
+        if static_local_store_needs_string_retain && !uses_global && !self.is_ref_bound_local(name) {
+            self.release_stored_local_value(name, slot, span);
         }
         if uses_global {
             self.store_global_name(name, slot, value, span);

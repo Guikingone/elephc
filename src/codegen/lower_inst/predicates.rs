@@ -111,7 +111,20 @@ pub(super) fn emit_is_null_result(ctx: &mut FunctionContext<'_>, value: ValueId)
             emit_tagged_scalar_null_bool(ctx);
             Ok(())
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable => {
+        // Bool-typed slots carry the in-band null sentinel even under `--null-repr=tagged`:
+        // `array_access_element_result_type` only widens *Int* element reads to the
+        // null-capable `TaggedScalar`, so a missed read of a `bool`/`false` element still
+        // returns the raw `NULL_SENTINEL` word. Answering "never null" for those (as the
+        // tagged shortcut below does for Int) made `$a[$k] ?? false` take the *value* branch
+        // on a miss and leak the sentinel — rendering as `true` (or as the literal
+        // 9223372036854775806 in string context). A genuine bool is only ever 0 or 1, so the
+        // sentinel comparison is exact here and never misfires on a real value.
+        PhpType::Bool | PhpType::False => {
+            ctx.load_value_to_result(value)?;
+            emit_int_result_null_sentinel_bool(ctx);
+            Ok(())
+        }
+        PhpType::Int | PhpType::Callable => {
             if crate::codegen::sentinels::null_repr_is_tagged() {
                 abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
                 return Ok(());
