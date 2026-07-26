@@ -130,7 +130,15 @@ fn test_error_putenv_wrong_args() {
 /// Verifies that `phpversion()` with any arguments yields a no-args diagnostic.
 #[test]
 fn test_error_phpversion_wrong_args() {
-    expect_error("<?php phpversion(1);", "phpversion() takes no arguments");
+    // `phpversion()` takes an optional `?string $extension`, so a non-string argument is
+    // now a TYPE diagnostic rather than an arity one. Documented divergence, shared with
+    // `extension_loaded()`: reference PHP coerces `phpversion(1)` to the string `"1"` and
+    // returns `false` for the unknown extension, while elephc rejects it because the
+    // lowering has no runtime int-to-string conversion on that path.
+    expect_error(
+        "<?php phpversion(1);",
+        "phpversion() extension argument must be string",
+    );
 }
 
 /// Verifies that `php_uname()` with two arguments yields a wrong-args diagnostic.
