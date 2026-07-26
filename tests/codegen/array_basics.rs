@@ -624,6 +624,70 @@ fn test_array_pop_mixed_non_array_throws_type_error() {
     );
 }
 
+/// Verifies `array_shift()` on a Mixed receiver removes the FIRST element of the caller's INDEXED
+/// array in place and reindexes the remaining integer keys from zero (runtime-tag dynamic path,
+/// tag 4 = indexed).
+#[test]
+fn test_array_shift_mixed_indexed() {
+    let out = compile_and_run(
+        "<?php function f(mixed $a){ $x = array_shift($a); return $x . \"|\" . implode(\",\", $a); } echo f([1, 2, 3]);",
+    );
+    assert_eq!(out, "1|2,3");
+}
+
+/// Verifies `array_shift()` on a Mixed receiver whose runtime value is an ASSOCIATIVE hash removes
+/// the insertion-order head entry and renumbers surviving integer keys `0,1,…` while preserving
+/// string keys (tag 5 = hash rebuild path).
+#[test]
+fn test_array_shift_mixed_assoc_renumbers() {
+    let out = compile_and_run(
+        "<?php function f(mixed $a){ $x = array_shift($a); return $x . \"|\" . json_encode($a); } echo f(['x' => 1, 5 => 2, 'y' => 3, 10 => 4]);",
+    );
+    assert_eq!(out, "1|{\"0\":2,\"y\":3,\"1\":4}");
+}
+
+/// Verifies copy-on-write: shifting a Mixed receiver that aliases a sibling variable (`$b = $a;`)
+/// must not corrupt the alias — the sibling keeps the original array.
+#[test]
+fn test_array_shift_mixed_cow_alias() {
+    let out = compile_and_run(
+        "<?php function f(mixed $a){ $b = $a; $x = array_shift($a); return $x . \"|\" . json_encode($a) . \"|\" . json_encode($b); } echo f([10, 20, 30]);",
+    );
+    assert_eq!(out, "10|[20,30]|[10,20,30]");
+}
+
+/// Verifies a Mixed receiver holding a string-valued indexed array shifts the first string and
+/// slides the 16-byte string slots one position toward the front.
+#[test]
+fn test_array_shift_mixed_string_indexed() {
+    let out = compile_and_run(
+        "<?php function f(mixed $a){ $x = array_shift($a); return $x . \"|\" . implode(\",\", $a); } echo f(['aa', 'bb', 'cc']);",
+    );
+    assert_eq!(out, "aa|bb,cc");
+}
+
+/// Verifies `array_shift()` on an empty Mixed array returns null and leaves the array empty.
+#[test]
+fn test_array_shift_mixed_empty() {
+    let out = compile_and_run(
+        "<?php function f(mixed $a){ $x = array_shift($a); return var_export($x, true) . \"|\" . count($a); } echo f([]);",
+    );
+    assert_eq!(out, "NULL|0");
+}
+
+/// Verifies a non-array runtime value behind a checker-accepted Mixed receiver throws PHP's exact
+/// catchable `\TypeError` from `array_shift()`.
+#[test]
+fn test_array_shift_mixed_non_array_throws_type_error() {
+    let out = compile_and_run(
+        "<?php function f(mixed $a){ try { array_shift($a); } catch (\\TypeError $e) { echo $e->getMessage(); } } f(42);",
+    );
+    assert_eq!(
+        out,
+        "array_shift(): Argument #1 ($array) must be of type array, int given"
+    );
+}
+
 /// Verifies in array found.
 #[test]
 fn test_in_array_found() {

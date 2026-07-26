@@ -1550,8 +1550,81 @@ fn emit_array_pop_dyn_kind(
     }
 }
 
-/// Lowers `array_shift()` for indexed arrays by compacting slots and boxing `T|null` as Mixed.
+/// Lowers `array_shift($array)` when `$array` is a checker-accepted Mixed / array-union receiver.
+///
+/// Byte-for-byte the same runtime-tag-dispatched, borrow/copy-on-write/writeback recipe as
+/// `lower_array_pop_dynamic` (it reuses `emit_array_pop_dyn_kind` and the shared wrong-tag
+/// dispatch), but routes each runtime array kind to the FIRST-element removers
+/// (`__rt_indexed_shift` / `__rt_hash_shift`) instead of the last-element `array_pop` helpers.
+/// Those helpers additionally reindex integer keys (indexed arrays compact toward the front;
+/// hashes are rebuilt so surviving integer keys renumber `0,1,2,…` while string keys persist),
+/// matching PHP `array_shift()`. The Mixed cell is a BORROW (caller owns/frees it), so the old
+/// cell is never released here — identical ownership to the pop dynamic path.
+fn lower_array_shift_dynamic(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+) -> Result<()> {
+    require_array_pop_result_type(&inst.result_php_type.codegen_repr())?;
+    let source_local = source_load_local_slot(ctx, array)?;
+
+    ctx.load_value_to_result(array)?;                                          // load $array's current boxed Mixed cell pointer
+    let old_cell_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_reserve_temporary_stack(ctx.emitter, 48);                        // [sp+0]=container, [sp+16]=old cell, [sp+32]=new cell, [sp+40]=removed value
+    abi::emit_store_to_sp(ctx.emitter, old_cell_reg, 16);                      // preserve the old Mixed cell pointer across everything below
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                     // tag in result reg, payload lo/hi in the unbox pair
+
+    let indexed_label = ctx.next_label("array_shift_dyn_indexed");
+    let hash_label = ctx.next_label("array_shift_dyn_hash");
+    let wrong_tag_label = ctx.next_label("array_shift_dyn_wrong_tag");
+    let finish_label = ctx.next_label("array_shift_dyn_finish");
+    // `__rt_mixed_unbox` output: AArch64 tag=x0, payload_lo=x1; x86_64 tag=rax, payload_lo=rdi.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                            // tag 4 = indexed array?
+            ctx.emitter.instruction(&format!("b.eq {}", indexed_label));
+            ctx.emitter.instruction("cmp x0, #5");                            // tag 5 = associative hash?
+            ctx.emitter.instruction(&format!("b.eq {}", hash_label));
+            ctx.emitter.instruction(&format!("b {}", wrong_tag_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                            // tag 4 = indexed array?
+            ctx.emitter.instruction(&format!("je {}", indexed_label));
+            ctx.emitter.instruction("cmp rax, 5");                            // tag 5 = associative hash?
+            ctx.emitter.instruction(&format!("je {}", hash_label));
+            ctx.emitter.instruction(&format!("jmp {}", wrong_tag_label));
+        }
+    }
+    unshift::emit_mixed_array_mutate_wrong_tag_dispatch(ctx, &wrong_tag_label, "array_shift");
+
+    ctx.emitter.label(&indexed_label);
+    emit_array_pop_dyn_kind(ctx, "__rt_indexed_shift", 4, &finish_label);
+    ctx.emitter.label(&hash_label);
+    emit_array_pop_dyn_kind(ctx, "__rt_hash_shift", 5, &finish_label);
+
+    ctx.emitter.label(&finish_label);
+    // Publish the bound Mixed cell (reused borrowed cell in place, or fresh diverged cell) into
+    // the SSA value's home and the by-ref local slot. The OLD Mixed cell is a BORROW — the caller
+    // owns and frees it — so it is never released here.
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 32);
+    ctx.store_result_value(array)?;
+    if let Some(slot) = source_local {
+        ctx.store_value_to_local(slot, array)?;
+    }
+    // Load the removed element (boxed Mixed) as the PHP-visible result.
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 40);
+    abi::emit_release_temporary_stack(ctx.emitter, 48);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `array_shift()`, dispatching a checker-accepted Mixed / array-union receiver to the
+/// runtime-tag in-place path and a compile-time-known indexed array to the concrete sequence.
 pub(crate) fn lower_array_shift(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "array_shift", 1)?;
+    let array = expect_operand(inst, 0)?;
+    if matches!(ctx.value_php_type(array)?.codegen_repr(), PhpType::Mixed) {
+        return lower_array_shift_dynamic(ctx, inst, array);
+    }
     shift::lower_array_shift(ctx, inst)
 }
 
