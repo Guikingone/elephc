@@ -37,6 +37,17 @@ builtin! {
 /// Arity (exactly 2 args) is pre-validated by `check_arity`. Both arguments are inferred
 /// to produce any side effects; the first must be an indexed or associative array or the
 /// call is rejected. Returns `Int` — the new element count.
+///
+/// Gradual-typing note: this hook intentionally stays STRICT (concrete array only). Relaxing it
+/// to accept a `Mixed`/union receiver was investigated and rejected as unsafe — the EIR dynamic
+/// path (`crate::codegen::lower_inst::builtins::arrays::unshift::lower_array_unshift_dynamic`)
+/// (a) supports only `Int`/`Bool` prepended values (an array/`Mixed` value — as in Symfony's
+/// `ContainerBuilder::prependExtensionConfig`'s `array_unshift($this->extensionConfigs[$name],
+/// $config)` — hits an unsupported EIR backend error, producing no binary), and (b) corrupts the
+/// refcount when the receiver is a direct function parameter (proven `bad refcount` under
+/// `--heap-debug`). Accepting the receiver would move the diagnostic from the counted checker
+/// phase to the uncounted backend phase without producing working code (a false-green), so the
+/// gap is kept loud pending a value-generalized, ownership-correct dynamic path.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     cx.checker.infer_type(&cx.args[1], cx.env)?;
