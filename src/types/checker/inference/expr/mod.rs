@@ -20,7 +20,7 @@ mod class_refs;
 mod effects;
 mod static_closure;
 use super::super::Checker;
-use super::syntactic::wider_type_syntactic;
+use super::syntactic::null_coalesce_merge_type;
 use static_closure::body_must_not_use_this;
 pub(crate) use static_closure::closure_body_uses_this;
 impl Checker {
@@ -428,9 +428,12 @@ impl Checker {
                 let vt = self.infer_type(value, env)?;
                 let dt = self.infer_type(default, env)?;
                 if Self::union_contains_void(&vt) {
-                    Ok(wider_type_syntactic(&self.strip_void_from_union(&vt), &dt))
+                    Ok(null_coalesce_merge_type(
+                        &self.strip_void_from_union(&vt),
+                        &dt,
+                    ))
                 } else {
-                    Ok(wider_type_syntactic(&vt, &dt))
+                    Ok(null_coalesce_merge_type(&vt, &dt))
                 }
             }
             ExprKind::Pipe { value, callable } => {

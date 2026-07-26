@@ -150,6 +150,55 @@ pub(crate) fn wider_type_syntactic(a: &PhpType, b: &PhpType) -> PhpType {
     a.clone()
 }
 
+/// Computes the result type of PHP's `??` / `??=` merge.
+///
+/// `??` performs **no coercion**: it yields the left operand verbatim when that operand is set
+/// and non-null, otherwise the right operand verbatim. Folding the two arms with the general
+/// [`wider_type_syntactic`] heuristic is therefore wrong here — that helper implements PHP's
+/// *coercion* order, in which `Str` absorbs the other arm. Under it `["a" => true]["a"] ?? "M"`
+/// typed as `string`, so the boolean hit came back stringified as `"1"`; the same collapse hit
+/// `int`, `float`, `array` and `mixed` element reads. When the two arms are not the same type
+/// the only honest static answer is `Mixed`, which is exactly what the IR-level merge
+/// (`wider_type_for_merge` in `src/ir_lower/expr/mod.rs`) already materializes — this makes the
+/// checker agree with the code that is actually emitted instead of relabelling one arm.
+///
+/// Containers merge element-wise rather than collapsing to `Mixed` so the pervasive
+/// `$arr ?? []` idiom keeps its element type (an empty literal is `Array(Never)`).
+///
+/// This is deliberately a dedicated helper and not a change to [`wider_type_syntactic`]: that
+/// one is shared with closure return widening, match/ternary joins and array-element widening,
+/// where PHP's coercion order is the right answer.
+pub(crate) fn null_coalesce_merge_type(value_ty: &PhpType, default_ty: &PhpType) -> PhpType {
+    if value_ty == default_ty {
+        return value_ty.clone();
+    }
+    if matches!(value_ty, PhpType::Never | PhpType::Void) {
+        return default_ty.clone();
+    }
+    if matches!(default_ty, PhpType::Never | PhpType::Void) {
+        return value_ty.clone();
+    }
+    if matches!(
+        (value_ty, default_ty),
+        (PhpType::Bool, PhpType::False) | (PhpType::False, PhpType::Bool)
+    ) {
+        return PhpType::Bool;
+    }
+    match (value_ty, default_ty) {
+        (PhpType::Array(left), PhpType::Array(right)) => {
+            PhpType::Array(Box::new(null_coalesce_merge_type(left, right)))
+        }
+        (
+            PhpType::AssocArray { key: left_key, value: left_value },
+            PhpType::AssocArray { key: right_key, value: right_value },
+        ) => PhpType::AssocArray {
+            key: Box::new(merge_array_key_types(*left_key.clone(), *right_key.clone())),
+            value: Box::new(null_coalesce_merge_type(left_value, right_value)),
+        },
+        _ => PhpType::Mixed,
+    }
+}
+
 /// Computes the union of two array types when one operand is an empty indexed array literal.
 ///
 /// Returns `Some(PhpType)` when a + b can be expressed as a single type (identical arrays,
@@ -296,7 +345,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         ExprKind::NullCoalesce { value, default } => {
             let left_ty = infer_expr_type_syntactic(value);
             let right_ty = infer_expr_type_syntactic(default);
-            wider_type_syntactic(&left_ty, &right_ty)
+            null_coalesce_merge_type(&left_ty, &right_ty)
         }
         ExprKind::ErrorSuppress(inner) => infer_expr_type_syntactic(inner),
         ExprKind::Print(_) => PhpType::Int,

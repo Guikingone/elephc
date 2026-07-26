@@ -2565,7 +2565,9 @@ fn lower_object_prop_get_with_null_guard(
     if inst.op != Op::NullsafePropGet {
         emit_property_on_null_warning(ctx, property);
     }
-    super::arrays::emit_array_get_null_fallback(ctx, &inst.result_php_type.codegen_repr());
+    // Property reads keep the legacy zero-float miss shape: their null result is never
+    // re-tested for null the way a silent `??` element read is.
+    super::arrays::emit_array_get_null_fallback(ctx, &inst.result_php_type.codegen_repr(), false);
     store_if_result(ctx, inst)?;
 
     ctx.emitter.label(&done_label);
@@ -3335,7 +3337,9 @@ fn lower_object_dynamic_prop_get_with_null_guard(
 
     ctx.emitter.label(&null_label);
     emit_dynamic_property_on_null_warning(ctx, property_value)?;
-    super::arrays::emit_array_get_null_fallback(ctx, &inst.result_php_type.codegen_repr());
+    // Property reads keep the legacy zero-float miss shape: their null result is never
+    // re-tested for null the way a silent `??` element read is.
+    super::arrays::emit_array_get_null_fallback(ctx, &inst.result_php_type.codegen_repr(), false);
     store_if_result(ctx, inst)?;
 
     ctx.emitter.label(&done_label);

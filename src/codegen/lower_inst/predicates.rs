@@ -124,6 +124,20 @@ pub(super) fn emit_is_null_result(ctx: &mut FunctionContext<'_>, value: ValueId)
             emit_int_result_null_sentinel_bool(ctx);
             Ok(())
         }
+        // Float-typed slots have no tagged representation either, so a silent miss on a
+        // `float` element marks itself with the in-band `NULL_SENTINEL` word reinterpreted as
+        // a quiet NaN (`emit_float_null_sentinel`). Answering a constant "never null" here —
+        // which the catch-all arm below used to do — made `$a[$k] ?? $d` take the *value*
+        // branch on a miss and hand the caller `0` instead of the default. The comparison is
+        // on raw bits, not a float compare: `fcmp`/`ucomisd` report a NaN as *unordered*, and
+        // the sentinel payload differs from the `NAN` a PHP program can store, so a genuine
+        // stored `NAN` element is never mistaken for a miss.
+        PhpType::Float => {
+            ctx.load_value_to_result(value)?;
+            crate::codegen::sentinels::emit_float_result_bits_to_int_result(ctx.emitter);
+            emit_int_result_null_sentinel_bool(ctx);
+            Ok(())
+        }
         PhpType::Int | PhpType::Callable => {
             if crate::codegen::sentinels::null_repr_is_tagged() {
                 abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);

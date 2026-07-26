@@ -1485,16 +1485,16 @@ fn lower_empty(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> 
     ensure_arg_count(inst, "empty", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.raw_value_php_type(value)? {
-        PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Pointer(_) => {
+        PhpType::Int | PhpType::Pointer(_) => {
             ctx.load_value_to_result(value)?;
             emit_int_result_zero_bool(ctx);
         }
+        // Sentinel-marked slots; see `emit_sentinel_null_or_zero_empty_bool`.
+        ty @ (PhpType::Bool | PhpType::False | PhpType::Float) => {
+            emit_sentinel_null_or_zero_empty_bool(ctx, value, ty == PhpType::Float)?;
+        }
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
-        }
-        PhpType::Float => {
-            ctx.load_value_to_result(value)?;
-            emit_float_result_zero_bool(ctx);
         }
         PhpType::Str => {
             ctx.load_value_to_result(value)?;
@@ -1522,6 +1522,60 @@ fn lower_empty(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> 
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Emits `empty()` for an unboxed scalar slot whose miss marker is the in-band
+/// `NULL_SENTINEL`: true when the payload carries the sentinel (PHP null is empty), otherwise
+/// the ordinary zero test for the slot's own type.
+///
+/// `bool` and `float` element slots have no tagged representation, so a silent missed read
+/// leaves the sentinel word behind (`emit_float_null_sentinel` for floats). Testing the
+/// payload alone answered `false` for a missing `bool` element — the sentinel is a non-zero
+/// integer — and would answer `false` for a missing `float` element too, since its marker is a
+/// NaN rather than `0.0`. A genuine `bool` is only ever 0 or 1 and the float marker's bit
+/// pattern is unreachable by arithmetic, so neither check misfires on a real value.
+///
+/// `is_float` selects where the payload lives: the float result register (compared on raw
+/// bits, because a float compare reports the sentinel NaN as unordered rather than equal) or
+/// the integer result register.
+fn emit_sentinel_null_or_zero_empty_bool(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+    is_float: bool,
+) -> Result<()> {
+    let empty_label = ctx.next_label("empty_sentinel_true");
+    let done_label = ctx.next_label("empty_sentinel_done");
+    ctx.load_value_to_result(value)?;
+    if is_float {
+        crate::codegen::sentinels::emit_float_result_bits_to_int_result(ctx.emitter);
+    }
+    let sentinel_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, sentinel_reg, crate::codegen::NULL_SENTINEL);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", result_reg, sentinel_reg)); // does the scalar payload carry the in-band null sentinel?
+            ctx.emitter
+                .instruction(&format!("b.eq {}", empty_label));                 // PHP null is empty()
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", result_reg, sentinel_reg)); // does the scalar payload carry the in-band null sentinel?
+            ctx.emitter
+                .instruction(&format!("je {}", empty_label));                   // PHP null is empty()
+        }
+    }
+    if is_float {
+        emit_float_result_zero_bool(ctx);
+    } else {
+        emit_int_result_zero_bool(ctx);
+    }
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&empty_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    ctx.emitter.label(&done_label);
+    Ok(())
 }
 
 /// Emits true for a tagged scalar that is null or an integer zero.
