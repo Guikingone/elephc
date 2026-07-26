@@ -34,29 +34,34 @@ builtin! {
 ///
 /// The key type is derived from the keys-array element type via
 /// `array_key_type_from_value_type`, and the value type is the values-array element
-/// type. Both arguments must be indexed arrays. They are re-inferred here to drive the
-/// return type; the registry already inferred them once for side effects, and arity
-/// (exactly 2) is pre-validated by the registry.
+/// type. A concrete `Array(elem)` operand yields its element type; a Mixed /
+/// array-containing-union operand is accepted under the gradual-typing boundary and
+/// contributes `Mixed` (codegen's `lower_array_combine` routes such calls through the
+/// runtime-tag `__rt_array_combine_mixed` helper, which normalizes both operands to hashes
+/// and pairs their values positionally). A concretely non-array operand is rejected so
+/// genuine type errors keep being reported.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let keys_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let vals_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
+    if !crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&keys_ty) {
+        return Err(CompileError::new(
+            cx.span,
+            "array_combine() first argument must be array",
+        ));
+    }
+    if !crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&vals_ty) {
+        return Err(CompileError::new(
+            cx.span,
+            "array_combine() second argument must be array",
+        ));
+    }
     let key_elem = match keys_ty {
         PhpType::Array(elem) => *elem,
-        _ => {
-            return Err(CompileError::new(
-                cx.span,
-                "array_combine() first argument must be array",
-            ));
-        }
+        _ => PhpType::Mixed,
     };
     let val_elem = match vals_ty {
         PhpType::Array(elem) => *elem,
-        _ => {
-            return Err(CompileError::new(
-                cx.span,
-                "array_combine() second argument must be array",
-            ));
-        }
+        _ => PhpType::Mixed,
     };
     Ok(PhpType::AssocArray {
         key: Box::new(array_key_type_from_value_type(key_elem)),

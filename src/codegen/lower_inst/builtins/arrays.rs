@@ -158,17 +158,151 @@ pub(crate) fn lower_array_fill_keys(
 }
 
 /// Lowers `array_combine()` through the hash-building runtime helpers.
+///
+/// When both operands are concrete indexed arrays with the strict string-key / scalar-value
+/// slot layout the legacy `__rt_array_combine` helper expects, the fast concrete sequence is
+/// used. Any checker-accepted Mixed / array-union operand (the Symfony gradual-typing sites)
+/// routes through `lower_array_combine_mixed`, which boxes both operands and calls the
+/// runtime-tag `__rt_array_combine_mixed` helper.
 pub(crate) fn lower_array_combine(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_combine", 2)?;
     let keys = expect_operand(inst, 0)?;
     let values = expect_operand(inst, 1)?;
-    let key_elem_ty = array_combine_key_element_type(ctx.value_php_type(keys)?)?;
-    let value_elem_ty = array_combine_value_element_type(ctx.value_php_type(values)?)?;
-    require_array_combine_key_layout(&key_elem_ty)?;
-    require_array_combine_value_layout(&value_elem_ty)?;
-    require_array_combine_result_type(&value_elem_ty, &inst.result_php_type.codegen_repr())?;
-    lower_array_combine_call(ctx, keys, values, &value_elem_ty)?;
+    let keys_ty = ctx.value_php_type(keys)?;
+    let values_ty = ctx.value_php_type(values)?;
+    let result_ty = inst.result_php_type.codegen_repr();
+    if array_combine_strict_applicable(&keys_ty, &values_ty, &result_ty) {
+        let key_elem_ty = array_combine_key_element_type(keys_ty)?;
+        let value_elem_ty = array_combine_value_element_type(values_ty)?;
+        require_array_combine_key_layout(&key_elem_ty)?;
+        require_array_combine_value_layout(&value_elem_ty)?;
+        require_array_combine_result_type(&value_elem_ty, &result_ty)?;
+        lower_array_combine_call(ctx, keys, values, &value_elem_ty)?;
+        return store_if_result(ctx, inst);
+    }
+    lower_array_combine_mixed(ctx, inst, keys, values)
+}
+
+/// Returns true when both `array_combine()` operands match the strict concrete-array slot layout
+/// backed by the legacy `__rt_array_combine` helper (string-key indexed keys array, scalar/
+/// refcounted-slot values array, and a matching `AssocArray` result type). Any other shape —
+/// notably a Mixed / array-union operand — must use the gradual `__rt_array_combine_mixed` path.
+fn array_combine_strict_applicable(keys_ty: &PhpType, values_ty: &PhpType, result_ty: &PhpType) -> bool {
+    let key_elem = match keys_ty.codegen_repr() {
+        PhpType::Array(elem) => elem.codegen_repr(),
+        _ => return false,
+    };
+    if !matches!(key_elem, PhpType::Str | PhpType::Void | PhpType::Never) {
+        return false;
+    }
+    let value_elem = match values_ty.codegen_repr() {
+        PhpType::Array(elem) => elem.codegen_repr(),
+        _ => return false,
+    };
+    let value_ok = matches!(
+        value_elem,
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Callable
+            | PhpType::Void
+            | PhpType::Never
+    ) || value_elem.is_refcounted();
+    if !value_ok {
+        return false;
+    }
+    matches!(result_ty, PhpType::AssocArray { value, .. } if value.codegen_repr() == value_elem)
+}
+
+/// Lowers `array_combine()` for checker-accepted Mixed / array-union operands.
+///
+/// Each operand is materialized as a boxed Mixed cell — a `Mixed` value already is one, while a
+/// concrete `Array`/`AssocArray` value is boxed via `__rt_mixed_from_array_kind` into a temporary
+/// cell that is released after the call. The two cells are passed to `__rt_array_combine_mixed`,
+/// which normalizes both to owned hashes, pairs their values positionally into a boxed-Mixed
+/// result hash (throwing a catchable `\ValueError` on a count mismatch), and returns the result.
+fn lower_array_combine_mixed(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    keys: ValueId,
+    values: ValueId,
+) -> Result<()> {
+    // Fast path: when both operands are already boxed Mixed cells (no boxing helper calls are
+    // needed to materialize them), load them straight into the argument registers with no
+    // temporary-stack frame. This keeps the call site free of an SP adjustment that would
+    // otherwise sit across the throwing `__rt_array_combine_mixed` call and break same-function
+    // `\ValueError` catches (the exception unwinder resumes at the try's saved stack pointer).
+    let keys_is_mixed = matches!(ctx.value_php_type(keys)?.codegen_repr(), PhpType::Mixed);
+    let values_is_mixed = matches!(ctx.value_php_type(values)?.codegen_repr(), PhpType::Mixed);
+    if keys_is_mixed && values_is_mixed {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.load_value_to_reg(values, "x1")?;
+                ctx.load_value_to_reg(keys, "x0")?;
+            }
+            Arch::X86_64 => {
+                ctx.load_value_to_reg(values, "rsi")?;
+                ctx.load_value_to_reg(keys, "rdi")?;
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_array_combine_mixed");
+        return store_if_result(ctx, inst);
+    }
+
+    // [sp+0] = keys cell, [sp+8] = values cell, [sp+16] = result hash.
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    let keys_is_temp = materialize_array_combine_operand_cell(ctx, keys)?;
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    let values_is_temp = materialize_array_combine_operand_cell(ctx, values)?;
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 8);
+
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 8);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 8);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_combine_mixed");
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+
+    // Release any temporary boxes created for concrete-array operands (a Mixed operand's cell is
+    // owned by its SSA value and released by the normal local lifetime, not here).
+    if keys_is_temp {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    }
+    if values_is_temp {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 8);
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    }
+
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
     store_if_result(ctx, inst)
+}
+
+/// Materializes one `array_combine()` operand as a boxed Mixed cell in the int result register.
+///
+/// A `Mixed` operand already holds a boxed cell, loaded directly (returns `false` — nothing to
+/// free). A concrete `Array`/`AssocArray` operand is a raw container pointer that is boxed via
+/// `__rt_mixed_from_array_kind` (which retains the child), yielding a temporary cell the caller
+/// must release with `__rt_decref_mixed` after the combine call (returns `true`).
+fn materialize_array_combine_operand_cell(
+    ctx: &mut FunctionContext<'_>,
+    operand: ValueId,
+) -> Result<bool> {
+    let ty = ctx.value_php_type(operand)?.codegen_repr();
+    if matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        ctx.load_value_to_result(operand)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_from_array_kind");
+        return Ok(true);
+    }
+    ctx.load_value_to_result(operand)?;
+    Ok(false)
 }
 
 /// Lowers `array_column()` through the target-aware column helpers.

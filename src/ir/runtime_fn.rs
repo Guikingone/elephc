@@ -624,12 +624,17 @@ impl RuntimeFnId {
     /// Returns the conservative observable effects for this typed backend operation.
     pub const fn effects(self) -> crate::ir::Effects {
         match self {
+            // `array_combine()` is intentionally NOT in the pure group below: it allocates its
+            // result hash and throws a catchable `\ValueError` on a count mismatch (the gradual
+            // `__rt_array_combine_mixed` path). Falling through to the conservative default (the
+            // same effect set as `array_filter`, which also throws a `\ValueError`) keeps it out of
+            // dead-code elimination when its result is unused and makes the optimizer preserve the
+            // enclosing try handler across the call.
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
             RuntimeFnId::ArrayChangeKeyCase |
             RuntimeFnId::ArrayChunk |
             RuntimeFnId::ArrayColumn |
-            RuntimeFnId::ArrayCombine |
             RuntimeFnId::ArrayDiff |
             RuntimeFnId::ArrayDiffAssoc |
             RuntimeFnId::ArrayDiffKey |

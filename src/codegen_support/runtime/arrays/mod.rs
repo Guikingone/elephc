@@ -16,6 +16,7 @@ mod array_column_mixed;
 mod array_column_ref;
 mod array_column_str;
 mod array_combine;
+mod array_combine_mixed;
 mod array_combine_refcounted;
 mod array_clone_shallow;
 mod array_diff;
@@ -191,6 +192,8 @@ pub use array_column_str::emit_array_column_str;
 /// Emit string-only array column helper.
 pub use array_combine::emit_array_combine;
 /// Emit array combine (keys + values) helper.
+pub use array_combine_mixed::emit_array_combine_mixed;
+/// Emit the gradual-typing Mixed/hash array combine helper.
 pub use array_combine_refcounted::emit_array_combine_refcounted;
 /// Emit refcounted array combine helper.
 pub use array_clone_shallow::emit_array_clone_shallow;

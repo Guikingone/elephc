@@ -332,6 +332,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_flip_mixed(emitter);
     arrays::emit_array_flip_string(emitter);
     arrays::emit_array_combine(emitter);
+    arrays::emit_array_combine_mixed(emitter);
     arrays::emit_array_combine_refcounted(emitter);
     arrays::emit_array_fill_keys(emitter);
     arrays::emit_array_fill_keys_refcounted(emitter);

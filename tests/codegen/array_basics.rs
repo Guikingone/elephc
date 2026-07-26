@@ -688,6 +688,50 @@ fn test_array_shift_mixed_non_array_throws_type_error() {
     );
 }
 
+/// Verifies `array_combine()` pairs two checker-accepted Mixed operands positionally into an
+/// associative array (gradual `__rt_array_combine_mixed` path).
+#[test]
+fn test_array_combine_mixed_operands() {
+    let out = compile_and_run(
+        "<?php function f(mixed $k, mixed $v){ return json_encode(array_combine($k, $v)); } echo f(['a', 'b'], [1, 2]);",
+    );
+    assert_eq!(out, "{\"a\":1,\"b\":2}");
+}
+
+/// Verifies `array_combine()` coerces keys exactly like PHP: integers stay integer keys, numeric
+/// strings normalize to integers, and non-integer scalars are `(string)`-cast (float `1.9`→`"1.9"`,
+/// `null`→`""`).
+#[test]
+fn test_array_combine_mixed_key_coercion() {
+    let out = compile_and_run(
+        "<?php function f(mixed $k, mixed $v){ return json_encode(array_combine($k, $v)); } echo f([1.9, 5.0, true, null], ['a', 'b', 'c', 'd']);",
+    );
+    assert_eq!(out, "{\"1.9\":\"a\",\"5\":\"b\",\"1\":\"c\",\"\":\"d\"}");
+}
+
+/// Verifies `array_combine()` accepts a concrete `Array` operand (a raw container pointer boxed via
+/// `__rt_mixed_from_array_kind`) alongside a Mixed operand, and preserves heterogeneous values.
+#[test]
+fn test_array_combine_mixed_array_operand() {
+    let out = compile_and_run(
+        "<?php function f(array $a){ return json_encode(array_combine(array_keys($a), array_values($a))); } echo f(['x' => 1, 'y' => 'two', 'z' => 3.5]);",
+    );
+    assert_eq!(out, "{\"x\":1,\"y\":\"two\",\"z\":3.5}");
+}
+
+/// Verifies `array_combine()` throws PHP's exact catchable `\ValueError` when the operands have
+/// different element counts.
+#[test]
+fn test_array_combine_mixed_count_mismatch_throws() {
+    let out = compile_and_run(
+        "<?php function f(mixed $k, mixed $v){ try { $r = array_combine($k, $v); echo json_encode($r); } catch (\\ValueError $e) { echo $e->getMessage(); } } f([1, 2], [1]);",
+    );
+    assert_eq!(
+        out,
+        "array_combine(): Argument #1 ($keys) and argument #2 ($values) must have the same number of elements"
+    );
+}
+
 /// Verifies in array found.
 #[test]
 fn test_in_array_found() {
