@@ -1128,20 +1128,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         {
             self.release_stored_local_value_before_overwrite(name, slot, span);
         }
-        // Pairs the string-only retain above. A `static` local is live from
-        // `init_static_local` onwards and survives every return, so a reassignment always
-        // overwrites a real occupant — releasing it here is what keeps the new reference
-        // from turning into a leak that grows by one buffer per call. The initializer of a
-        // string static is a `const_str` with persistent ownership, so the first call's
-        // release is a no-op that the backend filters out.
+        // NO release of the previous occupant is emitted here for the string case: the
+        // BACKEND already does it. `lower_store_static_local` calls
+        // `emit_store_result_to_symbol(.., release_previous = true)`, whose `PhpType::Str`
+        // arm loads the symbol's current payload and calls `__rt_heap_free_safe` before
+        // overwriting it. Emitting a second release here is a DOUBLE FREE — it survived
+        // macOS/aarch64 (where the redundant free was absorbed) and was caught by the
+        // heap-debug double-free guard on linux-x86_64.
         //
-        // This deliberately calls `release_stored_local_value` rather than the
-        // `..._before_overwrite` variant: the latter falls back to `Op::ReleaseLocalSlot`
-        // for storage types that are not lifetime-tracked, and that op addresses a FRAME
-        // slot, whereas a static local's value lives in a global symbol.
-        if static_local_store_needs_string_retain && !uses_global && !self.is_ref_bound_local(name) {
-            self.release_stored_local_value(name, slot, span);
-        }
+        // So the two layers split cleanly for a static string store: this layer owns the
+        // RETAIN (the backend's `emit_incref_if_refcounted` skips `Str`), the backend owns
+        // the RELEASE of what it overwrites.
         if uses_global {
             self.store_global_name(name, slot, value, span);
             self.set_local_type(name, php_type);
