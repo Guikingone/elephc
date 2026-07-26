@@ -668,3 +668,36 @@ echo $cb();
         "expects 1 arguments, got 0",
     );
 }
+
+/// Regression: a first-class callable created on a value typed as an INTERFACE
+/// (`Greeter $g; $g->greet(...)`) resolves gradually instead of hard-erroring
+/// "Undefined class: Greeter". The interface is registered in the interface map,
+/// never in the class map, so the first-class-callable path must consult interfaces
+/// and fall back to a runtime-dispatched (gradual) callable signature — the concrete
+/// implementor is only known at runtime. See `callables::first_class`.
+#[test]
+fn test_first_class_callable_on_interface_typed_receiver_resolves() {
+    expect_ok(
+        r#"<?php
+interface Greeter { public function greet(string $n): string; }
+class Hello implements Greeter { public function greet(string $n): string { return "hi $n"; } }
+function run(Greeter $g): string { $fn = $g->greet(...); return $fn("bob"); }
+echo run(new Hello());
+"#,
+    );
+}
+
+/// Negative control for the interface-typed first-class-callable relaxation above:
+/// a first-class callable naming a method that does NOT exist on a statically-known
+/// concrete class still errors, so the relaxation never blanket-accepts typos.
+#[test]
+fn test_first_class_callable_undefined_method_on_known_class_still_errors() {
+    expect_error(
+        r#"<?php
+class K { public function foo(): void {} }
+function bad(K $k) { return $k->nope(...); }
+bad(new K());
+"#,
+        "Undefined method for first-class callable: K::nope",
+    );
+}

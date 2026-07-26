@@ -175,3 +175,34 @@ expect_builtin_arity_error!(
     "<?php normalizer_normalize(\"a\", 16, 1);",
     "normalizer_normalize() takes 1 or 2 arguments"
 );
+
+/// Regression: elephc supplements a registered `Normalizer` class (e.g. the
+/// symfony/polyfill-intl-normalizer stub, which omits it) with the ext-intl
+/// `NFKC_CF = 48` constant, since elephc emulates an intl-present environment.
+/// Code guarded by `\defined('Normalizer::NFKC_CF')` (symfony/string's
+/// `AbstractUnicodeString::folded()`) then type-checks. See
+/// `builtin_types::normalizer::supplement_intl_normalizer_constants`.
+#[test]
+fn test_normalizer_nfkc_cf_constant_resolves() {
+    expect_ok(
+        r#"<?php
+class Normalizer { public const FORM_C = 16; public const NFC = 16; }
+echo Normalizer::NFKC_CF;
+echo Normalizer::FORM_C;
+"#,
+    );
+}
+
+/// Negative control for the `Normalizer::NFKC_CF` supplement: a genuinely undefined
+/// constant on the same class still errors, so the supplement adds only the one real
+/// intl constant and never blanket-accepts arbitrary class constants.
+#[test]
+fn test_normalizer_fake_constant_still_errors() {
+    expect_error(
+        r#"<?php
+class Normalizer { public const FORM_C = 16; }
+echo Normalizer::TOTALLY_FAKE;
+"#,
+        "Undefined class constant: Normalizer::TOTALLY_FAKE",
+    );
+}

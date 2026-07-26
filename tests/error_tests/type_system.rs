@@ -1657,3 +1657,37 @@ fn test_user_interface_narrowed_property_read_accepted() {
          function g(mixed $m): mixed { return $m instanceof Marker ? $m->anything : null; }",
     );
 }
+
+/// Regression: nested array writes through a value of the `object` pseudo-type — modeled
+/// as `Object("")`, an object whose concrete class is not statically known — are deferred
+/// to runtime rather than hard-erroring "Undefined class: " (empty name). This is the
+/// array-write analogue of the direct-write degradation already applied in
+/// `check_object_property_write`, and mirrors symfony/console's `MapInput::tryFrom`
+/// (`$self = $reflection->getAttribute(...); $self->definition[$k] = $v; $self->items[] = $x`).
+/// See `stmt_check::assignments::properties`.
+#[test]
+fn test_object_pseudo_type_nested_property_writes_defer_to_runtime() {
+    expect_ok(
+        r#"<?php
+function fill(object $self): void {
+    $self->definition['x'] = 'arg';
+    $self->items[] = 'y';
+}
+"#,
+    );
+}
+
+/// Negative control for the `object` pseudo-type nested-write relaxation above: an indexed
+/// or push write against a property that does NOT exist on a statically-known class still
+/// errors. The relaxation is gated strictly on the empty (pseudo-type) class name, so a
+/// concrete receiver keeps full undefined-property detection.
+#[test]
+fn test_known_class_undefined_array_property_write_still_errors() {
+    expect_error(
+        r#"<?php
+class Box { public int $count = 0; }
+function bad(Box $b): void { $b->missing[] = 1; }
+"#,
+        "Undefined property: Box::missing",
+    );
+}

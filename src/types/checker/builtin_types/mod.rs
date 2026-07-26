@@ -16,6 +16,7 @@ mod dom;
 mod exception;
 mod fiber;
 mod magic_methods;
+mod normalizer;
 mod reflection;
 mod timezone_ids;
 
@@ -70,3 +71,8 @@ pub(crate) use datetime::inject_builtin_datetime;
 
 /// Injects the builtin `DatePeriod` Iterator class (the `(start, interval, end)` form).
 pub(crate) use date_period::inject_builtin_date_period;
+
+/// Supplements an already-registered `Normalizer` class (e.g. the
+/// symfony/polyfill-intl-normalizer stub) with the ext-intl `NFKC_CF = 48` class
+/// constant, so vendor code guarded by `\defined('Normalizer::NFKC_CF')` type-checks.
+pub(crate) use normalizer::supplement_intl_normalizer_constants;

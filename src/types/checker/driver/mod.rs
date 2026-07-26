@@ -25,7 +25,7 @@ use super::builtin_types::{
     inject_builtin_dom, inject_builtin_reflection, inject_builtin_throwables,
     patch_builtin_exception_signatures,
     patch_builtin_fiber_signatures, patch_builtin_reflection_signatures,
-    patch_magic_method_signatures, InterfaceDeclInfo,
+    patch_magic_method_signatures, supplement_intl_normalizer_constants, InterfaceDeclInfo,
 };
 use super::builtin_enums::inject_builtin_enums;
 use super::builtin_interfaces::{apply_implicit_stringable_interfaces, inject_builtin_interfaces};
@@ -197,6 +197,10 @@ pub(super) fn check_types_impl(
     if let Err(error) = inject_builtin_dom(&interface_map, &mut class_map, &declared_traits) {
         errors.extend(error.flatten());
     }
+    // Supplement a vendor-provided `Normalizer` (the intl polyfill stub) with the ext-intl
+    // `NFKC_CF` constant elephc's emulated intl environment defines. Runs after all injectors
+    // so it patches whichever `Normalizer` ended up registered; a no-op if none exists.
+    supplement_intl_normalizer_constants(&mut class_map);
     checker.declared_classes = class_map.keys().cloned().collect();
     checker.declared_interfaces = interface_map.keys().cloned().collect();
     checker.declared_traits = declared_traits.clone();

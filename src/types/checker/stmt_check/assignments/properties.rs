@@ -61,6 +61,13 @@ pub(super) fn check_property_array_push(
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     match &obj_ty {
         PhpType::Object(class_name) => {
+            // The `object` pseudo-type is modeled as `Object("")` (an object whose class is not
+            // statically known). Its property set is only knowable at runtime, so a push through
+            // it (`$o->prop[] = v`) is deferred to runtime rather than resolved against a class —
+            // looking up the empty class name would otherwise emit a bogus `Undefined class: `.
+            if class_name.is_empty() {
+                return Ok(());
+            }
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, object, class_name, property, span)?;
             let updated_prop_ty = updated_array_property_push_type(
@@ -121,7 +128,13 @@ pub(super) fn check_property_array_assign(
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
-    if matches!(obj_ty, PhpType::Mixed) {
+    // `Mixed` and the `object` pseudo-type (modeled as `Object("")`, an object whose class is not
+    // statically known) both have a runtime-only property set: an indexed write through them
+    // (`$o->prop[$k] = v`) is deferred to runtime. The index must still be a valid array key, but
+    // the property is not resolved against a class — resolving the empty class name would emit a
+    // bogus `Undefined class: `.
+    let object_pseudo_type = matches!(&obj_ty, PhpType::Object(class_name) if class_name.is_empty());
+    if matches!(obj_ty, PhpType::Mixed) || object_pseudo_type {
         if !is_php_array_key_type(&normalized_idx_ty) {
             return Err(CompileError::new(span, "Array index must be integer"));
         }

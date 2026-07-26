@@ -199,9 +199,23 @@ impl Checker {
                         Ok(self.mixed_receiver_first_class_callable_sig(method))
                     }
                     PhpType::Object(class_name) => {
-                        let class_info = self.classes.get(&class_name).ok_or_else(|| {
-                            CompileError::new(span, &format!("Undefined class: {}", class_name))
-                        })?;
+                        // An interface-typed receiver (`ParameterBagInterface $bag; $bag->get(...)`)
+                        // is registered in `self.interfaces`, never in `self.classes`. The concrete
+                        // implementor — and thus the exact method descriptor — is only known at
+                        // runtime, so resolve the first-class callable gradually instead of looking
+                        // the interface up as a class (which would emit a bogus `Undefined class`).
+                        // This mirrors the empty-object (`object` pseudo-type) case handled above.
+                        let Some(class_info) = self.classes.get(&class_name) else {
+                            if self.interfaces.contains_key(&class_name)
+                                || self.declared_interfaces.contains(&class_name)
+                            {
+                                return Ok(self.mixed_receiver_first_class_callable_sig(method));
+                            }
+                            return Err(CompileError::new(
+                                span,
+                                &format!("Undefined class: {}", class_name),
+                            ));
+                        };
                         if let Some(sig) = class_info.methods.get(method) {
                             if let Some(visibility) = class_info.method_visibilities.get(method) {
                                 let declaring_class = class_info
