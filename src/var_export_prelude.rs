@@ -27,6 +27,10 @@
 //!   default `(string)`/`echo` precision used elsewhere.
 //! - Objects are out of scope (PHP renders `\Class::__set_state(...)`); a non
 //!   scalar/array value renders as the empty string.
+//! - The `$return` flag is FLAG-AWARE at the call site, mirroring `print_r`: `name_resolver`
+//!   retargets a literal-flag call at [`RENDER_HELPER`] (`: string`) or [`ECHO_HELPER`]
+//!   (prints, returns `null`), and only a runtime flag keeps the two-mode `var_export` body
+//!   whose `string|null` return type then genuinely describes both outcomes.
 
 use crate::parser::ast::Program;
 
@@ -118,6 +122,10 @@ function __elephc_var_export_str(mixed $value, int $indent): string {
     }
     return '';
 }
+function __elephc_var_export_echo(mixed $value) {
+    echo __elephc_var_export_str($value, 0);
+    return null;
+}
 function var_export(mixed $value, bool $return = false) {
     $rendered = __elephc_var_export_str($value, 0);
     if ($return) {
@@ -127,6 +135,22 @@ function var_export(mixed $value, bool $return = false) {
     return null;
 }
 "#;
+
+/// Name of the prelude helper that RENDERS a value to its parsable text and returns it.
+///
+/// Declared `: string`, so `crate::name_resolver` can retarget `var_export($v, true)` at it and
+/// get PHP's `string` return type without contradicting what the callee actually returns. Its
+/// presence in the resolved symbol table also doubles as the "the elephc prelude owns
+/// `var_export`" marker — `inject_if_used` declares it only when it injects.
+pub const RENDER_HELPER: &str = "__elephc_var_export_str";
+
+/// Name of the prelude helper that PRINTS a value and returns `null`, the echo-mode contract of
+/// `var_export($v)` / `var_export($v, false)` on reference PHP 8.5.6.
+///
+/// Left unhinted deliberately: elephc spells PHP `null` as `PhpType::Void`, which a lone
+/// `return null;` infers exactly, while a `: void` hint would reject the assignment
+/// `$r = var_export($v);` that PHP allows.
+pub const ECHO_HELPER: &str = "__elephc_var_export_echo";
 
 /// Prepends the `var_export` prelude when the program references `var_export` and does
 /// not declare its own, so unrelated binaries pay nothing and a user definition is not

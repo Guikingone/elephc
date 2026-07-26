@@ -23,9 +23,9 @@ sidebar:
 ## Semantic descriptor
 
 - **Target strategy**: `runtime_call`
-- **Validation**: `signature`
-- **Result type source**: `declared`
-- **Result ownership**: `may_alias_arguments`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `fresh`
 - **Effects**: `static (0 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function strstr(string $haystack, string $needle, bool $before_needle = false): string
+function strstr(string $haystack, string $needle, bool $before_needle = false): mixed
 ```
 
 ## What the type checker enforces

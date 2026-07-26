@@ -50470,7 +50470,7 @@
   {
     "area": "String",
     "canonical_name": "strstr",
-    "description": "Returns the portion of a string starting at the first occurrence of a substring.",
+    "description": "Returns the portion of a string starting at the first occurrence of a substring, or false.",
     "eval": {
       "area": "string",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/string/strstr.rs",
@@ -50540,13 +50540,13 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "strstr"
       ],
@@ -50557,7 +50557,8 @@
         "linux-x86_64"
       ],
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": false
       }
     },
     "sig": {
@@ -50584,7 +50585,7 @@
           "type": "bool"
         }
       ],
-      "return_type": "string",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "strstr",

@@ -138,7 +138,7 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `substr()` | `substr($str, $start [, $len]): string` | Extract substring |
 | `strpos()` | `strpos($hay, $needle): int\|false` | Find first occurrence. Returns `false` if not found |
 | `strrpos()` | `strrpos($hay, $needle): int\|false` | Find last occurrence. Returns `false` if not found |
-| `strstr()` | `strstr($hay, $needle): string` | Find first occurrence and return rest |
+| `strstr()` | `strstr($hay, $needle, $before_needle = false): string\|false` | Find first occurrence and return the rest, or the part before it when `$before_needle` is truthy. Returns `false` if not found |
 | `str_replace()` | `str_replace($search, $replace, $subject): string` | Replace all occurrences |
 | `str_ireplace()` | `str_ireplace($search, $replace, $subject): string` | Case-insensitive replace |
 | `substr_replace()` | `substr_replace($str, $repl, $start [, $len]): string` | Replace substring |

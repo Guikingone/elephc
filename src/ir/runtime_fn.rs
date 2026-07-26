@@ -937,6 +937,13 @@ impl RuntimeFnId {
                 | RuntimeFnId::StrSplit
                 | RuntimeFnId::Strpos
                 | RuntimeFnId::Strrpos
+                // Strstr's result is `string|false`, so its lowering boxes BOTH arms into a
+                // fresh Mixed cell and `__rt_mixed_from_value` persists (copies) the string
+                // payload — it no longer hands back a borrowed slice of the haystack. Leaving
+                // it in the default `MayAliasArguments` bucket kept an owned haystack
+                // temporary alive for the boxed result's whole lifetime, which leaked one
+                // block per iteration for `strstr($h, $cond ? "a" : "b")` in a loop.
+                | RuntimeFnId::Strstr
                 | RuntimeFnId::ZvalUnpack
         ) {
             BuiltinResultOwnership::Fresh
