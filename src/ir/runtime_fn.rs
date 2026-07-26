@@ -930,6 +930,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayDiff
                 | RuntimeFnId::ArrayFill
                 | RuntimeFnId::ArrayFillKeys
+                | RuntimeFnId::ArrayFlip
                 | RuntimeFnId::ArrayIntersect
                 | RuntimeFnId::ArrayKeys
                 | RuntimeFnId::ArrayMap

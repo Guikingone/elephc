@@ -5676,6 +5676,26 @@ fn lower_builtin_call_args(
             }
             operands
         }
+        // Gradual typing: `array_flip($array)` accepts a `Mixed`/union array argument.
+        // Convert it to a concrete owned `array<mixed, mixed>` so the associative flip
+        // codegen (`__rt_array_flip_mixed`) handles it; the owning temporary is released
+        // by `release_owned_call_arg_temporaries` after the call (array_flip's result is
+        // a fresh independent hash, so no aliasing keeps the source alive).
+        "array_flip"
+            if !crate::types::call_args::has_named_args(args)
+                && !args.iter().any(is_spread_arg) =>
+        {
+            let mut operands = lower_args_with_signature(ctx, sig, args);
+            if let Some(&array) = operands.first() {
+                if matches!(
+                    ctx.builder.value_php_type(array).codegen_repr(),
+                    PhpType::Mixed | PhpType::Union(_)
+                ) {
+                    operands[0] = convert_mixed_array_to_assoc_hash(ctx, array, args[0].span);
+                }
+            }
+            operands
+        }
         // Gradual typing: `array_merge` infers its result element type from the first
         // operand. When that is `array<mixed>`, any other concrete typed indexed-array
         // operand (e.g. `array<string>`) is widened to boxed-Mixed slots so the backend

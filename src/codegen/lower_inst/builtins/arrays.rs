@@ -180,6 +180,16 @@ pub(crate) fn lower_array_column(ctx: &mut FunctionContext<'_>, inst: &Instructi
 pub(crate) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_flip", 1)?;
     let array = expect_operand(inst, 0)?;
+    // Gradual boundary: a `Mixed`/union operand is converted to an owned
+    // `array<mixed, mixed>` hash before codegen (see `lower_builtin_call_args`), so it
+    // arrives here as an associative array. Iterate the hash and swap keys/values through
+    // `__rt_array_flip_mixed` (values that are not int/string are skipped, matching PHP).
+    if matches!(ctx.value_php_type(array)?.codegen_repr(), PhpType::AssocArray { .. }) {
+        let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
+        ctx.load_value_to_reg(array, arg0)?;
+        abi::emit_call_label(ctx.emitter, "__rt_array_flip_mixed");
+        return store_if_result(ctx, inst);
+    }
     let value_elem_ty = array_flip_source_element_type(ctx.value_php_type(array)?)?;
     require_array_flip_result_type(&value_elem_ty, &inst.result_php_type.codegen_repr())?;
     ctx.load_value_to_result(array)?;

@@ -445,6 +445,16 @@ fn test_error_array_flip_wrong_args() {
     );
 }
 
+/// Verifies `array_flip()` still rejects a concretely non-array argument even though the
+/// gradual boundary now accepts a `Mixed`/union-containing-array operand.
+#[test]
+fn test_error_array_flip_non_array_arg() {
+    expect_error(
+        "<?php array_flip(5);",
+        "array_flip() argument must be array",
+    );
+}
+
 /// Verifies `array_change_key_case()` enforces its one-or-two argument signature.
 #[test]
 fn test_error_array_change_key_case_wrong_args() {

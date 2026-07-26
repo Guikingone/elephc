@@ -48,6 +48,16 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             key: Box::new(array_key_type_from_value_type(*value)),
             value: key,
         }),
+        // Gradual boundary: a `Mixed` or union-containing-array argument is accepted. The
+        // key/value element types are unknown, so both flip to `Mixed`; EIR converts the
+        // boxed operand to an owned `Mixed`-keyed/`Mixed`-valued hash and flips it through
+        // `__rt_array_flip_mixed`.
+        t if crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&t) => {
+            Ok(PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            })
+        }
         _ => Err(CompileError::new(
             cx.span,
             "array_flip() argument must be array",

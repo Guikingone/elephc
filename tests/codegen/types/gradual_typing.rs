@@ -297,6 +297,27 @@ fn test_gradual_array_key_exists_with_mixed_haystack() {
     assert_eq!(out, "bool(true)\nbool(false)\n");
 }
 
+/// A `Mixed`/union-containing-array argument is accepted by `array_flip()` under gradual
+/// typing: the boxed array is converted to an owned hash at the runtime boundary and flipped
+/// through `__rt_array_flip_mixed`, so keys and values swap (string keys become values and
+/// integer values become keys), matching PHP.
+#[test]
+fn test_gradual_array_flip_with_mixed_argument() {
+    let out = compile_and_run(
+        "<?php
+        $h = [];
+        $h[\"a\"] = [\"x\" => 10, \"y\" => 20];
+        $h[\"b\"] = \"s\";
+        $src = $h[\"a\"];
+        var_dump(array_flip($src));
+        ",
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [10]=>\n  string(1) \"x\"\n  [20]=>\n  string(1) \"y\"\n}\n"
+    );
+}
+
 /// An array union `$a + $b` where one operand is a concrete array literal and the other is a
 /// `Mixed` value (read from a heterogeneous associative array) is accepted under gradual typing:
 /// the boxed operand is unboxed and asserted to be an array, then unioned with left-operand keys
