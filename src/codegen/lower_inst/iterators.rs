@@ -45,19 +45,46 @@ enum IteratorSourceKind {
     },
     /// A concrete object source that implements neither `Iterator` nor
     /// `IteratorAggregate`. PHP iterates such an object's accessible (public)
-    /// declared properties in declaration order; the EIR backend does not yet
-    /// emit that property-walk, so iteration lowers to a runtime fatal instead
-    /// of silently producing wrong results. See `emit_plain_object_foreach_fatal`.
-    PlainObject { class_name: String },
+    /// declared properties in declaration order. When `snapshotable` is true the
+    /// class has a fixed layout (no dynamic properties) and every public property
+    /// has a runtime representation the snapshot builder supports, so
+    /// `lower_iter_start` copies those properties into a fresh hash and drives the
+    /// existing hash-iteration path. Otherwise iteration lowers to a runtime fatal
+    /// (see `emit_plain_object_foreach_fatal`) instead of producing wrong results.
+    PlainObject {
+        class_name: String,
+        snapshotable: bool,
+    },
 }
 
 /// Lowers iterator initialization by storing the source pointer and initial cursor.
 pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let source = expect_operand(inst, 0)?;
     let source_kind = iterator_source_kind_from_type(ctx, &ctx.value_php_type(source)?, inst)?;
-    if let IteratorSourceKind::PlainObject { class_name } = &source_kind {
-        // No Iterator/IteratorAggregate protocol: emit a runtime fatal instead of
-        // walking public properties (unimplemented). Exits before any iteration.
+    if let IteratorSourceKind::PlainObject {
+        class_name,
+        snapshotable,
+    } = &source_kind
+    {
+        if *snapshotable {
+            // PHP's default object iteration walks a snapshot of the accessible
+            // properties, so copy the object's public declared properties into a
+            // fresh hash and iterate that with the existing hash path. The source
+            // object is read by declared-slot offset and never modified.
+            let result = inst.result.ok_or_else(|| {
+                CodegenIrError::invalid_module("iter_start missing result value".to_string())
+            })?;
+            let offset = ctx.value_frame_offset(result)?;
+            super::objects::emit_plain_object_property_snapshot_hash(ctx, class_name, source)?;
+            let result_reg = abi::int_result_reg(ctx.emitter);
+            abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+            abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+            abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
+            return Ok(());
+        }
+        // No Iterator/IteratorAggregate protocol and no sound property snapshot:
+        // emit a runtime fatal instead of walking properties. Exits before any
+        // iteration.
         emit_plain_object_foreach_fatal(ctx, class_name);
         return Ok(());
     }
@@ -173,8 +200,19 @@ pub(super) fn lower_iter_next(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         IteratorSourceKind::Interface { interface_name, .. } => {
             lower_interface_iter_next(ctx, offset, &interface_name)?;
         }
-        IteratorSourceKind::PlainObject { class_name } => {
-            emit_plain_object_foreach_fatal(ctx, &class_name);
+        IteratorSourceKind::PlainObject {
+            class_name,
+            snapshotable,
+        } => {
+            if snapshotable {
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => lower_hash_iter_next_aarch64(ctx, offset),
+                    Arch::X86_64 => lower_hash_iter_next_x86_64(ctx, offset),
+                }
+                free_plain_object_snapshot_if_done(ctx, offset);
+            } else {
+                emit_plain_object_foreach_fatal(ctx, &class_name);
+            }
         }
     }
     store_if_result(ctx, inst)
@@ -208,8 +246,18 @@ pub(super) fn lower_iter_current_key(
             let return_ty = emit_interface_iterator_method_call(ctx, offset, &interface_name, "key")?;
             box_iterator_method_result_if_needed(ctx, inst, &return_ty)?;
         }
-        IteratorSourceKind::PlainObject { class_name } => {
-            emit_plain_object_foreach_fatal(ctx, &class_name);
+        IteratorSourceKind::PlainObject {
+            class_name,
+            snapshotable,
+        } => {
+            if snapshotable {
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => load_current_hash_key_as_mixed_aarch64(ctx, offset),
+                    Arch::X86_64 => load_current_hash_key_as_mixed_x86_64(ctx, offset),
+                }
+            } else {
+                emit_plain_object_foreach_fatal(ctx, &class_name);
+            }
         }
     }
     store_if_result(ctx, inst)
@@ -247,8 +295,18 @@ pub(super) fn lower_iter_current_value(
             let return_ty = emit_interface_iterator_method_call(ctx, offset, &interface_name, "current")?;
             box_iterator_method_result_if_needed(ctx, inst, &return_ty)?;
         }
-        IteratorSourceKind::PlainObject { class_name } => {
-            emit_plain_object_foreach_fatal(ctx, &class_name);
+        IteratorSourceKind::PlainObject {
+            class_name,
+            snapshotable,
+        } => {
+            if snapshotable {
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => load_current_hash_value_as_mixed_aarch64(ctx, offset),
+                    Arch::X86_64 => load_current_hash_value_as_mixed_x86_64(ctx, offset),
+                }
+            } else {
+                emit_plain_object_foreach_fatal(ctx, &class_name);
+            }
         }
     }
     store_if_result(ctx, inst)
@@ -316,7 +374,9 @@ pub(super) fn lower_iter_current_value_ref(
                 "by-reference foreach over object iterators in EIR backend",
             ))
         }
-        IteratorSourceKind::PlainObject { class_name } => {
+        IteratorSourceKind::PlainObject { class_name, .. } => {
+            // By-reference foreach over a plain object is rejected in the checker,
+            // so this is unreachable; keep the fatal as a belt-and-braces guard.
             emit_plain_object_foreach_fatal(ctx, &class_name);
         }
     }
@@ -1033,6 +1093,47 @@ fn emit_plain_object_foreach_fatal(ctx: &mut FunctionContext<'_>, class_name: &s
         class_name
     );
     super::emit_unsupported_feature_fatal(ctx, &message);
+}
+
+/// Releases the plain-object property-snapshot hash once its iteration is exhausted.
+///
+/// The snapshot hash `lower_iter_start` builds for a plain-object foreach is a fresh,
+/// self-owned allocation with no other owner, so unlike a real array/hash source it
+/// cannot be released by the loop-exit ownership machinery (which only frees sources
+/// that alias an owned value). The just-completed `IterNext` leaves its availability
+/// flag in the integer result register; when it reports the iterator is exhausted
+/// (zero) the snapshot hash is decref'd, its source slot cleared, and the exhausted
+/// flag restored as the instruction result. No double-free is possible: after
+/// `IterNext` reports exhaustion the loop branches to its exit block and never
+/// re-enters `IterNext`. An early `break` leaves the loop before the exhausted path,
+/// so that (rare) case retains the snapshot until process exit; every run-to-
+/// completion foreach is leak free.
+fn free_plain_object_snapshot_if_done(ctx: &mut FunctionContext<'_>, offset: usize) {
+    let keep_label = ctx.next_label("plain_object_snapshot_keep");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cbnz {}, {}", result_reg, keep_label));  // keep the snapshot while the iterator still has entries
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("test {}, {}", result_reg, result_reg));  // did IterNext report the iterator is exhausted?
+            ctx.emitter
+                .instruction(&format!("jnz {}", keep_label));                   // keep the snapshot while the iterator still has entries
+        }
+    }
+    abi::load_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+    abi::emit_decref_if_refcounted(
+        ctx.emitter,
+        &PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Mixed),
+        },
+    );
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+    abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA); // clear the freed snapshot source slot
+    ctx.emitter.label(&keep_label);
 }
 
 /// Emits a zero-argument Iterator method call through runtime class metadata.
@@ -1879,11 +1980,13 @@ fn object_iterator_source(
         };
     }
     if !class_implements_interface(ctx, class_name, "IteratorAggregate") {
-        // No Iterator/IteratorAggregate protocol: PHP would walk the object's
-        // accessible public properties. The EIR backend does not implement that
-        // yet, so this lowers to a runtime fatal at iteration time.
+        // No Iterator/IteratorAggregate protocol: PHP walks the object's accessible
+        // public properties. When the class layout allows a sound property snapshot
+        // `lower_iter_start` builds that hash and reuses the hash-iteration path;
+        // otherwise iteration lowers to a runtime fatal.
         return IteratorSourceKind::PlainObject {
             class_name: class_name.to_string(),
+            snapshotable: super::objects::plain_object_snapshot_supported(ctx, class_name),
         };
     }
     match iterator_method_return_type(ctx, class_name, "getIterator") {

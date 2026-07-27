@@ -25,6 +25,7 @@ use crate::codegen::{
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::names::{method_symbol, php_symbol_key};
+use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 
 use super::super::context::FunctionContext;
@@ -5119,6 +5120,230 @@ fn emit_dynamic_property_hash_init(ctx: &mut FunctionContext<'_>, object_reg: &s
     }
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, hash_reg, object_reg, offset);
+}
+
+/// One public declared property selected for a plain-object foreach snapshot.
+struct SnapshotProperty {
+    name: String,
+    php_type: PhpType,
+    offset: usize,
+    is_declared: bool,
+}
+
+/// Returns whether a property's runtime representation can be snapshotted into a
+/// `Mixed` hash entry by [`emit_plain_object_property_snapshot_hash`].
+///
+/// The supported set is exactly what `emit_property_load` loads and
+/// `emit_box_current_value_as_mixed` (or a `Mixed` incref) can box. `TaggedScalar`
+/// (`?int`-shaped inline slots) and raw pointer/buffer/packed slots are excluded so
+/// their objects fall back to the loud runtime fatal rather than snapshot garbage.
+fn snapshot_supported_property_repr(repr: &PhpType) -> bool {
+    matches!(
+        repr,
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Object(_)
+            | PhpType::Mixed
+            | PhpType::Union(_)
+            | PhpType::Callable
+            | PhpType::Resource(_)
+            | PhpType::Iterable
+    )
+}
+
+/// Collects the public declared properties a plain-object foreach snapshot iterates.
+///
+/// Returns `None` when any public property has an unsupported representation or is a
+/// by-reference slot, signalling that the class cannot be snapshotted soundly and
+/// must fall back to the runtime fatal. An empty result (an object with no public
+/// properties) is valid and yields an empty snapshot. Properties are enumerated in
+/// parent-first declaration order — matching PHP's default object iteration order —
+/// and only public members are included (PHP's outside-class visibility; protected
+/// and private members observable only from inside the class are deferred).
+fn collect_snapshot_properties(class_info: &ClassInfo) -> Option<Vec<SnapshotProperty>> {
+    let mut out = Vec::with_capacity(class_info.properties.len());
+    for (index, (name, php_type)) in class_info.properties.iter().enumerate() {
+        let visibility = class_info
+            .property_visibilities
+            .get(name)
+            .cloned()
+            .unwrap_or(Visibility::Public);
+        if visibility != Visibility::Public {
+            continue;
+        }
+        if !snapshot_supported_property_repr(&php_type.codegen_repr()) {
+            return None;
+        }
+        if class_info.property_slot_is_reference(index, name) {
+            return None;
+        }
+        out.push(SnapshotProperty {
+            name: name.clone(),
+            php_type: php_type.clone(),
+            offset: 8 + index * 16,
+            is_declared: class_info.property_slot_is_declared(index, name),
+        });
+    }
+    Some(out)
+}
+
+/// Returns true when a plain object can be iterated by snapshotting its public
+/// properties into a hash (see [`emit_plain_object_property_snapshot_hash`]).
+///
+/// Requires a fixed layout (no dynamic properties) and every public property to have
+/// a snapshot-supported representation. Recomputed by the iterator lowering on every
+/// foreach opcode, so it must be a pure function of the class metadata.
+pub(super) fn plain_object_snapshot_supported(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    let Some(class_info) = ctx.module.class_infos.get(normalized) else {
+        return false;
+    };
+    if class_info.allow_dynamic_properties {
+        return false;
+    }
+    collect_snapshot_properties(class_info).is_some()
+}
+
+/// Builds a fresh hash snapshotting a plain object's public declared properties and
+/// leaves the hash pointer in the integer result register.
+///
+/// PHP's default object iteration walks a snapshot of the accessible properties, so a
+/// by-value foreach over an object implementing no iterator protocol is lowered by
+/// copying the object's public properties (name → value, declaration order) into a
+/// new `Mixed`-valued hash and then iterating that hash. Each property is read by its
+/// declared-slot offset (a sound read of a real slot on an object of this class; the
+/// object is never modified), boxed into an owned `Mixed` cell — retaining refcounted
+/// payloads and copying strings, so the snapshot is independent of the object — and
+/// stored under its constant-string name. Uninitialized typed properties are skipped,
+/// matching PHP, which omits them from iteration.
+///
+/// The object pointer and accumulating hash are preserved on the temporary stack
+/// across the runtime calls (the register allocator is unaware of these internal
+/// calls, so callee-clobbered registers cannot be relied on). Callers must have
+/// verified [`plain_object_snapshot_supported`]; a class that slipped through with an
+/// unsupported layout yields a loud codegen error rather than wrong iteration.
+pub(super) fn emit_plain_object_property_snapshot_hash(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    object: ValueId,
+) -> Result<()> {
+    let normalized = class_name.trim_start_matches('\\');
+    let props = {
+        let class_info = ctx.module.class_infos.get(normalized).ok_or_else(|| {
+            CodegenIrError::unsupported(format!("plain-object snapshot for unknown class {}", normalized))
+        })?;
+        collect_snapshot_properties(class_info).ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "plain-object snapshot for class {} with an unsupported property layout",
+                normalized
+            ))
+        })?
+    };
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let mixed_tag = runtime_value_tag(&PhpType::Mixed) as i64;
+    let capacity = props.len().max(1) as i64;
+    // Preserve the source object on the temporary stack: it must survive the hash
+    // allocation and every `__rt_hash_set` call below.
+    ctx.load_value_to_reg(object, base_reg)?;
+    abi::emit_push_reg(ctx.emitter, base_reg);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x0", capacity);
+            abi::emit_load_int_immediate(ctx.emitter, "x1", mixed_tag);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_new");
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", capacity);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", mixed_tag);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_new");
+        }
+    }
+    // Stack now holds [snapshot hash][object]; the hash is at `[sp]`, object at `[sp + 16]`.
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    for prop in &props {
+        let (label, key_len) = ctx.data.add_string(prop.name.as_bytes());
+        let slot = PropertySlot {
+            class_name: normalized.to_string(),
+            property: prop.name.clone(),
+            php_type: prop.php_type.clone(),
+            offset: prop.offset,
+            is_declared: prop.is_declared,
+            is_packed: false,
+            is_reference: false,
+        };
+        let skip_label = ctx.next_label("plain_object_snapshot_skip");
+        // Reload the preserved object pointer for this property's slot read.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx
+                .emitter
+                .instruction(&format!("ldr {}, [sp, #16]", base_reg)),
+            Arch::X86_64 => ctx
+                .emitter
+                .instruction(&format!("mov {}, QWORD PTR [rsp + 16]", base_reg)),
+        }
+        if prop.is_declared {
+            // PHP omits uninitialized typed properties from iteration; skip this
+            // slot's hash insert when its marker still holds the uninit sentinel.
+            emit_typed_property_initialized_bool(ctx, &slot, base_reg);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx
+                    .emitter
+                    .instruction(&format!("cbz x0, {}", skip_label)),           // skip an uninitialized typed property
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("test rax, rax");                   // is the typed property initialized?
+                    ctx.emitter
+                        .instruction(&format!("jz {}", skip_label));            // skip an uninitialized typed property
+                }
+            }
+        }
+        emit_property_load(ctx, &slot, base_reg)?;
+        let repr = prop.php_type.codegen_repr();
+        if matches!(repr, PhpType::Mixed | PhpType::Union(_)) {
+            // The slot already holds a boxed Mixed cell; the snapshot shares it, so
+            // retain the borrowed cell instead of re-boxing it.
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        } else {
+            emit_box_current_value_as_mixed(ctx.emitter, &repr);
+        }
+        // The owned boxed cell is in the integer result register; insert it under the
+        // constant-string property name and store the possibly-reallocated hash back.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x3, x0");                          // boxed Mixed cell as the hash value low word
+                ctx.emitter.instruction("ldr x0, [sp]");                        // reload the accumulating snapshot hash
+                abi::emit_symbol_address(ctx.emitter, "x1", &label);
+                abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
+                ctx.emitter.instruction("mov x4, xzr");                         // boxed Mixed entries have no high payload word
+                abi::emit_load_int_immediate(ctx.emitter, "x5", mixed_tag);
+                abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+                ctx.emitter.instruction("str x0, [sp]");                        // publish the possibly-reallocated hash
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rcx, rax");                        // boxed Mixed cell as the hash value low word
+                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");            // reload the accumulating snapshot hash
+                abi::emit_symbol_address(ctx.emitter, "rsi", &label);
+                abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
+                ctx.emitter.instruction("xor r8, r8");                          // boxed Mixed entries have no high payload word
+                abi::emit_load_int_immediate(ctx.emitter, "r9", mixed_tag);
+                abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+                ctx.emitter.instruction("mov QWORD PTR [rsp], rax");            // publish the possibly-reallocated hash
+            }
+        }
+        ctx.emitter.label(&skip_label);
+    }
+    // Pop the final hash into the result register and discard the preserved object.
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_pop_reg(ctx.emitter, base_reg);
+    Ok(())
 }
 
 /// Returns true when implemented interfaces require method-wrapper metadata not emitted here.

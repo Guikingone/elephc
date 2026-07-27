@@ -238,12 +238,16 @@ mod weak_coercion_negatives;
 
 // --- Iterator-related errors ---
 
-/// Verifies the error diagnostic for foreach over object not implementing iterator.
+/// Verifies the error diagnostic for by-reference foreach over a plain object.
+///
+/// A by-value foreach over a plain object now iterates its accessible public
+/// properties (PHP's default object iteration), but a by-reference foreach over an
+/// object remains unsupported and must still be rejected.
 #[test]
-fn test_error_foreach_over_object_not_implementing_iterator() {
+fn test_error_foreach_by_ref_over_plain_object() {
     expect_error(
-        "<?php class Plain { public int $x = 1; } foreach (new Plain() as $v) { echo $v; }",
-        "foreach over object requires Plain to implement Iterator",
+        "<?php class Plain { public int $x = 1; } foreach (new Plain() as &$v) { echo $v; }",
+        "by-reference foreach over Iterator/IteratorAggregate objects or iterable-typed values is not supported",
     );
 }
 

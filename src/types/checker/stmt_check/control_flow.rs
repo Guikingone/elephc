@@ -254,23 +254,29 @@ impl Checker {
                         || self.interface_extends_interface(class_name, "IteratorAggregate");
                     let is_traversable = normalized_class_name == "Traversable"
                         || self.interface_extends_interface(class_name, "Traversable");
-                    if !is_iter && !is_iter_agg && !is_traversable {
-                        return Err(CompileError::new(
-                            stmt.span,
-                            &format!(
-                                "foreach over object requires {} to implement Iterator or IteratorAggregate",
-                                class_name
-                            ),
-                        ));
+                    if is_iter || is_iter_agg || is_traversable {
+                        let (key_ty, value_ty) =
+                            self.foreach_object_key_value_types(class_name, array);
+                        if let Some(k) = key_var {
+                            env.insert(k.clone(), key_ty);
+                            self.clear_foreach_callable_metadata(k);
+                        }
+                        env.insert(value_var.clone(), value_ty);
+                        self.clear_foreach_callable_metadata(value_var);
+                    } else {
+                        // A plain object implementing none of Iterator/IteratorAggregate/
+                        // Traversable iterates its accessible declared properties in PHP:
+                        // property-name string keys with values in declaration order. The
+                        // EIR backend snapshots the object's public properties into a hash
+                        // and drives the hash-iteration path (see `lower_iter_start`), so
+                        // bind the key to `Str` and the value to `Mixed` accordingly.
+                        if let Some(k) = key_var {
+                            env.insert(k.clone(), PhpType::Str);
+                            self.clear_foreach_callable_metadata(k);
+                        }
+                        env.insert(value_var.clone(), PhpType::Mixed);
+                        self.clear_foreach_callable_metadata(value_var);
                     }
-                    let (key_ty, value_ty) =
-                        self.foreach_object_key_value_types(class_name, array);
-                    if let Some(k) = key_var {
-                        env.insert(k.clone(), key_ty);
-                        self.clear_foreach_callable_metadata(k);
-                    }
-                    env.insert(value_var.clone(), value_ty);
-                    self.clear_foreach_callable_metadata(value_var);
                 } else if matches!(
                     arr_ty,
                     PhpType::Iterable | PhpType::Mixed | PhpType::Union(_)
