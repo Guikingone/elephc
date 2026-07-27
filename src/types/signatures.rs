@@ -303,9 +303,8 @@ pub(crate) fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
         )),
         "get_class" => Some(optional(&["object"], 0, vec![null_lit()])),
         "get_parent_class" => Some(optional(&["object_or_class"], 0, vec![null_lit()])),
-        "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => {
-            Some(fixed(&[]))
-        }
+        "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits"
+        | "get_defined_functions" => Some(fixed(&[])),
         "is_a" => Some(optional(
             &["object_or_class", "class", "allow_string"],
             2,

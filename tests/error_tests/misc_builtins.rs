@@ -315,15 +315,15 @@ fn test_filter_var_fully_qualified_constant_recognized() {
 // what real Symfony call site reaches it).
 
 /// `get_defined_functions()` — reachable from
-/// `Symfony\Component\ErrorHandler\ErrorEnhancer\UndefinedFunctionErrorEnhancer::enhance()` —
-/// stays a compile-time "Undefined function": a real implementation needs a correct
-/// 'internal'/'user' split sourced from EIR `Function`/`FunctionFlags` plus a pay-for-use data
-/// table, scoped as real follow-up work rather than a five-minute catalog entry.
+/// `Symfony\Component\ErrorHandler\ErrorEnhancer\UndefinedFunctionErrorEnhancer::enhance()` — is now
+/// implemented (see `crate::codegen::lower_inst::builtins::types::lower_get_defined_functions`): it
+/// returns the two-key `['internal', 'user']` assoc split sourced from the builtin catalog and EIR
+/// `Function`/`FunctionFlags`. It must type-check cleanly rather than stay an "Undefined function".
 #[test]
-fn test_error_get_defined_functions_kept_loud() {
-    expect_error(
-        "<?php $fns = get_defined_functions(); var_dump($fns);",
-        "Undefined function: get_defined_functions",
+fn test_get_defined_functions_now_recognized() {
+    assert!(
+        check_source("<?php $fns = get_defined_functions(); echo count($fns['internal']);").is_ok(),
+        "get_defined_functions() should resolve as an implemented builtin, not stay undefined",
     );
 }
 

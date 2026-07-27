@@ -85,3 +85,15 @@ pub(crate) fn check_class_relation(cx: &mut BuiltinCheckCtx) -> Result<PhpType, 
 pub(crate) fn check_declared_names(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Array(Box::new(PhpType::Str)))
 }
+
+/// Returns `array<string, array<string>>` for `get_defined_functions()`.
+///
+/// The result is a two-key assoc array (`'internal'` and `'user'`), each mapping to an
+/// indexed list of lowercased function names. The hook ignores its context because the
+/// builtin takes no arguments; the registry common path enforces arity = 0 before it runs.
+pub(crate) fn check_defined_functions(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    Ok(PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Array(Box::new(PhpType::Str))),
+    })
+}

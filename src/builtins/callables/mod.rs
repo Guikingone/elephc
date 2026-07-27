@@ -27,6 +27,7 @@ pub mod is_subclass_of;
 pub mod get_declared_classes;
 pub mod get_declared_interfaces;
 pub mod get_declared_traits;
+pub mod get_defined_functions;
 
 // Group C — check_class_like_exists
 pub mod class_exists;

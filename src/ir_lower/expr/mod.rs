@@ -8631,6 +8631,10 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
             key: Box::new(PhpType::Mixed),
             value: Box::new(PhpType::Mixed),
         }),
+        "get_defined_functions" => Some(PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Array(Box::new(PhpType::Str))),
+        }),
         "class_get_attributes" => Some(PhpType::Array(Box::new(PhpType::Object(
             "ReflectionAttribute".to_string(),
         )))),

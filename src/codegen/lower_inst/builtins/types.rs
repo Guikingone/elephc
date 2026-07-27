@@ -827,6 +827,185 @@ fn emit_string_array_fill_x86_64(ctx: &mut FunctionContext<'_>, names: &[String]
     ctx.emitter.instruction("pop rax");                                         // restore the final declared-name array as the result
 }
 
+/// Lowers `get_defined_functions()` into `['internal' => [...], 'user' => [...]]`.
+///
+/// Mirrors the `get_declared_classes` string-array path one level nested: two indexed
+/// string arrays (compile-time-known builtin and user-defined function names) boxed
+/// into a two-entry assoc hash.
+pub(crate) fn lower_get_defined_functions(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "get_defined_functions", 0)?;
+    let internal = defined_internal_function_names();
+    let user = defined_user_function_names(ctx);
+    emit_defined_functions_array(ctx, &internal, &user)?;
+    store_if_result(ctx, inst)
+}
+
+/// Returns the lowercased, sorted, de-duplicated set of PHP-visible builtin function names.
+///
+/// This is elephc's supported builtin catalog (registry + compiler-resident names, minus
+/// `--strict-php` extension hides), which stands in for PHP's `['internal']` list. The exact
+/// membership differs from stock PHP, but the structure and common names (e.g. `strlen`) match.
+fn defined_internal_function_names() -> Vec<String> {
+    let mut names: Vec<String> =
+        crate::types::checker::builtins::supported_builtin_function_names()
+            .into_iter()
+            .map(|name| name.to_ascii_lowercase())
+            .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Returns the lowercased user-defined free-function names in module declaration order.
+///
+/// Filters out compiler-synthesized bodies, methods, closures, invoker/wrapper trampolines,
+/// the top-level `main`, elephc prelude internals (`__`-prefixed), and elephc's own
+/// always-available prelude globals, so only PHP-visible user functions remain.
+fn defined_user_function_names(ctx: &FunctionContext<'_>) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for func in &ctx.module.functions {
+        let flags = &func.flags;
+        if flags.is_main
+            || flags.is_method
+            || flags.is_closure
+            || flags.is_synthetic
+            || flags.is_fiber_wrapper
+            || flags.is_callback_wrapper
+            || flags.is_runtime_callable_invoker
+        {
+            continue;
+        }
+        let bare = func.name.trim_start_matches('\\');
+        if bare.contains("::") || bare.starts_with("__") {
+            continue;
+        }
+        if crate::name_resolver::canonical_prelude_global_function_name(bare).is_some() {
+            continue;
+        }
+        let lower = bare.to_ascii_lowercase();
+        if seen.insert(lower.clone()) {
+            names.push(lower);
+        }
+    }
+    names
+}
+
+/// Builds the `['internal' => [...], 'user' => [...]]` assoc hash into the result register.
+///
+/// Each inner list is an indexed string array built by `emit_string_array`; both are boxed
+/// into a freshly allocated hash under the `'internal'`/`'user'` keys with the array runtime
+/// value tag (4). `__rt_hash_set` stores the inner array pointer without retaining, so the
+/// outer hash takes ownership of each inner array's single reference and frees it on release.
+fn emit_defined_functions_array(
+    ctx: &mut FunctionContext<'_>,
+    internal: &[String],
+    user: &[String],
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => emit_defined_functions_array_aarch64(ctx, internal, user)?,
+        Arch::X86_64 => emit_defined_functions_array_x86_64(ctx, internal, user)?,
+    }
+    Ok(())
+}
+
+/// Emits the AArch64 `get_defined_functions()` assoc-hash construction.
+///
+/// Scratch frame (sp-relative, 48 bytes): #0 internal array, #8 user array, #16 hash pointer.
+/// No frame-pointer/return-address save is needed: the enclosing function preserved them and
+/// nothing here needs a live `x30` across the helper calls.
+fn emit_defined_functions_array_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    internal: &[String],
+    user: &[String],
+) -> Result<()> {
+    ctx.emitter.instruction("sub sp, sp, #48");                                 // reserve scratch slots for the two inner arrays and the hash
+    emit_string_array(ctx, internal)?;
+    ctx.emitter.instruction("str x0, [sp, #0]");                                // save the built 'internal' name array
+    emit_string_array(ctx, user)?;
+    ctx.emitter.instruction("str x0, [sp, #8]");                                // save the built 'user' name array
+    abi::emit_load_int_immediate(ctx.emitter, "x0", 16);                        // outer hash capacity hint
+    abi::emit_load_int_immediate(ctx.emitter, "x1", 4);                         // outer hash value tag = array
+    abi::emit_call_label(ctx.emitter, "__rt_hash_new");
+    ctx.emitter.instruction("str x0, [sp, #16]");                               // save the freshly allocated outer hash
+    emit_defined_functions_hash_entry_aarch64(ctx, b"internal", 0);
+    emit_defined_functions_hash_entry_aarch64(ctx, b"user", 8);
+    ctx.emitter.instruction("ldr x0, [sp, #16]");                               // load the finished hash as the result
+    ctx.emitter.instruction("add sp, sp, #48");                                 // release the scratch slots
+    Ok(())
+}
+
+/// Inserts one `key => inner_array` entry into the outer hash on AArch64.
+///
+/// `value_slot` is the sp-relative byte offset of the saved inner array pointer. The
+/// normalized key survives in `x1`/`x2` because no call intervenes before `__rt_hash_set`.
+fn emit_defined_functions_hash_entry_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    key: &[u8],
+    value_slot: i64,
+) {
+    let (label, len) = ctx.data.add_string(key);
+    abi::emit_symbol_address(ctx.emitter, "x1", &label);                        // key pointer for normalization
+    abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);                // key length for normalization
+    abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");               // x1/x2 = normalized key ptr/len
+    ctx.emitter.instruction("ldr x0, [sp, #16]");                               // reload the outer hash pointer
+    ctx.emitter.instruction(&format!("ldr x3, [sp, #{}]", value_slot));         // value_lo = the inner array pointer
+    ctx.emitter.instruction("mov x4, xzr");                                     // value_hi is unused for an array payload
+    abi::emit_load_int_immediate(ctx.emitter, "x5", 4);                         // value tag = array
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set");                         // x0 = the possibly-grown hash
+    ctx.emitter.instruction("str x0, [sp, #16]");                               // save the updated hash pointer
+}
+
+/// Emits the x86_64 `get_defined_functions()` assoc-hash construction.
+///
+/// Scratch frame (rsp-relative, 48 bytes): +0 internal array, +8 user array, +16 hash pointer.
+fn emit_defined_functions_array_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    internal: &[String],
+    user: &[String],
+) -> Result<()> {
+    ctx.emitter.instruction("sub rsp, 48");                                     // reserve scratch slots for the two inner arrays and the hash
+    emit_string_array(ctx, internal)?;
+    ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // save the built 'internal' name array
+    emit_string_array(ctx, user)?;
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                    // save the built 'user' name array
+    abi::emit_load_int_immediate(ctx.emitter, "rdi", 16);                       // outer hash capacity hint
+    abi::emit_load_int_immediate(ctx.emitter, "rsi", 4);                        // outer hash value tag = array
+    abi::emit_call_label(ctx.emitter, "__rt_hash_new");
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");                   // save the freshly allocated outer hash
+    emit_defined_functions_hash_entry_x86_64(ctx, b"internal", 0);
+    emit_defined_functions_hash_entry_x86_64(ctx, b"user", 8);
+    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                   // load the finished hash as the result
+    ctx.emitter.instruction("add rsp, 48");                                     // release the scratch slots
+    Ok(())
+}
+
+/// Inserts one `key => inner_array` entry into the outer hash on x86_64.
+///
+/// `value_slot` is the rsp-relative byte offset of the saved inner array pointer. The
+/// normalized key length survives in `rdx` because no call intervenes before `__rt_hash_set`.
+fn emit_defined_functions_hash_entry_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    key: &[u8],
+    value_slot: i64,
+) {
+    let (label, len) = ctx.data.add_string(key);
+    abi::emit_symbol_address(ctx.emitter, "rax", &label);                       // key pointer for normalization
+    abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);               // key length for normalization
+    abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");               // rax/rdx = normalized key ptr/len
+    ctx.emitter.instruction("mov rsi, rax");                                    // hash_set key pointer = normalized key ptr
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");                   // hash_set hash pointer
+    let value_load = format!("mov rcx, QWORD PTR [rsp + {}]", value_slot);
+    ctx.emitter.instruction(&value_load);                                       // value_lo = the inner array pointer
+    ctx.emitter.instruction("xor r8, r8");                                      // value_hi is unused for an array payload
+    abi::emit_load_int_immediate(ctx.emitter, "r9", 4);                         // value tag = array
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set");                         // rax = the possibly-grown hash
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");                   // save the updated hash pointer
+}
+
 /// Looks up a class by PHP-style case-insensitive name.
 fn lookup_class<'a>(ctx: &'a FunctionContext<'_>, name: &str) -> Option<&'a ClassInfo> {
     let clean = name.trim_start_matches('\\');

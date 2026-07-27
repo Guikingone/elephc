@@ -1391,6 +1391,31 @@ echo ($zebra >= 0 && $alpha >= 0 && $zebra < $alpha) ? "ok" : "bad";
     assert_eq!(out, "ok");
 }
 
+/// Verifies get_defined_functions() returns the two-key ['internal', 'user'] assoc
+/// structure, with user functions listed under 'user' and builtins under 'internal'.
+#[test]
+fn test_get_defined_functions_splits_internal_and_user() {
+    let out = compile_and_run(
+        r#"<?php
+function myUserFn() {}
+function otherFn() {}
+$f = get_defined_functions();
+echo array_key_exists('internal', $f) ? "i" : "-";
+echo array_key_exists('user', $f) ? "u" : "-";
+echo count($f['internal']) > 0 ? "n" : "-";
+echo in_array('strlen', $f['internal']) ? "s" : "-";
+echo in_array('myuserfn', $f['user']) ? "m" : "-";
+echo in_array('otherfn', $f['user']) ? "o" : "-";
+$seen = 0;
+foreach ($f as $type => $names) {
+    foreach ($names as $name) { $seen = $seen + 1; }
+}
+echo $seen > 0 ? "y" : "-";
+"#,
+    );
+    assert_eq!(out, "iunsmoy");
+}
+
 /// Verifies get declared interfaces includes user interfaces.
 #[test]
 fn test_get_declared_interfaces_includes_user_interfaces() {
