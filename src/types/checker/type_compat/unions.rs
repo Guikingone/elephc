@@ -411,6 +411,18 @@ impl Checker {
         existing: &PhpType,
         new_ty: &PhpType,
     ) -> Option<PhpType> {
+        // A `Mixed` on either side dominates the merge and yields `Mixed`. This must precede the
+        // `type_accepts` shortcut below: under gradual typing `type_accepts(existing, Mixed)` is
+        // true for any concrete `existing`, so the shortcut would return that narrower `existing`
+        // type and silently discard the widening. As a *join* (this helper backs the conditional
+        // reassignment and ternary/if branch merges), the least upper bound of a concrete type and
+        // a gradual `Mixed` value is `Mixed`, never the concrete side. Discarding it left a
+        // reassigned local mis-typed: `$x = <string>; $x = unserialize(...);` inside a branch kept
+        // `Str`, so a later `$x->method()` resolved against the string receiver and fell through to
+        // the `Int` method-call fallback (Symfony DI `ParentTrait::parent()`).
+        if matches!(existing, PhpType::Mixed) || matches!(new_ty, PhpType::Mixed) {
+            return Some(PhpType::Mixed);
+        }
         if self.type_accepts(existing, new_ty) {
             return Some(existing.clone());
         }
@@ -429,9 +441,6 @@ impl Checker {
             && matches!(existing, PhpType::Array(_) | PhpType::AssocArray { .. })
         {
             return Some(existing.clone());
-        }
-        if matches!(existing, PhpType::Mixed) || matches!(new_ty, PhpType::Mixed) {
-            return Some(PhpType::Mixed);
         }
         if *new_ty == PhpType::Void {
             return Some(existing.clone());
