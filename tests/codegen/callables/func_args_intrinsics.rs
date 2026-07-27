@@ -229,6 +229,31 @@ echo $options->legacyFlag(false) ? "on" : "off";
     assert_eq!(out, "3:off");
 }
 
+/// Regression guard: an arity-hungry method reached through a boxed `Mixed` receiver (here
+/// an untyped parameter) must still receive its hidden `__fga_argc` operand. The boxed
+/// dynamic-dispatch path (`lower_mixed_method_call` → `mixed_method_candidates`) filters
+/// candidate classes by ABI arity; that filter reads the EMITTED method ABI (which carries
+/// the hidden argc), not the checker-visible signature, so the single closed-world
+/// implementation is matched instead of being dropped — a dropped candidate previously
+/// mis-emitted a spurious "Call to a member function on null" fatal at runtime.
+#[test]
+fn test_func_args_intrinsic_in_method_via_mixed_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class Counter {
+    public function tally() {
+        return func_num_args() . ":" . implode(",", func_get_args());
+    }
+}
+function dispatch($receiver) {
+    return $receiver->tally(10, 20, 30);
+}
+echo dispatch(new Counter());
+"#,
+    );
+    assert_eq!(out, "3:10,20,30");
+}
+
 // Gated dynamic-invoker forms (first-class-callable syntax, dynamic-length spread, and a
 // per-element dynamic-callback path) are now checker-level `CompileError`s — see
 // `error_tests::callables::test_error_func_num_args_first_class_callable`,

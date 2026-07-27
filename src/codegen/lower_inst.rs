@@ -3935,7 +3935,22 @@ fn mixed_method_candidates(
         let Some(signature) = class_info.methods.get(&method_key) else {
             continue;
         };
-        if signature.params.len() + 1 != operand_count {
+        // Compare against the EMITTED method ABI, not the checker-visible signature: an
+        // arity-hungry method (one calling func_num_args()/func_get_args()) carries a hidden
+        // trailing `__fga_argc` ABI parameter absent from `signature.params`, so filtering on
+        // `signature.params.len()` would drop the very candidate whose call site appended that
+        // operand — leaving `candidates` empty and mis-emitting a spurious "on null" fatal.
+        // `resolve_method_call_target` already resolves the ABI from the emitted body via
+        // `emitted_class_method_abi`; mirror its arity here so the two stay in lock-step.
+        let impl_class = class_info
+            .method_impl_classes
+            .get(&method_key)
+            .map(String::as_str)
+            .unwrap_or_else(|| class_name.trim_start_matches('\\'));
+        let abi_param_count = emitted_class_method_abi(ctx, impl_class, &method_key, false)
+            .map(|(params, _)| params.len())
+            .unwrap_or_else(|| signature.params.len());
+        if abi_param_count + 1 != operand_count {
             continue;
         }
         let target = resolve_method_call_target(ctx, class_name, method_name, operand_count)?;
