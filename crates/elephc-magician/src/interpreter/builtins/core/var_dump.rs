@@ -115,12 +115,32 @@ fn eval_var_dump_append_value(
             Ok(())
         }
         EVAL_TAG_RESOURCE => {
-            eval_var_dump_append_prefix(depth, is_reference, output);
-            output.extend_from_slice(b"resource(0) of type (stream)\n");
-            Ok(())
+            eval_var_dump_append_resource(value, values, depth, is_reference, output)
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
+}
+
+/// Appends one `var_dump()` resource line carrying its PHP resource id.
+///
+/// The id is the runtime registry's, reached through the same `(int)` coercion
+/// `get_resource_id()` uses, NOT the eval-local payload: those are different
+/// numbers by construction (see `crate::stream_resources`). This line used to be
+/// the constant `resource(0) of type (stream)`, so every eval `var_dump()` of a
+/// stream printed the same wrong number regardless of how many were open.
+fn eval_var_dump_append_resource(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+    depth: usize,
+    is_reference: bool,
+    output: &mut Vec<u8>,
+) -> Result<(), EvalStatus> {
+    let id = values.cast_int(value)?;
+    eval_var_dump_append_prefix(depth, is_reference, output);
+    output.extend_from_slice(b"resource(");
+    output.extend_from_slice(&values.string_bytes(id)?);
+    output.extend_from_slice(b") of type (stream)\n");
+    Ok(())
 }
 
 /// Appends one integer-like or float-like `var_dump()` scalar line.

@@ -20,6 +20,7 @@ use super::generators;
 use super::io;
 use super::objects;
 use super::pointers;
+use super::resource_ids;
 use super::spl;
 use super::strings;
 use super::system;
@@ -71,6 +72,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_explode(emitter);
     strings::emit_implode(emitter);
     strings::emit_implode_int(emitter);
+    strings::emit_implode_bool(emitter);
     strings::emit_ucwords(emitter);
     strings::emit_str_ireplace(emitter);
     strings::emit_substr_replace(emitter);
@@ -114,6 +116,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
 
     // Callable introspection runtime functions
     callables::emit_is_callable_runtime(emitter);
+    callables::emit_function_exists_lookup(emitter);
     callables::emit_callable_descriptor_release(emitter);
     callables::emit_closure_bind(emitter);
 
@@ -265,6 +268,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_intersect_refcounted(emitter);
     arrays::emit_array_flip(emitter);
     arrays::emit_array_flip_string(emitter);
+    arrays::emit_hash_flip(emitter);
+    arrays::emit_hash_map(emitter);
     arrays::emit_array_combine(emitter);
     arrays::emit_array_combine_refcounted(emitter);
     arrays::emit_array_fill_keys(emitter);
@@ -313,6 +318,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_mixed_abs(emitter);
     arrays::emit_mixed_instanceof(emitter);
     arrays::emit_iterable_unsupported_kind(emitter);
+    arrays::emit_foreach_non_iterable_warning(emitter);
+    arrays::emit_nan_bool_coercion_warning(emitter);
     arrays::emit_iterable_write_stdout(emitter);
     arrays::emit_mixed_cast_bool(emitter);
     arrays::emit_mixed_cast_float(emitter);
@@ -343,7 +350,11 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     spl::emit_doubly_linked_list_runtime(emitter);
     spl::emit_fixed_array_runtime(emitter);
 
+    // PHP resource-id registry (its own numbering space, unrelated to object handles)
+    resource_ids::emit_resource_ids(emitter);
+
     // Object runtime functions
+    objects::emit_object_handles(emitter);
     objects::emit_stdclass_new(emitter);
     objects::emit_stdclass_from_hash(emitter);
     objects::emit_stdclass_get(emitter);
@@ -481,7 +492,22 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_var_dump_array_str(emitter);
     io::emit_var_dump_array_bool(emitter);
     io::emit_var_dump_array_float(emitter);
-    io::emit_var_dump_array_mixed(emitter);
+    io::emit_var_dump_indexed(emitter);
+    io::emit_var_dump_value(emitter);
+    io::emit_var_dump_open_container(emitter);
+    io::emit_var_dump_close_container(emitter);
+    io::emit_var_dump_open_object(emitter);
+    io::emit_var_dump_object(emitter);
+    io::emit_var_dump_emit_object_key(emitter);
+    io::emit_var_dump_emit_uninit_line(emitter);
+    io::emit_var_dump_emit_recursion_line(emitter);
+    io::emit_vd_obj_desc(emitter);
+    io::emit_vd_obj_count(emitter);
+    io::emit_vd_seen_find(emitter);
+    io::emit_vd_seen_push(emitter);
+    io::emit_vd_seen_pop(emitter);
+    io::emit_var_dump_pad(emitter);
+    io::emit_var_dump_indent_step(emitter);
     io::emit_var_dump_emit_indexed_key(emitter);
     io::emit_var_dump_emit_string_key(emitter);
     io::emit_var_dump_hash(emitter);

@@ -6740,7 +6740,12 @@ fn lower_user_stream_filter_attach(
 }
 
 /// Boxes the current integer result as a PHP stream resource Mixed cell.
+///
+/// Mints a fresh resource id first: like a descriptor, a filter handle can repeat a
+/// number a previous, now-released filter used, and PHP never hands the same
+/// resource id out twice.
 fn emit_boxed_stream_resource(ctx: &mut FunctionContext<'_>) {
+    abi::emit_call_label(ctx.emitter, "__rt_resource_id_mint");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x1, x0");                              // use the descriptor as the resource payload
@@ -8562,6 +8567,7 @@ fn box_stream_fd_or_false_result_kind(
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x0, #0");                              // test whether the stream helper returned a negative descriptor
             ctx.emitter.instruction(&format!("b.lt {}", false_label));          // box PHP false when stream creation failed
+            abi::emit_call_label(ctx.emitter, "__rt_resource_id_mint");         // mint a FRESH resource id: the kernel reuses descriptor numbers, PHP never reuses ids
             ctx.emitter.instruction("mov x1, x0");                              // pass the native stream fd as the Mixed low payload word
             ctx.emitter.instruction(&format!("mov x2, #{}", kind));             // resource-kind subtype in the Mixed high word (1=fd,3=popen,4=dir)
             ctx.emitter.instruction("mov x0, #9");                              // select runtime tag 9 for a stream resource
@@ -8577,6 +8583,7 @@ fn box_stream_fd_or_false_result_kind(
         Arch::X86_64 => {
             ctx.emitter.instruction("test rax, rax");                           // test whether the stream helper returned a negative descriptor
             ctx.emitter.instruction(&format!("js {}", false_label));            // box PHP false when stream creation failed
+            abi::emit_call_label(ctx.emitter, "__rt_resource_id_mint");         // mint a FRESH resource id: the kernel reuses descriptor numbers, PHP never reuses ids
             ctx.emitter.instruction("mov rdi, rax");                            // pass the native stream fd as the Mixed low payload word
             ctx.emitter.instruction(&format!("mov esi, {}", kind));             // resource-kind subtype in the Mixed high word (1=fd,3=popen,4=dir)
             ctx.emitter.instruction("mov eax, 9");                              // select runtime tag 9 for a stream resource

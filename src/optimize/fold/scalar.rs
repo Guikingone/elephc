@@ -259,6 +259,15 @@ impl ScalarValue {
         }
     }
 
+    /// Returns whether this scalar value is a floating-point NAN.
+    ///
+    /// Folding a NAN to bool is value-correct (`truthy()` already answers `true`, since
+    /// `NAN != 0.0`) but WARNING-incorrect under PHP 8.5, which reports every NAN-to-bool
+    /// coercion. `try_fold_cast` uses this to keep such a cast on the runtime path.
+    pub(in crate::optimize) fn is_nan_float(&self) -> bool {
+        matches!(self, ScalarValue::Float(value) if value.is_nan())
+    }
+
     /// Converts this scalar value back into the equivalent `ExprKind` literal node.
     pub(in crate::optimize) fn into_expr_kind(self) -> ExprKind {
         match self {

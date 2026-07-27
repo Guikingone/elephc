@@ -24,6 +24,72 @@ pub(in crate::interpreter) fn eval_builtin_with_values(
         return Ok(Some(result));
     }
 
+    // `opcache_get_configuration` is prelude-provided on native and dispatched here as
+    // a plain runtime handler (not a PHP-visible builtin); it takes no arguments.
+    if name == "opcache_get_configuration" {
+        if !evaluated_args.is_empty() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        return Ok(Some(eval_opcache_get_configuration_result(values)?));
+    }
+
+    // `opcache_reset` is prelude-provided on native and dispatched here as a plain
+    // runtime handler (not a PHP-visible builtin); it takes no arguments and returns
+    // the CLI-default cache-enabled boolean.
+    if name == "opcache_reset" {
+        if !evaluated_args.is_empty() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        return Ok(Some(eval_opcache_reset_result(values)?));
+    }
+
+    // `opcache_get_status` is prelude-provided on native and dispatched here as a plain
+    // runtime handler (not a PHP-visible builtin); it takes an optional `$include_scripts`
+    // argument and returns the CLI-default result (cache disabled → `false`).
+    if name == "opcache_get_status" {
+        if evaluated_args.len() > 1 {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        return Ok(Some(eval_opcache_get_status_result(values)?));
+    }
+
+    // The five OPcache file/script functions are prelude-provided on native and dispatched
+    // here as plain runtime handlers (not PHP-visible builtins), each returning the
+    // CLI-default disabled-cache result (`false`) after validating arity — except the
+    // `void` `opcache_jit_blacklist`, which yields `NULL`.
+    if name == "opcache_is_script_cached" {
+        if evaluated_args.len() != 1 {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        return Ok(Some(eval_opcache_is_script_cached_result(values)?));
+    }
+    if name == "opcache_invalidate" {
+        if evaluated_args.is_empty() || evaluated_args.len() > 2 {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        return Ok(Some(eval_opcache_invalidate_result(values)?));
+    }
+    if name == "opcache_compile_file" {
+        if evaluated_args.len() != 1 {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        return Ok(Some(eval_opcache_compile_file_result(values)?));
+    }
+    if name == "opcache_is_script_cached_in_file_cache" {
+        if evaluated_args.len() != 1 {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        return Ok(Some(eval_opcache_is_script_cached_in_file_cache_result(
+            values,
+        )?));
+    }
+    if name == "opcache_jit_blacklist" {
+        if evaluated_args.len() != 1 {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        return Ok(Some(eval_opcache_jit_blacklist_result(values)?));
+    }
+
     if let Some(result) =
         eval_date_procedural_alias_with_values(name, evaluated_args, context, values)?
     {

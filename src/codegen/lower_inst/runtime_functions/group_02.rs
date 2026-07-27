@@ -43,6 +43,9 @@ pub(super) fn lower(
                     "get_declared_traits",
                 )
         }),
+        RuntimeFnId::GetLoadedExtensions => Some({
+            crate::codegen::lower_inst::builtins::types::lower_get_loaded_extensions(ctx, inst)
+        }),
         RuntimeFnId::GetParentClass => Some({
             crate::codegen::lower_inst::builtins::types::lower_class_name_lookup(
                     ctx,

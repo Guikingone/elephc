@@ -26,6 +26,21 @@ pub(super) fn emit_type_error(ctx: &mut FunctionContext<'_>, message: &str) {
     emit_static_exception(ctx, "TypeError", "_spl_type_error_class_id", message);
 }
 
+/// Throws a catchable PHP `DivisionByZeroError` carrying a static message.
+///
+/// Reference PHP raises this `ArithmeticError` subclass — not a bare fatal — for a
+/// zero divisor, so `catch (DivisionByZeroError $e)`, `catch (ArithmeticError $e)`,
+/// `catch (Error $e)`, and `catch (Throwable $e)` all match. Callers pass php-src's
+/// own wording (`"Division by zero"` / `"Modulo by zero"`).
+pub(super) fn emit_division_by_zero_error(ctx: &mut FunctionContext<'_>, message: &str) {
+    emit_static_exception(
+        ctx,
+        "DivisionByZeroError",
+        "_spl_division_by_zero_error_class_id",
+        message,
+    );
+}
+
 /// Throws a catchable PHP `Error` whose message is a runtime string value.
 pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) -> Result<()> {
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
@@ -54,6 +69,7 @@ fn emit_static_exception(
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = throwable object instance
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation as a runtime object
+            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "x9", class_id_symbol, 0);
             ctx.emitter.instruction("str x9, [x0]");                            // store the built-in throwable class id
             abi::emit_symbol_address(ctx.emitter, "x9", &message_label);
@@ -70,6 +86,7 @@ fn emit_static_exception(
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation as a runtime object
+            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", class_id_symbol, 0);
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the built-in throwable class id
             abi::emit_symbol_address(ctx.emitter, "r10", &message_label);
@@ -172,6 +189,7 @@ fn emit_dynamic_error_object(ctx: &mut FunctionContext<'_>) {
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = throwable object instance
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation as a runtime object
+            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_spl_error_class_id", 0);
             ctx.emitter.instruction("str x9, [x0]");                            // store the built-in Error class id
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 0);
@@ -189,6 +207,7 @@ fn emit_dynamic_error_object(ctx: &mut FunctionContext<'_>) {
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation as a runtime object
+            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_error_class_id", 0);
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the built-in Error class id
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 0);

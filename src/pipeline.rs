@@ -16,11 +16,13 @@ use std::time::Instant;
 use crate::cli::CliConfig;
 use crate::codegen::platform::{Platform, Target};
 use crate::codegen::Emit;
+use crate::span::Span;
 use crate::timings::CompileTimings;
 use crate::{
     autoload, codegen, conditional, debug_info, errors, exports, ir, ir_lower, ir_passes, lexer,
-    linker, list_id_prelude, magic_constants, name_resolver, optimize, parser, pdo_prelude,
-    resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude, web_prelude,
+    linker, list_id_prelude, magic_constants, name_resolver, opcache_prelude, optimize, parser,
+    pdo_prelude, resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude,
+    web_prelude,
 };
 
 /// Holds the paths for all compilation output files (assembly, object, binary, source map).
@@ -60,10 +62,16 @@ pub(crate) fn compile(config: CliConfig) {
         web,
         with_crates,
         quiet,
+        ini_overrides,
     } = config;
     let filename = filename.as_str();
     crate::progress::init(quiet);
     codegen::set_null_repr(null_repr);
+    // Record the PHP language profile and SAPI mode BEFORE any prelude or lowering runs: it is
+    // the single source of truth for the reported version surface (`PHP_VERSION` and friends,
+    // `PHP_SAPI`, `phpversion()`), which is baked far below this function's parameter list — in
+    // `codegen_support::prescan::collect_constants` and in the `phpversion()` const-fold.
+    codegen::set_compile_profile(php_version, web);
     crate::strict_php::set_enabled(strict_php);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
     let output_paths = output_paths(filename, target, emit);
@@ -136,7 +144,9 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("resolve");
     let phase_started = Instant::now();
-    let ast = match resolver::resolve(parsed, parent) {
+    // `resolve_collecting_includes` also hands back the canonical path of every file the
+    // resolver statically inlined — group 2 of the OPcache script manifest.
+    let (ast, opcache_included_files) = match resolver::resolve_collecting_includes(parsed, parent) {
         Ok(resolved) => resolved,
         Err(e) => {
             crate::progress::clear();
@@ -146,6 +156,15 @@ pub(crate) fn compile(config: CliConfig) {
     };
     let ast = autoload::collect_aliases(ast);
     timings.record_since("resolve", phase_started);
+
+    // Snapshot the USER-declared function/class names for `opcache.preload`'s
+    // `preload_statistics`, taken HERE — after include resolution but BEFORE any compiler prelude
+    // is injected — so the reported lists can never contain `var_export`, the PDO surface, or the
+    // OPcache functions the opcache prelude itself adds. Reference PHP reports the DELTA preloading
+    // added to the symbol tables, which likewise never contains a built-in. The walk visits only
+    // statement lists that can host a hoisted declaration, so it is cheap on every build; it is
+    // consumed only when `opcache.preload` is set (see `opcache_prelude::preload_statistics`).
+    let opcache_preload_symbols = opcache_prelude::collect_preload_symbols(&ast);
 
     // Inject the PDO standard-library prelude (extern bridge + PDO classes,
     // written in elephc-PHP) only when the program references PDO, so non-PDO
@@ -185,6 +204,71 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = var_export_prelude::inject_if_used(ast);
     timings.record_since("var-export-prelude", phase_started);
 
+    // Inject the OPcache preludes (pure elephc-PHP functions): `opcache_get_configuration()`
+    // returns a compile-time array literal built from the version-keyed OPcache
+    // directive matrix, and `opcache_reset()` returns the compile-time cache-enabled
+    // boolean. Each is injected only when the program references it, so other binaries
+    // carry nothing. Runs after include resolution so usage inside includes is detected,
+    // and before name resolution so the call resolves to the injected function. The
+    // reported directive set/version follows the compile target `php_version`; the
+    // `opcache_reset()` result follows the SAPI (`web`): CLI disabled, web enabled.
+    // Build the PLACEHOLDER OPcache script manifest: the canonicalized main entry file, every
+    // statically-resolved include/require target, and Composer `autoload.files`. The PSR-4 /
+    // SPL-rule class files are still unknown here — `autoload::run` produces them below, after
+    // name resolution — so this manifest is completed and re-baked by
+    // `opcache_prelude::bake_manifest` further down. The declarations themselves MUST be
+    // injected here, before `name_resolver`, or a namespaced `opcache_get_status()` caller
+    // would not resolve to them (see `opcache_prelude::bake_manifest` for the full argument).
+    // The manifest feeds `opcache_get_status().scripts`, `opcache_is_script_cached`, and
+    // `opcache_compile_file`.
+    let phase_started = Instant::now();
+    let opcache_manifest = opcache_prelude::collect_manifest(
+        filename,
+        &opcache_included_files,
+        autoload_registry.always_included_files(),
+    );
+    // The canonicalized entry script, resolved separately from the manifest: it is the operand
+    // `opcache.restrict_api` compares its prefix against (reference PHP uses
+    // `SG(request_info).path_translated`, the ENTRY script — not the executing file), and the
+    // manifest deliberately drops entries it cannot stat, so its first element is not a
+    // dependable stand-in. See `opcache_prelude::restrict_api_denies`.
+    let opcache_entry_path = opcache_prelude::canonical_entry_path(filename);
+    // `opcache.preload` is a COMPILE-TIME decision, resolved here for the same reason
+    // `restrict_api` is: reference PHP preloads during STARTUP, before the script runs, and
+    // elephc's INI is fixed when the binary is built. The three outcomes mirror reference exactly
+    // (see `opcache_prelude::PreloadVerdict` for the verified matrix):
+    // - unresolvable path with the cache enabled → HARD COMPILE ERROR, the AOT equivalent of
+    //   reference's startup fatal. It fires whether or not the program calls an OPcache function,
+    //   because reference's fatal does not depend on that either.
+    // - resolvable but outside the compile-time script manifest → a WARNING only: preloading a file
+    //   this program never includes is a legitimate configuration and must not break a build. That
+    //   arm depends on the COMPLETE manifest, so it is evaluated after `autoload::run` below; only
+    //   the manifest-independent compile ERROR is decided here, matching reference PHP, which
+    //   fatals at startup regardless of what the script does.
+    // - empty directive, or a disabled cache → nothing at all happens (reference does not preload
+    //   when the accelerator is off, and does not even validate the path).
+    let opcache_preload =
+        opcache_prelude::preload_verdict(php_version, web, &ini_overrides, &opcache_manifest);
+    if let Some(message) = opcache_preload.compile_error() {
+        errors::report(&errors::CompileError::new(Span::new(0, 0), &message).with_file(filename.to_string()));
+        process::exit(1);
+    }
+    let opcache_preload_statistics = opcache_prelude::preload_statistics(
+        &opcache_preload,
+        &opcache_manifest,
+        &opcache_preload_symbols,
+    );
+    let (ast, opcache_bake_sites) = opcache_prelude::inject_if_used(
+        ast,
+        php_version,
+        web,
+        opcache_entry_path.as_deref(),
+        &opcache_manifest,
+        &ini_overrides,
+        opcache_preload_statistics.as_ref(),
+    );
+    timings.record_since("opcache-prelude", phase_started);
+
     // Inject the image standard-library prelude (elephc_image externs + GD/Exif/
     // Imagick/Gmagick/Cairo surface, written in elephc-PHP) only when the program
     // references an image symbol, so non-image binaries never declare the
@@ -195,10 +279,30 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = crate::image_prelude::inject_if_used(ast, with_crates.contains("image"));
     timings.record_since("image-prelude", phase_started);
 
+    // Inject the incremental-hashing prelude (the `HashContext` class and the
+    // `hash_init`/`hash_update`/`hash_final`/`hash_copy` wrappers over the internal
+    // `__elephc_hash_ctx_*` builtins) only when the program references that surface,
+    // so non-hashing binaries never declare `HashContext` and never link
+    // `-lelephc_crypto`. Runs after include resolution so hashing inside includes is
+    // detected, and before name resolution so a namespaced caller resolves to it.
+    crate::progress::phase("hash-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::hash_prelude::inject_if_used(ast, false);
+    timings.record_since("hash-prelude", phase_started);
+
     crate::progress::phase("web-prelude");
     let phase_started = Instant::now();
-    let ast = web_prelude::inject_if_web(ast, web, php_version);
+    let ast = web_prelude::inject_if_web(ast, web, php_version, &ini_overrides);
     timings.record_since("web-prelude", phase_started);
+
+    // Inject the PHP version-surface functions (`zend_version`, `php_sapi_name`,
+    // `ini_restore`) the program actually references. Runs AFTER the web prelude so a
+    // `--web` build's own declarations are already present and the redeclaration guard sees
+    // them, and before name resolution so a namespaced caller resolves to the injection.
+    crate::progress::phase("version-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::version_prelude::inject_if_used(ast, php_version);
+    timings.record_since("version-prelude", phase_started);
 
     crate::progress::phase("name-resolve");
     let phase_started = Instant::now();
@@ -214,15 +318,59 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("autoload-run");
     let phase_started = Instant::now();
-    let ast = match autoload::run(ast, parent, &autoload_registry) {
-        Ok(resolved) => resolved,
-        Err(e) => {
-            crate::progress::clear();
-            errors::report(&e);
-            process::exit(1);
-        }
-    };
+    // `run_collecting_included` also hands back the canonical path of every file the autoload
+    // pass loaded — Composer `autoload.files`, PSR-4 / SPL-rule class files, and their own
+    // include targets: group 3 of the OPcache script manifest, and the last one to become
+    // knowable.
+    let (ast, opcache_autoloaded_files) =
+        match autoload::run_collecting_included(ast, parent, &autoload_registry) {
+            Ok(resolved) => resolved,
+            Err(e) => {
+                crate::progress::clear();
+                errors::report(&e);
+                process::exit(1);
+            }
+        };
     timings.record_since("autoload-run", phase_started);
+
+    // Complete the OPcache script manifest now that all three groups exist, and re-render the
+    // manifest-dependent functions injected above against it. This is a pure substitution of
+    // already-declared, already-name-resolved top-level functions, so it cannot disturb the
+    // name resolution that has already happened (see `opcache_prelude::bake_manifest`). It runs
+    // before `optimize::fold_constants` so the baked literals meet every later pass exactly as
+    // the placeholder ones would have.
+    crate::progress::phase("opcache-manifest-bake");
+    let phase_started = Instant::now();
+    let opcache_manifest = opcache_prelude::collect_manifest(
+        filename,
+        &opcache_included_files,
+        &opcache_autoloaded_files,
+    );
+    // Re-decide `opcache.preload` against the complete manifest. Only the `in_manifest` arm can
+    // differ from the verdict taken above (the directive, the SAPI gate and the path resolution
+    // are all manifest-independent), so this second call exists purely to emit the
+    // outside-the-manifest WARNING against the truthful set — reporting it against the
+    // placeholder manifest would warn about files that are, in fact, compiled in.
+    let opcache_preload =
+        opcache_prelude::preload_verdict(php_version, web, &ini_overrides, &opcache_manifest);
+    if let Some(message) = opcache_preload.compile_warning() {
+        errors::report_warning(&errors::CompileWarning::new(Span::new(0, 0), &message));
+    }
+    let opcache_preload_statistics = opcache_prelude::preload_statistics(
+        &opcache_preload,
+        &opcache_manifest,
+        &opcache_preload_symbols,
+    );
+    let ast = opcache_prelude::bake_manifest(
+        ast,
+        &opcache_bake_sites,
+        php_version,
+        web,
+        &opcache_manifest,
+        &ini_overrides,
+        opcache_preload_statistics.as_ref(),
+    );
+    timings.record_since("opcache-manifest-bake", phase_started);
 
     crate::progress::phase("opt-fold");
     let phase_started = Instant::now();
@@ -395,6 +543,32 @@ pub(crate) fn compile(config: CliConfig) {
             .required_libraries
             .iter()
             .any(|lib| lib == "elephc_tls");
+
+    // Report the bridges actually linked into THIS compilation to
+    // `extension_loaded()` / `get_loaded_extensions()`. The set is the bridge
+    // staticlibs referenced at codegen time (`extra_link_libs`, which by now
+    // already carries the `--web` `elephc_web` and every forced `--with-<flag>`
+    // bridge) unioned with the feature-auto-detected `required_libraries` (the
+    // set is not merged into `extra_link_libs` until after codegen, at line
+    // ~414). Each lib is mapped to its canonical PHP extension name through the
+    // single-source `linker::BRIDGES` table; bridges with no distinct PHP
+    // extension (tz -> date, eval) map to `None` and are skipped. Seeded into a
+    // codegen thread-local (mirrors `set_autoload_rule_count`) because the
+    // `extension_loaded` const-fold happens deep in per-instruction lowering,
+    // where threading a parameter would be far more invasive than the bool
+    // `requires_elephc_tls`.
+    let mut linked_extensions: Vec<String> = Vec::new();
+    for lib in extra_link_libs
+        .iter()
+        .chain(check_result.required_libraries.iter())
+    {
+        if let Some(ext) = linker::php_extension_for_lib(lib) {
+            if !linked_extensions.iter().any(|existing| existing == ext) {
+                linked_extensions.push(ext.to_string());
+            }
+        }
+    }
+    codegen::set_linked_extensions(linked_extensions);
 
     crate::progress::phase("runtime-cache");
     let phase_started = Instant::now();

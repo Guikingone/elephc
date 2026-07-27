@@ -112,7 +112,9 @@ mod hash_key_hash;
 mod hash_normalize_key;
 mod hash_may_have_cyclic_values;
 mod hash_ensure_unique;
+mod hash_flip;
 mod hash_insert_owned;
+mod hash_map;
 mod hash_iter;
 mod hash_new;
 mod hash_set;
@@ -134,6 +136,8 @@ mod natsort;
 mod object_free_deep;
 mod range;
 mod incref;
+mod foreach_non_iterable_warning;
+mod nan_bool_coercion_warning;
 mod iterable_unsupported_kind;
 mod iterable_write_stdout;
 mod mixed_abs;
@@ -208,6 +212,10 @@ pub use array_flip::emit_array_flip;
 /// Emit array flip helper.
 pub use array_flip_string::emit_array_flip_string;
 /// Emit string-only array flip helper.
+pub use hash_flip::{emit_hash_flip, ARRAY_FLIP_SKIPPED_MESSAGES};
+/// Emit associative (hash) array flip helper and its skipped-entry warning table.
+pub use hash_map::{emit_hash_map, HashMapResultKind};
+/// Emit associative (hash) array map helper and its callback result-kind selector.
 pub use array_free_deep::emit_array_free_deep;
 /// Emit deep array free helper.
 pub use array_grow::emit_array_grow;
@@ -390,6 +398,16 @@ pub use heap_free::emit_heap_free;
 /// Emit heap free helper.
 pub use in_array_mixed_int::emit_in_array_mixed_int;
 /// Emit integer membership over boxed-Mixed indexed arrays.
+pub use foreach_non_iterable_warning::{
+    emit_foreach_non_iterable_warning, FOREACH_NON_ITERABLE_MESSAGES,
+};
+/// Emit the PHP `foreach()` non-iterable-argument warning helper.
+pub use nan_bool_coercion_warning::{
+    emit_nan_bool_coercion_probe, emit_nan_bool_coercion_probe_leaf,
+    emit_nan_bool_coercion_warning, nan_bool_coercion_warning_enabled,
+    NAN_BOOL_COERCION_MESSAGES,
+};
+/// Emit the PHP 8.5 NAN-to-bool coercion warning helper and its inline call-site probe.
 pub use iterable_unsupported_kind::emit_iterable_unsupported_kind;
 /// Emit unsupported iterable kind error helper.
 pub use iterable_write_stdout::emit_iterable_write_stdout;

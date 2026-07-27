@@ -23,11 +23,11 @@ use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen_support::DeferredFiberWrapper;
 use crate::ir::{BasicBlock, Function, InstId, Module};
 use crate::names::{
-    enum_case_symbol, function_epilogue_symbol, function_symbol, method_symbol, php_symbol_key,
+    function_epilogue_symbol, function_symbol, method_symbol, php_symbol_key,
     static_method_symbol, static_property_symbol,
 };
 use crate::parser::ast::ExprKind;
-use crate::types::{EnumCaseInfo, EnumCaseValue, PhpType};
+use crate::types::PhpType;
 
 use super::context::FunctionContext;
 use super::fibers;
@@ -90,6 +90,10 @@ pub(super) fn emit_module(
         emit_user_function(module, closure, emitter, data, &mut shared, regalloc_linear)?;
     }
     emit_eir_fiber_wrappers(module, emitter);
+    // Enum case materializers are plain out-of-line functions that any user body,
+    // method or closure may call, so they must exist in every emit kind — including
+    // `Emit::Cdylib`, which returns before the main function is emitted.
+    super::enum_singletons::emit_enum_case_materializers(emitter, module, data);
     if matches!(emit, Emit::Cdylib) {
         return Ok(());
     }
@@ -801,7 +805,10 @@ fn emit_main_function(
     if requires_elephc_tls {
         crate::codegen::tls::publish_tls_function_pointers(ctx.emitter);
     }
-    emit_enum_singleton_initializers(&mut ctx);
+    // Enum cases are NOT initialized here any more: each case now materializes on
+    // its first evaluation through `super::enum_singletons`, so a case that user
+    // code never touches allocates nothing and burns no object handle — which is
+    // what PHP does and what the eager prologue diverged from.
     emit_static_property_initializers(&mut ctx)?;
     emit_blocks(&mut ctx)?;
     if !ctx.epilogue_emitted {
@@ -821,133 +828,6 @@ fn emit_main_function(
 /// Returns true when a function is the process entry function.
 fn is_main(function: &Function) -> bool {
     function.flags.is_main || function.name == "main"
-}
-
-/// Emits global singleton objects for enum cases used by EIR user code.
-fn emit_enum_singleton_initializers(ctx: &mut FunctionContext<'_>) {
-    let allowed_enum_names = super::runtime_referenced_enum_singleton_names(ctx.module);
-    let mut sorted_enums = ctx.module.enum_infos.iter().collect::<Vec<_>>();
-    sorted_enums.sort_by_key(|(name, _)| name.as_str());
-    for (enum_name, enum_info) in sorted_enums {
-        if !allowed_enum_names.contains(enum_name) {
-            continue;
-        }
-        let Some(class_info) = ctx.module.class_infos.get(enum_name) else {
-            continue;
-        };
-        // The `name` property slot is authoritative in the class metadata; fall back to the last
-        // property slot (`8 + (count - 1) * 16`) only if it is somehow absent.
-        let name_offset = class_info
-            .property_offsets
-            .get("name")
-            .copied()
-            .unwrap_or_else(|| 8 + class_info.properties.len().saturating_sub(1) * 16);
-        for case in &enum_info.cases {
-            emit_enum_singleton_initializer(
-                ctx,
-                enum_name,
-                class_info.class_id,
-                class_info.properties.len(),
-                name_offset,
-                case,
-            );
-        }
-    }
-}
-
-/// Emits one enum case singleton allocation and publishes it to its global slot.
-fn emit_enum_singleton_initializer(
-    ctx: &mut FunctionContext<'_>,
-    enum_name: &str,
-    class_id: u64,
-    property_count: usize,
-    name_offset: usize,
-    case: &EnumCaseInfo,
-) {
-    ctx.emitter.comment(&format!(
-        "initialize enum singleton {}::{}",
-        enum_name, case.name
-    ));
-    emit_enum_object_allocation(ctx, class_id, property_count);
-    if let Some(case_value) = &case.value {
-        emit_enum_backing_value(ctx, case_value);
-    }
-    emit_enum_name_property(ctx, &case.name, name_offset);
-    let symbol = enum_case_symbol(enum_name, &case.name);
-    abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &symbol, 0);
-}
-
-/// Writes an enum case's `name` string (the case identifier) into its singleton name slot.
-///
-/// The name is interned as a static data-section string, so the pointer/length pair stored here
-/// mirrors a string-backed enum's `value` slot and needs no refcount management.
-fn emit_enum_name_property(ctx: &mut FunctionContext<'_>, case_name: &str, offset: usize) {
-    let object_reg = abi::int_result_reg(ctx.emitter);
-    let temp_reg = abi::temp_int_reg(ctx.emitter.target);
-    let (label, len) = ctx.data.add_string(case_name.as_bytes());
-    abi::emit_symbol_address(ctx.emitter, temp_reg, &label);
-    abi::emit_store_to_address(ctx.emitter, temp_reg, object_reg, offset);
-    abi::emit_load_int_immediate(ctx.emitter, temp_reg, len as i64);
-    abi::emit_store_to_address(ctx.emitter, temp_reg, object_reg, offset + 8);
-}
-
-/// Allocates an object-shaped enum singleton and zeroes its property storage.
-fn emit_enum_object_allocation(
-    ctx: &mut FunctionContext<'_>,
-    class_id: u64,
-    property_count: usize,
-) {
-    let payload_size = 8 + property_count * 16;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter
-                .instruction(&format!("mov x0, #{}", payload_size)); // request enum singleton object payload storage
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction("mov x9, #4");                              // heap kind 4 marks enum singletons as object instances
-            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the heap header before the enum singleton payload
-            ctx.emitter.instruction(&format!("mov x10, #{}", class_id));        // materialize the enum class id
-            ctx.emitter.instruction("str x10, [x0]");                           // store the enum class id at payload offset zero
-        }
-        Arch::X86_64 => {
-            ctx.emitter
-                .instruction(&format!("mov rax, {}", payload_size)); // request enum singleton object payload storage
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!(
-                "mov r10, 0x{:x}",
-                crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-            )); // materialize the x86_64 object heap kind word
-            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the enum singleton payload
-            ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the enum class id
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the enum class id at payload offset zero
-        }
-    }
-    let object_reg = abi::int_result_reg(ctx.emitter);
-    for index in 0..property_count {
-        let offset = 8 + index * 16;
-        abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset);
-        abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset + 8);
-    }
-}
-
-/// Writes a backed enum case value into the singleton's first property slot.
-fn emit_enum_backing_value(ctx: &mut FunctionContext<'_>, case_value: &EnumCaseValue) {
-    let object_reg = abi::int_result_reg(ctx.emitter);
-    let temp_reg = abi::temp_int_reg(ctx.emitter.target);
-    match case_value {
-        EnumCaseValue::Int(value) => {
-            abi::emit_load_int_immediate(ctx.emitter, temp_reg, *value);
-            abi::emit_store_to_address(ctx.emitter, temp_reg, object_reg, 8);
-            abi::emit_store_zero_to_address(ctx.emitter, object_reg, 16);
-        }
-        EnumCaseValue::Str(value) => {
-            let bytes = crate::string_bytes::literal_bytes(value);
-            let (label, len) = ctx.data.add_string(&bytes);
-            abi::emit_symbol_address(ctx.emitter, temp_reg, &label);
-            abi::emit_store_to_address(ctx.emitter, temp_reg, object_reg, 8);
-            abi::emit_load_int_immediate(ctx.emitter, temp_reg, len as i64);
-            abi::emit_store_to_address(ctx.emitter, temp_reg, object_reg, 16);
-        }
-    }
 }
 
 /// Initializes static-property storage before user code runs.

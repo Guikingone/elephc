@@ -644,6 +644,7 @@ fn emit_throw_value_error_aarch64(
     ctx.emitter.instruction("bl __rt_heap_alloc");                              // allocate the ValueError object payload
     ctx.emitter.instruction("mov x9, #6");                                      // heap kind 6 marks an object instance allocation
     ctx.emitter.instruction("str x9, [x0, #-8]");                               // stamp the allocation header as a runtime object
+    ctx.emitter.instruction("bl __rt_object_handle_acquire");                   // bind the new object to its PHP object handle
     abi::emit_symbol_address(ctx.emitter, "x9", "_spl_value_error_class_id");
     ctx.emitter.instruction("ldr x9, [x9]");                                    // load ValueError's runtime class id for this program
     ctx.emitter.instruction("str x9, [x0]");                                    // store the ValueError class id in the Throwable header
@@ -671,6 +672,7 @@ fn emit_throw_value_error_x86_64(
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the ValueError object payload
     ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the allocation header as a runtime object
+    ctx.emitter.instruction("call __rt_object_handle_acquire");                 // bind the new object to its PHP object handle
     ctx.emitter.instruction("mov r10, QWORD PTR [rip + _spl_value_error_class_id]"); // load ValueError's runtime class id for this program
     ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // store the ValueError class id in the Throwable header
     ctx.emitter.instruction(&format!("lea r10, [rip + {}]", message_symbol));   // materialize the static ValueError message pointer

@@ -68,6 +68,41 @@ pub(in crate::interpreter) fn eval_call(
     if matches!(name, "fsockopen" | "pfsockopen") {
         return eval_builtin_fsockopen_call(args, context, scope, values);
     }
+    // `opcache_get_configuration` is prelude-provided on the native side (not a
+    // catalog builtin), so eval dispatches it as a plain runtime handler rather than
+    // through the PHP-visible builtin registry, keeping the two builtin sets in sync.
+    if name == "opcache_get_configuration" {
+        return eval_opcache_get_configuration_call(args, context, scope, values);
+    }
+    // `opcache_reset` is likewise prelude-provided on native; eval returns the CLI
+    // default cache-enabled boolean (false) as a plain runtime handler.
+    if name == "opcache_reset" {
+        return eval_opcache_reset_call(args, context, scope, values);
+    }
+    // `opcache_get_status` is likewise prelude-provided on native; eval reports the CLI
+    // default (cache disabled) and so returns `false` as a plain runtime handler.
+    if name == "opcache_get_status" {
+        return eval_opcache_get_status_call(args, context, scope, values);
+    }
+    // The five OPcache file/script functions are likewise prelude-provided on native; eval
+    // reports the CLI default (cache disabled) and returns `false` from each, except the
+    // `void` `opcache_jit_blacklist`, which evaluates to `NULL`. See
+    // `network_env::opcache_file_functions`.
+    if name == "opcache_is_script_cached" {
+        return eval_opcache_is_script_cached_call(args, context, scope, values);
+    }
+    if name == "opcache_invalidate" {
+        return eval_opcache_invalidate_call(args, context, scope, values);
+    }
+    if name == "opcache_compile_file" {
+        return eval_opcache_compile_file_call(args, context, scope, values);
+    }
+    if name == "opcache_is_script_cached_in_file_cache" {
+        return eval_opcache_is_script_cached_in_file_cache_call(args, context, scope, values);
+    }
+    if name == "opcache_jit_blacklist" {
+        return eval_opcache_jit_blacklist_call(args, context, scope, values);
+    }
     if let Some(result) = eval_date_procedural_alias_call(name, args, context, scope, values)? {
         return Ok(result);
     }

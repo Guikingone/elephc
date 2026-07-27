@@ -302,11 +302,13 @@ sidebar:
 | [`define()`](./builtins/misc/define.md) | `(string $constant_name, mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`defined()`](./builtins/misc/defined.md) | `(string $constant_name): bool` | `bool` | ✓ | ✓ |
 | [`empty()`](./builtins/misc/empty.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
+| [`extension_loaded()`](./builtins/misc/extension_loaded.md) | `(string $extension): bool` | `bool` | ✓ | ✓ |
+| [`get_loaded_extensions()`](./builtins/misc/get_loaded_extensions.md) | `(bool $zend_extensions = false): array` | `array` | ✓ | ✓ |
 | [`header()`](./builtins/misc/header.md) | `(string $header, bool $replace = true, int $response_code = 0): void` | `void` | ✓ | ✓ |
 | [`http_response_code()`](./builtins/misc/http_response_code.md) | `(int $response_code = 0): int` | `int` | ✓ | ✓ |
 | [`isset()`](./builtins/misc/isset.md) | `(mixed $var, ...$vars): bool` | `bool` | ✓ | ✓ |
 | [`php_uname()`](./builtins/misc/php_uname.md) | `(string $mode = 'a'): string` | `string` | ✓ | ✓ |
-| [`phpversion()`](./builtins/misc/phpversion.md) | `(): string` | `string` | ✓ | ✓ |
+| [`phpversion()`](./builtins/misc/phpversion.md) | `(string $extension = null): string|false` | `string|false` | ✓ | ✓ |
 | [`print_r()`](./builtins/misc/print_r.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | ✓ |
 | [`serialize()`](./builtins/misc/serialize.md) | `(mixed $value): string` | `string` | ✓ | — |
 | [`unserialize()`](./builtins/misc/unserialize.md) | `(string $data, mixed $options = []): mixed` | `mixed` | ✓ | — |
@@ -381,12 +383,12 @@ sidebar:
 | [`gzuncompress()`](./builtins/string/gzuncompress.md) | `(string $data, int $max_length = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`hash()`](./builtins/string/hash.md) | `(string $algo, string $data, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`hash_algos()`](./builtins/string/hash_algos.md) | `(): array` | `array` | ✓ | ✓ |
-| [`hash_copy()`](./builtins/string/hash_copy.md) | `(resource $context): mixed` | `mixed` | ✓ | ✓ |
+| [`hash_copy()`](./builtins/string/hash_copy.md) | `(mixed $context): mixed` | `mixed` | — | ✓ |
 | [`hash_equals()`](./builtins/string/hash_equals.md) | `(string $known_string, string $user_string): bool` | `bool` | ✓ | ✓ |
-| [`hash_final()`](./builtins/string/hash_final.md) | `(resource $context, bool $binary = false): string` | `string` | ✓ | ✓ |
+| [`hash_final()`](./builtins/string/hash_final.md) | `(mixed $context, mixed $binary = 'false'): mixed` | `mixed` | — | ✓ |
 | [`hash_hmac()`](./builtins/string/hash_hmac.md) | `(string $algo, string $data, string $key, bool $binary = false): string` | `string` | ✓ | ✓ |
-| [`hash_init()`](./builtins/string/hash_init.md) | `(string $algo, int $flags = 0, string $key = ''): mixed` | `mixed` | ✓ | ✓ |
-| [`hash_update()`](./builtins/string/hash_update.md) | `(resource $context, string $data): bool` | `bool` | ✓ | ✓ |
+| [`hash_init()`](./builtins/string/hash_init.md) | `(mixed $algo, mixed $flags = '0', mixed $key = '""'): mixed` | `mixed` | — | ✓ |
+| [`hash_update()`](./builtins/string/hash_update.md) | `(mixed $context, mixed $data): mixed` | `mixed` | — | ✓ |
 | [`hex2bin()`](./builtins/string/hex2bin.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`html_entity_decode()`](./builtins/string/html_entity_decode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`htmlentities()`](./builtins/string/htmlentities.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` | ✓ | ✓ |
@@ -425,7 +427,7 @@ sidebar:
 | [`strpos()`](./builtins/string/strpos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`strrev()`](./builtins/string/strrev.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`strrpos()`](./builtins/string/strrpos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
-| [`strstr()`](./builtins/string/strstr.md) | `(string $haystack, string $needle, bool $before_needle = false): string` | `string` | ✓ | ✓ |
+| [`strstr()`](./builtins/string/strstr.md) | `(string $haystack, string $needle, bool $before_needle = false): mixed` | `mixed` | ✓ | ✓ |
 | [`strtolower()`](./builtins/string/strtolower.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`strtoupper()`](./builtins/string/strtoupper.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`substr()`](./builtins/string/substr.md) | `(string $string, int $offset, int $length = null): string` | `string` | ✓ | ✓ |

@@ -282,25 +282,60 @@ fn test_error_hash_family_wrong_args() {
             "<?php hash_algos(1);",
             "hash_algos() takes no arguments",
         ),
+        // CHANGED CELLS. `hash_init`/`hash_update`/`hash_final`/`hash_copy` are no
+        // longer builtins: they are elephc-PHP wrappers injected by
+        // `elephc::hash_prelude` so that `hash_init()` can return a real `HashContext`
+        // OBJECT (PHP 8 parity). Arity is therefore diagnosed by the ordinary
+        // user-function check, which phrases it differently. What matters is preserved:
+        // every one of these is still rejected AT COMPILE TIME with a message naming the
+        // function and the expected count.
+        //
+        // The `hash_init` message lost its bespoke "use hash_hmac() for HMAC" hint,
+        // which the old builtin carried via `arity_error`. HMAC STREAMING IS STILL
+        // UNSUPPORTED and still rejected — the wrapper deliberately keeps a
+        // one-parameter signature so `hash_init($algo, HASH_HMAC, $key)` stays a
+        // compile-time error rather than being silently accepted. `docs/php/strings.md`
+        // carries the pointer to `hash_hmac()` that the diagnostic no longer does.
         (
             "<?php hash_init();",
-            "hash_init() flags/HASH_HMAC streaming mode is not supported; use hash_hmac() for HMAC",
+            "Function 'hash_init' expects 1 arguments, got 0",
+        ),
+        (
+            r#"<?php hash_init("sha256", 1, "key");"#,
+            "Function 'hash_init' expects 1 arguments, got 3",
         ),
         (
             "<?php hash_update();",
-            "hash_update() takes exactly 2 arguments",
+            "Function 'hash_update' expects 2 arguments, got 0",
         ),
         (
             "<?php hash_final();",
-            "hash_final() takes 1 or 2 arguments",
+            "Function 'hash_final' expects 1 to 2 arguments, got 0",
         ),
         (
             "<?php hash_copy();",
-            "hash_copy() takes exactly 1 argument",
+            "Function 'hash_copy' expects 1 arguments, got 0",
         ),
     ] {
         expect_error(source, message);
     }
+}
+
+/// Verifies `HashContext` CANNOT BE CONSTRUCTED DIRECTLY, matching PHP's private
+/// constructor.
+///
+/// Reference PHP 8.5.6 rejects `new HashContext()` at RUNTIME with
+/// `Error: Call to private HashContext::__construct() from global scope`. elephc's
+/// prelude gives the class the same private constructor, and the checker rejects it at
+/// COMPILE TIME instead — stricter than PHP, never more permissive, and there is no
+/// legal program this refuses that PHP would have run. `hash_init()` remains the only
+/// way to obtain a context on either side.
+#[test]
+fn test_error_hash_context_cannot_be_constructed_directly() {
+    expect_error(
+        "<?php $c = new HashContext();",
+        "Cannot access private constructor: HashContext::__construct",
+    );
 }
 
 /// Verifies that `sscanf()` with only one argument produces the correct arity error.

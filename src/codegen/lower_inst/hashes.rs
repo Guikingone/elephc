@@ -329,7 +329,7 @@ fn lower_hash_get_aarch64(
         super::arrays::emit_array_offset_on_null_warning(ctx);
     }
     ctx.emitter.label(&fallback);
-    emit_hash_get_miss(ctx, result_ty);
+    emit_hash_get_miss(ctx, result_ty, !warn_on_missing);
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)
 }
@@ -371,7 +371,7 @@ fn lower_hash_get_x86_64(
         super::arrays::emit_array_offset_on_null_warning(ctx);
     }
     ctx.emitter.label(&fallback);
-    emit_hash_get_miss(ctx, result_ty);
+    emit_hash_get_miss(ctx, result_ty, !warn_on_missing);
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)
 }
@@ -1195,10 +1195,19 @@ fn emit_hash_get_mixed_success_x86_64(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Emits the miss fallback in the result shape expected by the associative-array value type.
-fn emit_hash_get_miss(ctx: &mut FunctionContext<'_>, value_ty: &PhpType) {
+///
+/// `miss_reads_as_null` is true for the *silent* read variants — the ones `??`, `isset()` and
+/// `empty()` lower to — where the caller goes on to ask whether the read produced PHP null.
+/// Only those get the float null marker; a warned read keeps materializing `0.0` so a plain
+/// `$a[$missing]` in value position renders as it always has (issue: float misses had no
+/// marker at all, so `$a[$missing] ?? $d` took the *value* branch and yielded `0`).
+fn emit_hash_get_miss(ctx: &mut FunctionContext<'_>, value_ty: &PhpType, miss_reads_as_null: bool) {
     match value_ty {
         PhpType::TaggedScalar => {
             crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);
+        }
+        PhpType::Float if miss_reads_as_null => {
+            crate::codegen::sentinels::emit_float_null_sentinel(ctx.emitter);
         }
         PhpType::Float => match ctx.emitter.target.arch {
             Arch::AArch64 => {

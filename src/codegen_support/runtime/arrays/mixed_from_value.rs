@@ -9,6 +9,26 @@
 //! - Mixed helpers use boxed tag/payload cells; tag constants and ownership rules are shared with type checking and codegen.
 //! - Null or sentinel payloads presented with a container-shaped tag (4–6) are
 //!   normalized to the canonical Mixed null tag before ownership or allocation.
+//! - Tag 9 (resource) takes no ownership, but it is this function that guarantees
+//!   every boxed resource carries a PHP resource id: the tag-9 arm calls
+//!   `__rt_resource_id_of`, which binds the next id when the native payload has
+//!   none yet and leaves an existing binding alone. Boxing is the one point every
+//!   resource passes through — `fopen`, `opendir`, `popen`, the stream filters, the
+//!   eval bridge and `zval_unpack` alike — so ids follow creation order without each
+//!   of those sites having to opt in, while `$b = $a` re-boxing the same payload keeps
+//!   the id it already had. Creation sites that can hand back a RECYCLED native payload
+//!   (a descriptor number the kernel reissued after `fclose`) call
+//!   `__rt_resource_id_mint` first, which overwrites instead of preserving; see
+//!   `runtime::resource_ids`.
+//! - ONE RESOURCE KIND IS EXCLUDED: kind 2, the raw incremental-hash context. PHP 8
+//!   makes `hash_init()` return a `HashContext` OBJECT (`crate::hash_prelude`), so the
+//!   context belongs to the OBJECT handle space and must consume nothing from the
+//!   resource counter — otherwise every `fopen()` in a hashing program would report an
+//!   id one higher than PHP's. The cell is still tag 9 because that is what owns the
+//!   native context (`__rt_mixed_free_deep` → `__rt_hash_ctx_free`); only the id
+//!   binding is skipped. It is safe to skip because the cell lives in an object
+//!   property and never reaches a display path: should one ever be reached anyway,
+//!   `__rt_resource_id_of` still mints lazily, so no path can print a raw address.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -60,7 +80,16 @@ pub fn emit_mixed_from_value(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_from_value_retain");                   // nested mixed cells must also be retained
     emitter.instruction("cmp x0, #10");                                         // does this mixed payload hold a callable descriptor?
     emitter.instruction("b.eq __rt_mixed_from_value_retain");                   // callable descriptors are retained for the boxed owner
+    emitter.instruction("cmp x0, #9");                                          // does this mixed payload hold a PHP resource?
+    emitter.instruction("b.eq __rt_mixed_from_value_resource");                 // resources need a display id bound before they can be shown
     emitter.instruction("b __rt_mixed_from_value_alloc");                       // scalars can be boxed without additional retention
+
+    emitter.label("__rt_mixed_from_value_resource");
+    emitter.instruction("cmp x2, #2");                                          // resource kind 2 = the raw incremental-hash context
+    emitter.instruction("b.eq __rt_mixed_from_value_alloc");                    // a HashContext is an OBJECT in PHP and must consume no resource id
+    emitter.instruction("mov x0, x1");                                          // move the native resource payload into the registry argument
+    emitter.instruction("bl __rt_resource_id_of");                              // bind a display id if this payload does not already have one
+    emitter.instruction("b __rt_mixed_from_value_alloc");                       // the id lives in the side table; the cell is boxed unchanged
 
     emitter.label("__rt_mixed_from_value_null_container");
     emitter.instruction("mov x9, #8");                                          // runtime tag 8 is the canonical boxed PHP null
@@ -131,7 +160,16 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_from_value_retain");                     // retain nested mixed cells before storing them inside the parent mixed cell
     emitter.instruction("cmp rax, 10");                                         // detect callable descriptors that participate in callable ownership
     emitter.instruction("je __rt_mixed_from_value_retain");                     // retain callable descriptors before storing them inside the mixed cell
+    emitter.instruction("cmp rax, 9");                                          // detect PHP resources, which carry a displayed id rather than ownership
+    emitter.instruction("je __rt_mixed_from_value_resource");                   // resources need a display id bound before they can be shown
     emitter.instruction("jmp __rt_mixed_from_value_alloc");                     // scalars can be boxed directly without additional ownership work
+
+    emitter.label("__rt_mixed_from_value_resource");
+    emitter.instruction("cmp QWORD PTR [rbp - 24], 2");                         // resource kind 2 = the raw incremental-hash context
+    emitter.instruction("je __rt_mixed_from_value_alloc");                      // a HashContext is an OBJECT in PHP and must consume no resource id
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // move the native resource payload into the registry argument
+    emitter.instruction("call __rt_resource_id_of");                            // bind a display id if this payload does not already have one
+    emitter.instruction("jmp __rt_mixed_from_value_alloc");                     // the id lives in the side table; the cell is boxed unchanged
 
     emitter.label("__rt_mixed_from_value_null_container");
     emitter.instruction("mov QWORD PTR [rbp - 8], 8");                          // replace the container-shaped tag with canonical Mixed null

@@ -23,6 +23,14 @@ pub(super) fn try_fold_cast(target: &CastType, expr: &Expr) -> Option<ExprKind> 
         CastType::Int => try_fold_cast_int(value),
         CastType::Float => try_fold_cast_float(value),
         CastType::String => try_fold_cast_string(value),
+        // A NAN is truthy, but PHP 8.5 also REPORTS the coercion
+        // (`unexpected NAN value was coerced to bool`), and a folded `BoolLiteral` would
+        // swallow that warning — `var_dump((bool)NAN)` warns in php-src even though the
+        // operand is a compile-time constant. Declining the fold sends the value through the
+        // runtime truthiness path, which owns the diagnostic. This costs one compare for a
+        // literal NAN and nothing at all for every other float, and it matches how
+        // `try_fold_cast_int`/`try_fold_cast_string` already decline non-finite operands.
+        CastType::Bool if value.is_nan_float() => None,
         CastType::Bool => Some(ExprKind::BoolLiteral(value.truthy())),
         CastType::Array => None,
     }

@@ -299,7 +299,13 @@ fn emit_int_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Converts the loaded float result register into a canonical bool.
+///
+/// This is `settype($x, "bool")`'s own copy of float truthiness; it must agree with
+/// `predicates::emit_float_result_nonzero_bool` on every value, NAN included — PHP settypes a
+/// NAN to `true`. See that function for why the x86_64 arm needs a parity fixup and the
+/// AArch64 arm does not.
 fn emit_float_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
+    super::super::predicates::emit_nan_bool_coercion_probe(ctx);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("fmov d1, #0.0");                           // materialize 0.0 for PHP float truthiness
@@ -309,22 +315,21 @@ fn emit_float_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
         Arch::X86_64 => {
             ctx.emitter.instruction("xorpd xmm1, xmm1");                        // materialize 0.0 for PHP float truthiness
             ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare the float payload against zero
-            ctx.emitter.instruction("setne al");                                // normalize non-zero floats to true
+            ctx.emitter.instruction("setne al");                                // normalize ordered non-zero floats to true
+            ctx.emitter.instruction("setp r10b");                               // materialize whether the comparison was unordered (a NAN)
+            ctx.emitter.instruction("or al, r10b");                             // PHP settypes a NAN to true, so merge the unordered case in
             ctx.emitter.instruction("movzx rax, al");                           // widen the normalized boolean byte
         }
     }
 }
 
-/// Converts the loaded resource payload into PHP's one-based integer id.
+/// Converts the loaded resource payload into PHP's resource id.
+///
+/// Answers from the resource-id registry (`runtime::resource_ids`) rather than
+/// from the payload itself; see the twin helper in `lower_inst::conversions` for
+/// why `payload + 1` was not a numbering scheme.
 fn emit_resource_display_id_to_int(ctx: &mut FunctionContext<'_>) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("add x0, x0, #1");                          // convert native resource payload to PHP's one-based display id
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("add rax, 1");                              // convert native resource payload to PHP's one-based display id
-        }
-    }
+    abi::emit_call_label(ctx.emitter, "__rt_resource_id_of");
 }
 
 /// Lowers `get_class()` and `get_parent_class()` through static or dynamic class metadata.
@@ -401,6 +406,137 @@ pub(crate) fn lower_get_declared_names(
     let names = declared_names(ctx, name)?;
     emit_string_array(ctx, &names)?;
     store_if_result(ctx, inst)
+}
+
+/// Lowers `get_loaded_extensions($zend_extensions)` as a string array.
+///
+/// The optional flag selects between the regular extension list (default / `false`) and the Zend
+/// extension list (`true`). BOTH lists are known at compile time, so a literal flag bakes exactly
+/// one of them into the emitted array; a dynamic flag emits both behind a runtime branch (see
+/// [`lower_dynamic_get_loaded_extensions`]) rather than failing the compile.
+///
+/// The regular (non-Zend) list is the always-present core set followed by the canonical names of
+/// the bridges actually linked into this compilation (`crate::codegen::linked_extensions()`, e.g.
+/// `PDO`/`hash`), de-duplicated case-insensitively. The Zend list is unaffected: bridges are
+/// ordinary (non-Zend) extensions.
+pub(crate) fn lower_get_loaded_extensions(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count_between(inst, "get_loaded_extensions", 0, 1)?;
+    let flag = inst.operands.first().copied();
+    let constant_flag = match flag {
+        Some(value) => const_bool_operand(ctx, value)?,
+        None => Some(false),
+    };
+    match (constant_flag, flag) {
+        (Some(zend_extensions), _) => {
+            emit_string_array(ctx, &loaded_extension_names(zend_extensions))?
+        }
+        (None, Some(value)) => lower_dynamic_get_loaded_extensions(ctx, value)?,
+        (None, None) => unreachable!("a missing flag always folds to false"),
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Returns the extension-name list `get_loaded_extensions($zend_extensions)` reports.
+///
+/// Single source of truth for the const-folded and the runtime-selected forms, so they can never
+/// report different sets.
+fn loaded_extension_names(zend_extensions: bool) -> Vec<String> {
+    if zend_extensions {
+        return super::ZEND_LOADED_EXTENSIONS
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect();
+    }
+    let mut names: Vec<String> = super::CORE_LOADED_EXTENSIONS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    for extension in crate::codegen::linked_extensions() {
+        if !names.iter().any(|name| name.eq_ignore_ascii_case(&extension)) {
+            names.push(extension);
+        }
+    }
+    names
+}
+
+/// Lowers `get_loaded_extensions($flag)` for a flag that is only known at runtime.
+///
+/// Both candidate lists are compile-time constants, so the emitted code just picks between two
+/// fully baked arrays with a PHP-truthiness test on the flag. Each branch runs the same
+/// [`emit_string_array`] sequence and leaves an `Array<Str>` pointer in the integer result
+/// register, so the two arms agree in shape as well as in type — nothing observes a different
+/// representation depending on which branch ran.
+fn lower_dynamic_get_loaded_extensions(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let flag_type = ctx.value_php_type(value)?.codegen_repr();
+    if !matches!(flag_type, PhpType::Bool | PhpType::False | PhpType::Int) {
+        return Err(CodegenIrError::unsupported(format!(
+            "get_loaded_extensions with a {:?} flag argument",
+            flag_type
+        )));
+    }
+    ctx.load_value_to_result(value)?;
+    let zend_label = ctx.next_label("get_loaded_extensions_zend");
+    let done_label = ctx.next_label("get_loaded_extensions_done");
+    let flag_reg = abi::int_result_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #0", flag_reg));          // did the caller ask for the Zend extension list?
+            ctx.emitter.instruction(&format!("b.ne {}", zend_label));           // a truthy flag selects the Zend list
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("test {}, {}", flag_reg, flag_reg));      // did the caller ask for the Zend extension list?
+            ctx.emitter.instruction(&format!("jne {}", zend_label));            // a truthy flag selects the Zend list
+        }
+    }
+    emit_string_array(ctx, &loaded_extension_names(false))?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&zend_label);
+    emit_string_array(ctx, &loaded_extension_names(true))?;
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Reads a literal boolean operand produced by a constant instruction, or `None` when non-literal.
+///
+/// Accepts `ConstBool`, integer, float, null, and string const instructions using PHP truthiness so
+/// any literal the frontend folds into the flag operand resolves at compile time.
+fn const_bool_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<bool>> {
+    let value_ref = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    match (inst_ref.op, inst_ref.immediate.as_ref()) {
+        (Op::ConstBool, Some(Immediate::Bool(value))) => Ok(Some(*value)),
+        (Op::ConstI64, Some(Immediate::I64(value))) => Ok(Some(*value != 0)),
+        (Op::ConstF64, Some(Immediate::F64(value))) => Ok(Some(*value != 0.0)),
+        (Op::ConstNull, _) => Ok(Some(false)),
+        (Op::ConstStr, Some(Immediate::Data(data))) => {
+            let value = ctx
+                .module
+                .data
+                .strings
+                .get(data.as_raw() as usize)
+                .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?;
+            Ok(Some(!value.is_empty() && value != "0"))
+        }
+        _ => Ok(None),
+    }
 }
 
 /// Lowers `is_resource(value)` for static resources and boxed Mixed resource cells.

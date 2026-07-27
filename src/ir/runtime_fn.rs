@@ -122,6 +122,7 @@ pub enum RuntimeFnId {
     GetDeclaredClasses,
     GetDeclaredInterfaces,
     GetDeclaredTraits,
+    GetLoadedExtensions,
     GetParentClass,
     InterfaceExists,
     IsA,
@@ -443,6 +444,7 @@ pub enum RuntimeFnId {
     Define,
     Defined,
     Exec,
+    ExtensionLoaded,
     Getdate,
     Getenv,
     Gmdate,
@@ -906,6 +908,14 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayDiff
                 | RuntimeFnId::ArrayFill
                 | RuntimeFnId::ArrayFillKeys
+                // Every `array_flip` lowering allocates its destination table before writing a
+                // single entry — `__rt_hash_flip` calls `__rt_hash_new`, the indexed helpers
+                // call `__rt_array_new` — so the result can never alias the source. The default
+                // `MayAliasArguments` bucket suppressed the release of an owned source
+                // temporary, which leaked the whole source table on `array_flip(build())` while
+                // the same call through a named local stayed clean. Its Fresh-owning siblings
+                // `ArrayKeys` / `ArrayValues` were already listed here; this was the gap.
+                | RuntimeFnId::ArrayFlip
                 | RuntimeFnId::ArrayIntersect
                 | RuntimeFnId::ArrayKeys
                 | RuntimeFnId::ArrayMap
@@ -930,11 +940,26 @@ impl RuntimeFnId {
                 | RuntimeFnId::ObGetStatus
                 | RuntimeFnId::ObListHandlers
                 | RuntimeFnId::PregSplit
+                // print_r renders into the `_print_r_buf` capture buffer and `__rt_pr_finish`
+                // copies those bytes out through `__rt_str_persist`, so every mode returns
+                // storage that is freshly allocated and cannot alias an argument: return mode
+                // yields an owned heap string, echo mode a non-heap `true`, and the runtime-flag
+                // mode a fresh Mixed cell. The default `MayAliasArguments` bucket made
+                // `value_is_scratch_string` classify the return-mode string as concat scratch and
+                // skip its release, leaking one block per `print_r($v, true)` call.
+                | RuntimeFnId::PrintR
                 | RuntimeFnId::PtrReadString
                 | RuntimeFnId::Range
                 | RuntimeFnId::StrSplit
                 | RuntimeFnId::Strpos
                 | RuntimeFnId::Strrpos
+                // Strstr's result is `string|false`, so its lowering boxes BOTH arms into a
+                // fresh Mixed cell and `__rt_mixed_from_value` persists (copies) the string
+                // payload — it no longer hands back a borrowed slice of the haystack. Leaving
+                // it in the default `MayAliasArguments` bucket kept an owned haystack
+                // temporary alive for the boxed result's whole lifetime, which leaked one
+                // block per iteration for `strstr($h, $cond ? "a" : "b")` in a loop.
+                | RuntimeFnId::Strstr
                 | RuntimeFnId::ZvalUnpack
         ) {
             BuiltinResultOwnership::Fresh
@@ -1027,6 +1052,7 @@ impl RuntimeFnId {
             RuntimeFnId::GetDeclaredClasses => "get_declared_classes",
             RuntimeFnId::GetDeclaredInterfaces => "get_declared_interfaces",
             RuntimeFnId::GetDeclaredTraits => "get_declared_traits",
+            RuntimeFnId::GetLoadedExtensions => "get_loaded_extensions",
             RuntimeFnId::GetParentClass => "get_parent_class",
             RuntimeFnId::InterfaceExists => "interface_exists",
             RuntimeFnId::IsA => "is_a",
@@ -1289,12 +1315,12 @@ impl RuntimeFnId {
             RuntimeFnId::Gzuncompress => "gzuncompress",
             RuntimeFnId::Hash => "hash",
             RuntimeFnId::HashAlgos => "hash_algos",
-            RuntimeFnId::HashCopy => "hash_copy",
+            RuntimeFnId::HashCopy => "__elephc_hash_ctx_copy",
             RuntimeFnId::HashEquals => "hash_equals",
-            RuntimeFnId::HashFinal => "hash_final",
+            RuntimeFnId::HashFinal => "__elephc_hash_ctx_final",
             RuntimeFnId::HashHmac => "hash_hmac",
-            RuntimeFnId::HashInit => "hash_init",
-            RuntimeFnId::HashUpdate => "hash_update",
+            RuntimeFnId::HashInit => "__elephc_hash_ctx_init",
+            RuntimeFnId::HashUpdate => "__elephc_hash_ctx_update",
             RuntimeFnId::Htmlentities => "htmlentities",
             RuntimeFnId::Htmlspecialchars => "htmlspecialchars",
             RuntimeFnId::Implode => "implode",
@@ -1348,6 +1374,7 @@ impl RuntimeFnId {
             RuntimeFnId::Define => "define",
             RuntimeFnId::Defined => "defined",
             RuntimeFnId::Exec => "exec",
+            RuntimeFnId::ExtensionLoaded => "extension_loaded",
             RuntimeFnId::Getdate => "getdate",
             RuntimeFnId::Getenv => "getenv",
             RuntimeFnId::Gmdate => "gmdate",

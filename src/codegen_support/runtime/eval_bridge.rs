@@ -917,6 +917,28 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #16");                                     // release the object-identity wrapper frame
     emitter.instruction("ret");                                                 // return the object identity pointer to Rust
 
+    // `__elephc_eval_value_object_handle` is the PHP OBJECT HANDLE, not the address:
+    // the magician's `spl_object_id` / `spl_object_hash` must agree with the AOT
+    // engine and with `var_dump`'s `#N`, and all three read the same pool. The
+    // address-shaped `object_identity` above stays as it is because destructor
+    // bookkeeping keys on the storage, not on the PHP-visible handle.
+    label_c_global(emitter, "__elephc_eval_value_object_handle");
+    emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame while unboxing the object cell
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across nested calls
+    emitter.instruction("mov x29, sp");                                         // establish a stable object-handle wrapper frame
+    emitter.instruction("bl __rt_mixed_unbox");                                 // unwrap nested Mixed cells to tag and object payload
+    emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means PHP object
+    emitter.instruction("b.ne __elephc_eval_value_object_handle_zero");         // non-object values carry no PHP handle
+    emitter.instruction("mov x0, x1");                                          // pass the unboxed object payload to the handle pool
+    emitter.instruction("bl __rt_object_handle_of");                            // x0 = this object's PHP handle
+    emitter.instruction("b __elephc_eval_value_object_handle_done");            // return the resolved handle
+    emitter.label("__elephc_eval_value_object_handle_zero");
+    emitter.instruction("mov x0, #0");                                          // report "no handle" for non-object values
+    emitter.label("__elephc_eval_value_object_handle_done");
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the object-handle wrapper frame
+    emitter.instruction("ret");                                                 // return the PHP object handle to Rust
+
     label_c_global(emitter, "__elephc_eval_value_cast_int");
     emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame while casting and boxing the value
     emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across helper calls
@@ -2696,6 +2718,24 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_value_object_identity_done_x86");
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the object identity pointer to Rust
+
+    // The PHP OBJECT HANDLE bridge — see the AArch64 arm for why it is separate
+    // from the address-shaped `object_identity` above.
+    label_c_global(emitter, "__elephc_eval_value_object_handle");
+    emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable object-handle wrapper frame
+    emitter.instruction("mov rax, rdi");                                        // pass the boxed Mixed argument to mixed_unbox
+    emitter.instruction("call __rt_mixed_unbox");                               // unwrap nested Mixed cells to tag and object payload
+    emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means PHP object
+    emitter.instruction("jne __elephc_eval_value_object_handle_zero_x86");      // non-object values carry no PHP handle
+    emitter.instruction("mov rax, rdi");                                        // pass the unboxed object payload to the handle pool
+    emitter.instruction("call __rt_object_handle_of");                          // rax = this object's PHP handle
+    emitter.instruction("jmp __elephc_eval_value_object_handle_done_x86");      // return the resolved handle
+    emitter.label("__elephc_eval_value_object_handle_zero_x86");
+    emitter.instruction("xor eax, eax");                                        // report "no handle" for non-object values
+    emitter.label("__elephc_eval_value_object_handle_done_x86");
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the PHP object handle to Rust
 
     label_c_global(emitter, "__elephc_eval_value_cast_int");
     emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer
@@ -4846,6 +4886,7 @@ fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate a clone object payload with the same byte size
     emitter.instruction("mov x9, #4");                                          // heap kind 4 marks object instances for ownership helpers
     emitter.instruction("str x9, [x0, #-8]");                                   // stamp the uniform object heap header
+    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
     emitter.instruction("ldr x11, [sp, #56]");                                  // reload the source class id
     emitter.instruction("str x11, [x0]");                                       // store the class id at the clone payload head
     emitter.instruction("str x0, [sp, #8]");                                    // save the clone object payload pointer
@@ -4990,6 +5031,7 @@ fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("call __rt_heap_alloc");                                // allocate a clone object payload with the same byte size
     emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize the x86_64 object heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform object heap header
+    emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the source class id
     emitter.instruction("mov QWORD PTR [rax], rcx");                            // store the class id at the clone payload head
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the clone object payload pointer

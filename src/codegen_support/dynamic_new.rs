@@ -12,11 +12,15 @@
 /// Returns builtin class names with allocation paths that are safe for dynamic `new`.
 pub(crate) fn supported_dynamic_new_builtin_class_names() -> &'static [&'static str] {
     &[
+        "ArgumentCountError",
+        "ArithmeticError",
         "ArrayIterator",
         "ArrayObject",
+        "AssertionError",
         "BadFunctionCallException",
         "BadMethodCallException",
         "CallbackFilterIterator",
+        "DivisionByZeroError",
         "DomainException",
         "Error",
         "Exception",

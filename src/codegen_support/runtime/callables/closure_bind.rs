@@ -66,6 +66,7 @@ pub(crate) fn emit_closure_bind(emitter: &mut Emitter) {
     // -- allocate an 80-byte runtime descriptor copy --
     emitter.instruction("mov x0, #80");                                         // 64-byte static header + one 16-byte capture slot
     emitter.instruction("bl __rt_heap_alloc");                                  // x0 = fresh descriptor block
+    emitter.instruction("bl __rt_object_handle_acquire");                       // Closure::bind creates a NEW Closure in PHP, so it takes a new object handle
     emitter.instruction("str x0, [sp, #16]");                                   // save the new descriptor pointer
 
     // -- copy the 80-byte descriptor payload --
@@ -153,6 +154,7 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     // -- allocate an 80-byte runtime descriptor copy --
     emitter.instruction("mov rax, 80");                                         // 64-byte static header + one 16-byte capture slot
     emitter.instruction("call __rt_heap_alloc");                                // rax = fresh descriptor block
+    emitter.instruction("call __rt_object_handle_acquire");                     // Closure::bind creates a NEW Closure in PHP, so it takes a new object handle
     emitter.instruction("mov [rsp+16], rax");                                   // save the new descriptor pointer
 
     // -- copy the 80-byte descriptor payload --

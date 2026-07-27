@@ -112,40 +112,66 @@ echo "ok\n";
     assert_eq!(out, "ok\n");
 }
 
-/// Verifies that a finalized HashContext can be finalized again without a
-/// crash: `elephc_crypto_final` finalizes a clone and leaves the original live,
-/// so there is no use-after-free or double-free against scope cleanup. elephc
-/// diverges from PHP here (PHP throws); both finals see the same digest.
+/// Verifies that finalizing an already-finalized HashContext raises PHP's
+/// `TypeError` instead of silently digesting again, and that the rejection is
+/// memory-safe: the guard reads the finalized flag BEFORE touching the context,
+/// the original handle is still owned by scope cleanup, and the caught throw
+/// leaves the program running so that cleanup actually happens.
+///
+/// This used to pin the opposite behaviour — both finals returning the same
+/// digest — as a documented divergence. PHP throws, so the divergence is gone
+/// and the expectation moved with it.
 #[test]
-fn test_hash_context_double_final_memory_safe() {
+fn test_hash_context_double_final_rejected_and_memory_safe() {
     let out = compile_and_run(
         r#"<?php
 $ctx = hash_init("sha256");
 hash_update($ctx, "hello");
 $a = hash_final($ctx);
-$b = hash_final($ctx); // memory-safe: original stays live, same digest
-echo ($a === $b) ? "same\n" : "diff\n";
+try {
+    hash_final($ctx);
+    echo "no-throw\n";
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+echo strlen($a), "\n";
 "#,
     );
-    assert_eq!(out, "same\n");
+    assert_eq!(
+        out,
+        "hash_final(): Argument #1 ($context) must be a valid, non-finalized HashContext\n64\n"
+    );
 }
 
-/// Verifies that updating a HashContext after `hash_final()` is memory-safe:
-/// the original handle is never freed by finalize, so it keeps accumulating.
-/// PHP would reject this; elephc instead hashes the still-live context.
+/// Verifies that updating a HashContext after `hash_final()` raises PHP's
+/// `TypeError` rather than quietly accumulating more data into the still-live
+/// context — the silently-wrong-digest shape this guard exists to kill.
+///
+/// The `hash("sha256", "ab")` comparison this test used to make is kept as the
+/// positive control, computed the legitimate way, so the suite still proves the
+/// digest path itself was not broken by the guard.
 #[test]
-fn test_hash_context_update_after_final_memory_safe() {
+fn test_hash_context_update_after_final_rejected_and_memory_safe() {
     let out = compile_and_run(
         r#"<?php
 $ctx = hash_init("sha256");
 hash_update($ctx, "a");
-hash_final($ctx);      // finalizes a clone; original keeps "a"
-hash_update($ctx, "b");
-$got = hash_final($ctx);
-echo ($got === hash("sha256", "ab")) ? "ok\n" : "bad\n";
+hash_final($ctx);
+try {
+    hash_update($ctx, "b");
+    echo "no-throw\n";
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+$fresh = hash_init("sha256");
+hash_update($fresh, "ab");
+echo (hash_final($fresh) === hash("sha256", "ab")) ? "ok\n" : "bad\n";
 "#,
     );
-    assert_eq!(out, "ok\n");
+    assert_eq!(
+        out,
+        "hash_update(): Argument #1 ($context) must be a valid, non-finalized HashContext\nok\n"
+    );
 }
 
 /// Verifies that a `popen()` pipe never `pclose`d is auto-released at scope exit

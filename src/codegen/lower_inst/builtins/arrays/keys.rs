@@ -33,11 +33,144 @@ pub(super) fn lower_array_keys(ctx: &mut FunctionContext<'_>, inst: &Instruction
         PhpType::AssocArray { key, .. } => {
             lower_assoc_array_keys(ctx, inst, array, &key.codegen_repr(), &result_elem_ty)
         }
+        PhpType::Mixed => lower_boxed_mixed_array_keys(ctx, inst, array, &result_elem_ty),
         other => Err(CodegenIrError::unsupported(format!(
             "array_keys for PHP type {:?}",
             other
         ))),
     }
+}
+
+/// Lowers `array_keys()` for a BOXED Mixed receiver: a value whose static type is `mixed`
+/// (a builtin/prelude return such as `opcache_get_status()`, a `json_decode()` result, or an
+/// index read out of a `mixed` container) but which holds an array at runtime.
+///
+/// The Mixed cell is opened with `__rt_mixed_unbox`, and the concrete runtime tag selects the
+/// key-materialization path: tag 4 is indexed storage (positional integer keys) and tag 5 is hash
+/// storage (insertion-order int-or-string keys). Every other tag — `false`, `null`, an int, a
+/// float, a string, an object — is not an array, so PHP's catchable `TypeError` is raised instead
+/// of reading the payload word as a container pointer. This is the runtime counterpart of the
+/// checker accepting `Mixed`: the acceptance is not a claim that the value IS an array, it defers
+/// the array check to the point where the runtime tag is observable.
+fn lower_boxed_mixed_array_keys(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    result_elem_ty: &PhpType,
+) -> Result<()> {
+    require_supported_indexed_result_type(result_elem_ty)?;
+    require_supported_assoc_result_type(&PhpType::Mixed, result_elem_ty)?;
+    ctx.load_value_to_result(array)?;
+    let indexed_label = ctx.next_label("akeys_boxed_indexed");
+    let assoc_label = ctx.next_label("akeys_boxed_assoc");
+    let done_label = ctx.next_label("akeys_boxed_done");
+    let error_labels: Vec<(u64, &'static str, String)> = NON_ARRAY_TAG_TYPE_NAMES
+        .iter()
+        .map(|(tag, type_name)| (*tag, *type_name, ctx.next_label("akeys_boxed_type_error")))
+        .collect();
+    let fallback_error_label = ctx.next_label("akeys_boxed_type_error");
+    let bool_dispatch_label = ctx.next_label("akeys_boxed_bool");
+    let true_error_label = ctx.next_label("akeys_boxed_type_error");
+    let false_error_label = ctx.next_label("akeys_boxed_type_error");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                               // runtime tag 4 = indexed-array payload
+            ctx.emitter.instruction(&format!("b.eq {}", indexed_label));         // positional integer keys come from the indexed path
+            ctx.emitter.instruction("cmp x0, #5");                               // runtime tag 5 = associative-hash payload
+            ctx.emitter.instruction(&format!("b.eq {}", assoc_label));           // insertion-order hash keys come from the associative path
+            ctx.emitter.instruction("cmp x0, #3");                               // runtime tag 3 = bool payload
+            ctx.emitter.instruction(&format!("b.eq {}", bool_dispatch_label));   // php-src names the literal `true`/`false`, not `bool`
+            for (tag, _, label) in &error_labels {
+                ctx.emitter.instruction(&format!("cmp x0, #{}", tag));           // identify the non-array payload kind for PHP's TypeError wording
+                ctx.emitter.instruction(&format!("b.eq {}", label));             // raise the TypeError naming this payload kind
+            }
+            ctx.emitter.instruction(&format!("b {}", fallback_error_label));     // any remaining tag is still not an array
+            ctx.emitter.label(&assoc_label);
+            ctx.emitter.instruction("mov x0, x1");                               // move the unboxed hash pointer into the key-extraction input register
+            lower_assoc_array_keys_aarch64(ctx, &PhpType::Mixed, result_elem_ty)?;
+            ctx.emitter.instruction(&format!("b {}", done_label));               // skip the indexed and error paths after hash key materialization
+            ctx.emitter.label(&indexed_label);
+            ctx.emitter.instruction("mov x0, x1");                               // move the unboxed indexed-array pointer into the key-extraction input register
+            lower_indexed_array_keys_aarch64(ctx, result_elem_ty)?;
+            ctx.emitter.instruction(&format!("b {}", done_label));               // skip the error paths after indexed key materialization
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                               // runtime tag 4 = indexed-array payload
+            ctx.emitter.instruction(&format!("je {}", indexed_label));           // positional integer keys come from the indexed path
+            ctx.emitter.instruction("cmp rax, 5");                               // runtime tag 5 = associative-hash payload
+            ctx.emitter.instruction(&format!("je {}", assoc_label));             // insertion-order hash keys come from the associative path
+            ctx.emitter.instruction("cmp rax, 3");                               // runtime tag 3 = bool payload
+            ctx.emitter.instruction(&format!("je {}", bool_dispatch_label));     // php-src names the literal `true`/`false`, not `bool`
+            for (tag, _, label) in &error_labels {
+                ctx.emitter.instruction(&format!("cmp rax, {}", tag));           // identify the non-array payload kind for PHP's TypeError wording
+                ctx.emitter.instruction(&format!("je {}", label));               // raise the TypeError naming this payload kind
+            }
+            ctx.emitter.instruction(&format!("jmp {}", fallback_error_label));   // any remaining tag is still not an array
+            ctx.emitter.label(&assoc_label);
+            ctx.emitter.instruction("mov rax, rdi");                             // move the unboxed hash pointer into the key-extraction input register
+            lower_assoc_array_keys_x86_64(ctx, &PhpType::Mixed, result_elem_ty)?;
+            ctx.emitter.instruction(&format!("jmp {}", done_label));             // skip the indexed and error paths after hash key materialization
+            ctx.emitter.label(&indexed_label);
+            ctx.emitter.instruction("mov rax, rdi");                             // move the unboxed indexed-array pointer into the key-extraction input register
+            lower_indexed_array_keys_x86_64(ctx, result_elem_ty)?;
+            ctx.emitter.instruction(&format!("jmp {}", done_label));             // skip the error paths after indexed key materialization
+        }
+    }
+    ctx.emitter.label(&bool_dispatch_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {}", false_error_label)); // a zero bool payload is php-src's `false`
+            ctx.emitter.instruction(&format!("b {}", true_error_label));        // every other bool payload is php-src's `true`
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rdi, rdi");                           // inspect the unboxed bool payload
+            ctx.emitter.instruction(&format!("jz {}", false_error_label));      // a zero bool payload is php-src's `false`
+            ctx.emitter.instruction(&format!("jmp {}", true_error_label));      // every other bool payload is php-src's `true`
+        }
+    }
+    ctx.emitter.label(&false_error_label);
+    crate::codegen::lower_inst::exceptions::emit_type_error(
+        ctx,
+        &non_array_type_error_message("false"),
+    );
+    ctx.emitter.label(&true_error_label);
+    crate::codegen::lower_inst::exceptions::emit_type_error(
+        ctx,
+        &non_array_type_error_message("true"),
+    );
+    for (_, type_name, label) in &error_labels {
+        ctx.emitter.label(label);
+        crate::codegen::lower_inst::exceptions::emit_type_error(
+            ctx,
+            &non_array_type_error_message(type_name),
+        );
+    }
+    ctx.emitter.label(&fallback_error_label);
+    crate::codegen::lower_inst::exceptions::emit_type_error(
+        ctx,
+        &non_array_type_error_message("object"),
+    );
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
+}
+
+/// Runtime Mixed tags that are definitely NOT array storage, paired with the type name PHP uses
+/// in the `array_keys()` TypeError message. Tag 4 (indexed array) and tag 5 (hash) are absent
+/// because they are the accepted payloads. Tag 3 (bool) is absent too: php-src names the literal
+/// `true`/`false` rather than `bool`, so it needs a payload-value dispatch instead of a fixed
+/// name. Tag 6 (object) and any unknown tag fall through to the generic `object` wording, which
+/// is where elephc diverges from php-src — php-src names the concrete class there, and the class
+/// name is not available at this lowering site.
+const NON_ARRAY_TAG_TYPE_NAMES: [(u64, &str); 4] =
+    [(0, "int"), (1, "string"), (2, "float"), (8, "null")];
+
+/// Formats php-src's `array_keys()` argument TypeError message for a given rejected type name.
+fn non_array_type_error_message(type_name: &str) -> String {
+    format!(
+        "array_keys(): Argument #1 ($array) must be of type array, {} given",
+        type_name
+    )
 }
 
 /// Lowers `array_keys()` for a PHP `array<mixed>` value that may hold indexed or hash storage.

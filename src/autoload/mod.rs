@@ -8,6 +8,8 @@
 //! Key details:
 //! - Runtime autoload callbacks cannot run in native binaries; supported rules are interpreted at compile time.
 //! - Composer files execute before the entry program while class-triggered files splice before first use.
+//! - `run_collecting_included` additionally surfaces the canonical path of every file the pass
+//!   loaded, which `crate::opcache_prelude` bakes into the OPcache script manifest.
 
 mod alias;
 mod index;
@@ -32,15 +34,18 @@ use walk::{collect_declared_fqns, collect_reference_points};
 /// `stdClass`, `Iterator`). Seeded into the declared FQN set so references to these
 /// types are never treated as autoload demands.
 const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
+    "ArgumentCountError",
     "ArrayAccess",
     "AppendIterator",
     "ArrayIterator",
     "ArrayObject",
+    "AssertionError",
     "BadFunctionCallException",
     "BadMethodCallException",
     "CachingIterator",
     "CallbackFilterIterator",
     "Countable",
+    "DivisionByZeroError",
     "DomainException",
     "EmptyIterator",
     "Error",
@@ -110,15 +115,49 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
 /// the program, look it up first in the composer.json PSR-4 index and
 /// then in the user-registered closure rules; parse the referenced file,
 /// run resolver+name_resolver on it, and append. Iterate until stable.
+///
+/// This is the loaded-set-discarding wrapper over [`run_collecting_included`], kept for the
+/// call sites that do not bake the OPcache script manifest (the `ir_lower` and
+/// `tests/codegen/support` harnesses); only `crate::pipeline` takes the longer form.
+#[allow(dead_code)] // Consumed by the test harnesses; `crate::pipeline` uses the collecting form.
 pub fn run(
-    mut program: Program,
+    program: Program,
     base_dir: &Path,
     registry: &Registry,
 ) -> Result<Program, CompileError> {
+    run_collecting_included(program, base_dir, registry).map(|(program, _)| program)
+}
+
+/// Same as [`run`], but also returns the CANONICAL path of every source file this pass
+/// pulled into the program, each exactly once:
+/// - Composer `autoload.files` (the always-included list),
+/// - every PSR-4 / SPL-rule class file resolved by the fixpoint below,
+/// - every `include`/`require` target those files themselves pull in (an autoloaded class
+///   file that `require`s a helper compiles that helper into the binary too, so it is just
+///   as much a cached script).
+///
+/// The first two come from the pass's own `included` set, which is already canonicalized
+/// with `Path::canonicalize` — the SAME normalization `__FILE__` bakes
+/// (`crate::magic_constants::file_pass`) — so the paths are directly comparable with
+/// `crate::opcache_prelude::ScriptEntry::path`. The third comes from
+/// `resolver::resolve_collecting_includes`, canonicalized identically.
+///
+/// Nested include paths are accumulated SEPARATELY from `included` rather than being
+/// folded into it: `included` doubles as the "already autoloaded" guard, and seeding it
+/// with include targets would change which files the fixpoint loads. Keeping them apart
+/// makes this function's autoload behavior byte-identical to [`run`]'s.
+///
+/// The vector is SORTED so a build is byte-reproducible.
+pub fn run_collecting_included(
+    mut program: Program,
+    base_dir: &Path,
+    registry: &Registry,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
     if registry.is_empty() {
-        return Ok(program);
+        return Ok((program, Vec::new()));
     }
     let mut included: HashSet<PathBuf> = HashSet::new();
+    let mut nested_includes: HashSet<PathBuf> = HashSet::new();
     const MAX_ITERATIONS: usize = 64;
 
     // -- prefix always-included files first --
@@ -129,7 +168,9 @@ pub fn run(
     for path in registry.always_included_files() {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         if included.insert(canonical.clone()) {
-            prefix.extend(load_autoloaded_file(&canonical, base_dir)?);
+            let (loaded, loaded_includes) = load_autoloaded_file(&canonical, base_dir)?;
+            nested_includes.extend(loaded_includes);
+            prefix.extend(loaded);
         }
     }
     if !prefix.is_empty() {
@@ -149,7 +190,8 @@ pub fn run(
             if let Some(path) = resolve_class(&fqn, registry) {
                 let canonical = path.canonicalize().unwrap_or(path);
                 if included.insert(canonical.clone()) {
-                    let loaded = load_autoloaded_file(&canonical, base_dir)?;
+                    let (loaded, loaded_includes) = load_autoloaded_file(&canonical, base_dir)?;
+                    nested_includes.extend(loaded_includes);
                     insertions.push((stmt_idx, loaded));
                 }
             }
@@ -164,7 +206,11 @@ pub fn run(
             program.splice(insert_at..insert_at, loaded);
         }
     }
-    Ok(program)
+
+    included.extend(nested_includes);
+    let mut loaded_files: Vec<PathBuf> = included.into_iter().collect();
+    loaded_files.sort();
+    Ok((program, loaded_files))
 }
 
 /// Lower any top-level literal `class_alias()` calls left after another
@@ -199,8 +245,13 @@ fn resolve_class(fqn: &str, registry: &Registry) -> Option<PathBuf> {
     None
 }
 
-/// Load, parse, and resolve a single autoloaded PHP file, returning its statements.
-fn load_autoloaded_file(path: &Path, base_dir: &Path) -> Result<Program, CompileError> {
+/// Load, parse, and resolve a single autoloaded PHP file, returning its statements plus the
+/// canonical paths of every `include`/`require` target the file itself pulled in (surfaced for
+/// the OPcache script manifest — see [`run_collecting_included`]).
+fn load_autoloaded_file(
+    path: &Path,
+    base_dir: &Path,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
     let content = std::fs::read_to_string(path).map_err(|e| {
         CompileError::new(
             Span::dummy(),
@@ -214,11 +265,12 @@ fn load_autoloaded_file(path: &Path, base_dir: &Path) -> Result<Program, Compile
     // Strict-PHP audit of the autoloaded user file on its freshly parsed AST,
     // before resolution can synthesize compiler-internal names into it.
     crate::strict_php::check_file(&parsed, &file_label)?;
-    let resolved = crate::resolver::resolve(parsed, path.parent().unwrap_or(base_dir))?;
+    let (resolved, nested_includes) =
+        crate::resolver::resolve_collecting_includes(parsed, path.parent().unwrap_or(base_dir))?;
     let resolved = alias::collect_aliases(resolved);
     let canonicalized: Vec<Stmt> = crate::name_resolver::resolve(resolved)?;
     // name_resolver has already flattened namespace nodes and canonicalized
     // declarations, so we splice the statements directly into the top-level
     // program.
-    Ok(canonicalized)
+    Ok((canonicalized, nested_includes))
 }

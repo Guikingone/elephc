@@ -395,11 +395,21 @@ fn test_error_is_kind_predicates_arity() {
 
 // --- Error positions ---
 
-/// Verifies that the null coalesce operator widens the inferred return type to float
-/// when one branch is int and the other is a float literal.
+/// Verifies that `??` merges two DIFFERENT arm types to `mixed` rather than letting one arm
+/// absorb the other.
+///
+/// This test previously asserted `Float`, on the theory that `??` widens like an arithmetic
+/// operator. It does not: `??` is `isset($a) ? $a : $b` and performs no coercion at all, so
+/// `fallback_pi("hi")` must return the string `"hi"`. Under the old `Float` inference the
+/// value branch was lowered as a float coercion and the caller silently received `float(0)`
+/// for a string argument, `float(2)` for `2` and `float(1)` for `true` (reference PHP 8.5.6:
+/// `string(2) "hi"`, `int(2)`, `bool(true)`). `Mixed` is the only merge that keeps every arm
+/// intact; `null_coalesce_merge_type` in `src/types/checker/inference/syntactic.rs` computes
+/// it, and it agrees with the IR-level `wider_type_for_merge` that already emitted a Mixed
+/// merge slot for this shape.
 /// Input: `function fallback_pi($x) { return $x ?? 3.14159; }`
 #[test]
-fn test_null_coalesce_widens_function_return_type_in_checker() {
+fn test_null_coalesce_merges_mismatched_arms_to_mixed_in_checker() {
     let tokens = tokenize("<?php function fallback_pi($x) { return $x ?? 3.14159; }")
         .expect("tokenize failed");
     let ast = parse(&tokens).expect("parse failed");
@@ -410,7 +420,7 @@ fn test_null_coalesce_widens_function_return_type_in_checker() {
         .functions
         .get("fallback_pi")
         .expect("missing function signature for fallback_pi");
-    assert_eq!(sig.return_type, PhpType::Float);
+    assert_eq!(sig.return_type, PhpType::Mixed);
 
     // Verifies that `array` return hints preserve the element type through property storage
     // and method return inference, using a `Wad` class with `Entry` objects.
