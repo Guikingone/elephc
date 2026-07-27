@@ -119,3 +119,64 @@ echo need(src(true));
         "expects Str, got Union([Int, Void])",
     );
 }
+
+/// F6a: an `Obj|false` return value flows into a `?Obj`-shaped (`Obj|null`) declared return. Both
+/// are boxed-`Mixed` unions and the target carries an object member, so `boxed_union_source_member_flows`
+/// accepts the `false` sentinel as a memory-safe box-pointer copy (a stray `false` reaching an object
+/// use fatals loudly as a PHP `TypeError`). Mirrors HeaderBag::getDate / Response::getExpires.
+#[test]
+fn test_object_false_union_into_nullable_object_return_accepted() {
+    expect_ok(
+        r#"<?php
+class D {}
+function make(bool $ok): D|false { return $ok ? new D() : false; }
+function getIt(bool $ok): ?D { return make($ok); }
+"#,
+    );
+}
+
+/// F4: a `string|false` scalar union returned from a `?string`-shaped declared return is accepted —
+/// the return-boundary codegen weak-coerces `false`→"" (`__rt_mixed_cast_string`). Every source
+/// member is string-coercible (no null/array/object) and every target member is string/void, so the
+/// coercion is sound. Mirrors AbstractDumper::dump / Filesystem::readlink.
+#[test]
+fn test_string_false_union_into_nullable_string_return_accepted() {
+    expect_ok(
+        r#"<?php
+function rl(bool $ok): string|false { return $ok ? "t" : false; }
+function readlink2(bool $ok): ?string { return rl($ok); }
+"#,
+    );
+}
+
+/// F6a/F4 sentinel: an `int|false` scalar union into an `:int` return stays loud. The target is a
+/// bare scalar with no object member (so the F6a object arm does not fire) and no string member (so
+/// the F4 `?string` coercion does not apply); PHP would coerce the int but `TypeError` on `false`,
+/// so a compile-time rejection is the sound choice. Guards F6a/F4 against over-broadening.
+#[test]
+fn test_int_false_union_into_int_return_stays_loud() {
+    expect_error(
+        r#"<?php
+function make(bool $ok): int|false { return $ok ? 5 : false; }
+function getInt(bool $ok): int { return make($ok); }
+echo getInt(true);
+"#,
+        "expects Int, got Union([Int, False])",
+    );
+}
+
+/// F4 sentinel: a `string|array` union into a `?string` return stays loud. The `array` member is not
+/// string-coercible, so the F4 scalar-union → `?string` coercion deliberately excludes it (a
+/// boxed-array payload has no sound `string` cast); PHP raises a `TypeError`. Guards F4's
+/// "every source member string-coercible" precondition.
+#[test]
+fn test_string_array_union_into_nullable_string_return_stays_loud() {
+    expect_error(
+        r#"<?php
+function mk(bool $ok): string|array { return $ok ? "s" : [1, 2]; }
+function g(bool $ok): ?string { return mk($ok); }
+echo g(true);
+"#,
+        "expects Union([Str, Void]), got Union([Str, Array(Mixed)])",
+    );
+}
