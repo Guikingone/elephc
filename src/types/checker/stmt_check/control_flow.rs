@@ -492,11 +492,25 @@ impl Checker {
                                     return Some(then_ty.clone());
                                 }
                                 if Self::array_family_gradual_accepts(false_ty, then_ty) {
-                                    return self.merged_assignment_type(false_ty, then_ty);
+                                    if let Some(merged) =
+                                        self.merged_assignment_type(false_ty, then_ty)
+                                    {
+                                        return Some(merged);
+                                    }
                                 }
-                                None
-                            })
-                            ;
+                                // Single guard, no `else`: exactly two paths reach the code after
+                                // the `if` — the guard-true body exit (`then_ty`) and the
+                                // guard-false complement (`false_ty`). The precise post-`if` type
+                                // is their union. Falling through to restore the pre-`if` type
+                                // needlessly widened the variable back to members the complement
+                                // had eliminated (`if ($x instanceof C) { $x = ...; }` over a
+                                // `string|C|null` value kept `C` in the join, so a following use
+                                // saw the object member the `instanceof` had just ruled out).
+                                Some(self.normalize_union_type(vec![
+                                    then_ty.clone(),
+                                    false_ty.clone(),
+                                ]))
+                            });
                         if let Some(converged) = converged {
                             env.insert(var.clone(), converged);
                         } else {
