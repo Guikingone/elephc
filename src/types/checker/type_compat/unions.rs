@@ -400,6 +400,21 @@ impl Checker {
             return true;
         }
         match member {
+            // A `false`/`bool` sentinel member of a boxed union source flows into a boxed union
+            // target that carries an object member (e.g. `DateTimeInterface|false` into a
+            // `?DateTimeInterface`-shaped `Mixed` slot — `HeaderBag::getDate`, `Response::getExpires`,
+            // an `expiresAt` property). This path runs only when the target Union's codegen repr is
+            // already `Mixed` (guarded upstream) and the source is also a boxed Union, so it is a
+            // memory-safe box-pointer copy; a stray `false` reaching an object use (`->format()`)
+            // fatals loudly as PHP's `TypeError`. Kept narrow to object-bearing targets: a scalar-only
+            // union target (`int|false`) keeps its sentinel loudness through the arms below.
+            PhpType::False | PhpType::Bool
+                if target_members
+                    .iter()
+                    .any(|target_member| matches!(target_member, PhpType::Object(_))) =>
+            {
+                true
+            }
             PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str => {
                 union_has_scalar_member(target_members)
             }
