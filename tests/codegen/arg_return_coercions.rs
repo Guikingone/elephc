@@ -158,3 +158,64 @@ echo $acc;
     );
     assert_eq!(out, "r00r11r22");
 }
+
+/// A `string|false` value coerces into a `string` RETURN: PHP weak-mode maps `false` to `""` and
+/// passes a string through. This is Symfony's non-`strict_types` Dotenv/Path/Yaml boundary shape.
+/// The union is a boxed `Mixed`, so the return boundary emits `__rt_mixed_cast_string`, whose bool
+/// arm yields `""` for `false` — matching `php -n` exactly.
+#[test]
+fn test_string_false_union_coerces_to_string_return() {
+    let out = compile_and_run(
+        r#"<?php
+function raw(bool $b): string|false { return $b ? "hi" : false; }
+function norm(bool $b): string { return raw($b); }
+$s = norm(false);
+echo norm(true), "|", $s, "|", strlen($s), "\n";
+"#,
+    );
+    assert_eq!(out, "hi||0\n");
+}
+
+/// A `string|false` value coerces into a `string` PARAMETER (the call-argument boundary emits the
+/// same `__rt_mixed_cast_string`), `false` becoming `""`.
+#[test]
+fn test_string_false_union_coerces_to_string_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function src(bool $b): string|false { return $b ? "hi" : false; }
+function need(string $s): string { return "[$s]"; }
+echo need(src(true)), need(src(false)), "end";
+"#,
+    );
+    assert_eq!(out, "[hi][]end");
+}
+
+/// An `int|false` scalar union coerces into a `string` parameter: the `int` stringifies to its
+/// decimal and `false` to `""`, both via the boxed-`Mixed` cast dispatch.
+#[test]
+fn test_int_false_union_coerces_to_string_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function src(bool $b): int|false { return $b ? 42 : false; }
+function need(string $s): string { return "<$s>"; }
+echo need(src(true)), need(src(false));
+"#,
+    );
+    assert_eq!(out, "<42><>");
+}
+
+/// A scalar union with NO `string` member (`int|float`) still coerces into a `string` parameter:
+/// each scalar stringifies through the boxed-`Mixed` cast (`int`→decimal, `float`→`ftoa`).
+/// (Loud-rejection guards for array/object members and the TaggedScalar `int|null` exclusion live
+/// in `error_tests::weak_coercion_negatives`.)
+#[test]
+fn test_scalar_union_without_string_member_coerces_to_string() {
+    let out = compile_and_run(
+        r#"<?php
+function src(bool $b): int|float { return $b ? 3 : 2.5; }
+function need(string $s): string { return "<$s>"; }
+echo need(src(true)), need(src(false));
+"#,
+    );
+    assert_eq!(out, "<3><2.5>");
+}

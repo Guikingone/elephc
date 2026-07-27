@@ -262,14 +262,21 @@ impl Checker {
     ///    int-like representation would stringify `false` as `"0"` rather than PHP's `""`.
     /// 2. Stringable object → `string`. A class (or ancestor) with a public `__toString()` is
     ///    coerced through the same `__toString()` dispatch as `(string)$obj`.
-    /// 3. Concrete scalar (`int`/`float`/`bool`/`string`) or Stringable object → a union whose
+    /// 3. A SCALAR-ONLY union with a boxed-`Mixed` codegen representation → `string` (e.g.
+    ///    `string|false`, `string|null`, `string|int`). The boundary's `__rt_mixed_cast_string`
+    ///    tag dispatch realizes the exact PHP weak-mode form of whichever scalar the box holds
+    ///    (`false`→"", `null`→"", `int`→decimal, …) — the shape Symfony's non-`strict_types`
+    ///    boundaries rely on. See `coerces_to_string_boundary`.
+    /// 4. Concrete scalar (`int`/`float`/`bool`/`string`) or Stringable object → a union whose
     ///    codegen representation is a boxed `Mixed` and that offers a compatible member. The
     ///    source is boxed into the union slot and the callee weak-coerces it at use, so no eager
     ///    conversion is emitted. A union source whose every member so flows is accepted too.
     ///
-    /// Deliberately kept loud: non-Stringable objects into `string`, `array` into `string`,
-    /// scalars into a scalar-free union (e.g. `array|null`), and any object mismatch against a
-    /// concrete (by-offset) object target — none of which the boundary can realize safely.
+    /// Deliberately kept loud: non-Stringable objects into `string`, `array` into `string`, a
+    /// union carrying any array/object member into `string` (`__rt_mixed_cast_string` would turn
+    /// it into "" rather than PHP's TypeError), scalars into a scalar-free union (e.g.
+    /// `array|null`), and any object mismatch against a concrete (by-offset) object target — none
+    /// of which the boundary can realize safely.
     pub(crate) fn weak_boundary_coercion_accepts(
         &self,
         expected: &PhpType,
@@ -294,12 +301,45 @@ impl Checker {
     /// stays loud here (a value typed by an abstract/interface Stringable reaches a `string`
     /// slot only through a boxed union in practice — that path dispatches `__toString` virtually
     /// at use). See `weak_boundary_coercion_accepts`.
+    ///
+    /// A SCALAR-ONLY union whose codegen representation is a boxed `Mixed` cell (e.g.
+    /// `string|false`, `string|null`, `string|int`) also coerces here: the plain-`string`
+    /// boundary emits the `__rt_mixed_cast_string` tag dispatch (int→decimal, float→ftoa,
+    /// bool/`false`→"1"/"", string→persisted copy, null→""), which is exactly PHP weak-mode
+    /// `string`-boundary coercion. This is the shape Symfony's non-`strict_types` boundaries rely
+    /// on (Dotenv/Path/Yaml `string|false` returns and parameters). It stays loud for any
+    /// array/object union member — `__rt_mixed_cast_string` has no tag for those and would
+    /// silently yield "" instead of PHP's TypeError — and for a TAGGED-scalar union such as
+    /// `int|null` (codegen repr `TaggedScalar`, not `Mixed`), whose null case the `IToStr`
+    /// coercion would mis-stringify.
     fn coerces_to_string_boundary(&self, actual: &PhpType) -> bool {
         match actual {
             PhpType::Int | PhpType::Float => true,
             PhpType::Object(name) => self.object_class_has_eager_tostring(name),
+            PhpType::Union(members) if actual.codegen_repr() == PhpType::Mixed => {
+                members
+                    .iter()
+                    .all(Self::union_member_weak_coerces_to_string)
+            }
             _ => false,
         }
+    }
+
+    /// Returns true for a union member that `__rt_mixed_cast_string` dispatches to its exact PHP
+    /// weak-mode `string` form: `string`, `int`, `float`, `bool`/`false`, or `null`
+    /// (`void`/`never`). Array and object members are excluded — the cast has no tag for them and
+    /// would silently yield "" instead of PHP's TypeError, so a union carrying one stays loud.
+    fn union_member_weak_coerces_to_string(member: &PhpType) -> bool {
+        matches!(
+            member,
+            PhpType::Str
+                | PhpType::Int
+                | PhpType::Float
+                | PhpType::Bool
+                | PhpType::False
+                | PhpType::Void
+                | PhpType::Never
+        )
     }
 
     /// Returns true when `actual` may flow into a boxed-`Mixed` union target: a concrete scalar

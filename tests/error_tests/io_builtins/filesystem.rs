@@ -19,16 +19,20 @@ fn test_error_file_get_contents_wrong_args() {
 }
 
 /// Verifies returning `file_get_contents()` (typed `Str|False`) from a `: string` function is
-/// rejected: the `false` failure marker must be handled before the scalar return boundary.
+/// ACCEPTED under PHP weak-mode `string`-boundary coercion: the boxed-`Mixed` return boundary
+/// runs `__rt_mixed_cast_string`, which maps the `false` failure marker to `""` (matching
+/// non-`strict_types` PHP), so it flows into the scalar `string` return instead of erroring. This
+/// is the shape Symfony's non-strict Dotenv/Path/Yaml boundaries rely on. (The `int|false`→`:int`
+/// sentinel diagnostic stays loud — see `test_error_readfile_false_return_into_int_return_type` —
+/// because a silent `false`→`0` there hides the classic `0`-is-a-valid-offset footgun.)
 #[test]
-fn test_error_file_get_contents_false_return_into_string_return_type() {
-    expect_error(
+fn test_file_get_contents_false_return_coerces_into_string_return_type() {
+    expect_ok(
         r#"<?php
 function read_file(): string {
     return file_get_contents("missing.txt");
 }
 "#,
-        "Function 'read_file' return type expects Str, got Union([Str, False])",
     );
 }
 

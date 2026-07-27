@@ -101,3 +101,21 @@ k(5);
         "expects Union([Array(Mixed), Void]), got Int",
     );
 }
+
+/// A nullable-int union (`int|null`) into a `string` parameter stays loud. Unlike `string|false`
+/// and other scalar-only unions — which use a boxed-`Mixed` representation and ARE weak-coerced to
+/// `string` via `__rt_mixed_cast_string` (see `codegen::arg_return_coercions`) — `int|null` uses
+/// the TAGGED-SCALAR codegen representation, so the scalar-union → `string` weak coercion
+/// deliberately excludes it (the `IToStr` path would mis-stringify its null case). PHP would coerce
+/// the int but `TypeError` on null, so a compile-time rejection is the sound, conservative choice.
+#[test]
+fn test_tagged_scalar_int_null_union_into_string_stays_loud() {
+    expect_error(
+        r#"<?php
+function src(bool $b): int|null { return $b ? 5 : null; }
+function need(string $s): string { return $s; }
+echo need(src(true));
+"#,
+        "expects Str, got Union([Int, Void])",
+    );
+}

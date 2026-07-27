@@ -170,19 +170,18 @@ fn test_error_tmpfile_rejects_nonempty_static_spread() {
     expect_error("<?php tmpfile(...[1]);", "tmpfile() takes no arguments");
 }
 
-/// Verifies the gradual-typing boundary model accepts returning `fgetc()` (typed `Str|Bool`) from
-/// a `: string` function: `Bool` is PHP-coercible to `string` (weak mode coerces `false` to `""`),
-/// Verifies returning `fgetc()` (typed `Str|False`) from a `: string` function is rejected:
-/// the `false` EOF marker must be handled before the scalar return boundary.
+/// Verifies returning `fgetc()` (typed `Str|False`) from a `: string` function is ACCEPTED under
+/// PHP weak-mode `string`-boundary coercion: the boxed-`Mixed` return boundary runs
+/// `__rt_mixed_cast_string`, which maps the `false` EOF marker to `""` (matching non-`strict_types`
+/// PHP), so it flows into the scalar `string` return instead of erroring.
 #[test]
-fn test_error_fgetc_false_return_into_string_return_type() {
-    expect_error(
+fn test_fgetc_false_return_coerces_into_string_return_type() {
+    expect_ok(
         r#"<?php
 function read_char(): string {
     return fgetc(STDIN);
 }
 "#,
-        "Function 'read_char' return type expects Str, got Union([Str, False])",
     );
 }
 
