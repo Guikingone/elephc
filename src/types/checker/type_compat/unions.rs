@@ -124,6 +124,17 @@ impl Checker {
                         || self.class_implements_interface(actual_name, expected_name)
                         || self.interface_extends_interface(actual_name, expected_name)
                 }
+                // A `Closure`/`Callable` value IS an object in PHP (every closure is a
+                // `Closure` instance), so it satisfies the bare `object` pseudo-type
+                // (`Object("")`, an object whose class is not statically known). This lets a
+                // closure flow into an `object` slot — including as the `object` member of a
+                // `string|array|object` callable union (HttpKernel `ControllerEvent::$controller`).
+                // Reading such a union back yields a boxed-`Mixed` slot, so a later invocation
+                // dispatches by runtime tag (the safe `lower_mixed_callable_descriptor_invoke`
+                // path), never a by-offset object access. A CONCRETE class target (non-empty
+                // name) still rejects a callable: elephc emits no by-name/instanceof guard there,
+                // and a closure is not an instance of that class.
+                PhpType::Callable if expected_name.is_empty() => true,
                 _ => false,
             },
             PhpType::Iterable => match actual {
