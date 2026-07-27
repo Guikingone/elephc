@@ -1360,9 +1360,10 @@ echo (in_array("hello", $a) ? "y" : "n"),
 
 /// Regression: `in_array()` with a `Mixed` needle must work over a concrete indexed `array<Str>`
 /// (the inverse of the string-needle / Mixed-array case). An untyped function parameter is a boxed
-/// `Mixed` value; searching it against a literal string array surfaced in symfony/yaml. The needle
-/// is unboxed once and, when string-tagged, byte-compared against each element; a non-string needle
-/// (e.g. an integer) matches nothing, mirroring PHP's behavior for these cases.
+/// `Mixed` value; searching it against a literal string array surfaced in symfony/yaml. Each string
+/// element is boxed into a temporary Mixed cell and compared with the boxed needle: loose mode uses
+/// the PHP 8 three-way comparison helper (so a numeric needle can match a numeric string element,
+/// e.g. `in_array(1, ["1"])` is true), while strict mode uses runtime tag identity (so `1 !== "1"`).
 #[test]
 fn test_in_array_mixed_needle_over_string_array() {
     let out = compile_and_run(
@@ -1371,10 +1372,21 @@ function check($needle) {
     $arr = ["a", "b", "c"];
     return in_array($needle, $arr) ? "y" : "n";
 }
-echo check("b"), check("x"), check(2);
+function loose_num($needle) {
+    return in_array($needle, ["1", "x"]) ? "y" : "n";
+}
+function strict($needle) {
+    return in_array($needle, ["1", "b"], true) ? "y" : "n";
+}
+echo check("b"), check("x"), check(2), "|",
+     loose_num(1), loose_num(9), "|",
+     strict("b"), strict(1);
 "#,
     );
-    assert_eq!(out, "ynn");
+    // check: string hit, string miss, non-numeric int miss (2 cast to "2" != "a"/"b"/"c").
+    // loose_num: int 1 loose-matches string "1"; int 9 misses.
+    // strict: string "b" identity-matches; int 1 never identity-matches string "1".
+    assert_eq!(out, "ynn|yn|yn");
 }
 
 // --- Long-form `array(...)` literal ---
