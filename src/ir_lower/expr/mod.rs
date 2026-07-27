@@ -6389,6 +6389,11 @@ fn coerce_scalar_arg_to_param_storage(
                 | PhpType::Union(_)
                 | PhpType::Int
                 | PhpType::Float
+                // `source_ty` is a `codegen_repr()`, which folds `false` into `bool`; a
+                // `bool`/`false` argument routes through `coerce_to_string` (PHP-type-aware
+                // `IToStr`) so it stringifies to PHP's `""`/`"1"`, matching the checker's
+                // `coerces_to_string_boundary` acceptance.
+                | PhpType::Bool
                 | PhpType::Object(_)
         )
     {
@@ -6433,6 +6438,9 @@ fn coerce_operands_to_params(
                     | PhpType::Union(_)
                     | PhpType::Int
                     | PhpType::Float
+                    // `operand_ty` is a `codegen_repr()` (folds `false` into `bool`); coerce a
+                    // bool/false operand through the PHP-type-aware `IToStr` string cast.
+                    | PhpType::Bool
                     | PhpType::Object(_)
             )
         {

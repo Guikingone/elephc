@@ -257,9 +257,13 @@ impl Checker {
     /// which emit no coercion and must keep using the strict predicates only.
     ///
     /// Accepted flows (everything else stays loud):
-    /// 1. Concrete `int`/`float` → `string`. The call/return boundary emits the same
-    ///    `IToStr`/`FToStr` used by `(string)$scalar`. `bool` is excluded here because its
-    ///    int-like representation would stringify `false` as `"0"` rather than PHP's `""`.
+    /// 1. Concrete `int`/`float`/`bool` → `string`. The call/return boundary emits the same
+    ///    `IToStr`/`FToStr` used by `(string)$scalar`. `bool`/`false` are included because the
+    ///    `IToStr` codegen dispatches on the operand's PHP type (`lower_int_like_to_string`):
+    ///    a `bool`/`false` source stringifies through `lower_loaded_bool_to_string` to PHP's
+    ///    exact `false`→`""` / `true`→`"1"`, not the int form `"0"`/`"1"`. This is what admits a
+    ///    `return false;` in a `: string`-declared method (e.g. the mbstring polyfill's `mb_scrub`,
+    ///    whose invalid-encoding arm returns `false` under a `: string` return type).
     /// 2. Stringable object → `string`. A class (or ancestor) with a public `__toString()` is
     ///    coerced through the same `__toString()` dispatch as `(string)$obj`.
     /// 3. A SCALAR-ONLY union with a boxed-`Mixed` codegen representation → `string` (e.g.
@@ -292,7 +296,7 @@ impl Checker {
     }
 
     /// Returns true when `actual` coerces to a plain `string` slot at a value boundary: a
-    /// concrete `int`/`float`, or a Stringable object.
+    /// concrete `int`/`float`/`bool`, or a Stringable object.
     ///
     /// The object case requires a CONCRETE, non-abstract static class with a resolvable
     /// `__toString` (`object_class_has_eager_tostring`): the plain-`string` boundary emits an
@@ -314,7 +318,11 @@ impl Checker {
     /// coercion would mis-stringify.
     fn coerces_to_string_boundary(&self, actual: &PhpType) -> bool {
         match actual {
-            PhpType::Int | PhpType::Float => true,
+            // `bool`/`false` stringify to PHP's exact `""`/`"1"` here: the plain-`string`
+            // boundary's `IToStr` codegen is PHP-type-aware and routes a bool/false source
+            // through `lower_loaded_bool_to_string`, not the int form. See the doc comment on
+            // `weak_boundary_coercion_accepts`.
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False => true,
             PhpType::Object(name) => self.object_class_has_eager_tostring(name),
             PhpType::Union(members) if actual.codegen_repr() == PhpType::Mixed => {
                 members
