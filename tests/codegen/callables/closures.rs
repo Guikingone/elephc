@@ -1937,6 +1937,35 @@ echo (new Probe(9))->go();
     );
 }
 
+/// Regression test (F3 — Symfony `ViewEvent`/`TraceableCommand` bound-closure shape): the
+/// immediate-invoke `Closure::bind(fn () => $this->prop, $newThis, Scope::class)()` shape where
+/// `$newThis` is an instance of a class OTHER than the closure's lexically-enclosing method's
+/// class. The rebound `$this` must resolve `$this->prop`'s offset against `$newThis`'s layout —
+/// here a subclass that inherits a PRIVATE property declared on the rebind scope — not against the
+/// enclosing class, which does not declare the property at all. `crate::ir_lower` types the
+/// closure body's `$this` as the bound receiver's class (see
+/// `crate::ir_lower::expr::build_bound_closure_binding`) and the checker redirects the property
+/// resolution to the rebind scope (see
+/// `crate::types::checker::inference::objects::access::Checker::infer_property_on_class_type`),
+/// keeping the two in lock-step. Mirrors `ViewEvent:41` (private prop inherited by the bound
+/// receiver). php-verified oracle: 13.
+#[test]
+fn test_closure_bind_scope_rebind_reads_inherited_private_on_foreign_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { public function __construct(private int $hidden = 0) {} }
+class Derived extends Base {}
+class Outer {
+    public function peek(Derived $d): int {
+        return \Closure::bind(fn () => $this->hidden, $d, Base::class)();
+    }
+}
+echo (new Outer())->peek(new Derived(13));
+"#,
+    );
+    assert_eq!(out, "13");
+}
+
 // --- Untyped closure/arrow-fn parameter is Mixed inside the body (PHP semantics) ---
 
 /// An untyped arrow-function parameter with no contextual hint is `Mixed` inside the body, so

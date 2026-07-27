@@ -201,6 +201,12 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub web: bool,
     owner_name: String,
     closures: Vec<Function>,
+    /// Set for the span of lowering a `Closure::bind(fn () => $this->prop, $newThis, Scope::class)`
+    /// closure literal: the class the rebound `$this` should be typed as inside the closure body,
+    /// so `$this->prop` resolves its property offset against the bound receiver's layout rather than
+    /// the closure's lexically-enclosing class. Consumed (taken) by the `this` capture in
+    /// `lower_closure_with_context`; see `build_bound_closure_binding`.
+    bound_closure_this_class: Option<String>,
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
     hidden_temp_counter: usize,
@@ -292,6 +298,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             web,
             owner_name,
             closures: Vec::new(),
+            bound_closure_this_class: None,
             pending_static_callable_result: None,
             closure_counter: 0,
             hidden_temp_counter: 0,
@@ -942,6 +949,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Takes any statically known callable result recorded by the last direct expression.
     pub(crate) fn take_pending_static_callable_result(&mut self) -> Option<StaticCallableBinding> {
         self.pending_static_callable_result.take()
+    }
+
+    /// Records the class the rebound `$this` should be typed as while lowering the closure body of
+    /// a `Closure::bind(fn () => $this->prop, $newThis, Scope::class)` literal.
+    pub(crate) fn set_bound_closure_this_class(&mut self, class_name: String) {
+        self.bound_closure_this_class = Some(class_name);
+    }
+
+    /// Takes the pending bound-closure `$this` class (see `set_bound_closure_this_class`), clearing
+    /// it so it cannot leak into a nested or subsequent closure.
+    pub(crate) fn take_bound_closure_this_class(&mut self) -> Option<String> {
+        self.bound_closure_this_class.take()
     }
 
     /// Clears stale callable-result metadata before lowering a new independent expression.

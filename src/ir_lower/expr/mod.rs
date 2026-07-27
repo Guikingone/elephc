@@ -5225,8 +5225,19 @@ fn build_bound_closure_binding(
         return None;
     }
     let new_this = bind_args.get(1)?.clone();
+    // Type the rebound `$this` inside the closure body as the bound receiver's class, so
+    // `$this->prop` in the body resolves its property offset against `$newThis`'s layout (which
+    // declares or inherits the property) instead of the closure's lexically-enclosing class, which
+    // may not declare it at all. Sound because the runtime `$this` IS `$newThis`, an instance of
+    // this exact class, so the offset read matches the object. `closure_bind_property_return_type`
+    // already required the property to exist on this class, so it is guaranteed resolvable here.
+    if let Some(new_this_class) = instance_callable_object_class(ctx, &new_this) {
+        ctx.set_bound_closure_this_class(new_this_class);
+    }
     // Lower the closure literal to obtain its static binding (function name + captures).
     let closure_value = lower_expr(ctx, closure_lit);
+    // Clear any override the closure body did not consume so it cannot leak to a later closure.
+    ctx.take_bound_closure_this_class();
     let Some(StaticCallableBinding::Closure {
         name,
         mut signature,
@@ -10563,6 +10574,13 @@ fn lower_closure_with_context(
             } else if by_ref && body_contains_eval {
                 ctx.set_local_type(capture, PhpType::Mixed);
                 Some(PhpType::Mixed)
+            } else if capture == "this" {
+                // A `Closure::bind(fn () => $this->prop, $newThis, Scope::class)` rebind types the
+                // closure body's `$this` as the bound receiver's class (set in
+                // `build_bound_closure_binding`), so `$this->prop` resolves its property offset
+                // against `$newThis`'s layout instead of the lexical class. `None` for every other
+                // `$this` capture, leaving the lexical-class typing below unchanged.
+                ctx.take_bound_closure_this_class().map(PhpType::Object)
             } else {
                 None
             };
