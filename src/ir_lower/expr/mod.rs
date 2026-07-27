@@ -1299,8 +1299,8 @@ fn wider_type_for_merge(left: &PhpType, right: &PhpType) -> PhpType {
         // typed reads through the merged type misinterpret the payload bytes.
         (PhpType::Array(left_elem), PhpType::Array(right_elem)) => {
             PhpType::Array(Box::new(merge_ir_indexed_element_type(
-                left_elem.codegen_repr(),
-                right_elem.codegen_repr(),
+                (**left_elem).clone(),
+                (**right_elem).clone(),
             )))
         }
         (
@@ -1308,12 +1308,12 @@ fn wider_type_for_merge(left: &PhpType, right: &PhpType) -> PhpType {
             PhpType::AssocArray { key: right_key, value: right_value },
         ) => PhpType::AssocArray {
             key: Box::new(merge_ir_assoc_value_type(
-                left_key.codegen_repr(),
-                right_key.codegen_repr(),
+                (**left_key).clone(),
+                (**right_key).clone(),
             )),
             value: Box::new(merge_ir_assoc_value_type(
-                left_value.codegen_repr(),
-                right_value.codegen_repr(),
+                (**left_value).clone(),
+                (**right_value).clone(),
             )),
         },
         (
@@ -7542,7 +7542,7 @@ fn release_value_after_retaining_insert(
 }
 
 /// Returns the indexed-array type that the EIR backend can faithfully materialize.
-fn array_literal_type_for_ir(
+pub(crate) fn array_literal_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     items: &[Expr],
     expr: &Expr,
@@ -7655,16 +7655,7 @@ fn ir_array_storage_type(php_type: PhpType) -> PhpType {
 
 /// Merges indexed-array element types for EIR storage metadata.
 fn merge_ir_indexed_element_type(left: PhpType, right: PhpType) -> PhpType {
-    if left == right {
-        return left;
-    }
-    if matches!(left.codegen_repr(), PhpType::Void | PhpType::Never) {
-        return right;
-    }
-    if matches!(right.codegen_repr(), PhpType::Void | PhpType::Never) {
-        return left;
-    }
-    PhpType::Mixed
+    ir_array_storage_type(PhpType::widen_array_branch_element(left, right))
 }
 
 /// Lowers an associative array literal.
@@ -7926,16 +7917,7 @@ fn nullsafe_method_call_expr_type_for_ir(
 
 /// Merges associative-array value types for EIR storage metadata.
 fn merge_ir_assoc_value_type(left: PhpType, right: PhpType) -> PhpType {
-    if left == right {
-        return left;
-    }
-    if matches!(left, PhpType::Never) {
-        return right;
-    }
-    if matches!(right, PhpType::Never) {
-        return left;
-    }
-    PhpType::Mixed
+    ir_array_storage_type(PhpType::widen_array_branch_element(left, right))
 }
 
 /// Lowers a match expression with lazy arm-result evaluation.
@@ -8073,7 +8055,10 @@ fn lower_array_access_from_value(
                 Op::HashGetSilent
             }
         }
-        IrType::Heap(IrHeapKind::Buffer) => Op::BufferGet,
+        IrType::Heap(IrHeapKind::Buffer) => {
+            index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+            Op::BufferGet
+        }
         IrType::Str => {
             index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
             Op::StrCharAt
@@ -8667,6 +8652,8 @@ fn lower_closure_with_context(
         capture_params.push((capture.clone(), php_type, by_ref));
     }
     let name = ctx.next_closure_name();
+    let loop_storage_scope =
+        crate::types::nested_loop_storage_scope(&ctx.loop_storage_scope, expr.span);
     let by_ref_return = matches!(&expr.kind, ExprKind::Closure { by_ref_return: true, .. });
     let signature = if contextual_arg_types.is_empty() {
         function::lower_closure_function(
@@ -8680,6 +8667,7 @@ fn lower_closure_with_context(
             &capture_params,
             self_ref_callable_capture,
             by_ref_return,
+            loop_storage_scope,
         )
     } else {
         function::lower_closure_function_with_context(
@@ -8694,6 +8682,7 @@ fn lower_closure_with_context(
             contextual_arg_types,
             self_ref_callable_capture,
             by_ref_return,
+            loop_storage_scope,
         )
     };
     let data = ctx.intern_string(&name);
@@ -14761,24 +14750,18 @@ fn coerce_value_for_temp(
         }
         PhpType::Float => coerce_to_float_at_span(ctx, value, Some(span)),
         PhpType::Str => coerce_to_string_at_span(ctx, value, Some(span)),
-        _ => widen_container_value_for_temp(ctx, value, &source_ty, &target_ty, span),
+        _ => coerce_container_to_mixed_payload(ctx, value, &source_ty, &target_ty, span),
     }
 }
 
-/// Widens a typed container branch value to a hidden temp's boxed-Mixed
-/// element storage before it is stored.
+/// Widens a typed container value to boxed-Mixed element storage before it is stored.
 ///
-/// Mismatched array/array (or assoc/assoc) branch merges declare the temp with
-/// `Mixed` element storage (`wider_type_for_merge`, issue #549), so each
-/// branch's concrete container must box its slots via `ArrayToMixed` /
-/// `HashToMixed`: storing the raw pointer would let Mixed-element reads
-/// misinterpret the typed slot bytes. Borrowed sources (live locals, container
-/// element reads) are retained first so the conversion's copy-on-write split
-/// rewrites a private copy instead of boxing the source's slots in place; the
-/// conversion consumes that reference, and owning temporaries transfer their
-/// reference into the converted result, so no release is emitted here
-/// (mirrors `coerce_container_to_return_type`).
-fn widen_container_value_for_temp(
+/// Branch merges and stable loop-local contracts can require `Mixed` element storage, so each
+/// concrete container must box its slots via `ArrayToMixed` / `HashToMixed`: storing the raw
+/// pointer would let Mixed-element reads misinterpret typed slot bytes. Borrowed sources are
+/// retained first so the conversion's copy-on-write split rewrites a private copy; owning
+/// temporaries transfer their reference into the converted result.
+pub(super) fn coerce_container_to_mixed_payload(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     source_ty: &PhpType,
