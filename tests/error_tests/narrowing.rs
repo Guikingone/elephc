@@ -180,3 +180,15 @@ fn test_branch_join_union_rejects_member_absent_from_one_arm() {
         "Undefined property: B::a",
     );
 }
+
+/// F6c: a guard on an assignment receiver `if (!is_array($f = $x))` narrows the SOURCE alias `$x`,
+/// not just `$f`. `$x` (`string|array`) is narrowed to `array` on the fallthrough (is-array) edge and
+/// reassigned to an array in the guarded body, so after the `if` it is `array` on both paths and fits
+/// the declared `array|false` property. Without the alias narrowing `$x` would stay `string|array` and
+/// the assignment would be rejected. Mirrors Symfony's ErrorHandler FileLinkFormatter constructor.
+#[test]
+fn test_assignment_receiver_alias_narrows_source_in_guard() {
+    expect_ok(
+        "<?php class F { private array|false $fmt; public function __construct(string|array|null $x = null) { $x ??= \"\"; if (!\\is_array($f = $x)) { $x = [$f]; } $this->fmt = $x; } }",
+    );
+}
