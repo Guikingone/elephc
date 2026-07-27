@@ -61,6 +61,80 @@ fn restore_narrowed_var(env: &mut TypeEnv, var: &str, saved: &Option<PhpType>) {
     }
 }
 
+/// Collects variable names bound by a simple `$var = <expr>` assignment appearing directly in an
+/// `if`/`elseif` condition (`if (!$x = f())`, `false === $y = g()`, `$a && $b = h()`). Such a
+/// variable takes the condition-assigned type on the frame slot, which then persists past the whole
+/// construct as a member that no reaching branch actually leaves live once a later branch reassigns
+/// it — the post-`if` join must recompute its type from the branches instead. Only the assignment
+/// target is collected; assignment right-hand sides are not descended into.
+fn collect_condition_assigned_vars(cond: &Expr, out: &mut Vec<String>) {
+    match &cond.kind {
+        ExprKind::Not(inner) | ExprKind::Negate(inner) => {
+            collect_condition_assigned_vars(inner, out);
+        }
+        ExprKind::BinaryOp { left, right, .. } => {
+            collect_condition_assigned_vars(left, out);
+            collect_condition_assigned_vars(right, out);
+        }
+        ExprKind::Assignment { target, .. } => {
+            if let ExprKind::Variable(name) = &target.kind {
+                if !out.iter().any(|existing| existing == name) {
+                    out.push(name.clone());
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Returns true when `ty` carries an object member: an `Object`, or a union with an object member.
+/// The post-`if` branch-union join is scoped to object-bearing variables because the dead-member
+/// staleness it fixes is an object member-access concern; a scalar/`Mixed` local (e.g. an
+/// `int` exit code narrowed by `is_numeric` and reassigned to `int` in both arms) keeps its
+/// conservative type, so the join never tightens a scalar or gradual slot into a strict union.
+fn type_is_object_bearing(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(_) => true,
+        PhpType::Union(members) => members.iter().any(type_is_object_bearing),
+        _ => false,
+    }
+}
+
+/// Collects the names of variables directly reassigned by a top-level `$var = <expr>` statement in
+/// a branch body. Used to scope the post-`if` branch-union join to variables a branch actually
+/// rebinds: a variable only *narrowed* across the branches (each clause tests it but none reassigns
+/// it) rejoins to its pre-`if` type, and reconstructing it as the union of its per-branch narrowings
+/// would needlessly re-partition e.g. `\Throwable` into `FatalError|Error|ErrorException|Throwable`.
+fn collect_body_assigned_vars(body: &[Stmt], out: &mut Vec<String>) {
+    for stmt in body {
+        if let StmtKind::Assign { name, .. } = &stmt.kind {
+            if !out.iter().any(|existing| existing == name) {
+                out.push(name.clone());
+            }
+        }
+    }
+}
+
+/// Snapshots a branch's exit environment for the post-`if` join. Clones the current flow types and
+/// re-applies the precise per-path types a conditional body widens away in `env`: each surviving
+/// direct overwrite (e.g. a `new Concrete()` store reverted to its conservative frame-slot type on
+/// exit) and a trailing `$name = <expr>` assignment (whose value the widened slot would otherwise
+/// mask). A later union over the reaching branches then sees the precise per-path type.
+fn snapshot_branch_exit(
+    env: &TypeEnv,
+    overwrites: &BTreeMap<String, PhpType>,
+    final_assignment: &Option<(String, PhpType)>,
+) -> TypeEnv {
+    let mut snapshot = env.clone();
+    for (name, ty) in overwrites {
+        snapshot.insert(name.clone(), ty.clone());
+    }
+    if let Some((name, ty)) = final_assignment {
+        snapshot.insert(name.clone(), ty.clone());
+    }
+    snapshot
+}
+
 /// Returns the synthetic constructor default flags for filesystem iterators.
 fn filesystem_iterator_default_flags(class_name: &str) -> Option<i64> {
     match class_name {
@@ -351,6 +425,14 @@ impl Checker {
                     clauses.len() == 1 && else_body.is_none();
                 let mut single_guard_then_exit: Option<(String, PhpType, bool)> = None;
                 let mut branch_overwrites = Vec::new();
+                // Exit environment of every branch that can fall through past the `if`, recorded only
+                // when there is an explicit `else` (so every reaching path is one of these branches).
+                // The post-`if` type of a joined variable is the union of its type across them.
+                let mut branch_exit_snapshots: Vec<TypeEnv> = Vec::new();
+                // Variables bound inside a clause condition (`if (!$x = f())`). Their condition type
+                // otherwise persists past the construct even when a later branch reassigns them, so
+                // they take the branch-union at the join, alongside the guard-narrowed `saved_vars`.
+                let mut condition_assigned_vars: Vec<String> = Vec::new();
                 let mut precise_object_overwrites = if let Some(else_branch) = else_body {
                     let mut branch_bodies: Vec<&[Stmt]> =
                         clauses.iter().map(|(_, body)| body.as_slice()).collect();
@@ -375,6 +457,9 @@ impl Checker {
 
                 for (cond, body) in &clauses {
                     self.infer_type_with_assignment_effects(cond, env)?;
+                    if else_body.is_some() {
+                        collect_condition_assigned_vars(cond, &mut condition_assigned_vars);
+                    }
 
                     if let Some(guard) = self.guard_narrowing(cond, env)? {
                         applied_any_guard = true;
@@ -386,22 +471,19 @@ impl Checker {
                         // Check the guarded body with the "then" type.
                         let saved = env.get(&guard.var).cloned();
                         env.insert(guard.var.clone(), guard.then_ty.clone());
-                        let precise_final_local = if track_single_guard_convergence {
-                            Some(guard.var.as_str())
-                        } else {
-                            None
-                        };
-                        let (body_errors, overwrites, precise_final_assignment) = self
+                        let (body_errors, overwrites, final_assignment) = self
                             .check_conditional_path_body(
                             body,
                             &precise_object_overwrites,
-                            precise_final_local,
                             env,
                         );
                         errors.extend(body_errors);
                         if !self.body_cannot_fall_through(body) {
                             if track_single_guard_convergence {
-                                if let Some(exit_ty) = precise_final_assignment
+                                if let Some(exit_ty) = final_assignment
+                                    .as_ref()
+                                    .filter(|(name, _)| name == &guard.var)
+                                    .map(|(_, ty)| ty.clone())
                                     .or_else(|| overwrites.get(&guard.var).cloned())
                                     .or_else(|| env.get(&guard.var).cloned())
                                 {
@@ -413,6 +495,13 @@ impl Checker {
                                         false_edge_impossible,
                                     ));
                                 }
+                            }
+                            if else_body.is_some() {
+                                branch_exit_snapshots.push(snapshot_branch_exit(
+                                    env,
+                                    &overwrites,
+                                    &final_assignment,
+                                ));
                             }
                             branch_overwrites.push(overwrites);
                         }
@@ -434,14 +523,21 @@ impl Checker {
                         for (var, then_ty) in &narrowings {
                             env.insert(var.clone(), then_ty.clone());
                         }
-                        let (body_errors, overwrites, _) = self.check_conditional_path_body(
-                            body,
-                            &precise_object_overwrites,
-                            None,
-                            env,
-                        );
+                        let (body_errors, overwrites, final_assignment) =
+                            self.check_conditional_path_body(
+                                body,
+                                &precise_object_overwrites,
+                                env,
+                            );
                         errors.extend(body_errors);
                         if !self.body_cannot_fall_through(body) {
+                            if else_body.is_some() {
+                                branch_exit_snapshots.push(snapshot_branch_exit(
+                                    env,
+                                    &overwrites,
+                                    &final_assignment,
+                                ));
+                            }
                             branch_overwrites.push(overwrites);
                         }
                         for (var, original) in &saved {
@@ -452,14 +548,19 @@ impl Checker {
 
                 // Final else body (if present) is checked with the accumulated complement.
                 if let Some(body) = else_body {
-                    let (body_errors, overwrites, _) = self.check_conditional_path_body(
-                        body,
-                        &precise_object_overwrites,
-                        None,
-                        env,
-                    );
+                    let (body_errors, overwrites, final_assignment) =
+                        self.check_conditional_path_body(
+                            body,
+                            &precise_object_overwrites,
+                            env,
+                        );
                     errors.extend(body_errors);
                     if !self.body_cannot_fall_through(body) {
+                        branch_exit_snapshots.push(snapshot_branch_exit(
+                            env,
+                            &overwrites,
+                            &final_assignment,
+                        ));
                         branch_overwrites.push(overwrites);
                     }
                 } else {
@@ -515,6 +616,71 @@ impl Checker {
                             env.insert(var.clone(), converged);
                         } else {
                             restore_narrowed_var(env, var, original);
+                        }
+                    }
+
+                    // With an explicit `else`, every path that reaches the code after the `if` is one
+                    // of the recorded branch exits (a clause body that falls through, or the `else`
+                    // body — a clause that diverges via `return`/`continue`/`throw` records nothing).
+                    // A variable that a branch *reassigns* therefore has, after the `if`, the union of
+                    // its type across those reaching branches. This is the precise flow join, scoped
+                    // to variables that are both (a) narrowed by a guard or bound in a clause
+                    // condition and (b) reassigned by some branch: it recovers an `else`-branch (or
+                    // `elseif`-condition) reassignment the path-insensitive frame-slot join would
+                    // otherwise leave carrying a value only live on a path that reassigned or diverged
+                    // away from it — e.g. Symfony's `ResolveAutowireInlineAttributesPass`, where
+                    // `$attribute` is bound in an `elseif` condition, that clause `continue`s, and the
+                    // `else` rebinds it via `newInstance()`, so `ReflectionAttribute` never reaches
+                    // the following `$attribute->value`. A variable only narrowed across the branches
+                    // (`if ($e instanceof Error) ... elseif ... else ...` over a `\Throwable`, no
+                    // clause rebinding `$e`) is excluded: it rejoins to its pre-`if` type rather than
+                    // a re-partitioned union, and gradual/`Mixed` slots are never tightened here.
+                    if !branch_exit_snapshots.is_empty() {
+                        let mut reassigned_in_branch: Vec<String> = Vec::new();
+                        for (_, body) in &clauses {
+                            collect_body_assigned_vars(body, &mut reassigned_in_branch);
+                        }
+                        if let Some(else_branch) = else_body {
+                            collect_body_assigned_vars(else_branch, &mut reassigned_in_branch);
+                        }
+                        let mut joined: Vec<(String, PhpType)> = Vec::new();
+                        let join_names = saved_vars
+                            .iter()
+                            .map(|(name, _)| name)
+                            .chain(condition_assigned_vars.iter());
+                        let mut seen: Vec<&String> = Vec::new();
+                        for name in join_names {
+                            if seen.iter().any(|existing| *existing == name) {
+                                continue;
+                            }
+                            seen.push(name);
+                            if !reassigned_in_branch.iter().any(|v| v == name) {
+                                continue;
+                            }
+                            // Scope to object-bearing variables: the join fixes a stale object member
+                            // surviving the frame slot, so a scalar/gradual local is left untouched.
+                            if !env.get(name).is_some_and(type_is_object_bearing) {
+                                continue;
+                            }
+                            let mut members = Vec::with_capacity(branch_exit_snapshots.len());
+                            let mut bound_on_every_branch = true;
+                            for snapshot in &branch_exit_snapshots {
+                                match snapshot.get(name) {
+                                    Some(ty) => members.push(ty.clone()),
+                                    // Not bound on this reaching branch: possibly-undefined after the
+                                    // `if`, so leave its env entry untouched rather than narrow it.
+                                    None => {
+                                        bound_on_every_branch = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            if bound_on_every_branch && !members.is_empty() {
+                                joined.push((name.clone(), self.normalize_union_type(members)));
+                            }
+                        }
+                        for (name, ty) in joined {
+                            env.insert(name, ty);
                         }
                     }
                 }
@@ -1007,32 +1173,32 @@ impl Checker {
     ///
     /// The returned map contains locals whose precise overwrite survived to the path exit. The
     /// enclosing `if` may keep such a type only when every continuing branch reports the same
-    /// overwrite.
+    /// overwrite. The third element is the `(name, type)` of a trailing `$name = <expr>` statement,
+    /// inferred with the pre-statement environment: nothing runs after it on this path, so it is the
+    /// variable's precise flow type at the branch exit — used both for single-guard convergence and
+    /// for the post-`if` branch join (a conditional store otherwise widens the local's env entry
+    /// back to its conservative frame slot, discarding the assigned value).
     fn check_conditional_path_body(
         &mut self,
         body: &[Stmt],
         precise_object_overwrites: &BTreeMap<String, PhpType>,
-        precise_final_local: Option<&str>,
         env: &mut TypeEnv,
     ) -> (
         Vec<CompileError>,
         BTreeMap<String, PhpType>,
-        Option<PhpType>,
+        Option<(String, PhpType)>,
     ) {
         let mut errors = Vec::new();
         let mut precise_overwrites = BTreeMap::new();
         let mut conservative_types = BTreeMap::new();
-        let mut precise_final_assignment = None;
+        let mut final_assignment = None;
         for (index, stmt) in body.iter().enumerate() {
             if index + 1 == body.len() {
-                if let (
-                    Some(expected_name),
-                    StmtKind::Assign { name, value },
-                ) = (precise_final_local, &stmt.kind)
-                {
-                    if name == expected_name {
-                        precise_final_assignment = self.infer_type(value, env).ok();
-                    }
+                if let StmtKind::Assign { name, value } = &stmt.kind {
+                    final_assignment = self
+                        .infer_type(value, env)
+                        .ok()
+                        .map(|ty| (name.clone(), ty));
                 }
             }
             let direct_overwrite = match &stmt.kind {
@@ -1088,7 +1254,7 @@ impl Checker {
                 env.insert(name.clone(), conservative);
             }
         }
-        (errors, precise_overwrites, precise_final_assignment)
+        (errors, precise_overwrites, final_assignment)
     }
 
     /// Returns direct local overwrites by concrete `new` expressions that survive to a branch's

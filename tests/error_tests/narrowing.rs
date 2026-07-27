@@ -146,3 +146,37 @@ fn test_branch_derived_assignment_does_not_leak_past_merge() {
         "<?php class Base { public function b(): string { return \"b\"; } } class Derived extends Base { public function d(): int { return 7; } } function run(bool $f): int { if ($f) { $n = new Base(); } else { $n = new Derived(); } return $n->d(); }",
     );
 }
+
+/// Verifies an `else`-branch reassignment reaches the post-`if` join: `$x` narrowed to `Autowire`
+/// in the `if`, then reassigned to `Producer::newInstance()`'s `Made` result in the `else`, joins to
+/// `Autowire|Made` after the construct — a member declared on both arms type-checks. The pre-`if`
+/// `Producer` member (absent from the reachable join) must no longer leak in and reject the access.
+#[test]
+fn test_else_branch_reassignment_reaches_post_if_join() {
+    expect_ok(
+        "<?php class Producer { public function newInstance(): Made { return new Made(); } } class Made { public int $value = 42; public function tag(): string { return \"made\"; } } class Autowire { public int $value = 7; public function tag(): string { return \"auto\"; } } function resolve(Autowire|Producer $attribute): string { if ($attribute instanceof Autowire) { $seen = $attribute->value; } else { $attribute = $attribute->newInstance(); } return $attribute->tag() . \":\" . $attribute->value; }",
+    );
+}
+
+/// Verifies the 3-way `if`/`elseif`/`else` variant of the join: `$attribute` is assigned in the
+/// `elseif` condition, that clause diverges (`return`), and the `else` reassigns it via a method
+/// call. Only the `if` body (`Attr`) and the `else` body (`Attr` from `newInstance()`) reach the
+/// following code, so the join is `Attr` and a member on it type-checks — the `elseif`-condition
+/// `?Wrapper` type must not survive to the join. Mirrors Symfony's `ResolveAutowireInlineAttributesPass`.
+#[test]
+fn test_elseif_condition_assignment_reassigned_in_else_joins() {
+    expect_ok(
+        "<?php class Attr { public int $value = 5; public function build(): string { return \"attr\"; } } class Wrapper { public function newInstance(): Attr { return new Attr(); } } function pick(int $mode, Attr $direct, ?Wrapper $wrapped): string { if ($mode === 1) { $attribute = $direct; } elseif (!$attribute = $wrapped) { return \"none\"; } else { $attribute = $attribute->newInstance(); } return $attribute->build() . \":\" . $attribute->value; }",
+    );
+}
+
+/// Verifies the branch join stays sound: the post-`if` type is the *union* of the reaching arms, so
+/// a member present on only one arm (`A::$a`, absent from the `else`-branch `B`) is still rejected.
+/// Guards against the union fix over-accepting by collapsing to a single arm.
+#[test]
+fn test_branch_join_union_rejects_member_absent_from_one_arm() {
+    expect_error(
+        "<?php class A { public int $a = 1; public function m(): int { return $this->a; } } class B { public int $b = 2; public function m(): int { return $this->b; } } class Maker { public function make(): B { return new B(); } } function f(A|Maker $x): int { if ($x instanceof A) { $seen = 1; } else { $x = $x->make(); } return $x->a; }",
+        "Undefined property: B::a",
+    );
+}
