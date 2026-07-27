@@ -1171,7 +1171,7 @@ pub(crate) fn apply_condition_then_narrowing(
 ) -> Vec<(String, PhpType)> {
     if let Some(var) = is_array_guard_local(condition) {
         let original = ctx.local_type(var);
-        ctx.set_local_logical_type(var, PhpType::Array(Box::new(PhpType::Mixed)));
+        ctx.set_local_logical_type(var, is_array_narrowed_type());
         return vec![(var.to_string(), original)];
     }
     if let Some((var, closure_matches)) = closure_instanceof_guard_local(condition) {
@@ -1234,6 +1234,14 @@ fn apply_condition_else_narrowing(ctx: &mut LoweringContext<'_, '_>, condition: 
     }
     if let ExprKind::Not(inner) = &condition.kind {
         if let Some(var) = is_array_guard_local(inner) {
+            // The false edge of `!is_array($x)` (i.e. `$x` proven to be an array on the
+            // fall-through) keeps the concrete gradual `array<mixed>` type. Unlike the positive
+            // `if (is_array($x)) { … }` guard — where the Mixed representation is needed so an
+            // associative payload does not fatal in `foreach`/index/`count` — this else edge is
+            // reached by code that goes on to mutate the local by reference (`array_shift($x)` in
+            // `test_negated_is_array_guard_narrows_null_coalesce_assignment_target`); the concrete
+            // array keeps that by-ref store-back refcount-balanced, so it is intentionally not
+            // widened to the Mixed-dispatch union.
             ctx.set_local_logical_type(var, PhpType::Array(Box::new(PhpType::Mixed)));
             return;
         }
@@ -1324,6 +1332,26 @@ fn narrow_closure_guard_type(original: &PhpType, matches_closure: bool) -> Optio
         PhpType::Mixed if matches_closure => Some(PhpType::Callable),
         _ => None,
     }
+}
+
+/// The branch-local logical type an `is_array()` guard proves.
+///
+/// `is_array()` is true for BOTH indexed and associative arrays, so narrowing to a bare
+/// `array<mixed>` (runtime tag 4) was wrong: loading the local then coerced Mixed -> `array<mixed>`
+/// via `__rt_mixed_array_or_fatal`, which fatals on an associative payload (tag 5). A union of both
+/// array families has `codegen_repr() == Mixed`, so the guarded local keeps the boxed Mixed
+/// representation and `foreach`/index/`count` dispatch on the runtime tag — handling indexed and
+/// associative arrays alike. The type checker deliberately keeps the more permissive concrete
+/// `array<mixed>` for its `is_array` narrowing (a union would be rejected by the concrete-only
+/// array builtins such as `array_sum`); this Mixed-dispatch union is an EIR-lowering concern only.
+fn is_array_narrowed_type() -> PhpType {
+    PhpType::Union(vec![
+        PhpType::Array(Box::new(PhpType::Mixed)),
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+    ])
 }
 
 /// Returns the local proven to be an array by a one-argument `is_array()` condition.

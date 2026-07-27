@@ -564,6 +564,53 @@ fn test_var_export_arrays() {
     );
 }
 
+/// Regression: `var_export` of an ASSOCIATIVE array reaching the prelude as a boxed Mixed cell
+/// (here through a typed `array` parameter, so the value is a runtime tag-5 associative payload
+/// rather than a const-folded literal). The prelude renders it with `if (is_array($value)) { foreach
+/// ($value as $k => $v) … }`; the `is_array` guard used to narrow `$value` to `array<mixed>` (tag 4),
+/// forcing the Mixed->array load coercion that fataled with "array builtin argument must be of type
+/// array" on the associative payload. The guarded local now keeps its Mixed representation so the
+/// `foreach` dispatches on the runtime tag. Covers a nested associative value too.
+#[test]
+fn test_var_export_assoc_array_through_typed_param() {
+    let out = compile_and_run(
+        r#"<?php
+function dump(array $m) { var_export($m); }
+dump(["a" => 1, "b" => ["c" => 2, "d" => 3]]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array (\n  'a' => 1,\n  'b' => \n  array (\n    'c' => 2,\n    'd' => 3,\n  ),\n)"
+    );
+}
+
+/// Regression: an `is_array()` guard over a Mixed value that is an ASSOCIATIVE array must let the
+/// guarded body run `count`/`foreach`/index without the tag-4 load coercion fataling on the tag-5
+/// payload. Exercises the associative and indexed cases through the same untyped parameter, plus a
+/// direct associative index read after the guard, byte-for-byte against PHP.
+#[test]
+fn test_is_array_guard_ops_on_associative_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+function probe(mixed $x): string {
+    if (is_array($x)) {
+        $parts = [];
+        foreach ($x as $k => $v) { $parts[] = $k . "=" . $v; }
+        return "n" . count($x) . ":" . implode(",", $parts);
+    }
+    return "scalar";
+}
+function idx(mixed $x): string { return is_array($x) ? (string) $x["b"] : "?"; }
+echo probe(["a" => 1, "b" => 2, "c" => 3]), "|",
+     probe([10, 20]), "|",
+     probe("hi"), "|",
+     idx(["a" => 1, "b" => 42]);
+"#,
+    );
+    assert_eq!(out, "n3:a=1,b=2,c=3|n2:0=10,1=20|scalar|42");
+}
+
 /// `var_export($value, true)` returns the rendered string instead of printing it, and
 /// `function_exists('var_export')` sees the injected function. The unused-on-echo return is null.
 #[test]

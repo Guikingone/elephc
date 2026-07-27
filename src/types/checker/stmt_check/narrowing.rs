@@ -588,6 +588,14 @@ fn guard_receiver_and_type(cond: &Expr) -> Option<(&Expr, PhpType, bool)> {
                 "is_float" | "is_double" | "is_real" => PhpType::Float,
                 "is_string" => PhpType::Str,
                 "is_bool" => PhpType::Bool,
+                // `is_array($x)` proves the value is *some* array. The checker narrows to the
+                // gradual `array<mixed>` family: it is accepted by every array operation and array
+                // builtin (a union of `array|assoc-array` would be rejected by the concrete-only
+                // builtins such as `array_sum`/`array_unique`), and it does not over-refine the key
+                // or element type. The runtime indexed/associative distinction is handled where it
+                // matters — by the EIR lowering, which keeps the guarded local in its boxed Mixed
+                // representation so `foreach`/index/`count` dispatch on the runtime tag (see
+                // `ir_lower::stmt::is_array_narrowed_type`); an assoc payload no longer fatals.
                 "is_array" => PhpType::Array(Box::new(PhpType::Mixed)),
                 // `is_numeric($x)` accepts ints, floats, and numeric strings without changing
                 // the runtime value. Preserve all three possibilities so arithmetic selects
