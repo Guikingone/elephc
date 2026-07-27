@@ -44,6 +44,13 @@ pub(crate) struct GuardNarrowing {
     pub then_ty: PhpType,
     /// Type the binding has where the guard is false.
     pub else_ty: PhpType,
+    /// Extra `TypeEnv` keys that hold the SAME value as `var` on branch entry and must receive the
+    /// identical then/else narrowing. Populated for an assignment receiver `$f = $src` whose source
+    /// is a plain variable: right after `$f = $src` the two locals alias one value, so a guard on
+    /// `$f` (`!is_array($f = $src)`) narrows `$src` in each branch too. This is a branch-entry fact;
+    /// a later reassignment of either local overwrites it normally. Empty for every other receiver
+    /// shape, so ordinary guards are unaffected.
+    pub aliases: Vec<String>,
 }
 
 impl Checker {
@@ -119,7 +126,22 @@ impl Checker {
         } else {
             (matched, complement)
         };
-        Ok(Some(GuardNarrowing { var: key, then_ty, else_ty }))
+        // When the receiver is a simple `$f = $src` assignment whose source is a plain variable,
+        // `$f` and `$src` alias the same value on branch entry, so the narrowing applies to both.
+        let aliases = match &receiver.kind {
+            ExprKind::Assignment {
+                value,
+                result_target: None,
+                prelude,
+                conditional_value_temp: None,
+                ..
+            } if prelude.is_empty() => match &value.kind {
+                ExprKind::Variable(src) => vec![src.clone()],
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        };
+        Ok(Some(GuardNarrowing { var: key, then_ty, else_ty, aliases }))
     }
 
     /// Narrows a local binding on its truthy edge by removing only union arms whose complete value
@@ -186,6 +208,7 @@ impl Checker {
             var,
             then_ty,
             else_ty,
+            aliases: Vec::new(),
         }))
     }
 

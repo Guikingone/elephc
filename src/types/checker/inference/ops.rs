@@ -42,6 +42,11 @@ impl Checker {
                 } else {
                     guard.else_ty
                 };
+                // Assignment-receiver aliases (`$f = $src`) hold the same value, so they take the
+                // same narrowing in the short-circuited right operand.
+                for alias in &guard.aliases {
+                    right_env.insert(alias.clone(), narrowed.clone());
+                }
                 right_env.insert(guard.var, narrowed);
             }
             self.infer_type(right, &right_env)?

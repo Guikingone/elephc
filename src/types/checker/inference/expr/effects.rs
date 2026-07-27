@@ -187,6 +187,11 @@ impl Checker {
                             } else {
                                 g.else_ty
                             };
+                            // Assignment-receiver aliases (`$f = $src`) share the value and take the
+                            // same narrowing for the operands that follow in the chain.
+                            for alias in &g.aliases {
+                                chain_env.insert(alias.clone(), narrowed.clone());
+                            }
                             chain_env.insert(g.var, narrowed);
                         }
                     }
@@ -259,8 +264,14 @@ impl Checker {
                 let mut then_env = env.clone();
                 let mut else_env = env.clone();
                 if let Some(guard) = guard {
-                    then_env.insert(guard.var.clone(), guard.then_ty);
-                    else_env.insert(guard.var, guard.else_ty);
+                    then_env.insert(guard.var.clone(), guard.then_ty.clone());
+                    else_env.insert(guard.var.clone(), guard.else_ty.clone());
+                    // Assignment-receiver aliases (`$f = $src`) share the value and take the same
+                    // then/else narrowing.
+                    for alias in &guard.aliases {
+                        then_env.insert(alias.clone(), guard.then_ty.clone());
+                        else_env.insert(alias.clone(), guard.else_ty.clone());
+                    }
                 }
                 let then_ty =
                     self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
@@ -327,8 +338,14 @@ impl Checker {
                         )?;
                         if let Some(guard) = self.guard_narrowing(condition, &condition_env)? {
                             let mut narrowed_env = condition_env.clone();
-                            narrowed_env.insert(guard.var.clone(), guard.then_ty);
-                            condition_env.insert(guard.var, guard.else_ty);
+                            narrowed_env.insert(guard.var.clone(), guard.then_ty.clone());
+                            condition_env.insert(guard.var.clone(), guard.else_ty.clone());
+                            // Assignment-receiver aliases (`$f = $src`) share the value and take the
+                            // same then/else narrowing.
+                            for alias in &guard.aliases {
+                                narrowed_env.insert(alias.clone(), guard.then_ty.clone());
+                                condition_env.insert(alias.clone(), guard.else_ty.clone());
+                            }
                             narrowed_env
                         } else {
                             let mut narrowed_env = condition_env.clone();

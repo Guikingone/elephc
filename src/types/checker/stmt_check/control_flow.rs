@@ -471,6 +471,12 @@ impl Checker {
                         // Check the guarded body with the "then" type.
                         let saved = env.get(&guard.var).cloned();
                         env.insert(guard.var.clone(), guard.then_ty.clone());
+                        // Assignment-receiver aliases (`$f = $src`) hold the same value on branch
+                        // entry, so they take the same narrowing in the guarded body. This is a
+                        // branch-entry fact; a later reassignment inside the body overwrites it.
+                        for alias in &guard.aliases {
+                            env.insert(alias.clone(), guard.then_ty.clone());
+                        }
                         let (body_errors, overwrites, final_assignment) = self
                             .check_conditional_path_body(
                             body,
@@ -510,6 +516,11 @@ impl Checker {
                         // The fallthrough env for the rest of the chain (next elseif or else)
                         // sees the complement.
                         env.insert(guard.var.clone(), guard.else_ty.clone());
+                        // Assignment-receiver aliases (`$f = $src`) share the value, so the
+                        // complement applies to them on the fallthrough edge too.
+                        for alias in &guard.aliases {
+                            env.insert(alias.clone(), guard.else_ty.clone());
+                        }
                     } else {
                         // A pure `&&` condition can prove several independent facts in its
                         // true branch. Its false-side complement is disjunctive and cannot be

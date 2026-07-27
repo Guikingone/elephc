@@ -159,8 +159,14 @@ impl Checker {
                         if let Some(guard) =
                             self.guard_narrowing(condition, &fallthrough_env)?
                         {
-                            arm_env.insert(guard.var.clone(), guard.then_ty);
-                            fallthrough_env.insert(guard.var, guard.else_ty);
+                            arm_env.insert(guard.var.clone(), guard.then_ty.clone());
+                            fallthrough_env.insert(guard.var.clone(), guard.else_ty.clone());
+                            // Assignment-receiver aliases (`$f = $src`) share the value and take the
+                            // same then/else narrowing.
+                            for alias in &guard.aliases {
+                                arm_env.insert(alias.clone(), guard.then_ty.clone());
+                                fallthrough_env.insert(alias.clone(), guard.else_ty.clone());
+                            }
                         } else {
                             for (var, then_ty) in
                                 self.and_chain_then_narrowings(condition, &fallthrough_env)
@@ -412,9 +418,15 @@ impl Checker {
                     self.guard_narrowing(condition, env)?
                 {
                     let mut then_env = env.clone();
-                    then_env.insert(guard.var.clone(), guard.then_ty);
+                    then_env.insert(guard.var.clone(), guard.then_ty.clone());
                     let mut else_env = env.clone();
-                    else_env.insert(guard.var, guard.else_ty);
+                    else_env.insert(guard.var.clone(), guard.else_ty.clone());
+                    // Assignment-receiver aliases (`$f = $src`) share the value and take the same
+                    // then/else narrowing.
+                    for alias in &guard.aliases {
+                        then_env.insert(alias.clone(), guard.then_ty.clone());
+                        else_env.insert(alias.clone(), guard.else_ty.clone());
+                    }
                     (
                         self.match_arm_result_type(then_expr, &then_env)?,
                         self.match_arm_result_type(else_expr, &else_env)?,
