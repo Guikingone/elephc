@@ -13,6 +13,31 @@
 
 use super::*;
 
+/// Verifies `ReflectionProperty::setRawValue()` writes public instance
+/// properties both via the inline-known lowering fast path and via a
+/// runtime-held reflector executing the shell-method body.
+#[test]
+fn test_reflection_property_set_raw_value_writes_instance_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectRawValueTarget {
+    public int $count = 1;
+    public string $label = "old";
+}
+
+$target = new ReflectRawValueTarget();
+(new ReflectionProperty(ReflectRawValueTarget::class, "count"))->setRawValue($target, 42);
+echo $target->count;
+echo ":" . (new ReflectionProperty(ReflectRawValueTarget::class, "count"))->getValue($target);
+$reflector = new ReflectionProperty(ReflectRawValueTarget::class, "label");
+$apply = function (ReflectionProperty $p, object $o, $v) { $p->setRawValue($o, $v); };
+$apply($reflector, $target, "raw");
+echo ":" . $target->label;
+"#,
+    );
+    assert_eq!(out, "42:42:raw");
+}
+
 /// Verifies `ReflectionProperty::getValue()` and `setValue()` read and write
 /// public instance properties for inline reflectors with explicit object args,
 /// including reflectors returned by `ReflectionClass::getProperty()`.

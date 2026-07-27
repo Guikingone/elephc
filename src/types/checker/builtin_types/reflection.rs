@@ -3831,6 +3831,55 @@ fn builtin_reflection_property_set_value_method() -> ClassMethod {
     }
 }
 
+/// Returns `ReflectionProperty::setRawValue()` for dynamic public instance reflectors.
+///
+/// PHP 8.4 defines `setRawValue(object $object, mixed $value): void` as a sibling of
+/// `setValue()` that writes the backing store without triggering set hooks. elephc's
+/// `setValue()` shell already performs a direct property write (no hook dispatch), so the
+/// raw-write semantics are identical; this mirror keeps error messages method-accurate.
+fn builtin_reflection_property_set_raw_value_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let object = variable_expr("object", dummy_span);
+    let value = variable_expr("value", dummy_span);
+    ClassMethod {
+        name: "setRawValue".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![
+            ("object".to_string(), Some(mixed_type()), None, false),
+            ("value".to_string(), Some(mixed_type()), None, false),
+        ],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Void),
+        by_ref_return: false,
+        body: vec![
+            reflection_property_static_value_guard("setRawValue", dummy_span),
+            reflection_property_object_required_guard("setRawValue", dummy_span),
+            Stmt::new(
+                StmtKind::ExprStmt(Expr::new(
+                    ExprKind::Assignment {
+                        target: Box::new(reflection_dynamic_object_property(object, dummy_span)),
+                        value: Box::new(value),
+                        result_target: None,
+                        prelude: Vec::new(),
+                        conditional_value_temp: None,
+                    },
+                    dummy_span,
+                )),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns `ReflectionProperty::isInitialized()` for supported materialized reflectors.
 fn builtin_reflection_property_is_initialized_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
@@ -4884,6 +4933,7 @@ fn add_reflection_member_flag_methods(
         methods.push(builtin_reflection_property_skip_lazy_initialization_method());
         methods.push(builtin_reflection_property_get_value_method());
         methods.push(builtin_reflection_property_set_value_method());
+        methods.push(builtin_reflection_property_set_raw_value_method());
         methods.push(builtin_reflection_property_is_initialized_method());
         methods.push(builtin_reflection_property_modifier_mask_method(
             "isProtectedSet",

@@ -13611,7 +13611,7 @@ fn lower_reflection_property_value_call(
             let (_, property, _) = reflection_property_instance_target(ctx, object_expr)?;
             lower_reflection_property_get_value(ctx, &property, args, expr)
         }
-        "setvalue" => {
+        "setvalue" | "setrawvalue" => {
             if let Some((declaring_class, property, _)) =
                 reflection_property_static_target(ctx, object_expr)
             {
