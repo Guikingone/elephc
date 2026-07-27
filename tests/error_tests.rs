@@ -297,6 +297,63 @@ class Bad implements Iterator {
     );
 }
 
+// --- Untyped (bodyless) interface/abstract method return inference ---
+
+/// Regression: a bodyless interface method with no declared return type is UNTYPED in PHP (the
+/// implementor may return any value), so its result must be usable as an object. `build_method_sig`
+/// must seed Mixed, not the Void that an empty body would otherwise get — Void rejected
+/// `$c->get($id)::class` with "Cannot use ::class on null".
+#[test]
+fn test_untyped_interface_method_result_usable_as_object() {
+    expect_ok(
+        "<?php
+interface C { public function get(string $id); }
+class Svc {}
+class Container implements C { public function get(string $id) { return new Svc(); } }
+class App {
+    public function __construct(private C $c) {}
+    public function run() { $s = $this->c->get(\"x\"); return $s::class; }
+}
+echo (new App(new Container()))->run();",
+    );
+}
+
+/// The same for an `abstract` (bodyless) method: an untyped abstract method is UNTYPED, so its
+/// result must be usable as an object rather than inferred Void.
+#[test]
+fn test_untyped_abstract_method_result_usable_as_object() {
+    expect_ok(
+        "<?php
+abstract class C { abstract public function get(string $id); }
+class Svc {}
+class Container extends C { public function get(string $id) { return new Svc(); } }
+class App {
+    public function __construct(private C $c) {}
+    public function run() { $s = $this->c->get(\"x\"); return $s::class; }
+}
+echo (new App(new Container()))->run();",
+    );
+}
+
+/// Negative control (no over-acceptance): an interface method declared `: void` is explicitly
+/// typed Void, and Void is not a value — using its result (e.g. `::class`) must STILL error. This
+/// pins that the untyped-bodyless→Mixed fix does not widen an explicit `: void` return.
+#[test]
+fn test_void_interface_method_result_not_usable_as_value() {
+    expect_error(
+        "<?php
+interface C { public function get(string $id): void; }
+class Svc {}
+class Container implements C { public function get(string $id): void {} }
+class App {
+    public function __construct(private C $c) {}
+    public function run() { $s = $this->c->get(\"x\"); return $s::class; }
+}
+echo (new App(new Container()))->run();",
+        "Cannot use \"::class\" on null",
+    );
+}
+
 // --- Generator-related errors ---
 
 /// Verifies the error diagnostic for generator cannot be redeclared.

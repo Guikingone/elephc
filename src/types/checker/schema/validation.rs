@@ -85,6 +85,12 @@ pub(crate) fn build_method_sig(
             method.span,
             &format!("Method '{}'", method.name),
         )?,
+        // A bodyless method (an interface method or an `abstract` declaration) has no body
+        // to infer from and no declared return type. PHP treats such a method as untyped:
+        // the implementor may return any value, so callers must see Mixed. Seeding Void here
+        // (as `infer_return_type_syntactic` does for an empty body) would wrongly reject using
+        // the overriding implementation's result as a value (e.g. `$c->get($id)::class`).
+        None if !method.has_body => PhpType::Mixed,
         None => super::super::infer_return_type_syntactic(&method.body),
     };
     if method.variadic.is_some() {
