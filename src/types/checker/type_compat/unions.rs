@@ -415,7 +415,15 @@ impl Checker {
             {
                 true
             }
-            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str => {
+            // F4: a `false` sentinel member of a boxed union source (e.g. `string|false`) also
+            // flows into a boxed-`Mixed` union target that carries a scalar member — realizing PHP
+            // weak-mode coercion at the boundary (a `?string`-shaped return weak-casts `false`→"").
+            // The return-boundary codegen (`coerce_union_scalar_member_to_return_type`) emits that
+            // string coercion for the `?string`-shaped case; every other scalar target box-copies
+            // the payload and tag-dispatches at use, matching the pre-existing `Int|Float|Bool|Str`
+            // scalar-member handling one line up. Object-bearing targets are handled by the arm
+            // above; scalar-free targets (`array|null`) fall through to `_ => false`.
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str => {
                 union_has_scalar_member(target_members)
             }
             PhpType::Object(name) => {

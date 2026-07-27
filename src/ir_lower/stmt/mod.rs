@@ -5900,6 +5900,9 @@ fn coerce_to_return_type(
     if let Some(value) = coerce_container_to_return_type(ctx, value, span) {
         return value;
     }
+    if let Some(v) = coerce_union_scalar_member_to_return_type(ctx, value, span) {
+        return v;
+    }
     if value.ir_type == ctx.return_type {
         return value;
     }
@@ -5933,6 +5936,68 @@ fn coerce_to_return_type(
         }
         IrType::Void => value,
     }
+}
+
+/// Coerces a boxed scalar-union return value (e.g. `string|false`) into a `?string`-shaped
+/// boxed-`Mixed` return slot, realizing PHP's weak-mode `string` coercion at the return boundary
+/// (`false`→`""`, `int`→decimal, …) via `__rt_mixed_cast_string`, then re-boxing the resulting
+/// string under the declared return type.
+///
+/// Returns `Some` ONLY when both:
+/// - the declared return type (`ctx.return_php_type`) is a boxed-`Mixed` union whose every member
+///   is `string` or null (`?string`, `string|null`) and that offers a `string` member; and
+/// - the source value's type is a boxed-`Mixed` union whose every member is a string-coercible
+///   scalar (`string`/`int`/`float`/`bool`/`false`) with NO null (`void`/`never`), array, or object
+///   member.
+///
+/// The no-null SOURCE guard is the soundness key: it excludes the `?string`→`?string` identity
+/// flow (whose boxed null must be preserved, not cast to `""`) and prevents any boxed-null
+/// corruption. The string-only TARGET guard keeps a declared `string|false`/`string|int` return —
+/// which must preserve its own `false`/`int` sentinel — on the untouched identity path in
+/// `coerce_to_return_type`, so this only ever fires for a genuine widening into a `?string` slot.
+/// Without this the source and target share the boxed-`Mixed` IR type, so the identity early-return
+/// would copy a `false`-tagged box into the `?string` slot instead of the required `""`.
+fn coerce_union_scalar_member_to_return_type(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+) -> Option<LoweredValue> {
+    if ctx.return_php_type.codegen_repr() != PhpType::Mixed {
+        return None;
+    }
+    let PhpType::Union(return_members) = &ctx.return_php_type else {
+        return None;
+    };
+    // Target must be `?string`-shaped: every member `string` or null, and a `string` present.
+    let target_is_nullable_string = return_members
+        .iter()
+        .all(|member| matches!(member, PhpType::Str | PhpType::Void | PhpType::Never))
+        && return_members
+            .iter()
+            .any(|member| matches!(member, PhpType::Str));
+    if !target_is_nullable_string {
+        return None;
+    }
+    let source_ty = ctx.builder.value_php_type(value.value);
+    if source_ty.codegen_repr() != PhpType::Mixed {
+        return None;
+    }
+    let PhpType::Union(source_members) = &source_ty else {
+        return None;
+    };
+    // Every source member must be a string-coercible scalar — no null/array/object.
+    let all_string_coercible = source_members.iter().all(|member| {
+        matches!(
+            member,
+            PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False
+        )
+    });
+    if !all_string_coercible {
+        return None;
+    }
+    let return_ty = ctx.return_php_type.clone();
+    let coerced = coerce_to_string(ctx, value, span);
+    Some(ctx.box_value_as_mixed(coerced, return_ty, span))
 }
 
 /// Releases an owned source temporary consumed by a return-type coercion.
