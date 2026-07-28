@@ -1901,9 +1901,10 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     if let Some(value) = lower_eval_class_probe(ctx, canonical, args, expr) {
         return value;
     }
-    let sig = call_signature(ctx, canonical);
+    let extension_builtin = source_prefers_extension_builtin(canonical);
+    let sig = call_signature(ctx, canonical, extension_builtin);
     let is_extern = ctx.extern_functions.contains_key(canonical);
-    let is_user_function = ctx.functions.contains_key(canonical);
+    let is_user_function = ctx.functions.contains_key(canonical) && !extension_builtin;
     let operands = if is_extern || is_user_function {
         lower_args_with_signature(ctx, sig.as_ref(), args)
     } else {
@@ -2044,13 +2045,25 @@ fn emit_builtin_call_value(
     let (op, immediate, effects) = if let Some(fragment) = eval_literal {
         (
             Op::EvalLiteralCall,
-            Some(Immediate::Data(ctx.intern_string(fragment))),
+            Some(Immediate::ProfiledData {
+                data: ctx.intern_string(fragment),
+                strict_php: crate::strict_php::is_enabled(),
+            }),
             Op::EvalLiteralCall.default_effects(),
         )
     } else {
+        let data = ctx.intern_function_name(name);
+        let immediate = if php_symbol_key(name.trim_start_matches('\\')) == "eval" {
+            Immediate::ProfiledData {
+                data,
+                strict_php: crate::strict_php::is_enabled(),
+            }
+        } else {
+            Immediate::Data(data)
+        };
         (
             Op::LanguageConstructCall,
-            Some(Immediate::Data(ctx.intern_function_name(name))),
+            Some(immediate),
             effects_lookup::language_construct_effects(name),
         )
     };
@@ -2138,6 +2151,7 @@ fn eval_literal_needs_barrier(ctx: &LoweringContext<'_, '_>, fragment: &str) -> 
     let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
         fragment,
         ctx.source_path(),
+        crate::strict_php::is_enabled(),
         static_call_supported,
         |receiver, method, args| {
             eval_literal_static_method_supported_by_lowering(ctx, receiver, method, args)
@@ -2181,6 +2195,7 @@ fn eval_literal_scope_barrier_writes(
     let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
         fragment,
         ctx.source_path(),
+        crate::strict_php::is_enabled(),
         static_call_supported,
         |receiver, method, args| {
             eval_literal_static_method_supported_by_lowering(ctx, receiver, method, args)
@@ -3351,7 +3366,7 @@ fn lower_instance_callable_call_user_func(
     Some(ctx.emit_value(
         Op::ExprCall,
         operands,
-        None,
+        callable_profile_immediate(),
         result_type,
         Op::ExprCall.default_effects(),
         Some(expr.span),
@@ -3391,7 +3406,7 @@ fn lower_dynamic_call_user_func(
     Some(ctx.emit_value(
         Op::ExprCall,
         operands,
-        None,
+        callable_profile_immediate(),
         PhpType::Mixed,
         Op::ExprCall.default_effects(),
         Some(expr.span),
@@ -3667,7 +3682,7 @@ fn emit_callable_descriptor_invoke(
     let result = ctx.emit_value(
         Op::CallableDescriptorInvoke,
         vec![callback.value, arg_container.value],
-        None,
+        callable_profile_immediate(),
         result_type,
         Op::CallableDescriptorInvoke.default_effects(),
         Some(span),
@@ -4490,7 +4505,11 @@ fn lower_static_callable_call(
             ))
         }
         StaticCallableBinding::Builtin(function_name) => {
-            let sig = call_signature(ctx, &function_name);
+            let sig = call_signature(
+                ctx,
+                &function_name,
+                source_prefers_extension_builtin(&function_name),
+            );
             let operands = lower_builtin_call_args(ctx, &function_name, sig.as_ref(), callback_args);
             let php_type = call_return_type(ctx, &function_name, &operands);
             Some(emit_builtin_call_value(
@@ -4827,7 +4846,11 @@ where
 fn call_signature(
     ctx: &LoweringContext<'_, '_>,
     name: &str,
+    prefer_extension_builtin: bool,
 ) -> Option<FunctionSig> {
+    if prefer_extension_builtin {
+        return builtin_call_signature(name);
+    }
     if let Some(sig) = ctx.functions.get(name) {
         return Some(sig.clone());
     }
@@ -4835,6 +4858,15 @@ fn call_signature(
         return Some(function_sig_from_extern_for_descriptor(sig));
     }
     builtin_call_signature(name)
+}
+
+/// Returns whether the active source profile must prefer an elephc extension over a shadow.
+fn source_prefers_extension_builtin(name: &str) -> bool {
+    !crate::strict_php::is_enabled()
+        && crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
+            &php_symbol_key(name.trim_start_matches('\\')),
+            true,
+        )
 }
 
 /// Looks up a PHP builtin call signature using the normalized global builtin name.
@@ -5470,7 +5502,7 @@ fn lower_static_settype(
         return None;
     };
     let target_ty = static_settype_target_type(&type_arg)?;
-    let sig = call_signature(ctx, name);
+    let sig = call_signature(ctx, name, source_prefers_extension_builtin(name));
     let operands = lower_builtin_call_args(ctx, name, sig.as_ref(), args);
     let result = emit_builtin_call_value(ctx, name, operands, PhpType::Bool, expr.span, None);
     ctx.set_local_type(local_name, target_ty);
@@ -5489,7 +5521,7 @@ fn static_settype_arg_exprs(
     if !crate::types::call_args::has_named_args(args) {
         return Some((args[0].clone(), args[1].clone()));
     }
-    let sig = call_signature(ctx, name)?;
+    let sig = call_signature(ctx, name, source_prefers_extension_builtin(name))?;
     let call_span = args
         .first()
         .map(|arg| arg.span)
@@ -8994,7 +9026,14 @@ fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, args: &[Expr
     }
     let mut operands = vec![callable.value];
     operands.extend(lower_args_with_signature(ctx, instance_signature.as_ref(), args));
-    ctx.emit_value(Op::ClosureCall, operands, None, result_type, Op::ClosureCall.default_effects(), Some(expr.span))
+    ctx.emit_value(
+        Op::ClosureCall,
+        operands,
+        callable_profile_immediate(),
+        result_type,
+        Op::ClosureCall.default_effects(),
+        Some(expr.span),
+    )
 }
 
 /// Lowers `$object(...)` when the local object has an `__invoke` method.
@@ -9085,7 +9124,14 @@ fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, args: &[Exp
     }
     let mut operands = vec![lowered_callee.value];
     operands.extend(lower_args(ctx, args));
-    ctx.emit_value(Op::ExprCall, operands, None, result_type, Op::ExprCall.default_effects(), Some(expr.span))
+    ctx.emit_value(
+        Op::ExprCall,
+        operands,
+        callable_profile_immediate(),
+        result_type,
+        Op::ExprCall.default_effects(),
+        Some(expr.span),
+    )
 }
 
 /// Recognizes the parser's internal `call_user_func([$object, $method], ...)`
@@ -9273,7 +9319,7 @@ fn lower_expr_call_from_value(
     ctx.emit_value(
         Op::ExprCall,
         operands,
-        None,
+        callable_profile_immediate(),
         result_type,
         Op::ExprCall.default_effects(),
         Some(expr.span),
@@ -10603,7 +10649,7 @@ fn lower_closure_bind_method(
             Some(ctx.emit_value(
                 Op::CallableDescriptorInvoke,
                 vec![bound.value, arg_container.value],
-                None,
+                callable_profile_immediate(),
                 PhpType::Mixed,
                 Op::CallableDescriptorInvoke.default_effects(),
                 Some(expr.span),
@@ -13812,7 +13858,7 @@ fn lower_static_method_descriptor_call(
     ctx.emit_value(
         Op::ExprCall,
         operands,
-        None,
+        callable_profile_immediate(),
         result_type,
         Op::ExprCall.default_effects(),
         Some(expr.span),
@@ -13843,7 +13889,7 @@ fn lower_static_method_descriptor_value_call(
     Some(ctx.emit_value(
         Op::ExprCall,
         operands,
-        None,
+        callable_profile_immediate(),
         result_type,
         Op::ExprCall.default_effects(),
         Some(expr.span),
@@ -13989,11 +14035,19 @@ fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, target: &Callab
     ctx.emit_value(
         Op::FirstClassCallableNew,
         operands,
-        Some(Immediate::Data(data)),
+        Some(Immediate::ProfiledData {
+            data,
+            strict_php: crate::strict_php::is_enabled(),
+        }),
         PhpType::Callable,
         Op::FirstClassCallableNew.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Returns the strict-PHP visibility profile attached to runtime callable selection.
+fn callable_profile_immediate() -> Option<Immediate> {
+    Some(Immediate::Bool(crate::strict_php::is_enabled()))
 }
 
 /// Lowers a pointer cast.

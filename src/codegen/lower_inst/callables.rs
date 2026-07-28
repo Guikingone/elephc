@@ -268,7 +268,12 @@ fn lower_mixed_callable_descriptor_invoke(
     }
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);                    // spill the unboxed function name across dispatch emission
     let candidate_names = ctx.runtime_callable_candidates(callable);
-    let cases = runtime_string_descriptor_cases(ctx, None, candidate_names.as_deref())?;
+    let cases = runtime_string_descriptor_cases(
+        ctx,
+        None,
+        candidate_names.as_deref(),
+        super::instruction_strict_php_profile(inst),
+    )?;
     if cases.is_empty() {
         emit_undefined_runtime_string_call_fatal(ctx);
     } else {
@@ -366,7 +371,12 @@ fn lower_runtime_string_descriptor_invoke(
     op_name: &str,
 ) -> Result<()> {
     let candidate_names = ctx.runtime_callable_candidates(callable);
-    let cases = runtime_string_descriptor_cases(ctx, None, candidate_names.as_deref())?;
+    let cases = runtime_string_descriptor_cases(
+        ctx,
+        None,
+        candidate_names.as_deref(),
+        super::instruction_strict_php_profile(inst),
+    )?;
     if cases.is_empty() {
         return Err(CodegenIrError::unsupported(
             "callable_descriptor_invoke for runtime string with no descriptor targets",
@@ -432,11 +442,12 @@ pub(super) fn runtime_string_descriptor_cases(
     ctx: &mut FunctionContext<'_>,
     source_arg_ty: Option<&PhpType>,
     candidate_names: Option<&[String]>,
+    strict_php: bool,
 ) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> {
     let cache_ty = source_arg_ty.map(PhpType::codegen_repr);
     if let Some(cases) = ctx
         .shared
-        .runtime_string_descriptor_cases(cache_ty.as_ref(), candidate_names)
+        .runtime_string_descriptor_cases(cache_ty.as_ref(), candidate_names, strict_php)
     {
         return Ok(cases);
     }
@@ -445,11 +456,13 @@ pub(super) fn runtime_string_descriptor_cases(
         ctx,
         source_arg_ty,
         candidate_names,
+        strict_php,
     )?);
     cases.extend(runtime_user_function_descriptor_cases(
         ctx,
         source_arg_ty,
         candidate_names,
+        strict_php,
     ));
     cases.extend(
         runtime_static_method_descriptor_cases(ctx, candidate_names)
@@ -459,16 +472,22 @@ pub(super) fn runtime_string_descriptor_cases(
     cases.sort_by(|left, right| left.label.cmp(&right.label));
     cases.dedup_by(|left, right| left.label == right.label);
     if cases.is_empty() && candidate_names.is_some() {
-        let fallback = runtime_string_descriptor_cases(ctx, source_arg_ty, None)?;
+        let fallback = runtime_string_descriptor_cases(ctx, source_arg_ty, None, strict_php)?;
         ctx.shared.cache_runtime_string_descriptor_cases(
             cache_ty.as_ref(),
             candidate_names,
+            strict_php,
             &fallback,
         );
         return Ok(fallback);
     }
     ctx.shared
-        .cache_runtime_string_descriptor_cases(cache_ty.as_ref(), candidate_names, &cases);
+        .cache_runtime_string_descriptor_cases(
+            cache_ty.as_ref(),
+            candidate_names,
+            strict_php,
+            &cases,
+        );
     Ok(cases)
 }
 
@@ -549,9 +568,12 @@ fn runtime_builtin_descriptor_cases(
     ctx: &mut FunctionContext<'_>,
     source_arg_ty: Option<&PhpType>,
     candidate_names: Option<&[String]>,
+    strict_php: bool,
 ) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> {
     let mut cases = Vec::new();
-    for name in crate::types::checker::builtins::supported_builtin_function_names() {
+    for name in crate::types::checker::builtins::supported_builtin_function_names_for_profile(
+        strict_php,
+    ) {
         if !runtime_callable_name_is_reachable(name, candidate_names)
             || !callable_dispatch::runtime_builtin_wrapper_supported(name, source_arg_ty)
             || ctx
@@ -568,7 +590,8 @@ fn runtime_builtin_descriptor_cases(
         let wrapper_sig =
             runtime_builtin_wrapper_sig(name, &crate::types::callable_wrapper_sig(&sig));
         let case_sig = callable_dispatch::specialized_runtime_case_sig(&wrapper_sig, source_arg_ty);
-        let entry_label = emit_runtime_builtin_wrapper_inline(ctx, name, &case_sig)?;
+        let entry_label =
+            emit_runtime_builtin_wrapper_inline(ctx, name, &case_sig, strict_php)?;
         let invoker_label = emit_runtime_callable_invoker_inline(ctx, &case_sig, &[]);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
@@ -598,6 +621,7 @@ fn runtime_user_function_descriptor_cases(
     ctx: &mut FunctionContext<'_>,
     source_arg_ty: Option<&PhpType>,
     candidate_names: Option<&[String]>,
+    strict_php: bool,
 ) -> Vec<callable_dispatch::RuntimeCallableCase> {
     let mut functions = ctx
         .module
@@ -611,6 +635,14 @@ fn runtime_user_function_descriptor_cases(
 
     let mut cases = Vec::new();
     for function in functions {
+        if !strict_php
+            && crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
+                &php_symbol_key(&function.name),
+                true,
+            )
+        {
+            continue;
+        }
         if !runtime_callable_name_is_reachable(&function.name, candidate_names) {
             continue;
         }
@@ -647,9 +679,11 @@ pub(super) fn emit_runtime_string_descriptor_value(
     callable: ValueId,
     dest_reg: &str,
     op_name: &str,
+    strict_php: bool,
 ) -> Result<()> {
     let candidate_names = ctx.runtime_callable_candidates(callable);
-    let cases = runtime_string_descriptor_cases(ctx, None, candidate_names.as_deref())?;
+    let cases =
+        runtime_string_descriptor_cases(ctx, None, candidate_names.as_deref(), strict_php)?;
     if cases.is_empty() {
         return Err(CodegenIrError::unsupported(format!(
             "{} for runtime string with no descriptor targets",

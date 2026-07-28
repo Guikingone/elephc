@@ -307,7 +307,11 @@ pub(crate) fn lower_iterator_apply(
     let callback = iterator_apply_callback(ctx, callback_value, inst)?;
     let source_ty = ctx.value_php_type(source)?.codegen_repr();
 
-    emit_apply_callback_state(ctx, &callback)?;
+    emit_apply_callback_state(
+        ctx,
+        &callback,
+        super::super::instruction_strict_php_profile(inst),
+    )?;
 
     ctx.load_value_to_result(source)?;
     match source_ty {
@@ -328,6 +332,7 @@ pub(crate) fn lower_iterator_apply(
 fn emit_apply_callback_state(
     ctx: &mut FunctionContext<'_>,
     callback: &IteratorApplyCallback,
+    strict_php: bool,
 ) -> Result<()> {
     match callback {
         IteratorApplyCallback::DynamicString { callable, .. } => {
@@ -348,6 +353,7 @@ fn emit_apply_callback_state(
                 *callable,
                 abi::int_result_reg(ctx.emitter),
                 "iterator_apply",
+                strict_php,
             )?;
             abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
             Ok(())

@@ -97,7 +97,7 @@ pub fn inject_if_used(program: Program, php_version: PhpVersion) -> Program {
     let src = format!("<?php\n{}", src)
         .replace("__ELEPHC_ZEND_VERSION__", php_version.zend_version());
     let tokens = crate::lexer::tokenize(&src).expect("version prelude must tokenize");
-    let mut combined = crate::parser::parse(&tokens).expect("version prelude must parse");
+    let mut combined = crate::parser::parse_internal(&tokens).expect("version prelude must parse");
     combined.extend(program);
     combined
 }

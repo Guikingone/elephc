@@ -21,7 +21,9 @@ use super::{
 };
 use super::super::system;
 use crate::codegen_support::platform::Target;
-use crate::types::checker::builtins::supported_builtin_function_names;
+use crate::types::checker::builtins::{
+    all_supported_builtin_function_names, supported_builtin_function_names_for_profile,
+};
 
 /// Emit the fixed runtime `.data` section as assembly text.
 /// Cached across compilations because it contains only target-independent
@@ -1087,7 +1089,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
 /// routine and callable-invoke paths.
 fn emit_builtin_callable_data() -> String {
     let mut out = String::new();
-    let builtins = supported_builtin_function_names();
+    let strict_builtins = supported_builtin_function_names_for_profile(true);
+    let mut builtins = all_supported_builtin_function_names();
+    builtins.sort_by_key(|name| !strict_builtins.contains(name));
     for (idx, name) in builtins.iter().enumerate() {
         out.push_str(&format!(
             ".globl _callable_builtin_name_{0}\n_callable_builtin_name_{0}:\n    .ascii \"{1}\"\n",
@@ -1100,6 +1104,11 @@ fn emit_builtin_callable_data() -> String {
     out.push_str(".p2align 3\n");
     out.push_str(".globl _callable_builtin_count\n_callable_builtin_count:\n");
     out.push_str(&format!("    .quad {}\n", builtins.len()));
+    out.push_str(
+        ".globl _callable_builtin_strict_count\n_callable_builtin_strict_count:\n",
+    );
+    out.push_str(&format!("    .quad {}\n", strict_builtins.len()));
+    out.push_str(".comm _callable_strict_profile, 8, 3\n");
     out.push_str(".globl _callable_builtin_table\n_callable_builtin_table:\n");
     for (idx, name) in builtins.iter().enumerate() {
         out.push_str(&format!("    .quad _callable_builtin_name_{}\n", idx));

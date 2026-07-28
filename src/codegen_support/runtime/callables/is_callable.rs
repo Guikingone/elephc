@@ -51,7 +51,14 @@ fn emit_string_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save candidate string length for repeated table comparisons
     abi::emit_symbol_address(emitter, "x9", "_callable_builtin_table");
     emitter.instruction("str x9, [sp, #16]");                                   // save the builtin callable-name table pointer
+    abi::emit_symbol_address(emitter, "x10", "_callable_strict_profile");
+    emitter.instruction("ldr x10, [x10]");                                      // load the current call site's builtin visibility profile
+    emitter.instruction("cbz x10, __rt_is_callable_string_full_count");         // non-strict call sites scan the complete elephc builtin table
+    abi::emit_symbol_address(emitter, "x9", "_callable_builtin_strict_count");
+    emitter.instruction("b __rt_is_callable_string_count_ready");               // skip the full-count selection after choosing strict metadata
+    emitter.label("__rt_is_callable_string_full_count");
     abi::emit_symbol_address(emitter, "x9", "_callable_builtin_count");
+    emitter.label("__rt_is_callable_string_count_ready");
     emitter.instruction("ldr x9, [x9]");                                        // load builtin callable-name count from fixed runtime data
     emitter.instruction("str x9, [sp, #24]");                                   // save the active table count for the builtin scan
     emitter.instruction("str xzr, [sp, #32]");                                  // start the builtin scan at entry index zero
@@ -638,7 +645,14 @@ fn emit_string_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save candidate string length for repeated comparisons
     abi::emit_symbol_address(emitter, "r10", "_callable_builtin_table");
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save builtin callable-name table pointer
+    abi::emit_symbol_address(emitter, "r11", "_callable_strict_profile");
+    emitter.instruction("cmp QWORD PTR [r11], 0");                              // inspect the current call site's builtin visibility profile
+    emitter.instruction("je __rt_is_callable_string_full_count_x86_64");        // non-strict call sites scan the complete elephc builtin table
+    abi::emit_symbol_address(emitter, "r10", "_callable_builtin_strict_count");
+    emitter.instruction("jmp __rt_is_callable_string_count_ready_x86_64");      // skip full-count selection after choosing strict metadata
+    emitter.label("__rt_is_callable_string_full_count_x86_64");
     abi::emit_symbol_address(emitter, "r10", "_callable_builtin_count");
+    emitter.label("__rt_is_callable_string_count_ready_x86_64");
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load builtin callable-name count from fixed runtime data
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save active table count for builtin scan
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // start builtin scan at entry index zero

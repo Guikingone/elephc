@@ -1991,7 +1991,7 @@ pub fn inject_if_web(
             &crate::opcache_prelude::render_ini_module_known(true),
         );
     let tokens = crate::lexer::tokenize(&prelude).expect("web prelude must tokenize");
-    let mut combined = crate::parser::parse(&tokens).expect("web prelude must parse");
+    let mut combined = crate::parser::parse_internal(&tokens).expect("web prelude must parse");
     if !needs_callable_session_handler {
         combined.retain(|stmt| !is_callable_session_handler_decl(&stmt.kind));
     }
@@ -2029,7 +2029,7 @@ pub fn inject_if_web(
     }
 
     let wrap_tokens = crate::lexer::tokenize(WEB_WRAP_SRC).expect("web wrapper must tokenize");
-    let mut wrapper = crate::parser::parse(&wrap_tokens).expect("web wrapper must parse");
+    let mut wrapper = crate::parser::parse_internal(&wrap_tokens).expect("web wrapper must parse");
     if let Some(stmt) = wrapper.first_mut() {
         if let StmtKind::Try { try_body, .. } = &mut stmt.kind {
             *try_body = exec;
@@ -2058,7 +2058,7 @@ fn prune_unreachable_prelude_functions(prelude: &mut Program, user_usage: &usage
     }
 
     let wrap_tokens = crate::lexer::tokenize(WEB_WRAP_SRC).expect("web wrapper must tokenize");
-    let wrapper = crate::parser::parse(&wrap_tokens).expect("web wrapper must parse");
+    let wrapper = crate::parser::parse_internal(&wrap_tokens).expect("web wrapper must parse");
     roots.merge(usage::collect(&wrapper));
 
     if roots.dynamic_function_call {

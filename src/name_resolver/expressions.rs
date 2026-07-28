@@ -536,7 +536,10 @@ fn rewrite_var_export_return_flag(
 /// correspond to a known alias. This maps PHP's procedural date API onto elephc's OOP classes
 /// before type checking, so `date_create($s)` becomes `new DateTime($s)`, `date_diff($a, $b)`
 /// becomes `$a->diff($b)`, and so on.
-fn rewrite_date_procedural_alias(name: &str, args: &[Expr]) -> Option<ExprKind> {
+fn rewrite_date_procedural_alias(
+    name: &str,
+    args: &[Expr],
+) -> Option<ExprKind> {
     let bare = name
         .rsplit('\\')
         .next()
@@ -751,7 +754,10 @@ fn rewrite_date_procedural_alias(name: &str, args: &[Expr]) -> Option<ExprKind> 
                 args[1].clone()
             } else {
                 Expr::new(
-                    ExprKind::FunctionCall { name: resolved_name("time".to_string()), args: vec![] },
+                    ExprKind::FunctionCall {
+                        name: resolved_name("time".to_string()),
+                        args: vec![],
+                    },
                     span,
                 )
             };

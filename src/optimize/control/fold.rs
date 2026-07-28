@@ -22,6 +22,7 @@ use super::*;
 /// Returns a new `Stmt` with all nested expressions folded via `fold_expr`.
 pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
     let span = stmt.span;
+    let source_mode = stmt.source_mode;
     let attributes = stmt.attributes.clone();
     let kind = match stmt.kind {
         StmtKind::Synthetic(stmts) => StmtKind::Synthetic(fold_block(stmts)),
@@ -351,7 +352,12 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             StmtKind::FunctionVariantMark { name, variant }
         }
     };
-    Stmt { kind, span, attributes }
+    Stmt {
+        kind,
+        span,
+        source_mode,
+        attributes,
+    }
 }
 
 /// Folds all statements in a block by mapping `fold_stmt` over each element.

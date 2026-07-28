@@ -1993,6 +1993,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     crate::builtins::semantics::BuiltinResultOwnership::Fresh
                 )
             }
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. },
+            )) => matches!(
+                target.result_ownership(),
+                crate::builtins::semantics::BuiltinResultOwnership::Fresh
+            ),
             Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::UnaryString(_))) => true,
             Some(Immediate::Data(name_id)) if inst.op == Op::LanguageConstructCall => self
                 .data
@@ -2426,6 +2432,22 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
         effects: Effects,
         span: Option<Span>,
     ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        let target = match target {
+            crate::ir::RuntimeCallTarget::Function(target)
+                if matches!(
+                    target,
+                    crate::ir::RuntimeFnId::FunctionExists
+                        | crate::ir::RuntimeFnId::IsCallable
+                        | crate::ir::RuntimeFnId::ObStart
+                ) || target.string_callback_operand_index().is_some() =>
+            {
+                crate::ir::RuntimeCallTarget::ProfiledFunction {
+                    target,
+                    strict_php: crate::strict_php::is_enabled(),
+                }
+            }
+            target => target,
+        };
         let lowered = LoweringContext::emit_value(
             self,
             Op::RuntimeCall,

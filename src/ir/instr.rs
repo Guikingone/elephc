@@ -112,6 +112,13 @@ pub enum Immediate {
     F64(f64),
     Bool(bool),
     Data(DataId),
+    /// Data-pool reference carrying the strict-PHP profile of its physical call site.
+    ProfiledData {
+        /// Referenced string or name data.
+        data: DataId,
+        /// Whether strict PHP is effective at this call site.
+        strict_php: bool,
+    },
     LocalSlot(LocalSlotId),
     LocalSlotPair {
         first: LocalSlotId,

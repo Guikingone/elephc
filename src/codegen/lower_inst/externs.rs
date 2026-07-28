@@ -305,8 +305,9 @@ fn const_string_value<'a>(ctx: &'a FunctionContext<'_>, value: ValueId) -> Optio
     if !matches!(inst.op, Op::ConstStr) {
         return None;
     }
-    let Some(Immediate::Data(data)) = inst.immediate else {
-        return None;
+    let data = match inst.immediate {
+        Some(Immediate::Data(data)) | Some(Immediate::ProfiledData { data, .. }) => data,
+        _ => return None,
     };
     ctx.module
         .data

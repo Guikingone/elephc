@@ -42,6 +42,7 @@ mod progress;
 mod resolver;
 mod runtime_cache;
 mod debug_info;
+mod source;
 mod source_map;
 mod span;
 mod strict_php;

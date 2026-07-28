@@ -91,14 +91,23 @@ pub fn resolve_collecting_includes(
     program: Program,
     base_dir: &Path,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    resolve_collecting_includes_with_defines(program, base_dir, &HashSet::new())
+}
+
+/// Resolves includes while applying the invocation's conditional symbols to every loaded file.
+pub fn resolve_collecting_includes_with_defines(
+    program: Program,
+    base_dir: &Path,
+    defines: &HashSet<String>,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
     if !has_includes(&program) {
         return Ok((program, Vec::new()));
     }
 
-    let discovery = discover_include_declarations(&program, base_dir)?;
+    let discovery = discover_include_declarations(&program, base_dir, defines)?;
     let mut declared_once: HashSet<PathBuf> = HashSet::new();
     let mut include_chain: Vec<PathBuf> = Vec::new();
-    let mut state = ResolveState::default();
+    let mut state = ResolveState::with_conditional_defines(defines);
     let resolved = resolve_stmts(
         program,
         base_dir,

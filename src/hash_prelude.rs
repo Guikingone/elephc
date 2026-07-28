@@ -117,7 +117,7 @@ pub fn inject_if_used(program: crate::parser::ast::Program, force: bool) -> crat
         return program;
     }
     let tokens = crate::lexer::tokenize(HASH_PRELUDE_SRC).expect("hash prelude must tokenize");
-    let mut combined = crate::parser::parse(&tokens).expect("hash prelude must parse");
+    let mut combined = crate::parser::parse_internal(&tokens).expect("hash prelude must parse");
     combined.extend(program);
     combined
 }

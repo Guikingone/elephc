@@ -45,11 +45,12 @@ pub(in crate::resolver) use output::{
 pub(super) fn discover_include_declarations(
     stmts: &[Stmt],
     base_dir: &Path,
+    defines: &HashSet<String>,
 ) -> Result<IncludeDiscovery, CompileError> {
     let mut output = DiscoveryOutput::default();
     let mut loaded_paths = HashSet::new();
     let mut include_chain = Vec::new();
-    let mut state = ResolveState::default();
+    let mut state = ResolveState::with_conditional_defines(defines);
 
     discover_stmts(
         stmts,

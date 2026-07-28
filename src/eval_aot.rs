@@ -231,19 +231,25 @@ impl EvalAotFallbackReason {
     }
 }
 
-/// Parses a literal eval fragment as a PHP statement fragment.
-pub(crate) fn parse_literal_fragment(fragment: &str) -> Option<Program> {
+/// Parses a literal eval fragment with the builtin visibility of its physical call site.
+pub(crate) fn parse_literal_fragment(fragment: &str, strict_php: bool) -> Option<Program> {
     let source = format!("<?php {}", fragment);
     let tokens = crate::lexer::tokenize(&source).ok()?;
-    crate::parser::parse(&tokens).ok()
+    let source_mode = if strict_php {
+        crate::source::SourceMode::Php
+    } else {
+        crate::source::SourceMode::Lfc
+    };
+    crate::parser::parse_with_mode(&tokens, source_mode).ok()
 }
 
 /// Parses a literal eval fragment and applies call-site magic-constant metadata when available.
 pub(crate) fn parse_literal_fragment_with_source_path(
     fragment: &str,
     source_path: Option<&str>,
+    strict_php: bool,
 ) -> Option<Program> {
-    let program = parse_literal_fragment(fragment)?;
+    let program = parse_literal_fragment(fragment, strict_php)?;
     Some(match source_path {
         Some(source_path) => crate::magic_constants::substitute_file_and_scope_constants(
             program,
@@ -252,20 +258,22 @@ pub(crate) fn parse_literal_fragment_with_source_path(
         None => program,
     })
 }
-/// Returns a deterministic internal function name for a literal eval fragment.
-pub(crate) fn eir_function_name(fragment: &str) -> String {
+/// Returns a deterministic internal function name for a literal eval fragment and source profile.
+pub(crate) fn eir_function_name(fragment: &str, strict_php: bool) -> String {
     format!(
-        "{}_{:016x}",
+        "{}_{}_{:016x}",
         EIR_AOT_FUNCTION_PREFIX,
+        if strict_php { "strict" } else { "elephc" },
         stable_fragment_hash(fragment)
     )
 }
 
-/// Returns a deterministic internal function name for a scope-aware eval fragment.
-pub(crate) fn eir_scope_function_name(fragment: &str) -> String {
+/// Returns a deterministic internal function name for a profiled scope-aware eval fragment.
+pub(crate) fn eir_scope_function_name(fragment: &str, strict_php: bool) -> String {
     format!(
-        "{}_scope_{:016x}",
+        "{}_scope_{}_{:016x}",
         EIR_AOT_FUNCTION_PREFIX,
+        if strict_php { "strict" } else { "elephc" },
         stable_fragment_hash(fragment)
     )
 }
@@ -273,6 +281,7 @@ pub(crate) fn eir_scope_function_name(fragment: &str) -> String {
 /// Builds the shared literal eval AOT plan for scan, lowering, and codegen decisions.
 pub(crate) fn plan_literal_fragment_with_static_calls<F>(
     fragment: &str,
+    strict_php: bool,
     static_call_supported: F,
 ) -> EvalAotPlan
 where
@@ -280,6 +289,7 @@ where
 {
     plan_literal_fragment_with_static_and_method_calls(
         fragment,
+        strict_php,
         static_call_supported,
         |_, _, _| false,
     )
@@ -288,6 +298,7 @@ where
 /// Builds the shared literal eval AOT plan with function and static-method support.
 pub(crate) fn plan_literal_fragment_with_static_and_method_calls<F, M>(
     fragment: &str,
+    strict_php: bool,
     static_call_supported: F,
     static_method_supported: M,
 ) -> EvalAotPlan
@@ -295,11 +306,12 @@ where
     F: Fn(&str, &[Expr]) -> bool,
     M: Fn(&StaticReceiver, &str, &[Expr]) -> bool,
 {
-    let Some(program) = parse_literal_fragment(fragment) else {
+    let Some(program) = parse_literal_fragment(fragment, strict_php) else {
         return parse_error_plan();
     };
     plan_parsed_literal_fragment_with_static_and_method_calls(
         fragment,
+        strict_php,
         program,
         static_call_supported,
         static_method_supported,
@@ -310,6 +322,7 @@ where
 pub(crate) fn plan_literal_fragment_with_source_path_and_static_and_method_calls<F, M>(
     fragment: &str,
     source_path: Option<&str>,
+    strict_php: bool,
     static_call_supported: F,
     static_method_supported: M,
 ) -> EvalAotPlan
@@ -317,11 +330,14 @@ where
     F: Fn(&str, &[Expr]) -> bool,
     M: Fn(&StaticReceiver, &str, &[Expr]) -> bool,
 {
-    let Some(program) = parse_literal_fragment_with_source_path(fragment, source_path) else {
+    let Some(program) =
+        parse_literal_fragment_with_source_path(fragment, source_path, strict_php)
+    else {
         return parse_error_plan();
     };
     plan_parsed_literal_fragment_with_static_and_method_calls(
         fragment,
+        strict_php,
         program,
         static_call_supported,
         static_method_supported,
@@ -352,6 +368,7 @@ fn parse_error_plan() -> EvalAotPlan {
 /// Builds the shared literal eval AOT plan from an already parsed fragment program.
 fn plan_parsed_literal_fragment_with_static_and_method_calls<F, M>(
     fragment: &str,
+    strict_php: bool,
     program: Program,
     static_call_supported: F,
     static_method_supported: M,
@@ -403,11 +420,13 @@ where
     let needs_global_scope =
         !is_fully_static_no_bridge && !has_scope_eir && scope_access.has_scope_access();
     EvalAotPlan {
-        function_name: eir_program.as_ref().map(|_| eir_function_name(fragment)),
+        function_name: eir_program
+            .as_ref()
+            .map(|_| eir_function_name(fragment, strict_php)),
         eir_program,
         scope_function_name: scope_eir_program
             .as_ref()
-            .map(|_| eir_scope_function_name(fragment)),
+            .map(|_| eir_scope_function_name(fragment, strict_php)),
         scope_eir_program,
         reads: scope_access.reads,
         array_read_constraints,
@@ -3567,6 +3586,7 @@ fn fold_static_builtin_calls_in_stmt(stmt: Stmt) -> Stmt {
     Stmt {
         kind,
         span: stmt.span,
+        source_mode: stmt.source_mode,
         attributes: stmt.attributes,
     }
 }

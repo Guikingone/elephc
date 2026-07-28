@@ -149,9 +149,19 @@ pub fn run(
 ///
 /// The vector is SORTED so a build is byte-reproducible.
 pub fn run_collecting_included(
+    program: Program,
+    base_dir: &Path,
+    registry: &Registry,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    run_collecting_included_with_defines(program, base_dir, registry, &HashSet::new())
+}
+
+/// Runs autoload expansion while applying conditional symbols to every physical file loaded.
+pub fn run_collecting_included_with_defines(
     mut program: Program,
     base_dir: &Path,
     registry: &Registry,
+    defines: &HashSet<String>,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
     if registry.is_empty() {
         return Ok((program, Vec::new()));
@@ -168,7 +178,8 @@ pub fn run_collecting_included(
     for path in registry.always_included_files() {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         if included.insert(canonical.clone()) {
-            let (loaded, loaded_includes) = load_autoloaded_file(&canonical, base_dir)?;
+            let (loaded, loaded_includes) =
+                load_autoloaded_file(&canonical, base_dir, defines)?;
             nested_includes.extend(loaded_includes);
             prefix.extend(loaded);
         }
@@ -190,7 +201,8 @@ pub fn run_collecting_included(
             if let Some(path) = resolve_class(&fqn, registry) {
                 let canonical = path.canonicalize().unwrap_or(path);
                 if included.insert(canonical.clone()) {
-                    let (loaded, loaded_includes) = load_autoloaded_file(&canonical, base_dir)?;
+                    let (loaded, loaded_includes) =
+                        load_autoloaded_file(&canonical, base_dir, defines)?;
                     nested_includes.extend(loaded_includes);
                     insertions.push((stmt_idx, loaded));
                 }
@@ -251,6 +263,7 @@ fn resolve_class(fqn: &str, registry: &Registry) -> Option<PathBuf> {
 fn load_autoloaded_file(
     path: &Path,
     base_dir: &Path,
+    defines: &HashSet<String>,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
     let content = std::fs::read_to_string(path).map_err(|e| {
         CompileError::new(
@@ -259,14 +272,18 @@ fn load_autoloaded_file(
         )
     })?;
     let file_label = path.display().to_string();
-    let tokens = crate::lexer::tokenize(&content).map_err(|e| e.with_file(file_label.clone()))?;
-    let parsed = crate::parser::parse(&tokens).map_err(|e| e.with_file(file_label.clone()))?;
-    let parsed = crate::magic_constants::substitute_file_and_scope_constants(parsed, path);
-    // Strict-PHP audit of the autoloaded user file on its freshly parsed AST,
-    // before resolution can synthesize compiler-internal names into it.
-    crate::strict_php::check_file(&parsed, &file_label)?;
-    let (resolved, nested_includes) =
-        crate::resolver::resolve_collecting_includes(parsed, path.parent().unwrap_or(base_dir))?;
+    let source_mode = crate::source::SourceMode::from_path(path);
+    let tokens = crate::lexer::tokenize_with_mode(&content, source_mode)
+        .map_err(|e| e.with_file(file_label.clone()))?;
+    let parsed = crate::parser::parse_with_mode(&tokens, source_mode)
+        .map_err(|e| e.with_file(file_label.clone()))?;
+    let parsed =
+        crate::source::finalize_physical_program(parsed, path, source_mode, defines)?;
+    let (resolved, nested_includes) = crate::resolver::resolve_collecting_includes_with_defines(
+        parsed,
+        path.parent().unwrap_or(base_dir),
+        defines,
+    )?;
     let resolved = alias::collect_aliases(resolved);
     let canonicalized: Vec<Stmt> = crate::name_resolver::resolve(resolved)?;
     // name_resolver has already flattened namespace nodes and canonicalized

@@ -98,11 +98,15 @@ fn instance_method_expr_call_target(
     owner: &str,
 ) -> Result<InstanceMethodExprCallTarget> {
     let source = expr_callable_source_instruction(ctx, value, owner)?;
-    let Some(Immediate::Data(data)) = source.immediate.as_ref() else {
-        return Err(CodegenIrError::invalid_module(format!(
-            "{} first-class callable has no target data",
-            owner
-        )));
+    let data = match source.immediate.as_ref() {
+        Some(Immediate::Data(data))
+        | Some(Immediate::ProfiledData { data, .. }) => data,
+        _ => {
+            return Err(CodegenIrError::invalid_module(format!(
+                "{} first-class callable has no target data",
+                owner
+            )));
+        }
     };
     let target = ctx
         .module

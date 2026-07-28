@@ -378,6 +378,7 @@ pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
                     Some(&PhpType::Array(Box::new(elem_ty.clone()))),
                     visible_arg_types,
                     PhpType::Bool,
+                    super::super::instruction_strict_php_profile(inst),
                     "array_filter",
                     |ctx, wrapper_label, env_bytes| {
                         match ctx.emitter.target.arch {
@@ -491,6 +492,7 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                 Some(&PhpType::Array(Box::new(elem_ty.clone()))),
                 vec![elem_ty.clone()],
                 PhpType::Mixed,
+                super::super::instruction_strict_php_profile(inst),
                 "array_map",
                 |ctx, wrapper_label, env_bytes| {
                     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
@@ -695,6 +697,7 @@ fn lower_runtime_string_descriptor_callback<F>(
     source_arg_ty: Option<&PhpType>,
     visible_arg_types: Vec<PhpType>,
     return_ty: PhpType,
+    strict_php: bool,
     owner: &str,
     mut emit_call: F,
 ) -> Result<()>
@@ -719,6 +722,7 @@ where
         ctx,
         specialization_ty,
         candidate_names.as_deref(),
+        strict_php,
     )?;
 
     let done_label = ctx.next_label(&format!("{}_runtime_string_callback_done", owner));
@@ -1002,6 +1006,7 @@ pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instructi
                 Some(&PhpType::Array(Box::new(elem_ty.clone()))),
                 vec![initial_ty.clone(), elem_ty.clone()],
                 PhpType::Int,
+                super::super::instruction_strict_php_profile(inst),
                 "array_reduce",
                 |ctx, wrapper_label, env_bytes| {
                     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
@@ -1079,6 +1084,7 @@ pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
                 Some(&PhpType::Array(Box::new(elem_ty.clone()))),
                 vec![elem_ty.clone()],
                 PhpType::Void,
+                super::super::instruction_strict_php_profile(inst),
                 "array_walk",
                 |ctx, wrapper_label, env_bytes| {
                     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
@@ -1767,6 +1773,7 @@ fn lower_single_array_callback_builtin(
                 Some(source_arg_ty),
                 visible_arg_types,
                 return_ty,
+                super::super::instruction_strict_php_profile(inst),
                 name,
                 |ctx, wrapper_label, env_bytes| {
                     emit_single_array_callback_call(
@@ -1945,6 +1952,7 @@ fn lower_two_array_comparator_builtin(
                 Some(&source_arg_ty),
                 visible_arg_types,
                 comparator_return_ty,
+                super::super::instruction_strict_php_profile(inst),
                 name,
                 |ctx, wrapper_label, env_bytes| {
                     emit_two_array_comparator_call(ctx, wrapper_label, arr1, arr2, env_bytes, mode)
@@ -2362,6 +2370,7 @@ fn lower_user_sort_static_callback(
                 Some(&PhpType::Array(Box::new(callback_arg_types[0].clone()))),
                 callback_arg_types.to_vec(),
                 PhpType::Int,
+                super::super::instruction_strict_php_profile(inst),
                 name,
                 |ctx, wrapper_label, env_bytes| {
                     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
@@ -3400,11 +3409,15 @@ fn static_callback_name_operand(
         Op::FirstClassCallableNew => StaticCallbackOperandKind::FirstClassCallable,
         _ => unreachable!("callback source instruction was validated earlier"),
     };
-    let Some(Immediate::Data(data)) = inst_ref.immediate.as_ref() else {
-        return Err(CodegenIrError::invalid_module(format!(
-            "{} string literal has no data id",
-            owner
-        )));
+    let data = match inst_ref.immediate.as_ref() {
+        Some(Immediate::Data(data))
+        | Some(Immediate::ProfiledData { data, .. }) => data,
+        _ => {
+            return Err(CodegenIrError::invalid_module(format!(
+                "{} string literal has no data id",
+                owner
+            )));
+        }
     };
     let name = ctx
         .module
