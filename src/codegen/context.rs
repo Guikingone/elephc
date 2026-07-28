@@ -898,11 +898,14 @@ impl<'a> FunctionContext<'a> {
         }
     }
 
-    /// Returns true when a value producer can leave an owned source consumed by Mixed boxing.
+    /// Returns true when Mixed boxing can consume the value's owned source reference.
     pub(super) fn value_can_own_mixed_box_source(&self, value: ValueId) -> Result<bool> {
         let value_ty = self.value_php_type(value)?.codegen_repr();
         if value_ty == PhpType::Str {
             return self.value_is_heap_owned_string_for_mixed_box(value);
+        }
+        if self.value_can_transfer_ownership_to_consumer(value)? {
+            return Ok(true);
         }
         let Some(value_ref) = self.function.value(value) else {
             return Err(CodegenIrError::missing_entry("value", value.as_raw()));
@@ -976,6 +979,24 @@ impl<'a> FunctionContext<'a> {
                 | Op::SplRuntimeCall
                 | Op::FiberRuntimeCall
         ))
+    }
+
+    /// Returns true when a retaining consumer may take the value's owned reference.
+    ///
+    /// `Owned` identifies the value that must eventually be cleaned up; it does not
+    /// by itself cancel an explicit EIR `release`. When lowering still emits such a
+    /// release, the consumer must retain its own reference instead of stealing the
+    /// one that cleanup will consume.
+    pub(super) fn value_can_transfer_ownership_to_consumer(
+        &self,
+        value: ValueId,
+    ) -> Result<bool> {
+        if self.value_ownership(value)? != Ownership::Owned {
+            return Ok(false);
+        }
+        Ok(!self.function.instructions.iter().any(|inst| {
+            inst.op == Op::Release && inst.operands.first().copied() == Some(value)
+        }))
     }
 
     /// Returns true when a string producer leaves a heap-owned payload that Mixed boxing may consume.

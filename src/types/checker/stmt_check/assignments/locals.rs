@@ -20,6 +20,15 @@ use crate::types::{PhpType, TypeEnv};
 use super::super::super::builtins::array_arg_is_gradually_acceptable;
 use super::super::super::Checker;
 
+/// Binds an otherwise-unbound local as `Mixed` after its assignment fails.
+///
+/// Error recovery must preserve a valid earlier binding, while ensuring a name
+/// introduced by the failed statement does not trigger misleading follow-on
+/// `Undefined variable` diagnostics.
+fn poison_unbound_local(env: &mut TypeEnv, name: &str) {
+    env.entry(name.to_string()).or_insert(PhpType::Mixed);
+}
+
 /// Extracts the default expression from a null-coalescing assignment to a specific variable.
 ///
 /// Returns `Some(&default)` if `value` is a `NullCoalesce` expression where the current
@@ -214,16 +223,14 @@ pub(super) fn check_assign(
     let ty = match ty_result {
         Ok(ty) => ty,
         Err(err) => {
-            // Error recovery: a plain `$name = <rhs>` assignment unconditionally binds `$name`
-            // in PHP, even when `<rhs>` fails to type-check (the right-hand-side error is a
-            // separate, already-reported problem). Bind the variable so later uses are not
-            // reported as spurious "Undefined variable" cascades behind the real error, which is
-            // still propagated here. Prefer the callee's declared return type over the infectious
-            // `Mixed` so the recovered binding does not spuriously widen unrelated typed code that
-            // later observes the variable. Only fill in a missing binding; never clobber an
-            // existing type narrowed by an earlier assignment. Restricted to function/method/
-            // closure bodies: a top-level synthetic binding would leak into the shared `global_env`
-            // that every method body clones and corrupt unrelated typed code there.
+            // Error recovery (issue #597): a plain `$name = <rhs>` assignment unconditionally binds
+            // `$name` in PHP, even when `<rhs>` fails to type-check (the right-hand-side error is a
+            // separate, already-reported problem). Bind the variable so later uses are not reported
+            // as spurious "Undefined variable" cascades behind the real error, which is still
+            // propagated here. Prefer the callee's declared return type over the infectious `Mixed`
+            // so the recovered binding does not spuriously widen unrelated typed code that later
+            // observes the variable. Only fill in a missing binding; never clobber an existing type
+            // narrowed by an earlier assignment.
             if checker.in_callable_body && !env.contains_key(name) {
                 let fallback = checker
                     .assignment_recovery_call_return_type(value)
@@ -233,7 +240,10 @@ pub(super) fn check_assign(
             return Err(err);
         }
     };
-    metadata_result?;
+    if let Err(error) = metadata_result {
+        poison_unbound_local(env, name);
+        return Err(error);
+    }
     update_reflection_class_assignment_metadata(checker, name, reflection_class_target);
     let result = merge_local_assignment_type(checker, name, &ty, span, env);
     // `??=` guarantees that its target holds the expression's non-null result after evaluation,
@@ -263,7 +273,7 @@ pub(super) fn check_ref_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    match &source.kind {
+    let result = match &source.kind {
         ExprKind::Variable(source_name) => {
             check_ref_assign_variable(checker, target, source_name, span, env)
         }
@@ -340,7 +350,12 @@ pub(super) fn check_ref_assign(
             span,
             "Reference assignment source must be a variable, array/property element, or a by-reference call",
         )),
+    };
+    if let Err(error) = result {
+        poison_unbound_local(env, target);
+        return Err(error);
     }
+    Ok(())
 }
 
 /// Type-checks a reference alias whose source is a DYNAMIC-named property (`$x = &$this->$name`).
@@ -1210,10 +1225,26 @@ pub(super) fn check_typed_assign(
         span,
         &format!("Typed local ${}", name),
     )?;
-    let value_ty = checker.infer_type(value, env)?;
+    let value_ty = match checker.infer_type(value, env) {
+        Ok(value_ty) => value_ty,
+        Err(error) => {
+            // Error recovery (issue #597): the initializer failed to type. Bind `$name` before
+            // propagating the real RHS error so later uses do not cascade into misleading
+            // `Undefined variable: $name` diagnostics. Poison it as `Mixed` (unknown) rather than
+            // the declared type: a poisoned target must not spawn new follow-on type errors
+            // downstream (e.g. a declared `int` would make a later `count($name)` a spurious second
+            // error). Only bind when unbound so a valid earlier binding is preserved.
+            poison_unbound_local(env, name);
+            return Err(error);
+        }
+    };
     if !checker.type_accepts(&declared_ty, &value_ty)
         && !checker.gradual_boundary_accepts(&declared_ty, &value_ty)
     {
+        // The initializer typed successfully but violates the declared type. Poison
+        // `$name` as `Mixed` for recovery so later uses do not cascade, then report
+        // the initialization mismatch as the one real diagnostic.
+        poison_unbound_local(env, name);
         return Err(CompileError::new(
             span,
             &format!(
@@ -1272,13 +1303,15 @@ pub(super) fn check_list_unpack(
         Err(err) => {
             // The RHS carries its own (unrelated) error — e.g. an undefined function in
             // `[$a, $b] = someUndefinedFn();`. PHP still binds each destructure target (each
-            // missing offset reads as null), so bind every target as `Mixed` before propagating
-            // the RHS error. This keeps the real root error while preventing later reads of
-            // `$a`/`$b` from cascading into spurious "Undefined variable" diagnostics that bury
-            // it. Mirrors the plain `$x = <bad rhs>` recovery in `check_assign` and the
-            // expression-position `ExprKind::ListUnpack` recovery in the inference effects path.
+            // missing offset reads as null), so bind every target before propagating the RHS
+            // error. This keeps the real root error while preventing later reads of `$a`/`$b`
+            // from cascading into spurious "Undefined variable" diagnostics that bury it. Mirrors
+            // the plain `$x = <bad rhs>` recovery in `check_assign` and the expression-position
+            // `ExprKind::ListUnpack` recovery in the inference effects path. Poison only unbound
+            // targets so a valid earlier binding survives, and drop any stale callable/reflection
+            // metadata the failed destructure would otherwise leave attached.
             for var in vars {
-                env.insert(var.clone(), PhpType::Mixed);
+                poison_unbound_local(env, var);
                 clear_callable_metadata(checker, var);
                 checker.reflection_class_targets.remove(var);
             }
@@ -1296,6 +1329,9 @@ pub(super) fn check_list_unpack(
         // with a warning). A proven non-array RHS stays loud below.
         t if array_arg_is_gradually_acceptable(t) => PhpType::Mixed,
         _ => {
+            for var in vars {
+                poison_unbound_local(env, var);
+            }
             return Err(CompileError::new(
                 span,
                 "List unpacking requires an array on the right-hand side",
@@ -1416,7 +1452,14 @@ pub(super) fn check_static_var(
     init: &Expr,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let ty = checker.infer_type(init, env)?;
+    let ty = match checker.infer_type(init, env) {
+        Ok(ty) => ty,
+        Err(error) => {
+            poison_unbound_local(env, name);
+            checker.active_statics.insert(name.to_string());
+            return Err(error);
+        }
+    };
     checker.active_statics.insert(name.to_string());
     env.insert(name.to_string(), ty);
     Ok(())

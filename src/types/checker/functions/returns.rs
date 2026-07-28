@@ -273,8 +273,9 @@ impl Checker {
     }
 
     /// Checks that a function or closure body ends with a return on every control-flow path
-    /// when the declared return type is not Void or Never. Uses `block_guarantees_function_exit`
-    /// to determine if the body always exits; emits a "must return a value" error if not.
+    /// when the declared return type is not Void or Never. Uses the shared function-exit analysis,
+    /// extended with checker-known `never` calls, to determine if the body always exits; emits a
+    /// "must return a value" error if not.
     pub(crate) fn require_declared_return_coverage(
         &self,
         declared_ret: &PhpType,
@@ -286,7 +287,9 @@ impl Checker {
             return Ok(());
         }
 
-        if crate::termination::block_guarantees_function_exit(body) {
+        if crate::termination::block_guarantees_function_exit_with_divergence(body, &|expr| {
+            self.expr_is_declared_never_call(expr)
+        }) {
             Ok(())
         } else {
             Err(CompileError::new(
@@ -480,6 +483,33 @@ impl Checker {
             // exception) instead of widening to `Mixed`, which would break
             // object-typed dispatch (`Fiber::throw` / `Generator::throw`).
             (PhpType::Object(_), PhpType::Object(_)) => a.clone(),
+            (PhpType::Array(left), PhpType::Array(right)) => {
+                PhpType::Array(Box::new(Self::union_array_payload_type(left, right)))
+            }
+            (
+                PhpType::AssocArray {
+                    key: left_key,
+                    value: left_value,
+                },
+                PhpType::AssocArray {
+                    key: right_key,
+                    value: right_value,
+                },
+            ) => PhpType::AssocArray {
+                key: Box::new(Self::union_array_payload_type(left_key, right_key)),
+                value: Box::new(Self::union_array_payload_type(left_value, right_value)),
+            },
+            _ => PhpType::Mixed,
+        }
+    }
+
+    /// Joins one indexed/associative array payload position without discarding container shape.
+    fn union_array_payload_type(left: &PhpType, right: &PhpType) -> PhpType {
+        if left == right || left.codegen_repr() == right.codegen_repr() {
+            return left.clone();
+        }
+        match (left, right) {
+            (PhpType::Never, other) | (other, PhpType::Never) => other.clone(),
             _ => PhpType::Mixed,
         }
     }

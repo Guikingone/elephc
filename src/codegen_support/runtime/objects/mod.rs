@@ -10,9 +10,11 @@
 
 mod call_destructor;
 mod clone;
+mod mixed_array_append;
 mod mixed_array_fetch_for_write;
 mod mixed_array_get;
 mod mixed_array_set;
+mod mixed_cell_autovivify;
 mod new_by_name;
 mod object_from_hash;
 mod object_from_mixed;
@@ -20,9 +22,11 @@ mod stdclass;
 
 pub(crate) use call_destructor::emit_call_object_destructor;
 pub(crate) use clone::emit_object_clone;
+pub(crate) use mixed_array_append::emit_mixed_array_append;
 pub(crate) use mixed_array_fetch_for_write::emit_mixed_array_fetch_for_write;
 pub(crate) use mixed_array_get::emit_mixed_array_get;
 pub(crate) use mixed_array_set::emit_mixed_array_set;
+pub(crate) use mixed_cell_autovivify::emit_mixed_cell_autovivify_array;
 pub(crate) use new_by_name::emit_new_by_name;
 pub(crate) use object_from_hash::emit_object_from_hash;
 pub(crate) use object_from_mixed::emit_object_from_mixed;

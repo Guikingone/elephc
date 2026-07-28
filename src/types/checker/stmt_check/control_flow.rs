@@ -24,26 +24,61 @@ const FS_CURRENT_AS_PATHNAME: i64 = 32;
 const FS_CURRENT_MODE_MASK: i64 = 240;
 const FS_SKIP_DOTS: i64 = 4096;
 
-/// Widens locals whose indexed-array element type joins to `mixed` across loop growth sites.
+/// Computes and records fixed-point array storage contracts before checking a loop body.
 ///
-/// This includes entry-empty roots autovivified by nested writes: a read earlier in the body can
-/// observe the container created by a prior iteration, so the single-pass checker must use the
-/// back-edge's boxed element representation from the start.
-fn widen_loop_grown_arrays(
+/// The shared analysis iterates over rebinds and growth sites with an evolving environment, so
+/// cascading promotions, non-literal RHSs, and raw-to-raw element changes converge before any
+/// header/body read is checked. This includes entry-empty roots autovivified by nested writes: a
+/// read earlier in the body can observe the container created by a prior iteration, so the
+/// single-pass checker must use the back-edge's boxed element representation from the start. EIR
+/// lowering later consumes the recorded contract for the same loop span rather than repeating
+/// expression inference.
+fn stabilize_loop_storage(
     checker: &mut Checker,
+    loop_span: crate::span::Span,
     body: &[Stmt],
     update: Option<&Stmt>,
     env: &mut TypeEnv,
 ) {
+    let key = (checker.current_loop_storage_scope.clone(), loop_span);
+    if let Some(recorded) = checker.loop_storage_types.get(&key).cloned() {
+        for (name, storage_type) in recorded {
+            env.insert(name, storage_type);
+        }
+        return;
+    }
     let snapshot = env.clone();
-    let widenings = crate::types::checker::loop_grown_array_widenings(
+    let mut call_types: std::collections::HashMap<crate::span::Span, PhpType> =
+        std::collections::HashMap::new();
+    let contracts = crate::types::checker::loop_carried_storage_types(
         body,
         update,
-        &|name| snapshot.get(name).cloned(),
-        &mut |expr| checker.infer_type(expr, &snapshot).ok(),
+        &snapshot,
+        &mut |expr, analysis_env| {
+            let is_call = matches!(
+                expr.kind,
+                ExprKind::FunctionCall { .. }
+                    | ExprKind::MethodCall { .. }
+                    | ExprKind::StaticMethodCall { .. }
+                    | ExprKind::ClosureCall { .. }
+                    | ExprKind::ExprCall { .. }
+            );
+            if is_call {
+                if let Some(cached) = call_types.get(&expr.span) {
+                    return Some(cached.clone());
+                }
+            }
+            let inferred = checker.infer_type(expr, analysis_env).ok()?;
+            if is_call {
+                call_types.insert(expr.span, inferred.clone());
+            }
+            Some(inferred)
+        },
     );
-    for (name, target_type) in widenings {
-        env.insert(name, target_type);
+    let recorded = checker.loop_storage_types.entry(key).or_default();
+    for (name, storage_type) in contracts {
+        recorded.insert(name.clone(), storage_type.clone());
+        env.insert(name, storage_type);
     }
 }
 
@@ -311,7 +346,7 @@ impl Checker {
                 }
                 // Widen after the key/value bindings are in the environment so a push of
                 // the foreach value variable joins with its real element type.
-                widen_loop_grown_arrays(self, body, None, env);
+                stabilize_loop_storage(self, stmt.span, body, None, env);
                 let errors = self.check_break_continue_target_body(body, env);
                 if errors.is_empty() {
                     Ok(())
@@ -739,7 +774,7 @@ impl Checker {
                 }
             }
             StmtKind::DoWhile { body, condition } => {
-                widen_loop_grown_arrays(self, body, None, env);
+                stabilize_loop_storage(self, stmt.span, body, None, env);
                 let errors = self.check_break_continue_target_body(body, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
                 if errors.is_empty() {
@@ -749,7 +784,7 @@ impl Checker {
                 }
             }
             StmtKind::While { condition, body } => {
-                widen_loop_grown_arrays(self, body, None, env);
+                stabilize_loop_storage(self, stmt.span, body, None, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
                 // Entering the body proves every guard in a pure `&&` condition true. Keep these
                 // facts scoped to the body: a while may execute zero times, so they cannot refine
@@ -778,6 +813,7 @@ impl Checker {
                 update,
                 body,
             } => self.check_for_stmt(
+                stmt.span,
                 init.as_deref(),
                 condition.as_ref(),
                 update.as_deref(),
@@ -1044,6 +1080,7 @@ impl Checker {
     /// joined back with the entry environment before returning to the enclosing conditional path.
     fn check_for_stmt(
         &mut self,
+        loop_span: crate::span::Span,
         init: Option<&Stmt>,
         condition: Option<&Expr>,
         update: Option<&Stmt>,
@@ -1061,7 +1098,7 @@ impl Checker {
             if let Some(stmt) = init {
                 self.check_stmt(stmt, env)?;
             }
-            widen_loop_grown_arrays(self, body, update, env);
+            stabilize_loop_storage(self, loop_span, body, update, env);
             if let Some(expr) = condition {
                 self.infer_type_with_assignment_effects(expr, env)?;
             }

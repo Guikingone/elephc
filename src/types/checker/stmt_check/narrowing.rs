@@ -18,9 +18,12 @@
 //!   `array<mixed>|Countable`.
 //!   Narrowing is applied to each clause in an
 //!   if/elseif*/else chain (each subsequent clause, and the else, see the accumulated complement
-//!   from previous guards). For a chain with no else where *every* clause body always diverges
-//!   (return/throw/break/continue/exit/die/never-function), the accumulated complement is applied
-//!   to the statements after the entire if construct.
+//!   from previous guards). For a chain with no else where *every* clause body cannot fall through
+//!   to the following statement — via `src/termination.rs`'s structural analysis
+//!   (return/throw/break/continue/exit/die, statically infinite loops, nested if/switch/try whose
+//!   branches all terminate, or a terminal statement before unreachable code), extended
+//!   recursively with checker-known `never` calls — the accumulated complement is applied to the
+//!   statements after the entire if construct.
 //! - `and_chain_then_narrowings` collects guard-true narrowings and assignment facts for a
 //!   single condition or pure `&&` chain, folding repeated guards cumulatively and replacing
 //!   earlier facts on a later assignment. It powers `if` and `switch (true)` bodies.
@@ -29,7 +32,8 @@
 
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, property_hook_get_method};
-use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt};
+use crate::termination::{block_terminal_effect_with_divergence, TerminalEffect};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -499,28 +503,27 @@ impl Checker {
         }
     }
 
-    /// Returns true when a statement body cannot fall through to the following statement.
+    /// Returns true when a statement body cannot fall through to the statement that textually
+    /// follows it.
     ///
-    /// A body cannot fall through if its last statement is:
-    /// - `return`, `throw`, `break`, or `continue`
-    /// - a call to `exit()` or `die()`
-    /// - a call to a user function whose declared return type is `never`
+    /// The structural control-flow analysis in [`crate::termination`] recognizes
+    /// `return`/`throw`/`break`/`continue`/`exit`/`die`, statically infinite loops, and nested
+    /// `if`/`switch`/`try` forms whose branches all terminate, including a terminal statement placed
+    /// before unreachable trailing code. `break`/`continue` count as non-fallthrough here — they
+    /// prevent reaching the following statement even though they do not exit the function, which
+    /// is exactly the distinction post-guard narrowing needs.
     ///
-    /// This is used by type narrowing so that an `if (guard) { ... diverging ... }` (with no else)
-    /// allows the statements *after* the if to be narrowed to the complement type.
+    /// User functions declared `never` need the checker's function table. The checker supplies that
+    /// one semantic predicate to the shared traversal, so it applies at every nested structural
+    /// level rather than as a separate shallow scan.
+    ///
+    /// Used by type narrowing so that an `if (guard) { ... non-fallthrough ... }` (with no else)
+    /// allows the statements *after* the if to keep the complement type.
     pub(crate) fn body_cannot_fall_through(&self, body: &[Stmt]) -> bool {
-        let Some(last) = body.last() else {
-            return false;
-        };
-
-        match &last.kind {
-            StmtKind::Return(_)
-            | StmtKind::Throw(_)
-            | StmtKind::Break(_)
-            | StmtKind::Continue(_) => true,
-            StmtKind::ExprStmt(expr) => self.expr_always_diverges(expr),
-            _ => false,
-        }
+        block_terminal_effect_with_divergence(body, &|expr| {
+            self.expr_is_declared_never_call(expr)
+        })
+            != TerminalEffect::FallsThrough
     }
 
     /// Returns true when the body's control cannot reach past its last statement.
@@ -573,6 +576,22 @@ impl Checker {
         if lowered == "exit" || lowered == "die" {
             return true;
         }
+        self.canonical_function_name_folded(name)
+            .and_then(|canonical| self.functions.get(&canonical))
+            .map(|sig| sig.return_type == PhpType::Never)
+            .unwrap_or(false)
+    }
+
+    /// Returns true if the expression calls a user function whose declared return type is `never`.
+    /// The function name is resolved case-insensitively against the checker's function table,
+    /// matching PHP's call semantics. Error suppression preserves the call's divergence.
+    pub(in crate::types::checker) fn expr_is_declared_never_call(&self, expr: &Expr) -> bool {
+        if let ExprKind::ErrorSuppress(inner) = &expr.kind {
+            return self.expr_is_declared_never_call(inner);
+        }
+        let ExprKind::FunctionCall { name, .. } = &expr.kind else {
+            return false;
+        };
         self.canonical_function_name_folded(name)
             .and_then(|canonical| self.functions.get(&canonical))
             .map(|sig| sig.return_type == PhpType::Never)

@@ -4387,3 +4387,366 @@ echo f();
         out.stderr
     );
 }
+
+/// Regression test (issue #586): reading a `match`-branch merge through the
+/// null-coalescing form (`$r[0] ?? default`) and using that result directly as
+/// a ternary condition must not leak the boxed coalesce temporary each
+/// iteration. `IsTruthy` consumes the owned box but produced a fresh boolean,
+/// so the box has to be released on the condition path. `$i % 2` keeps the
+/// `match` runtime-selected so it is not constant-folded away.
+#[test]
+fn test_match_merge_read_through_coalesce_in_ternary_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$count = 0;
+for ($i = 0; $i < 20; $i++) {
+    $r = match($i % 2) {
+        0 => [1, 2],
+        default => [3, 4],
+    };
+    $count = $count + ($r[0] ?? 0 ? 1 : 0);
+}
+echo $count;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the coalesce box feeding the ternary to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test (issue #586): the same leak reproduces when the merge comes
+/// from a ternary instead of a `match`, proving the fault is the `??`-read
+/// feeding a condition, not the `match` merge itself.
+#[test]
+fn test_ternary_merge_read_through_coalesce_in_ternary_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$count = 0;
+for ($i = 0; $i < 20; $i++) {
+    $r = ($i % 2 == 0) ? [1, 2] : [3, 4];
+    $count = $count + ($r[0] ?? 0 ? 1 : 0);
+}
+echo $count;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the coalesce box feeding the ternary to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test (issue #586): the leak is not tied to any merge at all — a
+/// plain array local read through `?? default` and used as a ternary condition
+/// leaks the coalesce box just the same. `[$i + 1, 5]` keeps the read runtime.
+#[test]
+fn test_plain_array_read_through_coalesce_in_ternary_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$count = 0;
+for ($i = 0; $i < 20; $i++) {
+    $r = [$i + 1, 5];
+    $count = $count + ($r[0] ?? 0 ? 1 : 0);
+}
+echo $count;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the coalesce box feeding the ternary to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test (issue #586): an `if` condition consumes truthiness the same
+/// way a ternary does, so `if ($r[0] ?? 0)` must release the coalesce box too.
+#[test]
+fn test_array_read_through_coalesce_in_if_condition_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$count = 0;
+for ($i = 0; $i < 20; $i++) {
+    $r = [$i + 1, 5];
+    if ($r[0] ?? 0) {
+        $count++;
+    }
+}
+echo $count;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the coalesce box feeding the if-condition to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test (issue #586): a short-circuiting `&&` evaluates its left
+/// operand's truthiness, so `($r[0] ?? 0) && true` must release the owned
+/// coalesce box on the truthiness path.
+#[test]
+fn test_array_read_through_coalesce_in_logical_and_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$count = 0;
+for ($i = 0; $i < 20; $i++) {
+    $r = [$i + 1, 5];
+    if (($r[0] ?? 0) && true) {
+        $count++;
+    }
+}
+echo $count;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the coalesce box feeding the && to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test (issue #586): non-short-circuiting logical `xor` coerces
+/// and discards both operands, so owned coalesce boxes on either side must be
+/// released after their truthiness has been canonicalized.
+#[test]
+fn test_array_reads_through_coalesce_in_logical_xor_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$count = 0;
+for ($i = 0; $i < 20; $i++) {
+    $left = [$i + 1];
+    $right = [$i % 2];
+    if ((($left[0] ?? 0) xor ($right[0] ?? 0))) {
+        $count++;
+    }
+}
+echo $count;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "10");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected both coalesce boxes feeding xor to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test (issue #586): logical negation coerces its operand to a
+/// boolean, so `!($r[0] ?? 0)` must release the owned coalesce box.
+#[test]
+fn test_array_read_through_coalesce_in_negation_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$count = 0;
+for ($i = 0; $i < 20; $i++) {
+    $r = [$i, 5];
+    if (!($r[0] ?? 0)) {
+        $count++;
+    }
+}
+echo $count;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    // Only $i == 0 makes $r[0] falsy, so the negated branch runs once.
+    assert_eq!(out.stdout, "1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the coalesce box feeding the negation to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Control (issue #586): storing the coalesce result in a local first and then
+/// testing that local was already heap-clean; the fix must not regress it into
+/// a double free of the now-owned local.
+#[test]
+fn test_coalesce_result_stored_in_local_then_tested_stays_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$count = 0;
+for ($i = 0; $i < 20; $i++) {
+    $r = [$i + 1, 5];
+    $v = ($r[0] ?? 0);
+    $count = $count + ($v ? 1 : 0);
+}
+echo $count;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected storing then testing to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Control (issue #586): a direct element read fed into a ternary condition was
+/// already heap-clean and must stay clean after the fix (guards against a
+/// double free of borrowed element reads).
+#[test]
+fn test_direct_array_read_in_ternary_condition_stays_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$count = 0;
+for ($i = 0; $i < 20; $i++) {
+    $r = [$i + 1, 5];
+    $probe = $r[0];
+    $count = $count + ($probe ? 1 : 0);
+}
+echo $count;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a direct element read in a ternary condition to stay clean, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for #601: `implode()` over an indexed array held in a boxed
+/// `mixed` cell must release the persisted string produced when each boxed element
+/// is cast to a string. The ternary widens the two literal arms to a boxed mixed
+/// array and the string appends land as mixed elements; before the fix each
+/// stringified element leaked one heap block. Verifies correct output and a clean heap.
+#[test]
+fn test_implode_mixed_array_releases_boxed_string_elements() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$r = $argc == 1 ? [1] : ["a"];
+$r[] = "x"; $r[] = "y"; $r[] = "z";
+echo implode(",", $r), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1,x,y,z\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected implode over a boxed-mixed array to release its cast string elements, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for #601: a heterogeneous array literal is a boxed mixed cell, so
+/// each of its string elements is stringified through the persisting mixed-string cast.
+/// The three string elements after the leading bool must each be released by implode.
+#[test]
+fn test_implode_mixed_literal_releases_multiple_string_elements() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$r = [true, "x", "y", "z"];
+echo implode(",", $r), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1,x,y,z\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected implode to release every persisted mixed string element, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for #601: integer elements of a boxed mixed array are stringified
+/// into shared scratch storage (no heap allocation), so implode's per-element release
+/// must be a safe no-op for them while still freeing the persisted string element.
+/// Guards against a spurious double-free when a mixed array interleaves int and string.
+#[test]
+fn test_implode_mixed_array_with_int_elements_stays_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$r = ["a", 1, 2, 3];
+echo implode(",", $r), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "a,1,2,3\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected implode to free the string element while ignoring int scratch pointers, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for #601: repeatedly imploding a boxed-mixed array in a loop must
+/// not accumulate leaked blocks. Before the fix this leaked three blocks per iteration
+/// (60 total); a partial or missing release would still leave a growing heap here.
+#[test]
+fn test_implode_mixed_array_in_loop_does_not_accumulate_leaks() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$n = 0;
+for ($i = 0; $i < 20; $i++) {
+    $r = $argc == 1 ? [1] : ["a"];
+    $r[] = "x"; $r[] = "y"; $r[] = "z";
+    $n += strlen(implode(",", $r));
+}
+echo $n, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "140\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected repeated implode over a boxed-mixed array to stay leak-free, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for #601 (control): a homogeneous string array is a typed indexed
+/// array whose elements are borrowed slots, not boxed mixed cells. implode must copy
+/// those borrowed strings without releasing them (they are owned by the array). This
+/// path was already clean and must stay clean — a wrongful release here would double-free.
+#[test]
+fn test_implode_typed_string_array_borrowed_elements_stay_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$r = ["a", "b", "c"];
+echo implode(",", $r), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "a,b,c\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected implode over a typed string array to leave borrowed elements untouched, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for #601: joining a boxed-mixed array with an empty separator still
+/// stringifies every element through the persisting mixed-string cast, so the release
+/// path must run even when no glue bytes are copied between elements.
+#[test]
+fn test_implode_mixed_array_empty_separator_releases_string_elements() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$r = $argc == 1 ? [1] : ["a"];
+$r[] = "x"; $r[] = "y"; $r[] = "z";
+echo implode("", $r), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1xyz\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected empty-separator implode to still release its cast string elements, got: {}",
+        out.stderr
+    );
+}

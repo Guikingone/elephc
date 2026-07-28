@@ -35,3 +35,5 @@ mod switch_and_float_params;
 mod return_this_ownership;
 #[path = "regressions/prologue_param_register_clobber.rs"]
 mod prologue_param_register_clobber;
+#[path = "regressions/mixed_count_sentinel.rs"]
+mod mixed_count_sentinel;

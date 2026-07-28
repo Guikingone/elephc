@@ -145,6 +145,10 @@ impl Checker {
             .collect();
         let prev_by_ref_return = self.current_by_ref_return;
         self.current_by_ref_return = decl.by_ref_return;
+        self.loop_storage_types
+            .retain(|(scope, _), _| scope != &function_key);
+        let previous_loop_storage_scope =
+            std::mem::replace(&mut self.current_loop_storage_scope, function_key.clone());
         self.resolving_functions.insert(function_key.clone());
         let body_check_result = self.with_local_storage_context(ref_param_names, |checker| {
             for stmt in &decl.body {
@@ -161,6 +165,7 @@ impl Checker {
             Ok(())
         });
         self.resolving_functions.remove(&function_key);
+        self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;
         // Persist any specialization the body produced for its OWN declared callable
         // params into the cross-call cache BEFORE restoring the caller's snapshot —

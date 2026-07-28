@@ -413,7 +413,7 @@ pub(super) fn check_types_impl(
         &class_method_bodies,
     );
 
-    let (global_env, initial_top_level_errors) = checker.check_top_level_program(program);
+    let (_, initial_top_level_errors) = checker.check_top_level_program(program);
 
     checker.resolve_unchecked_functions(&mut errors);
 
@@ -437,7 +437,7 @@ pub(super) fn check_types_impl(
         &checker.func_args_functions,
     ));
 
-    checker.type_check_methods_until_stable(&methods_to_check, &global_env, &mut errors)?;
+    checker.type_check_methods_until_stable(&methods_to_check, &mut errors)?;
     patch_builtin_spl_storage_signatures(&mut checker);
     apply_implicit_stringable_interfaces(&mut checker.classes);
 

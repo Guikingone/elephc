@@ -19,6 +19,72 @@ fn test_buffer_int_direct_read_write() {
     assert_eq!(out, "10");
 }
 
+/// Regression test for issue #497: checked integer arithmetic can supply a
+/// runtime-narrowed Mixed index to both buffer writes and reads.
+#[test]
+fn test_buffer_mixed_arithmetic_index_read_write() {
+    let out = compile_and_run(
+        "<?php buffer<int> $values = buffer_new<int>(2); $values[$argc - 1] = 41; echo $values[$argc - 1] + 1;",
+    );
+    assert_eq!(out, "42");
+}
+
+/// Verifies the complete Mixed-index contract: strings, floats, and null are
+/// converted to int at runtime for both buffer writes and reads.
+#[test]
+fn test_buffer_mixed_index_runtime_int_conversion() {
+    let out = compile_and_run(
+        r#"<?php
+function mixed_index(mixed $value): mixed {
+    return $value;
+}
+buffer<int> $values = buffer_new<int>(3);
+$values[mixed_index("abc")] = 4;
+$values[mixed_index(2.9)] = 6;
+$values[mixed_index(null)] = $values[mixed_index("abc")] + 1;
+echo $values[0], "|", $values[2];
+"#,
+    );
+    assert_eq!(out, "5|6");
+}
+
+/// Regression test for issues #497 and #500: a loop-carried checked index can
+/// read a packed buffer through an object property without leaking its box.
+#[test]
+fn test_buffer_packed_property_mixed_index_read_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+packed class Thing {
+    public int $id;
+}
+class MapData {
+    public $things;
+}
+
+buffer<Thing> $things = buffer_new<Thing>(2000);
+for ($i = 0; $i < 2000; $i = $i + 1) {
+    $things[$i]->id = $i;
+}
+
+$map = new MapData();
+$map->things = $things;
+$sum = 0;
+for ($i = 0; $i < 2000; $i = $i + 1) {
+    $sum = $sum + $map->things[$i]->id;
+}
+echo $sum;
+buffer_free($things);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1999000");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected buffer property indices to leave a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Verifies buffer\<float\> stores and retrieves two floating-point values,
 /// then casts their sum to int.
 #[test]
