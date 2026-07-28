@@ -658,6 +658,7 @@ impl RuntimeFnId {
             RuntimeFnId::Ceil |
             RuntimeFnId::Chop |
             RuntimeFnId::Chr |
+            RuntimeFnId::Clamp |
             RuntimeFnId::Cos |
             RuntimeFnId::Cosh |
             RuntimeFnId::Crc32 |
@@ -684,6 +685,9 @@ impl RuntimeFnId {
             RuntimeFnId::InetNtop |
             RuntimeFnId::InetPton |
             RuntimeFnId::Ip2long |
+            RuntimeFnId::IsFinite |
+            RuntimeFnId::IsInfinite |
+            RuntimeFnId::IsNan |
             RuntimeFnId::IsNumeric |
             RuntimeFnId::Lcfirst |
             RuntimeFnId::Log |
@@ -727,11 +731,103 @@ impl RuntimeFnId {
             RuntimeFnId::Ucfirst |
             RuntimeFnId::Ucwords |
             RuntimeFnId::Wordwrap => crate::ir::Effects::empty(),
+            RuntimeFnId::FunctionExists
+            | RuntimeFnId::Defined
+            | RuntimeFnId::JsonLastError
+            | RuntimeFnId::JsonLastErrorMsg
+            | RuntimeFnId::DateDefaultTimezoneGet
+            | RuntimeFnId::ObGetLevel => crate::ir::Effects::READS_GLOBAL,
+            RuntimeFnId::SplAutoloadExtensions => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits()
+                    | crate::ir::Effects::WRITES_GLOBAL.bits(),
+            ),
+            RuntimeFnId::SplAutoloadFunctions => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits(),
+            ),
+            RuntimeFnId::GetClass
+            | RuntimeFnId::GetParentClass
+            | RuntimeFnId::SplObjectId => crate::ir::Effects::READS_HEAP,
+            RuntimeFnId::SplObjectHash => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_CONCAT.bits(),
+            ),
+            RuntimeFnId::BufferLen => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
+            RuntimeFnId::Time => crate::ir::Effects::READS_PROCESS,
+            RuntimeFnId::Microtime | RuntimeFnId::Hrtime => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_PROCESS.bits()
+                        | crate::ir::Effects::ALLOC_HEAP.bits(),
+                )
+            }
+            RuntimeFnId::Getenv | RuntimeFnId::Gethostname => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_PROCESS.bits()
+                        | crate::ir::Effects::ALLOC_CONCAT.bits(),
+                )
+            }
+            RuntimeFnId::PhpUname => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::ALLOC_CONCAT.bits()
+                    | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
+            RuntimeFnId::Phpversion => crate::ir::Effects::PURE,
+            RuntimeFnId::MtRand | RuntimeFnId::Rand | RuntimeFnId::RandomInt => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_PROCESS.bits()
+                        | crate::ir::Effects::WRITES_PROCESS.bits(),
+                )
+            }
+            RuntimeFnId::Sleep | RuntimeFnId::Usleep => crate::ir::Effects::WRITES_PROCESS,
+            RuntimeFnId::Sprintf | RuntimeFnId::Vsprintf => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_HEAP.bits()
+                        | crate::ir::Effects::ALLOC_CONCAT.bits()
+                        | crate::ir::Effects::MAY_WARN.bits(),
+                )
+            }
             _ => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::REFCOUNT_OP.bits()
                     & !crate::ir::Effects::WRITES_GLOBAL.bits(),
             ),
+        }
+    }
+
+    /// Returns effects intrinsic to a callback builtin before invoking user code.
+    ///
+    /// Optimizer effect analysis combines this base with a statically-known closure or
+    /// first-class-callable summary. Dynamic callbacks still use [`Self::effects`].
+    pub const fn intrinsic_effects(self) -> crate::ir::Effects {
+        use crate::ir::Effects as E;
+        match self {
+            RuntimeFnId::ArrayAll
+            | RuntimeFnId::ArrayAny
+            | RuntimeFnId::ArrayFilter
+            | RuntimeFnId::ArrayFind
+            | RuntimeFnId::ArrayMap
+            | RuntimeFnId::ArrayReduce
+            | RuntimeFnId::ArrayWalk
+            | RuntimeFnId::ArrayWalkRecursive
+            | RuntimeFnId::ArrayUdiff
+            | RuntimeFnId::ArrayUintersect => {
+                E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
+            }
+            RuntimeFnId::PregReplaceCallback => E::from_bits_retain(
+                E::READS_HEAP.bits() | E::ALLOC_HEAP.bits() | E::MAY_WARN.bits(),
+            ),
+            RuntimeFnId::Uasort
+            | RuntimeFnId::Uksort
+            | RuntimeFnId::Usort => {
+                E::from_bits_retain(
+                    E::READS_HEAP.bits() | E::WRITES_HEAP.bits() | E::REFCOUNT_OP.bits(),
+                )
+            }
+            RuntimeFnId::CallUserFunc => E::PURE,
+            RuntimeFnId::CallUserFuncArray => E::READS_HEAP,
+            _ => self.effects(),
         }
     }
 
@@ -855,7 +951,9 @@ impl RuntimeFnId {
     /// Returns the callback operand inspected for runtime string dispatch, if any.
     pub const fn string_callback_operand_index(self) -> Option<usize> {
         match self {
-            RuntimeFnId::ArrayMap => Some(0),
+            RuntimeFnId::ArrayMap
+            | RuntimeFnId::CallUserFunc
+            | RuntimeFnId::CallUserFuncArray => Some(0),
             RuntimeFnId::ArrayFilter
             | RuntimeFnId::ArrayReduce
             | RuntimeFnId::ArrayWalk
