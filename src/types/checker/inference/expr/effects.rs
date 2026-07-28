@@ -366,8 +366,10 @@ impl Checker {
                         }
                         condition_env.clone()
                     };
-                    let ty =
-                        self.infer_type_with_assignment_effects(result, &mut arm_env)?;
+                    let ty = super::normalize_match_arm_result_type(
+                        result,
+                        self.infer_type_with_assignment_effects(result, &mut arm_env)?,
+                    );
                     result_ty = Some(match result_ty {
                         Some(acc) => super::merge_match_arm_result_type(self, acc, ty),
                         None => ty,
@@ -375,8 +377,10 @@ impl Checker {
                 }
                 if let Some(default) = default {
                     let mut default_env = condition_env.clone();
-                    let ty =
-                        self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    let ty = super::normalize_match_arm_result_type(
+                        default,
+                        self.infer_type_with_assignment_effects(default, &mut default_env)?,
+                    );
                     result_ty = Some(match result_ty {
                         Some(acc) => super::merge_match_arm_result_type(self, acc, ty),
                         None => ty,

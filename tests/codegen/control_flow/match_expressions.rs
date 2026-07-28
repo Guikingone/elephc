@@ -741,3 +741,84 @@ echo $count, "|", $a[0], "|", $a[1];
         out.stderr
     );
 }
+
+/// PHP evaluates `match` arm conditions top-to-bottom in ONE shared scope, so a variable a
+/// condition assigns is visible to every later condition and to the matching arm's body.
+///
+/// Regression: that flow used to be implemented TWICE — once effectfully, once read-only inside
+/// `Checker::infer_type` — and the read-only copy inferred conditions immutably, dropping their
+/// assignments. Any construct re-entering the read-only path therefore failed with
+/// "Undefined variable". This is the exact `Symfony\Component\Yaml\Inline::dump()` shape: a
+/// `match (true)` whose first arm assigns `$length`, used as a METHOD-CALL ARGUMENT.
+#[test]
+fn test_match_condition_assignment_visible_in_later_arms_as_call_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class Fmt {
+    public function format(string $spec): string { return "<" . $spec . ">"; }
+}
+function dumpDate(Fmt $value, string $micro): string {
+    return $value->format(match (true) {
+        !$length = strlen(rtrim($micro, '0')) => 'c',
+        $length < 4 => 'short',
+        default => 'long',
+    });
+}
+$f = new Fmt();
+echo dumpDate($f, '000000'), dumpDate($f, '120000'), dumpDate($f, '123456');
+"#,
+    );
+    assert_eq!(out, "<c><short><long>");
+}
+
+/// The same rule through the OTHER entry point that re-enters read-only inference: an
+/// arrow-function body whose `match` arm assigns in its RESULT expression
+/// (`Symfony\Component\VarExporter\ProxyHelper::exportDefault()`'s `'parent' => ($parent = …) ? …`).
+#[test]
+fn test_match_arm_result_assignment_inside_arrow_function_body() {
+    let out = compile_and_run(
+        r#"<?php
+class Node {
+    public string $name = '';
+    private ?Node $parentNode = null;
+    public function __construct(string $name, ?Node $parentNode = null) {
+        $this->name = $name;
+        $this->parentNode = $parentNode;
+    }
+    public function getParent(): ?Node { return $this->parentNode; }
+}
+function render(Node $class, array $parts): array {
+    return array_map(static fn (string $part): string => match ($part) {
+        'self' => '\\' . $class->name,
+        'parent' => ($parent = $class->getParent()) ? '\\' . $parent->name : 'parent',
+        default => $part,
+    }, $parts);
+}
+echo implode(';', render(new Node('Child', new Node('Base')), ['self', 'parent', 'other']));
+echo '|';
+echo implode(';', render(new Node('Orphan'), ['self', 'parent']));
+"#,
+    );
+    assert_eq!(out, "\\Child;\\Base;other|\\Orphan;parent");
+}
+
+/// A `throw` arm still merges as "never yields" rather than "yields null" now that `match` result
+/// inference goes through the effectful path: the non-throwing arm's type must survive the merge
+/// intact, so the `int` result stays usable in an `int` context.
+#[test]
+fn test_match_throw_arm_does_not_make_result_nullable() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $n): int {
+    $v = match (true) {
+        $n > 0 => $n * 2,
+        default => throw new RuntimeException('nope'),
+    };
+    return $v + 1;
+}
+echo pick(4);
+try { pick(-1); } catch (RuntimeException $e) { echo '|', $e->getMessage(); }
+"#,
+    );
+    assert_eq!(out, "9|nope");
+}

@@ -141,58 +141,24 @@ impl Checker {
                     value: Box::new(val_ty),
                 })
             }
-            ExprKind::Match {
-                subject,
-                arms,
-                default,
-            } => {
-                self.infer_type(subject, env)?;
-                let narrows_between_arms =
-                    matches!(subject.kind, ExprKind::BoolLiteral(true));
-                let mut fallthrough_env = env.clone();
-                let mut result_ty: Option<PhpType> = None;
-                for (conditions, result) in arms {
-                    let mut arm_env = fallthrough_env.clone();
-                    if narrows_between_arms && conditions.len() == 1 {
-                        let condition = &conditions[0];
-                        self.infer_type(condition, &fallthrough_env)?;
-                        if let Some(guard) =
-                            self.guard_narrowing(condition, &fallthrough_env)?
-                        {
-                            arm_env.insert(guard.var.clone(), guard.then_ty.clone());
-                            fallthrough_env.insert(guard.var.clone(), guard.else_ty.clone());
-                            // Assignment-receiver aliases (`$f = $src`) share the value and take the
-                            // same then/else narrowing.
-                            for alias in &guard.aliases {
-                                arm_env.insert(alias.clone(), guard.then_ty.clone());
-                                fallthrough_env.insert(alias.clone(), guard.else_ty.clone());
-                            }
-                        } else {
-                            for (var, then_ty) in
-                                self.and_chain_then_narrowings(condition, &fallthrough_env)
-                            {
-                                arm_env.insert(var, then_ty);
-                            }
-                        }
-                    } else {
-                        for condition in conditions {
-                            self.infer_type(condition, &fallthrough_env)?;
-                        }
-                    }
-                    let ty = self.match_arm_result_type(result, &arm_env)?;
-                    result_ty = Some(match result_ty {
-                        Some(acc) => merge_match_arm_result_type(self, acc, ty),
-                        None => ty,
-                    });
-                }
-                if let Some(d) = default {
-                    let ty = self.match_arm_result_type(d, &fallthrough_env)?;
-                    result_ty = Some(match result_ty {
-                        Some(acc) => merge_match_arm_result_type(self, acc, ty),
-                        None => ty,
-                    });
-                }
-                Ok(result_ty.unwrap_or(PhpType::Void))
+            // `match` arm flow (cross-arm condition scope, guard narrowing, arm-result merge)
+            // lives in exactly ONE place: the effectful twin
+            // `Checker::infer_type_with_assignment_effects` (`inference/expr/effects.rs`). This
+            // read-only entry point delegates to it against a DISCARDED scratch clone of `env`,
+            // then drops the scratch — so `infer_type` stays side-effect-free for its callers
+            // while still seeing the SAME arm types the effectful path computes.
+            //
+            // The previous duplicate copy here inferred every arm condition immutably
+            // (`self.infer_type(condition, &fallthrough_env)`), which silently dropped the
+            // variables a condition ASSIGNS. PHP evaluates match arm conditions top-to-bottom in
+            // one shared scope, so `match (true) { !$length = strlen($s) => …, $length < 4 => … }`
+            // must define `$length` for the later arms and bodies; the read-only copy reported
+            // "Undefined variable: $length" instead. Any construct that re-enters the read-only
+            // path (a `match` in a method-call argument, an arrow-function body) hit that copy,
+            // so the two twins had to be collapsed rather than kept in sync.
+            ExprKind::Match { .. } => {
+                let mut scratch_env = env.clone();
+                self.infer_type_with_assignment_effects(expr, &mut scratch_env)
             }
             ExprKind::ArrayLiteral(elems) => {
                 if elems.is_empty() {
@@ -923,21 +889,32 @@ impl Checker {
             .unwrap_or(PhpType::Mixed)
     }
 
-    /// Infers a match/ternary arm result type for branch merging. Throw arms
-    /// produce no value, so their checker type (`Void`, shared with `null`) is
-    /// normalized to `Never` here: the merge must distinguish "arm never yields"
-    /// (defer to the other arms) from "arm yields null" (keep the merge nullable).
+    /// Infers a ternary/`?:` arm result type for branch merging, read-only. `match` arms take the
+    /// effectful path (`infer_type_with_assignment_effects`) and apply the same
+    /// `normalize_match_arm_result_type` rule there.
     fn match_arm_result_type(
         &mut self,
         result: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let ty = self.infer_type(result, env)?;
-        if matches!(result.kind, ExprKind::Throw(_)) {
-            return Ok(PhpType::Never);
-        }
-        Ok(ty)
+        Ok(normalize_match_arm_result_type(result, ty))
     }
+}
+
+/// Normalizes one match/ternary arm's inferred result type for branch merging: a `throw` arm
+/// produces no value, so its checker type (`Void`, shared with `null`) becomes `Never`. The merge
+/// must distinguish "arm never yields" (defer to the other arms) from "arm yields null" (keep the
+/// merge nullable).
+///
+/// Shared by the read-only (`Checker::match_arm_result_type`) and effectful
+/// (`Checker::infer_type_with_assignment_effects`) arm-inference paths so a `throw` arm merges
+/// identically whichever entry point reached it.
+pub(super) fn normalize_match_arm_result_type(result: &Expr, ty: PhpType) -> PhpType {
+    if matches!(result.kind, ExprKind::Throw(_)) {
+        return PhpType::Never;
+    }
+    ty
 }
 
 /// Returns whether `ty` can carry an object at runtime and may therefore reach PHP's clone
