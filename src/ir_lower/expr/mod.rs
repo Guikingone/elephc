@@ -8710,7 +8710,7 @@ fn lower_closure_with_context(
 }
 
 /// Returns true when a statement body contains an `eval(...)` call.
-fn body_contains_eval_call(body: &[Stmt]) -> bool {
+pub(crate) fn body_contains_eval_call(body: &[Stmt]) -> bool {
     body.iter().any(stmt_contains_eval_call)
 }
 

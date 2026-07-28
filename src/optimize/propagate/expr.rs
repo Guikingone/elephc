@@ -300,7 +300,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         } => {
             let object = propagate_expr(*object, env);
             let arg_env =
-                (!private_instance_method_call_effect(&object, &method).has_side_effects)
+                (!instance_method_call_effect(&object, &method).has_side_effects)
                     .then_some(env);
             let by_ref = method_by_ref_params(&method);
             ExprKind::MethodCall {

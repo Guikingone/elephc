@@ -16,6 +16,7 @@ use crate::ir::{print_module, Terminator};
 
 mod arrays;
 mod corpus;
+mod effects;
 mod exhaustive;
 mod ownership;
 
