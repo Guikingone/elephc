@@ -38,3 +38,5 @@ mod spread_and_calls;
 mod syntax;
 #[path = "lexer_tests/attributes.rs"]
 mod attributes;
+#[path = "lexer_tests/lfc.rs"]
+mod lfc;
