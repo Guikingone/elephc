@@ -8,7 +8,8 @@
 //! `fold_constants`), which false-folds `function_exists`/`extension_loaded` for a small set of
 //! PHP extension names elephc never provides so a Composer runtime's guard around an unresolvable
 //! extension function (`fastcgi_finish_request`, `igbinary_serialize`, ...) never reaches the
-//! checker.
+//! checker, and the matching `phpversion('<ext>')` / `version_compare(...)` pair that gates
+//! `symfony/cache`'s conditionally-declared Redis/Relay proxy traits.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -224,4 +225,103 @@ if (\function_exists('fastcgi_finish_request')) {
 "#,
     );
     assert_eq!(out, "polyfill");
+}
+
+/// Verifies the pre-checker curated-extension fold reaches the `phpversion()`/`version_compare()`
+/// pair, so a CONDITIONAL TRAIT DECLARATION guarded on an absent extension's version resolves to
+/// the else-branch trait before the checker flattens `use T`.
+///
+/// This is `symfony/cache`'s `Redis62ProxyTrait`/`Relay20Trait` shape verbatim: the real trait body
+/// is declared inside the `if`, an empty stand-in inside the `else`, and `RedisProxy` then
+/// `use`s it. `flatten_classes` only ever scans TOP-LEVEL statements, so without the fold the
+/// nested `TraitDecl` never enters the trait map and the class fails with "Unknown trait referenced
+/// during flattening". Cross-checked with `php -n` on the same source (prints "ok|false|false":
+/// neither extension is loaded under the CLI SAPI either, so PHP declares the empty trait too).
+#[test]
+fn test_precheck_fold_resolves_conditional_trait_behind_phpversion_guard() {
+    let out = compile_and_run(
+        r#"<?php
+if (version_compare(phpversion('redis'), '6.2.0', '>=')) {
+    trait T { public function f() { return 1; } }
+} else {
+    trait T {}
+}
+class C { use T; }
+$c = new C();
+echo "ok|";
+echo var_export(phpversion('redis'), true), "|";
+echo var_export(version_compare(phpversion('redis'), '6.2.0', '>='), true);
+"#,
+    );
+    assert_eq!(out, "ok|false|false");
+}
+
+/// Verifies the `version_compare` fold produces PHP's answer for every operator direction, not just
+/// the `>=` the Symfony guards use. An absent extension yields `false`, which `version_compare`
+/// coerces to `''`, and `''` sorts strictly BEFORE any real version — so `<`/`le`/`!=` are `true`
+/// and `>=`/`eq` are `false`. Cross-checked with `php -n` (prints "lower|true|true|false").
+#[test]
+fn test_precheck_fold_version_compare_operator_directions() {
+    let out = compile_and_run(
+        r#"<?php
+if (version_compare(phpversion('relay'), '0.20.0', '<')) {
+    echo "lower|";
+} else {
+    echo "higher|";
+}
+echo var_export(version_compare(phpversion('redis'), '6.2.0', '!='), true), "|";
+echo var_export(version_compare(phpversion('redis'), '6.2.0', 'le'), true), "|";
+echo var_export(version_compare(phpversion('redis'), '6.2.0', 'eq'), true);
+"#,
+    );
+    assert_eq!(out, "lower|true|true|false");
+}
+
+/// Negative control for the `phpversion()` fold: the curated allowlist must not grow implicitly.
+/// `phpversion('json')` names an extension elephc has real catalog presence for, so it is left
+/// unfolded, the guard stays a runtime condition, and the conditional trait inside it stays
+/// invisible to flattening — the general `types/traits.rs` top-level-only hole is deliberately NOT
+/// closed by this fold. A compile failure here is the expected, loud outcome.
+#[test]
+fn test_precheck_fold_leaves_uncurated_phpversion_guard_alone() {
+    let err = compile_expect_check_error(
+        r#"<?php
+if (version_compare(phpversion('json'), '1.0', '>=')) {
+    trait U { public function f() { return 1; } }
+} else {
+    trait U {}
+}
+class D { use U; }
+echo "ok";
+"#,
+    );
+    assert!(
+        err.contains("Unknown trait referenced during flattening"),
+        "expected the uncurated guard to leave the conditional trait invisible, got: {}",
+        err
+    );
+}
+
+/// Negative control for a non-literal extension argument: `phpversion($e)` cannot be proven absent
+/// at compile time (the name is only known at runtime), so nothing folds and the conditional trait
+/// stays invisible. Guards against the fold reaching through a variable.
+#[test]
+fn test_precheck_fold_leaves_dynamic_phpversion_argument_alone() {
+    let err = compile_expect_check_error(
+        r#"<?php
+$e = "redis";
+if (version_compare(phpversion($e), '6.2.0', '>=')) {
+    trait V { public function f() { return 1; } }
+} else {
+    trait V {}
+}
+class E { use V; }
+echo "ok";
+"#,
+    );
+    assert!(
+        err.contains("Unknown trait referenced during flattening"),
+        "expected a dynamic extension name to leave the conditional trait invisible, got: {}",
+        err
+    );
 }

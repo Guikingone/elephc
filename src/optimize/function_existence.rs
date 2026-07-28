@@ -15,12 +15,20 @@
 //! guard collapse to dead code before the checker ever sees the call to an extension function
 //! elephc cannot resolve, instead of failing with "Undefined function".
 //!
+//! The same pre-check window also folds the *version* form of the very same question:
+//! `phpversion('<curated extension>')` to `false`, and `version_compare(false|'', '<version>',
+//! '<operator>')` to the boolean PHP itself computes. Together they collapse
+//! `if (version_compare(phpversion('redis'), '6.2.0', '>=')) { trait T {...} } else { trait T {...} }`
+//! -- Symfony Cache's conditional Redis/Relay proxy traits -- to the else-branch declaration, which
+//! is exactly what PHP declares on a runtime without those extensions.
+//!
 //! Called from:
 //! - `crate::pipeline::compile()` via `crate::optimize::fold_function_existence` (twice: once in
 //!   pre-check mode before type checking, and once in the original post-check mode afterward,
 //!   alongside `fold_class_existence`, before `prune_constant_control_flow`).
-//! - `crate::optimize::fold::expr::fold_expr` calls `try_fold_function_exists` and
-//!   `try_fold_extension_loaded_pre_check` on each `FunctionCall`, and the pre-check-only
+//! - `crate::optimize::fold::expr::fold_expr` calls `try_fold_function_exists`,
+//!   `try_fold_extension_loaded_pre_check`, `try_fold_phpversion_pre_check`, and
+//!   `try_fold_version_compare_pre_check` on each `FunctionCall`, and the pre-check-only
 //!   short-circuit helpers on `&&`/`||`/ternary/short-ternary nodes.
 //!
 //! Key details:
@@ -35,7 +43,10 @@
 //!   function is left unfolded. Matching is case-insensitive with a leading `\` stripped.
 //! - The pre-check fold NEVER folds to `true` (JURY ADDENDUM #1): it only ever proves a curated
 //!   extension name absent. Everything else — including real builtins, which the post-check pass
-//!   already true-folds once `CheckResult` exists — is left untouched pre-checker.
+//!   already true-folds once `CheckResult` exists — is left untouched pre-checker. The
+//!   `version_compare` fold is the one place a `true` can be produced, and only as the arithmetic
+//!   consequence of an already-proven-absent extension ("" is less than every real version, so
+//!   `version_compare('', '6.2.0', '<')` is `true` in PHP too) — never as a claim of availability.
 //! - Like `class_existence`, folding only happens while the pipeline installs the set; a
 //!   `fold_constants`/`fold_function_existence` call outside either window sees an empty
 //!   thread-local slot and leaves calls untouched.
@@ -100,8 +111,15 @@ const NEVER_AVAILABLE_FUNCTION_PREFIXES: &[&str] = &[
 /// (extension names, unlike function names, are single words rather than prefixed families).
 /// Kept in lockstep with `NEVER_AVAILABLE_FUNCTION_PREFIXES`'s families that are genuinely queried
 /// through `extension_loaded()` in the wild (e.g. `symfony/cache`'s `DefaultMarshaller` checks
-/// `extension_loaded('igbinary')` before calling `igbinary_serialize()`).
-const NEVER_AVAILABLE_EXTENSIONS: &[&str] = &["apcu", "opcache", "xdebug", "igbinary"];
+/// `extension_loaded('igbinary')` before calling `igbinary_serialize()`), plus the extensions whose
+/// *version* is queried through `phpversion('<ext>')` (`symfony/cache`'s Redis/Relay proxies gate
+/// their trait declarations on `version_compare(phpversion('redis'), …)`). elephc ships no loadable
+/// extension of any kind, so both answers are already what its own runtime produces: codegen's
+/// `lower_extension_loaded` returns `false` unconditionally and `lower_phpversion` returns `false`
+/// for every one-argument form. Entries are added only for extensions elephc has no catalog
+/// presence under, so folding can never contradict a real (present or future) builtin family.
+const NEVER_AVAILABLE_EXTENSIONS: &[&str] =
+    &["apcu", "opcache", "xdebug", "igbinary", "redis", "relay"];
 
 /// Case-insensitive, backslash-stripped view of the checked closed world used to classify a
 /// `function_exists('X')` call. Externs are unconditionally available so they fold to `true`;
@@ -345,6 +363,103 @@ pub(in crate::optimize) fn try_fold_extension_loaded_pre_check(
         };
         set.classify_extension(literal).map(ExprKind::BoolLiteral)
     })
+}
+
+/// Attempts to fold `phpversion('X')` to `BoolLiteral(false)` when the pre-check window is
+/// installed and `X` is a literal string naming a curated never-loaded extension.
+///
+/// PHP returns the extension's version string when the extension is loaded and `false` when it is
+/// not; elephc loads no extensions at all, and codegen's `lower_phpversion`
+/// (`src/codegen/lower_inst/builtins.rs`) already emits `false` for every one-argument form. This
+/// fold therefore only moves elephc's own, already-final answer earlier — from codegen to before
+/// the type checker — so a version guard around a conditional declaration becomes constant control
+/// flow `prune_dead_static_branches` can resolve. Returns `None` for the zero-argument form (which
+/// yields the runtime version string, not a boolean), for a non-literal argument, and outside the
+/// pre-check window.
+pub(in crate::optimize) fn try_fold_phpversion_pre_check(
+    name: &Name,
+    args: &[Expr],
+) -> Option<ExprKind> {
+    ACTIVE_FUNCTION_EXISTENCE.with(|slot| {
+        let borrowed = slot.borrow();
+        let set = borrowed.as_ref()?;
+        if php_symbol_key(name.as_str().trim_start_matches('\\')) != "phpversion" {
+            return None;
+        }
+        let [arg] = args else {
+            return None;
+        };
+        let ExprKind::StringLiteral(literal) = &arg.kind else {
+            return None;
+        };
+        set.classify_extension(literal).map(ExprKind::BoolLiteral)
+    })
+}
+
+/// Attempts to fold `version_compare($absent, '<version>', '<operator>')` to the boolean PHP
+/// computes, where `$absent` is the `false` (or `''`) an absent extension's `phpversion()` yields.
+///
+/// PHP coerces the `false` first argument to `''`, and `''` compares as strictly LESS THAN every
+/// version string containing an alphanumeric character (verified against `php -n` 8.5.6:
+/// `version_compare('', '6.2.0')` is `-1`, as is `''` against `a`, `0`, `0.0`, `dev`). The
+/// alphanumeric requirement is deliberate: PHP canonicalizes separators away, so a second argument
+/// made only of them (`"\0"`) canonicalizes to `''` and compares EQUAL — folding those would be
+/// wrong, so they are left alone. The operator must be one of PHP's literal comparison spellings,
+/// matched case-SENSITIVELY as PHP does (`'GE'` is not `'ge'`); anything else is left unfolded so
+/// the `ValueError` PHP 8 raises for an invalid operator still happens, as is the two-argument form
+/// (which returns `-1|0|1` rather than a boolean).
+///
+/// Returns `None` outside the pre-check window, so this never changes an ordinary `fold_constants`
+/// run.
+pub(in crate::optimize) fn try_fold_version_compare_pre_check(
+    name: &Name,
+    args: &[Expr],
+) -> Option<ExprKind> {
+    if !pre_check_mode_active() {
+        return None;
+    }
+    if php_symbol_key(name.as_str().trim_start_matches('\\')) != "version_compare" {
+        return None;
+    }
+    let [left, right, operator] = args else {
+        return None;
+    };
+    if !is_absent_extension_version(left) {
+        return None;
+    }
+    let ExprKind::StringLiteral(right) = &right.kind else {
+        return None;
+    };
+    if !right.chars().any(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let ExprKind::StringLiteral(operator) = &operator.kind else {
+        return None;
+    };
+    // The left operand canonicalizes to the empty version, which orders strictly before `right`.
+    version_compare_less_than_result(operator).map(ExprKind::BoolLiteral)
+}
+
+/// Returns whether an expression is the version value PHP yields for an absent extension: the
+/// literal `false` our own `phpversion` fold produces, or the empty string it coerces to.
+fn is_absent_extension_version(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::BoolLiteral(false) => true,
+        ExprKind::StringLiteral(literal) => literal.is_empty(),
+        _ => false,
+    }
+}
+
+/// Maps a `version_compare()` operator literal onto the boolean PHP returns when the left version
+/// sorts strictly BEFORE the right one. Mirrors PHP's accepted spellings exactly (`<`/`lt`,
+/// `<=`/`le`, `>`/`gt`, `>=`/`ge`, `==`/`=`/`eq`, `!=`/`<>`/`ne`); every other operator raises a
+/// `ValueError` in PHP 8, so it stays unfolded and reaches the runtime unchanged.
+fn version_compare_less_than_result(operator: &str) -> Option<bool> {
+    match operator {
+        "<" | "lt" | "<=" | "le" | "!=" | "<>" | "ne" => Some(true),
+        ">" | "gt" | ">=" | "ge" | "==" | "=" | "eq" => Some(false),
+        _ => None,
+    }
 }
 
 /// Returns the operand's boolean value ONLY when it is already a literal `BoolLiteral` node — the

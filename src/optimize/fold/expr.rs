@@ -203,10 +203,21 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             // literal name to a boolean when the existence sets are installed (see
             // `crate::optimize::class_existence`); otherwise try the analogous `function_exists`
             // fold (see `crate::optimize::function_existence`); otherwise keep the call unchanged.
+            // The `phpversion`/`version_compare` pair runs in the same pre-check window: arguments
+            // are folded first (above), so a `version_compare(phpversion('redis'), …)` guard sees
+            // the already-folded `false` and collapses in this single bottom-up pass.
             crate::optimize::class_existence::try_fold_class_existence(&name, &args)
                 .or_else(|| crate::optimize::function_existence::try_fold_function_exists(&name, &args))
                 .or_else(|| {
                     crate::optimize::function_existence::try_fold_extension_loaded_pre_check(
+                        &name, &args,
+                    )
+                })
+                .or_else(|| {
+                    crate::optimize::function_existence::try_fold_phpversion_pre_check(&name, &args)
+                })
+                .or_else(|| {
+                    crate::optimize::function_existence::try_fold_version_compare_pre_check(
                         &name, &args,
                     )
                 })
