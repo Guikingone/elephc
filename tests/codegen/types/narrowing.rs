@@ -933,6 +933,8 @@ fn test_guarded_string_or_false_narrows_to_string() {
         "#,
     );
     assert_eq!(out, "[hi]none|[hi]none|[hi]none|[hi]none");
+}
+
 /// Verifies a null guard whose body returns before unreachable trailing code still narrows the
 /// `?array` value to `Array` for the list unpack after the `if` (issue #590 shape 1). The former
 /// last-statement-only model saw the dead `echo` instead of the terminal `return` and dropped the
