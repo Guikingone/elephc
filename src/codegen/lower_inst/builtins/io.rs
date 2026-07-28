@@ -5381,7 +5381,7 @@ fn lower_touch_args_aarch64(
         TouchTimeShape::MtimeAlsoAtime => {
             let mtime = expect_operand(inst, 1)?;
             abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
-            require_int(ctx.load_value_to_result(mtime)?.codegen_repr(), "touch mtime")?;
+            super::resolve_gradual_int_arg_to_result(ctx, mtime, "touch mtime")?;
             ctx.emitter.instruction("mov x3, x0");                              // pass explicit mtime seconds
             ctx.emitter.instruction("mov x4, x0");                              // default atime to the explicit mtime seconds
             ctx.emitter.instruction("mov x5, #0");                              // mark both timestamp fields as explicit
@@ -5391,9 +5391,9 @@ fn lower_touch_args_aarch64(
             let mtime = expect_operand(inst, 1)?;
             let atime = expect_operand(inst, 2)?;
             abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
-            require_int(ctx.load_value_to_result(mtime)?.codegen_repr(), "touch mtime")?;
+            super::resolve_gradual_int_arg_to_result(ctx, mtime, "touch mtime")?;
             ctx.emitter.instruction("str x0, [sp, #-16]!");                     // save explicit mtime while atime is evaluated
-            require_int(ctx.load_value_to_result(atime)?.codegen_repr(), "touch atime")?;
+            super::resolve_gradual_int_arg_to_result(ctx, atime, "touch atime")?;
             ctx.emitter.instruction("mov x4, x0");                              // pass explicit atime seconds
             ctx.emitter.instruction("ldr x3, [sp], #16");                       // restore explicit mtime seconds
             ctx.emitter.instruction("mov x5, #0");                              // mark both timestamp fields as explicit
@@ -5417,7 +5417,7 @@ fn lower_touch_args_x86_64(
         TouchTimeShape::MtimeAlsoAtime => {
             let mtime = expect_operand(inst, 1)?;
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-            require_int(ctx.load_value_to_result(mtime)?.codegen_repr(), "touch mtime")?;
+            super::resolve_gradual_int_arg_to_result(ctx, mtime, "touch mtime")?;
             ctx.emitter.instruction("mov rdi, rax");                            // pass explicit mtime seconds
             ctx.emitter.instruction("mov rsi, rax");                            // default atime to the explicit mtime seconds
             ctx.emitter.instruction("mov rcx, 0");                              // mark both timestamp fields as explicit
@@ -5427,10 +5427,10 @@ fn lower_touch_args_x86_64(
             let mtime = expect_operand(inst, 1)?;
             let atime = expect_operand(inst, 2)?;
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-            require_int(ctx.load_value_to_result(mtime)?.codegen_repr(), "touch mtime")?;
+            super::resolve_gradual_int_arg_to_result(ctx, mtime, "touch mtime")?;
             ctx.emitter.instruction("sub rsp, 16");                             // reserve aligned temporary storage for mtime
             ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // save explicit mtime while atime is evaluated
-            require_int(ctx.load_value_to_result(atime)?.codegen_repr(), "touch atime")?;
+            super::resolve_gradual_int_arg_to_result(ctx, atime, "touch atime")?;
             ctx.emitter.instruction("mov rsi, rax");                            // pass explicit atime seconds
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // restore explicit mtime seconds
             ctx.emitter.instruction("add rsp, 16");                             // release the aligned mtime temporary

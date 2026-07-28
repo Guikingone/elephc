@@ -700,7 +700,10 @@ pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         return Ok(());
     };
     ctx.emit_shutdown_functions_runner_call_if_present();
-    require_integer_like(ctx.load_value_to_result(status)?, "exit status")?;
+    // `exit(int $status)` accepts every int-family scalar the checker's `accepts_gradual_int`
+    // admits — including the boxed `int|float` that elephc infers for `exit(128 + $this->sig)`.
+    // The shared resolver is that predicate's codegen mirror.
+    super::resolve_gradual_int_arg_to_result(ctx, status, "exit status")?;
     emit_dynamic_exit(ctx);
     Ok(())
 }

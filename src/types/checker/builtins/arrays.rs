@@ -19,12 +19,14 @@ type BuiltinResult = Result<Option<PhpType>, CompileError>;
 /// Type-checks array builtin functions.
 ///
 /// Dispatches on `name` to validate arity, argument types, and return type for each
-/// supported array function (count, array_pop, in_array, array_keys, array_values, sort,
+/// supported array function (array_pop, in_array, array_keys, array_values, sort,
 /// rsort, shuffle, natsort, natcasesort, asort, arsort, ksort, krsort, isset, array_push,
 /// array_reverse, array_unique, array_flip, array_shift, array_sum, array_product, array_rand,
-/// array_key_exists, array_search, array_merge, array_diff, array_intersect, array_diff_key,
+/// array_key_exists, array_merge, array_diff, array_intersect, array_diff_key,
 /// array_intersect_key, array_unshift, array_combine, array_fill_keys, array_pad, array_fill,
 /// array_slice, array_splice, array_chunk, array_column, range).
+///
+/// `count` and `array_search` are registry-backed and never reach this dispatcher.
 ///
 /// Returns `Ok(Some(PhpType))` with the inferred return type, `Ok(None)` for unknown
 /// builtins (deferred to caller), or `Err(CompileError)` on arity/type mismatch.
@@ -36,33 +38,11 @@ pub(super) fn check_builtin(
     env: &TypeEnv,
 ) -> BuiltinResult {
     match name {
-        "count" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "count() takes exactly 1 argument"));
-            }
-            let ty = checker.infer_type(&args[0], env)?;
-            match &ty {
-                // A `Countable` object is accepted (PHP counts `Countable::count()`),
-                // and a non-`Countable` object is a concrete error.
-                PhpType::Object(class_name) => {
-                    if checker.class_implements_interface(class_name, "Countable") {
-                        Ok(Some(PhpType::Int))
-                    } else {
-                        Err(CompileError::new(
-                            span,
-                            "count() object argument must implement Countable",
-                        ))
-                    }
-                }
-                // Concrete array, `Mixed`, or a union containing an array is accepted
-                // under the gradual-typing boundary; EIR emits a runtime unbox/assert.
-                t if array_arg_is_gradually_acceptable(t) => Ok(Some(PhpType::Int)),
-                _ => Err(CompileError::new(
-                    span,
-                    "count() argument must be array or Countable object",
-                )),
-            }
-        }
+        // NOTE: `count` and `array_search` are NOT handled here. Both are registry-backed
+        // (`crate::builtins::array::{count, array_search}`), and `Checker::check_builtin`
+        // returns from the registry branch long before this dispatcher runs, so the copies
+        // that used to live here were unreachable duplicated policy. Their single source of
+        // truth is the registry `check` hook.
         "array_pop" => {
             if args.len() != 1 {
                 return Err(CompileError::new(span, "array_pop() takes exactly 1 argument"));
@@ -331,28 +311,6 @@ pub(super) fn check_builtin(
                 ));
             }
             Ok(Some(PhpType::Bool))
-        }
-        "array_search" => {
-            if args.len() < 2 || args.len() > 3 {
-                return Err(CompileError::new(
-                    span,
-                    "array_search() takes 2 or 3 arguments",
-                ));
-            }
-            checker.infer_type(&args[0], env)?;
-            let arr_ty = checker.infer_type(&args[1], env)?;
-            if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-                return Err(CompileError::new(
-                    span,
-                    "array_search() second argument must be array",
-                ));
-            }
-            match arr_ty {
-                PhpType::AssocArray { key, .. } => {
-                    Ok(Some(checker.normalize_union_type(vec![*key, PhpType::Bool])))
-                }
-                _ => Ok(Some(PhpType::Union(vec![PhpType::Int, PhpType::Bool]))),
-            }
         }
         "array_merge" => {
             // PHP 8: `array_merge(array ...$arrays): array` — variadic, accepting zero

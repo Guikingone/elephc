@@ -1200,14 +1200,20 @@ fn array_key_is_gradually_acceptable(idx_ty: &PhpType, normalized_idx_ty: &PhpTy
 
 /// Returns true when a value of `ty` can act as a PHP array key at the gradual-typing
 /// boundary: `int`, `string`, `Mixed`, the scalar families PHP casts to a key (`bool`,
-/// `float`), the null-like `Void`/`Never` tags (PHP treats a null key as `""`), and unions
-/// composed only of those. Heap container types are rejected.
+/// `false`, `float`), the null-like `Void`/`Never` tags (PHP treats a null key as `""`), and
+/// unions composed only of those. Heap container types are rejected.
+///
+/// `False` must be listed alongside `Bool`: it is the `false` literal subtype with an
+/// identical runtime representation (see `PhpType::False`), and PHP casts `false` to the key
+/// `0`. Without it the pervasive `int|false` shape returned by `array_search()`/`strpos()`
+/// could not be used as an array key even though PHP accepts it.
 fn php_type_is_array_key_coercible(ty: &PhpType) -> bool {
     match ty {
         PhpType::Int
         | PhpType::Str
         | PhpType::Mixed
         | PhpType::Bool
+        | PhpType::False
         | PhpType::Float
         | PhpType::Void
         | PhpType::Never => true,

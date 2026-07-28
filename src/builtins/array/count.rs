@@ -45,14 +45,25 @@ const fn count_semantics() -> BuiltinSemantics {
 
 /// Validates the argument type and returns `Int`.
 ///
-/// Accepts Array, AssocArray, Mixed (heterogeneous arrays), a Union where every member
-/// is countable, or an Object that implements the `Countable` interface. Arity
+/// Accepts Array, AssocArray, Mixed (heterogeneous arrays), `Iterable`, a Union where every
+/// member is countable, or an Object that implements the `Countable` interface. Arity
 /// enforcement (exactly 1 argument) is handled by the registry's `check_arity` via
 /// `max_args: 1`. Returns a `CompileError` for non-countable types or non-Countable objects.
+///
+/// This is the ONE source of truth for `count()` argument acceptance; `count` is
+/// registry-backed, so `Checker::check_builtin` reaches this hook and never falls through to
+/// the legacy `types::checker::builtins::arrays` dispatcher.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     match &ty {
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => Ok(PhpType::Int),
+        // `Iterable` is PHP's `array|Traversable`. Its array half is countable, so this is the
+        // same gradual boundary as the `Union` arms below: accepted at compile time, with the
+        // runtime `runtime.count` lowering raising PHP's catchable TypeError when the value
+        // turns out to be a Traversable that is not Countable.
+        PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Mixed
+        | PhpType::Iterable => Ok(PhpType::Int),
         PhpType::Union(members) if members.iter().all(union_member_is_countable_array) => {
             Ok(PhpType::Int)
         }

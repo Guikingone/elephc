@@ -37,3 +37,5 @@ mod return_this_ownership;
 mod prologue_param_register_clobber;
 #[path = "regressions/mixed_count_sentinel.rs"]
 mod mixed_count_sentinel;
+#[path = "regressions/gradual_int_and_iterable_count.rs"]
+mod gradual_int_and_iterable_count;

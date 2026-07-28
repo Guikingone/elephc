@@ -44,8 +44,13 @@ pub(super) fn check(
                 return Err(CompileError::new(span, "exit() takes 0 or 1 arguments"));
             }
             if let Some(arg) = args.first() {
+                // `exit(int $status)` at the gradual boundary: PHP coerces every int-family
+                // scalar (bool, float, the `false` subtype) to the exit status, and elephc's own
+                // `$a + $b` arithmetic infers `int|float`, which is what Symfony's
+                // `exit(128 + $this->signalToKill)` produces. `accepts_gradual_int` is the one
+                // shared predicate for that boundary (see `super::numeric`).
                 let ty = checker.infer_type(arg, env)?;
-                if ty != PhpType::Int {
+                if !super::numeric::accepts_gradual_int(&ty) {
                     return Err(CompileError::new(span, "exit() argument must be integer"));
                 }
             }

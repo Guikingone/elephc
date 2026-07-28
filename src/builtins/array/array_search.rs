@@ -34,8 +34,16 @@ builtin! {
 /// Validates haystack is an array and returns the key-or-false union type.
 ///
 /// The registry's `check_arity` handles arity enforcement (capped at 2 by `max_args`
-/// to match the legacy CHECK arm). For assoc arrays the return is `key_type | bool`;
-/// for indexed arrays it is `int | bool`.
+/// to match the legacy CHECK arm). For assoc arrays the return is `key_type | false`;
+/// for indexed arrays it is `int | false`.
+///
+/// The haystack must be a CONCRETE array type. Widening this to the shared
+/// `array_arg_is_gradually_acceptable` boundary (so a `Mixed` haystack or a union containing an
+/// array is accepted) was tried and reverted: `crate::codegen::lower_inst::builtins::arrays`
+/// has no dynamic search path — it rejects with `array_search for PHP array type Mixed` — so
+/// relaxing here only moves the failure from `error[…]` to `EIR backend error`, which the
+/// `^error\[` counter does not see. Restore the relaxation together with a runtime
+/// `array_search` over a boxed container, not before.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     let arr_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;

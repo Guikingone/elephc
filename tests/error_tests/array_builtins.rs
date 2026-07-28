@@ -219,14 +219,27 @@ fn test_error_count_string_arg() {
     );
 }
 
-/// Core correctness requirement: an UNGUARDED `count()` on an `iterable`-typed value still errors.
-/// An `iterable` can be a non-`Countable` `Traversable`, so `count()` on it is a static error in
-/// PHP 8 unless an `is_countable()` guard proves the value is an array or `Countable`. The guard
-/// narrowing must NOT blanket-accept `Iterable`. Input: `count($x)` with `iterable $x`.
+/// An UNGUARDED `count()` on an `iterable`-typed value type-checks and is resolved at runtime.
+///
+/// This REPLACES an earlier invariant that made the unguarded form a static error. PHP itself
+/// does not reject it: `iterable` is `array|Traversable`, and PHP counts the array and the
+/// `Countable` cases and raises a catchable `TypeError` only for a `Traversable` that is not
+/// `Countable`. `crate::codegen::lower_inst::builtins::lower_count_iterable` reproduces exactly
+/// that three-way runtime dispatch, so rejecting the whole program at compile time was strictly
+/// stricter than PHP and blocked real code (symfony/console `SymfonyStyle::createBlock()`).
+/// The runtime behavior in all three directions is locked by
+/// `tests/codegen/regressions/gradual_int_and_iterable_count.rs`.
 #[test]
-fn test_error_count_iterable_unguarded() {
+fn test_count_iterable_unguarded_is_resolved_at_runtime() {
+    expect_ok("<?php function f(iterable $x): int { return count($x); }");
+}
+
+/// Negative control for the arm above: relaxing `iterable` must NOT blanket-accept every type.
+/// A proven non-container argument is still a compile error.
+#[test]
+fn test_error_count_proven_non_container_still_rejected() {
     expect_error(
-        "<?php function f(iterable $x): int { return count($x); }",
+        "<?php function f(float $x): int { return count($x); }",
         "count() argument must be array or Countable object",
     );
 }

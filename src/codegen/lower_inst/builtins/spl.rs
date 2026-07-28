@@ -1537,8 +1537,12 @@ fn emit_mixed_key_from_result(ctx: &mut FunctionContext<'_>) -> Result<()> {
     Ok(())
 }
 
-/// Branches when the saved Traversable receiver implements `interface_name`.
-fn emit_branch_if_saved_receiver_implements(
+/// Branches when the object receiver saved at the top of the stack implements `interface_name`.
+///
+/// Shared with `super::lower_count_iterable`, which probes `Countable` on an `iterable` that
+/// turned out to hold an object. Callers must have pushed the receiver pointer so it is
+/// readable at `[sp]`, and the probe leaves that slot untouched.
+pub(super) fn emit_branch_if_saved_receiver_implements(
     ctx: &mut FunctionContext<'_>,
     interface_name: &str,
     target_label: &str,

@@ -44,6 +44,13 @@ fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
 /// Validates that all flag and depth arguments are integers.
 ///
 /// Reports type errors at the span of the offending argument, not the call span.
+///
+/// The strict `!= Int` test is deliberate and must NOT be widened to the shared
+/// `accepts_gradual_int` boundary yet: doing so was measured to move Symfony's
+/// `json_encode($data, $flags)` (JsonDescriptor.php:88, where `$flags` is `$opts['x'] ?? 0`)
+/// from `error[…]` to `EIR backend error: runtime_call missing operand 2`, i.e. an invisible
+/// relocation the `^error\[` counter cannot see. Widen this together with the EIR const-fold
+/// operand-drop fix, not before.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     for extra in &cx.args[1..] {

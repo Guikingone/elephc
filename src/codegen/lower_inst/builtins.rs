@@ -1218,6 +1218,10 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             lower_count_dynamic(ctx, value)?;
             store_if_result(ctx, inst)
         }
+        PhpType::Iterable => {
+            lower_count_iterable(ctx, value)?;
+            store_if_result(ctx, inst)
+        }
         PhpType::Object(class_name)
             if super::class_implements_interface(ctx, &class_name, "Countable") =>
         {
@@ -1232,6 +1236,102 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             other
         ))),
     }
+}
+
+/// Lowers `count()` for an `iterable` (PHP `array|Traversable`) value.
+///
+/// An `iterable` slot holds a RAW heap pointer, not a boxed Mixed, so the concrete shape is
+/// resolved with `__rt_heap_kind`:
+/// - kind 2 (indexed array) / 3 (hash): the entry count lives at offset 0 of both headers, so
+///   the count is read directly — identical to the concrete-array arm of `lower_count`.
+/// - kind 4 (object): PHP counts a `Traversable` only when it is ALSO `Countable`, so the
+///   receiver's interface table is probed at runtime and `Countable::count()` is dispatched
+///   through the interface slot. A `Traversable` that is not `Countable` raises PHP's real
+///   `TypeError`, exactly as PHP does — it is never silently counted or silently zero.
+/// - anything else: the same `TypeError`.
+///
+/// When the program declares no `Countable` implementor at all the interface is absent from the
+/// module metadata; nothing can then satisfy the probe, so the object arm goes straight to the
+/// `TypeError` instead of failing the compile.
+///
+/// KNOWN TEXT DIVERGENCE: PHP names the concrete class in the message ("… , Generator given");
+/// this path says "Traversable" because `emit_type_error` only carries a static message and the
+/// backend has no runtime-message `TypeError` emitter. The exception class, catchability, and
+/// control flow are identical — only the class name inside the string differs.
+fn lower_count_iterable(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let array_case = ctx.next_label("count_iterable_array");
+    let object_case = ctx.next_label("count_iterable_object");
+    let countable_case = ctx.next_label("count_iterable_countable");
+    let wrong_type_case = ctx.next_label("count_iterable_wrong_type");
+    let null_case = ctx.next_label("count_iterable_null");
+    let done = ctx.next_label("count_iterable_done");
+    let has_countable = ctx.module.interface_infos.contains_key("Countable");
+
+    ctx.load_value_to_result(value)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #2");                              // is the iterable an indexed array?
+            ctx.emitter.instruction(&format!("b.eq {}", array_case));           // read the entry count from the array header
+            ctx.emitter.instruction("cmp x0, #3");                              // is the iterable an associative hash?
+            ctx.emitter.instruction(&format!("b.eq {}", array_case));           // hash headers carry the count at the same offset
+            ctx.emitter.instruction("cmp x0, #4");                              // is the iterable an object?
+            ctx.emitter.instruction(&format!("b.eq {}", object_case));          // only a Countable object may be counted
+            ctx.emitter.instruction(&format!("b {}", wrong_type_case));         // every other shape is PHP's TypeError
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 2");                              // is the iterable an indexed array?
+            ctx.emitter.instruction(&format!("je {}", array_case));             // read the entry count from the array header
+            ctx.emitter.instruction("cmp rax, 3");                              // is the iterable an associative hash?
+            ctx.emitter.instruction(&format!("je {}", array_case));             // hash headers carry the count at the same offset
+            ctx.emitter.instruction("cmp rax, 4");                              // is the iterable an object?
+            ctx.emitter.instruction(&format!("je {}", object_case));            // only a Countable object may be counted
+            ctx.emitter.instruction(&format!("jmp {}", wrong_type_case));       // every other shape is PHP's TypeError
+        }
+    }
+
+    ctx.emitter.label(&object_case);
+    if has_countable {
+        spl::emit_branch_if_saved_receiver_implements(ctx, "Countable", &countable_case)?;
+    }
+    abi::emit_jump(ctx.emitter, &wrong_type_case);
+
+    ctx.emitter.label(&countable_case);
+    if has_countable {
+        // `emit_interface_dispatch_call` expects the receiver in the platform's first-argument
+        // register, which is exactly what the iterator paths reload from the top of the stack.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction("ldr x0, [sp]"),           // reload the Countable receiver for interface dispatch
+            Arch::X86_64 => ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]"), // reload the Countable receiver for interface dispatch
+        }
+        super::iterators::emit_interface_dispatch_call(ctx, "Countable", "count", None)?;
+        abi::emit_pop_reg(ctx.emitter, abi::secondary_scratch_reg(ctx.emitter));
+        abi::emit_jump(ctx.emitter, &done);
+    }
+
+    ctx.emitter.label(&array_case);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        result_reg,
+        scratch_reg,
+        &null_case,
+    );
+    abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, 0);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&null_case);
+    super::exceptions::emit_type_error(ctx, &count_wrong_type_message("null"));
+
+    ctx.emitter.label(&wrong_type_case);
+    abi::emit_pop_reg(ctx.emitter, abi::secondary_scratch_reg(ctx.emitter));
+    super::exceptions::emit_type_error(ctx, &count_wrong_type_message("Traversable"));
+
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Lowers `count()`/`sizeof()` for a boxed `Mixed`/union value.
@@ -1458,6 +1558,43 @@ pub(crate) fn lower_intval(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Resolves an `int`-declared builtin argument into the integer result register, applying PHP's
+/// non-strict scalar coercion at the gradual-typing boundary.
+///
+/// This is the codegen MIRROR of `crate::types::checker::builtins::numeric::accepts_gradual_int`:
+/// every type that predicate accepts must have a lowering here, or relaxing the checker would
+/// only move the failure from `error[…]` to `EIR backend error`. `Int`/`Bool` (and the `False`
+/// subtype, whose `codegen_repr` is `Bool`) share the integer representation and load directly;
+/// a `Float` truncates toward zero exactly like PHP's implicit float-to-int conversion; a boxed
+/// `Mixed`/`Union` — which is how elephc represents the `int|float` result of `$a + $b` — unboxes
+/// through `__rt_mixed_cast_int`.
+pub(crate) fn resolve_gradual_int_arg_to_result(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    context: &str,
+) -> Result<()> {
+    match ctx.value_php_type(value)?.codegen_repr() {
+        PhpType::Int | PhpType::Bool => {
+            ctx.load_value_to_result(value)?;
+        }
+        PhpType::Float => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_float_result_to_int_result(ctx.emitter);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} for PHP type {:?}",
+                context, other
+            )))
+        }
+    }
+    Ok(())
 }
 
 /// Lowers the `intval($stringValue, $base)` case: loads the string into the

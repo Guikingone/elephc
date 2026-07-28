@@ -16,6 +16,29 @@ use super::super::Checker;
 
 type BuiltinResult = Result<Option<PhpType>, CompileError>;
 
+/// Returns true when an `int`-taking builtin argument is acceptable under the gradual-typing
+/// boundary model.
+///
+/// This is the SINGLE source of truth for "PHP would accept this value where an `int` is
+/// declared". PHP's non-strict scalar coercion already turns `bool`, `float` and the `false`
+/// subtype into an integer at the call boundary, and `Mixed` is the gradual top type (EIR
+/// emits a runtime unbox), so all of those are accepted. A `Union` is accepted only when
+/// EVERY member is itself acceptable — which is what makes elephc's own `int|float`
+/// arithmetic result type (`$a + $b`) and `int|false` builtin returns usable as `int`
+/// arguments without opening the door to arrays, objects, or strings.
+///
+/// Deliberately NOT accepted: `Str` (a non-numeric string is a genuine PHP `TypeError`),
+/// `Void`/`Never` (null is only valid where a builtin declares `?int` — see
+/// `crate::builtins::io::touch`, which composes this predicate with an explicit null arm),
+/// and every container/resource type.
+pub(crate) fn accepts_gradual_int(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Mixed => true,
+        PhpType::Union(members) => !members.is_empty() && members.iter().all(accepts_gradual_int),
+        _ => false,
+    }
+}
+
 /// Type-checks numeric and language-construct PHP builtins.
 ///
 /// Validates argument count, argument types, and special cases (e.g., `buffer_free`
@@ -28,9 +51,10 @@ type BuiltinResult = Result<Option<PhpType>, CompileError>;
 ///   `is_double`, `is_real`, `is_integer`, `is_long`
 /// - Numeric conversions not yet migrated: `hexdec`, `bindec`
 /// - Type inspection not yet migrated: `get_debug_type`
-/// - Control: `exit`, `die`, `empty`
-/// - Unset: `unset`
 /// - Buffers: `buffer_len`, `buffer_free`
+///
+/// `exit`/`die`/`empty`/`unset`/`isset` are handled by `super::language_constructs` and never
+/// reach this dispatcher.
 ///
 /// ## Arguments
 /// - `checker`: mutable checker state for inference
@@ -50,18 +74,11 @@ pub(super) fn check_builtin(
     env: &TypeEnv,
 ) -> BuiltinResult {
     match name {
-        "exit" | "die" => {
-            if args.len() > 1 {
-                return Err(CompileError::new(span, "exit() takes 0 or 1 arguments"));
-            }
-            if let Some(arg) = args.first() {
-                let ty = checker.infer_type(arg, env)?;
-                if ty != PhpType::Int {
-                    return Err(CompileError::new(span, "exit() argument must be integer"));
-                }
-            }
-            Ok(Some(PhpType::Void))
-        }
+        // NOTE: `exit`/`die` are NOT handled here. `Checker::check_builtin` routes them to
+        // `super::language_constructs::check` before this function is ever reached, so a copy
+        // of the check in this module was unreachable duplicated policy. The single source of
+        // truth for the `exit()` status argument is `language_constructs::check`, which
+        // delegates to `accepts_gradual_int` above.
         "strval" => {
             if args.len() != 1 {
                 return Err(CompileError::new(span, "strval() takes exactly 1 argument"));
