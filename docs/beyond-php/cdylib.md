@@ -135,4 +135,4 @@ dynamic loader can relocate the library anywhere in the address space.
 - No string, array, object, callable, or nullable return values.
 - No exception propagation to the host — a PHP fatal terminates the process.
 - Single-threaded hosts only: the runtime has no locking around its heap.
-- One PHP source file per cdylib (includes/requires work as in executables).
+- One `.php` or `.lfc` entry source per cdylib (includes/requires work as in executables).

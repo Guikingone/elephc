@@ -2,16 +2,16 @@
 
 ## Task checklist
 
-- [ ] Define the user-visible `.lfc` source contract and central `SourceMode`.
-- [ ] Add tagless lexing while preserving the existing PHP lexer/parser API.
-- [ ] Centralize path-aware source loading for the entry point, includes, and autoload.
-- [ ] Preserve each user statement's source mode through every AST transformation.
-- [ ] Make `--strict-php` and extension-builtin visibility source-aware.
-- [ ] Make dynamic callable introspection and `eval()` honor the call-site source mode.
-- [ ] Extend include and Composer/SPL autoload discovery to `.lfc` files.
-- [ ] Add lexer, parser, CLI, error, include, autoload, strict-mode, and corpus coverage.
-- [ ] Add a runnable `.lfc` example and update user/internal documentation.
-- [ ] Run focused validation and leave the complete supported-target matrix to CI.
+- [x] Define the user-visible `.lfc` source contract and central `SourceMode`.
+- [x] Add tagless lexing while preserving the existing PHP lexer/parser API.
+- [x] Centralize path-aware source loading for the entry point, includes, and autoload.
+- [x] Preserve each user statement's source mode through every AST transformation.
+- [x] Make `--strict-php` and extension-builtin visibility source-aware.
+- [x] Make dynamic callable introspection and `eval()` honor the call-site source mode.
+- [x] Extend include and Composer/SPL autoload discovery to `.lfc` files.
+- [x] Add lexer, parser, CLI, error, include, autoload, strict-mode, and corpus coverage.
+- [x] Add a runnable `.lfc` example and update user/internal documentation.
+- [x] Run focused validation and leave the complete supported-target matrix to CI.
 
 ## Goal
 

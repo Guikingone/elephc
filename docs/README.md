@@ -21,7 +21,7 @@ Task-oriented guides for building real programs with elephc.
 
 ## Compiling
 
-Everything about driving the compiler: the command-line flags and the full path from a `.php` file to a native binary.
+Everything about driving the compiler: the command-line flags and the full path from a `.php` or `.lfc` file to a native binary.
 
 - [Compiling Overview](compiling/overview.md) — basic invocation, output naming, defaults, and a map of this section
 - [The compilation pipeline](compiling/compilation-pipeline.md) — every phase from source text to binary, in order
@@ -64,6 +64,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 
 Compiler-specific extensions that go beyond standard PHP. These features have no PHP equivalent and exist to enable use cases PHP was never designed for.
 
+- [LFC Source Files](beyond-php/lfc-source-files.md) — tagless source, mixed PHP/LFC projects, and per-file strict-mode behavior
 - [Pointers](beyond-php/pointers.md) — ptr(), ptr_get(), ptr_set(), pointer arithmetic, typed casting
 - [Buffers](beyond-php/buffers.md) — buffer&lt;T&gt; for fixed-size contiguous arrays, hot-path data
 - [Packed Classes](beyond-php/packed-classes.md) — flat POD records with compile-time field offsets

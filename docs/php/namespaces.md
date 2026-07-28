@@ -186,11 +186,19 @@ Rejected (compile error):
 
 `const` or `define()` calls inside functions, methods, loops, and branches are scoped to that resolved body during include expansion. They do not leak into the surrounding top-level include path resolver.
 
-**Other limitations:** Included files must start with `<?php`. Runtime-dynamic include paths are not supported by the current AOT resolver.
+**Other limitations:** Tagged-PHP included files must start with `<?php`;
+physical `.lfc` targets are parsed as tagless code. Runtime-dynamic include
+paths are not supported by the current AOT resolver.
 
 ## Composer PSR-4 autoload (static)
 
-The compiler reads `composer.json` from the directory containing the entry `.php` file and from each `vendor/<vendor>/<package>/composer.json`. PSR-4 mappings in those files are walked at compile time, and any class your program references is resolved through the resulting index — equivalent in spirit to `composer dump-autoload --classmap-authoritative`, but executed during compilation.
+The compiler reads `composer.json` from the directory containing the entry
+source file and from each `vendor/<vendor>/<package>/composer.json`. PSR-4
+mappings in those files are walked at compile time, and any class your program
+references is resolved through the resulting index — equivalent in spirit to
+`composer dump-autoload --classmap-authoritative`, but executed during
+compilation. Directory scans recognize tagged `.php` and tagless `.lfc` class
+files.
 
 ```json
 // composer.json
@@ -220,8 +228,8 @@ The compiler reads four `autoload` (and `autoload-dev`) subsections:
 |---|---|
 | `psr-4` | Standard PSR-4 mapping. Multiple namespace prefixes resolve longest-first, matching composer's rule. Empty prefix `""` (root namespace) is supported |
 | `psr-0` | Legacy PSR-0 mapping. Both namespaced prefixes (`Vendor\\Pkg\\`) and underscore-class prefixes (`Twig_`) are supported |
-| `classmap` | List of files or directories to scan. Every `.php` file is parsed and its class/interface/trait/enum declarations are added to the FQN→file index. Useful for non-PSR code |
-| `files` | List of files that must always be inlined at compile time, regardless of which classes the program references. Spliced into the program at the start of the autoload pass |
+| `classmap` | List of files or directories to scan. Every `.php` or `.lfc` file is parsed in its physical source mode and its class/interface/trait/enum declarations are added to the FQN→file index. Useful for non-PSR code |
+| `files` | List of files that must always be inlined at compile time, regardless of which classes the program references. Spliced into the program at the start of the autoload pass and parsed according to each path |
 | `exclude-from-classmap` | Glob patterns that drop matching files from `classmap` scanning. Supports `*` (within a path segment), `**` (across segments), `?` (single character). A trailing `/` is the directory shorthand and is rewritten as `<pattern>**` |
 
 `autoload-dev` is always merged in alongside `autoload`. There is no production/test split in the AOT model — both contribute to the same compiled binary.

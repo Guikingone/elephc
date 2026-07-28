@@ -1,6 +1,6 @@
 ---
 title: "The compilation pipeline"
-description: "Every phase a PHP file passes through on the way to a native binary, in order, with the timing label each phase reports."
+description: "Every phase a PHP or LFC source file passes through on the way to a native binary, in order, with the timing label each phase reports."
 sidebar:
   order: 2
 ---
@@ -13,8 +13,9 @@ directly back to a stage here.
 ## Phase order
 
 ```text
-PHP source
+Physical source (.php or .lfc)
   -> read              read the source file from disk
+  -> classify          select tagged PHP or tagless LFC mode from its path
   -> tokenize          Lexer: text -> tokens
   -> parse             Parser: tokens -> AST (Pratt expression parsing)
   -> magic-constants   lower __FILE__, __DIR__, __LINE__, __FUNCTION__, ...
@@ -50,16 +51,17 @@ PHP source
 
 ## Front end: source to checked AST
 
-- **read / tokenize / parse** — the [Lexer](../internals/the-lexer.md) turns
-  source text into tokens and the [Parser](../internals/the-parser.md) builds the
-  abstract syntax tree.
+- **read / classify / tokenize / parse** — every physical file is classified
+  independently. `.lfc` starts in code mode with no tags; every other suffix
+  retains tagged-PHP behavior. The [Lexer](../internals/the-lexer.md) turns the
+  source into tokens and the [Parser](../internals/the-parser.md) builds the AST.
 - **magic-constants** — magic constants such as `__DIR__` and `__LINE__` are
   substituted before any later pass sees them.
 - **strict-PHP audit** — with [`--strict-php`](cli-reference.md#strict-php-mode),
-  the freshly parsed AST is audited and every elephc-only construct is reported
-  before any later pass runs. Included and autoloaded user files get the same
-  audit where they are parsed (inside resolve / autoload-run), while
-  compiler-injected preludes are exempt.
+  each freshly parsed PHP-mode AST is audited and every elephc-only construct is
+  reported before any later pass runs. Included and autoloaded files are
+  classified where they are parsed (inside resolve / autoload-run); LFC and
+  compiler-injected source are exempt.
 - **conditional compilation** — `ifdef` branches are resolved using the symbols
   passed with [`--define`](linking-and-conditional-compilation.md#conditional-compilation).
 - **resolve / prelude injection / name-resolve** — `include`/`require` are
