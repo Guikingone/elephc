@@ -2720,6 +2720,12 @@ mod tests {
         crate::parser::parse(&tokens).expect("test source must parse")
     }
 
+    /// Parses compiler-generated source with the internal source profile.
+    fn parse_internal(source: &str) -> Program {
+        let tokens = crate::lexer::tokenize(source).expect("internal test source must tokenize");
+        crate::parser::parse_internal(&tokens).expect("internal test source must parse")
+    }
+
     /// The rendered 8.5 literal tokenizes/parses and carries the 8.5 markers.
     ///
     /// The EXCLUDED directives (`opcache.jit`, `opcache.memory_consumption`, …) are asserted as
@@ -3847,8 +3853,9 @@ mod tests {
             let isolated = parse_baked_function(body);
             // In-program: the same declaration name-resolved alongside a namespaced caller,
             // which is the situation the declaration must survive at the injection point.
-            let program = parse(&format!(
-                "<?php\n{body}\nnamespace App;\nfunction caller() {{ return opcache_get_status(); }}\n"
+            let mut program = parse_internal(&format!("<?php\n{body}\n"));
+            program.extend(parse(
+                "<?php\nnamespace App;\nfunction caller() { return opcache_get_status(); }\n",
             ));
             let resolved = crate::name_resolver::resolve(program)
                 .expect("in-program source must name-resolve");
