@@ -53,14 +53,16 @@
 //!   implementation or making it `function_exists`-invisible so its guards fire (both out of
 //!   scope here).
 //! - The remaining non-extension-shaped undefined names surfaced by the same scan
-//!   (`debug_backtrace`, `eval`, `next`, `is_uploaded_file`, `move_uploaded_file`,
-//!   `request_parse_body`, `highlight_file`) stay OUT of scope: they are core PHP functions
-//!   elephc genuinely lacks and are called UNCONDITIONALLY (not behind a dead guard), so keeping
-//!   them a loud compile-time "Undefined function" is the honest real-gap signal — each needs a
-//!   real implementation or new runtime support (`debug_backtrace` needs runtime call-stack
-//!   metadata; `is_uploaded_file`/`move_uploaded_file` need an rfc1867 upload-tracking set;
-//!   `request_parse_body` needs request-body parsing; `highlight_file` needs a runtime
-//!   tokenizer), tracked as separate follow-up work.
+//!   (`debug_backtrace`, `eval`, `next`, `request_parse_body`, `highlight_file`) stay OUT of scope: they are core PHP
+//!   functions elephc genuinely lacks and are called UNCONDITIONALLY (not behind a dead guard),
+//!   so keeping them a loud compile-time "Undefined function" is the honest real-gap signal —
+//!   each needs a real implementation or new runtime support (`debug_backtrace` needs runtime
+//!   call-stack metadata; `request_parse_body` needs request-body parsing; `highlight_file` needs
+//!   a runtime tokenizer), tracked as separate follow-up work.
+//!   `is_uploaded_file`/`move_uploaded_file` were on this list for the same reason and have since
+//!   been given a REAL implementation rather than late-bound throws: `crate::upload_prelude`
+//!   carries the rfc1867 upload registry they need, fed by the only producer of upload temp
+//!   files, `crate::web_prelude`'s multipart parser.
 //!   `register_shutdown_function` was ALSO in that original "out of scope" list but is now a real
 //!   fix elsewhere — see `crate::name_resolver::PRELUDE_GLOBAL_FUNCTIONS` (an own-feature
 //!   namespace-fallback gap, not a late-bound guard pattern: PHP's own

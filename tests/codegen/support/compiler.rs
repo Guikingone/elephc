@@ -111,6 +111,7 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     let resolved = elephc::shutdown_prelude::inject_if_used(resolved);
     let resolved = elephc::parse_ini_prelude::inject_if_used(resolved);
     let resolved = elephc::filter_var_prelude::inject_if_used(resolved);
+    let resolved = elephc::upload_prelude::inject_if_used(resolved);
     let resolved = elephc::optimize::fold_constants(resolved);
     // Mirror `pipeline::compile`'s pre-checker curated-extension `function_exists`/
     // `extension_loaded` fold+prune so codegen fixtures exercise the same
@@ -591,6 +592,7 @@ pub(crate) fn compile_expect_check_error(source: &str) -> String {
     let resolved = elephc::shutdown_prelude::inject_if_used(resolved);
     let resolved = elephc::parse_ini_prelude::inject_if_used(resolved);
     let resolved = elephc::filter_var_prelude::inject_if_used(resolved);
+    let resolved = elephc::upload_prelude::inject_if_used(resolved);
     let resolved = elephc::optimize::fold_constants(resolved);
     let pre_check_extension_set = elephc::optimize::FunctionExistenceSet::for_pre_check(&resolved);
     let resolved = elephc::optimize::fold_function_existence(resolved, &pre_check_extension_set);

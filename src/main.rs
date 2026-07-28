@@ -54,6 +54,7 @@ mod timings;
 mod tree_shake;
 mod types;
 mod tz_prelude;
+mod upload_prelude;
 mod var_export_prelude;
 mod web_prelude;
 

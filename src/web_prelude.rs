@@ -16,6 +16,9 @@
 //!   unknown dynamic calls conservatively keep the complete PHP prelude.
 //! - Legacy callable-handler dispatch is injected only when user code can reach
 //!   `session_set_save_handler()`.
+//! - The multipart parser is the ONLY producer of upload temp files in a compiled program, so
+//!   it registers each one with `crate::upload_prelude`'s registry — the single source of truth
+//!   behind `is_uploaded_file()`/`move_uploaded_file()`.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -261,6 +264,10 @@ if (strpos(strtoupper($__elephc_ct), 'APPLICATION/X-WWW-FORM-URLENCODED') !== fa
     }
 }
 $_FILES = [];
+// Drop the previous request's upload temp paths before this request's multipart parse
+// registers its own — the top-level prelude re-runs per request but a function `static` does
+// not, so the registry needs the explicit reset. See `crate::upload_prelude`.
+__elephc_reset_uploaded_files();
 if (strpos(strtoupper($__elephc_ct), 'MULTIPART/FORM-DATA') !== false) {
     $__elephc_mpc = elephc_web_multipart_count();
     for ($__elephc_mpi = 0; $__elephc_mpi < $__elephc_mpc; $__elephc_mpi++) {
@@ -280,6 +287,10 @@ if (strpos(strtoupper($__elephc_ct), 'MULTIPART/FORM-DATA') !== false) {
             $__elephc_mptmp = tempnam(sys_get_temp_dir(), 'elephc_up');
             if ($__elephc_mptmp !== false) {
                 file_put_contents($__elephc_mptmp, $__elephc_mpv);
+                // The ONE place a compiled program ever creates an upload temp file, and
+                // therefore the ONE place that can answer `is_uploaded_file()`. See
+                // `crate::upload_prelude`.
+                __elephc_register_uploaded_file($__elephc_mptmp);
                 $_FILES[$__elephc_mpn] = [
                     'name' => $__elephc_mpf,
                     'type' => elephc_web_multipart_type($__elephc_mpi),

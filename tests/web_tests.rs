@@ -1108,3 +1108,45 @@ fn web_namespaced_program_serves() {
     let _ = child.wait();
     assert!(resp.ends_with("hi ada"), "namespaced --web program: {:?}", resp);
 }
+
+/// Verifies the rfc1867 upload registry: a multipart temp file created by the web prelude is
+/// recognized by `is_uploaded_file()`, an unrelated path is not, `move_uploaded_file()` moves
+/// the payload, and the moved path stops being an upload so a second move fails — exactly
+/// PHP's semantics. The registry (`crate::upload_prelude`) is fed only by the multipart parser,
+/// the single producer of upload temp files in a compiled program.
+#[test]
+fn web_upload_predicates_track_multipart_temp_files() {
+    let dir = make_test_dir("web_upload_registry");
+    let src = "<?php \
+        $t = $_FILES['doc']['tmp_name'] ?? ''; \
+        $o = []; \
+        $o[] = 'isup=' . (is_uploaded_file($t) ? 'yes' : 'no'); \
+        $o[] = 'other=' . (is_uploaded_file('/etc/hosts') ? 'yes' : 'no'); \
+        $dst = sys_get_temp_dir() . '/elephc_web_upload_moved.txt'; \
+        @unlink($dst); \
+        $o[] = 'move=' . (move_uploaded_file($t, $dst) ? 'yes' : 'no'); \
+        $o[] = 'content=' . (is_file($dst) ? file_get_contents($dst) : 'MISSING'); \
+        $o[] = 'after=' . (is_uploaded_file($t) ? 'yes' : 'no'); \
+        $o[] = 'again=' . (move_uploaded_file($t, $dst) ? 'yes' : 'no'); \
+        @unlink($dst); \
+        echo implode('|', $o);";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let boundary = "Upbnd";
+    let body = format!(
+        "--{b}\r\nContent-Disposition: form-data; name=\"doc\"; filename=\"d.txt\"\r\n\
+         Content-Type: text/plain\r\n\r\nUPLOAD-OK\r\n--{b}--\r\n",
+        b = boundary
+    );
+    let ct = format!("multipart/form-data; boundary={}", boundary);
+    let resp = http_request(&addr, "POST", "/", &[("Content-Type", &ct)], &body);
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        resp.ends_with("isup=yes|other=no|move=yes|content=UPLOAD-OK|after=no|again=no"),
+        "upload registry: {:?}",
+        resp
+    );
+}

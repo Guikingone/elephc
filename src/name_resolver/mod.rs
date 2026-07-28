@@ -151,8 +151,18 @@ pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
 /// runs, like `var_export_prelude`'s, AFTER the main name-resolution pass — see
 /// `crate::pipeline::compile()` — so without an entry here a namespaced unqualified call could
 /// not fall back to the prelude's global declaration and hit "Undefined function" instead).
-const PRELUDE_GLOBAL_FUNCTIONS: &[&str] =
-    &["var_export", "register_shutdown_function", "parse_ini_file"];
+///
+/// `is_uploaded_file`/`move_uploaded_file` (`crate::upload_prelude`) are listed for the same
+/// reason: Symfony calls them unqualified from inside
+/// `namespace Symfony\Component\HttpFoundation\File`, and PHP's namespace fallback must find
+/// the prelude's global declaration.
+const PRELUDE_GLOBAL_FUNCTIONS: &[&str] = &[
+    "var_export",
+    "register_shutdown_function",
+    "parse_ini_file",
+    "is_uploaded_file",
+    "move_uploaded_file",
+];
 
 /// Returns the canonical name for a prelude-injected global function, case-normalized with a
 /// leading `\` stripped. Returns `None` if the name is not a known prelude global. Mirrors

@@ -320,6 +320,16 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = filter_var_prelude::inject_if_used(ast);
     timings.record_since("filter-var-prelude", phase_started);
 
+    // Inject the rfc1867 upload-predicate prelude (`is_uploaded_file`/`move_uploaded_file` plus
+    // the registry both read) when the program references either predicate, or when the `--web`
+    // multipart parser's `__elephc_register_uploaded_file()` call is present — the web prelude is
+    // prepended at line ~213, well before this point, so a `--web` build that merely RECEIVES
+    // uploads still gets a populated registry. Same pipeline stage and rationale as
+    // var_export_prelude: after autoload + the conditional-function hoist, before the checker.
+    let phase_started = Instant::now();
+    let ast = crate::upload_prelude::inject_if_used(ast);
+    timings.record_since("upload-prelude", phase_started);
+
     crate::progress::phase("opt-fold");
     let phase_started = Instant::now();
     let ast = optimize::fold_constants(ast);
