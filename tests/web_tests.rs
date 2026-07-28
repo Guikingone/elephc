@@ -1150,3 +1150,50 @@ fn web_upload_predicates_track_multipart_temp_files() {
         resp
     );
 }
+
+/// Verifies `request_parse_body()` (PHP 8.4): it returns `[$post, $files]` parsed from the
+/// current request body when the Content-Type is supported. Symfony's
+/// `Request::createFromGlobals()` calls it for PUT/DELETE/PATCH/QUERY requests.
+#[test]
+fn web_request_parse_body_returns_post_and_files() {
+    let dir = make_test_dir("web_request_parse_body");
+    let src = "<?php \
+        try { [$p, $f] = request_parse_body(); \
+              echo 'ok|' . ($p['greeting'] ?? '?') . '|' . ($f['doc']['name'] ?? '?'); } \
+        catch (\\RequestParseBodyException $e) { echo 'threw'; }";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let boundary = "Rpbbnd";
+    let body = format!(
+        "--{b}\r\nContent-Disposition: form-data; name=\"greeting\"\r\n\r\nhello\r\n\
+         --{b}\r\nContent-Disposition: form-data; name=\"doc\"; filename=\"d.txt\"\r\n\
+         Content-Type: text/plain\r\n\r\nDATA\r\n--{b}--\r\n",
+        b = boundary
+    );
+    let ct = format!("multipart/form-data; boundary={}", boundary);
+    let resp = http_request(&addr, "PUT", "/", &[("Content-Type", &ct)], &body);
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("ok|hello|d.txt"), "request_parse_body: {:?}", resp);
+}
+
+/// Verifies `request_parse_body()` throws the real `\RequestParseBodyException` when the
+/// request carries no supported Content-Type — the branch Symfony relies on to fall back to
+/// `$_POST`/`$_FILES`. The exception must be catchable by name, not a fatal.
+#[test]
+fn web_request_parse_body_throws_without_supported_content_type() {
+    let dir = make_test_dir("web_request_parse_body_throws");
+    let src = "<?php \
+        try { [$p, $f] = request_parse_body(); echo 'ok'; } \
+        catch (\\RequestParseBodyException $e) { echo 'threw'; }";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_request(&addr, "GET", "/", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("threw"), "request_parse_body without content type: {:?}", resp);
+}

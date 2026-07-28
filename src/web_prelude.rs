@@ -19,6 +19,8 @@
 //! - The multipart parser is the ONLY producer of upload temp files in a compiled program, so
 //!   it registers each one with `crate::upload_prelude`'s registry — the single source of truth
 //!   behind `is_uploaded_file()`/`move_uploaded_file()`.
+//! - `request_parse_body()` (PHP 8.4) is implemented here on top of the body parse the prelude
+//!   already performs for the current request, so there is one body parser, not two.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -239,8 +241,32 @@ if ($__elephc_qs !== '') {
         }
     }
 }
+function __elephc_request_content_type(int $__elephc_rct_op, string $__elephc_rct_v): string {
+    // Per-request storage for the request Content-Type. `request_parse_body()` cannot read
+    // `$_SERVER` itself: a `$_SERVER` read inside a function body currently yields null
+    // (pre-existing elephc gap; `$_POST`/`$_FILES` are fine), so the top-level prelude — which
+    // re-runs on every request — publishes the value here with op 1, overwriting the previous
+    // request's value.
+    static $__elephc_rct = '';
+    if ($__elephc_rct_op === 1) { $__elephc_rct = $__elephc_rct_v; }
+    return $__elephc_rct;
+}
+function request_parse_body(): array {
+    // PHP 8.4 `request_parse_body(): array` — returns `[$post, $files]` parsed from the request
+    // body, or throws `\RequestParseBodyException` when the Content-Type is not one the parser
+    // supports. The body of THIS request has already been parsed by the top-level prelude below
+    // (which runs before any user code, on every request), so returning the superglobals it
+    // filled is the same parse, not a second one — one source of truth for body parsing.
+    $__elephc_rpb_ct = strtoupper(__elephc_request_content_type(0, ''));
+    if (strpos($__elephc_rpb_ct, 'APPLICATION/X-WWW-FORM-URLENCODED') === false
+        && strpos($__elephc_rpb_ct, 'MULTIPART/FORM-DATA') === false) {
+        throw new RequestParseBodyException('Content-Type is not supported by request_parse_body()');
+    }
+    return [$_POST, $_FILES];
+}
 $_POST = [];
 $__elephc_ct = isset($_SERVER['CONTENT_TYPE']) ? $_SERVER['CONTENT_TYPE'] : '';
+__elephc_request_content_type(1, $__elephc_ct);
 if (strpos(strtoupper($__elephc_ct), 'APPLICATION/X-WWW-FORM-URLENCODED') !== false) {
     $__elephc_body_len = elephc_web_body_len();
     $__elephc_body = '';
@@ -1768,10 +1794,20 @@ pub fn inject_if_web(program: Program, web: bool, php_version: PhpVersion) -> Pr
     decls
 }
 
+/// Prelude functions that are PHP engine functions in their own right, so the reachability
+/// prune must never drop them: an autoloaded class the root scan cannot see may call them.
+///
+/// Only `request_parse_body` is listed. `setcookie`/`setrawcookie` have the SAME exposure and
+/// are deliberately left out of this fix: they are pruned today when the entry file does not
+/// mention them, which is a pre-existing gap with its own blast radius (every `--web` binary
+/// would grow), tracked separately rather than folded in here.
+const ALWAYS_RETAINED_PRELUDE_FUNCTIONS: &[&str] = &["request_parse_body"];
+
 /// Removes compiler-owned prelude functions that cannot be reached from user
 /// code, executable bootstrap statements, retained class methods, or the web
 /// exception/finalization wrapper. Unknown dynamic calls keep every declaration
 /// so PHP runtime-name dispatch and `eval()` remain conservative.
+/// `ALWAYS_RETAINED_PRELUDE_FUNCTIONS` are kept regardless of reachability.
 fn prune_unreachable_prelude_functions(prelude: &mut Program, user_usage: &usage::Usage) {
     let mut dependencies = HashMap::new();
     let mut roots = user_usage.clone();
@@ -1798,6 +1834,18 @@ fn prune_unreachable_prelude_functions(prelude: &mut Program, user_usage: &usage
         .filter(|name| dependencies.contains_key(*name))
         .cloned()
         .collect::<VecDeque<_>>();
+    // The root scan only sees the ENTRY program: `inject_if_web` runs before `autoload::run`
+    // splices in PSR-4/Composer files, so a prelude function called ONLY from an autoloaded
+    // class is invisible here and would be pruned into an "Undefined function" error
+    // (Symfony calls `request_parse_body()` from `HttpFoundation\Request::createFromGlobals`,
+    // never from `public/index.php`). Names PHP itself exposes as engine functions are
+    // therefore retained unconditionally; an unreachable one is dead code the linker drops.
+    pending.extend(
+        ALWAYS_RETAINED_PRELUDE_FUNCTIONS
+            .iter()
+            .map(|name| crate::names::php_symbol_key(name))
+            .filter(|name| dependencies.contains_key(name)),
+    );
     while let Some(name) = pending.pop_front() {
         if !reachable.insert(name.clone()) {
             continue;
