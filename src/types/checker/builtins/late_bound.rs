@@ -77,12 +77,23 @@
 //!   pattern; `parse_ini_file` needs genuinely new "build a nested PHP array from parsed runtime
 //!   data" machinery that must respect this codebase's ownership/COW/GC invariants — both are
 //!   real, scoped feature work for a follow-up session, not a five-minute catalog entry.
-//!   `headers_send` is a genuine PHP 8.4 builtin (informational/1xx-response support) elephc does
-//!   not implement; confirmed (`Symfony\Component\HttpFoundation\Response::sendHeaders()` guards
-//!   the call with `!function_exists('headers_send')`, but elephc's type checker still visits and
-//!   rejects the guarded branch's body regardless of runtime reachability, so the guard does not
-//!   save this call site) it needs real response-bridge semantics, not just a signature — stays a
-//!   compile-time error instead of moving here.
+//!   `headers_send` was ALSO in that original "out of scope" list, on the mistaken premise that it
+//!   is a core PHP builtin elephc simply had not implemented. It is not: `headers_send()` is not a
+//!   core function in any PHP release (verified against the local interpreter —
+//!   `php -n -r 'var_dump(function_exists("headers_send"));'` prints `bool(false)` on PHP 8.5.6).
+//!   It is provided only by SAPIs that support 1xx informational responses (FrankenPHP), which is
+//!   exactly what its Symfony call site documents: `Response::sendHeaders()` writes
+//!   `// skip informational responses if not supported by the SAPI` above its guard. So it is now
+//!   late-bound here, for the SAME verified-dead-guard reason as `token_get_all` above and not on
+//!   any "we owe an implementation" premise: elephc has no `headers_send` catalog entry, so
+//!   `function_exists('headers_send')` folds to `false`; the guard at
+//!   `HttpFoundation\Response::sendHeaders()` — `if ($informationalResponse &&
+//!   !\function_exists('headers_send')) { return $this; }` — therefore fires whenever
+//!   `$informationalResponse` is true, and the only `headers_send($statusCode)` call sits inside a
+//!   later `if ($informationalResponse)`, i.e. on a path the guard has already returned from. The
+//!   call is provably dead at runtime, while the checker still visits it and would otherwise
+//!   reject the whole compile. Late-binding it to PHP's own "Call to undefined function" `\Error`
+//!   is byte-faithful for elephc's non-FrankenPHP SAPI AND its throw is unreachable.
 //! - `is_late_bound_undefined_function` matches on the LAST `\`-separated segment of the
 //!   canonical name (case-insensitively): an unqualified call site written inside a namespace
 //!   reaches this point already rewritten to its namespaced attempt form (e.g.
@@ -120,6 +131,11 @@ const LATE_BOUND_UNDEFINED_FUNCTIONS: &[&str] = &[
     // (elephc has no `token_get_all` catalog entry, so `function_exists` folds false and
     // the guard fires). See the module doc.
     "token_get_all",
+    // SAPI-provided (FrankenPHP) 1xx-informational-response helper, absent from core PHP
+    // (`function_exists('headers_send') === false` on PHP 8.5.6). Reached only through a verified
+    // `!function_exists('headers_send')` early-return guard in
+    // `HttpFoundation\Response::sendHeaders()` that IS dead under AOT. See the module doc.
+    "headers_send",
 ];
 
 /// Returns whether `canonical_name` (as resolved by name-resolver/checker call lookup, possibly
@@ -205,6 +221,21 @@ mod tests {
         assert!(!is_late_bound_undefined_function(
             "Symfony\\Component\\Console\\proc_open"
         ));
+    }
+
+    /// `headers_send` (the SAPI-only, dead-guarded 1xx-response helper) is late-bound, including
+    /// through its Symfony-namespaced attempt form, and does not match a typo or its unrelated
+    /// core-PHP near-neighbour `headers_sent` (which elephc really does implement, so late-binding
+    /// it would swallow a genuine builtin).
+    #[test]
+    fn matches_dead_guarded_headers_send_not_headers_sent() {
+        assert!(is_late_bound_undefined_function("headers_send"));
+        assert!(is_late_bound_undefined_function("HEADERS_SEND"));
+        assert!(is_late_bound_undefined_function(
+            "Symfony\\Component\\HttpFoundation\\headers_send"
+        ));
+        assert!(!is_late_bound_undefined_function("headers_sent"));
+        assert!(!is_late_bound_undefined_function("headers_sen"));
     }
 
     /// A name outside the curated allowlist entirely does not match, even when it shares a

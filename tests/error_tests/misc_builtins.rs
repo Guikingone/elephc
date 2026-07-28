@@ -340,27 +340,35 @@ fn test_error_parse_ini_file_kept_loud() {
     );
 }
 
-/// `headers_send()` — a genuine PHP 8.4 core builtin (informational/1xx-response support)
-/// `Symfony\Component\HttpFoundation\Response::sendHeaders()` guards with
-/// `!function_exists('headers_send')` — stays a compile-time "Undefined function": elephc's type
-/// checker still visits and rejects the guarded branch's body regardless of runtime reachability
-/// (no PHP_VERSION_ID-style branch-pruning for `function_exists` guards on names the checker has
-/// never heard of), so the guard does not save this call site. It needs real response-bridge
-/// semantics, not just a signature.
+/// `headers_send()` is NOT a core PHP builtin — an earlier revision of this test asserted it was a
+/// "PHP 8.4 core builtin" and that premise was simply wrong (php 8.5.6:
+/// `php -n -r 'var_dump(function_exists("headers_send"));'` prints `bool(false)`). It is supplied
+/// only by SAPIs that support 1xx informational responses (FrankenPHP), which is exactly what
+/// `Symfony\Component\HttpFoundation\Response::sendHeaders()` documents above its guard
+/// (`// skip informational responses if not supported by the SAPI`).
+///
+/// It is therefore late-bound now, on the same verified-dead-guard footing as `token_get_all`:
+/// elephc has no catalog entry, so `function_exists('headers_send')` folds to `false`, the guard
+/// `if ($informationalResponse && !\function_exists('headers_send')) { return $this; }` fires, and
+/// the only call site — inside a later `if ($informationalResponse)` — is on a path the guard has
+/// already returned from. The compile succeeds and the (unreachable) call would throw PHP's own
+/// "Call to undefined function" `\Error`, byte-faithful for a non-FrankenPHP SAPI.
 #[test]
-fn test_error_headers_send_kept_loud() {
-    expect_error(
-        "<?php headers_send(103);",
-        "Undefined function: headers_send",
+fn test_headers_send_late_bound_behind_dead_guard() {
+    expect_ok(
+        "<?php function send(int $s): string { \
+           $info = $s >= 100 && $s < 200; \
+           if ($info && !\\function_exists('headers_send')) { return 'skipped'; } \
+           if ($info) { headers_send($s); return 'sent'; } \
+           return 'final'; \
+         } echo send(103), send(200);",
     );
 }
 
 /// Regression: `function_exists('headers_send')` itself type-checks cleanly on its own (the
 /// argument is just a string literal — php-verified to runtime-evaluate `false`, since elephc, like
-/// a PHP build without this PHP 8.4 feature, does not define it). Only the guarded CALL to
-/// `headers_send(...)` is loud (see `test_error_headers_send_kept_loud` above), mirroring the real
-/// `Response::sendHeaders()` guard shape: the guard condition itself is never the problem, the
-/// checker unconditionally visiting the guarded branch's body is.
+/// every PHP build whose SAPI does not provide it, does not define it). This is the guard-condition
+/// half of `test_headers_send_late_bound_behind_dead_guard`.
 #[test]
 fn test_headers_send_function_exists_guard_condition_type_checks() {
     expect_ok("<?php $has = function_exists('headers_send'); echo $has ? 'has' : 'no';");

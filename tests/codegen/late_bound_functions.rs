@@ -184,6 +184,7 @@ fn test_late_bound_call_covers_full_curated_allowlist() {
         "igbinary_unserialize",
         "frankenphp_handle_request",
         "token_get_all",
+        "headers_send",
     ];
     for name in names {
         let source = format!(
@@ -220,4 +221,32 @@ fn test_late_bound_xdebug_connect_guarded_in_closure_never_executes() {
         $handler();",
     );
     assert_eq!(out, "ran");
+}
+
+/// Verifies the exact Symfony `HttpFoundation\Response::sendHeaders()` shape: `headers_send`
+/// (a SAPI-only 1xx-informational helper absent from core PHP — `function_exists('headers_send')`
+/// is `false` on php 8.5.6) sits behind `if ($informational && !function_exists('headers_send'))
+/// { return … }`, so the guard fires and the call below it is unreachable. The program must
+/// compile and run to completion without ever reaching the late-bound throw, and print exactly
+/// what `php -n` prints.
+#[test]
+fn test_late_bound_headers_send_guarded_never_executes() {
+    let out = compile_and_run(
+        "<?php
+        function send(int $status): string {
+            $informational = $status >= 100 && $status < 200;
+            if ($informational && !\\function_exists('headers_send')) {
+                return 'skipped';
+            }
+            if ($informational) {
+                headers_send($status);
+
+                return 'sent';
+            }
+
+            return 'final';
+        }
+        echo send(103), send(200);",
+    );
+    assert_eq!(out, "skippedfinal");
 }
