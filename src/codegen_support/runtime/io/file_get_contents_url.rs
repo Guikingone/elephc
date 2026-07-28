@@ -18,6 +18,43 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
+/// Reclaims the block `__rt_stream_get_contents` owned, once the response has been persisted.
+///
+/// The slurp helper returns a borrowed slice of the 64 KiB concat arena while the response fits
+/// in it, and an owned `__rt_heap_alloc` block when it does not. Every URL branch then calls
+/// `__rt_str_persist`, which allocates independently and byte-copies, so the slurped storage is
+/// dead from that point on — but no branch reclaimed it, stranding one block per call sized to
+/// the doubled accumulation capacity (a 200 KB body left ~256 KiB behind on every read).
+///
+/// `__rt_heap_free_safe` separates the two shapes exactly rather than heuristically:
+/// `_concat_buf` and `_heap_buf` are distinct `.comm` objects, so an arena pointer can never
+/// satisfy its managed-heap window test and passes through untouched.
+///
+/// `source_slot` is the frame offset where the branch saved the pre-persist pointer across its
+/// close sequence. The owned copy is parked on the temporary stack rather than in a frame slot
+/// so this stays independent of each branch's differing frame layout.
+fn emit_release_slurped_source(emitter: &mut Emitter, source_slot: u32) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x0, [sp, #{}]", source_slot));    // reload the pre-persist slurp pointer
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the persisted copy across the release
+            emitter.instruction("bl __rt_heap_free_safe");                      // arena slices fall through the managed-heap window test
+            emitter.instruction("ldp x1, x2, [sp], #16");                       // restore the persisted copy as the result
+        }
+        Arch::X86_64 => {
+            emitter.instruction("sub rsp, 16");                                 // reserve one temporary slot for the persisted copy
+            emitter.instruction("mov QWORD PTR [rsp], rax");                    // preserve the persisted copy pointer
+            emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                // preserve the persisted copy length
+            let reload = format!("mov rax, QWORD PTR [rbp - {}]", source_slot);
+            emitter.instruction(&reload);                                       // reload the pre-persist slurp pointer
+            emitter.instruction("call __rt_heap_free_safe");                    // arena slices fall through the managed-heap window test
+            emitter.instruction("mov rax, QWORD PTR [rsp]");                    // restore the persisted copy pointer
+            emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                // restore the persisted copy length
+            emitter.instruction("add rsp, 16");                                 // release the temporary slot
+        }
+    }
+}
+
 /// Emits `__rt_file_get_contents_maybe_url`.
 ///
 /// Inputs use elephc's string ABI (`x1`/`x2` on AArch64, `rax`/`rdx` on
@@ -173,6 +210,7 @@ pub fn emit_file_get_contents_url(emitter: &mut Emitter) {
     emitter.syscall(6);                                                         // close the temporary response stream
     emitter.instruction("ldp x1, x2, [sp, #64]");                               // restore response ptr/len
     emitter.instruction("bl __rt_str_persist");                                 // persist the response string for file_get_contents ownership
+    emit_release_slurped_source(emitter, 64);
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // release helper frame
     emitter.instruction("ret");                                                 // return owned response string
@@ -325,6 +363,7 @@ pub fn emit_file_get_contents_url(emitter: &mut Emitter) {
     emitter.syscall(6);                                                         // close the temporary response stream
     emitter.instruction("ldp x1, x2, [sp, #80]");                               // restore response ptr/len
     emitter.instruction("bl __rt_str_persist");                                 // persist the response string for file_get_contents ownership
+    emit_release_slurped_source(emitter, 80);
     emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #112");                                    // release helper frame
     emitter.instruction("ret");                                                 // return owned HTTPS response string
@@ -527,6 +566,7 @@ pub fn emit_file_get_contents_url(emitter: &mut Emitter) {
     emitter.syscall(6);                                                         // close the data connection
     emitter.instruction("ldp x1, x2, [sp, #64]");                               // restore response ptr/len
     emitter.instruction("bl __rt_str_persist");                                 // persist the response string for file_get_contents ownership
+    emit_release_slurped_source(emitter, 64);
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // release helper frame
     emitter.instruction("ret");                                                 // return owned FTP response string
@@ -679,6 +719,7 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // restore response ptr
     emitter.instruction("mov rdx, QWORD PTR [rbp - 80]");                       // restore response length
     emitter.instruction("call __rt_str_persist");                               // persist the response string for file_get_contents ownership
+    emit_release_slurped_source(emitter, 72);
     emitter.instruction("add rsp, 112");                                        // release helper locals
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return owned response string
@@ -823,6 +864,7 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // restore response ptr
     emitter.instruction("mov rdx, QWORD PTR [rbp - 96]");                       // restore response length
     emitter.instruction("call __rt_str_persist");                               // persist the response string for file_get_contents ownership
+    emit_release_slurped_source(emitter, 88);
     emitter.instruction("add rsp, 112");                                        // release helper locals
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return owned HTTPS response string
@@ -1003,6 +1045,7 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // restore response ptr
     emitter.instruction("mov rdx, QWORD PTR [rbp - 80]");                       // restore response length
     emitter.instruction("call __rt_str_persist");                               // persist the response string for file_get_contents ownership
+    emit_release_slurped_source(emitter, 72);
     emitter.instruction("add rsp, 112");                                        // release helper locals
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return owned FTP response string

@@ -3874,6 +3874,44 @@ echo file_get_contents($url);
     assert_eq!(out, "dynamic contents fetched over ftp");
 }
 
+/// A URL body larger than the concat arena must not strand its slurp block per read.
+#[test]
+fn test_file_get_contents_dynamic_ftp_url_releases_slurped_block() {
+    // Every URL branch slurps the response with `__rt_stream_get_contents`, which returns an
+    // owned heap block once the body outgrows the 64 KiB arena, and then copies it with
+    // `__rt_str_persist`. Nothing reclaimed the slurped block, so each read stranded one --
+    // sized to the doubled accumulation capacity, so a 200 KB body cost ~256 KiB per call.
+    //
+    // The body is deliberately past 64 KiB: a response that still fits comes back as a
+    // borrowed arena slice, and the same release runs on it, where freeing would be a wild
+    // free rather than a leak. `test_file_get_contents_dynamic_ftp_url` above covers that
+    // small-body case and would fail if the arena slice were ever freed.
+    //
+    // str_starts_with/str_ends_with are the ordering guard: releasing the slurped block before
+    // the persist copied it would still yield the right length, so a length-only assertion
+    // would pass either way.
+    //
+    // One read, not a loop: `spawn_ftp_server` calls `accept()` exactly once, so a second
+    // iteration blocks until the harness kills the binary. A single read is enough -- the leak
+    // was one stranded block per call.
+    let body: &'static [u8] = Box::leak(vec![b'B'; 200_000].into_boxed_slice());
+    let _server = spawn_ftp_server(54967, body);
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$url = "ftp://127.0.0.1:54967/pub/file.txt";
+$b = file_get_contents($url);
+$intact = (str_starts_with($b, "BBB") && str_ends_with($b, "BBB")) ? 1 : 0;
+echo strlen($b), ":", $intact;
+"#,
+    );
+    assert_eq!(out.stdout, "200000:1", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// `file_get_contents($url)` routes a runtime `ftps://` URL through the FTP
 /// TLS path; an unreachable control port deterministically returns PHP false
 /// while still exercising TLS linkage and dynamic scheme dispatch.

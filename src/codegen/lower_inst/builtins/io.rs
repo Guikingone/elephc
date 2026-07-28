@@ -1300,6 +1300,50 @@ pub(crate) fn lower_stream_context_get_params(
     store_if_result(ctx, inst)
 }
 
+/// Boxes a read-all result as `Mixed`, then reclaims the block the read may have owned.
+///
+/// `__rt_stream_get_contents` hands back either a borrowed slice of the 64 KiB concat arena,
+/// when the stream fitted in it, or an owned `__rt_heap_alloc` block when it did not. The
+/// boxing helper does not adopt either one: `__rt_mixed_from_value` tag 1 goes through
+/// `__rt_str_persist`, which always allocates and byte-copies, so the source is dead the
+/// moment boxing returns. Without this the owned case stranded one block per call — one
+/// 524288-byte block per iteration on a 500 KB stream.
+///
+/// `__rt_heap_free_safe` separates the two shapes exactly rather than heuristically:
+/// `_concat_buf` and `_heap_buf` are distinct `.comm` objects, so an arena pointer can never
+/// satisfy its managed-heap window test and passes through untouched.
+///
+/// Only correct because no EIR value names the pre-box pointer: the builtin's checker
+/// signature is the union `string|false`, so `lower_release` always takes the
+/// `__rt_decref_mixed` arm and never frees this block a second time. Do not reuse this shape
+/// for a builtin typed plain `string` — `fread()` is exactly that, and there the EIR release
+/// already reclaims the block, so a second free here would be a double free.
+fn box_read_all_result_and_release_source(ctx: &mut FunctionContext<'_>) {
+    let (ptr_reg, _) = abi::string_result_regs(ctx.emitter);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, ptr_reg);                                   // preserve the pre-box source pointer, which boxing overwrites
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+    abi::emit_push_reg(ctx.emitter, result_reg);                                // preserve the boxed mixed cell across the source release
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // reload the source pointer saved below the boxed result
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // reload the source pointer saved below the boxed result
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+    abi::emit_pop_reg(ctx.emitter, result_reg);                                 // restore the boxed mixed cell as the current result
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("add sp, sp, #16");                         // discard the saved source-pointer slot
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("add rsp, 16");                             // discard the saved source-pointer slot
+        }
+    }
+}
+
 /// Lowers `stream_get_contents(stream, length?, offset?)` to `string|false`.
 pub(crate) fn lower_stream_get_contents(
     ctx: &mut FunctionContext<'_>,
@@ -1310,7 +1354,7 @@ pub(crate) fn lower_stream_get_contents(
     load_stream_fd_to_result(ctx, stream, "stream_get_contents")?;
     if inst.operands.len() == 1 {
         lower_stream_get_contents_read_all(ctx);
-        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+        box_read_all_result_and_release_source(ctx);
         return store_if_result(ctx, inst);
     }
 
@@ -1342,7 +1386,7 @@ pub(crate) fn lower_stream_get_contents(
     ctx.emitter.label(&read_all);
     lower_stream_get_contents_reload_fd_and_leave_frame(ctx);
     lower_stream_get_contents_read_all(ctx);
-    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+    box_read_all_result_and_release_source(ctx);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("b {}", done));                    // skip the seek-failure false result after reading successfully
