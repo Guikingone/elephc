@@ -319,13 +319,21 @@ fn terminator_successors(terminator: &Terminator) -> Vec<BlockId> {
 /// Returns by-value parameter slots that must own incoming or subsequently stored values.
 ///
 /// Hidden closure captures stay borrowed from the callable descriptor until their first
-/// reassignment. Reassigned captures use the dedicated epilogue slot set instead of the
+/// ordinary reassignment. Captures synchronized through eval scope state instead take an
+/// owned frame reference because the scope reload can replace their descriptor borrow.
+/// Reassigned captures without eval use the dedicated epilogue slot set instead of the
 /// generic owned-parameter path.
 fn owned_parameter_slots(
     function: &Function,
     stored_slots: &HashSet<LocalSlotId>,
     ever_ref_cell_slots: &HashSet<LocalSlotId>,
 ) -> HashSet<LocalSlotId> {
+    let has_eval_scope = function.locals.iter().any(|local| {
+        matches!(
+            local.kind,
+            crate::ir::LocalKind::EvalScope | crate::ir::LocalKind::EvalGlobalScope
+        )
+    });
     let capture_start = function
         .params
         .len()
@@ -334,7 +342,9 @@ fn owned_parameter_slots(
         .params
         .iter()
         .enumerate()
-        .filter(|(index, _)| !function.flags.is_closure || *index < capture_start)
+        .filter(|(index, _)| {
+            !function.flags.is_closure || *index < capture_start || has_eval_scope
+        })
         .filter(|(_, param)| !param.by_ref)
         .filter_map(|(index, param)| {
             let slot = LocalSlotId::from_raw(index as u32);
@@ -634,6 +644,41 @@ mod tests {
         let owned = owned_parameter_slots(&function, &stored_slots, &HashSet::new());
 
         assert!(!owned.contains(&slot));
+    }
+
+    /// Verifies an eval-synchronized capture owns its widened frame cell for scope reloads.
+    #[test]
+    fn eval_synchronized_closure_capture_owns_widened_parameter_cell() {
+        let mut function = Function::new(
+            "closure_capture_eval".to_string(),
+            IrType::Void,
+            PhpType::Void,
+        );
+        function.flags.is_closure = true;
+        function.flags.closure_capture_count = 1;
+        function.params.push(FunctionParam {
+            name: "capture".to_string(),
+            ir_type: IrType::Heap(crate::ir::IrHeapKind::Object),
+            php_type: PhpType::Object("stdClass".to_string()),
+            by_ref: false,
+            variadic: false,
+        });
+        let capture = function.add_local(
+            Some("capture".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::ClosureCapture,
+        );
+        function.add_local(
+            None,
+            IrType::I64,
+            PhpType::Int,
+            LocalKind::EvalScope,
+        );
+
+        let owned = owned_parameter_slots(&function, &HashSet::new(), &HashSet::new());
+
+        assert!(owned.contains(&capture));
     }
 
     /// Verifies incoming by-reference cells remain borrowed and need no raw-value state flag.

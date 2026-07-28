@@ -949,6 +949,7 @@ fn local_kind_needs_epilogue_cleanup(kind: LocalKind) -> bool {
     matches!(
         kind,
         LocalKind::PhpLocal
+            | LocalKind::ClosureCapture
             | LocalKind::HiddenTemp
             | LocalKind::OwnedTemp
             | LocalKind::NamedArgTemp

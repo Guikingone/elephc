@@ -558,7 +558,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     .get(name)
                     .copied()
                     .unwrap_or(LocalKind::PhpLocal);
-                (kind == LocalKind::PhpLocal).then_some((name.clone(), *slot))
+                matches!(kind, LocalKind::PhpLocal | LocalKind::ClosureCapture)
+                    .then_some((name.clone(), *slot))
             })
             .collect::<Vec<_>>();
         for (name, slot) in local_names {
@@ -572,7 +573,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 .get(&name)
                 .copied()
                 .unwrap_or(LocalKind::PhpLocal);
-            if kind == LocalKind::PhpLocal && eval_barrier_can_widen(&ty) {
+            if matches!(kind, LocalKind::PhpLocal | LocalKind::ClosureCapture)
+                && eval_barrier_can_widen(&ty)
+            {
                 self.local_types.insert(name, PhpType::Mixed);
             }
         }
@@ -629,7 +632,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let widen_names = write_names
             .iter()
             .filter(|name| {
-                self.local_kinds.get(*name).copied() == Some(LocalKind::PhpLocal)
+                self.local_kinds
+                    .get(*name)
+                    .copied()
+                    .is_some_and(|kind| {
+                        matches!(kind, LocalKind::PhpLocal | LocalKind::ClosureCapture)
+                    })
                     && self
                         .local_slots
                         .get(*name)
