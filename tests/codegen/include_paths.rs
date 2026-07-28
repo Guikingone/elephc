@@ -582,3 +582,37 @@ class Loader {
     );
     assert_eq!(out, "ok");
 }
+
+/// A value-position `include` whose path is runtime-dynamic sits INSIDE the `elseif` condition of
+/// the very `if` that defines the path variable — the exact
+/// `Symfony\Component\ErrorHandler\DebugClassLoader::loadClass()` shape
+/// (`if (!$file = …) { … } elseif (false === include $file) { … }`).
+///
+/// Regression: under lenient include lowering (autoloaded class files), the hoister lifted the
+/// include's expansion into statements emitted BEFORE the whole `if`, i.e. before `$file` was
+/// assigned, and the degraded runtime-fatal stub's message concatenation then read an undefined
+/// `$file` — a compile-time "Undefined variable: $file". The degraded case is now rewritten IN
+/// PLACE as a diverging expression, keeping the fatal at its real program point. The `elseif` is
+/// never reached here (the `if` branch wins), so the program runs to completion and prints exactly
+/// what `php -n` prints under an equivalent `spl_autoload_register`.
+#[test]
+fn test_degraded_dynamic_value_include_in_elseif_condition_keeps_path_variable_defined() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/Loader.php",
+                "<?php\nnamespace App;\n\nclass Loader\n{\n    private string $root = '';\n\n    public function load(string $class): void\n    {\n        if (!$file = $this->find($class)) {\n            echo \"no-file\";\n        } elseif (false === include $file) {\n            echo \"inc-false\";\n        }\n        echo \"|after:\", $file, \"|\";\n    }\n\n    private function find(string $class): string\n    {\n        return $class === 'Present' ? $this->root . 'present.php' : '';\n    }\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$l = new \\App\\Loader();\n$l->load('Absent');\necho \"done\";\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "no-file|after:|done");
+}

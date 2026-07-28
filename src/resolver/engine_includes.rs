@@ -356,28 +356,58 @@ pub(super) fn expand_value_include(
     Ok(out)
 }
 
-/// Builds the diverging runtime-fatal stub that replaces an unresolvable runtime-dynamic
-/// include/require under lenient include lowering. The stub writes a descriptive message to
-/// stderr (`fwrite(STDERR, ...)`) and then calls `exit(255)` — PHP's fatal-error exit code.
+/// Builds the IN-PLACE diverging expression that replaces an unresolvable runtime-dynamic
+/// value-position `include`/`require` under lenient include lowering, for the nested positions
+/// `hoist_includes` would otherwise lift out of their owning statement.
 ///
-/// `exit` is recognized as a function-exit guarantee by termination analysis, so a function
-/// body whose only remaining path runs this stub satisfies any declared return type without an
-/// explicit `return` (the value-position `return require $dynamic;` case). The synthetic nodes
-/// mirror exactly what the parser produces for `fwrite(STDERR, ...)` and `exit(255)`, so they
-/// flow unchanged through name resolution, type checking, and EIR lowering.
+/// Returns `None` — meaning "not a degraded dynamic include, take the normal hoist path" — unless
+/// lenient lowering is active, the path does not fold to a compile-time constant, and the path is
+/// a runtime-dynamic shape (a statically-invalid path keeps its hard compile error).
+///
+/// # Why in place rather than hoisted
+///
+/// `hoist_includes` evaluates a nested value-include EAGERLY as a statement emitted BEFORE the
+/// owning statement. For a nested position inside a CONDITION that also defines the path variable
+/// — Symfony's `if (!$file = …) { … } elseif (false === include $file) { … }` — the hoisted
+/// statements are placed above the whole `if`, i.e. before `$file` is assigned, and the stub's
+/// message concatenation then reads an undefined `$file` ("Undefined variable: $file"). Rewriting
+/// the include in place keeps it at its real program point, where the path variable is defined.
+///
+/// # Shape
+///
+/// `fwrite(STDERR, <msg>) ? exit(255) : exit(255)` — the same stderr message and PHP fatal exit
+/// code 255 as the statement-position `dynamic_include_fatal_stub`, expressed as one expression.
+/// The `fwrite` is the ternary CONDITION so it is always evaluated (a short-circuit `&&`/`||`/`?:`
+/// would skip the exit on one of the two truth values), and BOTH branches diverge, so the whole
+/// expression diverges regardless of what `fwrite` returns and can therefore stand in any operand
+/// position without ever yielding a value.
+pub(super) fn degraded_dynamic_include_expr(
+    path: &Expr,
+    span: Span,
+    state: &ResolveState,
+) -> Option<Expr> {
+    if !(state.lenient_dynamic_includes && fold_include_path(path, state).is_err()) {
+        return None;
+    }
+    runtime_dynamic_include_path_detail(path)?;
+    Some(Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(dynamic_include_fatal_write_expr(path, span)),
+            then_expr: Box::new(dynamic_include_exit_expr(span)),
+            else_expr: Box::new(dynamic_include_exit_expr(span)),
+        },
+        span,
+    ))
+}
+
+/// Builds the `fwrite(STDERR, "<prefix>" . <path> . "<suffix>")` call shared by the
+/// statement-position stub and the in-place diverging expression.
 ///
 /// The message concatenates the original `path` expression so the runtime diagnostic names the
-/// actual (computed) path that could not be resolved. Re-evaluating `path` in the stub also keeps
-/// any variable it reads marked as used, so degrading `$p = ...; require $p;` does not turn the
-/// `$p` assignment into a spurious "unused variable" warning. The path is only evaluated on the
-/// fatal path, which is reached exactly when the original include would have run.
-///
-/// Returns `None` when `path` is not a runtime-dynamic expression: statically-invalid include
-/// shapes (e.g. an integer or boolean literal path) keep their hard compile error.
-fn dynamic_include_fatal_stub(path: &Expr, span: Span) -> Option<Vec<Stmt>> {
-    // Gate: only runtime-dynamic shapes degrade; statically-invalid paths keep their hard error.
-    runtime_dynamic_include_path_detail(path)?;
-
+/// actual (computed) path that could not be resolved. Re-evaluating `path` here also keeps any
+/// variable it reads marked as used, so degrading `$p = ...; require $p;` does not turn the `$p`
+/// assignment into a spurious "unused variable" warning.
+fn dynamic_include_fatal_write_expr(path: &Expr, span: Span) -> Expr {
     let prefix = Expr::new(
         ExprKind::StringLiteral(
             "Fatal error: could not resolve dynamic include/require path at compile time: "
@@ -391,8 +421,7 @@ fn dynamic_include_fatal_stub(path: &Expr, span: Span) -> Option<Vec<Stmt>> {
     );
     // `prefix . <path> . suffix`
     let message = concat(concat(prefix, path.clone(), span), suffix, span);
-
-    let write_call = Expr::new(
+    Expr::new(
         ExprKind::FunctionCall {
             name: Name::unqualified("fwrite"),
             args: vec![
@@ -401,18 +430,47 @@ fn dynamic_include_fatal_stub(path: &Expr, span: Span) -> Option<Vec<Stmt>> {
             ],
         },
         span,
-    );
-    let exit_call = Expr::new(
+    )
+}
+
+/// Builds the `exit(255)` call (PHP's fatal-error exit code) shared by the statement-position stub
+/// and the in-place diverging expression.
+fn dynamic_include_exit_expr(span: Span) -> Expr {
+    Expr::new(
         ExprKind::FunctionCall {
             name: Name::unqualified("exit"),
             args: vec![Expr::new(ExprKind::IntLiteral(255), span)],
         },
         span,
-    );
+    )
+}
+
+/// Builds the diverging runtime-fatal stub that replaces an unresolvable runtime-dynamic
+/// include/require under lenient include lowering. The stub writes a descriptive message to
+/// stderr (`fwrite(STDERR, ...)`) and then calls `exit(255)` — PHP's fatal-error exit code.
+///
+/// `exit` is recognized as a function-exit guarantee by termination analysis, so a function
+/// body whose only remaining path runs this stub satisfies any declared return type without an
+/// explicit `return` (the value-position `return require $dynamic;` case). The synthetic nodes
+/// mirror exactly what the parser produces for `fwrite(STDERR, ...)` and `exit(255)`, so they
+/// flow unchanged through name resolution, type checking, and EIR lowering.
+///
+/// The path is only evaluated on the fatal path, which is reached exactly when the original
+/// include would have run; see `dynamic_include_fatal_write_expr` for why the message re-evaluates
+/// it at all.
+///
+/// Returns `None` when `path` is not a runtime-dynamic expression: statically-invalid include
+/// shapes (e.g. an integer or boolean literal path) keep their hard compile error.
+fn dynamic_include_fatal_stub(path: &Expr, span: Span) -> Option<Vec<Stmt>> {
+    // Gate: only runtime-dynamic shapes degrade; statically-invalid paths keep their hard error.
+    runtime_dynamic_include_path_detail(path)?;
 
     Some(vec![
-        Stmt::new(StmtKind::ExprStmt(write_call), span),
-        Stmt::new(StmtKind::ExprStmt(exit_call), span),
+        Stmt::new(
+            StmtKind::ExprStmt(dynamic_include_fatal_write_expr(path, span)),
+            span,
+        ),
+        Stmt::new(StmtKind::ExprStmt(dynamic_include_exit_expr(span)), span),
     ])
 }
 

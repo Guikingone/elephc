@@ -34,7 +34,9 @@ use crate::errors::CompileError;
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 
 use super::discovery::FunctionVariantRegistry;
-use super::engine_includes::{expand_value_include, IncludeValueCapture};
+use super::engine_includes::{
+    degraded_dynamic_include_expr, expand_value_include, IncludeValueCapture,
+};
 use super::state::ResolveState;
 
 /// Process-global counter producing unique hidden temporary names for hoisted value-includes.
@@ -360,6 +362,18 @@ impl HoistCtx<'_> {
                 once,
                 required,
             } => {
+                // Degraded runtime-dynamic path under lenient lowering: there is no file to
+                // inline, only a runtime fatal. Rewrite it IN PLACE as a diverging expression
+                // instead of hoisting anything, so the fatal keeps the include's real program
+                // point. Hoisting it would move the path expression above the owning statement —
+                // wrong whenever that statement is what defines the path variable, as in
+                // `if (!$file = …) { … } elseif (false === include $file) { … }`, where the
+                // hoisted stub reads `$file` before its assignment.
+                if let Some(diverging) =
+                    degraded_dynamic_include_expr(&path, span, self.state)
+                {
+                    return Ok(diverging);
+                }
                 // Terminal case: allocate a fresh temp, expand the include so it runs in the
                 // caller's scope and assigns its top-level return value to that temp, and return a
                 // reference to the temp in place of the include.
