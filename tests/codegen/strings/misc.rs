@@ -105,4 +105,73 @@ echo build("hi");"#,
     assert_eq!(out, "ABABABAB");
 }
 
+/// Verifies a non-string replacement is weakly converted before its first byte is written.
+///
+/// PHP converts the value with its ordinary string cast and writes byte 0 of the result:
+/// `65` becomes `"65"` so `6` lands, `true` becomes `"1"`, and `1.75` becomes `"1.75"` so `1`
+/// lands. Cross-checked with `php -n` (prints `61c|ab1def`, plus a
+/// "Only the first byte will be assigned" warning for the multi-byte conversions, which elephc
+/// does not emit).
+#[test]
+fn test_string_offset_assign_coerces_scalar_replacement() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "abc";
+$s[0] = 65;
+$s[1] = true;
+$t = "abcdef";
+$t[2] = 1.75;
+echo $s, "|", $t;"#,
+    );
+    assert_eq!(out, "61c|ab1def");
+}
+
+/// Verifies a boxed `Mixed` replacement is unboxed to a string before the byte write.
+///
+/// Mirrors `symfony/polyfill-intl-normalizer`'s `Normalizer::decompose()`, whose
+/// `$s[$i + $j] = $uchr[$ulen + $j];` reads a `Mixed` element out of a `??`-chained static map.
+/// Cross-checked with `php -n` (prints "YbX").
+#[test]
+fn test_string_offset_assign_coerces_mixed_replacement() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(array $a, int $i): mixed { return $a[$i]; }
+$vals = ["X", "Y", "Z"];
+$s = "abc";
+$s[0] = pick($vals, 1);
+$s[2] = pick($vals, 0);
+echo $s;"#,
+    );
+    assert_eq!(out, "YbX");
+}
+
+/// Verifies an empty replacement raises PHP's catchable `Error` instead of writing nothing.
+///
+/// PHP 8 rejects `$s[0] = ''`, `$s[0] = null` and `$s[0] = false` alike, because all three
+/// convert to the empty string. Cross-checked with `php -n` (prints
+/// "caught:Cannot assign an empty string to a string offset|abc|caught2").
+#[test]
+fn test_string_offset_assign_empty_replacement_throws_error() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "abc";
+try {
+    $s[0] = "";
+} catch (\Error $e) {
+    echo "caught:", $e->getMessage(), "|";
+}
+echo $s, "|";
+$t = "abc";
+try {
+    $t[1] = false;
+} catch (\Error $e) {
+    echo "caught2";
+}"#,
+    );
+    assert_eq!(
+        out,
+        "caught:Cannot assign an empty string to a string offset|abc|caught2"
+    );
+}
+
 // --- md5 / sha1 ---

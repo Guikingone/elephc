@@ -2004,6 +2004,12 @@ fn lower_array_assign(
 /// `$b = $a` stay copy-on-write safe. The fresh result is persisted into the destination local
 /// by `store_local`, which also releases the previous owner (matching `$s = <new string>`). The
 /// replacement operand is released afterwards only when it is a fresh owning temporary.
+///
+/// Both operands are weakly coerced first, exactly as PHP does before performing the write: the
+/// offset through the int conversion and the replacement through the string conversion, so
+/// `$s[0] = 65` writes `6` (the first byte of `"65"`) and `$s[0] = true` writes `1`. The shared
+/// `coerce_to_string` already releases a replaced owning source on its boxed-Mixed path, so the
+/// coerced value — not the original operand — is the one released after the write.
 fn lower_string_offset_set(
     ctx: &mut LoweringContext<'_, '_>,
     array: &str,
@@ -2014,16 +2020,17 @@ fn lower_string_offset_set(
     span: Span,
 ) {
     let offset = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+    let replacement = coerce_to_string(ctx, value_value, Some(span));
     let result = ctx.emit_value(
         Op::StrOffsetSet,
-        vec![array_value.value, offset.value, value_value.value],
+        vec![array_value.value, offset.value, replacement.value],
         None,
         PhpType::Str,
         Op::StrOffsetSet.default_effects(),
         Some(span),
     );
     ctx.store_local(array, result, PhpType::Str, Some(span));
-    release_persisted_string_operand(ctx, value_value, span);
+    release_persisted_string_operand(ctx, replacement, span);
 }
 
 /// Coerces a buffer element write value into the scalar storage accepted by `BufferSet`.

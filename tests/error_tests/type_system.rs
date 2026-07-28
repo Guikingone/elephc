@@ -71,15 +71,28 @@ fn test_error_property_array_write_array_key_is_rejected() {
     );
 }
 
-/// Verifies that string offset assignment with a NON-string replacement stays loud.
-/// Input: `$s = "hello"; $s[0] = 65;` — the plain-local string case with a string
-/// replacement and an int-coercible offset is now supported, but a non-string
-/// replacement (PHP coerces it to a string first) is not lowered yet and must remain a
-/// compile-time error instead of silently miscompiling.
+/// Verifies that string offset assignment with a NON-string-coercible replacement stays loud.
+/// Input: `$s = "hello"; $a = [1, 2]; $s[0] = $a;` — the plain-local string case now accepts every
+/// replacement PHP weakly converts to a string (`Str`/`Int`/`Float`/`Bool`/`Mixed`, coerced by
+/// `lower_string_offset_set`), but an array is not one of those: PHP raises
+/// `Array to string conversion` and writes the byte `A`, which elephc does not emulate, so the
+/// site must remain a compile-time error instead of silently miscompiling.
 #[test]
-fn test_error_string_offset_assignment_non_string_value_is_not_supported() {
+fn test_error_string_offset_assignment_array_value_is_not_supported() {
     expect_error(
-        "<?php $s = \"hello\"; $s[0] = 65;",
+        "<?php $s = \"hello\"; $a = [1, 2]; $s[0] = $a;",
+        "String offset assignment is not supported",
+    );
+}
+
+/// Verifies that string offset assignment through a by-reference-bound local stays loud.
+/// Input: `function f(string &$s) { $s[0] = "X"; }` — the write would have to travel back
+/// through the alias cell, and `lower_string_offset_set` only persists into a plain local, so the
+/// reference-bound form must remain a compile-time error rather than dropping the write.
+#[test]
+fn test_error_string_offset_assignment_on_reference_param_is_not_supported() {
+    expect_error(
+        "<?php function f(string &$s) { $s[0] = \"X\"; } $q = \"ab\"; f($q); echo $q;",
         "String offset assignment is not supported",
     );
 }

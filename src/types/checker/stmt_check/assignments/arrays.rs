@@ -47,18 +47,27 @@ pub(super) fn check_array_assign(
     if arr_ty == PhpType::Str {
         // PHP string offset assignment (`$s[$i] = $c`): write the replacement's first byte at
         // byte offset `$i`. Supported for a plain string local with an int-coercible offset and
-        // a string replacement; the runtime helper copies the source into fresh storage (never
-        // mutating a shared string in place), so aliases stay copy-on-write safe. The offset may
-        // be a boxed `Mixed`/scalar (a widened integer loop counter such as `$s[++$j]`): the
-        // lowering coerces it to int via the same `__rt_mixed_cast_int` path PHP uses. A
-        // reference-bound local would need a write-through path and stays loud, as does a
-        // non-string replacement (PHP coerces it, but that coercion is not lowered yet).
+        // a weakly string-coercible replacement; the runtime helper copies the source into fresh
+        // storage (never mutating a shared string in place), so aliases stay copy-on-write safe.
+        // The offset may be a boxed `Mixed`/scalar (a widened integer loop counter such as
+        // `$s[++$j]`): the lowering coerces it to int via the same `__rt_mixed_cast_int` path PHP
+        // uses. The replacement follows the SAME admitted set, because PHP applies its ordinary
+        // weak string conversion to it before taking the first byte (`$s[0] = 65` writes `6`,
+        // `$s[0] = true` writes `1`); `lower_string_offset_set` emits that conversion, and the
+        // `Op::StrOffsetSet` codegen raises PHP's `Error: Cannot assign an empty string to a
+        // string offset` when the converted replacement is empty (`null`/`false`/`""`). A
+        // reference-bound local would need a write-through path and stays loud.
         let offset_is_int_coercible = matches!(
             idx_ty.codegen_repr(),
             PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Mixed
         );
-        let value_is_string = matches!(val_ty.codegen_repr(), PhpType::Str);
-        if offset_is_int_coercible && value_is_string && !checker.active_ref_params.contains(array)
+        let value_is_string_coercible = matches!(
+            val_ty.codegen_repr(),
+            PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Mixed
+        );
+        if offset_is_int_coercible
+            && value_is_string_coercible
+            && !checker.active_ref_params.contains(array)
         {
             // The local stays a string; leave `env` unchanged.
             return Ok(());

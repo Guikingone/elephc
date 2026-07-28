@@ -356,26 +356,49 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
 ///
 /// The offset value is loaded first so the subsequent string frame-slot loads (which target
 /// distinct ABI registers) cannot clobber the offset when it homes in a string ABI register.
+///
+/// PHP rejects an empty replacement outright — `$s[0] = '';`, `$s[0] = null;` and `$s[0] = false;`
+/// all raise `Error: Cannot assign an empty string to a string offset` — so the emitted code tests
+/// the replacement length once it is loaded and throws that catchable `Error` instead of falling
+/// into the helper's copy-through path. The guard sits between the replacement and subject loads:
+/// it never returns, so clobbering the already-loaded argument registers on the throwing edge is
+/// harmless.
 pub(super) fn lower_str_offset_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let string = expect_operand(inst, 0)?;
     let index = expect_operand(inst, 1)?;
     let replacement = expect_operand(inst, 2)?;
     require_string(ctx.value_php_type(string)?, inst)?;
     require_string(ctx.value_php_type(replacement)?, inst)?;
+    let non_empty = ctx.next_label("str_offset_set_nonempty");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             require_integer_like(ctx.load_value_to_reg(index, "x3")?, inst)?;
             ctx.load_string_value_to_regs(replacement, "x4", "x5")?;
+            ctx.emitter.instruction(&format!("cbnz x5, {}", non_empty)); // a non-empty replacement performs the write
+            emit_empty_string_offset_error(ctx);
+            ctx.emitter.label(&non_empty);
             ctx.load_string_value_to_regs(string, "x1", "x2")?;
         }
         Arch::X86_64 => {
             require_integer_like(ctx.load_value_to_reg(index, "rdi")?, inst)?;
             ctx.load_string_value_to_regs(replacement, "rsi", "rcx")?;
+            ctx.emitter.instruction("test rcx, rcx");                           // is the replacement string empty?
+            ctx.emitter.instruction(&format!("jnz {}", non_empty));             // a non-empty replacement performs the write
+            emit_empty_string_offset_error(ctx);
+            ctx.emitter.label(&non_empty);
             ctx.load_string_value_to_regs(string, "rax", "rdx")?;
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_string_offset_set");
     store_if_result(ctx, inst)
+}
+
+/// Throws PHP's catchable `Error` for an empty string-offset replacement.
+///
+/// The wording is PHP 8's verbatim message, so a `try { $s[0] = null; } catch (\Error $e)` reads
+/// identically to `php -n`.
+fn emit_empty_string_offset_error(ctx: &mut FunctionContext<'_>) {
+    super::exceptions::emit_error(ctx, "Cannot assign an empty string to a string offset");
 }
 
 /// Lowers string persistence by copying the string into runtime-owned storage.
