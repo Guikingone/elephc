@@ -84,6 +84,7 @@ pub(crate) fn lower(
         &fiber_return_sigs,
     );
     include_lowered_runtime_features(&mut module);
+    super::effect_refinement::refine_module(&mut module);
     validate_module(&module)?;
     Ok(module)
 }

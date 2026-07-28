@@ -19,7 +19,8 @@ pub(super) use calls::{
     callable_alias_effect,
     expr_call_effect,
     function_call_effect,
-    private_instance_method_call_effect,
+    instance_property_read_effect,
+    instance_method_call_effect,
     static_method_call_effect,
 };
 
@@ -270,8 +271,15 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         } => expr_effect(object)
             .combine(expr_effect(method))
             .combine(combine_effects(args.iter().map(expr_effect)))
-            .with_side_effects()
-            .with_may_throw(),
+            .combine(match &method.kind {
+                ExprKind::StringLiteral(method) => {
+                    instance_method_call_effect(object, method)
+                }
+                _ => Effect::PURE
+                    .with_side_effects()
+                    .with_may_throw()
+                    .with_writes_globals(),
+            }),
         ExprKind::NewObject { args, .. } => combine_effects(args.iter().map(expr_effect))
             .with_side_effects()
             .with_may_throw(),
@@ -287,10 +295,14 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             .with_may_throw(),
         ExprKind::MethodCall { object, method, args } => expr_effect(object)
             .combine(combine_effects(args.iter().map(expr_effect)))
-            .combine(private_instance_method_call_effect(object, method)),
-        ExprKind::NullsafeMethodCall { object, args, .. } => expr_effect(object)
+            .combine(instance_method_call_effect(object, method)),
+        ExprKind::NullsafeMethodCall {
+            object,
+            method,
+            args,
+        } => expr_effect(object)
             .combine(combine_effects(args.iter().map(expr_effect)))
-            .with_may_throw(),
+            .combine(instance_method_call_effect(object, method)),
         ExprKind::StaticMethodCall {
             receiver,
             method,
@@ -317,10 +329,14 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                     .map(|expr| expr_effect(expr))
                     .unwrap_or(Effect::PURE),
             ),
-        ExprKind::ArrayAccess { array, index } => expr_effect(array)
-            .combine(expr_effect(index))
-            .with_side_effects()
-            .with_may_throw(),
+        ExprKind::ArrayAccess { array, index } => {
+            let evaluated = expr_effect(array).combine(expr_effect(index));
+            match statically_known_array_read(array, index) {
+                Some(true) => evaluated,
+                Some(false) => evaluated.with_side_effects(),
+                None => evaluated.with_side_effects().with_may_throw(),
+            }
+        }
         ExprKind::Ternary {
             condition,
             then_expr,
@@ -333,12 +349,21 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         }
         ExprKind::Closure { .. } => Effect::PURE,
         ExprKind::NamedArg { value, .. } => expr_effect(value),
-        ExprKind::PropertyAccess { object, .. }
-        | ExprKind::NullsafePropertyAccess { object, .. } => expr_effect(object).with_may_throw(),
+        ExprKind::PropertyAccess { object, property }
+        | ExprKind::NullsafePropertyAccess { object, property } => expr_effect(object)
+            .combine(instance_property_read_effect(object, property)),
         ExprKind::DynamicPropertyAccess { object, property }
-        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
-            expr_effect(object).combine(expr_effect(property))
-        }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => expr_effect(object)
+            .combine(expr_effect(property))
+            .combine(match &property.kind {
+                ExprKind::StringLiteral(property) => {
+                    instance_property_read_effect(object, property)
+                }
+                _ => Effect::PURE
+                    .with_side_effects()
+                    .with_may_throw()
+                    .with_writes_globals(),
+            }),
         ExprKind::StaticPropertyAccess { .. } => Effect::PURE.with_may_throw(),
         ExprKind::FirstClassCallable(target) => callable_target_effect(target),
         ExprKind::BufferNew { len, .. } => expr_effect(len).with_side_effects(),
@@ -363,6 +388,38 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before optimizer passes")
         }
+    }
+}
+
+/// Returns whether a literal container read is statically in bounds/present.
+///
+/// `Some(true)` is a warning-free read, `Some(false)` is a known missing offset that can warn
+/// but cannot throw, and `None` means runtime type/key behavior remains dynamic.
+fn statically_known_array_read(array: &Expr, index: &Expr) -> Option<bool> {
+    match (&array.kind, &index.kind) {
+        (ExprKind::ArrayLiteral(items), ExprKind::IntLiteral(index))
+            if items
+                .iter()
+                .all(|item| !matches!(item.kind, ExprKind::Spread(_))) =>
+        {
+            let len = i64::try_from(items.len()).ok()?;
+            Some(*index >= 0 && *index < len)
+        }
+        (ExprKind::ArrayLiteralAssoc(items), ExprKind::IntLiteral(index)) => Some(
+            items
+                .iter()
+                .any(|(key, _)| matches!(key.kind, ExprKind::IntLiteral(key) if key == *index)),
+        ),
+        (ExprKind::ArrayLiteralAssoc(items), ExprKind::StringLiteral(index)) => Some(
+            items.iter().any(
+                |(key, _)| matches!(&key.kind, ExprKind::StringLiteral(key) if key == index),
+            ),
+        ),
+        (ExprKind::StringLiteral(value), ExprKind::IntLiteral(index)) => {
+            let len = i64::try_from(value.len()).ok()?;
+            Some((*index >= 0 && *index < len) || (*index < 0 && -*index <= len))
+        }
+        _ => None,
     }
 }
 

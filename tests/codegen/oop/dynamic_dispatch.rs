@@ -151,7 +151,10 @@ fn test_static_and_instance_calls_unaffected() {
 #[test]
 fn test_example_dynamic_dispatch_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/dynamic-dispatch/main.php"));
-    assert_eq!(out, "Hello, world\nLOUD!\ncommands: greet, shout\n");
+    assert_eq!(
+        out,
+        "Hello, world\nLOUD!\ncommands: greet, shout\nresult: effects\n"
+    );
 }
 
 /// Verifies a dynamic static method call on a literal class name (`C::$method()`), which has a

@@ -12,6 +12,7 @@
 
 mod builtin_datetime;
 mod context;
+mod effect_refinement;
 mod effects_lookup;
 mod expr;
 mod fibers;
@@ -23,6 +24,8 @@ mod stmt;
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) use expr::body_contains_eval_call;
 
 use std::fmt;
 use std::path::Path;

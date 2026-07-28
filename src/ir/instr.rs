@@ -581,20 +581,26 @@ impl Op {
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | BufferNew | GeneratorNew => {
                 E::ALLOC_HEAP
             }
-            IsNull | IsTruthy | TypePredicate | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat | ArrayGetSilent
-            | HashGetSilent
-            | ArrayIsset | HashIsset | BufferGet | BufferLen | PackedFieldGet | PtrRead
+            IsNull | IsTruthy | TypePredicate | MixedUnbox | MixedCastBool | MixedCastInt
+            | MixedCastFloat | BufferGet | BufferLen | PackedFieldGet | PtrRead
             | PtrReadString => {
                 E::READS_HEAP | E::MAY_FATAL
             }
-            ArrayGet | HashGet => E::READS_HEAP | E::MAY_FATAL | E::MAY_WARN,
+            ArrayGetSilent | HashGetSilent | ArrayIsset | HashIsset => E::READS_HEAP,
+            ArrayGet | HashGet => E::READS_HEAP | E::MAY_WARN,
             StrPersist | ArrayEnsureUnique | HashEnsureUnique | ArrayCloneShallow
             | HashCloneShallow | ObjectCloneShallow => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
-            ArrayLen | HashLen => E::READS_HEAP | E::MAY_FATAL,
-            ArrayKeyExists | OffsetExists | PropGet | PropInitialized | LoadPropRefCell => {
+            ArrayLen | HashLen => E::READS_HEAP,
+            ArrayKeyExists | OffsetExists | PropInitialized | LoadPropRefCell => {
                 E::READS_HEAP
+            }
+            PropGet | NullsafePropGet => {
+                E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
+            }
+            DynamicPropGet => {
+                E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
             }
             LoadArrayElemRefCell => E::READS_HEAP | E::MAY_FATAL,
             BindRefCellPtr => E::WRITES_LOCAL,
@@ -611,10 +617,12 @@ impl Op {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
             HashSpread => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
+            MethodCall | NullsafeMethodCall => {
+                E::READS_HEAP | E::MAY_THROW | E::MAY_DEOPT
+            }
             IterStart | IterCurrentKey | IterCurrentValue | IteratorMethodCall
             | SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed
-            | DynamicObjectNewWithoutConstructorMixed | DynamicPropGet | NullsafePropGet
-            | NullsafeMethodCall | MethodLookup | MethodCall | StaticMethodCall
+            | DynamicObjectNewWithoutConstructorMixed | MethodLookup | StaticMethodCall
             | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | Spaceship => {
                 E::READS_HEAP | E::MAY_DEOPT
             }
@@ -683,6 +691,9 @@ impl Op {
                 | Op::ExternCall
                 | Op::MethodCall
                 | Op::StaticMethodCall
+                | Op::PropGet
+                | Op::NullsafePropGet
+                | Op::DynamicPropGet
                 | Op::ClosureCall
                 | Op::ExprCall
                 | Op::CallableDescriptorInvoke

@@ -17,7 +17,8 @@
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::builtins::semantics::{
-    runtime_fn_semantics, with_argument_lowering, BuiltinArgumentLowering, BuiltinSemantics,
+    runtime_fn_semantics, with_argument_lowering, BuiltinArgumentLowering, BuiltinEffects,
+    BuiltinSemanticInput, BuiltinSemantics,
 };
 use crate::errors::CompileError;
 use crate::types::checker::builtins::arrays::union_member_is_countable_array;
@@ -37,10 +38,22 @@ builtin! {
 
 /// Builds typed runtime semantics while retaining count's one-visible-argument lowering rule.
 const fn count_semantics() -> BuiltinSemantics {
-    with_argument_lowering(
+    let mut semantics = with_argument_lowering(
         runtime_fn_semantics(crate::ir::RuntimeFnId::Count),
         BuiltinArgumentLowering::Count,
-    )
+    );
+    semantics.effects = BuiltinEffects::Shared(effects);
+    semantics
+}
+
+/// Resolves count's intrinsic read/throw contract from the checked receiver representation.
+fn effects(input: &BuiltinSemanticInput<'_>) -> crate::ir::Effects {
+    match input.arg_types.first().map(PhpType::codegen_repr) {
+        Some(PhpType::Array(_) | PhpType::AssocArray { .. }) => {
+            crate::ir::Effects::READS_HEAP | crate::ir::Effects::MAY_THROW
+        }
+        _ => crate::ir::RuntimeFnId::Count.effects(),
+    }
 }
 
 /// Validates the argument type and returns `Int`.
