@@ -18,13 +18,37 @@ use crate::types::PhpType;
 use super::super::Checker;
 
 /// Returns a synthetic `ClassProperty` AST node for the `message` property of builtin Exception classes.
-/// The property is public, typed `string`, with an empty string default value.
+///
+/// `protected`, matching PHP's real `Exception`/`Error` declaration (`protected $message = '';`).
+/// External reads therefore fail the way `php -n` does ("Cannot access protected property
+/// Exception::$message"), and — the reason this matters in practice — a subclass may legally
+/// redeclare it as `protected $message = 'default';`, a widespread shape in Symfony's exception
+/// hierarchy that a `public` parent declaration rejected with a spurious "Cannot reduce visibility
+/// when overriding property".
+///
+/// UNTYPED, also matching PHP, so the property-invariance rule sees what PHP sees: a subclass may
+/// write `protected $message = 'default';` (type omitted, as PHP requires against an untyped
+/// parent) instead of being told "Type of X::$message must be string". The empty-string default
+/// still gives the slot a `string` STORAGE type through `infer_expr_type_syntactic`, which is what
+/// keeps the runtime layout unchanged.
+///
+/// That inferred `string` storage is a DELIBERATE, documented divergence from PHP, which can hold
+/// any value here — `AutowiringFailedException` stores a `Stringable` anonymous class in it for a
+/// lazy message. elephc's compact Throwable payload keeps the message as a raw `(pointer, length)`
+/// pair at object offsets 8/16, and `getMessage()`/`__toString()` are codegen intrinsics
+/// (`lower_throwable_get_message`, `src/codegen/lower_inst.rs`) that read those two words directly
+/// rather than executing the synthetic body below. Widening the slot to `Mixed` would store a
+/// single boxed pointer at offset 8 and leave a stale length at 16, so `getMessage()` would
+/// silently return garbage; and PHP re-invokes `__toString()` on EVERY `getMessage()` call, so
+/// coercing at the store instead would change observable behaviour. Honouring PHP here needs a
+/// tagged message field across the whole Throwable surface (allocation, intrinsic getters, the
+/// uncaught-exception printer, reflection), which is a feature rather than a declaration change.
 pub(super) fn builtin_exception_message_property() -> ClassProperty {
     ClassProperty {
         name: "message".to_string(),
-        visibility: Visibility::Public,
+        visibility: Visibility::Protected,
         set_visibility: None,
-        type_expr: Some(TypeExpr::Str),
+        type_expr: None,
         hooks: PropertyHooks::none(),
         readonly: false,
         is_final: false,

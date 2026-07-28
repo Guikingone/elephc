@@ -594,3 +594,39 @@ fn test_error_clone_must_take_zero_arguments() {
         "Magic method must take 0 arguments: P::__clone",
     );
 }
+
+/// Verifies `Exception::$message` is PROTECTED, matching PHP's real declaration
+/// (`protected $message = '';`): an external read must be rejected, not silently served.
+/// `php -n -r '$e = new Exception("boom"); echo $e->message;'` raises
+/// "Cannot access protected property Exception::$message"; elephc reports the same access
+/// violation at compile time because the receiver class is statically known.
+#[test]
+fn test_error_builtin_exception_message_is_protected() {
+    expect_error(
+        "<?php $e = new Exception(\"boom\"); echo $e->message;",
+        "Cannot access protected property",
+    );
+}
+
+/// Verifies a subclass may redeclare `protected $message = 'default';` — the shape PHP itself
+/// permits against its untyped parent declaration, and a widespread one in exception hierarchies.
+/// A `public`, `string`-typed parent declaration rejected it twice over ("Cannot reduce visibility
+/// when overriding property", then "Type of E::$message must be string"). `php -n` accepts this
+/// source; the checker must too.
+#[test]
+fn test_builtin_exception_message_subclass_may_redeclare_untyped_protected() {
+    expect_ok("<?php class E extends RuntimeException { protected $message = 'fallback'; }");
+}
+
+/// Verifies the untyped parent declaration still forbids a subclass from GIVING `$message` a type.
+/// `php -n` fatals with "Type of E::$message must be omitted to match the parent definition in
+/// class Exception"; the checker must reject it too rather than accepting a second, incompatible
+/// contract. (Widening the visibility to `public` is legal in PHP and stays accepted.)
+#[test]
+fn test_error_builtin_exception_message_subclass_cannot_add_a_type() {
+    expect_error(
+        "<?php class E extends RuntimeException { protected string $message = 'x'; }",
+        "must not be defined",
+    );
+    expect_ok("<?php class E extends RuntimeException { public $message = 'x'; }");
+}

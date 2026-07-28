@@ -52,14 +52,28 @@ fn test_builtin_error_is_not_caught_by_exception() {
     assert_eq!(out, "error");
 }
 
-/// Checks that the public `$message` property and getMessage() both return the
-/// constructor argument, verifying the Exception property surface.
+/// Checks that `$message` is reachable as a PROTECTED property from inside a subclass and that
+/// `getMessage()` returns the same constructor argument, verifying the Exception property surface.
+///
+/// PHP declares `protected $message = '';` on `Exception`, so the read has to happen through
+/// `$this` in a subclass; `php -n` on this source prints "boom:boom".
 #[test]
 fn test_builtin_exception_message_api() {
     let out = compile_and_run(
-        "<?php $e = new Exception(\"boom\"); echo $e->message; echo \":\"; echo $e->getMessage();",
+        "<?php class E extends Exception { public function raw(): string { return $this->message; } } $e = new E(\"boom\"); echo $e->raw(); echo \":\"; echo $e->getMessage();",
     );
     assert_eq!(out, "boom:boom");
+}
+
+/// Verifies a subclass constructor may write `$this->message` and `getMessage()` reads it back
+/// through the compact Throwable payload, with the property now declared `protected` and UNTYPED
+/// as PHP declares it. `php -n` on this source prints "set-late".
+#[test]
+fn test_builtin_exception_message_writable_from_subclass_constructor() {
+    let out = compile_and_run(
+        "<?php class E extends RuntimeException { public function __construct() { $this->message = \"set-late\"; } } $e = new E(); echo $e->getMessage();",
+    );
+    assert_eq!(out, "set-late");
 }
 
 /// Verifies `getMessage()` returns a caller-owned string without consuming the
