@@ -481,8 +481,9 @@ fn first_class_callable_target<'a>(
     ctx: &'a FunctionContext<'_>,
     inst: &Instruction,
 ) -> Option<&'a str> {
-    let Some(Immediate::Data(data)) = inst.immediate else {
-        return None;
+    let data = match inst.immediate {
+        Some(Immediate::Data(data)) | Some(Immediate::ProfiledData { data, .. }) => data,
+        _ => return None,
     };
     ctx.module
         .data
