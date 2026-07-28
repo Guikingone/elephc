@@ -555,3 +555,52 @@ rmdir("root");
     assert_eq!(out, "child:wrapped:leaf.txt=root/child/leaf.txt\nhas|leaf=7\n");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// `RecursiveDirectoryIterator::getSubPath()`/`getSubPathname()` report the current entry's
+/// location relative to the root the traversal started at: the root iterator's sub path is `''`,
+/// and every child seeded through `getChildren()` inherits the parent's `getSubPathname()`. Output
+/// is sorted because libc directory-entry order is unspecified; every expectation is `php -n`
+/// (8.5.6) output for the same tree.
+#[test]
+fn test_recursive_directory_iterator_reports_sub_paths() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+mkdir("tree/a/b", 0777, true);
+mkdir("tree/d");
+file_put_contents("tree/r.txt", "r");
+file_put_contents("tree/a/a.txt", "a");
+file_put_contents("tree/a/b/b.txt", "b");
+file_put_contents("tree/d/d.txt", "d");
+
+$it = new RecursiveIteratorIterator(
+    new RecursiveDirectoryIterator("tree", FilesystemIterator::SKIP_DOTS),
+    RecursiveIteratorIterator::SELF_FIRST
+);
+$rows = [];
+foreach ($it as $entry) {
+    $inner = $it->getInnerIterator();
+    $rows[] = basename($entry) . "[" . $inner->getSubPath() . "][" . $inner->getSubPathname() . "]";
+}
+sort($rows);
+echo implode(";", $rows);
+echo "\n";
+
+$root = new RecursiveDirectoryIterator("tree", FilesystemIterator::SKIP_DOTS);
+$top = [];
+foreach ($root as $entry) {
+    $top[] = basename($entry) . "[" . $root->getSubPath() . "][" . $root->getSubPathname() . "]";
+}
+sort($top);
+echo implode(";", $top);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "a.txt[a][a/a.txt];a[][a];b.txt[a/b][a/b/b.txt];b[a][a/b];",
+            "d.txt[d][d/d.txt];d[][d];r.txt[][r.txt]\n",
+            "a[][a];d[][d];r.txt[][r.txt]",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

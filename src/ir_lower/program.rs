@@ -2669,9 +2669,15 @@ fn is_supported_builtin_spl_method(class_name: &str, method_key: &str) -> bool {
             "__construct" | "current" | "key" | "getflags" | "setflags"
         ),
         "GlobIterator" => matches!(method_key, "__construct" | "count" | "setflags"),
-        "RecursiveDirectoryIterator" => {
-            matches!(method_key, "__construct" | "haschildren" | "getchildren")
-        }
+        "RecursiveDirectoryIterator" => matches!(
+            method_key,
+            "__construct"
+                | "haschildren"
+                | "getchildren"
+                | "getsubpath"
+                | "getsubpathname"
+                | "__elephcsetsubpath"
+        ),
         "RecursiveCachingIterator" => matches!(
             method_key,
             "__construct" | "haschildren" | "getchildren" | "__elephcassumerecursiveiterator"

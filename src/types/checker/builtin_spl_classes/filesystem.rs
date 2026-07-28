@@ -162,7 +162,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             is_abstract: false,
             is_final: false,
             is_readonly_class: false,
-            properties: Vec::new(),
+            properties: recursive_directory_iterator_properties(),
             methods: recursive_directory_iterator_methods(),
             attributes: Vec::new(),
             constants: filesystem_iterator_constants(),
@@ -266,6 +266,24 @@ fn directory_iterator_properties() -> Vec<ClassProperty> {
 /// Builds GlobIterator storage properties.
 fn glob_iterator_properties() -> Vec<ClassProperty> {
     vec![protected_storage_property("pattern", TypeExpr::Str)]
+}
+
+/// Builds RecursiveDirectoryIterator storage properties.
+///
+/// `__elephcSubPath` holds the directory path of the CURRENT iterator relative to the root the
+/// traversal started at, with no trailing separator (`''` for the root iterator itself).
+/// `getChildren()` seeds each child with the parent's `getSubPathname()`, which is how PHP's own
+/// sub-path chain is built.
+///
+/// The `__elephc` prefix is load-bearing, not cosmetic. PHP's real `RecursiveDirectoryIterator`
+/// keeps its sub path in C-internal state and exposes NO userland property for it, so subclasses
+/// are free to declare their own — Symfony's `Finder\Iterator\RecursiveDirectoryIterator` declares
+/// `private string $subPath`. A builtin storage slot literally named `subPath` collides with it and
+/// (being `protected` here) raises "Cannot reduce visibility when overriding property" on code PHP
+/// accepts. Any synthetic slot standing in for C-internal state must use a name userland cannot
+/// plausibly pick.
+fn recursive_directory_iterator_properties() -> Vec<ClassProperty> {
+    vec![protected_storage_property("__elephcSubPath", TypeExpr::Str)]
 }
 
 /// Builds RecursiveCachingIterator storage properties.
@@ -579,7 +597,29 @@ fn recursive_directory_iterator_methods() -> Vec<ClassMethod> {
                 param_default("flags", TypeExpr::Int, int_expr(FS_CURRENT_AS_FILEINFO)),
             ],
             Some(TypeExpr::Void),
-            directory_construct_body(var_expr("directory"), var_expr("flags"), true, false),
+            recursive_directory_construct_body(),
+        ),
+        method_with_body(
+            "getSubPath",
+            Vec::new(),
+            Some(TypeExpr::Str),
+            return_body(recursive_directory_sub_path_expr()),
+        ),
+        method_with_body(
+            "getSubPathname",
+            Vec::new(),
+            Some(TypeExpr::Str),
+            recursive_directory_get_sub_pathname_body(),
+        ),
+        method_with_body(
+            "__elephcSetSubPath",
+            vec![param("subPath", TypeExpr::Str)],
+            Some(TypeExpr::Void),
+            vec![property_assign_stmt(
+                this_expr(),
+                "__elephcSubPath",
+                string_copy_expr(var_expr("subPath")),
+            )],
         ),
         method_with_body(
             "hasChildren",
@@ -1615,7 +1655,52 @@ fn recursive_directory_has_children_body() -> Vec<Stmt> {
     ))
 }
 
+/// Returns `$this->__elephcSubPath` — the current iterator's directory path relative to the
+/// traversal root, with no trailing separator (`''` for the root iterator). See
+/// `recursive_directory_iterator_properties` for why the slot is name-mangled.
+fn recursive_directory_sub_path_expr() -> Expr {
+    property_access(this_expr(), "__elephcSubPath")
+}
+
+/// Builds RecursiveDirectoryIterator's constructor: the shared directory setup plus an empty
+/// `subPath`. A directly-constructed iterator IS the traversal root, so its sub path is `''`;
+/// `getChildren()` overwrites the child's copy with the parent's `getSubPathname()`.
+fn recursive_directory_construct_body() -> Vec<Stmt> {
+    let mut body = directory_construct_body(var_expr("directory"), var_expr("flags"), true, false);
+    body.push(property_assign_stmt(this_expr(), "__elephcSubPath", string_expr("")));
+    body
+}
+
+/// Builds RecursiveDirectoryIterator getSubPathname().
+///
+/// PHP returns the current entry's path relative to the traversal root: the entry's file name when
+/// the sub path is empty, otherwise `<subPath>/<filename>`. Verified against php 8.5.6 on a nested
+/// tree: `a` → `subPath=''`/`subPathname='a'`, and `a/b/b.txt` → `subPath='a/b'`/
+/// `subPathname='a/b/b.txt'`.
+fn recursive_directory_get_sub_pathname_body() -> Vec<Stmt> {
+    vec![
+        assign_stmt("name", function_call("basename", vec![file_path_arg_expr()])),
+        if_stmt(
+            binary_expr(
+                recursive_directory_sub_path_expr(),
+                BinOp::StrictEq,
+                string_expr(""),
+            ),
+            return_body(var_expr("name")),
+            None,
+        ),
+        return_stmt(path_join_expr(
+            recursive_directory_sub_path_expr(),
+            var_expr("name"),
+        )),
+    ]
+}
+
 /// Builds RecursiveDirectoryIterator getChildren().
+///
+/// The child's `subPath` is seeded with the PARENT's `getSubPathname()` — the parent's own sub path
+/// extended by the directory entry being descended into — which is exactly how PHP chains sub paths
+/// down a recursive traversal.
 fn recursive_directory_get_children_body() -> Vec<Stmt> {
     vec![
         if_stmt(
@@ -1623,10 +1708,19 @@ fn recursive_directory_get_children_body() -> Vec<Stmt> {
             return_body(null_expr()),
             None,
         ),
-        return_stmt(new_object_expr(
-            "RecursiveDirectoryIterator",
-            vec![file_path_arg_expr(), filesystem_flags_expr()],
+        assign_stmt(
+            "child",
+            new_object_expr(
+                "RecursiveDirectoryIterator",
+                vec![file_path_arg_expr(), filesystem_flags_expr()],
+            ),
+        ),
+        expr_stmt(method_call(
+            var_expr("child"),
+            "__elephcSetSubPath",
+            vec![method_call(this_expr(), "getSubPathname", Vec::new())],
         )),
+        return_stmt(var_expr("child")),
     ]
 }
 
