@@ -422,3 +422,62 @@ if ($a && $b) { echo "ok"; }
     assert_eq!(out, "ok");
 }
 
+/// Regression (sibling of the short-circuit-chain assignment surfacing): a variable assigned in the
+/// RHS of a null-coalescing assignment to a non-local target (`$cache[$k] ??= ($p = 5) > 0 ? …`) is
+/// visible to LATER sub-expressions of that same RHS. PHP evaluates the `??=` default left-to-right,
+/// so `$p` is defined before the ternary branch `$p * 2` reads it. Before the fix the non-local
+/// `??=` value was re-inferred through a plain (non-effect) pass that reported a spurious
+/// "Undefined variable: $p" at `$p * 2`. This is the symfony/var-dumper `Cloner\Stub` shape. PHP
+/// prints `10`.
+#[test]
+fn test_coalesce_assign_rhs_assignment_visible_within_same_rhs() {
+    let out = compile_and_run(
+        r#"<?php
+$cache = [];
+$k = 'a';
+$d = $cache[$k] ??= ($p = 5) > 0 ? $p * 2 : 0;
+echo $d;
+"#,
+    );
+    assert_eq!(out, "10");
+}
+
+/// Regression (nested-array `??=` target, both ternary branches read the RHS-assigned variable):
+/// `$m[$c][$k] ??= ($p = 4) > 1 ? $p + 100 : $p` compiles and both branches see `$p`. PHP prints
+/// `104`.
+#[test]
+fn test_coalesce_assign_nested_target_rhs_assignment_visible_in_both_branches() {
+    let out = compile_and_run(
+        r#"<?php
+$m = [];
+$c = 'x';
+$k = 'y';
+$r = $m[$c][$k] ??= ($p = 4) > 1 ? $p + 100 : $p;
+echo $r;
+"#,
+    );
+    assert_eq!(out, "104");
+}
+
+/// Soundness control for the fix above: a variable defined ONLY inside a `??=` RHS must NOT leak as
+/// definitely-defined to code AFTER the statement. When the target is already non-null the RHS never
+/// runs, so PHP leaves `$p` undefined afterwards (a runtime warning). The checker must still reject
+/// the post-statement read; the within-RHS visibility fix is scoped to a cloned env and does not
+/// over-leak. Mirrors PHP's `Undefined variable $p` for
+/// `$c = ['a' => 1]; $k = 'a'; $c[$k] ??= ($p = 5); echo $p;`.
+#[test]
+fn test_coalesce_assign_rhs_only_variable_not_defined_after_statement() {
+    let out = compile_expect_check_error(
+        r#"<?php
+$c = ['a' => 1];
+$k = 'a';
+$c[$k] ??= ($p = 5);
+echo $p;
+"#,
+    );
+    assert!(
+        out.contains("Undefined variable: $p"),
+        "expected post-`??=` read of an RHS-only variable to be rejected, got: {out}"
+    );
+}
+

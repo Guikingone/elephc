@@ -134,7 +134,17 @@ impl Checker {
             Some(result_target) if result_target != target => result_target,
             _ => value,
         };
-        self.infer_type(result_expr, env)
+        // Re-infer the result expression with assignment-effect threading rather than the plain
+        // pass. For a non-local `??=` target (`$a[$k] ??= …`, `self::$p[$c][$k] ??= …`) the result
+        // expression IS the `NullCoalesce` value, whose `default` may itself assign a variable that
+        // a later sub-expression of the same default reads (`… ??= ($p = 5) > 0 ? $p * 2 : 0`).
+        // PHP evaluates the default left-to-right, so `$p` is defined before `$p * 2` runs; the
+        // effect-aware inference threads that within-default definition (through a cloned env for
+        // the conditionally-evaluated default, so `$p` never leaks past the statement), while the
+        // plain pass would re-check `$p * 2` against an env without `$p` and report a spurious
+        // "Undefined variable: $p". For a distinct bound result target (compound assignment) the
+        // result expression is a plain temp read, which the effect path infers identically.
+        self.infer_type_with_assignment_effects(result_expr, env)
     }
 
     /// Type-checks `$object->{$property} = $value` assignment expressions.
