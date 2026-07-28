@@ -658,7 +658,6 @@ impl RuntimeFnId {
             RuntimeFnId::Ceil |
             RuntimeFnId::Chop |
             RuntimeFnId::Chr |
-            RuntimeFnId::Clamp |
             RuntimeFnId::Cos |
             RuntimeFnId::Cosh |
             RuntimeFnId::Crc32 |
@@ -731,6 +730,7 @@ impl RuntimeFnId {
             RuntimeFnId::Ucfirst |
             RuntimeFnId::Ucwords |
             RuntimeFnId::Wordwrap => crate::ir::Effects::empty(),
+            RuntimeFnId::Clamp => crate::ir::Effects::MAY_THROW,
             RuntimeFnId::FunctionExists
             | RuntimeFnId::Defined
             | RuntimeFnId::JsonLastError

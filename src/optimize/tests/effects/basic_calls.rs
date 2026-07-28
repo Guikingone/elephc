@@ -112,6 +112,32 @@ fn test_effect_analysis_refines_read_only_builtin_metadata() {
     assert!(!expr_is_observable(&expr));
 }
 
+/// Verifies catchable builtin validation errors remain visible to try/catch pruning.
+#[test]
+fn test_effect_analysis_preserves_throwing_builtin_metadata() {
+    let expr = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::from("clamp"),
+            args: vec![
+                Expr::int_lit(5),
+                Expr::int_lit(10),
+                Expr::int_lit(0),
+            ],
+        },
+        Span::dummy(),
+    );
+
+    assert!(expr_effect(&expr).may_throw);
+    assert!(expr_is_observable(&expr));
+
+    let statement = Stmt::new(StmtKind::ExprStmt(expr), Span::dummy());
+    assert_eq!(
+        prune_constant_control_flow(vec![statement.clone()]),
+        vec![statement.clone()]
+    );
+    assert_eq!(eliminate_dead_code(vec![statement.clone()]), vec![statement]);
+}
+
 /// Verifies callback builtins combine a known callback summary with intrinsic array work.
 #[test]
 fn test_effect_analysis_refines_builtin_with_known_pure_callback() {

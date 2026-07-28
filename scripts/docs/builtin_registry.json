@@ -10117,7 +10117,9 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "may_throw"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
