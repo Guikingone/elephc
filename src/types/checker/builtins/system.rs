@@ -112,7 +112,14 @@ pub(super) fn check_builtin(
             // In PHP it formats the message and raises an `E_USER_DEPRECATED` notice.
             // Deprecation notices are advisory, so elephc accepts the call and treats it
             // as a sound no-op returning void. package/version/message are required.
-            if args.len() < 3 {
+            //
+            // A spread argument (`trigger_deprecation(...$args)`) unpacks at runtime into a
+            // statically-unknown number of positional arguments, so the pre-expansion count is
+            // not the real arity and the compile-time gate must be skipped — exactly as
+            // `Checker::check_builtin` already does for registry-backed builtins. Symfony's
+            // `ParameterBag::get()` calls `trigger_deprecation(...$this->deprecatedParameters[$name])`.
+            let has_spread = args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)));
+            if !has_spread && args.len() < 3 {
                 return Err(CompileError::new(
                     span,
                     "trigger_deprecation() takes at least 3 arguments",

@@ -369,3 +369,34 @@ echo date_diff(1, 2), "|", timezone_name_get(5);
     );
     assert_eq!(out, "user:3|tz:5");
 }
+
+/// `trigger_deprecation(...$args)` must not be rejected by the pre-expansion arity gate: a
+/// spread unpacks at runtime, so the static argument count is not the real arity. Mirrors
+/// symfony/dependency-injection's `ParameterBag::get()`, which calls
+/// `trigger_deprecation(...$this->deprecatedParameters[$name])`.
+#[test]
+fn test_trigger_deprecation_accepts_argument_unpacking() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    private array $deprecated = [];
+    private array $params = [];
+    public function deprecate(string $n, array $spec): void { $this->deprecated[$n] = $spec; }
+    public function set(string $n, string $v): void { $this->params[$n] = $v; }
+    public function get(string $n): string {
+        if (isset($this->deprecated[$n])) {
+            trigger_deprecation(...$this->deprecated[$n]);
+        }
+        return $this->params[$n];
+    }
+}
+$b = new Bag();
+$b->set('a', 'A');
+$b->deprecate('a', ['acme/pkg', '1.2', 'The "%s" parameter is deprecated.', 'a']);
+echo $b->get('a'), "\n";
+$b->set('b', 'B');
+echo $b->get('b'), "\n";
+"#,
+    );
+    assert_eq!(out, "A\nB\n");
+}
