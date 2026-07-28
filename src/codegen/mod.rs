@@ -1360,6 +1360,9 @@ fn is_stream_registration_builtin(inst: &crate::ir::Instruction) -> bool {
 fn typed_builtin_target(inst: &crate::ir::Instruction) -> Option<crate::ir::RuntimeFnId> {
     match inst.immediate {
         Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))) => Some(target),
+        Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. },
+        )) => Some(target),
         _ => None,
     }
 }

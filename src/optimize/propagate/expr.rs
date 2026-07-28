@@ -523,6 +523,7 @@ pub(crate) fn build_if_stmt(
                             else_body: None,
                         },
                         span,
+                        source_mode: crate::source::current_parse_mode(),
                         attributes: Vec::new(),
                     };
                 }
@@ -538,6 +539,7 @@ pub(crate) fn build_if_stmt(
             else_body,
         },
         span,
+        source_mode: crate::source::current_parse_mode(),
         attributes: Vec::new(),
     }
 }

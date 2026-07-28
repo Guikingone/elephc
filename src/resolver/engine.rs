@@ -88,6 +88,7 @@ pub(super) fn resolve_stmts(
     let mut result = Vec::new();
 
     for stmt in stmts {
+        let _source_mode = crate::source::scoped_parse_mode(stmt.source_mode);
         // Expression-position includes (`$x = require X;` / `return require X;`) are expanded
         // before generic expression resolution so the included file's statements are inlined into
         // the caller's scope rather than resolved as an opaque sub-expression.

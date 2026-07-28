@@ -264,6 +264,7 @@ pub(super) fn lower_eval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     save_eval_code_string(ctx);
     ensure_eval_context(ctx)?;
+    mark_eval_strict_php(ctx, inst);
     set_eval_call_site(ctx, inst);
     ensure_eval_scope(ctx)?;
     ensure_eval_global_scope(ctx)?;
@@ -300,7 +301,8 @@ fn lower_eval_literal_eir_function(
     inst: &Instruction,
     fragment: &str,
 ) -> Result<bool> {
-    let function_name = crate::eval_aot::eir_function_name(fragment);
+    let strict_php = super::super::instruction_strict_php_profile(inst);
+    let function_name = crate::eval_aot::eir_function_name(fragment, strict_php);
     if let Some(callee) = ctx.callable_function_by_name(&function_name) {
         if callee.params.is_empty() && callee.return_php_type.codegen_repr() == PhpType::Mixed {
             ctx.emitter
@@ -322,7 +324,8 @@ fn lower_eval_literal_scope_eir_function(
     inst: &Instruction,
     fragment: &str,
 ) -> Result<bool> {
-    let function_name = crate::eval_aot::eir_scope_function_name(fragment);
+    let strict_php = super::super::instruction_strict_php_profile(inst);
+    let function_name = crate::eval_aot::eir_scope_function_name(fragment, strict_php);
     let Some(callee) = ctx.callable_function_by_name(&function_name) else {
         return Ok(false);
     };
@@ -335,6 +338,7 @@ fn lower_eval_literal_scope_eir_function(
     let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
         fragment,
         ctx.module.source_path.as_deref(),
+        strict_php,
         |name, args| eval_literal_static_function_supported_by_codegen(ctx, name, args),
         |receiver, method, args| {
             eval_literal_static_method_supported_by_codegen(ctx, receiver, method, args)
@@ -740,8 +744,9 @@ fn eval_literal_fragment(ctx: &FunctionContext<'_>, inst: &Instruction) -> Resul
     if inst.op != Op::EvalLiteralCall {
         return Ok(None);
     }
-    let Some(Immediate::Data(data)) = inst.immediate else {
-        return Ok(None);
+    let data = match inst.immediate {
+        Some(Immediate::Data(data)) | Some(Immediate::ProfiledData { data, .. }) => data,
+        _ => return Ok(None),
     };
     let fragment = ctx
         .module
@@ -760,6 +765,7 @@ fn emit_eval_literal_aot_marker(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
         &fragment,
         ctx.module.source_path.as_deref(),
+        super::super::instruction_strict_php_profile(inst),
         |name, args| eval_literal_static_function_supported_by_codegen(ctx, name, args),
         |receiver, method, args| {
             eval_literal_static_method_supported_by_codegen(ctx, receiver, method, args)
@@ -2130,23 +2136,26 @@ fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     register_eval_declared_symbols(ctx, offset);
     register_eval_native_functions(ctx, offset)?;
     register_eval_native_method_signatures(ctx, offset);
-    mark_eval_strict_php(ctx);
     ctx.emitter.label(&ready);
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_CONTEXT_HANDLE_OFFSET);
     Ok(())
 }
 
-/// Marks the eval bridge as strict-PHP when this compilation runs with
-/// `--strict-php`, so runtime eval hides extension builtins exactly like the
-/// AOT surface does. Emits nothing in normal compilations: non-strict binaries
-/// never reference the setter symbol, and the bridge's flag defaults to off.
-fn mark_eval_strict_php(ctx: &mut FunctionContext<'_>) {
-    if !crate::strict_php::is_enabled() {
-        return;
-    }
+/// Writes the physical eval call site's strict profile before every runtime dispatch.
+///
+/// Writing both true and false prevents a strict eval from leaking its profile into
+/// a later LFC eval that reuses the same persistent bridge context.
+fn mark_eval_strict_php(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
+    let strict_php = matches!(
+        inst.immediate,
+        Some(Immediate::ProfiledData {
+            strict_php: true,
+            ..
+        })
+    );
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    abi::emit_load_int_immediate(ctx.emitter, arg_reg, 1);
+    abi::emit_load_int_immediate(ctx.emitter, arg_reg, i64::from(strict_php));
     let symbol = ctx
         .emitter
         .target

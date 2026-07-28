@@ -17,12 +17,12 @@ use crate::cli::CliConfig;
 use crate::codegen::platform::{Platform, Target};
 use crate::codegen::Emit;
 use crate::span::Span;
+use crate::source::SourceMode;
 use crate::timings::CompileTimings;
 use crate::{
-    autoload, codegen, conditional, debug_info, errors, exports, ir, ir_lower, ir_passes, lexer,
-    linker, list_id_prelude, magic_constants, name_resolver, opcache_prelude, optimize, parser,
-    pdo_prelude, resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude,
-    web_prelude,
+    autoload, codegen, debug_info, errors, exports, ir, ir_lower, ir_passes, lexer,
+    linker, list_id_prelude, name_resolver, opcache_prelude, optimize, parser, pdo_prelude,
+    resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude, web_prelude,
 };
 
 /// Holds the paths for all compilation output files (assembly, object, binary, source map).
@@ -74,6 +74,7 @@ pub(crate) fn compile(config: CliConfig) {
     codegen::set_compile_profile(php_version, web);
     crate::strict_php::set_enabled(strict_php);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
+    let source_mode = SourceMode::from_path(Path::new(filename));
     let output_paths = output_paths(filename, target, emit);
     let mut timings = CompileTimings::new(emit_timings);
 
@@ -91,7 +92,7 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("tokenize");
     let phase_started = Instant::now();
-    let tokens = match lexer::tokenize(&source) {
+    let tokens = match lexer::tokenize_with_mode(&source, source_mode) {
         Ok(tokens) => tokens,
         Err(e) => {
             crate::progress::clear();
@@ -103,7 +104,7 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("parse");
     let phase_started = Instant::now();
-    let parsed = match parser::parse(&tokens) {
+    let parsed = match parser::parse_with_mode(&tokens, source_mode) {
         Ok(ast) => ast,
         Err(e) => {
             crate::progress::clear();
@@ -116,22 +117,20 @@ pub(crate) fn compile(config: CliConfig) {
     crate::progress::phase("magic-constants");
     let phase_started = Instant::now();
     let main_file_path = Path::new(filename).to_path_buf();
-    let parsed = magic_constants::substitute_file_and_scope_constants(parsed, &main_file_path);
+    let parsed = match crate::source::finalize_physical_program(
+        parsed,
+        &main_file_path,
+        source_mode,
+        &defines,
+    ) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
     timings.record_since("magic-constants", phase_started);
-
-    // Strict-PHP audit of the main file: after magic-constant substitution
-    // (matching the include/autoload audit sites) and before
-    // `conditional::apply` consumes `ifdef` nodes, so every elephc-only
-    // construct is reported with its span. Included and autoloaded user files
-    // are audited where they are parsed (resolver / autoloader), so injected
-    // compiler preludes are never audited.
-    if let Err(e) = crate::strict_php::check_file(&parsed, filename) {
-        crate::progress::clear();
-        errors::report(&e);
-        process::exit(1);
-    }
-
-    let parsed = conditional::apply(parsed, &defines);
 
     crate::progress::phase("autoload-build");
     let phase_started = Instant::now();
@@ -146,7 +145,8 @@ pub(crate) fn compile(config: CliConfig) {
     let phase_started = Instant::now();
     // `resolve_collecting_includes` also hands back the canonical path of every file the
     // resolver statically inlined — group 2 of the OPcache script manifest.
-    let (ast, opcache_included_files) = match resolver::resolve_collecting_includes(parsed, parent) {
+    let (ast, opcache_included_files) =
+        match resolver::resolve_collecting_includes_with_defines(parsed, parent, &defines) {
         Ok(resolved) => resolved,
         Err(e) => {
             crate::progress::clear();
@@ -323,7 +323,12 @@ pub(crate) fn compile(config: CliConfig) {
     // include targets: group 3 of the OPcache script manifest, and the last one to become
     // knowable.
     let (ast, opcache_autoloaded_files) =
-        match autoload::run_collecting_included(ast, parent, &autoload_registry) {
+        match autoload::run_collecting_included_with_defines(
+            ast,
+            parent,
+            &autoload_registry,
+            &defines,
+        ) {
             Ok(resolved) => resolved,
             Err(e) => {
                 crate::progress::clear();

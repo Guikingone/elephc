@@ -164,7 +164,7 @@ pub fn inject_if_used(program: Program) -> Program {
         return program;
     }
     let tokens = crate::lexer::tokenize(VAR_EXPORT_PRELUDE_SRC).expect("var_export prelude must tokenize");
-    let mut combined = crate::parser::parse(&tokens).expect("var_export prelude must parse");
+    let mut combined = crate::parser::parse_internal(&tokens).expect("var_export prelude must parse");
     combined.extend(program);
     combined
 }

@@ -13,22 +13,23 @@ the exhaustive *what*.
 ## Synopsis
 
 ```text
-elephc [OPTIONS] <source.php>
+elephc [OPTIONS] <source-file>
 ```
 
-Exactly one positional argument is required: the path to the PHP source file. The
-binary is written next to it, named after the source without its extension.
+Exactly one positional argument is required: the path to tagged `.php` or
+tagless `.lfc` source. The binary is written next to it, named after the source
+without its extension.
 
 ## Input and output
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `<source.php>` | path | — | Required. The PHP file to compile. |
+| `<source-file>` | path | — | Required. A tagged `.php` or tagless `.lfc` file to compile. Other suffixes retain tagged-PHP behavior. |
 | `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`) | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library. |
 | `--emit-asm` | — | off | Write generated assembly instead of a binary. |
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
 | `--check` | — | off | Run front-end checks only; write nothing. |
-| `--strict-php` | — | off | Reject every elephc extension; accept only PHP-compatible constructs. See [Strict PHP mode](#strict-php-mode). |
+| `--strict-php` | — | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [Strict PHP mode](#strict-php-mode). |
 | `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
 | `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |
 | `--php-version VERSION` | `8.2`, `8.3`, `8.4`, `8.5` | `8.5` | Select the maintained PHP compatibility profile for version-dependent behavior. Sessions use it for PHP 8.4 deprecations/validation and PHP 8.5 CHIPS/option semantics. |
@@ -111,10 +112,11 @@ See [Linking, heap, and conditional compilation](linking-and-conditional-compila
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--strict-php` | — | off | Accept only PHP-compatible constructs: every elephc extension becomes a compile error. |
+| `--strict-php` | — | off | Accept only PHP-compatible constructs in PHP-mode user files; LFC and compiler-generated source remain extension-enabled. |
 
-Under `--strict-php` the compiler rejects the [beyond-PHP extensions](../beyond-php/pointers.md)
-at the source level:
+Under `--strict-php` the compiler rejects the
+[beyond-PHP extensions](../beyond-php/pointers.md) at the source level in every
+physical PHP-mode file:
 
 - extension syntax — `ifdef` blocks, `packed class`, `extern` declarations,
   `ptr_cast<T>(...)`, `buffer_new<T>(...)`, typed local variable declarations
@@ -130,9 +132,13 @@ at the source level:
 - names prefixed with `__elephc_` are reserved for the compiler and rejected in
   user code.
 
-The audit covers the main file plus every `include`/`require`d and autoloaded
-user file. Compiler-injected preludes (PDO, timezone, image, web, …) are exempt,
-so programs using those PHP-level APIs keep compiling in strict mode.
+The audit covers a PHP entry plus every PHP-mode `include`/`require`d and
+autoloaded user file. Physical `.lfc` files are always extension-enabled, even
+when reached from a strict PHP entry; conversely, PHP included by an LFC entry
+is still audited. Compiler-injected preludes (PDO, timezone, image, web, …) are
+exempt, so programs using those PHP-level APIs keep compiling in strict mode.
+This same call-site profile controls direct and dynamic calls,
+`function_exists()`, `is_callable()`, first-class callables, and `eval()`.
 
 Strict mode also reaches `eval()`, matching PHP's runtime semantics for eval'd
 code: the compiled binary marks the eval bridge as strict, so extension
@@ -143,8 +149,10 @@ error. Fragments are never rejected at compile time: PHP only fails eval'd code
 when it actually executes, and strict mode preserves that. User functions that
 shadow extension names remain callable from eval'd code.
 
-`--strict-php` cannot be combined with `--define`: defines only feed the `ifdef`
-extension, which strict mode rejects.
+`--strict-php` may be combined with `--define`. LFC `ifdef` blocks consume the
+symbol normally, while a PHP-mode file containing `ifdef` is rejected by the
+strict audit before conditional compilation can remove either branch. Supplying
+an otherwise unused define is valid.
 
 Strict mode guarantees that the *constructs* used are PHP-compatible; it does
 not change elephc's static-subset semantics. A strict-valid program can still be

@@ -69,7 +69,7 @@ pub fn inject_if_used(program: Program) -> Program {
     }
     let src = LIST_ID_PRELUDE_TEMPLATE.replace("__ELEPHC_TZ_GROUPS_TABLE__", table::TIMEZONE_GROUPS_TABLE);
     let tokens = crate::lexer::tokenize(&src).expect("list-id prelude must tokenize");
-    let mut combined = crate::parser::parse(&tokens).expect("list-id prelude must parse");
+    let mut combined = crate::parser::parse_internal(&tokens).expect("list-id prelude must parse");
     combined.extend(program);
     combined
 }

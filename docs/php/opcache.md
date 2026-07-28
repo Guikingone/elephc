@@ -409,8 +409,9 @@ resolved (canonicalized) one. Each rule is pinned by
 
 ## The script manifest
 
-The manifest is the set of PHP source files compiled into the binary. It has
-three sources, each path stat'd once at build time:
+The manifest is the set of physical source files compiled into the binary,
+including tagged `.php` and tagless `.lfc` files. It has three sources, each
+path stat'd once at build time:
 
 1. the entry file,
 2. every statically-resolved `include` / `require` / `include_once` /

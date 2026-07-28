@@ -1224,6 +1224,7 @@ fn lower_fiber_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<
                 callable,
                 callable_arg,
                 "fiber_constructor",
+                false,
             )?;
         } else if matches!(
             &callable_ty,

@@ -17,7 +17,9 @@ use crate::codegen_support::data_section::DataWord;
 use crate::ir::{Immediate, Instruction, Op, PhpTypePredicate, ValueDef, ValueId};
 use crate::names::{define_seen_symbol, ir_global_symbol, php_symbol_key};
 use crate::parser::ast::Visibility;
-use crate::types::checker::builtins::is_php_visible_builtin_function;
+use crate::types::checker::builtins::{
+    is_php_visible_builtin_function_for_profile, supported_builtin_function_names_for_profile,
+};
 use crate::types::{ClassInfo, PhpType};
 
 use super::super::context::FunctionContext;
@@ -767,6 +769,7 @@ fn dynamic_extension_loaded_candidates() -> Vec<String> {
 /// `foreach ($names as $n) if (function_exists($n))` compile.
 pub(crate) fn lower_function_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "function_exists", 1)?;
+    let strict_php = super::instruction_strict_php_profile(inst);
     let value = expect_operand(inst, 0)?;
     if let Some(function_name) = maybe_const_string_operand(ctx, value)? {
         match function_exists_needle(&function_name) {
@@ -775,12 +778,12 @@ pub(crate) fn lower_function_exists(ctx: &mut FunctionContext<'_>, inst: &Instru
                 if let Some(group_name) = ctx.function_variant_group_name(bare) {
                     emit_variant_function_exists(ctx, &group_name);
                 } else {
-                    emit_static_bool(ctx, literal_function_exists(ctx, bare));
+                    emit_static_bool(ctx, literal_function_exists(ctx, bare, strict_php));
                 }
             }
         }
     } else {
-        lower_dynamic_function_exists(ctx, value)?;
+        lower_dynamic_function_exists(ctx, value, strict_php)?;
     }
     store_if_result(ctx, inst)
 }
@@ -810,10 +813,14 @@ fn function_exists_needle(name: &str) -> Option<&str> {
 ///
 /// [`dynamic_function_exists_candidates`] enumerates exactly the names this predicate accepts;
 /// a unit test below checks that correspondence in both directions.
-fn literal_function_exists(ctx: &FunctionContext<'_>, bare_name: &str) -> bool {
+fn literal_function_exists(
+    ctx: &FunctionContext<'_>,
+    bare_name: &str,
+    strict_php: bool,
+) -> bool {
     ctx.function_by_name(bare_name).is_some()
         || ctx.has_extern_function(bare_name)
-        || is_php_visible_builtin_function(bare_name)
+        || is_php_visible_builtin_function_for_profile(bare_name, strict_php)
         || (!bare_name.contains('\\')
             && crate::name_resolver::is_date_procedural_alias(bare_name))
 }
@@ -842,13 +849,17 @@ struct FunctionExistsCandidate {
 /// there into the helper's argument registers, following the same discipline as
 /// [`lower_dynamic_extension_loaded`]; the helper itself re-loads the needle from its own frame
 /// before each `__rt_strcasecmp` call.
-fn lower_dynamic_function_exists(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+fn lower_dynamic_function_exists(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    strict_php: bool,
+) -> Result<()> {
     if ctx.value_php_type(value)?.codegen_repr() != PhpType::Str {
         return Err(CodegenIrError::unsupported(
             "function_exists with non-string dynamic name",
         ));
     }
-    let candidates = dynamic_function_exists_candidates(ctx);
+    let candidates = dynamic_function_exists_candidates(ctx, strict_php);
     if candidates.is_empty() {
         emit_static_bool(ctx, false);
         return Ok(());
@@ -924,7 +935,10 @@ fn emit_function_exists_candidate_table(
 /// compile-time lookups use. Variant groups are collected first so that a name which is both a
 /// group and a plain declaration keeps its runtime activity check, mirroring the literal path's
 /// ordering (it tests `function_variant_group_name` before anything else).
-fn dynamic_function_exists_candidates(ctx: &FunctionContext<'_>) -> Vec<FunctionExistsCandidate> {
+fn dynamic_function_exists_candidates(
+    ctx: &FunctionContext<'_>,
+    strict_php: bool,
+) -> Vec<FunctionExistsCandidate> {
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut candidates: Vec<FunctionExistsCandidate> = Vec::new();
     let mut push = |name: &str, active_symbol: Option<String>| {
@@ -950,7 +964,7 @@ fn dynamic_function_exists_candidates(ctx: &FunctionContext<'_>) -> Vec<Function
     for extern_decl in &ctx.module.extern_decls {
         push(&extern_decl.name, None);
     }
-    for name in crate::types::checker::builtins::supported_builtin_function_names() {
+    for name in supported_builtin_function_names_for_profile(strict_php) {
         push(name, None);
     }
     for name in crate::name_resolver::date_procedural_alias_names() {
@@ -1100,6 +1114,8 @@ fn emit_branch_if_saved_string_matches_ci(
 /// Lowers `is_callable(value)` through static lookup or runtime callable-shape helpers.
 pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_callable", 1)?;
+    let strict_php = super::instruction_strict_php_profile(inst);
+    set_is_callable_strict_profile(ctx, strict_php);
     let value = expect_operand(inst, 0)?;
     let value_ty = ctx.value_php_type(value)?.codegen_repr();
     if has_eval_context(ctx) && value_ty != PhpType::Callable {
@@ -1112,7 +1128,10 @@ pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instructio
                 if let Some((class_name, method_name)) = function_name.rsplit_once("::") {
                     emit_static_bool(ctx, static_method_string_is_callable(ctx, class_name, method_name));
                 } else {
-                    emit_static_bool(ctx, callable_name_exists(ctx, &function_name));
+                    emit_static_bool(
+                        ctx,
+                        callable_name_exists(ctx, &function_name, strict_php),
+                    );
                 }
             } else {
                 ctx.load_value_to_result(value)?;
@@ -1162,6 +1181,22 @@ fn emit_is_callable_pointer_lookup(ctx: &mut FunctionContext<'_>, label: &str) {
         ctx.emitter.instruction("mov rdi, rax");                                // move pointer-shaped value into helper argument 0
     }
     abi::emit_call_label(ctx.emitter, label);
+}
+
+/// Stores the current `is_callable()` call site's builtin visibility for nested runtime helpers.
+fn set_is_callable_strict_profile(ctx: &mut FunctionContext<'_>, strict_php: bool) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", "_callable_strict_profile");
+            abi::emit_load_int_immediate(ctx.emitter, "x10", i64::from(strict_php));
+            ctx.emitter.instruction("str x10, [x9]");                           // publish the call-site builtin visibility for nested string probes
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r10", "_callable_strict_profile");
+            abi::emit_load_int_immediate(ctx.emitter, "r11", i64::from(strict_php));
+            ctx.emitter.instruction("mov QWORD PTR [r10], r11");                // publish the call-site builtin visibility for nested string probes
+        }
+    }
 }
 
 /// Calls the runtime `is_callable` string-name helper for a loaded dynamic string value.
@@ -2035,11 +2070,18 @@ fn emit_static_bool(ctx: &mut FunctionContext<'_>, value: bool) {
 }
 
 /// Returns true when a static callable name resolves to any known callable function.
-fn callable_name_exists(ctx: &FunctionContext<'_>, name: &str) -> bool {
+fn callable_name_exists(
+    ctx: &FunctionContext<'_>,
+    name: &str,
+    strict_php: bool,
+) -> bool {
     ctx.function_variant_group_name(name).is_some()
         || ctx.function_by_name(name).is_some()
         || ctx.has_extern_function(name)
-        || is_php_visible_builtin_function(name.trim_start_matches('\\'))
+        || is_php_visible_builtin_function_for_profile(
+            name.trim_start_matches('\\'),
+            strict_php,
+        )
 }
 
 /// Checks whether a PHP symbol is present in an iterator of known names.
@@ -2152,9 +2194,11 @@ mod function_exists_tests {
     /// for `function_exists('x')` and `false` for `function_exists($x)`.
     #[test]
     fn every_baked_catalog_name_is_accepted_by_the_literal_fold() {
-        for name in crate::types::checker::builtins::supported_builtin_function_names() {
+        for name in
+            crate::types::checker::builtins::catalog::supported_builtin_function_names()
+        {
             assert!(
-                is_php_visible_builtin_function(name),
+                crate::types::checker::builtins::is_php_visible_builtin_function(name),
                 "baked catalog candidate {:?} is rejected by the literal function_exists() fold",
                 name
             );

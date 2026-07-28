@@ -46,7 +46,15 @@ fn is_supported_builtin_function_exact(name: &str) -> bool {
 /// them and they are already invisible to user programs. `buffer_new` is the one
 /// catalog-name-only extension (its call form is dedicated syntax).
 pub(crate) fn strict_php_hidden_builtin(canonical: &str) -> bool {
-    if !crate::strict_php::is_enabled() {
+    strict_php_hidden_builtin_for_profile(canonical, crate::strict_php::is_enabled())
+}
+
+/// Returns whether one explicit visibility profile hides a canonical builtin name.
+pub(crate) fn strict_php_hidden_builtin_for_profile(
+    canonical: &str,
+    strict_php: bool,
+) -> bool {
+    if !strict_php {
         return false;
     }
     if canonical == "buffer_new" {
@@ -87,10 +95,20 @@ pub(crate) fn all_supported_builtin_function_names() -> Vec<&'static str> {
 /// Registry entries flagged as `internal` are excluded, mirroring the semantics
 /// of `is_php_visible_builtin_function`. Names present in both sources appear
 /// exactly once. Under `--strict-php`, extension builtins are excluded entirely.
+#[cfg(test)]
 pub(crate) fn supported_builtin_function_names() -> Vec<&'static str> {
+    supported_builtin_function_names_for_profile(crate::strict_php::is_enabled())
+}
+
+/// Returns builtin names visible under an explicit call-site strict-PHP profile.
+pub(crate) fn supported_builtin_function_names_for_profile(
+    strict_php: bool,
+) -> Vec<&'static str> {
     all_supported_builtin_function_names()
         .into_iter()
-        .filter(|name| !strict_php_hidden_builtin(&name.to_ascii_lowercase()))
+        .filter(|name| {
+            !strict_php_hidden_builtin_for_profile(&name.to_ascii_lowercase(), strict_php)
+        })
         .collect()
 }
 
@@ -118,8 +136,16 @@ pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
 /// flagged as `internal` are excluded from the PHP-visible set, and `--strict-php`
 /// additionally excludes extension builtins.
 pub(crate) fn is_php_visible_builtin_function(name: &str) -> bool {
+    is_php_visible_builtin_function_for_profile(name, crate::strict_php::is_enabled())
+}
+
+/// Returns PHP visibility for a builtin under an explicit call-site strict profile.
+pub(crate) fn is_php_visible_builtin_function_for_profile(
+    name: &str,
+    strict_php: bool,
+) -> bool {
     let canonical = name.to_ascii_lowercase();
-    if strict_php_hidden_builtin(&canonical) {
+    if strict_php_hidden_builtin_for_profile(&canonical, strict_php) {
         return false;
     }
     COMPILER_RESIDENT_BUILTIN_FUNCTIONS.contains(&canonical.as_str())

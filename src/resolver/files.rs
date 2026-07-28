@@ -1,5 +1,5 @@
 //! Purpose:
-//! Resolves include file paths and parses included PHP source files.
+//! Resolves include file paths and parses included PHP/LFC source files.
 //! Runs lexer, parser, and magic-constant substitution for included files.
 //!
 //! Called from:
@@ -15,6 +15,7 @@ use crate::lexer;
 use crate::parser;
 use crate::parser::ast::Stmt;
 use crate::span::Span;
+use crate::source::SourceMode;
 
 /// Resolves a relative include path against a base directory.
 ///
@@ -29,11 +30,15 @@ pub(super) fn resolve_path(path: &str, base_dir: &Path) -> PathBuf {
     }
 }
 
-/// Parses an included PHP source file, returning its AST.
+/// Parses an included physical source file in the mode selected by its path.
 ///
 /// Reads the file contents from disk, tokenizes, and parses to a `Vec<Stmt>`.
 /// Errors include the original `include_span` for diagnostics tracing.
-pub(super) fn parse_file(path: &Path, include_span: Span) -> Result<Vec<Stmt>, CompileError> {
+pub(super) fn parse_file(
+    path: &Path,
+    include_span: Span,
+    defines: &std::collections::HashSet<String>,
+) -> Result<Vec<Stmt>, CompileError> {
     let source = std::fs::read_to_string(path).map_err(|e| {
         CompileError::new(
             include_span,
@@ -43,7 +48,10 @@ pub(super) fn parse_file(path: &Path, include_span: Span) -> Result<Vec<Stmt>, C
 
     let file = path.display().to_string();
 
-    let tokens = lexer::tokenize(&source).map_err(|e| e.with_file(file.clone()))?;
+    let mode = SourceMode::from_path(path);
+    let tokens =
+        lexer::tokenize_with_mode(&source, mode).map_err(|e| e.with_file(file.clone()))?;
 
-    parser::parse(&tokens).map_err(|e| e.with_file(file))
+    let parsed = parser::parse_with_mode(&tokens, mode).map_err(|e| e.with_file(file))?;
+    crate::source::finalize_physical_program(parsed, path, mode, defines)
 }

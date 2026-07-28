@@ -17,7 +17,7 @@ use crate::types::{FunctionSig, PhpType};
 #[derive(Default)]
 pub(crate) struct SharedCodegenState {
     runtime_string_descriptor_cases:
-        Vec<(Option<PhpType>, Option<Vec<String>>, Vec<RuntimeCallableCase>)>,
+        Vec<(Option<PhpType>, Option<Vec<String>>, bool, Vec<RuntimeCallableCase>)>,
     runtime_static_method_descriptor_cases:
         Vec<(Option<Vec<String>>, Vec<RuntimeStaticMethodCallableCase>)>,
     runtime_static_method_descriptor_case_entries: Vec<RuntimeStaticMethodCallableCase>,
@@ -53,6 +53,7 @@ struct RuntimeCallableInvokerCacheEntry {
 struct RuntimeCallWrapperCacheEntry {
     name: String,
     signature: FunctionSig,
+    strict_php: bool,
     label: String,
 }
 
@@ -62,14 +63,16 @@ impl SharedCodegenState {
         &self,
         source_arg_ty: Option<&PhpType>,
         candidate_names: Option<&[String]>,
+        strict_php: bool,
     ) -> Option<Vec<RuntimeCallableCase>> {
         self.runtime_string_descriptor_cases
             .iter()
-            .find(|(cached_ty, cached_names, _)| {
+            .find(|(cached_ty, cached_names, cached_strict_php, _)| {
                 cached_ty.as_ref() == source_arg_ty
                     && cached_names.as_deref() == candidate_names
+                    && *cached_strict_php == strict_php
             })
-            .map(|(_, _, cases)| cases.clone())
+            .map(|(_, _, _, cases)| cases.clone())
     }
 
     /// Stores runtime string-callable cases after their global wrappers are emitted.
@@ -77,11 +80,13 @@ impl SharedCodegenState {
         &mut self,
         source_arg_ty: Option<&PhpType>,
         candidate_names: Option<&[String]>,
+        strict_php: bool,
         cases: &[RuntimeCallableCase],
     ) {
         self.runtime_string_descriptor_cases.push((
             source_arg_ty.cloned(),
             candidate_names.map(|names| names.to_vec()),
+            strict_php,
             cases.to_vec(),
         ));
     }
@@ -199,8 +204,14 @@ impl SharedCodegenState {
         &self,
         name: &str,
         signature: &FunctionSig,
+        strict_php: bool,
     ) -> Option<String> {
-        cached_runtime_call_wrapper(&self.runtime_builtin_wrappers, name, signature)
+        cached_runtime_call_wrapper(
+            &self.runtime_builtin_wrappers,
+            name,
+            signature,
+            strict_php,
+        )
     }
 
     /// Records a synthetic builtin wrapper for module-wide reuse.
@@ -208,12 +219,14 @@ impl SharedCodegenState {
         &mut self,
         name: &str,
         signature: &FunctionSig,
+        strict_php: bool,
         label: &str,
     ) {
         cache_runtime_call_wrapper(
             &mut self.runtime_builtin_wrappers,
             name,
             signature,
+            strict_php,
             label,
         );
     }
@@ -224,7 +237,7 @@ impl SharedCodegenState {
         name: &str,
         signature: &FunctionSig,
     ) -> Option<String> {
-        cached_runtime_call_wrapper(&self.runtime_extern_wrappers, name, signature)
+        cached_runtime_call_wrapper(&self.runtime_extern_wrappers, name, signature, false)
     }
 
     /// Records a synthetic extern wrapper for module-wide reuse.
@@ -238,6 +251,7 @@ impl SharedCodegenState {
             &mut self.runtime_extern_wrappers,
             name,
             signature,
+            false,
             label,
         );
     }
@@ -248,10 +262,15 @@ fn cached_runtime_call_wrapper(
     entries: &[RuntimeCallWrapperCacheEntry],
     name: &str,
     signature: &FunctionSig,
+    strict_php: bool,
 ) -> Option<String> {
     entries
         .iter()
-        .find(|entry| entry.name == name && entry.signature == *signature)
+        .find(|entry| {
+            entry.name == name
+                && entry.signature == *signature
+                && entry.strict_php == strict_php
+        })
         .map(|entry| entry.label.clone())
 }
 
@@ -260,11 +279,13 @@ fn cache_runtime_call_wrapper(
     entries: &mut Vec<RuntimeCallWrapperCacheEntry>,
     name: &str,
     signature: &FunctionSig,
+    strict_php: bool,
     label: &str,
 ) {
     entries.push(RuntimeCallWrapperCacheEntry {
         name: name.to_string(),
         signature: signature.clone(),
+        strict_php,
         label: label.to_string(),
     });
 }

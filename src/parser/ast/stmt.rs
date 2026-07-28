@@ -23,6 +23,8 @@ use super::{
 pub struct Stmt {
     pub kind: StmtKind,
     pub span: Span,
+    /// Physical source profile retained after includes and autoloaded statements are merged.
+    pub source_mode: crate::source::SourceMode,
     /// PHP attributes attached to this statement. Only populated for
     /// declaration kinds (`ClassDecl`, `FunctionDecl`, etc.); the parser
     /// rejects attributes on non-declaration statements.
@@ -32,7 +34,12 @@ pub struct Stmt {
 impl Stmt {
     /// Creates a `Stmt` with the given kind and source span, with an empty attribute list.
     pub fn new(kind: StmtKind, span: Span) -> Self {
-        Stmt { kind, span, attributes: Vec::new() }
+        Stmt {
+            kind,
+            span,
+            source_mode: crate::source::current_parse_mode(),
+            attributes: Vec::new(),
+        }
     }
 
     /// Creates a `Stmt` with the given kind, source span, and PHP attribute list.
@@ -41,7 +48,12 @@ impl Stmt {
         span: Span,
         attributes: Vec<AttributeGroup>,
     ) -> Self {
-        Stmt { kind, span, attributes }
+        Stmt {
+            kind,
+            span,
+            source_mode: crate::source::current_parse_mode(),
+            attributes,
+        }
     }
 }
 

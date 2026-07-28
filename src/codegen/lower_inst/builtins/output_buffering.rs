@@ -56,11 +56,19 @@ pub(crate) fn lower_ob_start(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
             }
             PhpType::Str => {
                 super::io::load_string_to_result(ctx, callback, "ob_start callback name")?;
-                emit_push_string_handler_triple(ctx, callback)?;
+                emit_push_string_handler_triple(
+                    ctx,
+                    callback,
+                    super::super::instruction_strict_php_profile(inst),
+                )?;
             }
             PhpType::Mixed | PhpType::Union(_) => {
                 load_value_to_first_int_arg(ctx, callback)?;
-                emit_push_mixed_handler_triple(ctx, callback)?;
+                emit_push_mixed_handler_triple(
+                    ctx,
+                    callback,
+                    super::super::instruction_strict_php_profile(inst),
+                )?;
             }
             ty => {
                 return Err(CodegenIrError::unsupported(format!(
@@ -189,13 +197,15 @@ fn emit_push_descriptor_handler_triple(ctx: &mut FunctionContext<'_>) {
 fn emit_push_string_handler_triple(
     ctx: &mut FunctionContext<'_>,
     callback: ValueId,
+    strict_php: bool,
 ) -> Result<()> {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     let (ptr_reg, len_reg) = (ptr_reg.to_string(), len_reg.to_string());
     abi::emit_push_reg_pair(ctx.emitter, &ptr_reg, &len_reg);
     let call_reg = abi::nested_call_reg(ctx.emitter);
     let candidate_names = ctx.runtime_callable_candidates(callback);
-    let cases = runtime_string_descriptor_cases(ctx, None, candidate_names.as_deref())?;
+    let cases =
+        runtime_string_descriptor_cases(ctx, None, candidate_names.as_deref(), strict_php)?;
     let matched_join = ctx.next_label("ob_start_cb_matched");
     let selector = callable_dispatch::RuntimeCallableSelector::StringNameStack {
         ptr_offset: 0,
@@ -273,6 +283,7 @@ fn emit_push_string_handler_triple(
 fn emit_push_mixed_handler_triple(
     ctx: &mut FunctionContext<'_>,
     callback: ValueId,
+    strict_php: bool,
 ) -> Result<()> {
     let desc_case = ctx.next_label("ob_start_mixed_desc");
     let string_case = ctx.next_label("ob_start_mixed_string");
@@ -310,7 +321,7 @@ fn emit_push_mixed_handler_triple(
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rax, rdi");                                // string pointer = the unboxed low payload word
     }
-    emit_push_string_handler_triple(ctx, callback)?;
+    emit_push_string_handler_triple(ctx, callback, strict_php)?;
     abi::emit_jump(ctx.emitter, &staged);
     ctx.emitter.label(&null_case);
     emit_push_default_handler_triple(ctx);

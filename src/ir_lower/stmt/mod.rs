@@ -38,6 +38,13 @@ use crate::types::{PhpType, ThrowAccessKind};
 
 /// Lowers one AST statement into the current EIR insertion block.
 pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
+    crate::strict_php::with_source_mode(stmt.source_mode, || {
+        lower_stmt_in_current_source_mode(ctx, stmt);
+    });
+}
+
+/// Lowers one statement after installing its physical source visibility profile.
+fn lower_stmt_in_current_source_mode(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
     if ctx.builder.insertion_block_is_terminated() {
         return;
     }

@@ -157,18 +157,14 @@ fn test_strict_php_extension_syntax_fails() {
     );
 }
 
-/// Verifies `--strict-php` cannot be combined with `--define`, since defines
-/// only feed the `ifdef` extension that strict mode rejects.
+/// Verifies strict PHP accepts an otherwise unused define for mixed PHP/LFC projects.
 #[test]
-fn test_strict_php_define_conflict_is_cli_error() {
-    let stderr = compile_cli_expect_error(
+fn test_strict_php_with_unused_define_is_valid() {
+    let output = compile_cli_file_and_run(
         "<?php echo 1;",
         &["--strict-php", "--define", "FEATURE"],
     );
-    assert!(
-        stderr.contains("--strict-php cannot be combined with --define"),
-        "unexpected stderr: {stderr}",
-    );
+    assert_eq!(output, "1");
 }
 
 /// Verifies a program that triggers a compiler prelude injection (var_export's

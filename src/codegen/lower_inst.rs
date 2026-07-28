@@ -820,13 +820,14 @@ fn lower_runtime_void_call(ctx: &mut FunctionContext<'_>, label: &str) -> Result
 /// Materializes a first-class callable value as a static descriptor pointer when possible.
 fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let target = callable_target_data(ctx, inst)?.to_string();
+    let strict_php = instruction_strict_php_profile(inst);
     if emit_static_late_bound_first_class_callable(ctx, &target)? {
         return store_if_result(ctx, inst);
     }
     if emit_instance_method_first_class_callable(ctx, inst, &target)? {
         return store_if_result(ctx, inst);
     }
-    if let Some(descriptor) = first_class_callable_descriptor(ctx, &target)? {
+    if let Some(descriptor) = first_class_callable_descriptor(ctx, &target, strict_php)? {
         let invoker_label = descriptor
             .sig
             .as_ref()
@@ -1572,8 +1573,14 @@ pub(super) fn emit_runtime_builtin_wrapper_inline(
     ctx: &mut FunctionContext<'_>,
     name: &str,
     sig: &FunctionSig,
+    strict_php: bool,
 ) -> Result<String> {
-    emit_runtime_call_wrapper_inline(ctx, name, sig, RuntimeCallWrapperKind::Builtin)
+    emit_runtime_call_wrapper_inline(
+        ctx,
+        name,
+        sig,
+        RuntimeCallWrapperKind::Builtin { strict_php },
+    )
 }
 
 /// Returns the registry/runtime-descriptor ABI used by builtin callable wrappers.
@@ -1601,7 +1608,7 @@ pub(super) fn emit_runtime_extern_wrapper_inline(
 /// Kind of call instruction used by a descriptor entry wrapper.
 #[derive(Clone, Copy)]
 enum RuntimeCallWrapperKind {
-    Builtin,
+    Builtin { strict_php: bool },
     Extern,
 }
 
@@ -1613,14 +1620,16 @@ fn emit_runtime_call_wrapper_inline(
     kind: RuntimeCallWrapperKind,
 ) -> Result<String> {
     let cached = match kind {
-        RuntimeCallWrapperKind::Builtin => ctx.shared.runtime_builtin_wrapper(name, sig),
+        RuntimeCallWrapperKind::Builtin { strict_php } => {
+            ctx.shared.runtime_builtin_wrapper(name, sig, strict_php)
+        }
         RuntimeCallWrapperKind::Extern => ctx.shared.runtime_extern_wrapper(name, sig),
     };
     if let Some(label) = cached {
         return Ok(label);
     }
     let label_prefix = match kind {
-        RuntimeCallWrapperKind::Builtin => "callable_builtin",
+        RuntimeCallWrapperKind::Builtin { .. } => "callable_builtin",
         RuntimeCallWrapperKind::Extern => "callable_extern",
     };
     let label = ctx.next_label(label_prefix);
@@ -1639,8 +1648,9 @@ fn emit_runtime_call_wrapper_inline(
     )?;
     ctx.emitter.label(&done_label);
     match kind {
-        RuntimeCallWrapperKind::Builtin => {
-            ctx.shared.cache_runtime_builtin_wrapper(name, sig, &label)
+        RuntimeCallWrapperKind::Builtin { strict_php } => {
+            ctx.shared
+                .cache_runtime_builtin_wrapper(name, sig, strict_php, &label)
         }
         RuntimeCallWrapperKind::Extern => {
             ctx.shared.cache_runtime_extern_wrapper(name, sig, &label)
@@ -1682,7 +1692,7 @@ fn build_runtime_call_wrapper_function(
     builder.position_at_end(entry);
     let operands = wrapper_param_operands(&mut builder, sig);
     let result = match kind {
-        RuntimeCallWrapperKind::Builtin => {
+        RuntimeCallWrapperKind::Builtin { strict_php } => {
             let def = crate::builtins::registry::lookup(name).ok_or_else(|| {
                 CodegenIrError::invalid_module(format!(
                     "callable wrapper {} is not registry-backed",
@@ -1691,6 +1701,7 @@ fn build_runtime_call_wrapper_function(
             })?;
             let mut lowering = WrapperBuiltinLoweringContext {
                 builder: &mut builder,
+                strict_php,
             };
             Some(crate::builtins::semantics::lower_registry_call(
                 &mut lowering,
@@ -1723,6 +1734,7 @@ fn build_runtime_call_wrapper_function(
 /// EIR construction adapter used by synthetic builtin callable wrappers.
 struct WrapperBuiltinLoweringContext<'a, 'f> {
     builder: &'a mut Builder<'f>,
+    strict_php: bool,
 }
 
 impl crate::builtins::semantics::BuiltinLoweringContext
@@ -1768,6 +1780,15 @@ impl crate::builtins::semantics::BuiltinLoweringContext
         effects: crate::ir::Effects,
         span: Option<crate::span::Span>,
     ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        let target = match target {
+            crate::ir::RuntimeCallTarget::Function(target) => {
+                crate::ir::RuntimeCallTarget::ProfiledFunction {
+                    target,
+                    strict_php: self.strict_php,
+                }
+            }
+            target => target,
+        };
         self.emit_value(
             Op::RuntimeCall,
             operands,
@@ -1934,6 +1955,7 @@ struct FirstClassCallableDescriptor {
 fn first_class_callable_descriptor(
     ctx: &mut FunctionContext<'_>,
     target: &str,
+    strict_php: bool,
 ) -> Result<Option<FirstClassCallableDescriptor>> {
     if let Some((receiver_label, method_name)) = target.rsplit_once("::") {
         return Ok(first_class_static_method_descriptor(
@@ -1953,7 +1975,7 @@ fn first_class_callable_descriptor(
             ),
         }));
     }
-    if let Some(descriptor) = first_class_builtin_descriptor(ctx, target)? {
+    if let Some(descriptor) = first_class_builtin_descriptor(ctx, target, strict_php)? {
         return Ok(Some(descriptor));
     }
     if let Some(callee) = ctx.callable_function_by_name(target) {
@@ -1974,13 +1996,21 @@ fn first_class_callable_descriptor(
 fn first_class_builtin_descriptor(
     ctx: &mut FunctionContext<'_>,
     target: &str,
+    strict_php: bool,
 ) -> Result<Option<FirstClassCallableDescriptor>> {
     let name = php_symbol_key(target.trim_start_matches('\\'));
+    if !crate::types::checker::builtins::is_php_visible_builtin_function_for_profile(
+        &name,
+        strict_php,
+    ) {
+        return Ok(None);
+    }
     let Some(sig) = first_class_callable_builtin_sig(&name) else {
         return Ok(None);
     };
     let wrapper_sig = runtime_builtin_wrapper_sig(&name, &callable_wrapper_sig(&sig));
-    let entry_label = emit_runtime_builtin_wrapper_inline(ctx, &name, &wrapper_sig)?;
+    let entry_label =
+        emit_runtime_builtin_wrapper_inline(ctx, &name, &wrapper_sig, strict_php)?;
     Ok(Some(FirstClassCallableDescriptor {
         entry_label,
         kind: callable_descriptor::CALLABLE_DESC_KIND_BUILTIN,
@@ -7637,10 +7667,23 @@ fn expect_bool(inst: &Instruction) -> Result<bool> {
     }
 }
 
+/// Returns the strict-PHP profile carried by a source-sensitive EIR instruction.
+pub(super) fn instruction_strict_php_profile(inst: &Instruction) -> bool {
+    match inst.immediate {
+        Some(Immediate::Bool(strict_php))
+        | Some(Immediate::ProfiledData { strict_php, .. })
+        | Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::ProfiledFunction { strict_php, .. },
+        )) => strict_php,
+        _ => false,
+    }
+}
+
 /// Returns the data-pool immediate attached to a data-backed instruction.
 fn expect_data(inst: &Instruction) -> Result<crate::ir::DataId> {
     match inst.immediate {
         Some(Immediate::Data(value)) => Ok(value),
+        Some(Immediate::ProfiledData { data, .. }) => Ok(data),
         _ => Err(CodegenIrError::invalid_module(format!(
             "{} missing data immediate",
             inst.op.name()

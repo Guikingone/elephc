@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - Exercises the full frontend ordering, including resolver and autoload, on
-//!   each `examples/*/main.php` fixture before EIR validation.
+//!   each `examples/*/main.php` or `main.lfc` fixture before EIR validation.
 
 use std::path::{Path, PathBuf};
 
@@ -41,7 +41,7 @@ fn lowers_examples_corpus() {
     }
 }
 
-/// Returns all example `main.php` fixtures in deterministic order, excluding
+/// Returns all example `main.php` and `main.lfc` fixtures in deterministic order, excluding
 /// examples that only type-check once a feature prelude has been injected.
 ///
 /// The corpus lowers each fixture in plain (CLI) mode, which does not inject the
@@ -55,8 +55,13 @@ fn example_main_files(root: &Path) -> Vec<PathBuf> {
     let examples = root.join("examples");
     std::fs::read_dir(&examples)
         .expect("examples directory should exist")
-        .map(|entry| entry.expect("example entry").path().join("main.php"))
-        .filter(|path| path.exists())
+        .filter_map(|entry| {
+            let directory = entry.expect("example entry").path();
+            ["main.php", "main.lfc"]
+                .into_iter()
+                .map(|name| directory.join(name))
+                .find(|path| path.exists())
+        })
         .filter(|path| !example_requires_prelude(path))
         .collect()
 }

@@ -16,7 +16,7 @@ use crate::codegen::platform::Target;
 
 /// Short usage line shown after every parameter error, alongside the `--help` hint.
 /// The full categorized reference lives in `HELP`.
-pub(crate) const USAGE: &str = "Usage: elephc [OPTIONS] <source.php>";
+pub(crate) const USAGE: &str = "Usage: elephc [OPTIONS] <source-file>";
 
 /// ASCII mascot printed by `--mascotte`, embedded at compile time (not read
 /// from a filesystem path — the original source file lives outside this
@@ -73,16 +73,16 @@ fn wants_help(args: &[String]) -> bool {
 
 /// Full `--help` reference text, categorized by section. Printed to stdout
 /// with exit code 0 — this is a successful, requested action, not an error.
-pub(crate) const HELP: &str = "Usage: elephc [OPTIONS] <source.php>
+pub(crate) const HELP: &str = "Usage: elephc [OPTIONS] <source-file>
 
 A PHP-to-native AOT compiler
 
 Arguments:
-  <source.php>            PHP source file to compile
+  <source-file>           Tagged .php or tagless .lfc source file to compile
 
 Modes:
   --web                   Compile as a prefork HTTP server
-  --strict-php            Reject elephc-only syntax; accept only the PHP-compatible subset
+  --strict-php            Reject elephc extensions in tagged PHP source; .lfc remains extension-enabled
 
 Output modes:
   --check                 Type-check only, no codegen (mutually exclusive with --emit-ir/--emit-asm)
@@ -364,10 +364,6 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     if web && emit_ir {
         fail("--web cannot be combined with --emit-ir");
     }
-    if let Err(message) = validate_strict_php_defines(strict_php, &defines) {
-        fail(message);
-    }
-
     CliConfig {
         filename,
         heap_size,
@@ -433,21 +429,6 @@ fn parse_php_version(value: &str) -> crate::web_prelude::PhpVersion {
             value
         ))
     })
-}
-
-/// Validates that `--strict-php` is not combined with `--define` symbols.
-///
-/// Defines only feed `ifdef` conditional compilation, which strict mode rejects
-/// outright, so the combination is always a configuration mistake. Kept pure
-/// (no IO/exit) so the rule can be unit-tested.
-fn validate_strict_php_defines(
-    strict_php: bool,
-    defines: &HashSet<String>,
-) -> Result<(), &'static str> {
-    if strict_php && !defines.is_empty() {
-        return Err("--strict-php cannot be combined with --define: ifdef conditional compilation is an elephc extension");
-    }
-    Ok(())
 }
 
 /// Parse the required emit-kind argument at the given index, or fail if missing.
@@ -765,26 +746,19 @@ mod tests {
         assert!(!config.strict_php);
     }
 
-    /// Verifies `--strict-php` combined with `--define` is rejected: defines only
-    /// feed `ifdef` conditional compilation, which strict mode rejects outright,
-    /// so accepting the combination would silently hide a configuration mistake.
+    /// Verifies strict mode and conditional symbols may coexist for mixed PHP/LFC projects.
     #[test]
-    fn strict_php_with_define_conflict_is_rejected() {
-        let mut defines = HashSet::new();
-        defines.insert("FEATURE".to_string());
-        assert!(validate_strict_php_defines(true, &defines).is_err());
-    }
-
-    /// Verifies `--strict-php` without defines and `--define` without strict mode
-    /// both pass the conflict validation.
-    #[test]
-    fn strict_php_defines_validation_accepts_non_conflicting() {
-        let empty = HashSet::new();
-        let mut defines = HashSet::new();
-        defines.insert("FEATURE".to_string());
-        assert!(validate_strict_php_defines(true, &empty).is_ok());
-        assert!(validate_strict_php_defines(false, &defines).is_ok());
-        assert!(validate_strict_php_defines(false, &empty).is_ok());
+    fn strict_php_with_define_is_accepted() {
+        let args = vec![
+            "elephc".into(),
+            "--strict-php".into(),
+            "--define".into(),
+            "FEATURE".into(),
+            "app.lfc".into(),
+        ];
+        let config = parse_args(&args);
+        assert!(config.strict_php);
+        assert!(config.defines.contains("FEATURE"));
     }
 
     /// Verifies `--quiet` sets the quiet flag.

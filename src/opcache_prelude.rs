@@ -141,7 +141,7 @@ const IS_SCRIPT_CACHED_IN_FILE_CACHE_FN: &str = "opcache_is_script_cached_in_fil
 /// The `opcache_jit_blacklist` function name (lowercase) the detector matches.
 const JIT_BLACKLIST_FN: &str = "opcache_jit_blacklist";
 
-/// One entry in the compile-time OPcache *script manifest* — a PHP source file baked
+/// One entry in the compile-time OPcache *script manifest* — a physical source file baked
 /// into the AOT binary and therefore reported as "cached" by the OPcache status/query
 /// functions (`opcache_get_status`, `opcache_is_script_cached`, `opcache_compile_file`).
 ///
@@ -153,7 +153,7 @@ const JIT_BLACKLIST_FN: &str = "opcache_jit_blacklist";
 /// 3. every autoloaded file — Composer `autoload.files`, PSR-4 / SPL-rule class files, and
 ///    the includes those files themselves pull in (`autoload::run_collecting_included`).
 ///
-/// Together that is exactly the set of PHP source files compiled into the binary, which is
+/// Together that is exactly the set of PHP/LFC source files compiled into the binary, which is
 /// what "cached script" means for an AOT build. The `eval` interpreter has no AOT binary and
 /// thus no manifest at all; its OPcache file functions stay empty-cache (see
 /// `crates/elephc-magician/.../opcache_file_functions.rs`).
@@ -177,7 +177,7 @@ pub struct ScriptEntry {
     pub memory_consumption: i64,
 }
 
-/// Builds the compile-time OPcache script manifest: every PHP source file compiled into this
+/// Builds the compile-time OPcache script manifest: every physical source file compiled into this
 /// binary. Called by `crate::pipeline` twice — once before `inject_if_used` (the placeholder
 /// manifest, which cannot yet see the autoloaded set) and once after `autoload::run` with the
 /// complete set, whose result [`bake_manifest`] bakes in. See [`bake_manifest`] for why the
@@ -399,7 +399,7 @@ __PRELOAD_STATISTICS__
 /// `realpath()` before membership so both `opcache_is_script_cached('./main.php')` and
 /// `opcache_is_script_cached(__FILE__)` hit the canonical manifest entry.
 ///
-/// The manifest is every PHP source file compiled into this binary: the entry file, every
+/// The manifest is every PHP/LFC source file compiled into this binary: the entry file, every
 /// statically-resolved `include`/`require` target, and every autoloaded file (Composer
 /// `autoload.files` + PSR-4 / SPL-rule class files + their own includes) — see `ScriptEntry`.
 /// The parameter is kept named `$filename` to match reference PHP for named-argument callers.
@@ -2522,7 +2522,7 @@ pub fn inject_if_used(
 
     let src = format!("<?php\n{bodies}");
     let tokens = crate::lexer::tokenize(&src).expect("opcache prelude must tokenize");
-    let mut combined = crate::parser::parse(&tokens).expect("opcache prelude must parse");
+    let mut combined = crate::parser::parse_internal(&tokens).expect("opcache prelude must parse");
     combined.extend(program);
     (combined, sites)
 }
@@ -2692,7 +2692,7 @@ pub fn bake_manifest(
 fn parse_baked_function(body: &str) -> Stmt {
     let src = format!("<?php\n{body}");
     let tokens = crate::lexer::tokenize(&src).expect("opcache prelude must tokenize");
-    let parsed = crate::parser::parse(&tokens).expect("opcache prelude must parse");
+    let parsed = crate::parser::parse_internal(&tokens).expect("opcache prelude must parse");
     let mut resolved =
         crate::name_resolver::resolve(parsed).expect("opcache prelude must name-resolve");
     assert_eq!(
@@ -2718,6 +2718,12 @@ mod tests {
     fn parse(source: &str) -> Program {
         let tokens = crate::lexer::tokenize(source).expect("test source must tokenize");
         crate::parser::parse(&tokens).expect("test source must parse")
+    }
+
+    /// Parses compiler-generated source with the internal source profile.
+    fn parse_internal(source: &str) -> Program {
+        let tokens = crate::lexer::tokenize(source).expect("internal test source must tokenize");
+        crate::parser::parse_internal(&tokens).expect("internal test source must parse")
     }
 
     /// The rendered 8.5 literal tokenizes/parses and carries the 8.5 markers.
@@ -3847,8 +3853,9 @@ mod tests {
             let isolated = parse_baked_function(body);
             // In-program: the same declaration name-resolved alongside a namespaced caller,
             // which is the situation the declaration must survive at the injection point.
-            let program = parse(&format!(
-                "<?php\n{body}\nnamespace App;\nfunction caller() {{ return opcache_get_status(); }}\n"
+            let mut program = parse_internal(&format!("<?php\n{body}\n"));
+            program.extend(parse(
+                "<?php\nnamespace App;\nfunction caller() { return opcache_get_status(); }\n",
             ));
             let resolved = crate::name_resolver::resolve(program)
                 .expect("in-program source must name-resolve");
