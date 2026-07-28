@@ -23,7 +23,7 @@ use super::wat::ValType;
 use super::WasmError;
 use crate::ir::{
     CmpPredicate, DataId, Immediate, InstId, Instruction, IrHeapKind, IrType, LocalSlotId, Op,
-    Ownership, ValueDef, ValueId,
+    Ownership, RuntimeCallTarget, RuntimeFnId, ValueDef, ValueId,
 };
 use crate::types::PhpType;
 use std::collections::HashMap;
@@ -54,6 +54,9 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::IAdd => lower_int_binop(ctx, &inst, "i64.add"),
         Op::ISub => lower_int_binop(ctx, &inst, "i64.sub"),
         Op::IMul => lower_int_binop(ctx, &inst, "i64.mul"),
+        Op::ICheckedAdd => lower_checked_int_binop(ctx, &inst, "add"),
+        Op::ICheckedSub => lower_checked_int_binop(ctx, &inst, "sub"),
+        Op::ICheckedMul => lower_checked_int_binop(ctx, &inst, "mul"),
         Op::IBitAnd => lower_int_binop(ctx, &inst, "i64.and"),
         Op::IBitOr => lower_int_binop(ctx, &inst, "i64.or"),
         Op::IBitXor => lower_int_binop(ctx, &inst, "i64.xor"),
@@ -73,11 +76,13 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::FCmp => lower_float_cmp(ctx, &inst),
         Op::IToF => lower_itof(ctx, &inst),
         Op::FToI => lower_ftoi(ctx, &inst),
+        Op::Cast => lower_cast(ctx, &inst),
         Op::IsTruthy => lower_is_truthy(ctx, &inst),
         Op::IsNull => lower_is_null(ctx, &inst),
         Op::Call => lower_call(ctx, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),
-        Op::BuiltinCall => lower_builtin_call(ctx, &inst),
+        Op::RuntimeCall => lower_runtime_call(ctx, &inst),
+        Op::LanguageConstructCall => lower_language_construct_call(ctx, &inst),
         Op::EchoValue | Op::PrintValue => lower_echo(ctx, &inst),
         Op::Acquire => lower_acquire(ctx, &inst),
         Op::Release => lower_release(ctx, &inst),
@@ -559,6 +564,152 @@ fn lower_int_binop(ctx: &mut FnCtx, inst: &Instruction, wasm_op: &str) -> Result
     store_result(ctx, inst)
 }
 
+/// Lowers PHP integer add/subtract/multiply with overflow promotion to a boxed float.
+fn lower_checked_int_binop(
+    ctx: &mut FnCtx,
+    inst: &Instruction,
+    operation: &str,
+) -> Result<()> {
+    if inst.result_php_type.codegen_repr() != PhpType::Mixed
+        || inst.result_type != IrType::Heap(IrHeapKind::Mixed)
+    {
+        return Err(WasmError::Unsupported(format!(
+            "checked integer {} result {:?}/{:?}",
+            operation, inst.result_type, inst.result_php_type
+        )));
+    }
+
+    let lhs = ctx.fresh_temp(ValType::I64);
+    let rhs = ctx.fresh_temp(ValType::I64);
+    let result = ctx.fresh_temp(ValType::I64);
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb
+        .ins(&format!("local.set {}", lhs), "checked integer lhs");
+    ctx.emit_load_value(operand(inst, 1)?)?;
+    ctx.fb
+        .ins(&format!("local.set {}", rhs), "checked integer rhs");
+    ctx.fb
+        .ins(&format!("local.get {}", lhs), "checked integer lhs");
+    ctx.fb
+        .ins(&format!("local.get {}", rhs), "checked integer rhs");
+    ctx.fb
+        .ins(&format!("i64.{}", operation), "wrapped integer result");
+    ctx.fb
+        .ins(&format!("local.set {}", result), "save wrapped integer result");
+
+    match operation {
+        "add" => {
+            // Signed-add overflow: ((lhs ^ result) & (rhs ^ result)) < 0.
+            ctx.fb.ins(&format!("local.get {}", lhs), "overflow lhs");
+            ctx.fb
+                .ins(&format!("local.get {}", result), "overflow result");
+            ctx.fb.ins("i64.xor", "lhs xor result");
+            ctx.fb.ins(&format!("local.get {}", rhs), "overflow rhs");
+            ctx.fb
+                .ins(&format!("local.get {}", result), "overflow result");
+            ctx.fb.ins("i64.xor", "rhs xor result");
+            ctx.fb.ins("i64.and", "add overflow sign mask");
+            ctx.fb.ins("i64.const 0", "zero sign threshold");
+            ctx.fb.ins("i64.lt_s", "signed add overflow?");
+        }
+        "sub" => {
+            // Signed-sub overflow: ((lhs ^ rhs) & (lhs ^ result)) < 0.
+            ctx.fb.ins(&format!("local.get {}", lhs), "overflow lhs");
+            ctx.fb.ins(&format!("local.get {}", rhs), "overflow rhs");
+            ctx.fb.ins("i64.xor", "lhs xor rhs");
+            ctx.fb.ins(&format!("local.get {}", lhs), "overflow lhs");
+            ctx.fb
+                .ins(&format!("local.get {}", result), "overflow result");
+            ctx.fb.ins("i64.xor", "lhs xor result");
+            ctx.fb.ins("i64.and", "sub overflow sign mask");
+            ctx.fb.ins("i64.const 0", "zero sign threshold");
+            ctx.fb.ins("i64.lt_s", "signed sub overflow?");
+        }
+        "mul" => emit_checked_mul_overflow_predicate(ctx, &lhs, &rhs, &result),
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "checked integer operation {}",
+                other
+            )));
+        }
+    }
+
+    // Both branches return a fresh kind-5 Mixed cell: tag 2 contains the
+    // promoted floating-point result, while tag 0 contains the exact integer.
+    ctx.fb
+        .ins("if (result i32)", "overflow -> float, otherwise int");
+    ctx.fb.ins("i64.const 2", "mixed tag (float)");
+    ctx.fb
+        .ins(&format!("local.get {}", lhs), "overflow lhs");
+    ctx.fb.ins("f64.convert_i64_s", "lhs -> float");
+    ctx.fb
+        .ins(&format!("local.get {}", rhs), "overflow rhs");
+    ctx.fb.ins("f64.convert_i64_s", "rhs -> float");
+    ctx.fb
+        .ins(&format!("f64.{}", operation), "promoted float result");
+    ctx.fb.ins("i64.reinterpret_f64", "float bits -> mixed lo");
+    ctx.fb.ins("i64.const 0", "mixed hi unused");
+    ctx.fb.ins(
+        "call $__rt_mixed_from_value",
+        "box promoted float result",
+    );
+    ctx.fb.ins("else", "no overflow -> exact integer");
+    ctx.fb.ins("i64.const 0", "mixed tag (int)");
+    ctx.fb
+        .ins(&format!("local.get {}", result), "exact integer result");
+    ctx.fb.ins("i64.const 0", "mixed hi unused");
+    ctx.fb
+        .ins("call $__rt_mixed_from_value", "box exact integer result");
+    ctx.fb.ins("end", "end checked integer result");
+    store_result(ctx, inst)
+}
+
+/// Leaves an i32 predicate indicating whether the wrapped i64 product overflowed.
+fn emit_checked_mul_overflow_predicate(
+    ctx: &mut FnCtx,
+    lhs: &str,
+    rhs: &str,
+    result: &str,
+) {
+    // Division verifies ordinary products. Guard zero and MIN/-1 first because
+    // WebAssembly's signed division traps for the latter pair.
+    ctx.fb.ins(&format!("local.get {}", rhs), "multiply rhs");
+    ctx.fb.ins("i64.eqz", "rhs is zero?");
+    ctx.fb
+        .ins("if (result i32)", "zero rhs cannot overflow");
+    ctx.fb.ins("i32.const 0", "no overflow");
+    ctx.fb.ins("else", "non-zero rhs");
+    ctx.fb.ins(&format!("local.get {}", lhs), "multiply lhs");
+    ctx.fb
+        .ins(&format!("i64.const {}", i64::MIN), "minimum integer");
+    ctx.fb.ins("i64.eq", "lhs is minimum?");
+    ctx.fb.ins(&format!("local.get {}", rhs), "multiply rhs");
+    ctx.fb.ins("i64.const -1", "negative one");
+    ctx.fb.ins("i64.eq", "rhs is negative one?");
+    ctx.fb.ins("i32.and", "lhs MIN and rhs -1?");
+    ctx.fb.ins(&format!("local.get {}", rhs), "multiply rhs");
+    ctx.fb
+        .ins(&format!("i64.const {}", i64::MIN), "minimum integer");
+    ctx.fb.ins("i64.eq", "rhs is minimum?");
+    ctx.fb.ins(&format!("local.get {}", lhs), "multiply lhs");
+    ctx.fb.ins("i64.const -1", "negative one");
+    ctx.fb.ins("i64.eq", "lhs is negative one?");
+    ctx.fb.ins("i32.and", "rhs MIN and lhs -1?");
+    ctx.fb.ins("i32.or", "division-trap overflow pair?");
+    ctx.fb
+        .ins("if (result i32)", "special overflow pair");
+    ctx.fb.ins("i32.const 1", "overflow");
+    ctx.fb.ins("else", "safe to verify with division");
+    ctx.fb
+        .ins(&format!("local.get {}", result), "wrapped product");
+    ctx.fb.ins(&format!("local.get {}", rhs), "multiply rhs");
+    ctx.fb.ins("i64.div_s", "reverse wrapped product");
+    ctx.fb.ins(&format!("local.get {}", lhs), "multiply lhs");
+    ctx.fb.ins("i64.ne", "reversed product differs?");
+    ctx.fb.ins("end", "end special-pair guard");
+    ctx.fb.ins("end", "end zero-rhs guard");
+}
+
 /// Lowers a float binary op: load both operands, emit the wasm op, store result.
 fn lower_float_binop(ctx: &mut FnCtx, inst: &Instruction, wasm_op: &str) -> Result<()> {
     ctx.emit_load_value(operand(inst, 0)?)?;
@@ -812,8 +963,132 @@ fn lower_itof(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 /// Lowers `FToI`: float to signed integer (truncate toward zero; NaN -> 0).
 fn lower_ftoi(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     ctx.emit_load_value(operand(inst, 0)?)?;
+    emit_float_to_php_int(ctx);
+    store_result(ctx, inst)
+}
+
+/// Converts the f64 on the operand stack to a PHP integer.
+///
+/// WebAssembly's saturating conversion already handles finite out-of-range values
+/// and NaN, but it maps infinities to the signed bounds while PHP maps both
+/// infinities to zero. Inspecting the exponent first preserves PHP's behavior.
+fn emit_float_to_php_int(ctx: &mut FnCtx) {
+    let bits = ctx.fresh_temp(ValType::I64);
+    ctx.fb.ins("i64.reinterpret_f64", "float bits for PHP int cast");
     ctx.fb
-        .ins("i64.trunc_sat_f64_s", "float to int (truncate, NaN->0)");
+        .ins(&format!("local.tee {}", bits), "retain float bits");
+    ctx.fb.ins("i64.const 52", "IEEE-754 exponent shift");
+    ctx.fb.ins("i64.shr_u", "extract exponent field");
+    ctx.fb.ins("i64.const 2047", "IEEE-754 exponent mask");
+    ctx.fb.ins("i64.and", "mask exponent field");
+    ctx.fb.ins("i64.const 2047", "INF/NaN exponent");
+    ctx.fb.ins("i64.eq", "float is INF or NaN?");
+    ctx.fb
+        .ins("if (result i64)", "PHP maps INF and NaN to integer zero");
+    ctx.fb.ins("i64.const 0", "PHP non-finite integer cast");
+    ctx.fb.ins("else", "finite float");
+    ctx.fb
+        .ins(&format!("local.get {}", bits), "restore finite float bits");
+    ctx.fb.ins("f64.reinterpret_i64", "restore finite float");
+    ctx.fb
+        .ins("i64.trunc_sat_f64_s", "truncate finite float toward zero");
+    ctx.fb.ins("end", "end PHP float-to-int cast");
+}
+
+/// Lowers an explicit EIR cast, including boxed Mixed-to-scalar conversions.
+///
+/// Checked integer arithmetic returns an owned Mixed cell so an overflow can
+/// promote to float. Typed PHP contexts immediately cast that cell back to the
+/// declared scalar type; these paths call the same WASM runtime helpers used by
+/// hashes and mixed-value output.
+fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let value = operand(inst, 0)?;
+    let target = match inst.immediate {
+        Some(Immediate::CastTarget(target)) => target,
+        _ => {
+            return Err(WasmError::Unsupported(
+                "cast without a CastTarget immediate".to_string(),
+            ));
+        }
+    };
+    if target != inst.result_type {
+        return Err(WasmError::Unsupported(format!(
+            "cast target {:?} differs from result type {:?}",
+            target, inst.result_type
+        )));
+    }
+
+    let source = ctx
+        .function
+        .value(value)
+        .cloned()
+        .ok_or_else(|| WasmError::Unsupported(format!("cast source {:?} is missing", value)))?;
+    if source.ir_type == IrType::Heap(IrHeapKind::Mixed) {
+        ctx.emit_load_value(value)?;
+        match target {
+            IrType::I64 if inst.result_php_type.codegen_repr() == PhpType::Bool => {
+                ctx.fb
+                    .ins("call $__rt_mixed_cast_bool", "cast boxed Mixed to bool");
+            }
+            IrType::I64 => {
+                ctx.fb
+                    .ins("call $__rt_mixed_cast_int", "cast boxed Mixed to int");
+            }
+            IrType::F64 => {
+                ctx.fb.ins(
+                    "call $__rt_mixed_cast_float",
+                    "cast boxed Mixed to float bits",
+                );
+                ctx.fb
+                    .ins("f64.reinterpret_i64", "reinterpret Mixed float bits");
+            }
+            IrType::Str => {
+                ctx.fb.ins(
+                    "call $__rt_mixed_cast_string",
+                    "cast boxed Mixed to owned string",
+                );
+                let len = ctx.fresh_temp(ValType::I32);
+                let ptr = ctx.fresh_temp(ValType::I32);
+                ctx.fb
+                    .ins(&format!("local.set {}", len), "capture cast string length");
+                ctx.fb
+                    .ins(&format!("local.set {}", ptr), "capture cast string pointer");
+                ctx.fb
+                    .ins(&format!("local.get {}", ptr), "cast string pointer");
+                ctx.fb
+                    .ins(&format!("local.get {}", len), "cast string length");
+                ctx.fb
+                    .ins("i64.extend_i32_u", "widen cast string length");
+            }
+            other => {
+                return Err(WasmError::Unsupported(format!(
+                    "boxed Mixed cast to {:?}",
+                    other
+                )));
+            }
+        }
+        return store_result(ctx, inst);
+    }
+
+    match (source.ir_type, target) {
+        (IrType::I64, IrType::I64)
+        | (IrType::F64, IrType::F64)
+        | (IrType::Str, IrType::Str) => ctx.emit_load_value(value)?,
+        (IrType::I64, IrType::F64) => {
+            ctx.emit_load_value(value)?;
+            ctx.fb.ins("f64.convert_i64_s", "cast int to float");
+        }
+        (IrType::F64, IrType::I64) => {
+            ctx.emit_load_value(value)?;
+            emit_float_to_php_int(ctx);
+        }
+        (source, target) => {
+            return Err(WasmError::Unsupported(format!(
+                "cast from {:?} to {:?}",
+                source, target
+            )));
+        }
+    }
     store_result(ctx, inst)
 }
 
@@ -872,11 +1147,11 @@ fn lower_load_global(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     }
 }
 
-/// Lowers `Op::BuiltinCall` by dispatching on the builtin's name.
+/// Lowers a compiler-resident language construct by dispatching on its name.
 ///
-/// Only `exit`/`die` and `get_class` are handled so far; other builtins return
-/// `Unsupported`.
-fn lower_builtin_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+/// Only `exit`/`die` are handled so far; ordinary builtins use typed
+/// `RuntimeCall` targets and other language constructs return `Unsupported`.
+fn lower_language_construct_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let data_id = data_immediate(inst)?;
     let name = ctx
         .module
@@ -884,18 +1159,51 @@ fn lower_builtin_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         .function_names
         .get(data_id.as_raw() as usize)
         .cloned()
-        .ok_or_else(|| WasmError::Unsupported(format!("builtin: unknown name data {:?}", data_id)))?;
+        .ok_or_else(|| {
+            WasmError::Unsupported(format!(
+                "language construct: unknown name data {:?}",
+                data_id
+            ))
+        })?;
     match name.as_str() {
         "exit" | "die" => lower_exit(ctx, inst),
-        "get_class" => super::classes::lower_get_class(ctx, inst),
-        "array_map" => lower_array_map(ctx, inst),
-        "array_filter" => lower_array_filter(ctx, inst),
-        "usort" => lower_user_sort(ctx, inst, "usort"),
-        "uasort" => lower_user_sort(ctx, inst, "uasort"),
-        "uksort" => lower_user_sort(ctx, inst, "uksort"),
-        "array_reduce" => lower_array_reduce(ctx, inst),
-        "array_walk" => lower_array_walk(ctx, inst),
-        other => Err(WasmError::Unsupported(format!("builtin {}", other))),
+        other => Err(WasmError::Unsupported(format!(
+            "language construct {}",
+            other
+        ))),
+    }
+}
+
+/// Lowers the typed runtime-call subset currently implemented by the WASM backend.
+fn lower_runtime_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let target = match inst.immediate {
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))) => target,
+        Some(Immediate::RuntimeCall(target)) => {
+            return Err(WasmError::Unsupported(format!(
+                "runtime call target {:?}",
+                target
+            )));
+        }
+        _ => {
+            return Err(WasmError::Unsupported(format!(
+                "untyped runtime call returning {:?}",
+                inst.result_php_type
+            )));
+        }
+    };
+    match target {
+        RuntimeFnId::GetClass => super::classes::lower_get_class(ctx, inst),
+        RuntimeFnId::ArrayMap => lower_array_map(ctx, inst),
+        RuntimeFnId::ArrayFilter => lower_array_filter(ctx, inst),
+        RuntimeFnId::Usort => lower_user_sort(ctx, inst, "usort"),
+        RuntimeFnId::Uasort => lower_user_sort(ctx, inst, "uasort"),
+        RuntimeFnId::Uksort => lower_user_sort(ctx, inst, "uksort"),
+        RuntimeFnId::ArrayReduce => lower_array_reduce(ctx, inst),
+        RuntimeFnId::ArrayWalk => lower_array_walk(ctx, inst),
+        other => Err(WasmError::Unsupported(format!(
+            "runtime function {:?}",
+            other
+        ))),
     }
 }
 
@@ -1881,11 +2189,12 @@ fn lower_mixed_tag_of(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     store_result(ctx, inst)
 }
 
-/// Lowers `Op::IterStart`: records the iterator's source pointer + cursor locals.
-/// Indexed arrays (`PhpType::Array`) iterate by element index; associative arrays
-/// (`PhpType::AssocArray`) iterate over the insertion-order entry list (cursor = slot
-/// index), with `elem` set to the hash's value type.
-fn lower_iter_start(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+/// Extracts the iterator result, source, element type, and container kind from
+/// an `IterStart` instruction.
+fn iter_start_metadata(
+    ctx: &FnCtx,
+    inst: &Instruction,
+) -> Result<(ValueId, ValueId, PhpType, bool)> {
     let iter = inst
         .result
         .ok_or_else(|| WasmError::Unsupported("iter_start without a result".to_string()))?;
@@ -1902,7 +2211,36 @@ fn lower_iter_start(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         }
         None => return Err(WasmError::Unsupported("iter_start source has no type".to_string())),
     };
-    ctx.iter_declare(iter, source, elem, is_hash)
+    Ok((iter, source, elem, is_hash))
+}
+
+/// Reserves locals for every iterator before block bodies are lowered.
+///
+/// Block ids reflect construction order, and inlined control flow can place a
+/// loop header before the block containing its `IterStart`. This prepass removes
+/// the previous compile-time dependency on block storage order.
+pub(super) fn reserve_iterators(ctx: &mut FnCtx) -> Result<()> {
+    let starts: Vec<Instruction> = ctx
+        .function
+        .blocks
+        .iter()
+        .flat_map(|block| block.instructions.iter())
+        .filter_map(|inst_id| ctx.function.instruction(*inst_id))
+        .filter(|inst| inst.op == Op::IterStart)
+        .cloned()
+        .collect();
+    for inst in starts {
+        let (iter, _, elem, is_hash) = iter_start_metadata(ctx, &inst)?;
+        ctx.iter_reserve(iter, elem, is_hash);
+    }
+    Ok(())
+}
+
+/// Lowers `Op::IterStart` by initializing the iterator locals reserved in the
+/// function prepass.
+fn lower_iter_start(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let (iter, source, _, _) = iter_start_metadata(ctx, inst)?;
+    ctx.iter_initialize(iter, source)
 }
 
 /// Lowers `Op::IterNext` and pushes the i64 loop-continue boolean the header's `CondBr`

@@ -53,7 +53,7 @@ assembly and invoking the system assembler and linker, it emits a WebAssembly
 module (`.wat`/`.wasm`) through the dedicated `src/codegen_wasm` backend, which
 consumes the same EIR the native backends use. It runs under any WASI host
 (for example `wasmer` or `wasmtime`), and `--emit npm` packages the resulting
-module as an NPM package.
+command module for Node.js 20 or newer.
 
 Unlike the native macOS/Linux targets, `wasm32-wasi` is **not yet at full
 parity**. It supports a growing subset of the language, and an EIR operation
@@ -69,7 +69,30 @@ To select it:
 ```bash
 elephc --target wasm32-wasi hello.php
 elephc --target wasm32-wasi --emit npm hello.php
+node hello-npm/index.mjs
 ```
+
+The NPM form writes `hello-npm/` with `module.wasm`, an ESM loader
+(`index.mjs`), TypeScript declarations, package metadata, and a README. The
+loader can also be imported:
+
+```js
+import { run } from "./hello-npm/index.mjs";
+
+const exitCode = await run({
+  args: ["hello", "first-argument"],
+  env: process.env,
+  preopens: { "/work": process.cwd() },
+});
+```
+
+WASM output is currently a WASI command (`_start`); `--emit cdylib` reactors are
+rejected with a focused diagnostic.
+
+Native-only compiler options are also rejected with focused diagnostics instead
+of being ignored: web-server mode, native source maps/DWARF, native heap and
+register-allocation controls, native linker/framework flags, and bridge-crate
+linking are not yet available on `wasm32-wasi`.
 
 The parser also recognizes `macos-x86_64` / `x86_64-apple-darwin` and
 `windows-x86_64` / `x86_64-pc-windows-msvc` /

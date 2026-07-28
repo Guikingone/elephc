@@ -41,6 +41,8 @@ Native builds continue through `codegen::generate_user_asm_from_ir_with_options`
 and link the resulting user object against the cached runtime object.
 `wasm32-wasi` builds instead call `codegen_wasm::generate`, retain the readable
 `.wat`, encode it to `.wasm`, and skip the native runtime object and linker.
+`--emit npm` then writes the binary with the Node.js WASI loader and package
+metadata from `src/codegen_wasm/npm.rs`.
 
 ## Module Layout
 
@@ -132,7 +134,9 @@ cdylib` emits a PIC user object with `#[Export]` trampolines and lifecycle
 symbols for embedding hosts. On Linux cdylib output also hides internal runtime
 symbols so separate loaded elephc modules do not preempt each other's state.
 For `wasm32-wasi`, `--emit npm` wraps the generated module in an ESM package
-that runs it through Node's WASI API.
+that runs it through Node's WASI preview1 API. The loader requires Node.js 20+,
+can run directly, and exports an asynchronous `run()` function. WASM reactor
+output is not implemented, so `--emit cdylib` is rejected for this target.
 
 ## Key Mechanisms
 

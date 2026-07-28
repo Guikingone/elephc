@@ -28,12 +28,13 @@ use crate::{
     resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude, web_prelude,
 };
 
-/// Holds the paths for all compilation output files (assembly, object, binary, source map).
+/// Holds the paths for compilation outputs and an optional generated package directory.
 struct OutputPaths {
     asm: PathBuf,
     obj: PathBuf,
     bin: PathBuf,
     source_map: PathBuf,
+    package_dir: Option<PathBuf>,
 }
 
 /// Runs the full compilation pipeline from PHP source to native binary.
@@ -819,6 +820,32 @@ fn emit_wasm_artifacts(
             process::exit(1);
         }
     };
+    if matches!(emit, Emit::NpmPackage) {
+        let package_dir = output_paths
+            .package_dir
+            .as_deref()
+            .expect("NPM output has a package directory");
+        let source_stem = Path::new(filename)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("output");
+        if let Err(e) = codegen_wasm::write_npm_package(package_dir, source_stem, &wasm_bytes) {
+            eprintln!(
+                "Error writing NPM package '{}': {}",
+                package_dir.display(),
+                e
+            );
+            process::exit(1);
+        }
+        timings.record_since("package-npm", phase_started);
+        timings.report();
+        println!(
+            "Compiled '{}' -> NPM package '{}'",
+            filename,
+            package_dir.display()
+        );
+        return;
+    }
     if let Err(e) = fs::write(&output_paths.bin, &wasm_bytes) {
         eprintln!("Error writing '{}': {}", output_paths.bin.display(), e);
         process::exit(1);
@@ -842,14 +869,21 @@ fn output_paths(filename: &str, target: Target, emit: Emit) -> OutputPaths {
 
     // The WebAssembly target emits a `.wat` text module (the readable form, the
     // analogue of `.s`) and a `.wasm` binary (the artifact). It never produces a
-    // `.o` object or runs the native linker. NPM packaging writes into a `<stem>/`
-    // directory and is finalized in a later phase.
+    // `.o` object or runs the native linker. NPM packaging writes into a
+    // `<stem>-npm/` directory to avoid colliding with the ordinary binary path.
     if target.is_wasm() {
+        let package_dir = matches!(emit, Emit::NpmPackage)
+            .then(|| parent.join(format!("{}-npm", stem)));
+        let bin = package_dir
+            .as_ref()
+            .map(|dir| dir.join("module.wasm"))
+            .unwrap_or_else(|| parent.join(format!("{}.wasm", stem)));
         return OutputPaths {
             asm: parent.join(format!("{}.wat", stem)),
             obj: parent.join(format!("{}.o", stem)),
-            bin: parent.join(format!("{}.wasm", stem)),
+            bin,
             source_map: parent.join(format!("{}.map", stem)),
+            package_dir,
         };
     }
 
@@ -868,5 +902,43 @@ fn output_paths(filename: &str, target: Target, emit: Emit) -> OutputPaths {
         obj: parent.join(format!("{}.o", stem)),
         bin: parent.join(bin_name),
         source_map: parent.join(format!("{}.map", stem)),
+        package_dir: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Unit tests for target-specific compilation output path selection.
+    //!
+    //! Called from:
+    //! - `cargo test` through Rust's test harness.
+    //!
+    //! Key details:
+    //! - These tests only calculate paths and never write compilation artifacts.
+
+    use super::output_paths;
+    use crate::codegen::platform::Target;
+    use crate::codegen::Emit;
+    use std::path::Path;
+
+    /// Verifies ordinary WASM output remains adjacent to the PHP source.
+    #[test]
+    fn wasm_executable_uses_wat_and_wasm_paths() {
+        let paths = output_paths("examples/hello.php", Target::wasm(), Emit::Executable);
+        assert_eq!(paths.asm, Path::new("examples/hello.wat"));
+        assert_eq!(paths.bin, Path::new("examples/hello.wasm"));
+        assert_eq!(paths.package_dir, None);
+    }
+
+    /// Verifies NPM output uses an isolated directory containing `module.wasm`.
+    #[test]
+    fn wasm_npm_uses_isolated_package_directory() {
+        let paths = output_paths("examples/hello.php", Target::wasm(), Emit::NpmPackage);
+        assert_eq!(
+            paths.package_dir.as_deref(),
+            Some(Path::new("examples/hello-npm"))
+        );
+        assert_eq!(paths.bin, Path::new("examples/hello-npm/module.wasm"));
     }
 }

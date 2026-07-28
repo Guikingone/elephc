@@ -22,7 +22,7 @@
 use std::collections::HashMap;
 
 use super::context::{wasm_fn_symbol, FnCtx, Result};
-use super::inst::lower_instruction;
+use super::inst::{lower_instruction, reserve_iterators};
 use super::values::{declare_local, declare_param, WasmRepr};
 use super::wat::{FuncBuilder, ValType};
 use super::WasmError;
@@ -161,6 +161,11 @@ pub fn lower_function(
             }
         }
     }
+
+    // EIR blocks can be stored in an order where a foreach loop header precedes
+    // the block containing IterStart. Reserve iterator locals before lowering any
+    // block so later instruction dispatch is independent of storage order.
+    reserve_iterators(&mut ctx)?;
 
     // Prologue: capture this frame's concat-buffer baseline, then set the initial
     // dispatch state. (For non-main, params and their slots share locals, so no

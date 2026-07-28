@@ -157,7 +157,7 @@ fn capture_tag_for_php_type(php: &PhpType, by_ref: bool) -> u8 {
         PhpType::Int => 0,
         PhpType::Str => 1,
         PhpType::Float => 2,
-        PhpType::Bool => 3,
+        PhpType::Bool | PhpType::False => 3,
         PhpType::Array(_) => 4,
         PhpType::AssocArray { .. } => 5,
         PhpType::Object(_) => 6,
@@ -1845,7 +1845,7 @@ mod tests {
     use crate::codegen::platform::Target;
     use crate::ir::{
         Builder, Function, FunctionParam, Immediate, IrHeapKind, IrType, LocalKind, Module, Op,
-        Ownership, Terminator,
+        Ownership, RuntimeCallTarget, RuntimeFnId, Terminator,
     };
     use crate::types::PhpType;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -3392,12 +3392,12 @@ mod tests {
     /// exercises the full `lower_array_map` path: it creates a first-class callable of
     /// `dbl` (`FirstClassCallableNew`, Owned kind-6 descriptor), builds an indexed
     /// `array<int>` `[21, 10]` (`ArrayNew` + `ArrayPush` of int constants), maps it with
-    /// `array_map($f, $arr)` (`Op::BuiltinCall` -> the new `lower_array_map` arm), then
+    /// `array_map($f, $arr)` (`Op::RuntimeCall` -> the `lower_array_map` arm), then
     /// releases the source array and the descriptor (mirroring `ir_lower`: `array_map`
     /// borrows the array and releases the FCC temp) and returns the Owned result array.
     fn map_dbl_via_builtin_fn(
         dbl_data: crate::ir::DataId,
-        array_map_data: crate::ir::DataId,
+        _array_map_data: crate::ir::DataId,
     ) -> Function {
         let int_arr_ty = PhpType::Array(Box::new(PhpType::Int));
         let mixed_arr_ty = PhpType::Array(Box::new(PhpType::Mixed));
@@ -3447,9 +3447,11 @@ mod tests {
             // $res = array_map($f, $arr)  -> array<mixed> (Owned). The new builtin arm.
             let res = b
                 .emit(
-                    Op::BuiltinCall,
+                    Op::RuntimeCall,
                     vec![vf, arr],
-                    Some(Immediate::Data(array_map_data)),
+                    Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                        RuntimeFnId::ArrayMap,
+                    ))),
                     IrType::Heap(IrHeapKind::Array),
                     mixed_arr_ty.clone(),
                     Ownership::Owned,
@@ -3544,7 +3546,7 @@ mod tests {
     }
 
     /// `map_dbl()` lowers `array_map(dbl(...), [21, 10])` through the real
-    /// `Op::BuiltinCall` -> `lower_array_map` dispatch (NOT a hand-written runtime call),
+    /// typed `Op::RuntimeCall` -> `lower_array_map` dispatch,
     /// returning a value_type-7 `array<mixed>` whose cells are 42 and 20. The driver
     /// reads both cells and folds them into `42*100 + 20 = 4220`. Proves the whole-module
     /// abort is removed: before this slice, the `array_map` callable arm hit the
@@ -3697,14 +3699,14 @@ mod tests {
     /// exercises the full `lower_array_filter` path: it builds an indexed `array<int>`
     /// `[1, 2, 3, 4, 5]` (`ArrayNew` + `ArrayPush` of int constants), creates a first-class
     /// callable of `keep_gt2` (`FirstClassCallableNew`, Owned kind-6 descriptor), then
-    /// filters with `array_filter($arr, $f)` as an `Op::BuiltinCall` whose operands are
+    /// filters with `array_filter($arr, $f)` as an `Op::RuntimeCall` whose operands are
     /// `[arr, vf]` — op0 = ARRAY, op1 = CALLBACK, the REVERSED order `lower_array_filter`
     /// must consume. It releases the source array and the FCC temp (mirroring `ir_lower`:
     /// `array_filter` borrows the array and releases the FCC temp) and returns the Owned
     /// result array.
     fn filter_keep_gt2_via_builtin_fn(
         keep_data: crate::ir::DataId,
-        array_filter_data: crate::ir::DataId,
+        _array_filter_data: crate::ir::DataId,
     ) -> Function {
         let int_arr_ty = PhpType::Array(Box::new(PhpType::Int));
         let mut f = Function::new(
@@ -3754,9 +3756,11 @@ mod tests {
             // vs array_map: op0 = array, op1 = callback. The new builtin arm under test.
             let res = b
                 .emit(
-                    Op::BuiltinCall,
+                    Op::RuntimeCall,
                     vec![arr, vf],
-                    Some(Immediate::Data(array_filter_data)),
+                    Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                        RuntimeFnId::ArrayFilter,
+                    ))),
                     IrType::Heap(IrHeapKind::Array),
                     int_arr_ty.clone(),
                     Ownership::Owned,
@@ -3851,7 +3855,7 @@ mod tests {
     }
 
     /// `filter_keep_gt2()` lowers `array_filter([1,2,3,4,5], keep_gt2(...))` through the real
-    /// `Op::BuiltinCall` -> `lower_array_filter` dispatch (NOT a hand-written runtime call),
+    /// typed `Op::RuntimeCall` -> `lower_array_filter` dispatch,
     /// returning a value_type-0 `array<int>` `[3, 4, 5]`. The driver folds `len*1000 +
     /// res[0]*100 + res[1]*10 + res[2]` = `3345`, the same distinguishing number as the
     /// direct-runtime test. Proves the EIR op0=array / op1=callback order is consumed
@@ -3989,15 +3993,15 @@ mod tests {
     /// the full `lower_user_sort` by-ref writeback path: it stores an `array<int>` `[3, 1, 2]`
     /// into a `PhpLocal` slot, `LoadLocal`s it as operand 0, creates a first-class callable
     /// of `cmp_asc` (`FirstClassCallableNew`, Owned kind-6 descriptor) as operand 1, calls
-    /// the user-comparator sort (`$a, cmp_asc(...)`) as an `Op::BuiltinCall`
-    /// `[LoadLocal(arr), vf]` (no result) — the builtin name is whichever the caller interned
+    /// the user-comparator sort (`$a, cmp_asc(...)`) as an `Op::RuntimeCall`
+    /// `[LoadLocal(arr), vf]` (no result) — the typed target is selected by the caller
     /// (usort/uasort/uksort, all lowered identically) — releases the FCC temp, then RE-loads
     /// the SAME slot and returns it. Because the sort mutates by reference, `lower_user_sort`
     /// writes the sorted pointer back into the slot via `value_source_slot`; returning a fresh
     /// `LoadLocal` of that slot proves the caller's local was updated — the whole point.
     fn sort_local_via_builtin_fn(
         cmp_data: crate::ir::DataId,
-        builtin_data: crate::ir::DataId,
+        builtin: RuntimeFnId,
     ) -> Function {
         let int_arr_ty = PhpType::Array(Box::new(PhpType::Int));
         let mut f = Function::new(
@@ -4055,9 +4059,9 @@ mod tests {
                 )
                 .unwrap();
             let _ = b.emit(
-                Op::BuiltinCall,
+                Op::RuntimeCall,
                 vec![loaded, vf],
-                Some(Immediate::Data(builtin_data)),
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(builtin))),
                 IrType::Void,
                 PhpType::Void,
                 Ownership::NonHeap,
@@ -4082,7 +4086,7 @@ mod tests {
 
     /// Builds a reactor module with the full runtime surface, the lowered self-contained
     /// `sort_local` body (via `lower_function`, so the `lower_user_sort` builtin arm —
-    /// selected by the interned `builtin` name, one of usort/uasort/uksort, all lowered
+    /// selected by the typed `builtin` target, one of usort/uasort/uksort, all lowered
     /// identically — and its by-ref `value_source_slot` writeback are under test together
     /// with the `__rt_usort_callable` runtime), the hand-written `fn_cmp_asc` body, and the
     /// unified closure/FCC dispatch ladder (single FCC entry `cmp_asc`). Validates with
@@ -4108,9 +4112,14 @@ mod tests {
         wm.add_raw_func(cmp_asc_free_fn_body_wat());
         let mut module = Module::new(Target::wasm());
         let cmp_data = module.data.intern_string("cmp_asc");
-        let builtin_data = module.data.intern_function_name(builtin);
+        let builtin = match builtin {
+            "usort" => RuntimeFnId::Usort,
+            "uasort" => RuntimeFnId::Uasort,
+            "uksort" => RuntimeFnId::Uksort,
+            other => panic!("unsupported sort builtin in WASM test: {other}"),
+        };
         module.functions.push(cmp_asc_free_fn());
-        let body_fn = sort_local_via_builtin_fn(cmp_data, builtin_data);
+        let body_fn = sort_local_via_builtin_fn(cmp_data, builtin);
         let fcc_entries = vec!["cmp_asc".to_string()];
         let body_fb =
             super::super::function::lower_function(&module, &body_fn, &[], &[], &fcc_entries)
@@ -4148,7 +4157,7 @@ mod tests {
     }
 
     /// `sort_local()` lowers `usort($a, cmp_asc(...))` over `$a = [3, 1, 2]` through the real
-    /// `Op::BuiltinCall` -> `lower_user_sort` dispatch (NOT a hand-written runtime call), then
+    /// typed `Op::RuntimeCall` -> `lower_user_sort` dispatch, then
     /// RE-loads the SAME slot and returns it. The driver reads `res[0..2]` via
     /// `__rt_array_get_int` and folds them into `e0*100 + e1*10 + e2` = `123`. Proves the
     /// by-ref `value_source_slot` writeback updates the caller's local in place: a missing
@@ -4170,7 +4179,7 @@ mod tests {
     }
 
     /// `uasort($a, cmp_asc(...))` over `$a = [3, 1, 2]` lowers through the real
-    /// `Op::BuiltinCall` -> `lower_user_sort` dispatch (the new `"uasort"` arm), so it does
+    /// typed `Op::RuntimeCall` -> `lower_user_sort` dispatch (`Uasort`), so it does
     /// NOT hit `Unsupported` and reuses `__rt_usort_callable` unchanged: the same by-value
     /// stable sort + by-ref `value_source_slot` writeback as `usort`. The driver folds the
     /// re-loaded slot's `res[0..2]` into `e0*100 + e1*10 + e2` = `123`, the sorted value
@@ -4193,7 +4202,7 @@ mod tests {
     }
 
     /// `uksort($a, cmp_asc(...))` over `$a = [3, 1, 2]` lowers through the real
-    /// `Op::BuiltinCall` -> `lower_user_sort` dispatch (the new `"uksort"` arm), so it does
+    /// typed `Op::RuntimeCall` -> `lower_user_sort` dispatch (`Uksort`), so it does
     /// NOT hit `Unsupported` and reuses `__rt_usort_callable` unchanged: the same by-value
     /// stable sort + by-ref `value_source_slot` writeback as `usort`. The driver folds the
     /// re-loaded slot's `res[0..2]` into `e0*100 + e1*10 + e2` = `123`, the sorted value
@@ -4338,7 +4347,7 @@ mod tests {
     /// full `lower_array_reduce` Mixed-result path: it builds an indexed `array<int>`
     /// `[1, 2, 3, 4]` (`ArrayNew` + `ArrayPush` of int constants), creates a first-class
     /// callable of `sum2` (`FirstClassCallableNew`, Owned kind-6 descriptor), then folds
-    /// with `array_reduce($arr, $f, 100)` as an `Op::BuiltinCall` whose operands are
+    /// with `array_reduce($arr, $f, 100)` as an `Op::RuntimeCall` whose operands are
     /// `[arr, vf, initial]` (op0 = ARRAY, op1 = CALLBACK, op2 = INITIAL — the 3-operand
     /// order `lower_array_reduce` consumes) and a **Mixed** result. The Mixed result repr
     /// is `WasmRepr::Ptr`, so the lowering boxes the i64 carry into a Mixed cell — the new
@@ -4347,7 +4356,7 @@ mod tests {
     /// initial is NonHeap) and returns the Owned Mixed cell.
     fn reduce_sum_via_builtin_fn(
         sum_data: crate::ir::DataId,
-        array_reduce_data: crate::ir::DataId,
+        _array_reduce_data: crate::ir::DataId,
     ) -> Function {
         let int_arr_ty = PhpType::Array(Box::new(PhpType::Int));
         let mut f = Function::new(
@@ -4399,9 +4408,11 @@ mod tests {
             // callback, op2 = initial. A Mixed result forces the WasmRepr::Ptr boxing arm.
             let res = b
                 .emit(
-                    Op::BuiltinCall,
+                    Op::RuntimeCall,
                     vec![arr, vf, initial],
-                    Some(Immediate::Data(array_reduce_data)),
+                    Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                        RuntimeFnId::ArrayReduce,
+                    ))),
                     IrType::Heap(IrHeapKind::Mixed),
                     PhpType::Mixed,
                     Ownership::Owned,
@@ -4496,7 +4507,7 @@ mod tests {
     }
 
     /// `reduce_sum()` lowers `array_reduce([1,2,3,4], sum2(...), 100)` through the real
-    /// `Op::BuiltinCall` -> `lower_array_reduce` dispatch (NOT a hand-written runtime call)
+    /// typed `Op::RuntimeCall` -> `lower_array_reduce` dispatch
     /// with a **Mixed** result, so the lowering boxes the folded i64 carry into a Mixed cell
     /// (the `WasmRepr::Ptr` arm). The driver unboxes that cell via `__rt_mixed_cast_int` and
     /// asserts `110` (`100 + 1 + 2 + 3 + 4`). Proves the 3-operand op0=array / op1=callback /
@@ -4704,7 +4715,7 @@ mod tests {
     /// `lower_array_walk` dispatch: it builds an indexed `array<int>` `[1, 2, 3, 4]`
     /// (`ArrayNew` + `ArrayPush` of int constants), creates a first-class callable of
     /// `walk_acc` (`FirstClassCallableNew`, Owned kind-6 descriptor), then walks with
-    /// `array_walk($arr, $f)` as an `Op::BuiltinCall` whose operands are `[arr, vf]`
+    /// `array_walk($arr, $f)` as an `Op::RuntimeCall` whose operands are `[arr, vf]`
     /// (op0 = ARRAY, op1 = CALLBACK — the 2-operand order `lower_array_walk` consumes) and a
     /// `Void` result type, so `emit` allocates NO result value (the call is purely for side
     /// effects). It releases the source array and the FCC temp (mirroring `ir_lower`'s
@@ -4712,7 +4723,7 @@ mod tests {
     /// `$__walk_acc` by the `walk_acc` callback, so the driver reads back `1+2+3+4 = 10`.
     fn walk_sum_via_builtin_fn(
         walk_data: crate::ir::DataId,
-        array_walk_data: crate::ir::DataId,
+        _array_walk_data: crate::ir::DataId,
     ) -> Function {
         let int_arr_ty = PhpType::Array(Box::new(PhpType::Int));
         let mut f = Function::new("walk_sum".to_string(), IrType::Void, PhpType::Void);
@@ -4758,9 +4769,11 @@ mod tests {
             // result type makes `emit` allocate no result value (inst.result is None), so
             // the call lowers purely for its effect.
             let _ = b.emit(
-                Op::BuiltinCall,
+                Op::RuntimeCall,
                 vec![arr, vf],
-                Some(Immediate::Data(array_walk_data)),
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::ArrayWalk,
+                ))),
                 IrType::Void,
                 PhpType::Void,
                 Ownership::NonHeap,
@@ -4863,7 +4876,7 @@ mod tests {
     }
 
     /// `walk_sum()` lowers `array_walk([1,2,3,4], walk_acc(...))` through the real
-    /// `Op::BuiltinCall` -> `lower_array_walk` dispatch (NOT a hand-written runtime call)
+    /// typed `Op::RuntimeCall` -> `lower_array_walk` dispatch
     /// with a Void result, so the lowered `fn_walk_sum` returns void and the call runs
     /// purely for side effects. The driver invokes `(call $fn_walk_sum)` (void — no
     /// `local.set`) then returns `(global.get $__walk_acc)`, asserting `10` (`1+2+3+4`).

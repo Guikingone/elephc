@@ -224,6 +224,7 @@ pub struct FunctionFlags {
     /// closure lowerer (`lower_closure_function_with_signature`) so backends that
     /// build a per-closure wrapper from the `Function` alone — without the
     /// `ClosureNew` instruction in hand — can recover the visible/capture split.
-    /// Native ignores it; the WASM backend reads it to split wrapper unboxing.
+    /// Native uses it to keep capture parameters borrowed until reassignment; the
+    /// WASM backend also reads it to split wrapper unboxing.
     pub closure_capture_count: usize,
 }

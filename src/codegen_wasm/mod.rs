@@ -31,6 +31,7 @@ mod inst;
 mod inst_hash;
 mod methods;
 mod mixed;
+mod npm;
 mod objects;
 mod refcount;
 mod refcell;
@@ -40,6 +41,8 @@ mod wat;
 
 use crate::codegen::Emit;
 use crate::ir::Module;
+
+pub use npm::write_package as write_npm_package;
 
 /// An error raised while lowering EIR to WebAssembly.
 #[derive(Debug)]
@@ -66,18 +69,17 @@ impl std::error::Error for WasmError {}
 
 /// Lowers a checked, optimized EIR `Module` to a WebAssembly text module (`.wat`).
 ///
-/// `emit` selects the artifact shape: `Executable` and `NpmPackage` produce a
-/// WASI *command* module (exporting `_start` and `memory`); `Cdylib` produces a
-/// *reactor* module (no `_start`). The returned string is valid WebAssembly text
-/// that the pipeline encodes to `.wasm` with the `wat` crate.
+/// `Executable` and `NpmPackage` both produce a WASI command module exporting
+/// `_start` and `memory`. The returned string is valid WebAssembly text that the
+/// pipeline encodes to `.wasm` with the `wat` crate.
 ///
 /// Sets up the module's WASI imports and memory, lowers every EIR function
 /// through `function::lower_function`, and renders the result. The `is_main`
 /// function becomes the `_start` command entry. Returns `WasmError::Unsupported`
 /// if any function uses an EIR construct the backend does not yet handle.
 ///
-/// `emit` will select command vs. reactor packaging once non-command output is
-/// implemented; the WASI command shape is the only one wired today.
+/// The WASI command shape is the only one wired today; the CLI rejects WASM
+/// `Cdylib` output before this function is called.
 pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     let _ = emit;
     let mut wm = wat::WatModule::new();
@@ -253,7 +255,8 @@ mod tests {
     use crate::codegen::Emit;
     use crate::ir::{
         Builder, CmpPredicate, DataId, Function, FunctionParam, Immediate, IrHeapKind, IrType,
-        LocalKind, LocalSlotId, Module, Op, Ownership, Terminator, ValueId,
+        LocalKind, LocalSlotId, Module, Op, Ownership, RuntimeCallTarget, RuntimeFnId, Terminator,
+        ValueId,
     };
     use crate::parser::ast::{Expr, ExprKind};
     use crate::span::Span;
@@ -3240,7 +3243,7 @@ mod tests {
             b.position_at_end(entry);
             let code = b.emit_const_i64(3);
             let _ = b.emit(
-                Op::BuiltinCall,
+                Op::LanguageConstructCall,
                 vec![code],
                 Some(Immediate::Data(exit_name)),
                 IrType::Void,
@@ -4461,6 +4464,132 @@ mod tests {
         }
         if let Some(o) = invoke(&int_binop_fn("imod", Op::ISMod), "fn_imod", &["17", "5"]) {
             assert_eq!(o, "2");
+        }
+    }
+
+    /// Verifies checked integer arithmetic boxes exact results as ints and
+    /// promotes add/sub/multiply overflow results to floats like PHP.
+    #[test]
+    fn checked_integer_arithmetic_promotes_overflow_to_float() {
+        let mut module = Module::new(Target::wasm());
+        let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let cases = [
+                (Op::ICheckedAdd, 10, 7),
+                (Op::ICheckedSub, 10, 7),
+                (Op::ICheckedMul, 6, 7),
+                (Op::ICheckedAdd, i64::MAX, 1),
+                (Op::ICheckedSub, i64::MIN, 1),
+                (Op::ICheckedMul, i64::MIN, -1),
+            ];
+            for (op, lhs, rhs) in cases {
+                let lhs = builder.emit_const_i64(lhs);
+                let rhs = builder.emit_const_i64(rhs);
+                let mixed = builder
+                    .emit(
+                        op,
+                        vec![lhs, rhs],
+                        None,
+                        IrType::Heap(IrHeapKind::Mixed),
+                        PhpType::Mixed,
+                        Ownership::Owned,
+                    )
+                    .expect("checked arithmetic produces a mixed value");
+                let tag = builder
+                    .emit(
+                        Op::MixedTagOf,
+                        vec![mixed],
+                        None,
+                        IrType::I64,
+                        PhpType::Int,
+                        Ownership::NonHeap,
+                    )
+                    .expect("mixed tag produces an integer");
+                let _ = builder.emit(
+                    Op::EchoValue,
+                    vec![tag],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+                let _ = builder.emit(
+                    Op::Release,
+                    vec![mixed],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+        if let Some(output) = run_main(&module) {
+            assert_eq!(output, "000222");
+        }
+    }
+
+    /// Verifies a checked integer result can be cast from its Mixed cell back to
+    /// the declared integer type, as emitted for typed function returns.
+    #[test]
+    fn checked_integer_result_casts_back_to_declared_int() {
+        let mut module = Module::new(Target::wasm());
+        let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let lhs = builder.emit_const_i64(6);
+            let rhs = builder.emit_const_i64(7);
+            let mixed = builder
+                .emit(
+                    Op::ICheckedMul,
+                    vec![lhs, rhs],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .expect("checked multiplication produces a mixed value");
+            let integer = builder
+                .emit(
+                    Op::Cast,
+                    vec![mixed],
+                    Some(Immediate::CastTarget(IrType::I64)),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .expect("cast produces an integer");
+            let _ = builder.emit(
+                Op::EchoValue,
+                vec![integer],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let _ = builder.emit(
+                Op::Release,
+                vec![mixed],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+        if let Some(output) = run_main(&module) {
+            assert_eq!(output, "42");
         }
     }
 
@@ -6000,6 +6129,113 @@ mod tests {
         }
     }
 
+    /// Verifies iterator lowering is independent of EIR block storage order.
+    ///
+    /// Inlined calls can create the loop header before the later continuation
+    /// block containing `IterStart`; the backend must reserve iterator locals in
+    /// a prepass rather than relying on the order block bodies are emitted.
+    #[test]
+    fn foreach_iter_start_may_follow_loop_header_in_block_storage() {
+        let mut module = Module::new(Target::wasm());
+        let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let header = builder.create_named_block("header", Vec::new());
+            let body = builder.create_named_block("body", Vec::new());
+            let exit = builder.create_named_block("exit", Vec::new());
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+
+            builder.position_at_end(entry);
+            let array = builder
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(2)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::Owned,
+                )
+                .expect("array allocation produces a value");
+            for value in [4_i64, 5] {
+                let value = builder.emit_const_i64(value);
+                let _ = builder.emit(
+                    Op::ArrayPush,
+                    vec![array, value],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            let iterator = builder
+                .emit(
+                    Op::IterStart,
+                    vec![array],
+                    None,
+                    IrType::Heap(IrHeapKind::Iterable),
+                    PhpType::Iterable,
+                    Ownership::Borrowed,
+                )
+                .expect("iterator start produces a value");
+            builder.terminate(Terminator::Br {
+                target: header,
+                args: Vec::new(),
+            });
+
+            builder.position_at_end(header);
+            let has_next = builder
+                .emit(
+                    Op::IterNext,
+                    vec![iterator],
+                    None,
+                    IrType::I64,
+                    PhpType::Bool,
+                    Ownership::NonHeap,
+                )
+                .expect("iterator next produces a condition");
+            builder.terminate(Terminator::CondBr {
+                cond: has_next,
+                then_target: body,
+                then_args: Vec::new(),
+                else_target: exit,
+                else_args: Vec::new(),
+            });
+
+            builder.position_at_end(body);
+            let current = builder
+                .emit(
+                    Op::IterCurrentValue,
+                    vec![iterator],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .expect("iterator current value produces an integer");
+            let _ = builder.emit(
+                Op::EchoValue,
+                vec![current],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Br {
+                target: header,
+                args: Vec::new(),
+            });
+
+            builder.position_at_end(exit);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+        if let Some(output) = run_main(&module) {
+            assert_eq!(output, "45");
+        }
+    }
+
     // ----- P5d-3: foreach over an associative hash -----
 
     /// Emits the canonical foreach loop CFG (entry already positioned with `hash` built
@@ -6590,19 +6826,26 @@ mod tests {
             .collect::<HashMap<_, _>>();
         ClassInfo {
             class_id,
+            declaration_span: Span::dummy(),
             parent: None,
             is_abstract: false,
             is_final: false,
             is_readonly_class: false,
             allow_dynamic_properties,
             constants: HashMap::new(),
+            constant_types: HashMap::new(),
+            constant_visibilities: HashMap::new(),
+            final_constants: HashSet::new(),
             attribute_names: Vec::new(),
             attribute_args: Vec::new(),
             method_attribute_names: HashMap::new(),
             method_attribute_args: HashMap::new(),
             property_attribute_names: HashMap::new(),
             property_attribute_args: HashMap::new(),
+            constant_attribute_names: HashMap::new(),
+            constant_attribute_args: HashMap::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
             properties,
             property_offsets,
             property_declaring_classes: HashMap::new(),
@@ -6610,10 +6853,13 @@ mod tests {
             property_visibilities: HashMap::new(),
             property_set_visibilities: HashMap::new(),
             declared_properties: HashSet::new(),
+            property_declared_slots: Vec::new(),
             final_properties: HashSet::new(),
             readonly_properties: HashSet::new(),
             reference_properties: HashSet::new(),
             owned_reference_properties: HashSet::new(),
+            promoted_properties: HashSet::new(),
+            property_reference_slots: Vec::new(),
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),
             static_properties: Vec::new(),
@@ -6625,6 +6871,8 @@ mod tests {
             method_decls: Vec::new(),
             methods: HashMap::new(),
             static_methods: HashMap::new(),
+            late_static_method_returns: HashMap::new(),
+            late_static_static_method_returns: HashMap::new(),
             callable_method_return_sigs: HashMap::new(),
             callable_array_method_return_sigs: HashMap::new(),
             method_visibilities: HashMap::new(),
@@ -7235,6 +7483,8 @@ mod tests {
                 .iter()
                 .map(|(n, t)| (n.to_string(), t.clone()))
                 .collect(),
+            param_type_exprs: (0..user_params.len()).map(|_| None).collect(),
+            param_attributes: (0..user_params.len()).map(|_| Vec::new()).collect(),
             defaults: (0..user_params.len()).map(|_| None).collect(),
             return_type,
             declared_return: true,
@@ -8347,14 +8597,24 @@ mod tests {
             name.to_string(),
             InterfaceInfo {
                 interface_id,
+                declaration_span: Span::dummy(),
                 parents: Vec::new(),
                 properties: HashMap::new(),
                 property_order: Vec::new(),
+                method_decls: Vec::new(),
                 methods: HashMap::new(),
+                late_static_method_returns: HashMap::new(),
                 method_declaring_interfaces: HashMap::new(),
                 method_order: Vec::new(),
                 method_slots: HashMap::new(),
+                static_methods: HashMap::new(),
+                late_static_static_method_returns: HashMap::new(),
+                static_method_declaring_interfaces: HashMap::new(),
+                static_method_order: Vec::new(),
                 constants: HashMap::new(),
+                constant_types: HashMap::new(),
+                constant_declaring_interfaces: HashMap::new(),
+                final_constants: HashSet::new(),
             },
         );
     }
@@ -8388,14 +8648,20 @@ mod tests {
         .expect("InstanceOfDynamic lowers")
     }
 
-    /// Emits `get_class(...operands)` (Op::BuiltinCall): the immediate is the interned
-    /// `"get_class"` function-name data id; operands is the argument list (empty for
-    /// the 0-arg lexical form). Returns the Str result value id.
-    fn emit_get_class(b: &mut Builder, get_class_data: DataId, operands: Vec<ValueId>) -> ValueId {
+    /// Emits `get_class(...operands)` through its typed runtime target. The retained
+    /// data-id parameter keeps existing test setup uniform while the instruction uses
+    /// the current EIR runtime-call contract.
+    fn emit_get_class(
+        b: &mut Builder,
+        _get_class_data: DataId,
+        operands: Vec<ValueId>,
+    ) -> ValueId {
         b.emit(
-            Op::BuiltinCall,
+            Op::RuntimeCall,
             operands,
-            Some(Immediate::Data(get_class_data)),
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                RuntimeFnId::GetClass,
+            ))),
             IrType::Str,
             PhpType::Str,
             Ownership::NonHeap,

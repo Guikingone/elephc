@@ -226,27 +226,39 @@ impl<'a> FnCtx<'a> {
         self.fb.local(&name, ty)
     }
 
-    /// Declares the iterator locals for an `IterStart`, emits the initialization
-    /// (capture the source pointer, set the cursor to its start sentinel), and records
-    /// them under the iterator value's id.
+    /// Declares and records the locals for an `IterStart` before block bodies are
+    /// lowered.
     ///
-    /// `source` must already have a `WasmRepr` (a single i32 pointer for an array or a
-    /// hash); `elem` is the array's element type or the hash's value type. The cursor is
-    /// seeded to `-1` for an indexed array (pre-incremented to 0 by `IterNext`) or to the
-    /// `-2` "before first" sentinel for a hash (`__rt_hash_iter_next` maps it to the list
-    /// head). The iterator result value's own local is left untouched — downstream ops
-    /// look the iterator up by id, not by its repr.
-    pub(super) fn iter_declare(
-        &mut self,
-        iter: ValueId,
-        source: ValueId,
-        elem: PhpType,
-        is_hash: bool,
-    ) -> Result<()> {
+    /// EIR block storage order does not guarantee that the block containing
+    /// `IterStart` precedes the loop header containing `IterNext`. Reserving every
+    /// iterator in a prepass makes lowering independent of that order.
+    pub(super) fn iter_reserve(&mut self, iter: ValueId, elem: PhpType, is_hash: bool) {
         let n = self.temp_counter;
         self.temp_counter += 1;
         let source_local = self.fb.local(&format!("__iter_src{}", n), ValType::I32);
         let cursor_local = self.fb.local(&format!("__iter_cur{}", n), ValType::I64);
+        self.iter_state.insert(
+            iter.as_raw(),
+            IterSlots {
+                source: source_local,
+                cursor: cursor_local,
+                elem,
+                is_hash,
+            },
+        );
+    }
+
+    /// Emits the runtime initialization for a previously reserved iterator.
+    ///
+    /// Captures the source pointer and seeds the cursor to `-1` for indexed
+    /// arrays or `-2` for associative hashes. The instruction prepass guarantees
+    /// that the iterator locals already exist even when its loop-header block is
+    /// stored before the `IterStart` block.
+    pub(super) fn iter_initialize(&mut self, iter: ValueId, source: ValueId) -> Result<()> {
+        let slots = self.iter_slots(iter)?;
+        let source_local = slots.source.clone();
+        let cursor_local = slots.cursor.clone();
+        let is_hash = slots.is_hash;
         self.emit_load_value(source)?;
         self.fb
             .ins(&format!("local.set {}", source_local), "iterator source pointer");
@@ -258,15 +270,6 @@ impl<'a> FnCtx<'a> {
         }
         self.fb
             .ins(&format!("local.set {}", cursor_local), "init iterator cursor");
-        self.iter_state.insert(
-            iter.as_raw(),
-            IterSlots {
-                source: source_local,
-                cursor: cursor_local,
-                elem,
-                is_hash,
-            },
-        );
         Ok(())
     }
 

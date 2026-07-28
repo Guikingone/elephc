@@ -55,12 +55,6 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
-      - name: Install wasmer (WASM backend behavioral tests)
-        shell: bash
-        run: |
-          curl https://get.wasmer.io -sSfL | sh
-          echo "$HOME/.wasmer/bin" >> "$GITHUB_PATH"
-
       - name: Install test-only native providers
         run: brew install pcre2
 
@@ -229,6 +223,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install wasmer (WASM backend behavioral tests)
+        shell: bash
+        run: |
+          curl https://get.wasmer.io -sSfL | sh -s "v 4.3.7"
+          echo "$HOME/.wasmer/bin" >> "$GITHUB_PATH"
+
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
@@ -263,6 +263,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install wasmer (WASM backend behavioral tests)
+        shell: bash
+        run: |
+          curl https://get.wasmer.io -sSfL | sh -s "v 4.3.7"
+          echo "$HOME/.wasmer/bin" >> "$GITHUB_PATH"
+
       - name: Download test archive
         uses: actions/download-artifact@v4
         with:
@@ -290,6 +296,12 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install wasmer (WASM backend behavioral tests)
+        shell: bash
+        run: |
+          curl https://get.wasmer.io -sSfL | sh -s "v 4.3.7"
+          echo "$HOME/.wasmer/bin" >> "$GITHUB_PATH"
 
       - name: Download test archive
         uses: actions/download-artifact@v4

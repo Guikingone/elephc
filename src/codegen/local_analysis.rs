@@ -317,15 +317,24 @@ fn terminator_successors(terminator: &Terminator) -> Vec<BlockId> {
 }
 
 /// Returns by-value parameter slots that must own incoming or subsequently stored values.
+///
+/// Hidden closure captures stay borrowed from the callable descriptor until their first
+/// reassignment. Reassigned captures use the dedicated epilogue slot set instead of the
+/// generic owned-parameter path.
 fn owned_parameter_slots(
     function: &Function,
     stored_slots: &HashSet<LocalSlotId>,
     ever_ref_cell_slots: &HashSet<LocalSlotId>,
 ) -> HashSet<LocalSlotId> {
+    let capture_start = function
+        .params
+        .len()
+        .saturating_sub(function.flags.closure_capture_count);
     function
         .params
         .iter()
         .enumerate()
+        .filter(|(index, _)| !function.flags.is_closure || *index < capture_start)
         .filter(|(_, param)| !param.by_ref)
         .filter_map(|(index, param)| {
             let slot = LocalSlotId::from_raw(index as u32);
@@ -595,6 +604,36 @@ mod tests {
 
         let analysis = LocalSlotAnalysis::new(&function);
         assert!(analysis.owns_parameter_slot(slot));
+    }
+
+    /// Verifies a stored closure capture remains borrowed until its dedicated reassignment path.
+    #[test]
+    fn stored_closure_capture_is_not_owned_as_a_regular_parameter() {
+        let mut function = Function::new(
+            "closure_capture".to_string(),
+            IrType::Void,
+            PhpType::Void,
+        );
+        function.flags.is_closure = true;
+        function.flags.closure_capture_count = 1;
+        function.params.push(FunctionParam {
+            name: "capture".to_string(),
+            ir_type: IrType::Heap(crate::ir::IrHeapKind::Object),
+            php_type: PhpType::Object("stdClass".to_string()),
+            by_ref: false,
+            variadic: false,
+        });
+        let slot = function.add_local(
+            Some("capture".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Object),
+            PhpType::Object("stdClass".to_string()),
+            LocalKind::PhpLocal,
+        );
+        let stored_slots = HashSet::from([slot]);
+
+        let owned = owned_parameter_slots(&function, &stored_slots, &HashSet::new());
+
+        assert!(!owned.contains(&slot));
     }
 
     /// Verifies incoming by-reference cells remain borrowed and need no raw-value state flag.
