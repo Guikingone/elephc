@@ -6,15 +6,30 @@
 //! - Resource-opening and registration modules in this tree.
 //!
 //! Key details:
-//! - `next_id` remains the single monotonically increasing id source.
+//! - `take_next_id` remains the single monotonically increasing payload source, and
+//!   the single place `EVAL_RESOURCE_PAYLOAD_BASE` is applied.
 
 use super::*;
 
 impl EvalStreamResources {
-    /// Inserts a file stream and returns the assigned zero-based resource payload.
-    pub(super) fn insert(&mut self, stream: EvalFileStream) -> i64 {
+    /// Reserves the next eval-owned resource payload.
+    ///
+    /// Every eval resource of every kind — streams, directories, hash contexts,
+    /// stream contexts, filters, user-wrapper handles — is numbered here, so the
+    /// namespace base is applied exactly once. `next_id` stays a plain zero-based
+    /// counter internally, which keeps `EvalStreamResources: Default` derivable;
+    /// the base is added on the way out. Payloads are never reused: a closed eval
+    /// stream's payload is not handed to the next one, which is what makes the
+    /// runtime registry mint the NEXT id for it, exactly as PHP does.
+    pub(super) fn take_next_id(&mut self) -> i64 {
         let id = self.next_id;
         self.next_id += 1;
+        EVAL_RESOURCE_PAYLOAD_BASE + id
+    }
+
+    /// Inserts a file stream and returns the assigned resource payload.
+    pub(super) fn insert(&mut self, stream: EvalFileStream) -> i64 {
+        let id = self.take_next_id();
         self.streams.insert(id, stream);
         id
     }
@@ -93,27 +108,74 @@ impl EvalStreamResources {
         Some(id)
     }
 
-    /// Inserts a directory stream and returns the assigned zero-based resource payload.
+    /// Inserts a directory stream and returns the assigned resource payload.
     pub(super) fn insert_directory(&mut self, directory: EvalDirectoryStream) -> i64 {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.take_next_id();
         self.directories.insert(id, directory);
         id
     }
 
-    /// Inserts a hash context and returns the assigned zero-based resource payload.
+    /// Inserts a hash context and returns the assigned resource payload.
     pub(super) fn insert_hash_context(&mut self, context: EvalHashContext) -> i64 {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.take_next_id();
         self.hash_contexts.insert(id, context);
         id
     }
 
-    /// Inserts a stream context and returns the assigned zero-based resource payload.
+    /// Inserts a stream context and returns the assigned resource payload.
     pub(super) fn insert_stream_context(&mut self, context: EvalStreamContext) -> i64 {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.take_next_id();
         self.stream_contexts.insert(id, context);
         id
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every eval payload must clear the runtime registry's standard-stream shortcut.
+    ///
+    /// `__rt_resource_id_of` answers payloads 0, 1 and 2 as `payload + 1` without
+    /// consuming its counter, because those are STDIN/STDOUT/STDERR. Eval's first
+    /// three payloads used to land exactly there, which is why `get_resource_id()`
+    /// inside `eval()` reported 1, 2, 3 before jumping to the counter's 5.
+    #[test]
+    fn eval_payloads_clear_the_standard_stream_shortcut() {
+        let mut resources = EvalStreamResources::default();
+        for _ in 0..8 {
+            assert!(resources.take_next_id() > 2);
+        }
+    }
+
+    /// Eval payloads must be consecutive, never reused, and never negative.
+    ///
+    /// Consecutive-and-distinct is what keeps one registry slot per live eval
+    /// resource; staying positive is what lets the payload round-trip through
+    /// `raw_value_word()` and `i64::try_from` in `eval_resource_payload()`.
+    #[test]
+    fn eval_payloads_are_consecutive_and_positive() {
+        let mut resources = EvalStreamResources::default();
+        let first = resources.take_next_id();
+        assert_eq!(first, EVAL_RESOURCE_PAYLOAD_BASE);
+        assert!(first > 0);
+        for offset in 1..16 {
+            assert_eq!(resources.take_next_id(), EVAL_RESOURCE_PAYLOAD_BASE + offset);
+        }
+    }
+
+    /// The base must sit above every host payload the registry can also be keyed by.
+    ///
+    /// Host payloads are file descriptors and user-space addresses. Canonical
+    /// user-space addressing stops at 2^47 on x86_64 (2^56 with 5-level paging) and
+    /// at 2^52 on AArch64, so the base has to clear 2^56 to be disjoint from both.
+    /// It also has to leave room above itself for the counter: the headroom assertion
+    /// is what keeps `EVAL_RESOURCE_PAYLOAD_BASE + n` from ever wrapping into the
+    /// negatives, which would break `i64::try_from` in `eval_resource_payload()`.
+    #[test]
+    fn eval_payload_base_is_disjoint_from_host_payloads() {
+        assert_eq!(EVAL_RESOURCE_PAYLOAD_BASE, 1 << 62);
+        assert!(EVAL_RESOURCE_PAYLOAD_BASE > 1_i64 << 56);
+        assert!(i64::MAX - EVAL_RESOURCE_PAYLOAD_BASE > 1_i64 << 61);
     }
 }

@@ -2,7 +2,7 @@
 title: "header() — internals"
 description: "Compiler internals for header(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 294
+  order: 296
 ---
 
 ## `header()` — internals

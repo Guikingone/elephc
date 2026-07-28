@@ -43,6 +43,9 @@ pub(super) fn lower(
         RuntimeFnId::Exec => Some({
             crate::codegen::lower_inst::builtins::system::lower_exec(ctx, inst)
         }),
+        RuntimeFnId::ExtensionLoaded => Some({
+            crate::codegen::lower_inst::builtins::lower_extension_loaded(ctx, inst)
+        }),
         RuntimeFnId::Getdate => Some({
             crate::codegen::lower_inst::builtins::system::lower_getdate(ctx, inst)
         }),

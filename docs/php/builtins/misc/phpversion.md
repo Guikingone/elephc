@@ -1,21 +1,22 @@
 ---
 title: "phpversion()"
-description: "Returns the current PHP version information."
+description: "Returns the targeted PHP language version, or one extension's version."
 sidebar:
-  order: 298
+  order: 300
 ---
 
 ## phpversion()
 
 ```php
-function phpversion(): string
+function phpversion(string $extension = null): string|false
 ```
 
-Returns the current PHP version information.
+Returns the targeted PHP language version, or one extension's version.
 
-**Parameters**: none.
+**Parameters**:
+- `$extension` (`string`), default `null`, optional
 
-**Returns**: `string`
+**Returns**: `string|false`
 
 ## Availability
 

@@ -976,9 +976,14 @@ fn ir_backend_handles_scalar_builtins() {
     for (name, source, expected) in [
         ("strlen", "<?php echo strlen(\"hello\");", "5"),
         (
+            // `phpversion()` reports the PHP LANGUAGE version of the compile target, not
+            // elephc's own package version. This harness compiles with the default
+            // `--php-version` (8.5), and elephc reports the profile's `8.5.0` form —
+            // reference PHP 8.5.6 reports `8.5.6`. See
+            // `web_prelude::PhpVersion::version_string`.
             "pi_and_phpversion",
             "<?php echo pi() > 3 ? \"pi\" : \"bad\"; echo \":\"; echo phpversion();",
-            concat!("pi:", env!("CARGO_PKG_VERSION")),
+            "pi:8.5.0",
         ),
         ("intval_float", "<?php echo intval(3.9);", "3"),
         ("intval_str", "<?php echo intval(\"42xyz\");", "42"),
@@ -1687,9 +1692,14 @@ echo "|";
 print_r($map["n"]);
 echo "]";
 "#;
+    // The nested `["a"]` slot dumps its elements: `var_dump` recurses into nested
+    // arrays, so this pins the recursive body rather than the empty `array(2) {\n}`
+    // shell it reported before. Verified byte-for-byte against reference PHP 8.5.6
+    // (`php -d xdebug.mode=off`), which prints the same two elements.
     assert_eq!(
         compile_and_run_ir_backend("mixed_assoc_array_slots", source),
-        "int(42)\nstring(5) \"hello\"\nbool(true)\nNULL\narray(2) {\n}\n[hello|]"
+        "int(42)\nstring(5) \"hello\"\nbool(true)\nNULL\n\
+         array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n[hello|]"
     );
 }
 
@@ -4074,7 +4084,13 @@ fn ir_backend_handles_isset_builtin() {
     );
 }
 
-/// Verifies `intdiv()` division-by-zero follows the legacy fatal diagnostic.
+/// Verifies an UNCAUGHT `intdiv()` division-by-zero names PHP's `DivisionByZeroError`.
+///
+/// This test previously pinned a bare `Fatal error: division by zero`, which was
+/// uncatchable: no `catch` clause could ever observe it. The zero-divisor guard now
+/// raises reference PHP 8.5.6's `DivisionByZeroError` with php-src's `Division by
+/// zero` wording, so an uncaught one still exits non-zero — it just names the class.
+/// The catchable side lives in `error_class_hierarchy_tests`.
 #[test]
 fn ir_backend_handles_intdiv_division_by_zero() {
     let run = compile_ir_backend_and_run("intdiv_zero", "<?php echo intdiv(1, 0);", &[]);
@@ -4088,7 +4104,7 @@ fn ir_backend_handles_intdiv_division_by_zero() {
     );
     let stderr = String::from_utf8(run.stderr).expect("intdiv stderr should be utf8");
     assert!(
-        stderr.contains("Fatal error: division by zero"),
+        stderr.contains("Uncaught DivisionByZeroError: Division by zero"),
         "unexpected intdiv stderr: {stderr}"
     );
 }

@@ -8,10 +8,18 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::strings`.
 //!
 //! Key details:
-//! - A `HashContext` is a resource: the `elephc_crypto_init`/`_clone` handle is
-//!   boxed as a Mixed cell (tag 9, kind 2) exactly like `fopen` boxes a file
-//!   descriptor. `hash_update`/`hash_final`/`hash_copy` receive the already-
-//!   unboxed raw handle (the emitter uses `emit_stream_fd_arg`).
+//! - THESE HELPERS ARE NO LONGER THE PHP SURFACE. PHP 8's `hash_init()` returns a
+//!   `HashContext` OBJECT, which elephc models in `crate::hash_prelude`; the builtins
+//!   these helpers back were renamed to `internal: true` `__elephc_hash_ctx_*` and are
+//!   called only from that prelude's elephc-PHP wrappers. Everything below is unchanged
+//!   by that migration except the resource id (next bullet).
+//! - The `elephc_crypto_init`/`_clone` handle is still boxed as a Mixed cell
+//!   (tag 9, kind 2), which is what owns it, but it NO LONGER TAKES A PHP RESOURCE ID:
+//!   the object holds the cell in a property, the cell never reaches user code, and PHP
+//!   counts the context in the object handle space instead. `__rt_mixed_from_value`
+//!   skips its bind-if-absent step for kind 2 (see `runtime::resource_ids`).
+//!   `hash_update`/`hash_final`/`hash_copy` still receive the already-unboxed raw
+//!   handle (the emitter uses `emit_stream_fd_arg`).
 //! - `__rt_hash_final` finalizes a *clone* of the context via `elephc_crypto_final`
 //!   (the original handle stays live and owned by its Mixed box) and formats the
 //!   digest through the shared `__rt_digest_to_string` (hex or raw).
@@ -20,17 +28,77 @@
 //!   never-finalized and already-finalized contexts exactly once.
 //! - An unknown algorithm in `hash_init` throws the same catchable `\ValueError`
 //!   as `hash()`.
-//! - Resource model note: reusing a context after `hash_final()` — a second
-//!   `hash_final()`, or a `hash_update()`/`hash_copy()` on an already-finalized
-//!   handle — is memory-safe (the handle is never freed by `final`), but the
-//!   result is not PHP-equivalent: PHP throws "Supplied resource is not a valid
-//!   Hash Context resource", whereas elephc keeps hashing the still-live context.
+//! - FINALIZATION IS A ONE-WAY DOOR, and each of the three helpers enforces it.
+//!   PHP 8.5 answers `hash_update()`, `hash_final()` or `hash_copy()` on an
+//!   already-finalized context with a catchable
+//!   `TypeError: <fn>(): Argument #1 ($context) must be a valid, non-finalized HashContext`.
+//!   elephc used to keep hashing the still-live handle and return a plausible but
+//!   wrong digest — a silently-wrong value, not a visible failure. Each helper now
+//!   asks `elephc_crypto_is_finalized` first and throws that exact TypeError,
+//!   before the context is touched, so a rejected call has no side effect on the
+//!   digest state. The check is a single indirect call on a path that already
+//!   makes one, and it happens in the runtime helper rather than in lowering so
+//!   both architectures and every call shape are covered by one implementation.
+//! - THE HANDLE STAYS ALIVE ACROSS THE THROW. `final` still finalizes a *clone*
+//!   and never frees, so the guard changes only what PHP sees, never ownership:
+//!   `__rt_hash_ctx_free` remains the single destructor and still runs exactly
+//!   once at scope exit, including for a context whose reuse was rejected.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::hash_crypto;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::runtime::data::HASH_INIT_UNKNOWN_ALGO_MSG;
+use crate::codegen_support::runtime::data::{
+    HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
+    HASH_UPDATE_FINALIZED_CTX_MSG,
+};
+
+/// Emits the AArch64 "is this context spent?" probe.
+///
+/// Expects the context handle already in `x0` (the C ABI's first argument, which
+/// is where all three helpers receive it). Branches to `finalized_label` when
+/// `elephc_crypto_is_finalized` answers non-zero, and falls through to
+/// `continue_label` otherwise.
+///
+/// A null slot falls through rather than throwing: the bridge is not linked, which
+/// is the same condition under which the surrounding helper already skips its real
+/// elephc-crypto call, and inventing a TypeError there would report a link-time
+/// gap as a PHP-level type error.
+fn emit_finalized_probe_aarch64(emitter: &mut Emitter, finalized_label: &str, continue_label: &str) {
+    abi::emit_symbol_address(emitter, "x9", "_elephc_crypto_is_finalized_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // load the elephc_crypto_is_finalized entry pointer
+
+    emitter.instruction(&format!("cbz x9, {}", continue_label));                // bridge not linked → no finalization state to consult
+
+    emitter.instruction("blr x9");                                              // elephc_crypto_is_finalized(ctx), w0 = 1 when spent
+
+    emitter.instruction(&format!("cbnz w0, {}", finalized_label));              // a spent context is PHP's TypeError case
+}
+
+/// Emits the x86_64 "is this context spent?" probe. Mirrors the AArch64 form; the
+/// context handle is expected in `rdi` and the answer arrives in `eax`.
+fn emit_finalized_probe_x86_64(emitter: &mut Emitter, finalized_label: &str, continue_label: &str) {
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_crypto_is_finalized_fn", 0); // load the elephc_crypto_is_finalized entry pointer
+    emitter.instruction("test r9, r9");                                         // bridge not linked → no finalization state to consult
+
+    emitter.instruction(&format!("jz {}", continue_label));                     // fall through to the normal path
+
+    emitter.instruction("call r9");                                             // elephc_crypto_is_finalized(ctx), eax = 1 when spent
+
+    emitter.instruction("test eax, eax");                                       // did the context already produce its digest?
+
+    emitter.instruction(&format!("jnz {}", finalized_label));                   // a spent context is PHP's TypeError case
+}
+
+/// Emits the catchable `\TypeError` PHP raises for a spent HashContext.
+fn emit_finalized_type_error(emitter: &mut Emitter, message_symbol: &str, message_len: usize) {
+    hash_crypto::emit_throw_static_hash_exception(
+        emitter,
+        "_spl_type_error_class_id",
+        message_symbol,
+        message_len,
+    );
+}
 
 /// Emits all four incremental HashContext runtime helpers for the target.
 pub fn emit_hash_context(emitter: &mut Emitter) {
@@ -140,19 +208,38 @@ fn emit_hash_init(emitter: &mut Emitter) {
 }
 
 /// `__rt_hash_update` — in: ctx handle + data already in C ABI registers
-/// (AArch64 x0=ctx, x1=data_ptr, x2=data_len; x86_64 rdi/rsi/rdx). Feeds the data
+/// (AArch64 x0=ctx, x1=data_ptr, x2=data_len; x86_64 rdi/rsi/rdx). Rejects an
+/// already-finalized context with PHP's `\TypeError`, otherwise feeds the data
 /// into the context. Out: PHP `true` (x0/rax = 1).
+///
+/// The three incoming argument registers are spilled across the finalized probe
+/// because that probe is itself a C call and takes `x0`/`rdi` as its own argument.
 fn emit_hash_update(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_update (feed data into a HashContext) ---");
     emitter.label_global("__rt_hash_update");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("sub sp, sp, #16");                             // frame to preserve the link register across the call
+            emitter.instruction("sub sp, sp, #48");                             // frame for the link register and the spilled arguments
 
-            emitter.instruction("stp x29, x30, [sp]");                          // save frame pointer and return address
+            emitter.instruction("stp x29, x30, [sp, #32]");                     // save frame pointer and return address
 
-            emitter.instruction("mov x29, sp");                                 // set the frame pointer
+            emitter.instruction("add x29, sp, #32");                            // set the frame pointer
+
+            emitter.instruction("stp x0, x1, [sp]");                            // spill the context handle and data pointer
+
+            emitter.instruction("str x2, [sp, #16]");                           // spill the data length
+
+            emit_finalized_probe_aarch64(
+                emitter,
+                "__rt_hash_update_finalized",
+                "__rt_hash_update_live",
+            );
+
+            emitter.label("__rt_hash_update_live");
+            emitter.instruction("ldp x0, x1, [sp]");                            // reload the context handle and data pointer
+
+            emitter.instruction("ldr x2, [sp, #16]");                           // reload the data length
 
             abi::emit_symbol_address(emitter, "x9", "_elephc_crypto_update_fn");
             emitter.instruction("ldr x9, [x9]");                                // load the elephc_crypto_update entry pointer
@@ -164,11 +251,16 @@ fn emit_hash_update(emitter: &mut Emitter) {
             emitter.label("__rt_hash_update_done");
             emitter.instruction("mov x0, #1");                                  // hash_update() returns true
 
-            emitter.instruction("ldp x29, x30, [sp]");                          // restore frame pointer and return address
+            emitter.instruction("ldp x29, x30, [sp, #32]");                     // restore frame pointer and return address
 
-            emitter.instruction("add sp, sp, #16");                             // release the frame
+            emitter.instruction("add sp, sp, #48");                             // release the frame
 
             emitter.instruction("ret");                                         // return true
+
+            emitter.label("__rt_hash_update_finalized");
+            emitter.instruction("ldp x29, x30, [sp, #32]");                     // restore frame pointer before the non-returning throw
+
+            emitter.instruction("add sp, sp, #48");                             // release the frame before throwing
 
         }
         Arch::X86_64 => {
@@ -176,7 +268,26 @@ fn emit_hash_update(emitter: &mut Emitter) {
 
             emitter.instruction("mov rbp, rsp");                                // establish the frame base
 
-            emitter.instruction("sub rsp, 16");                                 // keep the nested call 16-byte aligned
+            emitter.instruction("sub rsp, 32");                                 // spill slots for the three arguments, 16-byte aligned
+
+            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // spill the context handle
+
+            emitter.instruction("mov QWORD PTR [rbp - 16], rsi");               // spill the data pointer
+
+            emitter.instruction("mov QWORD PTR [rbp - 24], rdx");               // spill the data length
+
+            emit_finalized_probe_x86_64(
+                emitter,
+                "__rt_hash_update_finalized_x86",
+                "__rt_hash_update_live_x86",
+            );
+
+            emitter.label("__rt_hash_update_live_x86");
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                // reload the context handle
+
+            emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");               // reload the data pointer
+
+            emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");               // reload the data length
 
             abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_crypto_update_fn", 0); // load the elephc_crypto_update entry pointer
             emitter.instruction("test r9, r9");                                 // missing runtime → skip (returns true)
@@ -194,8 +305,18 @@ fn emit_hash_update(emitter: &mut Emitter) {
 
             emitter.instruction("ret");                                         // return true
 
+            emitter.label("__rt_hash_update_finalized_x86");
+            emitter.instruction("mov rsp, rbp");                                // release the frame before the non-returning throw
+
+            emitter.instruction("pop rbp");                                     // restore the caller frame pointer before throwing
+
         }
     }
+    emit_finalized_type_error(
+        emitter,
+        "_hash_update_finalized_ctx_msg",
+        HASH_UPDATE_FINALIZED_CTX_MSG.len(),
+    );
 }
 
 /// `__rt_hash_final` — in: ctx handle + binary flag (AArch64 x0=ctx, x5=binary;
@@ -215,6 +336,17 @@ fn emit_hash_final(emitter: &mut Emitter) {
             emitter.instruction("add x29, sp, #80");                            // set the frame pointer
 
             emitter.instruction("str x5, [sp, #72]");                           // preserve the binary flag across the C calls
+
+            emitter.instruction("str x0, [sp, #64]");                           // preserve the context handle across the finalized probe
+
+            emit_finalized_probe_aarch64(
+                emitter,
+                "__rt_hash_final_finalized",
+                "__rt_hash_final_live",
+            );
+
+            emitter.label("__rt_hash_final_live");
+            emitter.instruction("ldr x0, [sp, #64]");                           // reload the context handle for the C ABI first argument
 
             emitter.instruction("mov x1, sp");                                  // C ABI out = the 64-byte stack digest buffer
 
@@ -245,6 +377,11 @@ fn emit_hash_final(emitter: &mut Emitter) {
 
             emitter.instruction("ret");                                         // return the digest string
 
+            emitter.label("__rt_hash_final_finalized");
+            emitter.instruction("ldp x29, x30, [sp, #80]");                     // restore frame pointer before the non-returning throw
+
+            emitter.instruction("add sp, sp, #96");                             // release the frame before throwing
+
         }
         Arch::X86_64 => {
             emitter.instruction("push rbp");                                    // preserve the caller frame pointer
@@ -254,6 +391,17 @@ fn emit_hash_final(emitter: &mut Emitter) {
             emitter.instruction("sub rsp, 96");                                 // 64-byte digest buffer + saved flag (aligned)
 
             emitter.instruction("mov QWORD PTR [rbp - 16], r10");               // preserve the binary flag across the C calls
+
+            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // preserve the context handle across the finalized probe
+
+            emit_finalized_probe_x86_64(
+                emitter,
+                "__rt_hash_final_finalized_x86",
+                "__rt_hash_final_live_x86",
+            );
+
+            emitter.label("__rt_hash_final_live_x86");
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                // reload the context handle for the C ABI first argument
 
             emitter.instruction("mov rsi, rbp");                                // compute the digest buffer address
 
@@ -288,11 +436,22 @@ fn emit_hash_final(emitter: &mut Emitter) {
 
             emitter.instruction("ret");                                         // return the digest string
 
+            emitter.label("__rt_hash_final_finalized_x86");
+            emitter.instruction("mov rsp, rbp");                                // release the frame before the non-returning throw
+
+            emitter.instruction("pop rbp");                                     // restore the caller frame pointer before throwing
+
         }
     }
+    emit_finalized_type_error(
+        emitter,
+        "_hash_final_finalized_ctx_msg",
+        HASH_FINAL_FINALIZED_CTX_MSG.len(),
+    );
 }
 
-/// `__rt_hash_copy` — in: ctx handle (AArch64 x0, x86_64 rdi). Deep-clones the
+/// `__rt_hash_copy` — in: ctx handle (AArch64 x0, x86_64 rdi). Rejects an
+/// already-finalized context with PHP's `\TypeError`, otherwise deep-clones the
 /// context and boxes the new handle as a Mixed resource. Out: Mixed in x0/rax.
 fn emit_hash_copy(emitter: &mut Emitter) {
     emitter.blank();
@@ -300,11 +459,22 @@ fn emit_hash_copy(emitter: &mut Emitter) {
     emitter.label_global("__rt_hash_copy");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("sub sp, sp, #16");                             // frame to preserve the link register across calls
+            emitter.instruction("sub sp, sp, #32");                             // frame for the link register and the spilled context handle
 
-            emitter.instruction("stp x29, x30, [sp]");                          // save frame pointer and return address
+            emitter.instruction("stp x29, x30, [sp, #16]");                     // save frame pointer and return address
 
-            emitter.instruction("mov x29, sp");                                 // set the frame pointer
+            emitter.instruction("add x29, sp, #16");                            // set the frame pointer
+
+            emitter.instruction("str x0, [sp]");                                // spill the context handle across the finalized probe
+
+            emit_finalized_probe_aarch64(
+                emitter,
+                "__rt_hash_copy_finalized",
+                "__rt_hash_copy_live",
+            );
+
+            emitter.label("__rt_hash_copy_live");
+            emitter.instruction("ldr x0, [sp]");                                // reload the context handle for the C ABI first argument
 
             abi::emit_symbol_address(emitter, "x9", "_elephc_crypto_clone_fn");
             emitter.instruction("ldr x9, [x9]");                                // load the elephc_crypto_clone entry pointer
@@ -322,11 +492,16 @@ fn emit_hash_copy(emitter: &mut Emitter) {
 
             emitter.instruction("bl __rt_mixed_from_value");                    // box the cloned handle as a PHP resource
 
-            emitter.instruction("ldp x29, x30, [sp]");                          // restore frame pointer and return address
+            emitter.instruction("ldp x29, x30, [sp, #16]");                     // restore frame pointer and return address
 
-            emitter.instruction("add sp, sp, #16");                             // release the frame
+            emitter.instruction("add sp, sp, #32");                             // release the frame
 
             emitter.instruction("ret");                                         // return the boxed cloned HashContext
+
+            emitter.label("__rt_hash_copy_finalized");
+            emitter.instruction("ldp x29, x30, [sp, #16]");                     // restore frame pointer before the non-returning throw
+
+            emitter.instruction("add sp, sp, #32");                             // release the frame before throwing
 
         }
         Arch::X86_64 => {
@@ -335,6 +510,17 @@ fn emit_hash_copy(emitter: &mut Emitter) {
             emitter.instruction("mov rbp, rsp");                                // establish the frame base
 
             emitter.instruction("sub rsp, 16");                                 // keep nested calls 16-byte aligned
+
+            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // spill the context handle across the finalized probe
+
+            emit_finalized_probe_x86_64(
+                emitter,
+                "__rt_hash_copy_finalized_x86",
+                "__rt_hash_copy_live_x86",
+            );
+
+            emitter.label("__rt_hash_copy_live_x86");
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                // reload the context handle for the C ABI first argument
 
             abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_crypto_clone_fn", 0); // load the elephc_crypto_clone entry pointer
             emitter.instruction("test r9, r9");                                 // missing runtime → return the unboxed handle as-is
@@ -358,8 +544,18 @@ fn emit_hash_copy(emitter: &mut Emitter) {
 
             emitter.instruction("ret");                                         // return the boxed cloned HashContext
 
+            emitter.label("__rt_hash_copy_finalized_x86");
+            emitter.instruction("mov rsp, rbp");                                // release the frame before the non-returning throw
+
+            emitter.instruction("pop rbp");                                     // restore the caller frame pointer before throwing
+
         }
     }
+    emit_finalized_type_error(
+        emitter,
+        "_hash_copy_finalized_ctx_msg",
+        HASH_COPY_FINALIZED_CTX_MSG.len(),
+    );
 }
 
 /// `__rt_hash_ctx_free` — in: ctx handle (AArch64 x0, x86_64 rdi). Frees an

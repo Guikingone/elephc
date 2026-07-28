@@ -23,7 +23,10 @@ use crate::codegen::callable_invoker_args::{
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
-use crate::codegen::{abi, emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed};
+use crate::codegen::{
+    abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
+    emit_box_runtime_payload_as_mixed,
+};
 use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
@@ -198,7 +201,7 @@ fn emit_runtime_callable_invoker_impl(
         &mut ctx,
         data,
     );
-    emit_box_current_value_as_mixed(emitter, &ret_ty.codegen_repr());
+    emit_boxed_invoker_return(emitter, &ret_ty);
     if catch_native_throws {
         emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
     }
@@ -215,6 +218,42 @@ fn emit_runtime_callable_invoker_impl(
         abi::emit_frame_restore(emitter, frame_size);
         abi::emit_return(emitter);
     }
+}
+
+/// Boxes the callable target's return value into the invoker's uniform Mixed result.
+///
+/// OWNERSHIP — a `Str` return is already OWNED by the time it reaches here, so the Mixed cell
+/// TAKES it rather than copying it. `call_target_with_pushed_args` runs
+/// `restore_concat_offset_after_nested_call`, which unconditionally calls `__rt_str_persist` for a
+/// `Str` return type, and every path that produces `ret_ty` returns `sig.return_type` — the same
+/// value that persist was keyed on (`emit_loaded_indexed_array_callback_call`,
+/// `emit_loaded_assoc_array_callback_call`, and `emit_loaded_mixed_array_callback_call`, which only
+/// forwards to those two). So `ret_ty == Str` here implies a fresh heap copy is live in the string
+/// return registers, owned by nobody.
+///
+/// Boxing that through `emit_box_current_value_as_mixed` used the BORROWED contract:
+/// `__rt_mixed_from_value` persists a SECOND copy for the cell
+/// (`src/codegen_support/runtime/arrays/mixed_from_value.rs`, `__rt_mixed_from_value_string`),
+/// leaving the first orphaned — one leaked heap block per invoked callable returning a string,
+/// which is what every closure / first-class-callable / `array_map` string-result call site was
+/// paying. `emit_box_current_owned_value_as_mixed` moves the pointer/length pair into a fresh cell
+/// instead.
+///
+/// This ELIDES AN ALLOCATION; it adds no release. The Mixed cell owned exactly one string payload
+/// before and owns exactly one now — the only change is WHICH copy it owns — so the number of
+/// frees `__rt_mixed_free_deep` performs is unchanged and no double free can be introduced.
+///
+/// Only `Str` is routed through the owning boxer ON PURPOSE. For a container or object return
+/// `emit_box_current_owned_value_as_mixed` would emit a decref of the original reference, and the
+/// invoker never took one — nothing persisted or retained a container on the way in, so releasing
+/// one here would free a reference the caller still holds.
+fn emit_boxed_invoker_return(emitter: &mut Emitter, ret_ty: &PhpType) {
+    let repr = ret_ty.codegen_repr();
+    if repr == PhpType::Str {
+        emit_box_current_owned_value_as_mixed(emitter, &PhpType::Str);
+        return;
+    }
+    emit_box_current_value_as_mixed(emitter, &repr);
 }
 
 /// Loads the descriptor entry slot from the first invoker argument into `call_reg`.

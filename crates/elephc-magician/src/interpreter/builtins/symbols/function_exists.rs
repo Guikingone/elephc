@@ -135,7 +135,11 @@ pub(in crate::interpreter) fn eval_function_probe_exists(
     !name.contains("::")
         && (context.has_function(name)
             || eval_php_visible_builtin_exists(name)
-            || eval_date_procedural_alias_exists(name))
+            || eval_date_procedural_alias_exists(name)
+            || eval_opcache_configuration_function_exists(name)
+            || eval_opcache_reset_function_exists(name)
+            || eval_opcache_get_status_function_exists(name)
+            || eval_opcache_file_function_exists(name))
 }
 
 /// Returns the procedural date/time alias names the eval dispatcher accepts

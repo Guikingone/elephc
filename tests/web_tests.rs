@@ -1108,3 +1108,42 @@ fn web_namespaced_program_serves() {
     let _ = child.wait();
     assert!(resp.ends_with("hi ada"), "namespaced --web program: {:?}", resp);
 }
+
+/// Verifies the OPcache `opcache_get_status()` prelude function under `--web`, where the
+/// cache is enabled (`opcache.enable` default). Spot-checks the enabled status array:
+/// `opcache_enabled` true; the class-B memory invariant (used + free + wasted ==
+/// `opcache.memory_consumption` = 134217728) and the interned-strings invariant
+/// (used + free == buffer_size); `opcache_statistics.max_cached_keys` == 16229 (derived
+/// from the default `max_accelerated_files`); `opcache_hit_rate` == 0.0; `jit.enabled`
+/// false (default `opcache.jit = disable`); the `scripts` key present for the default
+/// call but ABSENT for `opcache_get_status(false)`; and `start_time` a live `time()`.
+/// The expected string matches reference PHP `opcache_get_status()` run with the cache
+/// enabled.
+#[test]
+fn web_opcache_get_status_reports_enabled_array() {
+    let dir = make_test_dir("web_opcache_status");
+    let src = "<?php \
+$s = opcache_get_status(); \
+$ns = opcache_get_status(false); \
+echo ($s['opcache_enabled'] ? 'EN1' : 'EN0'), ':'; \
+echo (($s['memory_usage']['used_memory'] + $s['memory_usage']['free_memory'] + $s['memory_usage']['wasted_memory']) == 134217728 ? 'MEMOK' : 'MEMBAD'), ':'; \
+echo (($s['interned_strings_usage']['used_memory'] + $s['interned_strings_usage']['free_memory']) == $s['interned_strings_usage']['buffer_size'] ? 'INTOK' : 'INTBAD'), ':'; \
+echo ($s['opcache_statistics']['max_cached_keys'] == 16229 ? 'MCK1' : 'MCK0'), ':'; \
+echo ($s['opcache_statistics']['opcache_hit_rate'] == 0 ? 'HR1' : 'HR0'), ':'; \
+echo ($s['jit']['enabled'] ? 'JIT0' : 'JIT1'), ':'; \
+echo (isset($s['scripts']) ? 'SCR1' : 'SCR0'), ':'; \
+echo (isset($ns['scripts']) ? 'NSCR1' : 'NSCR0'), ':'; \
+echo ($s['opcache_statistics']['start_time'] > 1000000000 ? 'ST1' : 'ST0');";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        resp.ends_with("EN1:MEMOK:INTOK:MCK1:HR1:JIT1:SCR1:NSCR0:ST1"),
+        "opcache_get_status --web array mismatch: {:?}",
+        resp
+    );
+}

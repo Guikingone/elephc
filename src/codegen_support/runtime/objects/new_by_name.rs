@@ -97,6 +97,7 @@ pub fn emit_new_by_name(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_heap_alloc");                                  // x0 = object pointer
     emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
     emitter.instruction("str x9, [x0, #-8]");                                   // stamp the uniform heap header
+    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
     emitter.instruction("ldr x12, [sp, #32]");                                  // reload class_id
     emitter.instruction("str x12, [x0]");                                       // class_id at offset 0
 
@@ -197,6 +198,7 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
         crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
     )); // object heap-kind word with the x86_64 marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform heap header
+    emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload class_id
     emitter.instruction("mov QWORD PTR [rax], rcx");                            // class_id at offset 0
 

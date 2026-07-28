@@ -410,6 +410,12 @@ pub trait RuntimeValueOps {
     /// Returns the unboxed object payload pointer used for PHP object identity.
     fn object_identity(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus>;
 
+    /// Returns the PHP OBJECT HANDLE — the small dense integer `spl_object_id()`
+    /// reports and `var_dump()` prints as `object(C)#N`. This is deliberately not
+    /// `object_identity`: that one is the storage address, which destructor
+    /// bookkeeping keys on, while this one must match the AOT engine's pool.
+    fn php_object_handle(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus>;
+
     /// Returns the object identity that would be freed by releasing this owned cell, if any.
     fn final_object_identity_for_release(
         &mut self,

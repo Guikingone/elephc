@@ -60,6 +60,16 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("cmp x12, x17");                                        // would the candidate payload overrun the live heap?
     emitter.instruction("b.hi __rt_heap_free_done");                            // yes — reject the invalid block before free-list insertion
 
+    // -- return this block's PHP object handle to the pool before the storage goes --
+    // This is the SINGLE release chokepoint for object identity: every object dies
+    // by having its storage reclaimed here, whatever released it (refcount drop,
+    // deep free, cycle collection). The helper falls out after one load for the
+    // strings/arrays/hashes/descriptors that never held a handle, and it preserves
+    // every register, so only x30 has to be saved around the branch.
+    emitter.instruction("stp x0, x30, [sp, #-16]!");                            // preserve the freed pointer and caller return address across the handle release
+    emitter.instruction("bl __rt_object_handle_release");                       // hand this block's PHP object handle back to the LIFO pool
+    emitter.instruction("ldp x0, x30, [sp], #16");                              // restore the freed pointer and caller return address
+
     // -- debug mode: validate the free list before mutating it --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
     emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
@@ -342,6 +352,12 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used to distinguish owned heap payloads from foreign pointers
     emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // verify that this payload belongs to the x86_64 heap runtime before mutating allocator state
     emitter.instruction("jne __rt_heap_free_done");                             // silently ignore foreign/static pointers so callers can safely pass literals or concat-buffer storage
+
+    // -- return this block's PHP object handle to the pool before the storage goes --
+    // Single release chokepoint for object identity, matching the AArch64 path: the
+    // helper preserves every register including rax, so no spill is needed here.
+    emitter.instruction("call __rt_object_handle_release");                     // hand this block's PHP object handle back to the LIFO pool
+
     emitter.instruction("lea r9, [rax - 16]");                                  // recover the internal block header address from the user payload pointer
     emitter.instruction("mov r11d, DWORD PTR [r9]");                            // load the block payload size from the uniform heap header before releasing it
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");

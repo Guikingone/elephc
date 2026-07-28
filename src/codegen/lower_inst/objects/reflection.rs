@@ -25,7 +25,7 @@ use crate::codegen::{
 };
 use crate::ir::{Immediate, Instruction, Op, TraitMethodInfo, ValueDef, ValueId};
 use crate::names::{
-    enum_case_symbol, php_symbol_key, property_hook_get_method, property_hook_set_method,
+    php_symbol_key, property_hook_get_method, property_hook_set_method,
     static_property_symbol,
 };
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, TypeExpr, Visibility};
@@ -6119,13 +6119,9 @@ fn emit_reflection_constant_value_as_mixed(
             enum_name,
             case_name,
         } => {
-            let case_label = enum_case_symbol(enum_name, case_name);
-            abi::emit_load_symbol_to_reg(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                &case_label,
-                0,
-            );
+            // Reading a case through Reflection is an access like any other, so it
+            // materializes the case if this is its first evaluation.
+            crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
             emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(enum_name.clone()));
         }
     }

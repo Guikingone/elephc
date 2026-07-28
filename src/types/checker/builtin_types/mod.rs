@@ -29,15 +29,18 @@ mod timezone_ids;
 /// Checks for name collisions with user-declared types before inserting; returns
 /// `CompileError` if any builtin name is already present. Insertion order sets
 /// the inheritance chain: Error/Exception extend Throwable; TypeError/ValueError/
-/// ArithmeticError/UnhandledMatchError extend Error; RuntimeException/
-/// ReflectionException extend Exception; JsonException extends RuntimeException;
-/// FiberError extends Error. Fiber is final with no parent.
+/// ArithmeticError/AssertionError/UnhandledMatchError extend Error;
+/// ArgumentCountError extends TypeError; DivisionByZeroError extends
+/// ArithmeticError; RuntimeException/ReflectionException extend Exception;
+/// JsonException extends RuntimeException; FiberError extends Error. Fiber is
+/// final with no parent.
 pub(crate) use declarations::{InterfaceDeclInfo, inject_builtin_throwables};
 
 /// Patches the checker metadata for the Throwable interface and all builtin exception classes.
 /// Updates return types for getter methods and the `__construct` parameter types for Error, TypeError,
-/// ValueError, ArithmeticError, UnhandledMatchError, Exception, RuntimeException,
-/// ReflectionException, JsonException, and FiberError.
+/// ArgumentCountError, ValueError, ArithmeticError, DivisionByZeroError, AssertionError,
+/// UnhandledMatchError, Exception, RuntimeException, ReflectionException, JsonException,
+/// and FiberError.
 pub(crate) use exception::patch_builtin_exception_signatures;
 
 /// Patches Fiber method signatures in the checker after initial class registration.

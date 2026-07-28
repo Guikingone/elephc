@@ -1,37 +1,27 @@
 ---
 title: "hash_final()"
-description: "Finalizes an incremental hash and returns the digest string."
+description: "Finalizes an incremental hashing context and returns the digest (hex, or raw bytes when $binary). Provided by the compiler-injected hash prelude in compiled code."
 sidebar:
-  order: 375
+  order: 377
 ---
 
 ## hash_final()
 
 ```php
-function hash_final(resource $context, bool $binary = false): string
+function hash_final(mixed $context, mixed $binary = 'false'): mixed
 ```
 
-Finalizes an incremental hash and returns the digest string.
+Finalizes an incremental hashing context and returns the digest (hex, or raw bytes when $binary). Provided by the compiler-injected hash prelude in compiled code.
 
 **Parameters**:
-- `$context` (`resource`)
-- `$binary` (`bool`), default `false`, optional
+- `$context` (`mixed`)
+- `$binary` (`mixed`), default `'false'`, optional
 
-**Returns**: `string`
+**Returns**: `mixed`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
+- **Compiled (AOT)**: not available — compiled programs cannot call this builtin yet.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/hash_final.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_final.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
-
-## Internals
-
-For how `hash_final` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/hash_final.md).

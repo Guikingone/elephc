@@ -332,20 +332,22 @@ fn lower_closure_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         ),
         Some(&invoker_label),
     );
-    if captures.is_empty() {
-        abi::emit_symbol_address(
-            ctx.emitter,
-            abi::int_result_reg(ctx.emitter),
-            &descriptor_label,
-        );
-    } else {
-        emit_runtime_closure_descriptor_with_captures(
-            ctx,
-            &descriptor_label,
-            &captures,
-            &inst.operands,
-        )?;
-    }
+    // Every closure gets HEAP storage, capture-free ones included. In PHP a Closure
+    // is an object and consumes an object handle from the same pool `new` draws
+    // from — `$f = function () {}; var_dump(new P());` prints `object(P)#2` — so a
+    // capture-free closure that collapsed to a static `.data` descriptor address
+    // would have no allocation to bind a handle to and no lifetime to release one
+    // at, and every `#N` after it would be off by one. Routing it through the same
+    // runtime descriptor the capturing case already uses gives the closure real
+    // storage, so `__rt_object_handle_acquire` binds a handle at creation and
+    // `__rt_callable_descriptor_release` → `__rt_heap_free` hands it back exactly
+    // when PHP destroys the Closure.
+    emit_runtime_closure_descriptor_with_captures(
+        ctx,
+        &descriptor_label,
+        &captures,
+        &inst.operands,
+    )?;
     store_if_result(ctx, inst)
 }
 
@@ -379,6 +381,7 @@ fn emit_runtime_closure_descriptor_with_captures(
         callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + captures.len() * 16;
     abi::emit_load_int_immediate(ctx.emitter, result_reg, total_bytes as i64);
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter); // a PHP Closure is an object: draw its handle from the object pool
     ctx.emitter
         .instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); // keep the runtime closure descriptor while storing captures
     callable_descriptor::emit_copy_static_descriptor_to_runtime(
@@ -839,11 +842,11 @@ fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst: &Instruct
             descriptor.invocation,
             invoker_label.as_deref(),
         );
-        abi::emit_symbol_address(
-            ctx.emitter,
-            abi::int_result_reg(ctx.emitter),
-            &descriptor_label,
-        );
+        // `f(...)` produces a Closure in PHP and therefore consumes an object
+        // handle, exactly like `function () {}` does. Give it the same runtime
+        // descriptor storage so the handle can be bound at creation and returned
+        // when the descriptor is released — see `lower_closure_new`.
+        emit_runtime_closure_descriptor_with_captures(ctx, &descriptor_label, &[], &[])?;
     } else {
         abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     }
@@ -919,6 +922,7 @@ fn emit_static_late_bound_first_class_callable(
         Some(&invoker_label),
     );
     emit_runtime_descriptor_with_called_class_capture(ctx, &descriptor_label, &called_class_id)?;
+    crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter); // `static::m(...)` is a Closure and consumes an object handle
     Ok(true)
 }
 
@@ -1001,6 +1005,11 @@ fn emit_instance_method_first_class_callable(
         Some(&invoker_label),
     );
     emit_runtime_descriptor_with_receiver_capture(ctx, &descriptor_label, receiver, &receiver_ty)?;
+    // `$o->m(...)` is a Closure in PHP and consumes an object handle. The acquire
+    // sits here rather than inside the shared descriptor helper because that helper
+    // also builds the internal adapter for calling an `__invoke`-able object, and
+    // `$obj()` creates no Closure in PHP.
+    crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter);
     Ok(true)
 }
 

@@ -22,6 +22,27 @@ pub(in crate::interpreter) fn eval_crc32_bytes(bytes: &[u8]) -> u32 {
     !crc
 }
 
+/// Returns the eval-local native payload carried by a runtime resource cell.
+///
+/// Reads the tag-9 payload word straight out of the cell instead of casting the
+/// cell to PHP int and undoing a `+ 1`. Those are two different numbers: `(int)`
+/// on a resource yields the PHP RESOURCE ID, which the runtime mints from its own
+/// counter (`runtime::resource_ids`) precisely so that a displayed id never
+/// depends on a native payload. The id therefore cannot be inverted back into the
+/// zero-based key of `EvalStreamResources`, and any attempt to do so silently
+/// resolves the wrong stream. The raw word is the only faithful source, and it is
+/// the same accessor the native-argument and by-reference writeback paths already
+/// use for tag-9 slots.
+pub(in crate::interpreter) fn eval_resource_payload(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
+    if values.type_tag(value)? != EVAL_TAG_RESOURCE {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    i64::try_from(values.raw_value_word(value)?).map_err(|_| EvalStatus::RuntimeFatal)
+}
+
 /// Casts one eval value to PHP int and returns the scalar payload.
 pub(in crate::interpreter) fn eval_int_value(
     value: RuntimeCellHandle,

@@ -15,6 +15,12 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
     fn object_identity(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus> {
         self.runtime_object_identity(object)
     }
+    /// Returns the fake object handle as the PHP object handle: the fake runtime
+    /// mints one small stable integer per object, which is the same shape PHP's
+    /// handles have, so identity-comparison tests behave identically.
+    fn php_object_handle(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus> {
+        self.runtime_object_identity(object)
+    }
     /// Returns fake object identity for releases that target object cells.
     fn final_object_identity_for_release(
         &mut self,

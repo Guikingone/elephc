@@ -684,7 +684,7 @@ fn lower_array_get_aarch64(
         emit_array_offset_on_null_warning(ctx);
     }
     ctx.emitter.label(&fallback_label);
-    emit_array_get_null_fallback(ctx, result_ty);
+    emit_array_get_null_fallback(ctx, result_ty, !warn_on_missing);
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
@@ -778,7 +778,7 @@ fn lower_array_get_x86_64(
         emit_array_offset_on_null_warning(ctx);
     }
     ctx.emitter.label(&fallback_label);
-    emit_array_get_null_fallback(ctx, result_ty);
+    emit_array_get_null_fallback(ctx, result_ty, !warn_on_missing);
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
@@ -1062,10 +1062,22 @@ pub(super) fn emit_array_offset_on_null_warning(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Emits the null/miss fallback in the result shape expected by the array element type.
-pub(super) fn emit_array_get_null_fallback(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) {
+///
+/// `miss_reads_as_null` is true for the *silent* read variants — the ones `??`, `isset()` and
+/// `empty()` lower to — where the caller goes on to ask whether the read produced PHP null.
+/// Only those get the float null marker; a warned read keeps materializing `0.0` so a plain
+/// `$a[$missing]` in value position renders as it always has. See `emit_float_null_sentinel`.
+pub(super) fn emit_array_get_null_fallback(
+    ctx: &mut FunctionContext<'_>,
+    elem_ty: &PhpType,
+    miss_reads_as_null: bool,
+) {
     match elem_ty {
         PhpType::TaggedScalar => {
             crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);
+        }
+        PhpType::Float if miss_reads_as_null => {
+            crate::codegen::sentinels::emit_float_null_sentinel(ctx.emitter);
         }
         PhpType::Float => match ctx.emitter.target.arch {
             Arch::AArch64 => {

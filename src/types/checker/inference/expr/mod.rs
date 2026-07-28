@@ -20,7 +20,7 @@ mod class_refs;
 mod effects;
 mod static_closure;
 use super::super::Checker;
-use super::syntactic::wider_type_syntactic;
+use super::syntactic::null_coalesce_merge_type;
 use static_closure::body_must_not_use_this;
 pub(crate) use static_closure::closure_body_uses_this;
 impl Checker {
@@ -906,11 +906,19 @@ fn merge_array_branch_types(acc: &PhpType, next: &PhpType) -> Option<PhpType> {
 /// Joins the non-null value and default types of `??`.
 ///
 /// Array pairs use the same elementwise branch join as `match` and ternaries.
-/// Other pairs retain the existing syntactic coalesce rules, including numeric
-/// widening and the historical first-type fallback.
+///
+/// Every other pair goes through [`null_coalesce_merge_type`] rather than
+/// `wider_type_syntactic`. `??` is not a widening: both arms are reachable, so a
+/// join that answers with ONE arm's type describes the other arm wrongly. The
+/// coercion order `wider_type_syntactic` implements is right for the operators
+/// that own it (a binary `+` really does coerce its operands to one type) and
+/// wrong here — `$m[$k] ?? 'MISS'` over a float map would have been typed `Str`,
+/// so a hit was read back through a string representation. When the two arms have
+/// no common type, `Mixed` is the honest answer: it keeps the value boxed with its
+/// tag, and both arms survive.
 fn merge_null_coalesce_result_type(value: PhpType, default: PhpType) -> PhpType {
     merge_array_branch_types(&value, &default)
-        .unwrap_or_else(|| wider_type_syntactic(&value, &default))
+        .unwrap_or_else(|| null_coalesce_merge_type(&value, &default))
 }
 
 /// Joins object/sentinel branch types at their existing compatible supertype

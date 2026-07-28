@@ -26,7 +26,8 @@ use super::super::Checker;
 impl Checker {
     /// Constructs a new `Checker` with pre-populated builtin constants and empty declaration tables.
     ///
-    /// Initializes the global constant map with PHP built-in constants (`PHP_OS`, `SID`, pathinfo
+    /// Initializes the global constant map with PHP built-in constants (`PHP_OS`, the
+    /// `PHP_VERSION*` / `PHP_SAPI` version surface, `SID`, pathinfo
     /// constants, `ENT_*` HTML-escaping flags, `FNM_*` flags, stream resources, and lock flags),
     /// array, JSON, stream, date, and preg constants, `PHP_SESSION_*`
     /// session-status constants, and `E_*` error-level constants. All other tables (function declarations,
@@ -41,6 +42,16 @@ impl Checker {
     pub(super) fn new(target_platform: Platform) -> Self {
         let mut constants = HashMap::new();
         constants.insert("PHP_OS".to_string(), PhpType::Str);
+        // The PHP version surface. Only the TYPES are declared here — the values are baked per
+        // compilation from `--php-version` / `--web` by `codegen::prescan::collect_constants`,
+        // exactly as `PHP_OS`'s value is baked from the target platform.
+        constants.insert("PHP_VERSION".to_string(), PhpType::Str);
+        constants.insert("PHP_VERSION_ID".to_string(), PhpType::Int);
+        constants.insert("PHP_MAJOR_VERSION".to_string(), PhpType::Int);
+        constants.insert("PHP_MINOR_VERSION".to_string(), PhpType::Int);
+        constants.insert("PHP_RELEASE_VERSION".to_string(), PhpType::Int);
+        constants.insert("PHP_EXTRA_VERSION".to_string(), PhpType::Str);
+        constants.insert("PHP_SAPI".to_string(), PhpType::Str);
         // Deprecated session-id constant; elephc is cookie-only so it always
         // resolves to the empty string (see `codegen::prescan::collect_constants`).
         constants.insert("SID".to_string(), PhpType::Str);

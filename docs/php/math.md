@@ -18,7 +18,7 @@ sidebar:
 | `min()` | `min($a, $b, ...): int\|float` | Minimum (variadic) |
 | `max()` | `max($a, $b, ...): int\|float` | Maximum (variadic) |
 | `clamp()` | `clamp(?mixed $value, ?mixed $min, ?mixed $max): ?mixed` | Clamp a value to inclusive bounds |
-| `intdiv()` | `intdiv($a, $b): int` | Integer division |
+| `intdiv()` | `intdiv($a, $b): int` | Integer division; a zero divisor raises a catchable `DivisionByZeroError`, and `intdiv(PHP_INT_MIN, -1)` an `ArithmeticError` |
 | `fmod()` | `fmod($a, $b): float` | Float modulo |
 | `fdiv()` | `fdiv($a, $b): float` | Float division (returns INF for /0) |
 | `rand()` | `rand([$min, $max]): int` | Random integer |

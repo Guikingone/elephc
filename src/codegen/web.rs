@@ -92,6 +92,15 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
         emit_superglobal_reset(emitter, &ir_global_symbol(name), &mut labels);
     }
 
+    // Clear every lazy enum case slot so request N+1 re-materializes its cases on
+    // demand instead of reusing request N's object. This keeps the pre-existing
+    // per-request lifecycle: the handler prologue used to re-run the eager enum
+    // initializers and overwrite each slot every request, so a case object never
+    // spanned two requests. Carrying the pointer over instead would be a new
+    // hazard, because the per-request local cleanup can release a case that
+    // reached a top-level local.
+    super::enum_singletons::emit_enum_slot_resets(emitter, module);
+
     emit_concat_offset_reset(emitter);
 
     abi::emit_frame_restore(emitter, RESET_FRAME_SIZE);

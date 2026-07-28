@@ -1253,13 +1253,27 @@ pub(crate) fn check_call_user_func(
 
 /// Type-checks `function_exists`: infers the argument and, for a string-literal function
 /// name, forces resolution of a matching not-yet-instantiated declaration or variant group.
+///
+/// The argument must be a string: a literal name const-folds at codegen, while any other
+/// `string` expression lowers to a baked case-insensitive membership test over the same set of
+/// declared functions. A non-string argument is rejected here — with a proper source-located
+/// diagnostic rather than a backend-internal message — because the lowering has no runtime
+/// string conversion.
 pub(crate) fn check_function_exists(
     checker: &mut Checker,
     args: &[Expr],
     span: crate::span::Span,
     env: &TypeEnv,
 ) -> Result<PhpType, CompileError> {
-    checker.infer_type(&args[0], env)?;
+    let function_ty = checker.infer_type(&args[0], env)?;
+    if !matches!(args[0].kind, ExprKind::StringLiteral(_))
+        && function_ty.codegen_repr() != PhpType::Str
+    {
+        return Err(CompileError::new(
+            span,
+            "function_exists() first argument must be a string in AOT mode",
+        ));
+    }
     if let ExprKind::StringLiteral(cb_name) = &args[0].kind {
         let cb_name = cb_name.trim_start_matches('\\');
         let cb_name = checker

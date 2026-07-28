@@ -100,7 +100,7 @@ impl Checker {
                 .collect(),
             param_attributes: decl.param_attributes.clone(),
             defaults: decl.defaults.clone(),
-            return_type: PhpType::Int,
+            return_type: self.provisional_return_type(decl),
             declared_return: decl.return_type.is_some(),
             by_ref_return: decl.by_ref_return,
             ref_params: decl.ref_params.clone(),
@@ -287,6 +287,38 @@ impl Checker {
         }
 
         Ok(return_type)
+    }
+
+    /// Picks the return type for the *provisional* signature published before a free
+    /// function's body is walked.
+    ///
+    /// The provisional signature exists so that a call to the function from inside its own
+    /// body — direct recursion, or a mutual-recursion cycle re-entering a function already
+    /// on the resolution stack — can be typed at all. Whatever this returns is what such a
+    /// self-call's expression type will be, since `resolving_functions` suppresses
+    /// re-specialization for in-flight functions (see `specialization.rs`).
+    ///
+    /// Resolution order mirrors the authoritative pass that runs after the body walk:
+    /// - a body containing `yield` always produces a `Generator`, whatever the annotation says;
+    /// - otherwise an explicit return hint is trusted verbatim;
+    /// - an unhinted function keeps the historical `Int` placeholder. That placeholder is not
+    ///   observable for a function with a base case, because the final unhinted return type is
+    ///   the `wider_type` merge of every `return` and the base case's real type absorbs it. It
+    ///   only survives for a function whose *only* return is the recursive call, which is
+    ///   unconditional infinite recursion and cannot produce a value anyway.
+    ///
+    /// A hint that fails to resolve (unknown class, misplaced `never`) falls back to the
+    /// placeholder rather than raising here: the authoritative pass resolves the same hint
+    /// again and reports that error with its original span and ordering.
+    fn provisional_return_type(&self, decl: &FnDecl) -> PhpType {
+        if super::super::super::yield_validation::body_contains_yield(&decl.body) {
+            return PhpType::Object("Generator".to_string());
+        }
+        let Some(type_ann) = decl.return_type.as_ref() else {
+            return PhpType::Int;
+        };
+        self.resolve_declared_return_type_hint(type_ann, decl.span, "")
+            .unwrap_or(PhpType::Int)
     }
 
     /// Returns true when a declared generator return annotation accepts

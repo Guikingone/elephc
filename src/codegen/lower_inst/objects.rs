@@ -802,6 +802,7 @@ fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut FunctionConte
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 marks object instances
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp allocation as a runtime object
+            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
             abi::emit_symbol_address(ctx.emitter, "x9", "_spl_logic_exception_class_id");
             ctx.emitter.instruction("ldr x9, [x9]");                            // load LogicException's runtime class id
             ctx.emitter.instruction("str x9, [x0]");                            // store the class id at object header
@@ -826,6 +827,7 @@ fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut FunctionConte
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp allocation as a runtime object
+            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             ctx.emitter
                 .instruction("mov r10, QWORD PTR [rip + _spl_logic_exception_class_id]"); // load LogicException's runtime class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at object header
@@ -935,8 +937,11 @@ fn is_builtin_throwable_payload_class(class_name: &str) -> bool {
         class_name,
         "Error"
             | "TypeError"
+            | "ArgumentCountError"
             | "ValueError"
             | "ArithmeticError"
+            | "DivisionByZeroError"
+            | "AssertionError"
             | "UnhandledMatchError"
             | "Exception"
             | "RuntimeException"
@@ -1010,6 +1015,7 @@ fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id: u64) {
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 marks runtime object payloads
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the heap header before the Throwable payload
+            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
             ctx.emitter.instruction(&format!("mov x9, #{}", class_id));         // materialize the Throwable runtime class id
             ctx.emitter.instruction("str x9, [x0]");                            // store class id at payload offset zero
             ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null until constructor init
@@ -1023,6 +1029,7 @@ fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id: u64) {
                 crate::codegen_support::sentinels::x86_64_heap_kind_word(6)
             )); // materialize the x86_64 Throwable heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the Throwable payload
+            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the Throwable runtime class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store class id at payload offset zero
             ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null until constructor init
@@ -1536,11 +1543,14 @@ fn is_dynamic_new_mixed_aot_candidate(class_name: &str) -> bool {
 /// Builtin class names with allocation paths that are safe for dynamic `new`.
 fn supported_dynamic_new_builtin_class_names() -> &'static [&'static str] {
     &[
+        "ArgumentCountError",
         "ArrayIterator",
         "ArrayObject",
+        "AssertionError",
         "BadFunctionCallException",
         "BadMethodCallException",
         "CallbackFilterIterator",
+        "DivisionByZeroError",
         "DomainException",
         "Error",
         "ArithmeticError",
@@ -1576,13 +1586,16 @@ fn supported_dynamic_new_builtin_class_names() -> &'static [&'static str] {
 fn known_dynamic_new_builtin_class_names() -> &'static [&'static str] {
     &[
         "AppendIterator",
+        "ArgumentCountError",
         "ArrayIterator",
         "ArrayObject",
+        "AssertionError",
         "BadFunctionCallException",
         "BadMethodCallException",
         "CachingIterator",
         "CallbackFilterIterator",
         "DirectoryIterator",
+        "DivisionByZeroError",
         "DomainException",
         "EmptyIterator",
         "Error",
@@ -2556,7 +2569,9 @@ fn lower_object_prop_get_with_null_guard(
     if inst.op != Op::NullsafePropGet {
         emit_property_on_null_warning(ctx, property);
     }
-    super::arrays::emit_array_get_null_fallback(ctx, &inst.result_php_type.codegen_repr());
+    // Property reads keep the legacy zero-float miss shape: their null result is never
+    // re-tested for null the way a silent `??` element read is.
+    super::arrays::emit_array_get_null_fallback(ctx, &inst.result_php_type.codegen_repr(), false);
     store_if_result(ctx, inst)?;
 
     ctx.emitter.label(&done_label);
@@ -3326,7 +3341,9 @@ fn lower_object_dynamic_prop_get_with_null_guard(
 
     ctx.emitter.label(&null_label);
     emit_dynamic_property_on_null_warning(ctx, property_value)?;
-    super::arrays::emit_array_get_null_fallback(ctx, &inst.result_php_type.codegen_repr());
+    // Property reads keep the legacy zero-float miss shape: their null result is never
+    // re-tested for null the way a silent `??` element read is.
+    super::arrays::emit_array_get_null_fallback(ctx, &inst.result_php_type.codegen_repr(), false);
     store_if_result(ctx, inst)?;
 
     ctx.emitter.label(&done_label);
@@ -4442,6 +4459,7 @@ fn emit_object_allocation(
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction("mov x9, #4");                              // heap kind 4 marks object instances for ownership helpers
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the heap header before the object payload
+            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
             ctx.emitter.instruction(&format!("mov x10, #{}", class_id));        // materialize the compile-time class id
             ctx.emitter.instruction("str x10, [x0]");                           // store the class id at object payload offset zero
         }
@@ -4454,6 +4472,7 @@ fn emit_object_allocation(
                 crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
             )); // materialize the x86_64 object heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the object payload
+            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the compile-time class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at object payload offset zero
         }
@@ -6140,6 +6159,7 @@ fn emit_uninitialized_typed_property_fatal(
             ctx.emitter.instruction("bl __rt_heap_alloc");                      // allocate the Error object payload
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = object instance
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp allocation as a runtime object
+            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
             abi::emit_symbol_address(ctx.emitter, "x9", "_spl_error_class_id");   // load Error's runtime class id symbol
             ctx.emitter.instruction("ldr x9, [x9]");                            // load Error's runtime class id for this program
             ctx.emitter.instruction("str x9, [x0]");                            // store class id at the object header
@@ -6161,6 +6181,7 @@ fn emit_uninitialized_typed_property_fatal(
             ctx.emitter.instruction("call __rt_heap_alloc");                    // allocate the Error object payload
             ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp allocation as a runtime object
+            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_error_class_id", 0); // load Error's runtime class id for this program
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store class id at the object header
             abi::emit_symbol_address(ctx.emitter, "r10", &message_label);          // materialize static Error message pointer

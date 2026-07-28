@@ -141,6 +141,16 @@ pub(crate) fn is_date_procedural_alias(name: &str) -> bool {
     expressions::is_date_procedural_alias(name)
 }
 
+/// Returns every lowercase procedural date/time alias name, i.e. the exact set
+/// [`is_date_procedural_alias`] accepts as a bare (non-namespaced) name.
+///
+/// Codegen uses this to bake the alias names into a dynamic `function_exists($name)` lookup
+/// table; because both functions read `expressions::DATE_PROCEDURAL_ALIASES`, the baked table
+/// and the compile-time fold can never drift apart.
+pub(crate) fn date_procedural_alias_names() -> &'static [&'static str] {
+    expressions::DATE_PROCEDURAL_ALIASES
+}
+
 /// Returns the inclusive `(min, max)` argument arity that the resolver's date/time alias
 /// desugaring accepts for `name`, or `None` when `name` is not a desugared alias. The type
 /// checker uses this to report a precise arity error (instead of "Undefined function") when a
