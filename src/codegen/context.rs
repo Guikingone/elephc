@@ -932,53 +932,14 @@ impl<'a> FunctionContext<'a> {
                         | PhpType::Iterable
                 ));
         }
-        Ok(matches!(
-            inst.op,
-            Op::Acquire
-                | Op::MixedNumericBinop
-                | Op::MixedBitwise
-                | Op::MixedBitwiseNot
-                | Op::ICheckedAdd
-                | Op::ICheckedSub
-                | Op::ICheckedMul
-                | Op::ArrayNew
-                | Op::HashNew
-                | Op::ArrayToMixed
-                | Op::ArrayCloneShallow
-                | Op::HashCloneShallow
-                | Op::ArrayUnion
-                | Op::HashUnion
-                | Op::ArrayHashUnion
-                | Op::HashArrayUnion
-                | Op::ArrayToHash
-                | Op::ObjectNew
-                | Op::DynamicObjectNew
-                | Op::DynamicObjectNewMixed
-                | Op::ClosureNew
-                | Op::FirstClassCallableNew
-                | Op::CallableArrayNew
-                | Op::BufferNew
-                | Op::GeneratorNew
-                | Op::CatchBind
-                | Op::Call
-                | Op::FunctionVariantCall
-                | Op::LanguageConstructCall
-                | Op::EvalFunctionCall
-                | Op::EvalFunctionCallArray
-                | Op::EvalConstantFetch
-                | Op::RuntimeCall
-                | Op::ExternCall
-                | Op::MethodCall
-                | Op::NullsafeMethodCall
-                | Op::StaticMethodCall
-                | Op::ClosureCall
-                | Op::CallableDescriptorInvoke
-                | Op::ExprCall
-                | Op::PipeCall
-                | Op::IteratorMethodCall
-                | Op::SplRuntimeCall
-                | Op::FiberRuntimeCall
-        ))
+        // Ownership is decided solely by `value_can_transfer_ownership_to_consumer` above.
+        // A producer-opcode allowlist used to also grant consumption here, but an opcode says
+        // nothing about whether cleanup already owns the reference: `Op::Acquire` results that
+        // are `Owned` *and* carry an explicit `Op::Release` (SPL `CallbackFilterIterator::accept`
+        // is one) passed the allowlist, so Mixed boxing stole the very reference the release
+        // frees and `--heap-debug` aborted with "bad refcount". Anything not proven transferable
+        // is boxed by retaining instead.
+        Ok(false)
     }
 
     /// Returns true when a retaining consumer may take the value's owned reference.

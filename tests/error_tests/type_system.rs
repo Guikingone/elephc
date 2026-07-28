@@ -1689,6 +1689,9 @@ class Box { public int $count = 0; }
 function bad(Box $b): void { $b->missing[] = 1; }
 "#,
         "Undefined property: Box::missing",
+    );
+}
+
 /// Regression for issue #587: a `match` merging two indexed arrays with different
 /// element types (`[1, 2]` vs `["a", "b"]`) must type as `array<mixed>`, so passing
 /// the result to a by-ref `array` parameter type-checks instead of failing with

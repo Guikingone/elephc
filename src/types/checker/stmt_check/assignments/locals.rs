@@ -231,7 +231,14 @@ pub(super) fn check_assign(
             // so the recovered binding does not spuriously widen unrelated typed code that later
             // observes the variable. Only fill in a missing binding; never clobber an existing type
             // narrowed by an earlier assignment.
-            if checker.in_callable_body && !env.contains_key(name) {
+            //
+            // The recovery is scope-independent: file scope needs it exactly as much as a callable
+            // body does. It was once restricted to callable bodies because method environments were
+            // seeded from the top-level environment, so a poisoned file-scope local widened every
+            // method that observed the name. `Checker::seed_method_env` now seeds method bodies from
+            // superglobals only, so that leak no longer exists and the gate would only reintroduce
+            // the `Undefined variable` cascade at top level.
+            if !env.contains_key(name) {
                 let fallback = checker
                     .assignment_recovery_call_return_type(value)
                     .unwrap_or(PhpType::Mixed);

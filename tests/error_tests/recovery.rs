@@ -199,6 +199,9 @@ fn test_list_unpack_rhs_error_does_not_cascade_undefined_variable() {
 fn test_list_unpack_valid_array_still_type_checks() {
     expect_ok(
         "<?php function pair(): array { return [1, 2]; } [$a, $b] = pair(); echo $a + $b;",
+    );
+}
+
 /// Regression for #597: when an assignment's RHS fails to type-check, the checker must
 /// still register the target so a later use does not cascade into a misleading
 /// `Undefined variable` diagnostic. The exact issue repro must emit only the real RHS

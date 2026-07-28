@@ -32,7 +32,7 @@
 
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, property_hook_get_method};
-use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt};
+use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::termination::{block_terminal_effect_with_divergence, TerminalEffect};
 use crate::types::{PhpType, TypeEnv};
 

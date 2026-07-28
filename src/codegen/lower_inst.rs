@@ -3730,6 +3730,14 @@ fn lower_mixed_method_candidate_call(
     candidate: &MixedMethodCandidate,
     method_name: &str,
 ) -> Result<()> {
+    // Built-in Throwables implement the standard Throwable surface through compact intrinsics,
+    // not through class vtable slots — those slots stay empty for builtins. Dispatching this
+    // candidate dynamically would load a null slot and branch to it, so route it to the same
+    // intrinsic the direct-receiver path uses. The receiver payload is already unboxed in
+    // `receiver_reg`, which is exactly what `_from_reg` expects.
+    if is_throwable_standard_method_call(ctx, &candidate.class_name, method_name) {
+        return lower_throwable_standard_method_from_reg(ctx, inst, receiver_reg, method_name);
+    }
     match candidate.dispatch {
         MethodDispatchKind::Literal => {
             lower_literal_method_candidate_call(ctx, inst, receiver_reg, candidate)
@@ -3748,14 +3756,6 @@ fn lower_literal_method_candidate_call(
     receiver_reg: &str,
     candidate: &MixedMethodCandidate,
 ) -> Result<()> {
-    // Built-in Throwables implement the standard Throwable surface through compact intrinsics,
-    // not through class vtable slots — those slots stay empty for builtins. Dispatching this
-    // candidate dynamically would load a null slot and branch to it, so route it to the same
-    // intrinsic the direct-receiver path uses. The receiver payload is already unboxed in
-    // `receiver_reg`, which is exactly what `_from_reg` expects.
-    if is_throwable_standard_method_call(ctx, &candidate.class_name, method_name) {
-        return lower_throwable_standard_method_from_reg(ctx, inst, receiver_reg, method_name);
-    }
     let receiver_ty = PhpType::Object(candidate.class_name.clone());
     let mut param_types = Vec::with_capacity(candidate.target.params.len() + 1);
     param_types.push(receiver_ty.clone());
