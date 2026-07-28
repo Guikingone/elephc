@@ -487,3 +487,41 @@ fn live_blocks(stderr: &str) -> u64 {
         .collect();
     digits.parse().unwrap_or_else(|_| panic!("bad live_blocks digits in: {}", tail))
 }
+
+/// A bare `object` return type accepts EVERY object and must take the UNGUARDED fast path.
+///
+/// The checker models `object` as `PhpType::Object("")` — an empty class name, not a class called
+/// `""`. Before the fix, `declared_object_arms` handed that empty name to `emit_guard_chain`, which
+/// emitted `Op::InstanceOf` against class `""`; no runtime class can satisfy it, so every such
+/// return compiled and then died with `TypeError: mk(): Return value must be of type , A returned`.
+/// Now the guard is skipped entirely and the program prints exactly what `php -n` prints.
+#[test]
+fn test_bare_object_return_type_is_unguarded() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public int $v = 7; }
+class B { public string $s = "b"; }
+function mk(): object { return new A(); }
+function pick(bool $flag): object { return $flag ? new A() : new B(); }
+$a = mk();
+echo get_class($a), "|", $a->v, "|";
+echo get_class(pick(true)), "|", get_class(pick(false));
+"#,
+    );
+    assert_eq!(out, "A|7|A|B");
+}
+
+/// A `?object` return (the `object|null` union shape) is likewise unguarded on BOTH arms: the bare
+/// `object` member accepts any object, and `null` passes through untouched.
+#[test]
+fn test_nullable_bare_object_return_type_is_unguarded() {
+    let out = compile_and_run(
+        r#"<?php
+class A {}
+function maybe(bool $flag): ?object { return $flag ? new A() : null; }
+var_dump(get_class(maybe(true)));
+var_dump(maybe(false));
+"#,
+    );
+    assert_eq!(out, "string(1) \"A\"\nNULL\n");
+}

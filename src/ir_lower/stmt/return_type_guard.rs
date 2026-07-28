@@ -43,6 +43,9 @@ pub(crate) fn emit_checked_downcast_return_guard(
     let PhpType::Object(actual_name) = actual_ty else {
         return value;
     };
+    if declared_accepts_any_object(&ctx.return_php_type) {
+        return value; // bare `object` accepts every object: no guard, zero runtime cost
+    }
     let candidates = declared_object_arms(&ctx.return_php_type);
     if candidates.is_empty() {
         return value;
@@ -56,14 +59,35 @@ pub(crate) fn emit_checked_downcast_return_guard(
     emit_guard_chain(ctx, value, &candidates, span)
 }
 
+/// Returns whether the declared return type has a bare `object` arm — PHP's `object` pseudo-type,
+/// which the checker models as `PhpType::Object("")` (an EMPTY class name, not a class called
+/// `""`). `object` accepts EVERY object, so such a return needs no runtime downcast check at all:
+/// the caller takes the unguarded fast path.
+///
+/// Without this, `function mk(): object { return new A(); }` fell through to `emit_guard_chain`
+/// with the empty name as the sole candidate, emitting `Op::InstanceOf` against class `""` — a
+/// check no runtime class can ever satisfy — so every such return died at runtime with
+/// `TypeError: mk(): Return value must be of type , A returned`. `declared_object_arms` also
+/// filters the empty name out, so no `Object("")` arm can reach the chain from a union either.
+fn declared_accepts_any_object(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(name) => name.is_empty(),
+        PhpType::Union(members) => members.iter().any(declared_accepts_any_object),
+        _ => false,
+    }
+}
+
 /// Collects the `Object(name)` arms of a (possibly-union) declared PHP type, in source order,
-/// deduped by name. Non-object arms (`Void`, scalars, …) don't participate in this guard.
+/// deduped by name. Non-object arms (`Void`, scalars, …) don't participate in this guard, and
+/// neither does the bare `object` pseudo-type (`Object("")`): it is not a class name, so it can
+/// never be an `Op::InstanceOf` target. A declared type carrying one is handled entirely by
+/// `declared_accepts_any_object`'s unguarded fast path before this is consulted.
 fn declared_object_arms(ty: &PhpType) -> Vec<String> {
-    /// Recursively appends every `Object(name)` arm of `ty` to `out`, deduped by name.
+    /// Recursively appends every named `Object(name)` arm of `ty` to `out`, deduped by name.
     fn walk(ty: &PhpType, out: &mut Vec<String>) {
         match ty {
             PhpType::Object(name) => {
-                if !out.contains(name) {
+                if !name.is_empty() && !out.contains(name) {
                     out.push(name.clone());
                 }
             }
@@ -171,6 +195,8 @@ fn format_declared_type_for_type_error(ty: &PhpType) -> String {
 /// Formats a single (non-union) `PhpType` member using PHP's type-declaration spelling.
 fn format_type_member(ty: &PhpType) -> String {
     match ty {
+        // `Object("")` is PHP's bare `object` pseudo-type, spelled `object` in a declaration.
+        PhpType::Object(name) if name.is_empty() => "object".to_string(),
         PhpType::Object(name) => name.clone(),
         PhpType::Int => "int".to_string(),
         PhpType::Float => "float".to_string(),
