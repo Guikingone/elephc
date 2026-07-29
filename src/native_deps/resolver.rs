@@ -42,7 +42,24 @@ pub fn resolve_for_compilation(
         return Ok(Vec::new());
     }
     let cwd = std::env::current_dir().map_err(|error| NativeError::io("read current directory", Path::new("."), error))?;
-    let cache = CacheLayout::from_environment(&cwd)?;
+    let first_package = requirements[0].package_name();
+    let cache = CacheLayout::from_environment(&cwd).map_err(|error| {
+        let search_root = source
+            .parent()
+            .and_then(|parent| std::fs::canonicalize(parent).ok())
+            .unwrap_or_else(|| cwd.clone());
+        match discover_for_source(source).ok().flatten() {
+            Some(project) => error
+                .with_project(project.root)
+                .with_recovery(format!(
+                    "elephc native install --locked --target {}",
+                    target.as_str()
+                )),
+            None => error
+                .with_missing_project(search_root)
+                .with_recovery(format!("elephc native add {first_package}")),
+        }
+    })?;
     resolve_for_compilation_with(source, target, requirements, &cache, &SystemToolchains)
 }
 
@@ -59,17 +76,39 @@ pub(crate) fn resolve_for_compilation_with(
     }
     let first_package = requirements[0].package_name();
     let feature = if first_package == "pcre2" { "regex" } else { first_package };
-    let project = discover_for_source(source)?.ok_or_else(|| NativeError::new(
-        NativeErrorKind::Project,
-        format!("{feature} support requires managed native package {first_package}; run elephc native add {first_package}"),
-    ))?;
+    let search_root = source
+        .parent()
+        .and_then(|parent| std::fs::canonicalize(parent).ok())
+        .unwrap_or_else(|| source.parent().unwrap_or_else(|| Path::new(".")).to_path_buf());
+    let project = discover_for_source(source)?.ok_or_else(|| {
+        NativeError::new(
+            NativeErrorKind::Project,
+            format!("{feature} support requires managed native package {first_package}"),
+        )
+        .with_missing_project(&search_root)
+        .with_recovery(format!("elephc native add {first_package}"))
+    })?;
     let manifest = ManifestDocument::load(&project.manifest)?;
-    let lock = NativeLock::load(&project.lock).map_err(|_| NativeError::new(
-        NativeErrorKind::Lock,
-        "native lock is missing or stale; run elephc native install (CI should use install --locked)",
-    ).with_path(&project.lock))?;
-    lock.validate_current(&manifest)?;
-    let toolchain = toolchains.resolve(target)?;
+    let lock_recovery = format!("elephc native install --target {}", target.as_str());
+    let artifact_recovery =
+        format!("elephc native install --locked --target {}", target.as_str());
+    let lock = NativeLock::load(&project.lock).map_err(|_| {
+        NativeError::new(NativeErrorKind::Lock, "native lock is missing or stale")
+            .with_path(&project.lock)
+            .with_project(&project.root)
+            .with_recovery(&lock_recovery)
+    })?;
+    lock.validate_current(&manifest).map_err(|error| {
+        error
+            .with_path(&project.lock)
+            .with_project(&project.root)
+            .with_default_recovery(&lock_recovery)
+    })?;
+    let toolchain = toolchains.resolve(target).map_err(|error| {
+        error
+            .with_project(&project.root)
+            .with_default_recovery(&artifact_recovery)
+    })?;
     let mut seen = BTreeSet::new();
     let mut resolved = Vec::new();
     for requirement in requirements {
@@ -77,11 +116,19 @@ pub(crate) fn resolve_for_compilation_with(
         if !seen.insert(name.to_string()) { continue; }
         let selected = manifest.dependencies().get(name).ok_or_else(|| NativeError::new(
             NativeErrorKind::Manifest,
-            format!("project does not declare required native package {name}; run elephc native add {name}"),
-        ).with_path(&project.manifest))?;
+            format!("project does not declare required native package {name}"),
+        )
+        .with_path(&project.manifest)
+        .with_project(&project.root)
+        .with_recovery(format!("elephc native add {name}")))?;
         let version = catalog::version(name, Some(selected))?;
         catalog::ensure_target(version, target)?;
-        let locked = lock.package(name).ok_or_else(|| NativeError::new(NativeErrorKind::Lock, "native lock is missing or stale; run elephc native install"))?;
+        let locked = lock.package(name).ok_or_else(|| {
+            NativeError::new(NativeErrorKind::Lock, "native lock is missing or stale")
+                .with_path(&project.lock)
+                .with_project(&project.root)
+                .with_recovery(&lock_recovery)
+        })?;
         let key = ArtifactKey {
             package: name,
             version: version.version,
@@ -92,7 +139,9 @@ pub(crate) fn resolve_for_compilation_with(
             toolchain_fingerprint: &toolchain.fingerprint,
         };
         let root = cache.artifact_path(&key)?;
-        let receipt = ArtifactReceipt::load(&root).map_err(|error| missing_artifact(error, target, &toolchain.abi))?;
+        let receipt = ArtifactReceipt::load(&root).map_err(|error| {
+            missing_artifact(error, target, &toolchain.abi, &project.root)
+        })?;
         let retained = version.retained_headers.iter().chain(version.ordered_link_outputs.iter()).copied().collect::<Vec<_>>();
         let identity = ReceiptIdentity {
             package: name, version: version.version, recipe: version.recipe_revision,
@@ -100,12 +149,31 @@ pub(crate) fn resolve_for_compilation_with(
             toolchain_fingerprint: &toolchain.fingerprint,
             required_outputs: &retained,
         };
-        receipt.verify(&root, &identity).map_err(|error| missing_artifact(error, target, &toolchain.abi))?;
-        let target_plan = locked.target.iter().find(|plan| plan.name == target.as_str()).ok_or_else(|| NativeError::new(NativeErrorKind::Lock, "native lock has no selected target plan"))?;
+        receipt.verify(&root, &identity).map_err(|error| {
+            missing_artifact(error, target, &toolchain.abi, &project.root)
+        })?;
+        let target_plan = locked
+            .target
+            .iter()
+            .find(|plan| plan.name == target.as_str())
+            .ok_or_else(|| {
+                NativeError::new(NativeErrorKind::Lock, "native lock has no selected target plan")
+                    .with_path(&project.lock)
+                    .with_project(&project.root)
+                    .with_recovery(&lock_recovery)
+            })?;
         let mut archives = Vec::new();
         for relative in &target_plan.archives {
             if !receipt.outputs.iter().any(|output| output.path == *relative) {
-                return Err(missing_artifact(NativeError::new(NativeErrorKind::Integrity, format!("receipt omits required output '{relative}'")), target, &toolchain.abi));
+                return Err(missing_artifact(
+                    NativeError::new(
+                        NativeErrorKind::Integrity,
+                        format!("receipt omits required output '{relative}'"),
+                    ),
+                    target,
+                    &toolchain.abi,
+                    &project.root,
+                ));
             }
             archives.push(root.join(relative));
         }
@@ -118,16 +186,93 @@ pub(crate) fn resolve_for_compilation_with(
 }
 
 /// Adds the exact selected target/ABI recovery command to an artifact failure.
-fn missing_artifact(error: NativeError, target: Target, abi: &str) -> NativeError {
+fn missing_artifact(
+    error: NativeError,
+    target: Target,
+    abi: &str,
+    project_root: &Path,
+) -> NativeError {
     NativeError::new(
         NativeErrorKind::Integrity,
-        format!("native artifact is missing or corrupt for target '{}' ABI '{}': {}; run elephc native install --locked --target {}", target.as_str(), abi, error, target.as_str()),
+        format!(
+            "native artifact is missing or corrupt for target '{}' ABI '{}': {}",
+            target.as_str(),
+            abi,
+            error
+        ),
     )
+    .with_project(project_root)
+    .with_recovery(format!(
+        "elephc native install --locked --target {}",
+        target.as_str()
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::super::receipt::ToolIdentity;
+    use super::super::toolchain::NativeToolchain;
+
+    /// Toolchain provider with one deterministic selected identity.
+    struct FixedToolchains;
+
+    impl ToolchainProvider for FixedToolchains {
+        /// Returns the stable identity used to address missing fixture artifacts.
+        fn resolve(&self, _target: Target) -> Result<NativeToolchain, NativeError> {
+            let identity = ToolIdentity {
+                command: "fixture".into(),
+                version: "fixture".into(),
+            };
+            Ok(NativeToolchain {
+                cc: "cc".into(),
+                ar: "ar".into(),
+                ranlib: "ranlib".into(),
+                target_tuple: "fixture".into(),
+                abi: "fixture-abi".into(),
+                fingerprint: "fixture-fingerprint".into(),
+                compiler: identity.clone(),
+                archiver: identity.clone(),
+                ranlib_identity: identity,
+            })
+        }
+    }
+
+    /// Toolchain provider that simulates an incompatible or missing selected toolchain.
+    struct BrokenToolchains;
+
+    impl ToolchainProvider for BrokenToolchains {
+        /// Returns the deterministic wrong-toolchain diagnostic.
+        fn resolve(&self, _target: Target) -> Result<NativeToolchain, NativeError> {
+            Err(NativeError::new(
+                NativeErrorKind::Toolchain,
+                "compiler tuple does not match target",
+            ))
+        }
+    }
+
+    /// Creates one project fixture and optionally writes its current deterministic lock.
+    fn project_fixture(label: &str, manifest_text: &str, write_lock: bool) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "elephc-resolver-{label}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("elephc.toml"), manifest_text).unwrap();
+        if write_lock {
+            let manifest = ManifestDocument::load(&root.join("elephc.toml")).unwrap();
+            let lock = NativeLock::from_manifest(&manifest).unwrap();
+            fs::write(root.join("elephc.lock"), lock.render().unwrap()).unwrap();
+        }
+        fs::canonicalize(root).unwrap()
+    }
 
     /// Verifies no requirement avoids all project/cache/toolchain access.
     #[test]
@@ -156,6 +301,103 @@ mod tests {
         let error = resolve_for_compilation_with(&fixture.join("main.php"), Target::detect_host(), &[NativeRequirement::package("pcre2")], &cache, &PanicToolchains).unwrap_err();
         assert!(error.to_string().contains("regex support requires managed native package pcre2"));
         assert!(error.to_string().contains("elephc native add pcre2"));
+        assert!(error.to_string().contains("project: not found"));
+        assert!(error.to_string().contains("recovery: cd --"));
         std::fs::remove_dir_all(fixture).unwrap();
+    }
+
+    /// Verifies absent lock state carries the discovered project and non-locked repair command.
+    #[test]
+    fn missing_lock_is_actionable() {
+        let root = project_fixture(
+            "missing-lock",
+            "[native]\nschema = 1\n[native.dependencies]\npcre2 = \"10.47\"\n",
+            false,
+        );
+        let cache = CacheLayout::from_values(
+            &root,
+            Some(root.join("cache").as_os_str()),
+            None,
+            None,
+        )
+        .unwrap();
+        let error = resolve_for_compilation_with(
+            &root.join("main.php"),
+            Target::detect_host(),
+            &[NativeRequirement::package("pcre2")],
+            &cache,
+            &FixedToolchains,
+        )
+        .unwrap_err();
+        let rendered = error.to_string();
+        assert!(rendered.contains("native lock is missing or stale"));
+        assert!(rendered.contains(&format!("project: {}", root.display())));
+        assert!(rendered.contains("elephc native install --target"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Verifies undeclared requirements use the same project/recovery diagnostic shape.
+    #[test]
+    fn undeclared_package_is_actionable() {
+        let root = project_fixture(
+            "undeclared",
+            "[native]\nschema = 1\n[native.dependencies]\n",
+            true,
+        );
+        let cache = CacheLayout::from_values(
+            &root,
+            Some(root.join("cache").as_os_str()),
+            None,
+            None,
+        )
+        .unwrap();
+        let error = resolve_for_compilation_with(
+            &root.join("main.php"),
+            Target::detect_host(),
+            &[NativeRequirement::package("pcre2")],
+            &cache,
+            &FixedToolchains,
+        )
+        .unwrap_err();
+        let rendered = error.to_string();
+        assert!(rendered.contains("does not declare required native package pcre2"));
+        assert!(rendered.contains(&format!("project: {}", root.display())));
+        assert!(rendered.contains("elephc native add pcre2"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Verifies wrong toolchains and missing artifacts share exact-target recovery diagnostics.
+    #[test]
+    fn toolchain_and_artifact_misses_are_actionable() {
+        let root = project_fixture(
+            "toolchain-artifact",
+            "[native]\nschema = 1\n[native.dependencies]\npcre2 = \"10.47\"\n",
+            true,
+        );
+        let cache = CacheLayout::from_values(
+            &root,
+            Some(root.join("cache").as_os_str()),
+            None,
+            None,
+        )
+        .unwrap();
+        for provider in [
+            &BrokenToolchains as &dyn ToolchainProvider,
+            &FixedToolchains as &dyn ToolchainProvider,
+        ] {
+            let error = resolve_for_compilation_with(
+                &root.join("main.php"),
+                Target::detect_host(),
+                &[NativeRequirement::package("pcre2")],
+                &cache,
+                provider,
+            )
+            .unwrap_err();
+            let rendered = error.to_string();
+            assert!(rendered.contains(&format!("project: {}", root.display())));
+            assert!(rendered.contains("recovery: cd --"));
+            assert!(rendered.contains("elephc native install --locked --target"));
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 }

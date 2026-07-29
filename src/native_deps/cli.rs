@@ -30,6 +30,7 @@ pub enum NativeCommand {
     Remove { package: String, manifest_path: Option<PathBuf> },
     List { options: NativeOptions },
     Doctor { options: NativeOptions },
+    Prune { target: Option<Target> },
 }
 
 /// Native parser result, including help that callers can print and exit successfully.
@@ -49,6 +50,7 @@ pub fn native_help() -> String {
         "  elephc native remove <package> [--manifest-path FILE]\n",
         "  elephc native list [--target TARGET] [--manifest-path FILE]\n",
         "  elephc native doctor [--target TARGET] [--manifest-path FILE]\n",
+        "  elephc native prune [--target TARGET]\n",
     ).to_string()
 }
 
@@ -61,6 +63,7 @@ fn native_verb_help(verb: &str) -> Option<String> {
         "remove" => "elephc native remove <package> [--manifest-path FILE]",
         "list" => "elephc native list [--target TARGET] [--manifest-path FILE]",
         "doctor" => "elephc native doctor [--target TARGET] [--manifest-path FILE]",
+        "prune" => "elephc native prune [--target TARGET]",
         _ => return None,
     };
     Some(format!("Usage:\n  {synopsis}\n"))
@@ -147,6 +150,18 @@ pub fn parse_native_args(args: &[String]) -> Result<NativeParseOutcome, NativeEr
                 return Err(usage(&format!("{verb} accepts only --target and --manifest-path")));
             }
             if verb == "list" { NativeCommand::List { options } } else { NativeCommand::Doctor { options } }
+        }
+        "prune" => {
+            if locked
+                || options.offline
+                || options.manifest_path.is_some()
+                || !positional.is_empty()
+            {
+                return Err(usage("prune accepts only --target"));
+            }
+            NativeCommand::Prune {
+                target: options.target,
+            }
         }
         _ => unreachable!("verb validated before option parsing"),
     };
@@ -246,6 +261,7 @@ mod tests {
         assert!(matches!(parse_native_args(&args(&["remove", "pcre2"])), Ok(NativeParseOutcome::Command(NativeCommand::Remove { .. }))));
         assert!(matches!(parse_native_args(&args(&["list"])), Ok(NativeParseOutcome::Command(NativeCommand::List { .. }))));
         assert!(matches!(parse_native_args(&args(&["doctor"])), Ok(NativeParseOutcome::Command(NativeCommand::Doctor { .. }))));
+        assert!(matches!(parse_native_args(&args(&["prune", "--target", "linux-x86_64"])), Ok(NativeParseOutcome::Command(NativeCommand::Prune { .. }))));
     }
 
     /// Verifies help does not require a project and invalid combinations fail early.
@@ -266,6 +282,7 @@ mod tests {
         assert!(parse_native_args(&args(&["add", "pcre2@^10.47"])).is_err());
         assert!(parse_native_args(&args(&["remove", "pcre2", "--offline"])).is_err());
         assert!(parse_native_args(&args(&["list", "--locked"])).is_err());
+        assert!(parse_native_args(&args(&["prune", "--manifest-path", "elephc.toml"])).is_err());
         assert!(parse_native_args(&args(&["install", "--offline", "--offline"])).is_err());
         assert!(parse_native_args(&args(&["install", "--target", "linux-x86_64", "--target", "linux-x86_64"])).is_err());
     }

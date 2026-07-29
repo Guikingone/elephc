@@ -24,6 +24,10 @@ fn test_cli_native_help_and_bare_usage() {
         String::from_utf8_lossy(&help.stdout).contains("elephc native add"),
         "native help should print the command synopsis"
     );
+    assert!(
+        String::from_utf8_lossy(&help.stdout).contains("elephc native prune"),
+        "native help should include explicit cache pruning"
+    );
 
     let bare = elephc_cli_command(&dir)
         .arg("native")
@@ -62,12 +66,34 @@ fn test_cli_native_read_only_commands_map_output_and_status() {
         .expect("failed to run elephc native doctor");
     assert!(!doctor.status.success(), "doctor without a project should be unhealthy");
     assert!(
-        String::from_utf8_lossy(&doctor.stdout).contains("summary: unhealthy"),
+        String::from_utf8_lossy(&doctor.stdout).contains("summary: unhealthy")
+            && String::from_utf8_lossy(&doctor.stdout).contains("cache size:")
+            && String::from_utf8_lossy(&doctor.stdout).contains("stale staging summary:"),
         "unexpected doctor output: {}",
         String::from_utf8_lossy(&doctor.stdout)
     );
     assert!(!cache.exists(), "read-only commands must not create the native cache");
 
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies explicit pruning is a successful no-op when no global native cache exists.
+#[test]
+fn test_cli_native_prune_empty_cache_is_noop() {
+    let dir = make_cli_test_dir("elephc_cli_native_prune_empty");
+    let cache = dir.join("native-cache-must-not-exist");
+    let prune = elephc_cli_command(&dir)
+        .args(["native", "prune"])
+        .env("ELEPHC_NATIVE_CACHE", &cache)
+        .output()
+        .expect("failed to run elephc native prune");
+    assert!(prune.status.success(), "empty-cache prune should succeed");
+    assert!(
+        String::from_utf8_lossy(&prune.stdout).contains("removed stale artifacts: 0"),
+        "unexpected prune output: {}",
+        String::from_utf8_lossy(&prune.stdout)
+    );
+    assert!(!cache.exists(), "empty-cache prune must not create cache state");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -116,10 +142,13 @@ fn test_cli_regex_final_link_requires_managed_pcre2_project() {
     assert!(!output.status.success(), "regex link without a project must fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains(
-            "regex support requires managed native package pcre2; run elephc native add pcre2"
-        ),
+        stderr.contains("regex support requires managed native package pcre2"),
         "unexpected missing-project diagnostic: {stderr}"
+    );
+    assert!(stderr.contains("project: not found"), "missing project context: {stderr}");
+    assert!(
+        stderr.contains("recovery: cd --") && stderr.contains("elephc native add pcre2"),
+        "missing copy-paste recovery command: {stderr}"
     );
     assert!(!cache.exists(), "failed compilation must not create the native cache");
 

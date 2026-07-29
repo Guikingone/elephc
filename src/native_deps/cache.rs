@@ -111,8 +111,35 @@ impl CacheLayout {
     /// Returns the artifact publication lock path for one exact cache key.
     pub fn artifact_lock_path(&self, key: &ArtifactKey<'_>) -> Result<PathBuf, NativeError> {
         let path = self.artifact_path(key)?;
-        let relative = path.strip_prefix(&self.artifacts).expect("artifact path rooted in artifacts");
-        Ok(self.locks.join("artifact").join(format!("{}.lock", sha256_bytes(relative.to_string_lossy().as_bytes()))))
+        self.artifact_lock_path_for_final(&path)
+    }
+
+    /// Returns the installer-compatible lock path for an existing final artifact path.
+    pub fn artifact_lock_path_for_final(
+        &self,
+        final_path: &Path,
+    ) -> Result<PathBuf, NativeError> {
+        let relative = final_path.strip_prefix(&self.artifacts).map_err(|_| {
+            NativeError::new(
+                NativeErrorKind::Cache,
+                "native artifact path is outside the configured cache",
+            )
+            .with_path(final_path)
+        })?;
+        if relative.as_os_str().is_empty()
+            || relative
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(
+                NativeError::new(NativeErrorKind::Cache, "invalid native artifact path")
+                    .with_path(final_path),
+            );
+        }
+        Ok(self.locks.join("artifact").join(format!(
+            "{}.lock",
+            sha256_bytes(relative.to_string_lossy().as_bytes())
+        )))
     }
 
     /// Acquires an advisory lock with the normative 30-second timeout.

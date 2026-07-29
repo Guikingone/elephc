@@ -123,7 +123,14 @@ impl ArtifactReceipt {
             }
             let (size, sha256) = hash_file(&path)?;
             if size != output.size || sha256 != output.sha256 {
-                return Err(NativeError::new(NativeErrorKind::Integrity, format!("native output '{}' failed size/SHA-256 verification; run elephc native install --locked --target {}", output.path, expected.target)).with_path(path));
+                return Err(NativeError::new(
+                    NativeErrorKind::Integrity,
+                    format!(
+                        "native output '{}' failed size/SHA-256 verification",
+                        output.path
+                    ),
+                )
+                .with_path(path));
             }
         }
         verify_artifact_tree(artifact, &required)?;
