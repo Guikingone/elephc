@@ -2219,8 +2219,9 @@ fn lower_array_len(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 /// Lowers indexed array reads with an explicit null-capable result representation.
 ///
 /// Integers return a `(payload, tag)` scalar pair; booleans and strings return
-/// fresh Mixed cells. `ArrayGetSilent` shares this value path and merely omits
-/// the warning, which belongs to a separate runtime diagnostic gate.
+/// fresh Mixed cells. A missing `ArrayGet` emits PHP's undefined-key warning
+/// after storing the null result, while `ArrayGetSilent` preserves the same
+/// value path without observable diagnostics.
 fn lower_array_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let array = operand(inst, 0)?;
     let index = operand(inst, 1)?;
@@ -2237,33 +2238,76 @@ fn lower_array_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         }
     };
     let result_repr = ctx.value_repr(result)?.clone();
-    match (element_type, result_repr) {
+    match (&element_type, &result_repr) {
         (PhpType::Int, WasmRepr::Tagged { .. }) => {
             ctx.emit_load_value(array)?;
             ctx.emit_load_value(index)?;
             ctx.fb
                 .ins("call $__rt_array_get_tagged_int", "indexed array get (tagged int)");
-            store_result(ctx, inst)
         }
         (PhpType::Bool, WasmRepr::Ptr(_)) => {
             ctx.emit_load_value(array)?;
             ctx.emit_load_value(index)?;
             ctx.fb
                 .ins("call $__rt_array_get_mixed_bool", "indexed array get (boxed bool|null)");
-            store_result(ctx, inst)
         }
         (PhpType::Str, WasmRepr::Ptr(_)) => {
             ctx.emit_load_value(array)?;
             ctx.emit_load_value(index)?;
             ctx.fb
                 .ins("call $__rt_array_get_mixed_str", "indexed array get (boxed string|null)");
-            store_result(ctx, inst)
         }
-        (element, repr) => Err(WasmError::Unsupported(format!(
-            "array_get element {:?} into {:?}",
-            element, repr
-        ))),
+        (element, repr) => {
+            return Err(WasmError::Unsupported(format!(
+                "array_get element {:?} into {:?}",
+                element, repr
+            )));
+        }
     }
+    store_result(ctx, inst)?;
+    if inst.op == Op::ArrayGet {
+        emit_undefined_array_index_warning_if_null(ctx, index, &result_repr)?;
+    }
+    Ok(())
+}
+
+/// Emits the warning-only branch for a normal indexed read whose result is null.
+///
+/// Tagged integers carry the null tag in their i32 tag local. Boxed bool/string
+/// reads carry it at offset zero of the fresh Mixed cell. The index SSA value is
+/// reloaded only after the getter has completed, so it is evaluated exactly once.
+fn emit_undefined_array_index_warning_if_null(
+    ctx: &mut FnCtx,
+    index: ValueId,
+    result_repr: &WasmRepr,
+) -> Result<()> {
+    match result_repr {
+        WasmRepr::Tagged { tag, .. } => {
+            ctx.fb.ins(&format!("local.get {tag}"), "read nullable result tag");
+            ctx.fb.ins("i32.const 8", "Mixed null tag");
+            ctx.fb.ins("i32.eq", "missing indexed element");
+        }
+        WasmRepr::Ptr(cell) => {
+            ctx.fb.ins(&format!("local.get {cell}"), "load boxed nullable result");
+            ctx.fb.ins("i64.load", "Mixed tag @ +0");
+            ctx.fb.ins("i64.const 8", "Mixed null tag");
+            ctx.fb.ins("i64.eq", "missing indexed element");
+        }
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "array_get warning for result representation {:?}",
+                other
+            )));
+        }
+    }
+    ctx.fb.ins("if", "warn only when the indexed read produced null");
+    ctx.emit_load_value(index)?;
+    ctx.fb.ins(
+        "call $__rt_warn_undefined_array_key_int",
+        "emit PHP undefined-array-key warning",
+    );
+    ctx.fb.ins("end", "continue with the stored null result");
+    Ok(())
 }
 
 /// Lowers `Op::ArrayPush`. Appends via the runtime (which may reallocate) and

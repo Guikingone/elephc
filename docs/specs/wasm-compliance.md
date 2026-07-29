@@ -29,7 +29,7 @@ available evidence is insufficient.
 | Capability audit | Partially satisfied | Exhaustive identity classification and shape checks for an audited P0 subset exist. Other admitted operations still rely on late lowerer diagnostics, so operand/result types, immediates, representations, ownership, callable shapes, and control-flow shapes are not yet completely classified. |
 | Typed transfer and control flow | Partially satisfied | Focused transfer and regression tests exist. Exhaustive representation, branch, switch, ownership, and cross-host matrices remain open. |
 | WASI startup, arguments/environment, I/O, and process status | Partially satisfied | The pinned three-host job proves exact `$argc`/`$argv`, stdout/stderr, `exit(7)`, repeated Node runs, and partial-`fd_write` progress. Environment/preopen mapping, complete byte contracts, and the full status boundary remain open. |
-| Numeric and PHP error semantics | Partially satisfied | Selected regressions have local evidence. The versioned php-src differential matrix remains open. |
+| Numeric and PHP error semantics | Partially satisfied | Admitted indexed int/bool/string misses preserve null and emit ordered warning-only stderr on normal reads across the 8.2–8.5 compiler profiles; silent reads omit the warning. The complete versioned php-src differential and diagnostics matrices remain open. |
 | Allocator, ownership, COW, and adversarial safety | Partially satisfied | Focused implementation and cleanup tests exist. Exhaustive resource, malformed-state, aliasing, and failure-path evidence remains open. |
 | Deterministic artifacts | Partially satisfied | Deterministic IDs have focused tests, and the pinned CI gate compares WAT, WASM, npm trees, and packed archives from independent compiler processes. Relevant map insertion orders and the complete metadata-normalization contract remain open. |
 | PHP differential parity | Open | No committed full-version oracle matrix covers the declared reachable surface. |
@@ -283,10 +283,12 @@ Acceptance:
 The current shape audit covers checked integer add/subtract/multiply, selected
 casts, indexed `ArrayGet`, `NullsafeMethodCall`, and the admitted `GetClass`,
 `ArrayMap`, `Usort`, and `ArrayReduce` runtime forms. It does not make the
-remaining admitted opcodes shape-complete. In particular, PHP warning/null
-behavior for out-of-range array reads and PHP errors for dynamic nullsafe
-receivers outside the proven closed class set remain runtime semantic gates;
-Core traps are not substitutes.
+remaining admitted opcodes shape-complete. Admitted indexed int/bool/string
+reads now distinguish warning-producing and silent misses while preserving
+null. Complete diagnostic metadata and suppression remain part of
+`PHP-WASM-ERROR-002`; PHP errors for dynamic nullsafe receivers outside the
+proven closed class set remain a runtime semantic gate. Core traps are not
+substitutes.
 
 ### P0 — representation and control-flow validity
 
@@ -561,6 +563,9 @@ At the time of this audit, durable repository evidence covers:
   checks;
 - compile-time exhaustive enum classification, focused shape checks for the
   audited P0 subset, and target-capability rejection tests;
+- PHP-source indexed int/bool/string miss regressions across Elephc's 8.2–8.5
+  profiles, with exact stdout, ordered warning stderr, success status, and
+  import-free silent/reactor coverage;
 - focused typed-transfer, `$argc`, void/Mixed result, block-argument, loop, and
   deterministic-ID regressions.
 

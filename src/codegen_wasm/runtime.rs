@@ -72,6 +72,8 @@ const ERR_UNDEFINED_METHOD_PREFIX: &[u8] =
     b"PHP Fatal error: Uncaught Error: Call to undefined method ";
 const ERR_UNDEFINED_METHOD_SEPARATOR: &[u8] = b"::";
 const ERR_UNDEFINED_METHOD_SUFFIX: &[u8] = b"()\n";
+const WARN_UNDEFINED_ARRAY_KEY_PREFIX: &[u8] = b"Warning: Undefined array key ";
+const WARN_SUFFIX: &[u8] = b"\n";
 
 /// First byte available to PHP string literals in a command module.
 pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
@@ -95,7 +97,9 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + PHP_TYPE_UNKNOWN.len() as u32
     + ERR_UNDEFINED_METHOD_PREFIX.len() as u32
     + ERR_UNDEFINED_METHOD_SEPARATOR.len() as u32
-    + ERR_UNDEFINED_METHOD_SUFFIX.len() as u32;
+    + ERR_UNDEFINED_METHOD_SUFFIX.len() as u32
+    + WARN_UNDEFINED_ARRAY_KEY_PREFIX.len() as u32
+    + WARN_SUFFIX.len() as u32;
 
 /// Adds the import-free runtime every module needs: the compatibility concat
 /// cursor global and the heap-backed `__rt_concat` helper.
@@ -159,7 +163,7 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_MIXED_WRITE_STDOUT);
 }
 
-/// Emits immutable fatal-message data and the command-runtime failure dispatcher.
+/// Emits immutable diagnostic data and the command-runtime failure dispatcher.
 ///
 /// Error code 1 is division by zero, 2 modulo by zero, 3 a negative shift,
 /// 4 `PHP_INT_MIN / -1` for integer division, 5 a WASI boundary failure, and
@@ -167,6 +171,8 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
 /// array append key.
 /// The helper writes the selected message to stderr, exits with status 255, and
 /// ends in `unreachable` so validation does not treat `proc_exit` as returning.
+/// The same data region also owns the warning fragments used by the non-fatal
+/// undefined-index diagnostic.
 fn emit_failure_runtime(wm: &mut WatModule) {
     let fixed_messages = [
         ERR_DIV_ZERO,
@@ -193,6 +199,7 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         ERR_UNDEFINED_METHOD_SEPARATOR,
         ERR_UNDEFINED_METHOD_SUFFIX,
     ];
+    let warning_messages = [WARN_UNDEFINED_ARRAY_KEY_PREFIX, WARN_SUFFIX];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
     for message in fixed_messages {
@@ -206,6 +213,15 @@ fn emit_failure_runtime(wm: &mut WatModule) {
     let mut method_offsets = Vec::with_capacity(method_messages.len());
     for message in method_messages {
         method_offsets.push((cursor, message.len() as u32));
+        wm.add_data(DataSegment {
+            offset: cursor,
+            bytes: message.to_vec(),
+        });
+        cursor += message.len() as u32;
+    }
+    let mut warning_offsets = Vec::with_capacity(warning_messages.len());
+    for message in warning_messages {
+        warning_offsets.push((cursor, message.len() as u32));
         wm.add_data(DataSegment {
             offset: cursor,
             bytes: message.to_vec(),
@@ -230,6 +246,7 @@ fn emit_failure_runtime(wm: &mut WatModule) {
     );
     wm.add_raw_func(&wat);
     emit_method_call_failure_runtime(wm, &method_offsets);
+    emit_undefined_array_key_warning_runtime(wm, &warning_offsets);
 }
 
 /// Emits the fatal path used when a `Mixed` receiver is not an object.
@@ -290,6 +307,31 @@ fn emit_undefined_method_failure_runtime(wm: &mut WatModule, offsets: &[(u32, u3
   (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {suffix_ptr}) (i32.const {suffix_len})))
   (call $wasi_proc_exit (i32.const 255))
   unreachable)"#
+    ));
+}
+
+/// Emits PHP's non-fatal warning for a missing integer array index.
+///
+/// The key is formatted through the shared signed `__rt_itoa` helper, including
+/// `i64::MIN`, and every stderr fragment uses the checked WASI write path. The
+/// helper returns normally so the caller can continue with the already-produced
+/// null value.
+fn emit_undefined_array_key_warning_runtime(
+    wm: &mut WatModule,
+    offsets: &[(u32, u32)],
+) {
+    debug_assert_eq!(offsets.len(), 2);
+    let (prefix_ptr, prefix_len) = offsets[0];
+    let (suffix_ptr, suffix_len) = offsets[1];
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_warn_undefined_array_key_int (param $key i64)
+  (local $key_ptr i32) (local $key_len i32)
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {prefix_ptr}) (i32.const {prefix_len}))
+  (call $__rt_itoa (local.get $key) (global.get $__float_scratch))
+  (local.set $key_len)
+  (local.set $key_ptr)
+  (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $key_ptr) (local.get $key_len))
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {suffix_ptr}) (i32.const {suffix_len})))"#
     ));
 }
 

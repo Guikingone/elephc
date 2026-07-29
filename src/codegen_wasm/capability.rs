@@ -289,7 +289,7 @@ fn check_instruction_shape(
             checked_int_binop_shape_issue(function, inst)
         }
         Op::Cast => cast_shape_issue(function, inst),
-        Op::ArrayGet | Op::ArrayGetSilent => array_get_shape_issue(function, inst),
+        Op::ArrayGet | Op::ArrayGetSilent => array_get_shape_issue(module, function, inst),
         Op::ArrayToHash => array_to_hash_shape_issue(function, inst),
         Op::Call => {
             direct_call_shape_issue(module, function, inst, ref_cell_provenance)
@@ -608,9 +608,24 @@ fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
 
 /// Validates null-capable indexed int/bool/string reads supported by `lower_array_get`.
 ///
-/// The warning distinction between `ArrayGet` and `ArrayGetSilent` is a separate
-/// runtime diagnostic gate; both opcodes must preserve the same value/null shape.
-fn array_get_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
+/// `ArrayGet` additionally requires a main-bearing command module because its
+/// warning path writes through WASI; `ArrayGetSilent` remains import-free.
+fn array_get_shape_issue(
+    module: &Module,
+    function: &Function,
+    inst: &Instruction,
+) -> Option<String> {
+    if inst.op == Op::ArrayGet
+        && !module
+            .functions
+            .iter()
+            .any(|candidate| candidate.flags.is_main)
+    {
+        return Some(
+            "warning-producing indexed read requires a main-bearing command module"
+                .to_string(),
+        );
+    }
     let [array, index] = inst.operands.as_slice() else {
         return Some(format!(
             "expected an indexed array and integer index, got {} operands",
@@ -4354,6 +4369,7 @@ mod tests {
     fn accepts_nullable_array_get_shapes_including_silent_reads() {
         let mut module = Module::new(Target::wasm());
         let mut function = Function::new("reads".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
         {
             let mut builder = Builder::new(&mut function);
             let entry = builder.create_named_block("entry", Vec::new());
@@ -4406,7 +4422,102 @@ mod tests {
         }
         module.add_function(function);
 
-        validate_module(&module).expect("nullable array-get shapes must pass the gate");
+        let wat = validate_module(&module)
+            .expect("nullable array-get shapes must pass the gate")
+            .into_wat();
+        assert_eq!(
+            wat.matches("call $__rt_warn_undefined_array_key_int")
+                .count(),
+            2,
+            "only the two normal reads should call the warning helper: {wat}"
+        );
+    }
+
+    /// A warning-producing read cannot be admitted into an import-free reactor,
+    /// because that module deliberately has no WASI stderr runtime.
+    #[test]
+    fn rejects_warning_array_get_without_command_runtime() {
+        let mut module = Module::new(Target::wasm());
+        let mut function =
+            Function::new("reactor_read".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let array = builder
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(1)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::Owned,
+                )
+                .expect("array value");
+            let index = builder.emit_const_i64(2);
+            let _ = builder.emit(
+                Op::ArrayGet,
+                vec![array, index],
+                None,
+                IrType::TaggedScalar,
+                PhpType::TaggedScalar,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let error =
+            validate_module(&module).expect_err("reactor warning read must fail capability");
+        assert!(
+            error
+                .to_string()
+                .contains("warning-producing indexed read requires a main-bearing command module"),
+            "{error}"
+        );
+    }
+
+    /// A silent nullable read remains valid in an import-free reactor and does
+    /// not cause a warning helper or WASI import to appear in the rendered WAT.
+    #[test]
+    fn accepts_silent_array_get_without_command_runtime() {
+        let mut module = Module::new(Target::wasm());
+        let mut function =
+            Function::new("reactor_silent_read".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let array = builder
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(1)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Str)),
+                    Ownership::Owned,
+                )
+                .expect("array value");
+            let index = builder.emit_const_i64(2);
+            let _ = builder.emit(
+                Op::ArrayGetSilent,
+                vec![array, index],
+                None,
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+                Ownership::Owned,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let wat = validate_module(&module)
+            .expect("silent reactor read must remain supported")
+            .into_wat();
+        assert!(!wat.contains("__rt_warn_undefined_array_key_int"), "{wat}");
+        assert!(!wat.contains("wasi_snapshot_preview1"), "{wat}");
     }
 
     /// Legacy non-null result shapes are rejected for both warning and silent

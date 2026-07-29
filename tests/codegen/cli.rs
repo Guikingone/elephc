@@ -1003,8 +1003,9 @@ echo ["x"][$argc] ?? 77;
 }
 
 /// Compiles typed int/bool/string indexed reads from PHP through EIR to WASM and
-/// executes them under Wasmer. Negative/OOB reads remain null through `is_null`
-/// and `echo`; the former integer sentinel remains a valid in-range value.
+/// executes them under Wasmer. Negative/OOB reads emit one PHP warning per
+/// ordinary access and remain null through `is_null` and `echo`; the former
+/// integer sentinel remains a valid in-range value.
 #[test]
 fn test_cli_wasm_indexed_array_oob_preserves_php_null() {
     if Command::new("wasmer").arg("--version").output().is_err() {
@@ -1031,35 +1032,56 @@ echo (int)["x"][-1], ",", (bool)["x"][-1], ",", (string)["x"][-1], ";";
     )
     .unwrap();
 
-    let output = elephc_cli_command(&dir)
-        .arg("--target")
-        .arg("wasm32-wasi")
-        .arg(&php_path)
-        .output()
-        .expect("failed to compile indexed-array OOB fixture to WASM");
-    assert!(
-        output.status.success(),
-        "indexed-array OOB compilation failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let warning_keys = [
+        -1, -1, 1, 1, -1, -1, 1, 1, -1, -1, 1, 1, -1, -1, -1, -1, -1, -1, -1,
+        -1,
+    ];
+    let expected_stderr = warning_keys
+        .iter()
+        .map(|key| format!("Warning: Undefined array key {key}"))
+        .collect::<Vec<_>>();
+    for version in ["8.2", "8.3", "8.4", "8.5"] {
+        let output = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg("--php-version")
+            .arg(version)
+            .arg(&php_path)
+            .output()
+            .expect("failed to compile indexed-array OOB fixture to WASM");
+        assert!(
+            output.status.success(),
+            "PHP {version} indexed-array OOB compilation failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
 
-    let wasm_path = dir.join("main.wasm");
-    let run = Command::new("wasmer")
-        .arg("run")
-        .arg(&wasm_path)
-        .current_dir(&dir)
-        .output()
-        .expect("failed to run indexed-array OOB fixture under Wasmer");
-    assert!(
-        run.status.success(),
-        "indexed-array OOB fixture trapped: {}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&run.stdout),
-        "1:;1:;:9223372036854775806;1:;1:;:;1:;1:;\
-0,,0;0,;0,,;"
-    );
+        let wasm_path = dir.join("main.wasm");
+        let run = Command::new("wasmer")
+            .arg("run")
+            .arg(&wasm_path)
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run indexed-array OOB fixture under Wasmer");
+        assert!(
+            run.status.success(),
+            "PHP {version} indexed-array OOB fixture trapped: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "1:;1:;:9223372036854775806;1:;1:;:;1:;1:;\
+0,,0;0,;0,,;",
+            "PHP {version}"
+        );
+        let actual_stderr = String::from_utf8_lossy(&run.stderr)
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual_stderr, expected_stderr,
+            "PHP {version} ordinary indexed misses must warn exactly once in source order"
+        );
+    }
 
     let _ = fs::remove_dir_all(&dir);
 }
