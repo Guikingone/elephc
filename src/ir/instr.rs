@@ -383,6 +383,7 @@ pub enum Op {
     DynamicObjectNewMixed,
     DynamicObjectNewWithoutConstructorMixed,
     PropGet,
+    PropGetForWrite,
     PropInitialized,
     PropSet,
     /// Loads the raw reference-cell pointer stored in a reference property's slot,
@@ -615,6 +616,13 @@ impl Op {
             }
             PropGet | NullsafePropGet => {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
+            }
+            // Not a pure read despite the name, exactly like `ArrayGetForWrite`: the
+            // copy-on-write split rewrites the receiver's PROPERTY slot, so it must never be
+            // treated as reorderable or redundant against the plain property reads around it.
+            PropGetForWrite => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
+                    | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
             }
             DynamicPropGet => {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
@@ -873,6 +881,7 @@ impl Op {
                 "dynamic_object_new_without_constructor_mixed"
             }
             PropGet => "prop_get",
+            PropGetForWrite => "prop_get_for_write",
             PropInitialized => "prop_initialized",
             PropSet => "prop_set",
             LoadPropRefCell => "load_prop_ref_cell",

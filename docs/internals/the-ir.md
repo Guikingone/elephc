@@ -596,6 +596,19 @@ mechanism exists to avoid; later than the last exit and the element outlives the
 program's need for it. PHP gets the same effect for free: its by-reference
 `foreach` holds a reference to the iterated array itself.
 
+`PropGetForWrite` is the same rule for an object PROPERTY receiver (issue #642).
+It splits the property's container and stores the separated container back into
+the property slot, returning it borrowed. The property case was not merely losing
+writes like the element case: `PropGet` retains, so the container sat at refcount
+2, `IterStart`'s split CONSUMED that reference, and the loop-exit `release`
+consumed a second one — taking the property's own container to refcount 0 and
+freeing storage the property still pointed at. Taking no reference at all is what
+removes both halves: refcount 1 leaves `IterStart` nothing to copy, and a borrowed
+result has no exit release. The op is restricted to a statically known, non-null,
+variable-rooted object receiver (`$o->x`, `$this->x`) whose property is a declared
+array or hash slot; dynamic names, hooked properties, `Mixed` receivers, reference
+and packed slots, and receivers over a temporary all keep the retaining read.
+
 ### Iterables, SPL, and Foreach
 
 | Op | Operands | Result | Effects |

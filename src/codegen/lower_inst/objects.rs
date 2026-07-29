@@ -2598,6 +2598,60 @@ pub(super) fn lower_prop_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     lower_prop_get_nonnull(ctx, inst, object, &property)
 }
 
+/// Lowers `PropGetForWrite`: separates the property's container BEFORE a by-reference
+/// `foreach` iterates it, publishes the separated container back into the property slot, and
+/// leaves it in the result register borrowed (issue #642).
+///
+/// This is the property-side counterpart of `ArrayGetForWrite`. `__rt_array_ensure_unique`
+/// consumes one reference from a shared source when it splits and hands back a container at
+/// refcount 1; storing that container into the property slot is therefore exactly balanced —
+/// the reference the property already held is the one the split consumed. No extra retain is
+/// emitted, which is the whole point: the loop must iterate storage the property owns, without
+/// a second reference that would make `IterStart` copy it and the loop exit over-release it.
+///
+/// A slot with no container to split keeps the ordinary borrowed load.
+pub(super) fn lower_prop_get_for_write(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    let property = property_name_immediate(ctx, inst)?.to_string();
+    let slot = resolve_property_slot(ctx, object, &property, inst)?;
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let Some(helper) = property_cow_helper(&slot) else {
+        ctx.load_value_to_reg(object, base_reg)?;
+        emit_property_load(ctx, &slot, base_reg)?;
+        return store_if_result(ctx, inst);
+    };
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(object, base_reg)?;
+    abi::emit_load_from_address(ctx.emitter, arg_reg, base_reg, slot.offset);
+    abi::emit_call_label(ctx.emitter, helper);
+    // The split helper clobbers the scratch registers on both targets (it materializes the
+    // null-container sentinel into one of them), so the receiver has to be reloaded before the
+    // separated container can be published into its slot.
+    ctx.load_value_to_reg(object, base_reg)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_store_to_address(ctx.emitter, result_reg, base_reg, slot.offset);
+    store_if_result(ctx, inst)
+}
+
+/// Returns the copy-on-write helper that separates this property's container, if there is one.
+///
+/// Only the two container shapes need — and survive — the split. A packed field, a reference
+/// cell, or a dynamic slot is not a plain container pointer at a fixed offset, and a scalar
+/// property has nothing to separate; all of them keep the ordinary read.
+fn property_cow_helper(slot: &PropertySlot) -> Option<&'static str> {
+    if slot.is_packed || slot.is_reference || !slot.is_declared {
+        return None;
+    }
+    match slot.php_type.codegen_repr() {
+        PhpType::Array(_) => Some("__rt_array_ensure_unique"),
+        PhpType::AssocArray { .. } => Some("__rt_hash_ensure_unique"),
+        _ => None,
+    }
+}
+
 /// Guards statically typed object receivers before selecting declared, dynamic,
 /// stdClass, or magic-property lowering.
 fn lower_object_prop_get_with_null_guard(

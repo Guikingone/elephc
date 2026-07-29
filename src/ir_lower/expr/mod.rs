@@ -8114,6 +8114,111 @@ fn lower_by_ref_foreach_source_receiver(
     lower_expr(ctx, array)
 }
 
+/// Lowers the source of a by-reference `foreach` whose receiver is an object PROPERTY.
+///
+/// The property receiver has the same disease as the element receiver (issue #580) and one more
+/// on top (issue #642). `lower_property_get_from_value` finishes with
+/// `stabilize_borrowed_result_and_release_receiver`, which ACQUIRES the container: the property
+/// slot holds one reference and the read adds a second, so the by-ref `IterStart` sees refcount 2
+/// and copy-on-writes. `__rt_array_ensure_unique` CONSUMES one reference from the shared source
+/// when it splits, and the loop-exit `release` of this read's own reference then consumes a
+/// second — which takes the property's container to refcount 0 and frees storage the property
+/// still points at. A `mixed`-valued property makes it worse still: it takes the DynamicIterable
+/// iterator path, whose converted container is republished only to a `load_local` origin, so the
+/// SSA value keeps naming the freed original instead of the live conversion.
+///
+/// This read does the split itself, publishes the unique container back into the PROPERTY slot,
+/// and hands the loop a BORROWED pointer. Refcount 1 means `IterStart` finds nothing to copy, so
+/// the writes land in the property's own storage; borrowed means no second reference is ever
+/// taken, so there is no exit release to over-consume. As in `lower_by_ref_foreach_element_source`,
+/// `stabilize_borrowed_result_and_release_receiver` is deliberately NOT used — it would acquire
+/// the result and restore exactly the refcount 2 that causes the copy.
+pub(crate) fn lower_by_ref_foreach_property_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    let object_value = lower_expr(ctx, object);
+    if !property_fetch_for_write_applies(ctx, &object_value, property, expr) {
+        return lower_property_get_from_value(ctx, object_value, property, Op::PropGet, expr);
+    }
+    let data = ctx.intern_string(property);
+    let result_type = property_get_result_type(ctx, object_value.value, property, Op::PropGet, expr);
+    let result = ctx.emit_value(
+        Op::PropGetForWrite,
+        vec![object_value.value],
+        Some(Immediate::Data(data)),
+        result_type,
+        Op::PropGetForWrite.default_effects(),
+        Some(expr.span),
+    );
+    // The separated container belongs to the property slot, not to this read — pin that
+    // explicitly instead of leaving it at the `MaybeOwned` default, which
+    // `mark_owned_temporaries` is free to promote to `Owned` later, and which would then have
+    // the loop release the property's own container on the way out.
+    ctx.builder
+        .set_value_ownership(result.value, Ownership::Borrowed);
+    // The receiver object is dropped here rather than held for the whole loop. This is safe
+    // because `property_fetch_for_write_applies` demanded a variable-rooted receiver: the base
+    // local keeps the object — and therefore its property slot — alive until the loop ends.
+    if ctx.value_is_owning_temporary(object_value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, object_value, Some(expr.span));
+    }
+    result
+}
+
+/// Returns whether a by-reference `foreach` source can take the fetch-for-write property read.
+///
+/// Requires a statically-known object receiver rooted in a plain variable (`$o->x`, `$this->x`),
+/// and a property whose static type is one of the two container kinds with a copy-on-write helper
+/// to split them. Everything else — dynamic property names, `Mixed` receivers, scalar or
+/// nullable properties, and receivers over a temporary such as `f()->x`, which has no owner once
+/// the read returns — keeps the ordinary retaining read.
+fn property_fetch_for_write_applies(
+    ctx: &LoweringContext<'_, '_>,
+    object_value: &LoweredValue,
+    property: &str,
+    expr: &Expr,
+) -> bool {
+    if !matches!(
+        ctx.builder.value_php_type(object_value.value).codegen_repr(),
+        PhpType::Object(_)
+    ) {
+        return false;
+    }
+    if value_is_nullable(ctx, object_value.value) {
+        return false;
+    }
+    // A hooked property is not a storage slot at all: the read routes to an accessor method
+    // whose result is a fresh value, so there is nothing for the loop to alias.
+    if class_declares_hook_accessor(ctx, object_value.value, &property_hook_get_method(property)) {
+        return false;
+    }
+    let property_ty =
+        property_get_result_type(ctx, object_value.value, property, Op::PropGet, expr);
+    if !matches!(
+        normalize_value_php_type(property_ty).codegen_repr(),
+        PhpType::Array(_) | PhpType::AssocArray { .. }
+    ) {
+        return false;
+    }
+    property_chain_is_variable_rooted(expr)
+}
+
+/// Returns whether a property expression bottoms out in a plain variable receiver (`$o->x`,
+/// `$this->x`, `$o->inner->x`).
+///
+/// `$this` counts: it is a parameter local that owns the receiver for the whole method body,
+/// which is exactly the lifetime guarantee this predicate is there to establish.
+fn property_chain_is_variable_rooted(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(_) | ExprKind::This => true,
+        ExprKind::PropertyAccess { object, .. } => property_chain_is_variable_rooted(object),
+        _ => false,
+    }
+}
+
 /// Returns the fetch-for-write element read a by-reference `foreach` source can take, if any.
 ///
 /// Requires a statically-known container element — an indexed array or a hash, the two kinds

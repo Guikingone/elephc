@@ -22,7 +22,8 @@ use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
     array_access_element_result_type, coerce_container_to_mixed_payload, coerce_to_int_at_span,
     index_expr_key_type, lower_array_access_from_lowered_receiver,
-    lower_by_ref_foreach_element_source, lower_callable_array_for_assignment,
+    lower_by_ref_foreach_element_source, lower_by_ref_foreach_property_source,
+    lower_callable_array_for_assignment,
     lower_array_literal_with_expected_type,
     lower_closure_for_assignment, lower_expr,
     reflection_arg_array_binding_for_expr, reflection_class_binding_for_expr,
@@ -1772,6 +1773,9 @@ fn lower_foreach_source(
             let is_borrowed_element =
                 ctx.builder.value_ownership(source.value) == Ownership::Borrowed;
             return (source, is_borrowed_element);
+        }
+        if let ExprKind::PropertyAccess { object, property } = &array.kind {
+            return lower_by_ref_foreach_property_source(ctx, object, property, array);
         }
     }
     (lower_expr(ctx, array), false)

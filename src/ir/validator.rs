@@ -544,6 +544,7 @@ fn validate_opcode_rules(
         }
         DynamicObjectNewWithoutConstructorMixed
         | PropGet
+        | PropGetForWrite
         | PropInitialized
         | PropSet
         | LoadPropRefCell

@@ -184,6 +184,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
             objects::lower_dynamic_object_new_without_constructor_mixed(ctx, &inst)
         }
         Op::PropGet => objects::lower_prop_get(ctx, &inst),
+        Op::PropGetForWrite => objects::lower_prop_get_for_write(ctx, &inst),
         Op::PropInitialized => objects::lower_prop_initialized(ctx, &inst),
         Op::LoadPropRefCell => objects::lower_load_prop_ref_cell(ctx, &inst),
         Op::LoadArrayElemRefCell => arrays::lower_load_array_elem_ref_cell(ctx, &inst),

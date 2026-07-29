@@ -1265,5 +1265,268 @@ echo implode(',', $a[0]);
         out.stderr.contains("leak summary: clean"),
         "expected a clean heap-debug leak summary, got: {}",
         out.stderr
+// --- Issue #642: by-ref foreach over an OBJECT PROPERTY source ---
+//
+// The property receiver is the sibling of #580's element receiver, and strictly worse: the
+// property's container is not merely left unmutated, it is FREED while the property still
+// points at it. Measured cause: `prop_get` + `acquire` leaves the container at refcount 2, so
+// the by-ref `IterStart` copy-on-writes it. `__rt_array_ensure_unique` CONSUMES the caller's
+// reference when it splits, and the loop-exit `release` then consumes it a second time, taking
+// the property's own container to refcount 0. A `mixed`-valued property additionally takes the
+// DynamicIterable path, whose conversion result is republished only to a local origin, so the
+// SSA value still names the freed original. The fix reads the property for write — split up
+// front, unique container republished into the property slot, result BORROWED so no second
+// reference is ever taken.
+
+/// Regression for issue #642: by-ref `foreach` over a typed array property must mutate the
+/// property in place. Pre-fix `implode` printed nothing and `count()` returned a heap address,
+/// because the property's container had been freed by the loop-exit release.
+#[test]
+fn test_regression_642_by_ref_foreach_over_property_source() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public array $x = [1, 2]; }
+$o = new C();
+foreach ($o->x as &$v) { $v = $v * 2; }
+unset($v);
+echo implode(',', $o->x), ' count=', count($o->x);
+"#,
+    );
+    assert_eq!(out, "2,4 count=2");
+}
+
+/// Regression for issue #642: the corruption is in the loop's source handling, not in the
+/// writes — an EMPTY by-ref body destroyed the property just as thoroughly.
+#[test]
+fn test_regression_642_by_ref_foreach_over_property_empty_body_keeps_property_intact() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public array $x = [1, 2]; }
+$o = new C();
+foreach ($o->x as &$v) { }
+unset($v);
+echo implode(',', $o->x), ' count=', count($o->x);
+"#,
+    );
+    assert_eq!(out, "1,2 count=2");
+}
+
+/// Regression for issue #642: an UNTYPED property holds the same container behind a different
+/// static type, which took the static-Indexed iterator path. That path rebinds the SSA value
+/// after the split, so it lost the writes instead of corrupting — the same defect, milder.
+#[test]
+fn test_regression_642_by_ref_foreach_over_untyped_property_source() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public $x = [1, 2]; }
+$o = new C();
+foreach ($o->x as &$v) { $v = $v * 2; }
+unset($v);
+echo implode(',', $o->x), ' count=', count($o->x);
+"#,
+    );
+    assert_eq!(out, "2,4 count=2");
+}
+
+/// Regression for issue #642: a hash-valued property must alias through the hash split helper.
+/// `implode` on an `AssocArray` is unsupported by the backend, so the assertion reads the
+/// property back through a by-value loop instead.
+#[test]
+fn test_regression_642_by_ref_foreach_over_hash_property_source() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public array $x = ['a' => 1, 'b' => 2]; }
+$o = new C();
+foreach ($o->x as &$v) { $v = $v * 2; }
+unset($v);
+$out = '';
+foreach ($o->x as $k => $w) { $out = $out . $k . '=' . $w . ';'; }
+echo $out, ' count=', count($o->x);
+"#,
+    );
+    assert_eq!(out, "a=2;b=4; count=2");
+}
+
+/// Regression for issue #642: the same loop written against `$this` inside a method must behave
+/// identically — the receiver is a parameter local rather than an outer local.
+#[test]
+fn test_regression_642_by_ref_foreach_over_property_via_this() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public array $x = [1, 2];
+    public function doubleAll(): void { foreach ($this->x as &$v) { $v = $v * 2; } unset($v); }
+}
+$o = new C();
+$o->doubleAll();
+echo implode(',', $o->x), ' count=', count($o->x);
+"#,
+    );
+    assert_eq!(out, "2,4 count=2");
+}
+
+/// Regression for issue #642: string elements exercise the 16-byte source slot layout through
+/// the same conversion, which also corrupted the property pre-fix.
+#[test]
+fn test_regression_642_by_ref_foreach_over_string_valued_property_source() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public array $x = ['a', 'b']; }
+$o = new C();
+foreach ($o->x as &$v) { $v = $v . '!'; }
+unset($v);
+echo implode(',', $o->x), ' count=', count($o->x);
+"#,
+    );
+    assert_eq!(out, "a!,b! count=2");
+}
+
+/// Guard for issue #642: a STATIC property already reached the loop correctly before the fix.
+/// This pins that behaviour so the property-side change does not disturb the static path.
+#[test]
+fn test_regression_642_by_ref_foreach_over_static_property_source() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public static array $x = [1, 2]; }
+foreach (C::$x as &$v) { $v = $v * 2; }
+unset($v);
+echo implode(',', C::$x), ' count=', count(C::$x);
+"#,
+    );
+    assert_eq!(out, "2,4 count=2");
+}
+
+/// Guard for issue #642: a by-VALUE foreach over the same property must keep iterating a copy
+/// and leave the property untouched. The fetch-for-write read must not leak into that path.
+#[test]
+fn test_regression_642_by_value_foreach_over_property_does_not_mutate() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public array $x = [1, 2]; }
+$o = new C();
+foreach ($o->x as $v) { $v = $v * 2; }
+echo implode(',', $o->x), ' count=', count($o->x);
+"#,
+    );
+    assert_eq!(out, "1,2 count=2");
+}
+
+/// Regression for issue #642: the case that proves BOTH defects are fixed rather than only the
+/// refcount one. A second live owner (`$keep`) masked the corruption pre-fix — the property
+/// survived — but the writes were still lost. The split must now separate the property into its
+/// own unique container, so the loop's writes land in the property while `$keep` keeps PHP's
+/// value-copy semantics and stays unchanged.
+#[test]
+fn test_regression_642_by_ref_foreach_property_source_shared_with_another_owner() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public array $x = [1, 2]; }
+$o = new C();
+$keep = $o->x;
+foreach ($o->x as &$v) { $v = $v * 2; }
+unset($v);
+echo implode(',', $o->x), '|', implode(',', $keep);
+"#,
+    );
+    assert_eq!(out.stdout, "2,4|1,2");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #642: the borrowed property read must take no reference of its own, so
+/// the loop neither leaks the container nor over-releases it. Pre-fix this aborted under heap
+/// debug with `bad refcount`.
+#[test]
+fn test_regression_642_by_ref_foreach_property_source_is_leak_free() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public array $x = [1, 2]; }
+$o = new C();
+foreach ($o->x as &$v) { $v = $v * 2; }
+unset($v);
+echo implode(',', $o->x);
+"#,
+    );
+    assert_eq!(out.stdout, "2,4");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #642: the mutation must be visible through the property *during* the
+/// loop, not published at the end — the by-ref binding aliases the property's own storage.
+#[test]
+fn test_regression_642_by_ref_foreach_property_mutation_visible_during_loop() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public array $x = [1, 2]; }
+$o = new C();
+foreach ($o->x as &$v) { $v = $v * 2; echo $o->x[0], ';'; }
+unset($v);
+echo implode(',', $o->x);
+"#,
+    );
+    assert_eq!(out, "2;2;2,4");
+}
+
+/// Regression for issue #642: the separated container must be published back into the PROPERTY
+/// slot, on every supported target. Publishing is the whole fix — a split whose result is not
+/// written back leaves the loop iterating a container the property does not own, which is how
+/// the property ended up freed. The assertion is structural: inside the `prop_get_for_write`
+/// block the slot is read, the copy-on-write helper runs, and the result is stored back to that
+/// same slot, in that order. Run under `ELEPHC_TEST_TARGET` to cover the non-host architectures.
+#[test]
+fn test_regression_642_prop_get_for_write_publishes_split_into_property_slot() {
+    let dir = make_cli_test_dir("elephc_prop_get_for_write_publish");
+    let (user_asm, _runtime_asm, _libs) = compile_source_to_asm_with_options(
+        r#"<?php
+class C { public array $x = [1, 2]; }
+$o = new C();
+foreach ($o->x as &$v) { $v = $v * 2; }
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let start = user_asm
+        .find("op=prop_get_for_write")
+        .expect("missing prop_get_for_write lowering");
+    let body = &user_asm[start..];
+    let end = body[1..]
+        .find("op=iter_start")
+        .map(|pos| pos + 1)
+        .expect("missing iter_start after prop_get_for_write");
+    let body = &body[..end];
+
+    let (slot_load, slot_store) = match target().arch {
+        Arch::AArch64 => ("ldr x0, [x9, #8]", "str x0, [x9, #8]"),
+        Arch::X86_64 => (
+            "mov rdi, QWORD PTR [r11 + 8]",
+            "mov QWORD PTR [r11 + 8], rax",
+        ),
+    };
+    let call = match target().arch {
+        Arch::AArch64 => "bl __rt_array_ensure_unique",
+        Arch::X86_64 => "call __rt_array_ensure_unique",
+    };
+    let load_pos = body
+        .find(slot_load)
+        .unwrap_or_else(|| panic!("missing property slot load `{slot_load}` in:\n{body}"));
+    let call_pos = body
+        .find(call)
+        .unwrap_or_else(|| panic!("missing copy-on-write split `{call}` in:\n{body}"));
+    let store_pos = body
+        .find(slot_store)
+        .unwrap_or_else(|| panic!("missing slot republish `{slot_store}` in:\n{body}"));
+    assert!(
+        load_pos < call_pos && call_pos < store_pos,
+        "expected slot load -> split -> slot republish, got:\n{body}"
     );
 }
