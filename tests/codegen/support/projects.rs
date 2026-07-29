@@ -10,17 +10,14 @@
 use super::*;
 
 /// Combines checker-required libraries with libraries required by feature-gated runtime helpers.
-fn required_libraries_for_runtime_features(
+fn link_requirements_for_runtime_features(
     check_result: &elephc::types::CheckResult,
     runtime_features: elephc::codegen::RuntimeFeatures,
-) -> Vec<String> {
-    let mut required_libraries = check_result.required_libraries.clone();
-    for lib in elephc::codegen::required_libraries_for_runtime_features(runtime_features) {
-        if !required_libraries.contains(&lib) {
-            required_libraries.push(lib);
-        }
-    }
-    required_libraries
+) -> TestLinkRequirements {
+    TestLinkRequirements::new(
+        check_result.required_libraries.clone(),
+        elephc::codegen::link_requirements_for_runtime_features(runtime_features),
+    )
 }
 
 /// Generates user and runtime assembly for project fixtures through the canonical EIR backend.
@@ -92,6 +89,14 @@ pub(crate) fn elephc_cli_command(dir: &Path) -> Command {
     cmd
 }
 
+/// Constructs a CLI command backed by a hermetic managed-PCRE2 project fixture.
+pub(crate) fn elephc_cli_command_with_managed_pcre2(dir: &Path) -> Command {
+    let cache = prepare_managed_pcre2_cli_project(dir);
+    let mut cmd = elephc_cli_command(dir);
+    cmd.env("ELEPHC_NATIVE_CACHE", cache);
+    cmd
+}
+
 // Compiles a PHP source string with conditional defines and runs the resulting binary.
 // Uses the full compiler pipeline (no CLI subprocess) with the default 8_388_608-byte heap.
 // Returns stdout. Cleans up the temporary directory after execution.
@@ -126,12 +131,33 @@ pub(crate) fn compile_and_run_with_defines(source: &str, defines: &[&str]) -> St
 // Used for CLI integration tests that exercise the binary interface end-to-end.
 /// Provides the Compile cli file and run helper used by the projects module.
 pub(crate) fn compile_cli_file_and_run(source: &str, defines: &[&str]) -> String {
+    compile_cli_file_and_run_with_native(source, defines, false)
+}
+
+/// Compiles and runs a CLI fixture with a verified managed-PCRE2 test artifact.
+pub(crate) fn compile_cli_file_and_run_with_managed_pcre2(
+    source: &str,
+    defines: &[&str],
+) -> String {
+    compile_cli_file_and_run_with_native(source, defines, true)
+}
+
+/// Compiles and runs one CLI fixture with optional managed-PCRE2 project setup.
+fn compile_cli_file_and_run_with_native(
+    source: &str,
+    defines: &[&str],
+    managed_pcre2: bool,
+) -> String {
     let dir = make_cli_test_dir("elephc_cli_test");
 
     let php_path = dir.join("main.php");
     fs::write(&php_path, source).unwrap();
 
-    let mut compile_cmd = elephc_cli_command(&dir);
+    let mut compile_cmd = if managed_pcre2 {
+        elephc_cli_command_with_managed_pcre2(&dir)
+    } else {
+        elephc_cli_command(&dir)
+    };
     for define in defines {
         compile_cmd.arg("--define").arg(define);
     }
@@ -279,7 +305,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
         requires_elephc_tls,
     );
     let required_libraries =
-        required_libraries_for_runtime_features(&check_result, runtime_features);
+        link_requirements_for_runtime_features(&check_result, runtime_features);
 
     let elephc_err = assemble_and_run_expect_failure(
         &user_asm,
@@ -353,7 +379,7 @@ pub(crate) fn compile_and_run_files_with_defines(
         requires_elephc_tls,
     );
     let required_libraries =
-        required_libraries_for_runtime_features(&check_result, runtime_features);
+        link_requirements_for_runtime_features(&check_result, runtime_features);
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let elephc_out = assemble_and_run(
@@ -461,7 +487,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
         requires_elephc_tls,
     );
     let required_libraries =
-        required_libraries_for_runtime_features(&check_result, runtime_features);
+        link_requirements_for_runtime_features(&check_result, runtime_features);
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let asm_path = dir.join("test.s");

@@ -1,12 +1,13 @@
 //! Purpose:
 //! Orchestrates the full PHP source to native binary compilation flow.
-//! Runs frontend passes, semantic checks, optimizations, runtime preparation, codegen, and linking in order.
+//! Resolves typed managed dependencies only when the selected path performs a final link.
 //!
 //! Called from:
 //! - `crate::main()` after `crate::cli::parse_args()`.
 //!
 //! Key details:
 //! - Pass ordering is observable: magic constants and conditionals run before resolver/name resolution and type checking.
+//! - Check/EIR/assembly-only paths return before read-only native artifact resolution.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,6 +17,8 @@ use std::time::Instant;
 use crate::cli::CliConfig;
 use crate::codegen::platform::{Platform, Target};
 use crate::codegen::Emit;
+use crate::codegen::LinkRequirement;
+use crate::native_deps::NativeRequirement;
 use crate::span::Span;
 use crate::source::SourceMode;
 use crate::timings::CompileTimings;
@@ -54,7 +57,7 @@ pub(crate) fn compile(config: CliConfig) {
         ir_opt,
         target,
         php_version,
-        mut extra_link_libs,
+        extra_link_libs,
         extra_link_paths,
         extra_frameworks,
         defines,
@@ -525,48 +528,60 @@ pub(crate) fn compile(config: CliConfig) {
     // web and non-web runtime objects distinct automatically.
     runtime_features.web = web;
 
-    if web && !extra_link_libs.iter().any(|lib| lib == "elephc_web") {
-        extra_link_libs.push("elephc_web".to_string());
-    }
+    let runtime_link_requirements =
+        codegen::link_requirements_for_runtime_features(runtime_features);
 
     // `--with-<crate>` force-links each named bridge staticlib (whole-archived,
     // via `forced_bridge_libs`, so it is not dead-stripped) regardless of feature
     // auto-detection. Crates with a PHP-surface prelude (pdo/tz/image) also had
     // that prelude force-injected above, so their classes/functions are available.
     let mut forced_bridge_libs: Vec<String> = Vec::new();
-    for flag in &with_crates {
+    let mut sorted_with_crates: Vec<&String> = with_crates.iter().collect();
+    sorted_with_crates.sort();
+    for flag in sorted_with_crates {
         if let Some(lib) = linker::bridge_lib_for_flag(flag) {
-            if !extra_link_libs.iter().any(|l| l == lib) {
-                extra_link_libs.push(lib.to_string());
-            }
             forced_bridge_libs.push(lib.to_string());
         }
     }
 
-    let requires_elephc_tls = extra_link_libs.iter().any(|lib| lib == "elephc_tls")
-        || check_result
-            .required_libraries
-            .iter()
-            .any(|lib| lib == "elephc_tls");
-
-    // Report the bridges actually linked into THIS compilation to
-    // `extension_loaded()` / `get_loaded_extensions()`. The set is the bridge
-    // staticlibs referenced at codegen time (`extra_link_libs`, which by now
-    // already carries the `--web` `elephc_web` and every forced `--with-<flag>`
-    // bridge) unioned with the feature-auto-detected `required_libraries` (the
-    // set is not merged into `extra_link_libs` until after codegen, at line
-    // ~414). Each lib is mapped to its canonical PHP extension name through the
-    // single-source `linker::BRIDGES` table; bridges with no distinct PHP
-    // extension (tz -> date, eval) map to `None` and are skipped. Seeded into a
-    // codegen thread-local (mirrors `set_autoload_rule_count`) because the
-    // `extension_loaded` const-fold happens deep in per-instruction lowering,
-    // where threading a parameter would be far more invasive than the bool
-    // `requires_elephc_tls`.
-    let mut linked_extensions: Vec<String> = Vec::new();
-    for lib in extra_link_libs
+    // Collect the named libraries that the typed link planner will consider.
+    // This preserves codegen-time bridge feature reporting without flattening
+    // those inputs back into the legacy user-library list.
+    let mut planned_link_libraries = Vec::new();
+    for library in extra_link_libs
         .iter()
         .chain(check_result.required_libraries.iter())
+        .chain(forced_bridge_libs.iter())
     {
+        if !planned_link_libraries.contains(library) {
+            planned_link_libraries.push(library.clone());
+        }
+    }
+    if web && !planned_link_libraries.iter().any(|library| library == "elephc_web") {
+        planned_link_libraries.push("elephc_web".to_string());
+    }
+    for requirement in &runtime_link_requirements {
+        if let LinkRequirement::Bridge(library) = requirement {
+            if !planned_link_libraries
+                .iter()
+                .any(|existing| existing.as_str() == *library)
+            {
+                planned_link_libraries.push((*library).to_string());
+            }
+        }
+    }
+
+    let requires_elephc_tls = planned_link_libraries
+        .iter()
+        .any(|library| library == "elephc_tls");
+
+    // Report the bridges actually linked into THIS compilation to
+    // `extension_loaded()` / `get_loaded_extensions()`. Each planned bridge is
+    // mapped through the single-source bridge table; bridges with no distinct
+    // PHP extension (tz -> date, eval) are skipped. Seeded into a codegen
+    // thread-local because extension folding happens during instruction lowering.
+    let mut linked_extensions: Vec<String> = Vec::new();
+    for lib in &planned_link_libraries {
         if let Some(ext) = linker::php_extension_for_lib(lib) {
             if !linked_extensions.iter().any(|existing| existing == ext) {
                 linked_extensions.push(ext.to_string());
@@ -615,17 +630,6 @@ pub(crate) fn compile(config: CliConfig) {
     };
     timings.record_since("codegen", phase_started);
 
-    for lib in &check_result.required_libraries {
-        if !extra_link_libs.contains(lib) {
-            extra_link_libs.push(lib.clone());
-        }
-    }
-    for lib in codegen::required_libraries_for_runtime_features(runtime_features) {
-        if !extra_link_libs.contains(&lib) {
-            extra_link_libs.push(lib);
-        }
-    }
-
     crate::progress::phase("write-asm");
     let phase_started = Instant::now();
     if let Err(e) = fs::write(&output_paths.asm, &user_asm) {
@@ -667,12 +671,43 @@ pub(crate) fn compile(config: CliConfig) {
         return;
     }
 
+    let native_requirements: Vec<NativeRequirement> = runtime_link_requirements
+        .iter()
+        .filter_map(|requirement| match requirement {
+            LinkRequirement::NativePackage(package) => {
+                Some(NativeRequirement::package(*package))
+            }
+            LinkRequirement::Bridge(_) | LinkRequirement::SystemLibrary(_) => None,
+        })
+        .collect();
+    let resolved_native = match crate::native_deps::resolve_for_compilation(
+        Path::new(filename),
+        target,
+        &native_requirements,
+    ) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            eprintln!("{error}");
+            process::exit(1);
+        }
+    };
+    let link_plan = crate::link_planning::build(crate::link_planning::LinkPlanningInputs {
+        user_libraries: &extra_link_libs,
+        user_search_paths: &extra_link_paths,
+        user_frameworks: &extra_frameworks,
+        checker_libraries: &check_result.required_libraries,
+        runtime_requirements: &runtime_link_requirements,
+        managed_packages: &resolved_native,
+        forced_bridges: &forced_bridge_libs,
+        web,
+    });
+
     crate::progress::phase("assemble");
     let phase_started = Instant::now();
     linker::assemble(target, &output_paths.asm, &output_paths.obj);
     timings.record_since("assemble", phase_started);
 
-    for (lib_name, flag_name) in linker::bridges_in(&extra_link_libs) {
+    for (lib_name, flag_name) in linker::bridges_in(&planned_link_libraries) {
         let detail = if forced_bridge_libs.iter().any(|l| l == lib_name) {
             format!("{} (--with-{})", lib_name, flag_name)
         } else {
@@ -683,17 +718,18 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("link");
     let phase_started = Instant::now();
-    linker::link(
+    if let Err(error) = linker::link_with_plan(
         target,
         emit,
         &output_paths.bin,
         &output_paths.obj,
         &runtime_object.path,
-        &extra_link_libs,
-        &extra_link_paths,
-        &extra_frameworks,
+        &link_plan,
         &forced_bridge_libs,
-    );
+    ) {
+        eprintln!("Linker error: {error}");
+        process::exit(1);
+    }
     timings.record_since("link", phase_started);
 
     // With --debug-info the DWARF line tables must be preserved past object
