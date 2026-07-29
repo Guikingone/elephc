@@ -1,4 +1,9 @@
-import { run, WasiArgumentError } from "host_portability";
+import {
+  run,
+  WasiArgumentError,
+  WasiEnvironmentError,
+  WasiPreopenError,
+} from "host_portability";
 
 declare const process: {
   env: Readonly<Record<string, string | undefined>>;
@@ -28,3 +33,5 @@ async function handlesInvalidArguments(): Promise<void> {
 
 void exitCode;
 void handlesInvalidArguments;
+void WasiEnvironmentError;
+void WasiPreopenError;

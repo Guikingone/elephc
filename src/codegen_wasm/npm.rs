@@ -325,105 +325,329 @@ fn loader_source(package_name: &str) -> String {
         r#"import {{ realpathSync }} from "node:fs";
 import {{ readFile }} from "node:fs/promises";
 import {{ fileURLToPath }} from "node:url";
+import {{ isAbsolute }} from "node:path";
 import {{ WASI }} from "node:wasi";
 
 const wasmUrl = new URL("./{WASM_FILENAME}", import.meta.url);
 
-/**
- * Error thrown when JavaScript arguments cannot be represented losslessly by
- * the generated WASI Preview 1 command.
- */
-export class WasiArgumentError extends TypeError {{
-  constructor(message, argumentIndex = null) {{
+export class WasiOptionError extends TypeError {{
+  constructor(message, code = "ERR_ELEPHC_WASI_OPTION", optionPath = "options") {{
     super(message);
+    this.name = "WasiOptionError";
+    this.code = code;
+    this.optionPath = optionPath;
+  }}
+}}
+
+export class WasiArgumentError extends WasiOptionError {{
+  constructor(message, argumentIndex = null) {{
+    super(
+      message,
+      "ERR_ELEPHC_WASI_ARGUMENT",
+      argumentIndex === null ? "args" : "args[" + argumentIndex + "]",
+    );
     this.name = "WasiArgumentError";
-    this.code = "ERR_ELEPHC_WASI_ARGUMENT";
     this.argumentIndex = argumentIndex;
   }}
 }}
 
-/**
- * Rejects argument containers and strings that Node's WASI adapter would
- * otherwise coerce or truncate before the PHP command observes them.
- */
+export class WasiEnvironmentError extends WasiOptionError {{
+  constructor(message, envKey = null) {{
+    super(message, "ERR_ELEPHC_WASI_ENVIRONMENT", "env");
+    this.name = "WasiEnvironmentError";
+    this.envKey = envKey;
+  }}
+}}
+
+export class WasiPreopenError extends WasiOptionError {{
+  constructor(message, guestPath = null) {{
+    super(message, "ERR_ELEPHC_WASI_PREOPEN", "preopens");
+    this.name = "WasiPreopenError";
+    this.guestPath = guestPath;
+  }}
+}}
+
+/** Rejects strings that cannot be transferred losslessly through WASI. */
+function validateLosslessString(value, invalid) {{
+  for (let offset = 0; offset < value.length; offset += 1) {{
+    const codeUnit = value.charCodeAt(offset);
+    if (codeUnit === 0) {{
+      throw invalid(
+        "contains an embedded NUL (U+0000) code unit at offset " + offset + ".",
+      );
+    }}
+    if (codeUnit >= 0xD800 && codeUnit <= 0xDBFF) {{
+      const next = value.charCodeAt(offset + 1);
+      if (!(next >= 0xDC00 && next <= 0xDFFF)) {{
+        throw invalid(
+          "contains an unpaired high UTF-16 surrogate code unit at offset "
+            + offset + ".",
+        );
+      }}
+      offset += 1;
+    }} else if (codeUnit >= 0xDC00 && codeUnit <= 0xDFFF) {{
+      throw invalid(
+        "contains an unpaired low UTF-16 surrogate code unit at offset "
+          + offset + ".",
+      );
+    }}
+  }}
+}}
+
+/** Validates arguments and returns a one-read immutable snapshot. */
 function validateWasiArguments(args) {{
-  if (!Array.isArray(args)) {{
+  let isArray = false;
+  try {{
+    isArray = Array.isArray(args);
+  }} catch {{
+    // A revoked Proxy is not a stable argument container.
+  }}
+  if (!isArray) {{
     const received = args === null ? "null" : typeof args;
     throw new WasiArgumentError(
       "Invalid WASI arguments: expected an Array, received " + received + ".",
     );
   }}
-
-  for (let argumentIndex = 0; argumentIndex < args.length; argumentIndex += 1) {{
-    const argument = args[argumentIndex];
-    if (typeof argument !== "string") {{
+  let length;
+  let keys;
+  try {{
+    length = Reflect.getOwnPropertyDescriptor(args, "length").value;
+    keys = Reflect.ownKeys(args);
+  }} catch {{
+    throw new WasiArgumentError(
+      "Invalid WASI arguments: the Array could not be inspected safely.",
+    );
+  }}
+  const snapshot = new Array(length);
+  for (let index = 0; index < length; index += 1) {{
+    let descriptor;
+    try {{
+      descriptor = Reflect.getOwnPropertyDescriptor(args, String(index));
+    }} catch {{
       throw new WasiArgumentError(
-        "Invalid WASI argument at index " + argumentIndex
-          + ": expected a primitive string, received " + typeof argument + ".",
-        argumentIndex,
+        "Invalid WASI argument at index " + index
+          + ": the property could not be inspected safely.",
+        index,
       );
     }}
-
-    for (
-      let codeUnitIndex = 0;
-      codeUnitIndex < argument.length;
-      codeUnitIndex += 1
-    ) {{
-      const codeUnit = argument.charCodeAt(codeUnitIndex);
-      if (codeUnit === 0) {{
-        throw new WasiArgumentError(
-          "Invalid WASI argument at index " + argumentIndex
-            + ": argument contains an embedded NUL (U+0000) code unit at offset "
-            + codeUnitIndex + ".",
-          argumentIndex,
-        );
-      }}
-
-      if (codeUnit >= 0xD800 && codeUnit <= 0xDBFF) {{
-        const nextCodeUnit = argument.charCodeAt(codeUnitIndex + 1);
-        if (!(nextCodeUnit >= 0xDC00 && nextCodeUnit <= 0xDFFF)) {{
-          throw new WasiArgumentError(
-            "Invalid WASI argument at index " + argumentIndex
-              + ": argument contains an unpaired high UTF-16 surrogate code unit at offset "
-              + codeUnitIndex + ".",
-            argumentIndex,
-          );
-        }}
-        codeUnitIndex += 1;
-      }} else if (codeUnit >= 0xDC00 && codeUnit <= 0xDFFF) {{
-        throw new WasiArgumentError(
-          "Invalid WASI argument at index " + argumentIndex
-            + ": argument contains an unpaired low UTF-16 surrogate code unit at offset "
-            + codeUnitIndex + ".",
-          argumentIndex,
-        );
-      }}
+    if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) {{
+      throw new WasiArgumentError(
+        "Invalid WASI argument at index " + index
+          + ": expected a primitive string, received "
+          + (descriptor ? "accessor" : "undefined") + ".",
+        index,
+      );
+    }}
+    const argument = descriptor.value;
+    if (typeof argument !== "string") {{
+      throw new WasiArgumentError(
+        "Invalid WASI argument at index " + index
+          + ": expected a primitive string, received " + typeof argument + ".",
+        index,
+      );
+    }}
+    validateLosslessString(argument, (reason) => new WasiArgumentError(
+      "Invalid WASI argument at index " + index + ": argument " + reason,
+      index,
+    ));
+    snapshot[index] = argument;
+  }}
+  for (const key of keys) {{
+    if (key === "length") continue;
+    const index = typeof key === "string" ? Number(key) : Number.NaN;
+    if (!Number.isInteger(index) || index < 0 || index >= length || String(index) !== key) {{
+      throw new WasiArgumentError(
+        "Invalid WASI arguments: unexpected own property "
+          + (typeof key === "symbol" ? "Symbol" : JSON.stringify(key)) + ".",
+      );
     }}
   }}
+  return Object.freeze(snapshot);
+}}
 
-  return args;
+/** Reads each own enumerable data property exactly once. */
+function snapshotRecordEntries(value, label, allowProcessEnv, makeError) {{
+  let prototype;
+  let keys;
+  try {{
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {{
+      throw new TypeError();
+    }}
+    prototype = Reflect.getPrototypeOf(value);
+    keys = Reflect.ownKeys(value);
+  }} catch {{
+    throw makeError("Invalid WASI " + label + ": expected a plain object.", null);
+  }}
+  if (
+    !(allowProcessEnv && value === process.env)
+    && prototype !== Object.prototype
+    && prototype !== null
+  ) {{
+    throw makeError("Invalid WASI " + label + ": expected a plain object.", null);
+  }}
+  const entries = [];
+  for (const key of keys) {{
+    if (typeof key !== "string") {{
+      throw makeError("Invalid WASI " + label + ": symbol keys are not supported.", null);
+    }}
+    let descriptor;
+    try {{
+      descriptor = Reflect.getOwnPropertyDescriptor(value, key);
+    }} catch {{
+      throw makeError(
+        "Invalid WASI " + label + " entry " + JSON.stringify(key)
+          + ": the property could not be inspected safely.",
+        key,
+      );
+    }}
+    if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) {{
+      throw makeError(
+        "Invalid WASI " + label + " entry " + JSON.stringify(key)
+          + ": expected an enumerable data property.",
+        key,
+      );
+    }}
+    entries.push([key, descriptor.value]);
+  }}
+  return entries;
+}}
+
+/** Validates and snapshots an explicit WASI environment. */
+function validateWasiEnvironment(env) {{
+  const entries = snapshotRecordEntries(
+    env,
+    "environment",
+    true,
+    (message, key) => new WasiEnvironmentError(message, key),
+  );
+  const snapshot = Object.create(null);
+  for (const [key, value] of entries) {{
+    if (key.length === 0 || key.includes("=")) {{
+      throw new WasiEnvironmentError(
+        "Invalid WASI environment key " + JSON.stringify(key)
+          + ": keys must be non-empty and must not contain '='.",
+        key,
+      );
+    }}
+    validateLosslessString(key, (reason) => new WasiEnvironmentError(
+      "Invalid WASI environment key " + JSON.stringify(key) + ": key " + reason,
+      key,
+    ));
+    if (typeof value !== "string") {{
+      throw new WasiEnvironmentError(
+        "Invalid WASI environment entry " + JSON.stringify(key)
+          + ": expected a primitive string value, received "
+          + (value === null ? "null" : typeof value) + ".",
+        key,
+      );
+    }}
+    validateLosslessString(value, (reason) => new WasiEnvironmentError(
+      "Invalid WASI environment entry " + JSON.stringify(key) + ": value " + reason,
+      key,
+    ));
+    snapshot[key] = value;
+  }}
+  return Object.freeze(snapshot);
+}}
+
+/** Validates and snapshots guest-to-host preopens without rewriting paths. */
+function validateWasiPreopens(preopens) {{
+  const entries = snapshotRecordEntries(
+    preopens,
+    "preopens",
+    false,
+    (message, key) => new WasiPreopenError(message, key),
+  );
+  const snapshot = Object.create(null);
+  for (const [guestPath, hostPath] of entries) {{
+    validateLosslessString(guestPath, (reason) => new WasiPreopenError(
+      "Invalid WASI preopen guest path " + JSON.stringify(guestPath)
+        + ": path " + reason,
+      guestPath,
+    ));
+    const segments = guestPath === "/" ? [] : guestPath.slice(1).split("/");
+    if (
+      !guestPath.startsWith("/")
+      || (guestPath !== "/" && guestPath.endsWith("/"))
+      || segments.some((segment) =>
+        segment.length === 0 || segment === "." || segment === ".."
+      )
+    ) {{
+      throw new WasiPreopenError(
+        "Invalid WASI preopen guest path " + JSON.stringify(guestPath)
+          + ": expected a canonical absolute POSIX path.",
+        guestPath,
+      );
+    }}
+    if (typeof hostPath !== "string") {{
+      throw new WasiPreopenError(
+        "Invalid WASI preopen host path for " + JSON.stringify(guestPath)
+          + ": expected a primitive string, received "
+          + (hostPath === null ? "null" : typeof hostPath) + ".",
+        guestPath,
+      );
+    }}
+    validateLosslessString(hostPath, (reason) => new WasiPreopenError(
+      "Invalid WASI preopen host path for " + JSON.stringify(guestPath)
+        + ": path " + reason,
+      guestPath,
+    ));
+    if (!isAbsolute(hostPath)) {{
+      throw new WasiPreopenError(
+        "Invalid WASI preopen host path for " + JSON.stringify(guestPath)
+          + ": expected an absolute host path.",
+        guestPath,
+      );
+    }}
+    snapshot[guestPath] = hostPath;
+  }}
+  return Object.freeze(snapshot);
+}}
+
+/** Validates top-level options before WASI or module I/O is attempted. */
+function validateRunOptions(options) {{
+  const entries = snapshotRecordEntries(
+    options === undefined ? {{}} : options,
+    "options",
+    false,
+    (message, key) => new WasiOptionError(
+      message,
+      "ERR_ELEPHC_WASI_OPTION",
+      key === null ? "options" : "options." + key,
+    ),
+  );
+  const values = Object.create(null);
+  for (const [key, value] of entries) {{
+    if (key !== "args" && key !== "env" && key !== "preopens") {{
+      throw new WasiOptionError(
+        "Invalid WASI option: unknown key " + JSON.stringify(key) + ".",
+        "ERR_ELEPHC_WASI_OPTION",
+        "options." + key,
+      );
+    }}
+    values[key] = value;
+  }}
+  return {{
+    args: validateWasiArguments(values.args === undefined ? ["{package_name}"] : values.args),
+    env: validateWasiEnvironment(values.env === undefined ? {{}} : values.env),
+    preopens: validateWasiPreopens(values.preopens === undefined ? {{}} : values.preopens),
+  }};
 }}
 
 /**
  * Runs the compiled PHP command under Node's WASI preview1 runtime.
  *
- * @param {{ args?: string[], env?: Record<string, string | undefined>, preopens?: Record<string, string> }} options
+ * @param {{ args?: readonly string[], env?: Readonly<Record<string, string | undefined>>, preopens?: Readonly<Record<string, string>> }} options
  * @returns {{Promise<number>}} the WASI process exit code
- * @throws {{WasiArgumentError}} before WASI construction when `args` cannot be
- * represented losslessly
+ * @throws {{WasiOptionError}} before WASI construction when an option cannot be
+ * represented losslessly.
  */
-export async function run({{
-  args = ["{package_name}"],
-  env = process.env,
-  preopens = {{}},
-}} = {{}}) {{
-  validateWasiArguments(args);
+export async function run(options = undefined) {{
+  const {{ args, env, preopens }} = validateRunOptions(options);
   const wasi = new WASI({{
     version: "preview1",
     args,
-    env: Object.fromEntries(
-      Object.entries(env).filter(([, value]) => typeof value === "string"),
-    ),
+    env,
     preopens,
     returnOnExit: true,
   }});
@@ -433,13 +657,19 @@ export async function run({{
   return typeof exitCode === "number" ? exitCode : 0;
 }}
 
-const invokedPath = process.argv[1];
-if (
-  invokedPath &&
-  realpathSync(invokedPath) === realpathSync(fileURLToPath(import.meta.url))
-) {{
+/** Returns false when argv[1] is absent or cannot name a real entry file. */
+function isDirectInvocation(invokedPath) {{
+  if (!invokedPath) return false;
+  try {{
+    return realpathSync(invokedPath) === realpathSync(fileURLToPath(import.meta.url));
+  }} catch {{
+    return false;
+  }}
+}}
+
+if (isDirectInvocation(process.argv[1])) {{
   process.exitCode = await run({{
-    args: [invokedPath, ...process.argv.slice(2)],
+    args: [process.argv[1], ...process.argv.slice(2)],
   }});
 }}
 "#
@@ -448,17 +678,38 @@ if (
 
 /// Returns TypeScript declarations for the generated loader API.
 fn type_declarations() -> &'static str {
-    r#"export declare class WasiArgumentError extends TypeError {
+    r#"export declare class WasiOptionError extends TypeError {
+  readonly name: string;
+  readonly code: string;
+  readonly optionPath: string;
+  constructor(message: string, code?: string, optionPath?: string);
+}
+
+export declare class WasiArgumentError extends WasiOptionError {
   readonly name: "WasiArgumentError";
   readonly code: "ERR_ELEPHC_WASI_ARGUMENT";
   readonly argumentIndex: number | null;
   constructor(message: string, argumentIndex?: number | null);
 }
 
+export declare class WasiEnvironmentError extends WasiOptionError {
+  readonly name: "WasiEnvironmentError";
+  readonly code: "ERR_ELEPHC_WASI_ENVIRONMENT";
+  readonly envKey: string | null;
+  constructor(message: string, envKey?: string | null);
+}
+
+export declare class WasiPreopenError extends WasiOptionError {
+  readonly name: "WasiPreopenError";
+  readonly code: "ERR_ELEPHC_WASI_PREOPEN";
+  readonly guestPath: string | null;
+  constructor(message: string, guestPath?: string | null);
+}
+
 export interface RunOptions {
   args?: readonly string[];
   env?: Readonly<Record<string, string | undefined>>;
-  preopens?: Record<string, string>;
+  preopens?: Readonly<Record<string, string>>;
 }
 
 export declare function run(options?: RunOptions): Promise<number>;
@@ -475,7 +726,12 @@ Node.js WASI package generated by elephc from `{source_stem}.php`.
 Requires Node.js 20 or newer.
 
 ```js
-import {{ run, WasiArgumentError }} from "{package_name}";
+import {{
+  run,
+  WasiArgumentError,
+  WasiEnvironmentError,
+  WasiPreopenError,
+}} from "{package_name}";
 
 const exitCode = await run({{
   args: ["{package_name}", "first-argument"],
@@ -491,6 +747,31 @@ non-string elements, embedded NUL (`U+0000`) code units, and unpaired UTF-16
 surrogates. Rejections use `WasiArgumentError` with
 `code === "ERR_ELEPHC_WASI_ARGUMENT"` and `argumentIndex` set to the invalid
 element index, or `null` when `args` itself is invalid.
+
+For deterministic runs, the environment is empty unless `env` is passed
+explicitly; this intentionally differs from inheriting `process.env`.
+`process.env` is accepted directly despite its TypeScript value union, but any
+own property whose runtime value is actually `undefined` is rejected rather
+than silently filtered. Environment keys and present values must be primitive
+strings; empty keys, `=`, embedded NUL, unpaired surrogates, `undefined`, and
+implicit coercions are rejected with `WasiEnvironmentError`. Preopen guest
+paths must be canonical absolute POSIX
+paths and host paths must already be absolute on the current platform.
+`WasiPreopenError` reports invalid mappings. All inputs are copied once from
+own enumerable data properties before Node constructs WASI, preventing getters
+or later mutation from changing the validated values.
+
+Entries follow ECMAScript own-key order (integer-like keys first, then other
+strings in insertion order). A record cannot contain duplicate keys; only the
+last JavaScript assignment made before `run()` is observable. Empty environment
+values and `=` inside values are valid, while `=` inside keys is not. Every
+`run()` snapshots afresh without shared state. Distinct canonical guest paths
+may map to the same unresolved host path.
+
+A preopen grants the WASI program access to the mapped host path under Node's
+WASI implementation. This loader neither resolves nor verifies that path and
+does not provide a host filesystem sandbox; use Node's permission model and
+least-privilege mappings where appropriate.
 
 ```js
 try {{
@@ -591,31 +872,53 @@ mod tests {
         assert!(loader.contains("new WASI"));
         assert!(loader.contains("version: \"preview1\""));
         assert!(loader.contains("wasi.getImportObject()"));
-        assert!(loader.contains("typeof value === \"string\""));
+        assert!(loader.contains("typeof value !== \"string\""));
         assert!(loader.contains("export async function run"));
-        assert!(loader.contains("export class WasiArgumentError extends TypeError"));
-        assert!(loader.contains("this.code = \"ERR_ELEPHC_WASI_ARGUMENT\""));
+        assert!(loader.contains("export class WasiOptionError extends TypeError"));
+        assert!(loader.contains("export class WasiArgumentError extends WasiOptionError"));
+        assert!(loader.contains("export class WasiEnvironmentError extends WasiOptionError"));
+        assert!(loader.contains("export class WasiPreopenError extends WasiOptionError"));
+        assert!(loader.contains("\"ERR_ELEPHC_WASI_ARGUMENT\""));
+        assert!(loader.contains("\"ERR_ELEPHC_WASI_ENVIRONMENT\""));
+        assert!(loader.contains("\"ERR_ELEPHC_WASI_PREOPEN\""));
         assert!(loader.contains("this.argumentIndex = argumentIndex"));
         assert!(loader.contains("function validateWasiArguments(args)"));
+        assert!(loader.contains("function validateWasiEnvironment(env)"));
+        assert!(loader.contains("function validateWasiPreopens(preopens)"));
+        assert!(loader.contains("function validateRunOptions(options)"));
+        assert!(loader.contains("function isDirectInvocation(invokedPath)"));
+        assert!(loader.contains("catch {\n    return false;"));
+        assert!(loader.contains("Reflect.getOwnPropertyDescriptor"));
+        assert!(loader.contains("Object.freeze(snapshot)"));
+        assert!(loader.contains("isAbsolute(hostPath)"));
         assert!(loader.contains("codeUnit === 0"));
         assert!(loader.contains("codeUnit >= 0xD800 && codeUnit <= 0xDBFF"));
-        assert!(loader.contains("nextCodeUnit >= 0xDC00 && nextCodeUnit <= 0xDFFF"));
+        assert!(loader.contains("next >= 0xDC00 && next <= 0xDFFF"));
         let validation = loader
-            .find("validateWasiArguments(args);")
-            .expect("argument validation call");
+            .find("validateRunOptions(options);")
+            .expect("option validation call");
         let wasi_construction = loader.find("new WASI").expect("WASI construction");
         let module_compilation = loader
             .find("WebAssembly.compile")
             .expect("WebAssembly compilation");
         assert!(
             validation < wasi_construction && validation < module_compilation,
-            "arguments must be validated before any WASI or WebAssembly work"
+            "options must be validated before any WASI or WebAssembly work"
         );
         let declarations =
             fs::read_to_string(package_dir.join("index.d.ts")).expect("read declarations");
         assert!(declarations.contains("string | undefined"));
         assert!(declarations.contains("args?: readonly string[]"));
-        assert!(declarations.contains("export declare class WasiArgumentError extends TypeError"));
+        assert!(declarations.contains(
+            "env?: Readonly<Record<string, string | undefined>>"
+        ));
+        assert!(declarations.contains("preopens?: Readonly<Record<string, string>>"));
+        assert!(declarations.contains("export declare class WasiOptionError extends TypeError"));
+        assert!(declarations.contains(
+            "export declare class WasiArgumentError extends WasiOptionError"
+        ));
+        assert!(declarations.contains("export declare class WasiEnvironmentError"));
+        assert!(declarations.contains("export declare class WasiPreopenError"));
         assert!(declarations.contains("readonly name: \"WasiArgumentError\""));
         assert!(declarations.contains("readonly code: \"ERR_ELEPHC_WASI_ARGUMENT\""));
         assert!(declarations.contains("readonly argumentIndex: number | null"));
@@ -629,6 +932,10 @@ mod tests {
         assert!(readme.contains("ERR_ELEPHC_WASI_ARGUMENT"));
         assert!(readme.contains("embedded NUL (`U+0000`)"));
         assert!(readme.contains("unpaired UTF-16"));
+        assert!(readme.contains("environment is empty unless `env` is passed"));
+        assert!(readme.contains("intentionally differs from inheriting `process.env`"));
+        assert!(readme.contains("runtime value is actually `undefined`"));
+        assert!(readme.contains("does not provide a host filesystem sandbox"));
 
         fs::remove_dir_all(package_dir).expect("remove temporary package");
     }

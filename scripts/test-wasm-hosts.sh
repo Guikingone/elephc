@@ -180,6 +180,13 @@ run_and_assert node-import 0 \
     }
   ' "$FIRST_PACKAGE/package.json" "$FIRST_PACKAGE/index.mjs"
 
+run_and_assert node-import-missing-argv 0 \
+  "$WORK_DIR/expected.stderr" "$WORK_DIR/expected.stderr" \
+  env NODE_NO_WARNINGS=1 node --input-type=module --eval '
+    import { pathToFileURL } from "node:url";
+    await import(pathToFileURL(process.argv[2]));
+  ' "$WORK_DIR/does-not-exist" "$FIRST_PACKAGE/index.mjs"
+
 run_and_assert node-invalid-args 0 \
   "$WORK_DIR/expected.stderr" "$WORK_DIR/expected.stderr" \
   env NODE_NO_WARNINGS=1 node --input-type=module --eval '
@@ -257,6 +264,80 @@ run_and_assert node-invalid-args 0 \
         },
       );
     }
+  ' "$FIRST_PACKAGE/package.json" "$FIRST_PACKAGE/index.mjs"
+
+printf '2|first\n2|first\n2|first\n' >"$WORK_DIR/expected-strict-options.stdout"
+run_and_assert node-strict-options 0 \
+  "$WORK_DIR/expected-strict-options.stdout" "$WORK_DIR/expected.stderr" \
+  env NODE_NO_WARNINGS=1 node --input-type=module --eval '
+    import assert from "node:assert/strict";
+    import { pathToFileURL } from "node:url";
+    const {
+      run,
+      WasiOptionError,
+      WasiArgumentError,
+      WasiEnvironmentError,
+      WasiPreopenError,
+    } = await import(pathToFileURL(process.argv[2]));
+
+    assert.equal(await run({ args: ["host-portability", "first"], env: {} }), 7);
+    assert.equal(
+      await run({ args: ["host-portability", "first"], env: process.env }),
+      7,
+    );
+    assert.equal(
+      await run({
+        args: ["host-portability", "first"],
+        env: { EMPTY: "", EQUALS: "a=b" },
+        preopens: { "/work": process.cwd() },
+      }),
+      7,
+    );
+
+    const failures = [
+      [{ unknown: true }, WasiOptionError, "ERR_ELEPHC_WASI_OPTION", "options.unknown"],
+      [{ env: { BAD: undefined } }, WasiEnvironmentError, "ERR_ELEPHC_WASI_ENVIRONMENT", "env"],
+      [{ env: { "A=B": "x" } }, WasiEnvironmentError, "ERR_ELEPHC_WASI_ENVIRONMENT", "env"],
+      [{ env: { A: "x\0y" } }, WasiEnvironmentError, "ERR_ELEPHC_WASI_ENVIRONMENT", "env"],
+      [{ env: { A: "\uD800" } }, WasiEnvironmentError, "ERR_ELEPHC_WASI_ENVIRONMENT", "env"],
+      [{ preopens: { work: process.cwd() } }, WasiPreopenError, "ERR_ELEPHC_WASI_PREOPEN", "preopens"],
+      [{ preopens: { "/work/../tmp": process.cwd() } }, WasiPreopenError, "ERR_ELEPHC_WASI_PREOPEN", "preopens"],
+      [{ preopens: { "/work": "." } }, WasiPreopenError, "ERR_ELEPHC_WASI_PREOPEN", "preopens"],
+      [{ preopens: { "/work": 1 } }, WasiPreopenError, "ERR_ELEPHC_WASI_PREOPEN", "preopens"],
+    ];
+    for (const [options, ErrorClass, code, optionPath] of failures) {
+      await assert.rejects(run(options), (error) => {
+        assert.ok(error instanceof ErrorClass);
+        assert.ok(error instanceof WasiOptionError);
+        assert.equal(error.code, code);
+        assert.equal(error.optionPath, optionPath);
+        return true;
+      });
+    }
+
+    let argumentGetterCalls = 0;
+    const getterArgs = ["host-portability", "first"];
+    Object.defineProperty(getterArgs, 1, {
+      enumerable: true,
+      get() {
+        argumentGetterCalls += 1;
+        return "changed";
+      },
+    });
+    await assert.rejects(run({ args: getterArgs }), WasiArgumentError);
+    assert.equal(argumentGetterCalls, 0);
+
+    let preopenGetterCalls = 0;
+    const getterPreopens = {};
+    Object.defineProperty(getterPreopens, "/work", {
+      enumerable: true,
+      get() {
+        preopenGetterCalls += 1;
+        return process.cwd();
+      },
+    });
+    await assert.rejects(run({ preopens: getterPreopens }), WasiPreopenError);
+    assert.equal(preopenGetterCalls, 0);
   ' "$FIRST_PACKAGE/package.json" "$FIRST_PACKAGE/index.mjs"
 
 printf '0\n' >"$WORK_DIR/expected-empty-argv.stdout"
