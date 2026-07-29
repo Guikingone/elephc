@@ -236,6 +236,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::FirstClassCallableNew => lower_first_class_callable_new(ctx, &inst),
         Op::Acquire => ownership::lower_acquire(ctx, &inst),
         Op::Release => ownership::lower_release(ctx, &inst),
+        Op::ReleaseUnlessAliases => ownership::lower_release_unless_aliases(ctx, &inst),
         Op::GcCollect => lower_gc_collect(ctx),
         Op::Move | Op::Borrow => ownership::lower_forward(ctx, &inst),
         Op::EchoValue => lower_echo_value(ctx, &inst),
