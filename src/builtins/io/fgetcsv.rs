@@ -8,6 +8,7 @@
 //! - `check` validates the `stream` argument is a stream resource and returns `Array<Str>`.
 //! - `returns: Mixed` is used because the array type cannot be expressed through the
 //!   scalar `returns:` field. Arguments are pre-inferred by the registry before the hook runs.
+//! - PHP 8.4: `escape` defaults to `"\\"` (the `""` RFC 4180 doubling mode is PHP 9.0).
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::errors::CompileError;
@@ -16,7 +17,13 @@ use crate::types::PhpType;
 builtin! {
     name: "fgetcsv",
     area: Io,
-    params: [stream: Mixed, length: Int = DefaultSpec::Null, separator: Str = DefaultSpec::Str(",")],
+    params: [
+        stream: Mixed,
+        length: Int = DefaultSpec::Null,
+        separator: Str = DefaultSpec::Str(","),
+        enclosure: Str = DefaultSpec::Str("\""),
+        escape: Str = DefaultSpec::Str("\\")
+    ],
     returns: Mixed,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(

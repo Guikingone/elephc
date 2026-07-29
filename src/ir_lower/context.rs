@@ -2187,6 +2187,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     fn uses_global_storage(&self, name: &str, kind: LocalKind) -> bool {
         kind == LocalKind::GlobalAlias
             || crate::superglobals::is_superglobal(name)
+            || name == "http_response_header"
             || (self.in_main && self.all_global_var_names.contains(name))
     }
 

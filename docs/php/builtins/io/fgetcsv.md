@@ -2,13 +2,13 @@
 title: "fgetcsv()"
 description: "Gets line from file pointer and parse for CSV fields."
 sidebar:
-  order: 165
+  order: 166
 ---
 
 ## fgetcsv()
 
 ```php
-function fgetcsv(resource $stream, int $length = null, string $separator = ','): array
+function fgetcsv(resource $stream, int $length = null, string $separator = ',', string $enclosure = '"', string $escape = '\\'): array
 ```
 
 Gets line from file pointer and parse for CSV fields.
@@ -17,6 +17,8 @@ Gets line from file pointer and parse for CSV fields.
 - `$stream` (`resource`)
 - `$length` (`int`), default `null`, optional
 - `$separator` (`string`), default `','`, optional
+- `$enclosure` (`string`), default `'"'`, optional
+- `$escape` (`string`), default `'\\'`, optional
 
 **Returns**: `array`
 

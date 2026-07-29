@@ -114,16 +114,85 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     emit_set_bool_slot(emitter, "_meta_key_eof", 3, 32);
     emit_set_int_const(emitter, "_meta_key_unread_bytes", 12);
     emit_set_str_slots(emitter, "_meta_key_stream_type", 11, 56, 64);
-    emit_set_str_const(emitter, "_meta_key_wrapper_type", 12, "_meta_wrapper_plainfile", 9);
+    // -- wrapper_type: read _stream_wrapper_id[fd] and map to the wrapper name literal --
+    emit_set_wrapper_type_aarch64(emitter);
     emit_set_str_slots(emitter, "_meta_key_mode", 4, 40, 48);
     emit_set_bool_slot(emitter, "_meta_key_seekable", 8, 16);
-    emit_set_str_const(emitter, "_meta_key_uri", 3, "_meta_wrapper_plainfile", 0);
+    // -- uri: read _stream_uri_ptr[fd] / _stream_uri_len[fd] (fallback "") --
+    emit_set_uri_aarch64(emitter);
 
     // -- return the completed hash --
     emitter.instruction("ldr x0, [sp, #8]");                                    // load the final hash pointer
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // release the metadata frame
     emitter.instruction("ret");                                                 // return the metadata hash pointer
+}
+
+/// Reads `_stream_wrapper_id[fd]` and loads the matching wrapper-type string
+/// literal into x3 (ptr) / x4 (len) / x5 (tag=1), then inserts the hash entry.
+/// Fallback id 0 (unset) → "plainfile".
+fn emit_set_wrapper_type_aarch64(emitter: &mut Emitter) {
+    let wrappers: &[(&str, i64)] = &[
+        ("_meta_wrapper_plainfile", 9),
+        ("_meta_wrapper_http", 4),
+        ("_meta_wrapper_https", 5),
+        ("_meta_wrapper_ftp", 3),
+        ("_meta_wrapper_ftps", 4),
+        ("_meta_wrapper_phar", 4),
+        ("_meta_wrapper_php", 3),
+        ("_meta_wrapper_data", 4),
+        ("_meta_wrapper_zlib", 12),
+        ("_meta_wrapper_bzip2", 13),
+        ("_meta_wrapper_glob", 4),
+        ("_meta_wrapper_user", 4),
+    ];
+    emitter.instruction("ldr x0, [sp, #0]");                                     // reload fd
+    abi::emit_symbol_address(emitter, "x6", "_stream_wrapper_id");               // wrapper-id table base
+    emitter.instruction("ldrb w7, [x6, x0]");                                     // load wrapper id byte
+    // Compare-and-branch chain: each comparison branches to a label that is
+    // emitted after all comparisons, so the fall-through goes to the next
+    // comparison rather than into the literal-load block.
+    for (id, _) in wrappers.iter().enumerate() {
+        let label = format!("__rt_sgmd_wid_{}", id);
+        emitter.instruction(&format!("cmp w7, #{}", id));                         // compare wrapper id
+        emitter.instruction(&format!("b.eq {}", label));                         // branch to the matching literal load
+    }
+    // Fallback for unknown ids: use plainfile (same as id 0).
+    abi::emit_symbol_address(emitter, "x3", "_meta_wrapper_plainfile");          // fallback wrapper name
+    emitter.instruction("mov x4, #9");                                          // plainfile length
+    emitter.instruction("mov x5, #1");                                          // value tag = string
+    emitter.instruction("b __rt_sgmd_wtype_put");                                // jump to the shared hash insert
+    // Literal-load blocks (emitted after the compare chain).
+    for (id, (sym, len)) in wrappers.iter().enumerate() {
+        let label = format!("__rt_sgmd_wid_{}", id);
+        emitter.label(&label);
+        abi::emit_symbol_address(emitter, "x3", sym);                            // load the wrapper-name literal address
+        emitter.instruction(&format!("mov x4, #{}", len));                        // wrapper-name length
+        emitter.instruction("mov x5, #1");                                       // value tag = string
+        emitter.instruction("b __rt_sgmd_wtype_put");                            // jump to the shared hash insert
+    }
+    emitter.label("__rt_sgmd_wtype_put");
+    emit_hash_put_aarch64(emitter, "_meta_key_wrapper_type", 12);
+}
+
+/// Reads `_stream_uri_ptr[fd]` / `_stream_uri_len[fd]` and loads them into
+/// x3 (ptr) / x4 (len) / x5 (tag=1), then inserts the hash entry.
+/// Fallback (ptr == 0) → empty string.
+fn emit_set_uri_aarch64(emitter: &mut Emitter) {
+    emitter.instruction("ldr x0, [sp, #0]");                                     // reload fd
+    abi::emit_symbol_address(emitter, "x6", "_stream_uri_ptr");                  // uri-ptr table base
+    emitter.instruction("ldr x3, [x6, x0, lsl #3]");                             // x3 = _stream_uri_ptr[fd]
+    abi::emit_symbol_address(emitter, "x6", "_stream_uri_len");                  // uri-len table base
+    emitter.instruction("ldr x4, [x6, x0, lsl #3]");                             // x4 = _stream_uri_len[fd]
+    emitter.instruction("cbz x3, __rt_sgmd_uri_empty");                          // null ptr → empty uri
+    emitter.instruction("mov x5, #1");                                          // value tag = string
+    emitter.instruction("b __rt_sgmd_uri_put");                                  // insert the uri entry
+    emitter.label("__rt_sgmd_uri_empty");
+    emitter.instruction("mov x3, #0");                                          // ptr = null (empty string)
+    emitter.instruction("mov x4, #0");                                          // len = 0
+    emitter.instruction("mov x5, #1");                                          // value tag = string
+    emitter.label("__rt_sgmd_uri_put");
+    emit_hash_put_aarch64(emitter, "_meta_key_uri", 3);
 }
 
 /// Emit one `__rt_hash_set` with the value already staged in x3/x4/x5.
@@ -156,14 +225,6 @@ fn emit_set_int_const(emitter: &mut Emitter, key_sym: &str, key_len: i64) {
     emitter.instruction("mov x3, #0");                                          // value_lo = 0 (elephc keeps no read buffer)
     emitter.instruction("mov x4, #0");                                          // value_hi unused for integers
     emitter.instruction("mov x5, #0");                                          // value tag = int
-    emit_hash_put_aarch64(emitter, key_sym, key_len);
-}
-
-/// Emits the set str const stream runtime helper.
-fn emit_set_str_const(emitter: &mut Emitter, key_sym: &str, key_len: i64, val_sym: &str, val_len: i64) {
-    abi::emit_symbol_address(emitter, "x3", val_sym);                           // load page of the value literal
-    emitter.instruction(&format!("mov x4, #{}", val_len));                      // value_hi = string length
-    emitter.instruction("mov x5, #1");                                          // value tag = string
     emit_hash_put_aarch64(emitter, key_sym, key_len);
 }
 
@@ -265,10 +326,12 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emit_set_bool_slot_x86(emitter, "_meta_key_eof", 3, 40);
     emit_set_int_const_x86(emitter, "_meta_key_unread_bytes", 12);
     emit_set_str_slots_x86(emitter, "_meta_key_stream_type", 11, 64, 72);
-    emit_set_str_const_x86(emitter, "_meta_key_wrapper_type", 12, "_meta_wrapper_plainfile", 9);
+    // -- wrapper_type: read _stream_wrapper_id[fd] and map to the wrapper name literal --
+    emit_set_wrapper_type_x86(emitter);
     emit_set_str_slots_x86(emitter, "_meta_key_mode", 4, 48, 56);
     emit_set_bool_slot_x86(emitter, "_meta_key_seekable", 8, 24);
-    emit_set_str_const_x86(emitter, "_meta_key_uri", 3, "_meta_wrapper_plainfile", 0);
+    // -- uri: read _stream_uri_ptr[fd] / _stream_uri_len[fd] (fallback "") --
+    emit_set_uri_x86(emitter);
 
     // -- return the completed hash --
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the final hash pointer
@@ -310,12 +373,68 @@ fn emit_set_int_const_x86(emitter: &mut Emitter, key_sym: &str, key_len: i64) {
     emit_hash_put_x86(emitter, key_sym, key_len);
 }
 
-/// Emits the set str const x86 stream runtime helper.
-fn emit_set_str_const_x86(emitter: &mut Emitter, key_sym: &str, key_len: i64, val_sym: &str, val_len: i64) {
-    abi::emit_symbol_address(emitter, "rcx", val_sym);                          // value_lo = string pointer
-    emitter.instruction(&format!("mov r8, {}", val_len));                       // value_hi = string length
-    emitter.instruction("mov r9, 1");                                           // value tag = string
-    emit_hash_put_x86(emitter, key_sym, key_len);
+/// Reads `_stream_wrapper_id[fd]` and loads the matching wrapper-type string
+/// literal into rcx (ptr) / r8 (len) / r9 (tag=1), then inserts the hash entry.
+/// Fallback id 0 (unset) → "plainfile".
+fn emit_set_wrapper_type_x86(emitter: &mut Emitter) {
+    let wrappers: &[(&str, i64)] = &[
+        ("_meta_wrapper_plainfile", 9),
+        ("_meta_wrapper_http", 4),
+        ("_meta_wrapper_https", 5),
+        ("_meta_wrapper_ftp", 3),
+        ("_meta_wrapper_ftps", 4),
+        ("_meta_wrapper_phar", 4),
+        ("_meta_wrapper_php", 3),
+        ("_meta_wrapper_data", 4),
+        ("_meta_wrapper_zlib", 12),
+        ("_meta_wrapper_bzip2", 13),
+        ("_meta_wrapper_glob", 4),
+        ("_meta_wrapper_user", 4),
+    ];
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                          // reload fd
+    abi::emit_symbol_address(emitter, "r10", "_stream_wrapper_id");               // wrapper-id table base
+    emitter.instruction("movzx eax, BYTE PTR [r10 + rax]");                      // load wrapper id byte
+    for (id, _) in wrappers.iter().enumerate() {
+        let label = format!("__rt_sgmd_wid_{}_x", id);
+        emitter.instruction(&format!("cmp eax, {}", id));                         // compare wrapper id
+        emitter.instruction(&format!("je {}", label));                            // branch to the matching literal load
+    }
+    // Fallback for unknown ids: use plainfile (same as id 0).
+    abi::emit_symbol_address(emitter, "rcx", "_meta_wrapper_plainfile");          // fallback wrapper name
+    emitter.instruction("mov r8, 9");                                            // plainfile length
+    emitter.instruction("mov r9, 1");                                            // value tag = string
+    emitter.instruction("jmp __rt_sgmd_wtype_put_x");                             // jump to the shared hash insert
+    for (id, (sym, len)) in wrappers.iter().enumerate() {
+        let label = format!("__rt_sgmd_wid_{}_x", id);
+        emitter.label(&label);
+        abi::emit_symbol_address(emitter, "rcx", sym);                            // load the wrapper-name literal address
+        emitter.instruction(&format!("mov r8, {}", len));                         // wrapper-name length
+        emitter.instruction("mov r9, 1");                                        // value tag = string
+        emitter.instruction("jmp __rt_sgmd_wtype_put_x");                         // jump to the shared hash insert
+    }
+    emitter.label("__rt_sgmd_wtype_put_x");
+    emit_hash_put_x86(emitter, "_meta_key_wrapper_type", 12);
+}
+
+/// Reads `_stream_uri_ptr[fd]` / `_stream_uri_len[fd]` and loads them into
+/// rcx (ptr) / r8 (len) / r9 (tag=1), then inserts the hash entry.
+/// Fallback (ptr == 0) → empty string.
+fn emit_set_uri_x86(emitter: &mut Emitter) {
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                          // reload fd
+    abi::emit_symbol_address(emitter, "r10", "_stream_uri_ptr");                  // uri-ptr table base
+    emitter.instruction("mov rcx, QWORD PTR [r10 + rax * 8]");                   // rcx = _stream_uri_ptr[fd]
+    abi::emit_symbol_address(emitter, "r10", "_stream_uri_len");                  // uri-len table base
+    emitter.instruction("mov r8, QWORD PTR [r10 + rax * 8]");                    // r8 = _stream_uri_len[fd]
+    emitter.instruction("test rcx, rcx");                                        // null ptr?
+    emitter.instruction("jz __rt_sgmd_uri_empty_x");                              // → empty uri
+    emitter.instruction("mov r9, 1");                                            // value tag = string
+    emitter.instruction("jmp __rt_sgmd_uri_put_x");                              // insert the uri entry
+    emitter.label("__rt_sgmd_uri_empty_x");
+    emitter.instruction("xor ecx, ecx");                                         // ptr = 0 (empty string)
+    emitter.instruction("xor r8d, r8d");                                         // len = 0
+    emitter.instruction("mov r9, 1");                                            // value tag = string
+    emitter.label("__rt_sgmd_uri_put_x");
+    emit_hash_put_x86(emitter, "_meta_key_uri", 3);
 }
 
 /// Emits the set str slots x86 stream runtime helper.

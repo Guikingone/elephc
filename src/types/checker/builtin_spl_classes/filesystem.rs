@@ -1379,8 +1379,10 @@ fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
                 "fgetcsv",
                 vec![
                     file_stream_expr(),
+                    int_expr(0),
                     var_expr("separator"),
                     var_expr("enclosure"),
+                    var_expr("escape"),
                 ],
             ),
         ),
@@ -1405,6 +1407,7 @@ fn spl_file_object_fputcsv_body() -> Vec<Stmt> {
                     var_expr("fields"),
                     var_expr("separator"),
                     var_expr("enclosure"),
+                    var_expr("escape"),
                 ],
             ),
         ),

@@ -39,7 +39,7 @@ pub(crate) fn lower_file_get_contents(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "file_get_contents", 1)?;
+    super::ensure_arg_count_between(inst, "file_get_contents", 1, 5)?;
     let path = expect_operand(inst, 0)?;
     let path_literal = optional_const_string_operand(ctx, path)?;
     if let Some(path_literal) = path_literal.as_deref() {
@@ -297,7 +297,7 @@ pub(crate) fn lower_hash_file(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 
 /// Lowers `readfile(path)` and boxes the runtime byte-count-or-false result.
 pub(crate) fn lower_readfile(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count(inst, "readfile", 1)?;
+    super::ensure_arg_count_between(inst, "readfile", 1, 3)?;
     let path = expect_operand(inst, 0)?;
     load_string_to_result(ctx, path, "readfile")?;
     emit_readfile_wrapper_dispatch(ctx);
@@ -351,6 +351,8 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         }
         if is_php_memory_stream(path) {
             abi::emit_call_label(ctx.emitter, "__rt_tmpfile");
+            // -- record stream metadata (wrapper_id=6 for php://, URI = literal path) --
+            emit_record_stream_meta_after_fd(ctx, 6, path);
             box_stream_fd_or_false_result(ctx, "fopen");
             return store_if_result(ctx, inst);
         }
@@ -397,6 +399,11 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             ctx.emitter.instruction("mov rsi, rdx");                            // pass the mode length while the filename remains on the stack
             abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
         }
+    }
+    // -- if a $context arg (arg 3) is passed, restore the per-handle options --
+    if inst.operands.len() > 3 {
+        let context = expect_operand(inst, 3)?;
+        restore_stream_context_from_handle(ctx, context)?;
     }
     abi::emit_call_label(ctx.emitter, "__rt_fopen_maybe_phar");
     box_stream_fd_or_false_result(ctx, "fopen");
@@ -573,6 +580,8 @@ fn emit_literal_data_fopen_result(ctx: &mut FunctionContext<'_>, path: &str) -> 
                 }
             }
             abi::emit_call_label(ctx.emitter, "__rt_data_stream");
+            // -- record stream metadata (wrapper_id=7 for data://, URI = literal path) --
+            emit_record_stream_meta_after_fd(ctx, 7, path);
         }
         None => match ctx.emitter.target.arch {
             Arch::AArch64 => {
@@ -699,6 +708,8 @@ fn emit_literal_ftp_fopen_result(ctx: &mut FunctionContext<'_>, path: &str) -> R
                 }
             }
             abi::emit_call_label(ctx.emitter, "__rt_ftp_open");
+            // -- record stream metadata (wrapper_id=3 for ftp://, URI = literal path) --
+            emit_record_stream_meta_after_fd(ctx, 3, path);
         }
         None => match ctx.emitter.target.arch {
             Arch::AArch64 => {
@@ -746,7 +757,32 @@ fn lower_literal_http_fopen(
     path: &str,
 ) -> Result<()> {
     emit_literal_http_fopen_result(ctx, path)?;
-    store_if_result(ctx, inst)
+    store_if_result(ctx, inst)?;
+    // -- populate $http_response_header from the last HTTP response --
+    // After store_if_result, x0/rax is free. Call the helper, box the result
+    // as a Mixed(array), and store it into the global slot.
+    let hdr_symbol = crate::names::ir_global_symbol("http_response_header");
+    abi::emit_call_label(ctx.emitter, "__rt_get_http_response_headers");
+    // Box the raw array pointer as Mixed(tag=4, array_ptr).
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                              // payload_lo = array pointer
+            ctx.emitter.instruction("mov x2, #0");                              // payload_hi = 0
+            ctx.emitter.instruction("mov x0, #4");                              // tag = 4 (indexed array)
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");        // x0 = Mixed(array)
+            abi::emit_symbol_address(ctx.emitter, "x9", &hdr_symbol);
+            ctx.emitter.instruction("str x0, [x9]");                            // store the boxed Mixed into the global
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // payload_lo = array pointer
+            ctx.emitter.instruction("xor esi, esi");                            // payload_hi = 0
+            ctx.emitter.instruction("mov eax, 4");                              // tag = 4 (indexed array)
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");        // rax = Mixed(array)
+            abi::emit_symbol_address(ctx.emitter, "r9", &hdr_symbol);
+            ctx.emitter.instruction("mov QWORD PTR [r9], rax");                 // store the boxed Mixed into the global
+        }
+    }
+    Ok(())
 }
 
 /// Emits the boxed result for a literal `http://` stream open.
@@ -769,6 +805,8 @@ fn emit_literal_http_fopen_result(ctx: &mut FunctionContext<'_>, path: &str) -> 
                     abi::emit_symbol_address(ctx.emitter, "x2", "_http_req_scratch");
                     abi::emit_pop_reg(ctx.emitter, "x3");
                     abi::emit_call_label(ctx.emitter, "__rt_http_open");
+                    // -- record stream metadata (wrapper_id=1 for http://, URI = literal path) --
+                    emit_record_stream_meta_after_fd(ctx, 1, path);
                 }
                 Arch::X86_64 => {
                     abi::emit_symbol_address(ctx.emitter, "rdi", &host_sym);
@@ -782,6 +820,8 @@ fn emit_literal_http_fopen_result(ctx: &mut FunctionContext<'_>, path: &str) -> 
                     abi::emit_symbol_address(ctx.emitter, "rdx", "_http_req_scratch");
                     abi::emit_pop_reg(ctx.emitter, "rcx");
                     abi::emit_call_label(ctx.emitter, "__rt_http_open");
+                    // -- record stream metadata (wrapper_id=1 for http://, URI = literal path) --
+                    emit_record_stream_meta_after_fd(ctx, 1, path);
                 }
             }
         }
@@ -1059,6 +1099,11 @@ pub(crate) fn lower_stream_wrapper_restore(
 }
 
 /// Lowers `stream_context_create(options?, params?)`.
+///
+/// Stores the options hash in both the global `_stream_context_options` slot
+/// (for immediate consumers) and a per-handle `_stream_context_table[id]` slot
+/// (so `fopen(..., $context)` can restore it later). Returns a unique context
+/// id (1..=16) as the resource handle.
 pub(crate) fn lower_stream_context_create(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -1068,7 +1113,46 @@ pub(crate) fn lower_stream_context_create(
         store_stream_context_options(ctx, options, true)?;
     }
     capture_stream_notification_callback(ctx, inst.operands.get(1).copied())?;
-    emit_fd_result(ctx, 1);
+    // -- allocate a context id and store the options hash in the per-handle table --
+    // The options hash pointer is already in _stream_context_options (stored above).
+    // We read it back, increment _stream_context_next_id, and store the hash at
+    // _stream_context_table[id].
+    let wrap_label = ctx.next_label("sctx_wrap");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // -- increment next_id (1..=16, wrap to 1) --
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_next_id");
+            ctx.emitter.instruction("ldr x0, [x9]");                               // load current next_id
+            ctx.emitter.instruction("add x0, x0, #1");                             // increment
+            ctx.emitter.instruction("cmp x0, #17");                                // wrapped past 16?
+            ctx.emitter.instruction(&format!("b.ne {}", wrap_label));             // skip wrap
+            ctx.emitter.instruction("mov x0, #1");                                  // wrap to 1
+            ctx.emitter.label(&wrap_label);
+            ctx.emitter.instruction("str x0, [x9]");                               // store new next_id
+            // -- store the options hash at _stream_context_table[id] --
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_options");
+            ctx.emitter.instruction("ldr x1, [x9]");                               // load the options hash pointer
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_table");
+            ctx.emitter.instruction("str x1, [x9, x0, lsl #3]");                   // _stream_context_table[id] = hash
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_context_next_id");
+            ctx.emitter.instruction("mov rax, QWORD PTR [r9]");                    // load current next_id
+            ctx.emitter.instruction("add rax, 1");                                 // increment
+            ctx.emitter.instruction("cmp rax, 17");                                 // wrapped past 16?
+            ctx.emitter.instruction(&format!("jne {}", wrap_label));              // skip wrap
+            ctx.emitter.instruction("mov rax, 1");                                 // wrap to 1
+            ctx.emitter.label(&wrap_label);
+            ctx.emitter.instruction("mov QWORD PTR [r9], rax");                    // store new next_id
+            // -- store the options hash at _stream_context_table[id] --
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_context_options");
+            ctx.emitter.instruction("mov rcx, QWORD PTR [r9]");                    // load the options hash pointer
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_context_table");
+            ctx.emitter.instruction("mov QWORD PTR [r9 + rax * 8], rcx");           // _stream_context_table[id] = hash
+        }
+    }
+    // -- the result is the context id (in x0/rax), box it as a resource --
+    box_stream_fd_or_false_result_kind(ctx, "stream_context_create", 9);
     store_if_result(ctx, inst)
 }
 
@@ -1100,8 +1184,11 @@ pub(crate) fn lower_stream_context_set_option(
     ensure_arg_count_between(inst, "stream_context_set_option", 2, 4)?;
     match inst.operands.len() {
         2 => {
+            let context = expect_operand(inst, 0)?;
             let options = expect_operand(inst, 1)?;
             store_stream_context_options(ctx, options, false)?;
+            // -- also update the per-handle table so fopen($context) restores the right hash --
+            update_stream_context_table_from_handle(ctx, context);
             emit_bool_result(ctx, true);
         }
         4 => {
@@ -1487,7 +1574,9 @@ pub(crate) fn lower_stream_get_transports(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `stream_get_filters()` to the static built-in filter list.
+/// Lowers `stream_get_filters()` to the static built-in filter list, then
+/// appends user-registered filter names via the `__rt_stream_get_filters`
+/// runtime helper.
 pub(crate) fn lower_stream_get_filters(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -1512,6 +1601,8 @@ pub(crate) fn lower_stream_get_filters(
             "bzip2.decompress",
         ],
     );
+    // -- append user-registered filter names from the runtime registry --
+    abi::emit_call_label(ctx.emitter, "__rt_stream_get_filters");
     store_if_result(ctx, inst)
 }
 
@@ -1551,6 +1642,12 @@ pub(crate) fn lower_stream_filter_attach(
     name: &str,
 ) -> Result<()> {
     ensure_arg_count_between(inst, name, 2, 4)?;
+    // -- for prepend: shift the current slot-0 filter to slot 1 before attaching --
+    if name == "stream_filter_prepend" {
+        let stream = expect_operand(inst, 0)?;
+        let mode = inst.operands.get(2).copied();
+        emit_filter_prepend_shift(ctx, stream, mode)?;
+    }
     let filter = expect_operand(inst, 1)?;
     if let Some(filter_name) = optional_const_string_operand(ctx, filter)? {
         if filter_name == "zlib.deflate" {
@@ -1744,7 +1841,7 @@ fn lower_literal_compress_zlib_fopen(
     path: &str,
 ) -> Result<()> {
     let underlying = path.strip_prefix("compress.zlib://").unwrap_or("");
-    emit_literal_compress_wrapper_fopen(ctx, inst, underlying, CompressWrapper::Zlib)
+    emit_literal_compress_wrapper_fopen(ctx, inst, underlying, path, CompressWrapper::Zlib)
 }
 
 /// Lowers `fopen("compress.bzip2://<path>", ...)` for a compile-time literal path.
@@ -1756,7 +1853,7 @@ fn lower_literal_compress_bzip2_fopen(
     path: &str,
 ) -> Result<()> {
     let underlying = path.strip_prefix("compress.bzip2://").unwrap_or("");
-    emit_literal_compress_wrapper_fopen(ctx, inst, underlying, CompressWrapper::Bzip2)
+    emit_literal_compress_wrapper_fopen(ctx, inst, underlying, path, CompressWrapper::Bzip2)
 }
 
 /// Selects which read-direction decompressor a `compress.*://` fopen wrapper attaches.
@@ -1774,6 +1871,7 @@ fn emit_literal_compress_wrapper_fopen(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     underlying: &str,
+    full_uri: &str,
     kind: CompressWrapper,
 ) -> Result<()> {
     if underlying.is_empty() {
@@ -1812,8 +1910,14 @@ fn emit_literal_compress_wrapper_fopen(
         }
     }
     match kind {
-        CompressWrapper::Zlib => emit_zlib_inflate_attach_in_place(ctx),
-        CompressWrapper::Bzip2 => emit_bzip2_decompress_attach_in_place(ctx),
+        CompressWrapper::Zlib => {
+            emit_record_stream_meta_after_fd(ctx, 8, full_uri);
+            emit_zlib_inflate_attach_in_place(ctx);
+        }
+        CompressWrapper::Bzip2 => {
+            emit_record_stream_meta_after_fd(ctx, 9, full_uri);
+            emit_bzip2_decompress_attach_in_place(ctx);
+        }
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", done_label)), // skip false boxing after attaching the decompressor
@@ -1948,16 +2052,22 @@ pub(crate) fn lower_stream_filter_remove(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(ctx.emitter, "x9", "_stream_read_filters");
-            ctx.emitter.instruction("strb wzr, [x9, x0]");                      // clear the read-direction filter slot for this descriptor
+            ctx.emitter.instruction("strb wzr, [x9, x0]");                      // clear the read-direction slot 0
+            ctx.emitter.instruction("add x10, x0, #256");                        // fd+256 (slot 1)
+            ctx.emitter.instruction("strb wzr, [x9, x10]");                     // clear the read-direction slot 1
             abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_filters");
-            ctx.emitter.instruction("strb wzr, [x9, x0]");                      // clear the write-direction filter slot for this descriptor
+            ctx.emitter.instruction("strb wzr, [x9, x0]");                      // clear the write-direction slot 0
+            ctx.emitter.instruction("strb wzr, [x9, x10]");                     // clear the write-direction slot 1
             ctx.emitter.instruction("mov x0, #1");                              // return true after removing the filter state
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(ctx.emitter, "r9", "_stream_read_filters"); // read-filter table base
-            ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");              // clear the read-direction filter slot for this descriptor
+            ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");              // clear the read-direction slot 0
+            ctx.emitter.instruction("lea r10, [rax + 256]");                     // fd+256 (slot 1)
+            ctx.emitter.instruction("mov BYTE PTR [r9 + r10], 0");              // clear the read-direction slot 1
             abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_filters"); // write-filter table base
-            ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");              // clear the write-direction filter slot for this descriptor
+            ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");              // clear the write-direction slot 0
+            ctx.emitter.instruction("mov BYTE PTR [r9 + r10], 0");              // clear the write-direction slot 1
             ctx.emitter.instruction("mov eax, 1");                              // return true after removing the filter state
         }
     }
@@ -2098,14 +2208,63 @@ pub(crate) fn lower_stream_bucket_append_or_prepend(
 }
 
 /// Lowers `stream_is_local(stream)` as a true predicate after evaluating its argument.
+/// Lowers `stream_is_local(stream_or_path)` — returns false for http/https/ftp/ftps.
 pub(crate) fn lower_stream_is_local(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "stream_is_local", 1)?;
     let stream = expect_operand(inst, 0)?;
-    ctx.load_value_to_result(stream)?;
-    emit_bool_result(ctx, true);
+    // If the arg is a string literal, check the scheme prefix at compile time.
+    if let Some(path) = optional_const_string_operand(ctx, stream)? {
+        let is_local = !(path.starts_with("http://")
+            || path.starts_with("https://")
+            || path.starts_with("ftp://")
+            || path.starts_with("ftps://"));
+        emit_bool_result(ctx, is_local);
+        return store_if_result(ctx, inst);
+    }
+    // For a resource arg, check the wrapper_id from _stream_wrapper_id[fd].
+    // Wrappers 1 (http), 2 (https), 3 (ftp), 4 (ftps) are non-local; all others are local.
+    let is_remote_label = ctx.next_label("sil_remote");
+    let done_label = ctx.next_label("sil_done");
+    load_stream_fd_to_result(ctx, stream, "stream_is_local")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_wrapper_id");
+            ctx.emitter.instruction("ldrb w10, [x9, x0]");
+            ctx.emitter.instruction("cmp w10, #1");
+            ctx.emitter.instruction(&format!("b.eq {}", is_remote_label));
+            ctx.emitter.instruction("cmp w10, #2");
+            ctx.emitter.instruction(&format!("b.eq {}", is_remote_label));
+            ctx.emitter.instruction("cmp w10, #3");
+            ctx.emitter.instruction(&format!("b.eq {}", is_remote_label));
+            ctx.emitter.instruction("cmp w10, #4");
+            ctx.emitter.instruction(&format!("b.eq {}", is_remote_label));
+            ctx.emitter.instruction("mov x0, #1");
+            ctx.emitter.instruction(&format!("b {}", done_label));
+            ctx.emitter.label(&is_remote_label);
+            ctx.emitter.instruction("mov x0, #0");
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_wrapper_id");
+            ctx.emitter.instruction("movzx eax, BYTE PTR [r9 + rax]");
+            ctx.emitter.instruction("cmp eax, 1");
+            ctx.emitter.instruction(&format!("je {}", is_remote_label));
+            ctx.emitter.instruction("cmp eax, 2");
+            ctx.emitter.instruction(&format!("je {}", is_remote_label));
+            ctx.emitter.instruction("cmp eax, 3");
+            ctx.emitter.instruction(&format!("je {}", is_remote_label));
+            ctx.emitter.instruction("cmp eax, 4");
+            ctx.emitter.instruction(&format!("je {}", is_remote_label));
+            ctx.emitter.instruction("mov eax, 1");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));
+            ctx.emitter.label(&is_remote_label);
+            ctx.emitter.instruction("xor eax, eax");
+            ctx.emitter.label(&done_label);
+        }
+    }
     store_if_result(ctx, inst)
 }
 
@@ -2373,7 +2532,7 @@ pub(crate) fn lower_stream_socket_server(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "stream_socket_server", 1)?;
+    ensure_arg_count_between(inst, "stream_socket_server", 1, 6)?;
     let address = expect_operand(inst, 0)?;
     load_string_to_result(ctx, address, "stream_socket_server address")?;
     match ctx.emitter.target.arch {
@@ -2396,7 +2555,7 @@ pub(crate) fn lower_stream_socket_client(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "stream_socket_client", 1)?;
+    ensure_arg_count_between(inst, "stream_socket_client", 1, 7)?;
     let address = expect_operand(inst, 0)?;
     load_string_to_result(ctx, address, "stream_socket_client address")?;
     match ctx.emitter.target.arch {
@@ -2987,37 +3146,214 @@ pub(crate) fn lower_fgetc(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     store_if_result(ctx, inst)
 }
 
-/// Lowers `fgetcsv(stream, separator?, enclosure?)` through the CSV row runtime helper.
+/// Lowers `fgetcsv(stream, length?, separator?, enclosure?, escape?)` through the CSV row
+/// runtime helper, passing separator/enclosure/escape as a packed `csv_opts` word.
 pub(crate) fn lower_fgetcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count_between(inst, "fgetcsv", 1, 3)?;
+    ensure_arg_count_between(inst, "fgetcsv", 1, 5)?;
     let stream = expect_operand(inst, 0)?;
+    let arch = ctx.emitter.target.arch;
     load_stream_fd_to_result(ctx, stream, "fgetcsv")?;
-    if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the stream fd to the x86_64 fgetcsv runtime helper
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));            // save stream fd on stack
+
+    // -- extract first byte of separator / enclosure / escape (or default) --
+    let csv_indices: [(usize, u8, &str); 3] = [
+        (2, b',', "fgetcsv separator"),
+        (3, b'"', "fgetcsv enclosure"),
+        (4, b'\\', "fgetcsv escape"),
+    ];
+    for (idx, default, name) in csv_indices {
+        if inst.operands.len() > idx {
+            let v = expect_operand(inst, idx)?;
+            load_string_to_result(ctx, v, name)?;
+            let empty_label = ctx.next_label("csv_empty");
+            let done_label = ctx.next_label("csv_done");
+            match arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!("cbz x2, {}", empty_label)); // branch if string is empty
+                    ctx.emitter.instruction("ldrb w0, [x1]");                     // load first byte of the CSV delimiter string
+                    ctx.emitter.instruction(&format!("b {}", done_label));       // skip the empty-string fallback
+                    ctx.emitter.label(&empty_label);
+                    ctx.emitter.instruction("mov w0, #0");                       // use zero byte when the string is empty
+                    ctx.emitter.label(&done_label);
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("test rdx, rdx");                    // check string length for the CSV delimiter
+                    ctx.emitter.instruction(&format!("jz {}", empty_label));    // branch if string is empty
+                    ctx.emitter.instruction("movzx eax, BYTE PTR [rax]");        // load first byte of the CSV delimiter string
+                    ctx.emitter.instruction(&format!("jmp {}", done_label));   // skip the empty-string fallback
+                    ctx.emitter.label(&empty_label);
+                    ctx.emitter.instruction("mov eax, 0");                      // use zero byte when the string is empty
+                    ctx.emitter.label(&done_label);
+                }
+            }
+        } else {
+            match arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!("mov w0, #{}", default));  // use default CSV delimiter byte
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(&format!("mov eax, {}", default));  // use default CSV delimiter byte
+                }
+            }
+        }
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));        // save extracted delimiter byte
     }
-    abi::emit_call_label(ctx.emitter, "__rt_fgetcsv");
+
+    // -- pack csv_opts = (esc << 16) | (enc << 8) | sep --
+    match arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg(ctx.emitter, "x1");                                // pop escape byte
+            ctx.emitter.instruction("lsl x1, x1, #16");                         // shift escape to bits 16..23
+            abi::emit_pop_reg(ctx.emitter, "x0");                                // pop enclosure byte
+            ctx.emitter.instruction("orr x1, x1, x0, lsl #8");                  // include enclosure in csv_opts
+            abi::emit_pop_reg(ctx.emitter, "x0");                                // pop separator byte
+            ctx.emitter.instruction("orr x1, x1, x0");                          // complete csv_opts in x1
+            abi::emit_pop_reg(ctx.emitter, "x0");                                // restore stream fd into x0
+        }
+        Arch::X86_64 => {
+            abi::emit_pop_reg(ctx.emitter, "rax");                               // pop escape byte
+            ctx.emitter.instruction("shl rax, 16");                             // shift escape to bits 16..23
+            ctx.emitter.instruction("mov rsi, rax");                             // start accumulating csv_opts
+            abi::emit_pop_reg(ctx.emitter, "rax");                               // pop enclosure byte
+            ctx.emitter.instruction("shl rax, 8");                              // shift enclosure to bits 8..15
+            ctx.emitter.instruction("or rsi, rax");                             // include enclosure in csv_opts
+            abi::emit_pop_reg(ctx.emitter, "rax");                               // pop separator byte
+            ctx.emitter.instruction("or rsi, rax");                             // complete csv_opts in rsi
+            abi::emit_pop_reg(ctx.emitter, "rdi");                               // restore stream fd into rdi
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_fgetcsv");                           // call the CSV row parser runtime
     store_if_result(ctx, inst)
 }
 
-/// Lowers `fputcsv(stream, fields, separator?, enclosure?)` for string arrays.
+/// Lowers `fputcsv(stream, fields, separator?, enclosure?, escape?, eol?)` for string arrays,
+/// passing separator/enclosure/escape as a packed `csv_opts` word and eol as (ptr, len).
 pub(crate) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count_between(inst, "fputcsv", 2, 4)?;
+    ensure_arg_count_between(inst, "fputcsv", 2, 6)?;
     let stream = expect_operand(inst, 0)?;
     let fields = expect_operand(inst, 1)?;
+    let arch = ctx.emitter.target.arch;
+
     load_stream_fd_to_result(ctx, stream, "fputcsv")?;
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));            // save stream fd on stack
     require_string_array(ctx.load_value_to_result(fields)?.codegen_repr(), "fputcsv fields")?;
-    match ctx.emitter.target.arch {
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));            // save fields array pointer
+
+    // -- extract first byte of separator / enclosure / escape (or default) --
+    let csv_indices: [(usize, u8, &str); 3] = [
+        (2, b',', "fputcsv separator"),
+        (3, b'"', "fputcsv enclosure"),
+        (4, 0, "fputcsv escape"),
+    ];
+    for (idx, default, name) in csv_indices {
+        if inst.operands.len() > idx {
+            let v = expect_operand(inst, idx)?;
+            load_string_to_result(ctx, v, name)?;
+            let empty_label = ctx.next_label("csv_empty");
+            let done_label = ctx.next_label("csv_done");
+            match arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!("cbz x2, {}", empty_label)); // branch if string is empty
+                    ctx.emitter.instruction("ldrb w0, [x1]");                     // load first byte of the CSV delimiter string
+                    ctx.emitter.instruction(&format!("b {}", done_label));       // skip the empty-string fallback
+                    ctx.emitter.label(&empty_label);
+                    ctx.emitter.instruction("mov w0, #0");                       // use zero byte when the string is empty
+                    ctx.emitter.label(&done_label);
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("test rdx, rdx");                    // check string length for the CSV delimiter
+                    ctx.emitter.instruction(&format!("jz {}", empty_label));    // branch if string is empty
+                    ctx.emitter.instruction("movzx eax, BYTE PTR [rax]");        // load first byte of the CSV delimiter string
+                    ctx.emitter.instruction(&format!("jmp {}", done_label));   // skip the empty-string fallback
+                    ctx.emitter.label(&empty_label);
+                    ctx.emitter.instruction("mov eax, 0");                      // use zero byte when the string is empty
+                    ctx.emitter.label(&done_label);
+                }
+            }
+        } else {
+            match arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!("mov w0, #{}", default));  // use default CSV delimiter byte
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(&format!("mov eax, {}", default));  // use default CSV delimiter byte
+                }
+            }
+        }
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));        // save extracted delimiter byte
+    }
+
+    // -- pack csv_opts = (esc << 16) | (enc << 8) | sep --
+    match arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x1, x0");                              // pass the string-array pointer to the fputcsv runtime helper
-            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_pop_reg(ctx.emitter, "x2");                                // pop escape byte
+            ctx.emitter.instruction("lsl x2, x2, #16");                         // shift escape to bits 16..23
+            abi::emit_pop_reg(ctx.emitter, "x0");                                // pop enclosure byte
+            ctx.emitter.instruction("orr x2, x2, x0, lsl #8");                  // include enclosure in csv_opts
+            abi::emit_pop_reg(ctx.emitter, "x0");                                // pop separator byte
+            ctx.emitter.instruction("orr x2, x2, x0");                          // complete csv_opts in x2
+            abi::emit_push_reg(ctx.emitter, "x2");                              // save packed csv_opts
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rsi, rax");                            // pass the string-array pointer to the fputcsv runtime helper
-            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_pop_reg(ctx.emitter, "rax");                               // pop escape byte
+            ctx.emitter.instruction("shl rax, 16");                             // shift escape to bits 16..23
+            ctx.emitter.instruction("mov rdx, rax");                            // start accumulating csv_opts
+            abi::emit_pop_reg(ctx.emitter, "rax");                               // pop enclosure byte
+            ctx.emitter.instruction("shl rax, 8");                              // shift enclosure to bits 8..15
+            ctx.emitter.instruction("or rdx, rax");                             // include enclosure in csv_opts
+            abi::emit_pop_reg(ctx.emitter, "rax");                               // pop separator byte
+            ctx.emitter.instruction("or rdx, rax");                             // complete csv_opts in rdx
+            abi::emit_push_reg(ctx.emitter, "rdx");                             // save packed csv_opts
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_fputcsv");
+
+    // -- push eol (ptr, len) or (0, 0) for default --
+    if inst.operands.len() > 5 {
+        let eol = expect_operand(inst, 5)?;
+        load_string_to_result(ctx, eol, "fputcsv eol")?;
+        match arch {
+            Arch::AArch64 => {
+                abi::emit_push_reg(ctx.emitter, "x1");                          // save eol string pointer
+                abi::emit_push_reg(ctx.emitter, "x2");                          // save eol string length
+            }
+            Arch::X86_64 => {
+                abi::emit_push_reg(ctx.emitter, "rax");                         // save eol string pointer
+                abi::emit_push_reg(ctx.emitter, "rdx");                         // save eol string length
+            }
+        }
+    } else {
+        match arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x0, #0");                          // null eol pointer signals default newline
+                abi::emit_push_reg(ctx.emitter, "x0");                          // push eol ptr
+                abi::emit_push_reg(ctx.emitter, "x0");                          // push eol len
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rax, 0");                          // null eol pointer signals default newline
+                abi::emit_push_reg(ctx.emitter, "rax");                         // push eol ptr
+                abi::emit_push_reg(ctx.emitter, "rax");                         // push eol len
+            }
+        }
+    }
+
+    // -- pop all into ABI registers: fd, arr, csv_opts, eol_ptr, eol_len --
+    match arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg(ctx.emitter, "x4");                                // eol length -> arg5
+            abi::emit_pop_reg(ctx.emitter, "x3");                                // eol pointer -> arg4
+            abi::emit_pop_reg(ctx.emitter, "x2");                                // csv_opts -> arg3
+            abi::emit_pop_reg(ctx.emitter, "x1");                                // fields array -> arg2
+            abi::emit_pop_reg(ctx.emitter, "x0");                                // stream fd -> arg1
+        }
+        Arch::X86_64 => {
+            abi::emit_pop_reg(ctx.emitter, "r8");                                // eol length -> arg5
+            abi::emit_pop_reg(ctx.emitter, "rcx");                               // eol pointer -> arg4
+            abi::emit_pop_reg(ctx.emitter, "rdx");                               // csv_opts -> arg3
+            abi::emit_pop_reg(ctx.emitter, "rsi");                               // fields array -> arg2
+            abi::emit_pop_reg(ctx.emitter, "rdi");                               // stream fd -> arg1
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_fputcsv");                           // call the CSV row writer runtime
     store_if_result(ctx, inst)
 }
 
@@ -3724,7 +4060,7 @@ pub(crate) fn lower_file_put_contents(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "file_put_contents", 2)?;
+    super::ensure_arg_count_between(inst, "file_put_contents", 2, 4)?;
     let path = expect_operand(inst, 0)?;
     let data = expect_operand(inst, 1)?;
     let path_literal = optional_const_string_operand(ctx, path)?;
@@ -6595,7 +6931,7 @@ fn optional_const_i64_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Resu
 fn lower_builtin_stream_filter_attach(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
-    id: u8,
+    filter_id: u8,
 ) -> Result<()> {
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "stream_filter_append")?;
@@ -6609,14 +6945,29 @@ fn lower_builtin_stream_filter_attach(
             ctx.emitter.instruction("tst x0, #1");                              // test whether STREAM_FILTER_READ is enabled
             ctx.emitter.instruction(&format!("b.eq {}", skip_read));            // skip the read-filter table when the read bit is clear
             abi::emit_symbol_address(ctx.emitter, "x9", "_stream_read_filters");
-            ctx.emitter.instruction(&format!("mov w10, #{}", id));              // materialize the built-in stream-filter id
-            ctx.emitter.instruction("strb w10, [x9, x1]");                      // record the read filter for this descriptor
+            ctx.emitter.instruction(&format!("mov w10, #{}", filter_id));              // materialize the built-in stream-filter id
+            // -- append logic: write to slot 0 if empty, else slot 1 (fd+256) --
+            let slot1_read = ctx.next_label("sf_slot1_read");
+            ctx.emitter.instruction("ldrb w11, [x9, x1]");                      // check if slot 0 is occupied
+            ctx.emitter.instruction(&format!("cbnz w11, {}", slot1_read));      // slot 0 taken → write to slot 1
+            ctx.emitter.instruction("strb w10, [x9, x1]");                      // slot 0 is free → write here
+            ctx.emitter.instruction(&format!("b {}", skip_read));               // done with read filter
+            ctx.emitter.label(&slot1_read);
+            ctx.emitter.instruction("add x12, x1, #256");                        // fd+256 (slot 1)
+            ctx.emitter.instruction("strb w10, [x9, x12]");                     // write to slot 1
             ctx.emitter.label(&skip_read);
             ctx.emitter.instruction("tst x0, #2");                              // test whether STREAM_FILTER_WRITE is enabled
             ctx.emitter.instruction(&format!("b.eq {}", skip_write));           // skip the write-filter table when the write bit is clear
             abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_filters");
-            ctx.emitter.instruction(&format!("mov w10, #{}", id));              // materialize the built-in stream-filter id
-            ctx.emitter.instruction("strb w10, [x9, x1]");                      // record the write filter for this descriptor
+            ctx.emitter.instruction(&format!("mov w10, #{}", filter_id));              // materialize the built-in stream-filter id
+            let slot1_write = ctx.next_label("sf_slot1_write");
+            ctx.emitter.instruction("ldrb w11, [x9, x1]");                      // check if slot 0 is occupied
+            ctx.emitter.instruction(&format!("cbnz w11, {}", slot1_write));     // slot 0 taken → write to slot 1
+            ctx.emitter.instruction("strb w10, [x9, x1]");                      // slot 0 is free → write here
+            ctx.emitter.instruction(&format!("b {}", skip_write));              // done with write filter
+            ctx.emitter.label(&slot1_write);
+            ctx.emitter.instruction("add x12, x1, #256");                        // fd+256 (slot 1)
+            ctx.emitter.instruction("strb w10, [x9, x12]");                     // write to slot 1
             ctx.emitter.label(&skip_write);
             ctx.emitter.instruction("mov x0, x1");                              // move the descriptor into the resource payload register
         }
@@ -6625,12 +6976,28 @@ fn lower_builtin_stream_filter_attach(
             ctx.emitter.instruction("test rax, 1");                             // test whether STREAM_FILTER_READ is enabled
             ctx.emitter.instruction(&format!("jz {}", skip_read));              // skip the read-filter table when the read bit is clear
             abi::emit_symbol_address(ctx.emitter, "r9", "_stream_read_filters"); // read-filter table base
-            ctx.emitter.instruction(&format!("mov BYTE PTR [r9 + rcx], {}", id)); // record the read filter for this descriptor
+            ctx.emitter.instruction(&format!("mov r10b, {}", filter_id));              // materialize the built-in stream-filter id (low byte)
+            let slot1_read = ctx.next_label("sf_slot1_read_x");
+            ctx.emitter.instruction("movzx r11d, BYTE PTR [r9 + rcx]");         // check if slot 0 is occupied
+            ctx.emitter.instruction(&format!("jnz {}", slot1_read));            // slot 0 taken → write to slot 1
+            ctx.emitter.instruction(&format!("mov BYTE PTR [r9 + rcx], {}", filter_id)); // slot 0 is free → write here
+            ctx.emitter.instruction(&format!("jmp {}", skip_read));             // done with read filter
+            ctx.emitter.label(&slot1_read);
+            ctx.emitter.instruction("lea r11, [rcx + 256]");                     // fd+256 (slot 1)
+            ctx.emitter.instruction(&format!("mov BYTE PTR [r9 + r11], {}", filter_id)); // write to slot 1
             ctx.emitter.label(&skip_read);
             ctx.emitter.instruction("test rax, 2");                             // test whether STREAM_FILTER_WRITE is enabled
             ctx.emitter.instruction(&format!("jz {}", skip_write));             // skip the write-filter table when the write bit is clear
             abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_filters"); // write-filter table base
-            ctx.emitter.instruction(&format!("mov BYTE PTR [r9 + rcx], {}", id)); // record the write filter for this descriptor
+            ctx.emitter.instruction(&format!("mov r10b, {}", filter_id));              // materialize the built-in stream-filter id (low byte)
+            let slot1_write = ctx.next_label("sf_slot1_write_x");
+            ctx.emitter.instruction("movzx r11d, BYTE PTR [r9 + rcx]");         // check if slot 0 is occupied
+            ctx.emitter.instruction(&format!("jnz {}", slot1_write));           // slot 0 taken → write to slot 1
+            ctx.emitter.instruction(&format!("mov BYTE PTR [r9 + rcx], {}", filter_id)); // slot 0 is free → write here
+            ctx.emitter.instruction(&format!("jmp {}", skip_write));            // done with write filter
+            ctx.emitter.label(&slot1_write);
+            ctx.emitter.instruction("lea r11, [rcx + 256]");                     // fd+256 (slot 1)
+            ctx.emitter.instruction(&format!("mov BYTE PTR [r9 + r11], {}", filter_id)); // write to slot 1
             ctx.emitter.label(&skip_write);
             ctx.emitter.instruction("mov rax, rcx");                            // move the descriptor into the resource payload register
         }
@@ -7857,6 +8224,97 @@ fn store_stream_context_options_x86_64(ctx: &mut FunctionContext<'_>, clear_on_n
     ctx.emitter.label(&skip_label);
 }
 
+/// Updates the per-handle context table entry from the global options slot.
+///
+/// After `store_stream_context_options` writes a new hash to the global slot,
+/// this copies it into `_stream_context_table[context_id]` so that
+/// `fopen(..., $context)` restores the right hash later. The context handle
+/// is unboxed from the resource payload.
+fn update_stream_context_table_from_handle(ctx: &mut FunctionContext<'_>, context: ValueId) {
+    let skip_label = ctx.next_label("sctx_update_skip");
+    let _ = ctx.load_value_to_result(context);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {}", skip_label));
+            ctx.emitter.instruction("ldr x1, [x0]");                               // load the Mixed tag
+            ctx.emitter.instruction("cmp x1, #9");                                 // resource?
+            ctx.emitter.instruction(&format!("b.ne {}", skip_label));
+            ctx.emitter.instruction("ldr x0, [x0, #8]");                           // context id
+            ctx.emitter.instruction(&format!("cbz x0, {}", skip_label));           // id 0 → skip
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_options");
+            ctx.emitter.instruction("ldr x1, [x9]");                               // load the global hash
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_table");
+            ctx.emitter.instruction("str x1, [x9, x0, lsl #3]");                   // table[id] = hash
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test rax, rax"));
+            ctx.emitter.instruction(&format!("jz {}", skip_label));
+            ctx.emitter.instruction("mov rcx, QWORD PTR [rax]");                   // tag
+            ctx.emitter.instruction("cmp rcx, 9");
+            ctx.emitter.instruction(&format!("jne {}", skip_label));
+            ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");               // context id
+            ctx.emitter.instruction(&format!("test rax, rax"));
+            ctx.emitter.instruction(&format!("jz {}", skip_label));
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_context_options");
+            ctx.emitter.instruction("mov rcx, QWORD PTR [r9]");                    // global hash
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_context_table");
+            ctx.emitter.instruction("mov QWORD PTR [r9 + rax * 8], rcx");          // table[id] = hash
+        }
+    }
+    ctx.emitter.label(&skip_label);
+}
+
+/// Restores the stream-context options from a per-handle table entry.
+///
+/// Unboxes the context id from the resource handle (arg), looks it up in
+/// `_stream_context_table[id]`, and stores the hash pointer back into
+/// `_stream_context_options` so the subsequent open call reads the right
+/// context. If the handle is null/false or the table entry is empty, the
+/// global slot is left unchanged.
+fn restore_stream_context_from_handle(
+    ctx: &mut FunctionContext<'_>,
+    context: ValueId,
+) -> Result<()> {
+    let skip_label = ctx.next_label("sctx_restore_skip");
+    let _ = ctx.load_value_to_result(context);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // x0 = boxed resource (tag at [x0], payload at [x0+8])
+            ctx.emitter.instruction(&format!("cbz x0, {}", skip_label));           // null/false → skip
+            ctx.emitter.instruction("ldr x1, [x0]");                               // load the Mixed tag
+            ctx.emitter.instruction("cmp x1, #9");                                 // tag 9 = resource?
+            ctx.emitter.instruction(&format!("b.ne {}", skip_label));             // not a resource → skip
+            ctx.emitter.instruction("ldr x0, [x0, #8]");                           // load the context id (payload)
+            ctx.emitter.instruction(&format!("cbz x0, {}", skip_label));           // id 0 (default) → skip
+            // -- restore: _stream_context_options = _stream_context_table[id] --
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_table");
+            ctx.emitter.instruction("ldr x1, [x9, x0, lsl #3]");                   // load the hash from the table
+            ctx.emitter.instruction(&format!("cbz x1, {}", skip_label));          // empty table entry → skip
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_options");
+            ctx.emitter.instruction("str x1, [x9]");                              // restore the global slot
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test rax, rax"));
+            ctx.emitter.instruction(&format!("jz {}", skip_label));                // null/false → skip
+            ctx.emitter.instruction("mov rcx, QWORD PTR [rax]");                   // load the Mixed tag
+            ctx.emitter.instruction("cmp rcx, 9");                                 // tag 9 = resource?
+            ctx.emitter.instruction(&format!("jne {}", skip_label));              // not a resource → skip
+            ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");               // load the context id (payload)
+            ctx.emitter.instruction(&format!("test rax, rax"));
+            ctx.emitter.instruction(&format!("jz {}", skip_label));               // id 0 → skip
+            // -- restore: _stream_context_options = _stream_context_table[id] --
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_context_table");
+            ctx.emitter.instruction("mov rcx, QWORD PTR [r9 + rax * 8]");          // load the hash from the table
+            ctx.emitter.instruction(&format!("test rcx, rcx"));
+            ctx.emitter.instruction(&format!("jz {}", skip_label));               // empty → skip
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_context_options");
+            ctx.emitter.instruction("mov QWORD PTR [r9], rcx");                    // restore the global slot
+        }
+    }
+    ctx.emitter.label(&skip_label);
+    Ok(())
+}
+
 /// Clears the runtime's single stream-context options slot.
 fn clear_stream_context_options(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
@@ -9051,4 +9509,127 @@ fn require_string_array(ty: PhpType, name: &str) -> Result<()> {
             other
         ))),
     }
+}
+
+/// Records stream metadata (wrapper id + URI) for a fd that is currently held
+/// in the integer result register (x0 on ARM64, rax on x86_64) after a
+/// successful runtime open call. Preserves the fd across the record_meta call
+/// by pushing it on the stack. The URI is a compile-time string literal.
+pub(super) fn emit_record_stream_meta_after_fd(
+    ctx: &mut FunctionContext<'_>,
+    wrapper_id: i64,
+    uri: &str,
+) {
+    let (label, len) = ctx.data.add_string(uri.as_bytes());
+    let uri_len = len as i64;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_symbol_address(ctx.emitter, "x2", &label);
+            ctx.emitter.instruction(&format!("mov x3, #{}", uri_len));
+            ctx.emitter.instruction(&format!("mov x1, #{}", wrapper_id));
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_record_meta");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("push rax");
+            abi::emit_symbol_address(ctx.emitter, "rdx", &label);
+            ctx.emitter.instruction(&format!("mov rcx, {}", uri_len));
+            ctx.emitter.instruction(&format!("mov esi, {}", wrapper_id));
+            ctx.emitter.instruction("pop rdi");
+            ctx.emitter.instruction("push rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_record_meta");
+            ctx.emitter.instruction("pop rax");
+        }
+    }
+}
+
+/// Shifts the current slot-0 filter to slot 1 for a `stream_filter_prepend` call.
+///
+/// Reads `_stream_read_filters[fd]` (slot 0) and stores it at
+/// `_stream_read_filters[fd+256]` (slot 1) when the mode includes READ (bit 0).
+/// Does the same for `_stream_write_filters` when the mode includes WRITE (bit 1).
+/// The mode defaults to STREAM_FILTER_ALL (3) when not provided. The fd is
+/// unboxed from the stream resource argument.
+fn emit_filter_prepend_shift(
+    ctx: &mut FunctionContext<'_>,
+    stream: ValueId,
+    mode: Option<ValueId>,
+) -> Result<()> {
+    // Determine the mode bits: default 3 (READ|WRITE), or evaluate the arg.
+    let do_read = match mode {
+        None => true,
+        Some(v) => {
+            if let Some(m) = optional_const_i64_operand(ctx, v)? {
+                (m & 1) != 0
+            } else {
+                true // conservative: assume both directions
+            }
+        }
+    };
+    let do_write = match mode {
+        None => true,
+        Some(v) => {
+            if let Some(m) = optional_const_i64_operand(ctx, v)? {
+                (m & 2) != 0
+            } else {
+                true
+            }
+        }
+    };
+    if !do_read && !do_write {
+        return Ok(());
+    }
+    load_stream_fd_to_result(ctx, stream, "stream_filter_prepend")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // x0 = fd. Save it.
+            abi::emit_push_reg(ctx.emitter, "x0");
+            if do_read {
+                abi::emit_symbol_address(ctx.emitter, "x9", "_stream_read_filters");
+                abi::emit_pop_reg(ctx.emitter, "x0");
+                abi::emit_push_reg(ctx.emitter, "x0");
+                ctx.emitter.instruction("ldrb w10, [x9, x0]");
+                abi::emit_symbol_address(ctx.emitter, "x9", "_stream_read_filters");
+                ctx.emitter.instruction("add x11, x0, #256");
+                ctx.emitter.instruction("strb w10, [x9, x11]");
+            }
+            if do_write {
+                abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_filters");
+                abi::emit_pop_reg(ctx.emitter, "x0");
+                abi::emit_push_reg(ctx.emitter, "x0");
+                ctx.emitter.instruction("ldrb w10, [x9, x0]");
+                abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_filters");
+                ctx.emitter.instruction("add x11, x0, #256");
+                ctx.emitter.instruction("strb w10, [x9, x11]");
+            }
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            // rax = fd. Save it.
+            ctx.emitter.instruction("push rax");
+            if do_read {
+                abi::emit_symbol_address(ctx.emitter, "r9", "_stream_read_filters");
+                ctx.emitter.instruction("pop rax");
+                ctx.emitter.instruction("push rax");
+                ctx.emitter.instruction("movzx r10d, BYTE PTR [r9 + rax]");
+                abi::emit_symbol_address(ctx.emitter, "r9", "_stream_read_filters");
+                ctx.emitter.instruction("lea r11, [rax + 256]");
+                ctx.emitter.instruction("mov BYTE PTR [r9 + r11], r10b");
+            }
+            if do_write {
+                abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_filters");
+                ctx.emitter.instruction("pop rax");
+                ctx.emitter.instruction("push rax");
+                ctx.emitter.instruction("movzx r10d, BYTE PTR [r9 + rax]");
+                abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_filters");
+                ctx.emitter.instruction("lea r11, [rax + 256]");
+                ctx.emitter.instruction("mov BYTE PTR [r9 + r11], r10b");
+            }
+            ctx.emitter.instruction("pop rax");
+        }
+    }
+    Ok(())
 }

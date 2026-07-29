@@ -2,19 +2,24 @@
 title: "stream_socket_server()"
 description: "Create an Internet or Unix domain server socket."
 sidebar:
-  order: 242
+  order: 250
 ---
 
 ## stream_socket_server()
 
 ```php
-function stream_socket_server(string $address): mixed
+function stream_socket_server(string $address, int $error_code = null, int $error_message = null, int $flags = 12, mixed $context = null, mixed $peername = null): mixed
 ```
 
 Create an Internet or Unix domain server socket.
 
 **Parameters**:
 - `$address` (`string`)
+- `$error_code` (`int`), passed by reference, default `null`, optional
+- `$error_message` (`int`), passed by reference, default `null`, optional
+- `$flags` (`int`), default `12`, optional
+- `$context` (`mixed`), default `null`, optional
+- `$peername` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`
 

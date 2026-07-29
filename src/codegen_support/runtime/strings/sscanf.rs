@@ -206,7 +206,7 @@ pub fn emit_sscanf(emitter: &mut Emitter) {
     // -- %s: extract non-whitespace word --
     emitter.label("__rt_sscanf_check_s");
     emitter.instruction("cmp w9, #115");                                        // 's'?
-    emitter.instruction("b.ne __rt_sscanf_loop");                               // unknown specifier → skip
+    emitter.instruction("b.ne __rt_sscanf_check_c");                             // no → check %c
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save format state
     emitter.instruction("mov x5, x1");                                          // start of match
     emitter.instruction("mov x6, #0");                                          // char count
@@ -222,7 +222,7 @@ pub fn emit_sscanf(emitter: &mut Emitter) {
     emitter.instruction("add x1, x1, #1");                                      // consume char
     emitter.instruction("sub x2, x2, #1");                                      // decrement
     emitter.instruction("add x6, x6, #1");                                      // count
-    emitter.instruction("b __rt_sscanf_s_loop");                                // continue
+    emitter.instruction("b __rt_sscanf_s_loop");                                 // continue
     emitter.label("__rt_sscanf_s_end");
     emitter.instruction("stp x1, x2, [sp]");                                    // save input state
     emitter.instruction("ldr x0, [sp, #32]");                                   // array ptr
@@ -230,6 +230,119 @@ pub fn emit_sscanf(emitter: &mut Emitter) {
     emitter.instruction("mov x2, x6");                                          // matched length
     emitter.instruction("bl __rt_array_push_str");                              // push to array
     emitter.instruction("str x0, [sp, #32]");                                   // update array pointer after possible realloc
+    emitter.instruction("ldp x1, x2, [sp]");                                    // restore input state
+    emitter.instruction("ldp x3, x4, [sp, #16]");                               // restore format state
+    emitter.instruction("b __rt_sscanf_loop");                                  // continue
+
+    // -- %c: extract a single non-whitespace character --
+    emitter.label("__rt_sscanf_check_c");
+    emitter.instruction("cmp w9, #99");                                         // 'c'?
+    emitter.instruction("b.ne __rt_sscanf_check_x");                             // no → check %x
+    emitter.instruction("stp x3, x4, [sp, #16]");                               // save format state
+    emitter.instruction("mov x5, x1");                                          // start of match
+    emitter.instruction("mov x6, #0");                                          // matched length (0 if no input)
+    emitter.instruction("cbz x2, __rt_sscanf_c_end");                            // no input → empty match
+    emitter.instruction("mov x6, #1");                                          // consume exactly one char
+    emitter.instruction("add x1, x1, #1");                                      // advance past the char
+    emitter.instruction("sub x2, x2, #1");                                      // decrement input
+    emitter.label("__rt_sscanf_c_end");
+    emitter.instruction("stp x1, x2, [sp]");                                    // save input state
+    emitter.instruction("ldr x0, [sp, #32]");                                   // array ptr
+    emitter.instruction("mov x1, x5");                                          // matched start
+    emitter.instruction("mov x2, x6");                                          // matched length (0 or 1)
+    emitter.instruction("bl __rt_array_push_str");                              // push to array
+    emitter.instruction("str x0, [sp, #32]");                                   // update array pointer
+    emitter.instruction("ldp x1, x2, [sp]");                                    // restore input state
+    emitter.instruction("ldp x3, x4, [sp, #16]");                               // restore format state
+    emitter.instruction("b __rt_sscanf_loop");                                  // continue
+
+    // -- %x: extract a hexadecimal integer (optional sign, optional 0x prefix, hex digits) --
+    emitter.label("__rt_sscanf_check_x");
+    emitter.instruction("cmp w9, #120");                                        // 'x'?
+    emitter.instruction("b.ne __rt_sscanf_loop");                               // unknown specifier → skip
+    emitter.instruction("stp x3, x4, [sp, #16]");                               // save format state
+    emitter.instruction("mov x5, x1");                                          // start of match
+    emitter.instruction("mov x6, #0");                                          // matched length
+    // Skip optional sign
+    emitter.instruction("cbz x2, __rt_sscanf_x_end");                            // no input
+    emitter.instruction("ldrb w10, [x1]");                                      // peek
+    emitter.instruction("cmp w10, #45");                                        // '-'?
+    emitter.instruction("b.ne __rt_sscanf_x_check_plus");                         // no → check +
+    emitter.instruction("add x1, x1, #1");                                      // consume '-'
+    emitter.instruction("sub x2, x2, #1");                                      // decrement
+    emitter.instruction("add x6, x6, #1");                                      // count
+    emitter.instruction("b __rt_sscanf_x_digits");                               // skip to digits
+    emitter.label("__rt_sscanf_x_check_plus");
+    emitter.instruction("cmp w10, #43");                                        // '+'?
+    emitter.instruction("b.ne __rt_sscanf_x_prefix");                           // no → check 0x prefix
+    emitter.instruction("add x1, x1, #1");                                      // consume '+'
+    emitter.instruction("sub x2, x2, #1");                                      // decrement
+    emitter.instruction("add x6, x6, #1");                                      // count
+    // Optional 0x prefix
+    emitter.label("__rt_sscanf_x_prefix");
+    emitter.instruction("cbz x2, __rt_sscanf_x_end");                            // no input
+    emitter.instruction("ldrb w10, [x1]");                                      // peek
+    emitter.instruction("cmp w10, #48");                                        // '0'?
+    emitter.instruction("b.ne __rt_sscanf_x_end");                              // no prefix → done (need at least the 0)
+    // Check for 'x'/'X' after '0'
+    emitter.instruction("cmp x2, #2");                                          // at least 2 chars left?
+    emitter.instruction("b.lt __rt_sscanf_x_one_zero");                          // only '0' → consume it as the match
+    emitter.instruction("ldrb w10, [x1, #1]");                                   // peek after '0'
+    emitter.instruction("cmp w10, #120");                                        // 'x'?
+    emitter.instruction("b.eq __rt_sscanf_x_consume_prefix");                    // consume 0x
+    emitter.instruction("cmp w10, #88");                                        // 'X'?
+    emitter.instruction("b.eq __rt_sscanf_x_consume_prefix");                    // consume 0X
+    emitter.label("__rt_sscanf_x_one_zero");
+    emitter.instruction("add x1, x1, #1");                                      // consume '0'
+    emitter.instruction("sub x2, x2, #1");                                      // decrement
+    emitter.instruction("add x6, x6, #1");                                      // count
+    emitter.instruction("b __rt_sscanf_x_end");                                  // '0' alone is a valid hex match
+    emitter.label("__rt_sscanf_x_consume_prefix");
+    emitter.instruction("add x1, x1, #2");                                      // consume '0x'
+    emitter.instruction("sub x2, x2, #2");                                      // decrement
+    emitter.instruction("add x6, x6, #2");                                      // count
+    // Scan hex digits
+    emitter.label("__rt_sscanf_x_digits");
+    emitter.instruction("cbz x2, __rt_sscanf_x_end");                            // input exhausted
+    emitter.instruction("ldrb w10, [x1]");                                      // peek
+    emitter.instruction("cmp w10, #48");                                        // < '0'?
+    emitter.instruction("b.lt __rt_sscanf_x_end");                              // not a hex digit
+    emitter.instruction("cmp w10, #57");                                        // <= '9'?
+    emitter.instruction("b.le __rt_sscanf_x_consume");                          // digit → consume
+    emitter.instruction("cmp w10, #65");                                        // < 'A'?
+    emitter.instruction("b.lt __rt_sscanf_x_end");                              // not hex
+    emitter.instruction("cmp w10, #70");                                        // <= 'F'?
+    emitter.instruction("b.le __rt_sscanf_x_consume");                          // A-F → consume
+    emitter.instruction("cmp w10, #97");                                        // < 'a'?
+    emitter.instruction("b.lt __rt_sscanf_x_end");                              // not hex
+    emitter.instruction("cmp w10, #102");                                       // <= 'f'?
+    emitter.instruction("b.le __rt_sscanf_x_consume");                          // a-f → consume
+    emitter.instruction("b __rt_sscanf_x_end");                                 // not a hex digit
+    emitter.label("__rt_sscanf_x_consume");
+    emitter.instruction("add x1, x1, #1");                                      // consume the hex digit
+    emitter.instruction("sub x2, x2, #1");                                      // decrement
+    emitter.instruction("add x6, x6, #1");                                      // count
+    emitter.instruction("b __rt_sscanf_x_digits");                               // continue
+    emitter.label("__rt_sscanf_x_end");
+    // If only a sign was consumed (no digits), backtrack: undo the sign
+    emitter.instruction("cbz x6, __rt_sscanf_x_push");                          // 0 chars → push empty
+    emitter.instruction("ldr w10, [x5]");                                        // peek at the first matched char
+    emitter.instruction("cmp w10, #45");                                        // '-'?
+    emitter.instruction("b.eq __rt_sscanf_x_backtrack");                         // only sign → backtrack
+    emitter.instruction("cmp w10, #43");                                        // '+'?
+    emitter.instruction("b.ne __rt_sscanf_x_push");                              // not a lone sign → push as-is
+    emitter.label("__rt_sscanf_x_backtrack");
+    // Only a sign was consumed with no digits: undo it
+    emitter.instruction("sub x1, x1, #1");                                      // rewind input
+    emitter.instruction("add x2, x2, #1");                                      // restore input remaining
+    emitter.instruction("mov x6, #0");                                          // empty match
+    emitter.label("__rt_sscanf_x_push");
+    emitter.instruction("stp x1, x2, [sp]");                                    // save input state
+    emitter.instruction("ldr x0, [sp, #32]");                                   // array ptr
+    emitter.instruction("mov x1, x5");                                          // matched start
+    emitter.instruction("mov x2, x6");                                          // matched length
+    emitter.instruction("bl __rt_array_push_str");                              // push to array
+    emitter.instruction("str x0, [sp, #32]");                                   // update array pointer
     emitter.instruction("ldp x1, x2, [sp]");                                    // restore input state
     emitter.instruction("ldp x3, x4, [sp, #16]");                               // restore format state
     emitter.instruction("b __rt_sscanf_loop");                                  // continue
@@ -445,7 +558,7 @@ fn emit_sscanf_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_sscanf_check_s_linux_x86_64");
     emitter.instruction("cmp r8b, 115");                                        // is the current format specifier '%s'?
-    emitter.instruction("jne __rt_sscanf_loop_linux_x86_64");                   // skip unknown format specifiers instead of aborting the whole scan
+    emitter.instruction("jne __rt_sscanf_check_c_linux_x86_64");                 // no → check %c
     emitter.instruction("mov r10, rax");                                        // mark the start of the matched word slice before scanning non-whitespace bytes
     emitter.instruction("xor r11d, r11d");                                      // start the matched word-slice length at zero bytes
 
@@ -479,6 +592,129 @@ fn emit_sscanf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // restore the current format-string pointer after appending the matched word slice
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // restore the current format-string length after appending the matched word slice
     emitter.instruction("jmp __rt_sscanf_loop_linux_x86_64");                   // continue scanning the remaining format string after pushing the word slice
+
+    // -- %c: extract a single character (no whitespace skip) --
+    emitter.label("__rt_sscanf_check_c_linux_x86_64");
+    emitter.instruction("cmp r8b, 99");                                         // is the current format specifier '%c'?
+    emitter.instruction("jne __rt_sscanf_check_x_linux_x86_64");                 // no → check %x
+    emitter.instruction("mov r10, rax");                                        // mark the start of the matched char
+    emitter.instruction("xor r11d, r11d");                                      // matched length = 0 (empty if no input)
+    emitter.instruction("test rdx, rdx");                                       // any input?
+    emitter.instruction("jz __rt_sscanf_push_c_linux_x86_64");                  // no input → push empty
+    emitter.instruction("mov r11, 1");                                          // consume exactly one char
+    emitter.instruction("add rax, 1");                                          // advance past the char
+    emitter.instruction("sub rdx, 1");                                          // decrement input
+    emitter.label("__rt_sscanf_push_c_linux_x86_64");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save input ptr
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save input len
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save format ptr
+    emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save format len
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload array ptr
+    emitter.instruction("mov rsi, r10");                                        // matched start
+    emitter.instruction("mov rdx, r11");                                        // matched length (0 or 1)
+    emitter.instruction("call __rt_array_push_str");                            // push the char
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // update array ptr
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore input ptr
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore input len
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // restore format ptr
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // restore format len
+    emitter.instruction("jmp __rt_sscanf_loop_linux_x86_64");                   // continue
+
+    // -- %x: extract a hexadecimal integer (optional sign, optional 0x prefix, hex digits) --
+    emitter.label("__rt_sscanf_check_x_linux_x86_64");
+    emitter.instruction("cmp r8b, 120");                                        // is the current format specifier '%x'?
+    emitter.instruction("jne __rt_sscanf_loop_linux_x86_64");                   // unknown → skip
+    emitter.instruction("mov r10, rax");                                        // mark the start of the match
+    emitter.instruction("xor r11d, r11d");                                      // matched length = 0
+    emitter.instruction("test rdx, rdx");                                       // any input?
+    emitter.instruction("jz __rt_sscanf_push_x_linux_x86_64");                  // no → push empty
+    emitter.instruction("movzx r9d, BYTE PTR [rax]");                           // peek
+    emitter.instruction("cmp r9b, 45");                                         // '-'?
+    emitter.instruction("jne __rt_sscanf_x_check_plus_x86_64");                 // no → check +
+    emitter.instruction("add rax, 1");                                          // consume '-'
+    emitter.instruction("sub rdx, 1");                                          // decrement
+    emitter.instruction("add r11, 1");                                          // count
+    emitter.instruction("jmp __rt_sscanf_x_digits_x86_64");                     // skip to digits
+    emitter.label("__rt_sscanf_x_check_plus_x86_64");
+    emitter.instruction("cmp r9b, 43");                                         // '+'?
+    emitter.instruction("jne __rt_sscanf_x_prefix_x86_64");                     // no → check 0x prefix
+    emitter.instruction("add rax, 1");                                          // consume '+'
+    emitter.instruction("sub rdx, 1");                                          // decrement
+    emitter.instruction("add r11, 1");                                          // count
+    // Optional 0x prefix
+    emitter.label("__rt_sscanf_x_prefix_x86_64");
+    emitter.instruction("test rdx, rdx");                                       // any input?
+    emitter.instruction("jz __rt_sscanf_push_x_linux_x86_64");                  // no → push
+    emitter.instruction("movzx r9d, BYTE PTR [rax]");                           // peek
+    emitter.instruction("cmp r9b, 48");                                         // '0'?
+    emitter.instruction("jne __rt_sscanf_push_x_linux_x86_64");                 // no prefix → done
+    emitter.instruction("cmp rdx, 2");                                         // at least 2 chars?
+    emitter.instruction("jl __rt_sscanf_x_one_zero_x86_64");                    // only '0' → consume it
+    emitter.instruction("movzx r9d, BYTE PTR [rax + 1]");                       // peek after '0'
+    emitter.instruction("cmp r9b, 120");                                        // 'x'?
+    emitter.instruction("je __rt_sscanf_x_consume_prefix_x86_64");              // consume 0x
+    emitter.instruction("cmp r9b, 88");                                         // 'X'?
+    emitter.instruction("je __rt_sscanf_x_consume_prefix_x86_64");              // consume 0X
+    emitter.label("__rt_sscanf_x_one_zero_x86_64");
+    emitter.instruction("add rax, 1");                                          // consume '0'
+    emitter.instruction("sub rdx, 1");                                          // decrement
+    emitter.instruction("add r11, 1");                                          // count
+    emitter.instruction("jmp __rt_sscanf_push_x_linux_x86_64");                 // '0' alone is valid
+    emitter.label("__rt_sscanf_x_consume_prefix_x86_64");
+    emitter.instruction("add rax, 2");                                          // consume '0x'
+    emitter.instruction("sub rdx, 2");                                          // decrement
+    emitter.instruction("add r11, 2");                                          // count
+    // Scan hex digits
+    emitter.label("__rt_sscanf_x_digits_x86_64");
+    emitter.instruction("test rdx, rdx");                                       // input exhausted?
+    emitter.instruction("jz __rt_sscanf_x_backtrack_check_x86_64");             // → check backtrack
+    emitter.instruction("movzx r9d, BYTE PTR [rax]");                           // peek
+    emitter.instruction("cmp r9b, 48");                                         // < '0'?
+    emitter.instruction("jl __rt_sscanf_x_backtrack_check_x86_64");             // not hex → check backtrack
+    emitter.instruction("cmp r9b, 57");                                         // <= '9'?
+    emitter.instruction("jle __rt_sscanf_x_consume_x86_64");                     // digit → consume
+    emitter.instruction("cmp r9b, 65");                                         // < 'A'?
+    emitter.instruction("jl __rt_sscanf_x_backtrack_check_x86_64");             // not hex
+    emitter.instruction("cmp r9b, 70");                                         // <= 'F'?
+    emitter.instruction("jle __rt_sscanf_x_consume_x86_64");                     // A-F → consume
+    emitter.instruction("cmp r9b, 97");                                         // < 'a'?
+    emitter.instruction("jl __rt_sscanf_x_backtrack_check_x86_64");             // not hex
+    emitter.instruction("cmp r9b, 102");                                        // <= 'f'?
+    emitter.instruction("jle __rt_sscanf_x_consume_x86_64");                     // a-f → consume
+    emitter.instruction("jmp __rt_sscanf_x_backtrack_check_x86_64");             // not hex
+    emitter.label("__rt_sscanf_x_consume_x86_64");
+    emitter.instruction("add rax, 1");                                          // consume the hex digit
+    emitter.instruction("sub rdx, 1");                                          // decrement
+    emitter.instruction("add r11, 1");                                          // count
+    emitter.instruction("jmp __rt_sscanf_x_digits_x86_64");                     // continue
+    // Backtrack: if only a sign was consumed with no digits, undo it
+    emitter.label("__rt_sscanf_x_backtrack_check_x86_64");
+    emitter.instruction("test r11, r11");                                       // 0 chars matched?
+    emitter.instruction("jz __rt_sscanf_push_x_linux_x86_64");                  // 0 → push empty
+    emitter.instruction("movzx r9d, BYTE PTR [r10]");                           // peek at first matched char
+    emitter.instruction("cmp r9b, 45");                                         // '-'?
+    emitter.instruction("je __rt_sscanf_x_backtrack_undo_x86_64");               // lone sign → undo
+    emitter.instruction("cmp r9b, 43");                                         // '+'?
+    emitter.instruction("jne __rt_sscanf_push_x_linux_x86_64");                  // not a lone sign → push
+    emitter.label("__rt_sscanf_x_backtrack_undo_x86_64");
+    emitter.instruction("sub rax, 1");                                          // rewind input
+    emitter.instruction("add rdx, 1");                                          // restore remaining
+    emitter.instruction("xor r11d, r11d");                                      // empty match
+    emitter.label("__rt_sscanf_push_x_linux_x86_64");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save input ptr
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save input len
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save format ptr
+    emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save format len
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload array ptr
+    emitter.instruction("mov rsi, r10");                                        // matched start
+    emitter.instruction("mov rdx, r11");                                        // matched length
+    emitter.instruction("call __rt_array_push_str");                            // push the hex slice
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // update array ptr
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore input ptr
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore input len
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // restore format ptr
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // restore format len
+    emitter.instruction("jmp __rt_sscanf_loop_linux_x86_64");                   // continue
 
     emitter.label("__rt_sscanf_done_linux_x86_64");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return the result indexed-array pointer in the primary x86_64 integer result register

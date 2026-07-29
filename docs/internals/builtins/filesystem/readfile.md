@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function readfile(string $filename): mixed
+function readfile(string $filename, bool $use_include_path = false, mixed $context = null): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–3 arguments (2 optional).
 
 ## Eval interpreter (magician)
 

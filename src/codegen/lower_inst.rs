@@ -7166,10 +7166,23 @@ fn lower_load_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("load_global missing result value"))?;
     let ty = ctx.value_php_type(result)?;
-    ctx.data
-        .add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
-    abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &ty);
-    store_if_result(ctx, inst)
+    // $http_response_header is auto-populated by the runtime after fopen("http://...").
+    // Each read calls __rt_get_http_response_headers to build the array from the
+    // last HTTP response, instead of reading a static global slot.
+    if name == "http_response_header" {
+        // $http_response_header is populated by the lowering of fopen("http://...")
+        // which calls __rt_get_http_response_headers and stores the result into
+        // the _eir_global_http_response_header slot. Here we just load that slot
+        // like a normal global, but we must ensure the .comm is declared.
+        ctx.data.add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
+        abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &ty);
+        store_if_result(ctx, inst)
+    } else {
+        ctx.data
+            .add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
+        abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &ty);
+        store_if_result(ctx, inst)
+    }
 }
 
 /// Lowers a global storage store from one SSA operand.

@@ -2,7 +2,7 @@
 title: "stream_socket_client() — internals"
 description: "Compiler internals for stream_socket_client(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 236
+  order: 244
 ---
 
 ## `stream_socket_client()` — internals
@@ -39,12 +39,13 @@ sidebar:
 ## Signature summary
 
 ```php
-function stream_socket_client(string $address): mixed
+function stream_socket_client(string $address, int $error_code = null, int $error_message = null, string $timeout = null, int $flags = 1, mixed $context = null, mixed $peername = null): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–7 arguments (6 optional).
+- **By-reference parameters**: `$error_code`, `$error_message`.
 
 ## Eval interpreter (magician)
 

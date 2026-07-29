@@ -2,7 +2,7 @@
 title: "file_get_contents() — internals"
 description: "Compiler internals for file_get_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 168
+  order: 169
 ---
 
 ## `file_get_contents()` — internals
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function file_get_contents(string $filename): mixed
+function file_get_contents(string $filename, bool $use_include_path = false, mixed $context = null, int $offset = 0, int $length = null): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–5 arguments (4 optional).
 
 ## Eval interpreter (magician)
 

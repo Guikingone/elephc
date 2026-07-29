@@ -15,14 +15,20 @@
 //!   `elephc_tls`, `elephc_phar`, `z`, and `bz2` because the scheme and PHAR entry
 //!   flags are unknown until run time.
 
-use crate::builtins::spec::BuiltinCheckCtx;
+use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
     name: "file_get_contents",
     area: Io,
-    params: [filename: Str],
+    params: [
+        filename: Str,
+        use_include_path: Bool = DefaultSpec::Bool(false),
+        context: Mixed = DefaultSpec::Null,
+        offset: Int = DefaultSpec::Int(0),
+        length: Mixed = DefaultSpec::Null
+    ],
     returns: Mixed,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
@@ -34,11 +40,6 @@ builtin! {
 }
 
 /// Returns `Union(Str, Bool)` and records the runtime libraries the call may need.
-///
-/// A literal `https://`/`ftps://` URL is read over TLS, so it links `elephc_tls`.
-/// A non-literal path routes through the runtime URL dispatcher, whose scheme and
-/// PHAR entry flags are unknown at compile time, so it conservatively links TLS
-/// plus the PHAR bridge and decompression libraries (`z`, `bz2`).
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     Ok(PhpType::Union(vec![PhpType::Str, PhpType::False]))

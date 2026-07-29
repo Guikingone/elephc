@@ -1,0 +1,11 @@
+{
+    "schema_version": 2,
+    "commit": "397b19b048b920c1651a51e6abb899b0f8a4a42d",
+    "indexed_at": "2026-07-29T07:45:45Z",
+    "project": "elephc-streams-csv",
+    "nodes": 34006,
+    "edges": 176928,
+    "original_size": 74383360,
+    "compressed_size": 12904882,
+    "compression_level": 9
+}

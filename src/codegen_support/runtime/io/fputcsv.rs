@@ -1,359 +1,555 @@
 //! Purpose:
-//! Emits the `__rt_fputcsv`, `__rt_fputcsv_loop` runtime helper assembly for fputcsv.
-//! Keeps PHP filesystem/resource behavior, libc calls, and target-specific ABI variants in one focused emitter.
+//! Emits the `__rt_fputcsv` runtime helper assembly for writing a PHP string
+//! array as a CSV row to a file descriptor. Supports custom separator,
+//! enclosure, escape, and end-of-line characters passed as a packed `csv_opts`
+//! word and an optional `(eol_ptr, eol_len)` pair from the EIR lowering.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::io`.
 //!
 //! Key details:
-//! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
+//! - `csv_opts = (esc << 16) | (enc << 8) | sep`; zero bytes select defaults
+//!   (sep → ',', enc → '"', esc → 0 means RFC 4180 doubling mode).
+//! - `eol_ptr == 0` (or `eol_len == 0`) selects the default `"\n"` terminator.
+//! - ARM64 and x86_64 variants mirror the same quoting and escaping logic.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
-/// Emits the `__rt_fputcsv` runtime helper that writes a PHP string array as a CSV line to a file descriptor.
-///
-/// Each array element is written as a CSV field. Fields containing comma (`,`), double quote (`"`), or
-/// newline are automatically wrapped in double quotes; internal quotes are escaped by doubling.
-///
-/// A trailing newline is written after the last field. The total byte count written (including separators,
-/// quotes, and newline) is returned in `x0` (ARM64) or `rax` (x86_64).
-///
-/// # Inputs
-/// - `x0` / `rdi`: file descriptor to write to
-/// - `x1` / `rsi`: pointer to a runtime array of PHP strings (each string has a 24-byte header followed by char* and length)
-///
-/// # Outputs
-/// - `x0` / `rax`: total bytes written across all fields, separators, quotes, and trailing newline
-///
-/// # ABI notes
-/// - Each field/separator/quote/newline segment is emitted through `__rt_fd_write`
-///   (not a bare `write`), so a synthetic userspace-wrapper fd transparently routes
-///   into the wrapper's `stream_write` while a normal fd takes the raw `write` path.
-/// - ARM64: `bl __rt_fd_write` per segment; 96-byte stack frame
-/// - x86_64: `call __rt_fd_write` per segment; 80-byte stack frame with callee-saved `rbp`
+/// Emits the `__rt_fputcsv` runtime helper, dispatching to the target-specific variant.
 pub fn emit_fputcsv(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_fputcsv_linux_x86_64(emitter);
         return;
     }
+    emit_fputcsv_aarch64(emitter);
+}
 
+/// ARM64 variant of `__rt_fputcsv`.
+///
+/// Signature: `__rt_fputcsv(fd: x0, arr: x1, csv_opts: x2, eol_ptr: x3, eol_len: x4)
+/// -> bytes_written: x0`.
+///
+/// Writes each array element as a CSV field, quoting fields that contain the
+/// separator, enclosure, escape, or whitespace characters. Internal quotes are
+/// escaped by doubling (RFC 4180, `esc == 0`) or by the escape char (`esc != 0`).
+/// A trailing `eol` (or `"\n"` default) is written after the last field.
+fn emit_fputcsv_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fputcsv ---");
     emitter.label_global("__rt_fputcsv");
 
-    // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #96");                                     // allocate 96 bytes on the stack
-    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #80");                                    // establish new frame pointer
+    // -- set up stack frame: 128 bytes (fd, arr, total, index, sep, enc, esc, eol_ptr, eol_len, arrlen, field_ptr, field_len, scratch, scratch2, fp, lr) --
+    emitter.instruction("sub sp, sp, #128");                                    // allocate 128 bytes on the stack
+    emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
+    emitter.instruction("add x29, sp, #112");                                   // establish new frame pointer
 
     // -- save inputs --
     emitter.instruction("str x0, [sp, #0]");                                    // save fd
     emitter.instruction("str x1, [sp, #8]");                                    // save array pointer
-    emitter.instruction("str xzr, [sp, #16]");                                  // total bytes written = 0
-    emitter.instruction("str xzr, [sp, #24]");                                  // current element index = 0
+    emitter.instruction("str xzr, [sp, #16]");                                   // total bytes written = 0
+    emitter.instruction("str xzr, [sp, #24]");                                   // current element index = 0
 
-    // -- get array length --
+    // -- unpack csv_opts: sep = x2 & 0xFF, enc = (x2 >> 8) & 0xFF, esc = (x2 >> 16) & 0xFF --
+    emitter.instruction("and w5, w2, #0xff");                                   // sep = csv_opts & 0xFF
+    emitter.instruction("lsr w6, w2, #8");                                        // shift right 8 for enc
+    emitter.instruction("and w6, w6, #0xff");                                   // enc = (csv_opts >> 8) & 0xFF
+    emitter.instruction("lsr w7, w2, #16");                                      // shift right 16 for esc
+    emitter.instruction("and w7, w7, #0xff");                                   // esc = (csv_opts >> 16) & 0xFF
+
+    // -- apply defaults: sep==0 -> 0x2C, enc==0 -> 0x22 --
+    emitter.instruction("cbnz w5, __rt_fputcsv_sep_ok");                        // if sep != 0, skip default
+    emitter.instruction("mov w5, #0x2c");                                        // sep = ',' (0x2C)
+    emitter.label("__rt_fputcsv_sep_ok");
+    emitter.instruction("cbnz w6, __rt_fputcsv_enc_ok");                        // if enc != 0, skip default
+    emitter.instruction("mov w6, #0x22");                                        // enc = '"' (0x22)
+    emitter.label("__rt_fputcsv_enc_ok");
+
+    // -- save sep/enc/esc and eol --
+    emitter.instruction("str w5, [sp, #32]");                                    // save sep
+    emitter.instruction("str w6, [sp, #40]");                                    // save enc
+    emitter.instruction("str w7, [sp, #48]");                                    // save esc
+    emitter.instruction("str x3, [sp, #56]");                                    // save eol_ptr
+    emitter.instruction("str x4, [sp, #64]");                                    // save eol_len
+
+    // -- get array length from header --
     emitter.instruction("ldr x9, [x1]");                                        // load array length from header
-    emitter.instruction("str x9, [sp, #32]");                                   // save array length
+    emitter.instruction("str x9, [sp, #72]");                                   // save array length
 
     // -- main loop: iterate over array elements --
     emitter.label("__rt_fputcsv_loop");
-    emitter.instruction("ldr x9, [sp, #24]");                                   // load current index
-    emitter.instruction("ldr x10, [sp, #32]");                                  // load array length
+    emitter.instruction("ldr x9, [sp, #24]");                                    // load current index
+    emitter.instruction("ldr x10, [sp, #72]");                                    // load array length
     emitter.instruction("cmp x9, x10");                                         // check if we've processed all elements
-    emitter.instruction("b.hs __rt_fputcsv_newline");                           // if done, write trailing newline
+    emitter.instruction("b.hs __rt_fputcsv_eol");                                // if done, write trailing eol
 
-    // -- write comma separator before 2nd+ fields --
-    emitter.instruction("cbz x9, __rt_fputcsv_field");                          // skip comma for first field
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    emitter.adrp("x1", "__rt_fputcsv_comma_lit");                // load comma literal address
-    emitter.add_lo12("x1", "x1", "__rt_fputcsv_comma_lit");          // resolve exact address
-    emitter.instruction("mov x2, #1");                                          // write 1 byte (comma)
-    emitter.instruction("bl __rt_fd_write");                                    // write this segment (wrapper-aware: stream_write or raw write)
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
-    emitter.instruction("add x9, x9, x0");                                      // add bytes written
-    emitter.instruction("str x9, [sp, #16]");                                   // save updated total
+    // -- write separator before 2nd+ fields --
+    emitter.instruction("cbz x9, __rt_fputcsv_field");                           // skip separator for first field
+    emitter.instruction("ldr x0, [sp, #0]");                                     // reload fd
+    emitter.instruction("ldr w1, [sp, #32]");                                    // load sep byte
+    emitter.instruction("and x1, x1, #0xff");                                     // zero-extend sep
+    emitter.instruction("strb w1, [sp, #96]");                                    // store sep byte in scratch slot
+    emitter.instruction("add x1, sp, #96");                                        // ptr = scratch slot
+    emitter.instruction("mov x2, #1");                                            // write 1 byte (sep)
+    emitter.instruction("bl __rt_fd_write");                                      // write the separator
+    emitter.instruction("ldr x9, [sp, #16]");                                    // reload total bytes
+    emitter.instruction("add x9, x9, x0");                                        // add bytes written
+    emitter.instruction("str x9, [sp, #16]");                                     // save updated total
 
     // -- load current field from array --
     emitter.label("__rt_fputcsv_field");
-    emitter.instruction("ldr x9, [sp, #24]");                                   // reload current index
-    emitter.instruction("ldr x10, [sp, #8]");                                   // reload array pointer
-    emitter.instruction("lsl x11, x9, #4");                                     // byte offset = index * 16
-    emitter.instruction("add x11, x10, x11");                                   // element address = array + offset
-    emitter.instruction("ldr x3, [x11, #24]");                                  // load string pointer (skip 24-byte header)
-    emitter.instruction("ldr x4, [x11, #32]");                                  // load string length
+    emitter.instruction("ldr x9, [sp, #24]");                                    // reload current index
+    emitter.instruction("ldr x10, [sp, #8]");                                    // reload array pointer
+    emitter.instruction("lsl x11, x9, #4");                                      // byte offset = index * 16
+    emitter.instruction("add x11, x10, x11");                                    // element address = array + offset
+    emitter.instruction("ldr x3, [x11, #24]");                                    // load string pointer (skip 24-byte header)
+    emitter.instruction("ldr x4, [x11, #32]");                                    // load string length
 
-    // -- check if field needs quoting (contains comma, quote, or newline) --
-    emitter.instruction("stp x3, x4, [sp, #40]");                               // save field ptr and len
-    emitter.instruction("mov x5, #0");                                          // needs_quote flag = 0
-    emitter.instruction("mov x6, #0");                                          // scan index = 0
+    // -- check if field needs quoting (contains sep, enc, esc, or whitespace) --
+    emitter.instruction("stp x3, x4, [sp, #80]");                                 // save field ptr and len (overlapping frame top is fine; we saved fp/lr at #80 but this is scratch above fp)
+    emitter.instruction("mov x5, #0");                                            // needs_quote flag = 0
+    emitter.instruction("mov x6, #0");                                            // scan index = 0
     emitter.label("__rt_fputcsv_scan");
-    emitter.instruction("cmp x6, x4");                                          // check if scan complete
-    emitter.instruction("b.hs __rt_fputcsv_write");                             // if done scanning, proceed to write
-    emitter.instruction("ldrb w7, [x3, x6]");                                   // load byte at current position
-    emitter.instruction("cmp w7, #0x2C");                                       // check for comma
-    emitter.instruction("b.eq __rt_fputcsv_need_q");                            // comma found, needs quoting
-    emitter.instruction("cmp w7, #0x22");                                       // check for double quote
-    emitter.instruction("b.eq __rt_fputcsv_need_q");                            // quote found, needs quoting
-    emitter.instruction("cmp w7, #0x0A");                                       // check for newline
-    emitter.instruction("b.eq __rt_fputcsv_need_q");                            // newline found, needs quoting
-    emitter.instruction("add x6, x6, #1");                                      // increment scan index
-    emitter.instruction("b __rt_fputcsv_scan");                                 // continue scanning
+    emitter.instruction("cmp x6, x4");                                            // check if scan complete
+    emitter.instruction("b.hs __rt_fputcsv_scan_done");                            // if done scanning, proceed to write
+    emitter.instruction("ldrb w7, [x3, x6]");                                    // load byte at current position
+    emitter.instruction("ldr w8, [sp, #32]");                                     // load sep
+    emitter.instruction("cmp w7, w8");                                            // byte == sep?
+    emitter.instruction("b.eq __rt_fputcsv_need_q");                              // needs quoting
+    emitter.instruction("ldr w8, [sp, #40]");                                     // load enc
+    emitter.instruction("cmp w7, w8");                                            // byte == enc?
+    emitter.instruction("b.eq __rt_fputcsv_need_q");                              // needs quoting
+    emitter.instruction("ldr w8, [sp, #48]");                                     // load esc
+    emitter.instruction("cbz w8, __rt_fputcsv_scan_ws");                          // esc == 0 -> skip esc check
+    emitter.instruction("cmp w7, w8");                                            // byte == esc?
+    emitter.instruction("b.eq __rt_fputcsv_need_q");                              // needs quoting
+    emitter.label("__rt_fputcsv_scan_ws");
+    emitter.instruction("cmp w7, #0x20");                                         // byte == space?
+    emitter.instruction("b.eq __rt_fputcsv_need_q");                              // needs quoting
+    emitter.instruction("cmp w7, #0x09");                                         // byte == tab?
+    emitter.instruction("b.eq __rt_fputcsv_need_q");                              // needs quoting
+    emitter.instruction("cmp w7, #0x0a");                                         // byte == newline?
+    emitter.instruction("b.eq __rt_fputcsv_need_q");                              // needs quoting
+    emitter.instruction("cmp w7, #0x0d");                                         // byte == carriage return?
+    emitter.instruction("b.eq __rt_fputcsv_need_q");                              // needs quoting
+    emitter.instruction("add x6, x6, #1");                                        // increment scan index
+    emitter.instruction("b __rt_fputcsv_scan");                                    // continue scanning
 
     emitter.label("__rt_fputcsv_need_q");
-    emitter.instruction("mov x5, #1");                                          // set needs_quote flag
+    emitter.instruction("mov x5, #1");                                            // set needs_quote flag
 
     // -- write the field (quoted or unquoted) --
-    emitter.label("__rt_fputcsv_write");
-    emitter.instruction("ldp x3, x4, [sp, #40]");                               // reload field ptr and len
-    emitter.instruction("cbz x5, __rt_fputcsv_plain");                          // if no quoting needed, write directly
+    emitter.label("__rt_fputcsv_scan_done");
+    emitter.instruction("ldp x3, x4, [sp, #80]");                                 // reload field ptr and len
+    emitter.instruction("cbz x5, __rt_fputcsv_plain");                            // if no quoting needed, write directly
 
-    // -- write opening quote --
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    emitter.adrp("x1", "__rt_fputcsv_quote_lit");                // load quote literal address
-    emitter.add_lo12("x1", "x1", "__rt_fputcsv_quote_lit");          // resolve exact address
-    emitter.instruction("mov x2, #1");                                          // write 1 byte (quote)
-    emitter.instruction("bl __rt_fd_write");                                    // write this segment (wrapper-aware: stream_write or raw write)
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
-    emitter.instruction("add x9, x9, x0");                                      // add bytes written
-    emitter.instruction("str x9, [sp, #16]");                                   // save updated total
+    // -- write opening quote (enc) --
+    emitter.instruction("ldr x0, [sp, #0]");                                       // reload fd
+    emitter.instruction("ldr w1, [sp, #40]");                                      // load enc
+    emitter.instruction("and x1, x1, #0xff");                                       // zero-extend enc
+    emitter.instruction("strb w1, [sp, #96]");                                        // store enc byte in scratch slot
+    emitter.instruction("add x1, sp, #96");                                          // ptr = scratch slot
+    emitter.instruction("mov x2, #1");                                              // write 1 byte (enc)
+    emitter.instruction("bl __rt_fd_write");                                        // write opening quote
+    emitter.instruction("ldr x9, [sp, #16]");                                       // reload total bytes
+    emitter.instruction("add x9, x9, x0");                                          // add bytes written
+    emitter.instruction("str x9, [sp, #16]");                                       // save updated total
 
-    // -- write field contents, escaping internal quotes --
-    emitter.instruction("ldp x3, x4, [sp, #40]");                               // reload field ptr and len
-    emitter.instruction("mov x6, #0");                                          // byte index = 0
+    // -- write field contents, escaping internal quotes/escapes --
+    emitter.instruction("ldp x3, x4, [sp, #80]");                                   // reload field ptr and len
+    emitter.instruction("mov x6, #0");                                              // byte index = 0
     emitter.label("__rt_fputcsv_qloop");
-    emitter.instruction("cmp x6, x4");                                          // check if all bytes written
-    emitter.instruction("b.hs __rt_fputcsv_close_q");                           // if done, write closing quote
-    emitter.instruction("ldrb w7, [x3, x6]");                                   // load current byte
-    emitter.instruction("add x6, x6, #1");                                      // advance index
-    emitter.instruction("str x6, [sp, #56]");                                   // save current index
-    emitter.instruction("cmp w7, #0x22");                                       // check if byte is a quote
-    emitter.instruction("b.ne __rt_fputcsv_qchar");                             // if not quote, write normally
+    emitter.instruction("cmp x6, x4");                                              // check if all bytes written
+    emitter.instruction("b.hs __rt_fputcsv_close_q");                                // if done, write closing quote
+    emitter.instruction("ldrb w7, [x3, x6]");                                        // load current byte
+    emitter.instruction("add x6, x6, #1");                                           // advance index
+    emitter.instruction("str x6, [sp, #104]");                                        // save current index (scratch2 slot, safe: not used by loop bounds)
+    emitter.instruction("ldr w8, [sp, #40]");                                        // load enc
+    emitter.instruction("cmp w7, w8");                                                // byte == enc?
+    emitter.instruction("b.ne __rt_fputcsv_qesc_chk");                                // if not enc, check esc
+    // -- byte is enc: escape via doubling or escape char --
+    emitter.instruction("ldr w8, [sp, #48]");                                        // load esc
+    emitter.instruction("cbnz w8, __rt_fputcsv_q_escape");                            // esc != 0 -> write esc + enc
+    // -- doubling mode: write enc twice --
+    emitter.instruction("ldr x0, [sp, #0]");                                          // reload fd
+    emitter.instruction("ldr w1, [sp, #40]");                                         // load enc
+    emitter.instruction("and x1, x1, #0xff");                                          // zero-extend enc
+    emitter.instruction("strb w1, [sp, #96]");                                         // store first enc in scratch
+    emitter.instruction("strb w1, [sp, #97]");                                         // store second enc in scratch
+    emitter.instruction("add x1, sp, #96");                                            // ptr = scratch slot
+    emitter.instruction("mov x2, #2");                                                // write 2 bytes (enc enc)
+    emitter.instruction("bl __rt_fd_write");                                          // write doubled quote
+    emitter.instruction("ldr x9, [sp, #16]");                                         // reload total bytes
+    emitter.instruction("add x9, x9, x0");                                            // add bytes written
+    emitter.instruction("str x9, [sp, #16]");                                         // save updated total
+    emitter.instruction("b __rt_fputcsv_qloop_next");                                 // continue loop
 
-    // -- escape quote by writing two quotes --
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    emitter.adrp("x1", "__rt_fputcsv_quote_lit");                // load quote literal address
-    emitter.add_lo12("x1", "x1", "__rt_fputcsv_quote_lit");          // resolve exact address
-    emitter.instruction("mov x2, #1");                                          // write 1 byte (escape quote)
-    emitter.instruction("bl __rt_fd_write");                                    // write this segment (wrapper-aware: stream_write or raw write)
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
-    emitter.instruction("add x9, x9, x0");                                      // add bytes written
-    emitter.instruction("str x9, [sp, #16]");                                   // save updated total
+    emitter.label("__rt_fputcsv_q_escape");
+    // -- escape mode: write esc + enc --
+    emitter.instruction("ldr x0, [sp, #0]");                                          // reload fd
+    emitter.instruction("ldr w1, [sp, #48]");                                         // load esc
+    emitter.instruction("and x1, x1, #0xff");                                          // zero-extend esc
+    emitter.instruction("ldr w2, [sp, #40]");                                         // load enc
+    emitter.instruction("and x2, x2, #0xff");                                          // zero-extend enc
+    emitter.instruction("strb w1, [sp, #96]");                                         // store esc in scratch
+    emitter.instruction("strb w2, [sp, #97]");                                         // store enc in scratch
+    emitter.instruction("add x1, sp, #96");                                            // ptr = scratch slot
+    emitter.instruction("mov x2, #2");                                                // write 2 bytes (esc enc)
+    emitter.instruction("bl __rt_fd_write");                                          // write escaped quote
+    emitter.instruction("ldr x9, [sp, #16]");                                         // reload total bytes
+    emitter.instruction("add x9, x9, x0");                                            // add bytes written
+    emitter.instruction("str x9, [sp, #16]");                                         // save updated total
+    emitter.instruction("b __rt_fputcsv_qloop_next");                                 // continue loop
 
-    // -- write the actual character --
+    emitter.label("__rt_fputcsv_qesc_chk");
+    // -- check if byte == esc (and esc != 0): double the esc --
+    emitter.instruction("ldr w8, [sp, #48]");                                          // load esc
+    emitter.instruction("cbz w8, __rt_fputcsv_qchar");                                 // esc == 0 -> no esc doubling
+    emitter.instruction("cmp w7, w8");                                                // byte == esc?
+    emitter.instruction("b.ne __rt_fputcsv_qchar");                                    // if not esc, write byte as-is
+    // -- byte is esc: write esc twice --
+    emitter.instruction("ldr x0, [sp, #0]");                                          // reload fd
+    emitter.instruction("ldr w1, [sp, #48]");                                         // load esc
+    emitter.instruction("and x1, x1, #0xff");                                          // zero-extend esc
+    emitter.instruction("strb w1, [sp, #96]");                                         // store first esc in scratch
+    emitter.instruction("strb w1, [sp, #97]");                                         // store second esc in scratch
+    emitter.instruction("add x1, sp, #96");                                            // ptr = scratch slot
+    emitter.instruction("mov x2, #2");                                                // write 2 bytes (esc esc)
+    emitter.instruction("bl __rt_fd_write");                                          // write doubled escape
+    emitter.instruction("ldr x9, [sp, #16]");                                         // reload total bytes
+    emitter.instruction("add x9, x9, x0");                                            // add bytes written
+    emitter.instruction("str x9, [sp, #16]");                                         // save updated total
+    emitter.instruction("b __rt_fputcsv_qloop_next");                                 // continue loop
+
     emitter.label("__rt_fputcsv_qchar");
-    emitter.instruction("ldp x3, x4, [sp, #40]");                               // reload field ptr and len
-    emitter.instruction("ldr x6, [sp, #56]");                                   // reload byte index
-    emitter.instruction("sub x9, x6, #1");                                      // index of byte to write
-    emitter.instruction("add x1, x3, x9");                                      // pointer to the byte
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    emitter.instruction("mov x2, #1");                                          // write 1 byte
-    emitter.instruction("bl __rt_fd_write");                                    // write this segment (wrapper-aware: stream_write or raw write)
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
-    emitter.instruction("add x9, x9, x0");                                      // add bytes written
-    emitter.instruction("str x9, [sp, #16]");                                   // save updated total
-    emitter.instruction("ldr x6, [sp, #56]");                                   // reload byte index
-    emitter.instruction("ldp x3, x4, [sp, #40]");                               // reload field ptr and len
-    emitter.instruction("b __rt_fputcsv_qloop");                                // continue writing
+    // -- write the actual character --
+    emitter.instruction("ldp x3, x4, [sp, #80]");                                     // reload field ptr and len
+    emitter.instruction("ldr x6, [sp, #104]");                                         // reload byte index
+    emitter.instruction("sub x9, x6, #1");                                             // index of byte to write (we advanced x6 earlier)
+    emitter.instruction("add x1, x3, x9");                                             // pointer to the byte
+    emitter.instruction("ldr x0, [sp, #0]");                                          // reload fd
+    emitter.instruction("mov x2, #1");                                                 // write 1 byte
+    emitter.instruction("bl __rt_fd_write");                                           // write this byte
+    emitter.instruction("ldr x9, [sp, #16]");                                          // reload total bytes
+    emitter.instruction("add x9, x9, x0");                                             // add bytes written
+    emitter.instruction("str x9, [sp, #16]");                                          // save updated total
 
-    // -- write closing quote --
+    emitter.label("__rt_fputcsv_qloop_next");
+    emitter.instruction("ldr x6, [sp, #104]");                                         // reload byte index
+    emitter.instruction("ldp x3, x4, [sp, #80]");                                     // reload field ptr and len
+    emitter.instruction("b __rt_fputcsv_qloop");                                       // continue writing
+
+    // -- write closing quote (enc) --
     emitter.label("__rt_fputcsv_close_q");
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    emitter.adrp("x1", "__rt_fputcsv_quote_lit");                // load quote literal address
-    emitter.add_lo12("x1", "x1", "__rt_fputcsv_quote_lit");          // resolve exact address
-    emitter.instruction("mov x2, #1");                                          // write 1 byte (quote)
-    emitter.instruction("bl __rt_fd_write");                                    // write this segment (wrapper-aware: stream_write or raw write)
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
-    emitter.instruction("add x9, x9, x0");                                      // add bytes written
-    emitter.instruction("str x9, [sp, #16]");                                   // save updated total
-    emitter.instruction("b __rt_fputcsv_next");                                 // proceed to next field
+    emitter.instruction("ldr x0, [sp, #0]");                                          // reload fd
+    emitter.instruction("ldr w1, [sp, #40]");                                         // load enc
+    emitter.instruction("and x1, x1, #0xff");                                          // zero-extend enc
+    emitter.instruction("strb w1, [sp, #96]");                                         // store enc byte in scratch
+    emitter.instruction("add x1, sp, #96");                                            // ptr = scratch slot
+    emitter.instruction("mov x2, #1");                                                // write 1 byte (enc)
+    emitter.instruction("bl __rt_fd_write");                                          // write closing quote
+    emitter.instruction("ldr x9, [sp, #16]");                                         // reload total bytes
+    emitter.instruction("add x9, x9, x0");                                            // add bytes written
+    emitter.instruction("str x9, [sp, #16]");                                         // save updated total
+    emitter.instruction("b __rt_fputcsv_next");                                       // proceed to next field
 
     // -- write plain field (no quoting needed) --
     emitter.label("__rt_fputcsv_plain");
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    emitter.instruction("mov x1, x3");                                          // field pointer
-    emitter.instruction("mov x2, x4");                                          // field length
-    emitter.instruction("bl __rt_fd_write");                                    // write this segment (wrapper-aware: stream_write or raw write)
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
-    emitter.instruction("add x9, x9, x0");                                      // add bytes written
-    emitter.instruction("str x9, [sp, #16]");                                   // save updated total
+    emitter.instruction("ldr x0, [sp, #0]");                                          // reload fd
+    emitter.instruction("mov x1, x3");                                                // field pointer
+    emitter.instruction("mov x2, x4");                                                // field length
+    emitter.instruction("bl __rt_fd_write");                                          // write the plain field
+    emitter.instruction("ldr x9, [sp, #16]");                                         // reload total bytes
+    emitter.instruction("add x9, x9, x0");                                            // add bytes written
+    emitter.instruction("str x9, [sp, #16]");                                         // save updated total
 
     // -- advance to next element --
     emitter.label("__rt_fputcsv_next");
-    emitter.instruction("ldr x9, [sp, #24]");                                   // reload current index
-    emitter.instruction("add x9, x9, #1");                                      // increment index
-    emitter.instruction("str x9, [sp, #24]");                                   // save updated index
-    emitter.instruction("b __rt_fputcsv_loop");                                 // continue loop
+    emitter.instruction("ldr x9, [sp, #24]");                                         // reload current index
+    emitter.instruction("add x9, x9, #1");                                             // increment index
+    emitter.instruction("str x9, [sp, #24]");                                         // save updated index
+    emitter.instruction("b __rt_fputcsv_loop");                                        // continue loop
 
-    // -- write trailing newline --
-    emitter.label("__rt_fputcsv_newline");
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    emitter.adrp("x1", "__rt_fputcsv_nl_lit");                   // load newline literal address
-    emitter.add_lo12("x1", "x1", "__rt_fputcsv_nl_lit");             // resolve exact address
-    emitter.instruction("mov x2, #1");                                          // write 1 byte (newline)
-    emitter.instruction("bl __rt_fd_write");                                    // write this segment (wrapper-aware: stream_write or raw write)
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
-    emitter.instruction("add x9, x9, x0");                                      // add final bytes written
-    emitter.instruction("str x9, [sp, #16]");                                   // save final total
+    // -- write trailing eol (custom or default "\n") --
+    emitter.label("__rt_fputcsv_eol");
+    emitter.instruction("ldr x3, [sp, #56]");                                         // reload eol_ptr
+    emitter.instruction("ldr x4, [sp, #64]");                                         // reload eol_len
+    emitter.instruction("cbz x3, __rt_fputcsv_eol_default");                           // eol_ptr == 0 -> default "\n"
+    emitter.instruction("cbz x4, __rt_fputcsv_eol_default");                           // eol_len == 0 -> default "\n"
+    // -- write custom eol --
+    emitter.instruction("ldr x0, [sp, #0]");                                          // reload fd
+    emitter.instruction("mov x1, x3");                                                // eol pointer
+    emitter.instruction("mov x2, x4");                                                // eol length
+    emitter.instruction("bl __rt_fd_write");                                          // write the eol
+    emitter.instruction("ldr x9, [sp, #16]");                                         // reload total bytes
+    emitter.instruction("add x9, x9, x0");                                            // add bytes written
+    emitter.instruction("str x9, [sp, #16]");                                         // save final total
+    emitter.instruction("b __rt_fputcsv_ret");                                        // return
+
+    emitter.label("__rt_fputcsv_eol_default");
+    emitter.instruction("ldr x0, [sp, #0]");                                          // reload fd
+    emitter.adrp("x1", "__rt_fputcsv_nl_lit");                                        // load newline literal address
+    emitter.add_lo12("x1", "x1", "__rt_fputcsv_nl_lit");                              // resolve exact address
+    emitter.instruction("mov x2, #1");                                                // write 1 byte (newline)
+    emitter.instruction("bl __rt_fd_write");                                          // write the newline
+    emitter.instruction("ldr x9, [sp, #16]");                                         // reload total bytes
+    emitter.instruction("add x9, x9, x0");                                            // add final bytes written
+    emitter.instruction("str x9, [sp, #16]");                                         // save final total
 
     // -- return total bytes written --
-    emitter.instruction("ldr x0, [sp, #16]");                                   // return total bytes written
+    emitter.label("__rt_fputcsv_ret");
+    emitter.instruction("ldr x0, [sp, #16]");                                         // return total bytes written
 
     // -- restore frame and return --
-    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #96");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #112]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #128");                                    // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 
-    // -- literal data for comma, quote, and newline characters --
-    emitter.label("__rt_fputcsv_comma_lit");
-    emitter.instruction(".ascii \",\"");                                        // comma character literal
-    emitter.label("__rt_fputcsv_quote_lit");
-    emitter.instruction(".ascii \"\\\"\"");                                     // double quote character literal
+    // -- literal data for newline --
     emitter.label("__rt_fputcsv_nl_lit");
-    emitter.instruction(".ascii \"\\n\"");                                      // newline character literal
+    emitter.instruction(".ascii \"\\n\"");                                            // newline character literal
 }
 
-/// x86_64 Linux implementation of the `__rt_fputcsv` runtime helper.
+/// x86_64 Linux variant of `__rt_fputcsv`.
 ///
-/// Uses the System V AMD64 ABI: `rdi` = fd, `rsi` = array pointer. Calls libc `write()` for each output
-/// segment (comma separators, field content, quotes, newline). Preserves and restores `rbp` as frame pointer.
-/// The total byte count is returned in `rax`.
-///
-/// # Stack layout (80 bytes)
-/// - `[rbp - 8]`  : file descriptor (preserved across all steps)
-/// - `[rbp - 16]` : array pointer (preserved across field loads)
-/// - `[rbp - 24]` : running total bytes written
-/// - `[rbp - 32]` : current field index
-/// - `[rbp - 40]` : array length (for loop termination)
-/// - `[rbp - 48]` : current field string pointer
-/// - `[rbp - 56]` : current field string length
-/// - `[rbp - 64]` : needs-quote flag (0 or 1)
-/// - `[rbp - 72]` : byte index inside quoted field loop
+/// Signature: `__rt_fputcsv(fd: rdi, arr: rsi, csv_opts: rdx, eol_ptr: rcx,
+/// eol_len: r8) -> bytes_written: rax`. Mirrors the ARM64 quoting/escaping
+/// logic using the System V ABI and a rbp-relative frame.
 fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fputcsv ---");
     emitter.label_global("__rt_fputcsv");
 
-    emitter.instruction("push rbp");                                            // preserve the caller frame pointer while fputcsv() keeps stream and field state in stack slots
-    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the file descriptor, array pointer, and CSV writer bookkeeping
-    emitter.instruction("sub rsp, 80");                                         // reserve aligned stack space for the CSV writer state across repeated __rt_fd_write() calls
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the destination file descriptor across all field-scan and write helper steps
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the source string-array pointer across repeated field loads
-    emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // total written bytes start at zero before any CSV separator or field bytes are emitted
-    emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // current field index starts at zero before iterating the source array
-    emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load the source string-array logical length before entering the CSV writer loop
-    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the source string-array length for the loop termination check
+    // -- prologue: 112-byte frame with rbp --
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
+    emitter.instruction("sub rsp, 112");                                         // reserve aligned stack space for writer state
 
-    emitter.label("__rt_fputcsv_loop_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the current field index before checking loop completion
-    emitter.instruction("cmp r10, QWORD PTR [rbp - 40]");                       // have we already emitted every field from the source string array?
-    emitter.instruction("jae __rt_fputcsv_newline_x86");                        // write the trailing newline once every field has been emitted
-    emitter.instruction("test r10, r10");                                       // is the current field index zero, meaning this is the first CSV field?
-    emitter.instruction("jz __rt_fputcsv_field_x86");                           // skip the comma separator before the first field
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the destination file descriptor as the first __rt_fd_write() argument for the comma separator
-    emitter.instruction("lea rsi, [rip + __rt_fputcsv_comma_lit]");             // pass the comma literal address as the second __rt_fd_write() argument
-    emitter.instruction("mov edx, 1");                                          // write exactly one comma byte between consecutive CSV fields
-    emitter.instruction("call __rt_fd_write");                                  // emit the comma separator through __rt_fd_write()
-    emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate the comma byte count into the running CSV write total
+    // -- save inputs --
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                         // preserve the destination file descriptor
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                        // preserve the source string-array pointer
+    emitter.instruction("mov QWORD PTR [rbp - 24], 0");                          // total written bytes start at zero
+    emitter.instruction("mov QWORD PTR [rbp - 32], 0");                          // current field index starts at zero
+    // -- save eol_ptr (rcx) and eol_len (r8) BEFORE unpacking csv_opts (which clobbers rcx) --
+    emitter.instruction("mov QWORD PTR [rbp - 64], rcx");                        // preserve eol_ptr before rcx is clobbered
+    emitter.instruction("mov QWORD PTR [rbp - 72], r8");                         // preserve eol_len (r8 not clobbered by unpack)
 
-    emitter.label("__rt_fputcsv_field_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the current field index before loading the next string slot from the array
-    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the source string-array pointer before computing the current field slot address
-    emitter.instruction("mov rcx, r10");                                        // copy the field index before scaling it into the 16-byte string-slot offset
-    emitter.instruction("shl rcx, 4");                                          // convert the field index into the byte offset of the current 16-byte string slot
-    emitter.instruction("lea rcx, [r11 + rcx + 24]");                           // compute the current string-slot address inside the source array payload region
-    emitter.instruction("mov r8, QWORD PTR [rcx]");                             // load the current field string pointer from the source array slot
-    emitter.instruction("mov r9, QWORD PTR [rcx + 8]");                         // load the current field string length from the source array slot
-    emitter.instruction("mov QWORD PTR [rbp - 48], r8");                        // preserve the current field string pointer across the quote scan and repeated write() calls
-    emitter.instruction("mov QWORD PTR [rbp - 56], r9");                        // preserve the current field string length across the quote scan and repeated write() calls
-    emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // needs_quote starts false before scanning the current field payload
-    emitter.instruction("xor ecx, ecx");                                        // start scanning the current field payload from byte index zero
+    // -- unpack csv_opts from rdx: sep=dl, enc=(rdx>>8)&0xFF, esc=(rdx>>16)&0xFF --
+    emitter.instruction("movzx ecx, dl");                                       // sep = csv_opts & 0xFF
+    emitter.instruction("mov QWORD PTR [rbp - 40], rcx");                         // save sep
+    emitter.instruction("shr rdx, 8");                                          // shift right 8 for enc
+    emitter.instruction("movzx ecx, dl");                                       // enc = (csv_opts >> 8) & 0xFF
+    emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                         // save enc
+    emitter.instruction("shr rdx, 8");                                          // shift right 8 more for esc
+    emitter.instruction("movzx ecx, dl");                                       // esc = (csv_opts >> 16) & 0xFF
+    emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                         // save esc
 
-    emitter.label("__rt_fputcsv_scan_x86");
-    emitter.instruction("cmp rcx, r9");                                         // have we scanned every byte of the current field payload?
-    emitter.instruction("jae __rt_fputcsv_write_x86");                          // proceed to field emission once the quote scan reaches the end of the payload
-    emitter.instruction("movzx edx, BYTE PTR [r8 + rcx]");                      // load the current field byte while deciding whether CSV quoting is required
-    emitter.instruction("cmp dl, 0x2C");                                        // does the current field byte contain a comma separator?
-    emitter.instruction("je __rt_fputcsv_need_q_x86");                          // quote the field when it contains a comma byte
-    emitter.instruction("cmp dl, 0x22");                                        // does the current field byte contain a double quote?
-    emitter.instruction("je __rt_fputcsv_need_q_x86");                          // quote the field when it contains a literal quote byte
-    emitter.instruction("cmp dl, 0x0A");                                        // does the current field byte contain a newline?
-    emitter.instruction("je __rt_fputcsv_need_q_x86");                          // quote the field when it contains a newline byte
-    emitter.instruction("add rcx, 1");                                          // advance to the next field byte while scanning for CSV quote triggers
-    emitter.instruction("jmp __rt_fputcsv_scan_x86");                           // continue scanning the field payload for quote-triggering bytes
+    // -- apply defaults: sep==0 -> 0x2C, enc==0 -> 0x22 --
+    emitter.instruction("cmp QWORD PTR [rbp - 40], 0");                           // sep == 0?
+    emitter.instruction("jne __rt_fputcsv_x_sep_ok");                            // if not, skip default
+    emitter.instruction("mov QWORD PTR [rbp - 40], 0x2c");                        // sep = ',' (0x2C)
+    emitter.label("__rt_fputcsv_x_sep_ok");
+    emitter.instruction("cmp QWORD PTR [rbp - 48], 0");                          // enc == 0?
+    emitter.instruction("jne __rt_fputcsv_x_enc_ok");                             // if not, skip default
+    emitter.instruction("mov QWORD PTR [rbp - 48], 0x22");                       // enc = '"' (0x22)
+    emitter.label("__rt_fputcsv_x_enc_ok");
 
-    emitter.label("__rt_fputcsv_need_q_x86");
-    emitter.instruction("mov QWORD PTR [rbp - 64], 1");                         // remember that the current field must be emitted inside CSV quotes
+    // -- get array length from header --
+    emitter.instruction("mov r10, QWORD PTR [rsi]");                             // load array length before entering the loop
+    emitter.instruction("mov QWORD PTR [rbp - 80], r10");                        // preserve the source array length
 
-    emitter.label("__rt_fputcsv_write_x86");
-    emitter.instruction("cmp QWORD PTR [rbp - 64], 0");                         // does the current field require CSV quoting based on the scan result?
-    emitter.instruction("je __rt_fputcsv_plain_x86");                           // write the field directly when no quotes or separators were found
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the destination file descriptor as the first __rt_fd_write() argument for the opening quote
-    emitter.instruction("lea rsi, [rip + __rt_fputcsv_quote_lit]");             // pass the quote literal address as the second __rt_fd_write() argument
-    emitter.instruction("mov edx, 1");                                          // write exactly one opening quote byte before the field payload
-    emitter.instruction("call __rt_fd_write");                                  // emit the opening quote through __rt_fd_write()
-    emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate the opening-quote byte count into the running CSV write total
-    emitter.instruction("mov QWORD PTR [rbp - 72], 0");                         // current byte index inside the quoted field starts at zero before the per-byte writer loop
+    // -- main loop: iterate over array elements --
+    emitter.label("__rt_fputcsv_x_loop");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                         // reload the current field index
+    emitter.instruction("cmp r10, QWORD PTR [rbp - 80]");                         // have we already emitted every field?
+    emitter.instruction("jae __rt_fputcsv_x_eol");                                // write the trailing eol once every field has been emitted
 
-    emitter.label("__rt_fputcsv_qloop_x86");
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 72]");                       // reload the current byte index before checking whether the quoted field payload is finished
-    emitter.instruction("cmp rcx, QWORD PTR [rbp - 56]");                       // have we emitted every byte from the quoted field payload?
-    emitter.instruction("jae __rt_fputcsv_close_q_x86");                        // write the closing quote once all quoted field bytes have been emitted
-    emitter.instruction("mov r8, QWORD PTR [rbp - 48]");                        // reload the current field string pointer before fetching the next quoted field byte
-    emitter.instruction("movzx edx, BYTE PTR [r8 + rcx]");                      // load the current field byte while deciding whether it must be escaped as \"\"
-    emitter.instruction("cmp dl, 0x22");                                        // is the current field byte itself a double quote that must be escaped in CSV output?
-    emitter.instruction("jne __rt_fputcsv_qchar_x86");                          // skip the escape-prefix write when the current byte is not a quote
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the destination file descriptor as the first __rt_fd_write() argument for the escaped quote prefix
-    emitter.instruction("lea rsi, [rip + __rt_fputcsv_quote_lit]");             // pass the quote literal address as the second __rt_fd_write() argument for the escaped quote prefix
-    emitter.instruction("mov edx, 1");                                          // write the extra quote byte that escapes a literal quote in CSV output
-    emitter.instruction("call __rt_fd_write");                                  // emit the escape-prefix quote through __rt_fd_write()
-    emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate the escape-prefix byte count into the running CSV write total
+    // -- write separator before 2nd+ fields --
+    emitter.instruction("test r10, r10");                                         // is the current field index zero?
+    emitter.instruction("jz __rt_fputcsv_x_field");                              // skip the separator before the first field
+    emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                          // pass the destination fd for the separator
+    emitter.instruction("lea rsi, [rbp - 40]");                                  // ptr = address of sep byte on stack
+    emitter.instruction("mov edx, 1");                                           // write exactly one separator byte
+    emitter.instruction("call __rt_fd_write");                                   // emit the separator through __rt_fd_write()
+    emitter.instruction("add QWORD PTR [rbp - 24], rax");                         // accumulate the separator byte count
 
-    emitter.label("__rt_fputcsv_qchar_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the destination file descriptor as the first __rt_fd_write() argument for the current field byte
-    emitter.instruction("mov r8, QWORD PTR [rbp - 48]");                        // reload the current field string pointer before writing the current field byte
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 72]");                       // reload the current byte index before computing the source pointer of the current field byte
-    emitter.instruction("lea rsi, [r8 + rcx]");                                 // point __rt_fd_write() at the current field byte inside the source string payload
-    emitter.instruction("mov edx, 1");                                          // write exactly one payload byte from the quoted field
-    emitter.instruction("call __rt_fd_write");                                  // emit the current field byte through __rt_fd_write()
-    emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate the current field-byte count into the running CSV write total
-    emitter.instruction("add QWORD PTR [rbp - 72], 1");                         // advance to the next byte inside the quoted field payload
-    emitter.instruction("jmp __rt_fputcsv_qloop_x86");                          // continue emitting the quoted field payload byte-by-byte
+    // -- load current field from array --
+    emitter.label("__rt_fputcsv_x_field");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                         // reload the current field index
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                         // reload the source string-array pointer
+    emitter.instruction("mov rcx, r10");                                         // copy the field index before scaling
+    emitter.instruction("shl rcx, 4");                                           // convert the field index into the byte offset
+    emitter.instruction("lea rcx, [r11 + rcx + 24]");                            // compute the current string-slot address
+    emitter.instruction("mov r8, QWORD PTR [rcx]");                              // load the current field string pointer
+    emitter.instruction("mov r9, QWORD PTR [rcx + 8]");                           // load the current field string length
+    emitter.instruction("mov QWORD PTR [rbp - 88], r8");                         // preserve the current field pointer
+    emitter.instruction("mov QWORD PTR [rbp - 96], r9");                         // preserve the current field length
+    emitter.instruction("mov QWORD PTR [rbp - 104], 0");                         // needs_quote starts false
+    emitter.instruction("xor ecx, ecx");                                         // start scanning from byte index zero
 
-    emitter.label("__rt_fputcsv_close_q_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the destination file descriptor as the first __rt_fd_write() argument for the closing quote
-    emitter.instruction("lea rsi, [rip + __rt_fputcsv_quote_lit]");             // pass the quote literal address as the second __rt_fd_write() argument for the closing quote
-    emitter.instruction("mov edx, 1");                                          // write exactly one closing quote byte after the quoted field payload
-    emitter.instruction("call __rt_fd_write");                                  // emit the closing quote through __rt_fd_write()
-    emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate the closing-quote byte count into the running CSV write total
-    emitter.instruction("jmp __rt_fputcsv_next_x86");                           // advance to the next field after finishing the quoted field emission
+    // -- scan field for quote-triggering bytes --
+    emitter.label("__rt_fputcsv_x_scan");
+    emitter.instruction("cmp rcx, r9");                                          // have we scanned every byte?
+    emitter.instruction("jae __rt_fputcsv_x_scan_done");                         // proceed to field emission once scan completes
+    emitter.instruction("movzx edx, BYTE PTR [r8 + rcx]");                        // load the current field byte
+    emitter.instruction("cmp dl, BYTE PTR [rbp - 40]");                           // byte == sep?
+    emitter.instruction("je __rt_fputcsv_x_need_q");                             // quote the field when it contains the separator
+    emitter.instruction("cmp dl, BYTE PTR [rbp - 48]");                          // byte == enc?
+    emitter.instruction("je __rt_fputcsv_x_need_q");                             // quote the field when it contains the enclosure
+    emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                          // esc == 0?
+    emitter.instruction("jz __rt_fputcsv_x_scan_ws");                            // skip esc check if esc is disabled
+    emitter.instruction("cmp dl, BYTE PTR [rbp - 56]");                          // byte == esc?
+    emitter.instruction("je __rt_fputcsv_x_need_q");                             // quote the field when it contains the escape
+    emitter.label("__rt_fputcsv_x_scan_ws");
+    emitter.instruction("cmp dl, 0x20");                                         // byte == space?
+    emitter.instruction("je __rt_fputcsv_x_need_q");                             // quote the field when it contains whitespace
+    emitter.instruction("cmp dl, 0x09");                                         // byte == tab?
+    emitter.instruction("je __rt_fputcsv_x_need_q");                             // quote the field when it contains a tab
+    emitter.instruction("cmp dl, 0x0a");                                         // byte == newline?
+    emitter.instruction("je __rt_fputcsv_x_need_q");                             // quote the field when it contains a newline
+    emitter.instruction("cmp dl, 0x0d");                                         // byte == carriage return?
+    emitter.instruction("je __rt_fputcsv_x_need_q");                             // quote the field when it contains a carriage return
+    emitter.instruction("add rcx, 1");                                           // advance to the next field byte
+    emitter.instruction("jmp __rt_fputcsv_x_scan");                              // continue scanning
 
-    emitter.label("__rt_fputcsv_plain_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the destination file descriptor as the first __rt_fd_write() argument for the plain field path
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // pass the current field string pointer as the second __rt_fd_write() argument for the plain field path
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // pass the current field string length as the third __rt_fd_write() argument for the plain field path
-    emitter.instruction("call __rt_fd_write");                                  // emit the entire unquoted field payload through one __rt_fd_write() call
-    emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate the plain field byte count into the running CSV write total
+    emitter.label("__rt_fputcsv_x_need_q");
+    emitter.instruction("mov QWORD PTR [rbp - 104], 1");                         // remember that the current field must be quoted
 
-    emitter.label("__rt_fputcsv_next_x86");
-    emitter.instruction("add QWORD PTR [rbp - 32], 1");                         // advance to the next field index before looping back to the CSV field iterator
-    emitter.instruction("jmp __rt_fputcsv_loop_x86");                           // continue emitting the remaining CSV fields from the source string array
+    // -- write the field (quoted or unquoted) --
+    emitter.label("__rt_fputcsv_x_scan_done");
+    emitter.instruction("cmp QWORD PTR [rbp - 104], 0");                         // does the current field require quoting?
+    emitter.instruction("je __rt_fputcsv_x_plain");                              // write the field directly when no quoting needed
 
-    emitter.label("__rt_fputcsv_newline_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the destination file descriptor as the first __rt_fd_write() argument for the trailing newline
-    emitter.instruction("lea rsi, [rip + __rt_fputcsv_nl_lit]");                // pass the newline literal address as the second __rt_fd_write() argument
-    emitter.instruction("mov edx, 1");                                          // write exactly one trailing newline byte after the last CSV field
-    emitter.instruction("call __rt_fd_write");                                  // emit the trailing newline through __rt_fd_write()
-    emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate the trailing newline byte count into the running CSV write total
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the total number of bytes that fputcsv() emitted through __rt_fd_write()
-    emitter.instruction("add rsp, 80");                                         // release the CSV writer spill slots before returning to the caller
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the x86_64 CSV writer completes
-    emitter.instruction("ret");                                                 // return the total written byte count in the x86_64 integer result register
+    // -- write opening quote (enc) --
+    emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                          // pass the destination fd for the opening quote
+    emitter.instruction("lea rsi, [rbp - 48]");                                  // ptr = address of enc byte on stack
+    emitter.instruction("mov edx, 1");                                          // write exactly one opening quote byte
+    emitter.instruction("call __rt_fd_write");                                   // emit the opening quote
+    emitter.instruction("add QWORD PTR [rbp - 24], rax");                        // accumulate the opening-quote byte count
+    emitter.instruction("mov QWORD PTR [rbp - 112], 0");                         // current byte index inside the quoted field
 
-    emitter.label("__rt_fputcsv_comma_lit");
-    emitter.instruction(".ascii \",\"");                                        // comma character literal used as the CSV field separator
-    emitter.label("__rt_fputcsv_quote_lit");
-    emitter.instruction(".ascii \"\\\"\"");                                     // double quote character literal used for CSV quoting and escaping
+    // -- write field contents, escaping internal quotes/escapes --
+    emitter.label("__rt_fputcsv_x_qloop");
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 112]");                       // reload the current byte index
+    emitter.instruction("cmp rcx, QWORD PTR [rbp - 96]");                         // have we emitted every byte from the field?
+    emitter.instruction("jae __rt_fputcsv_x_close_q");                           // write the closing quote once all bytes emitted
+    emitter.instruction("mov r8, QWORD PTR [rbp - 88]");                         // reload the current field string pointer
+    emitter.instruction("movzx edx, BYTE PTR [r8 + rcx]");                        // load the current field byte
+    emitter.instruction("add QWORD PTR [rbp - 112], 1");                         // advance the byte index
+    emitter.instruction("cmp dl, BYTE PTR [rbp - 48]");                          // is the byte the enclosure?
+    emitter.instruction("jne __rt_fputcsv_x_qesc_chk");                          // skip to esc check if not enclosure
+    // -- byte is enc: escape via doubling or escape char --
+    emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                          // esc == 0?
+    emitter.instruction("jne __rt_fputcsv_x_q_escape");                          // esc != 0 -> write esc + enc
+    // -- doubling mode: write enc twice --
+    emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                         // pass the destination fd
+    emitter.instruction("lea rsi, [rbp - 48]");                                  // ptr = address of enc byte
+    emitter.instruction("mov edx, 1");                                          // write one enc
+    emitter.instruction("call __rt_fd_write");                                  // emit first enc
+    emitter.instruction("add QWORD PTR [rbp - 24], rax");                        // accumulate
+    emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                         // pass the destination fd
+    emitter.instruction("lea rsi, [rbp - 48]");                                 // ptr = address of enc byte
+    emitter.instruction("mov edx, 1");                                          // write second enc
+    emitter.instruction("call __rt_fd_write");                                  // emit second enc
+    emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate
+    emitter.instruction("jmp __rt_fputcsv_x_qloop");                            // continue the quoted field loop
+
+    emitter.label("__rt_fputcsv_x_q_escape");
+    // -- escape mode: write esc + enc --
+    emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                         // pass the destination fd
+    emitter.instruction("lea rsi, [rbp - 56]");                                  // ptr = address of esc byte
+    emitter.instruction("mov edx, 1");                                          // write one esc
+    emitter.instruction("call __rt_fd_write");                                  // emit esc
+    emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate
+    emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                         // pass the destination fd
+    emitter.instruction("lea rsi, [rbp - 48]");                                 // ptr = address of enc byte
+    emitter.instruction("mov edx, 1");                                          // write one enc
+    emitter.instruction("call __rt_fd_write");                                  // emit enc
+    emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate
+    emitter.instruction("jmp __rt_fputcsv_x_qloop");                            // continue the quoted field loop
+
+    emitter.label("__rt_fputcsv_x_qesc_chk");
+    // -- check if byte == esc (and esc != 0): double the esc --
+    emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                         // esc == 0?
+    emitter.instruction("jz __rt_fputcsv_x_qchar");                             // skip esc doubling if esc disabled
+    emitter.instruction("cmp dl, BYTE PTR [rbp - 56]");                         // byte == esc?
+    emitter.instruction("jne __rt_fputcsv_x_qchar");                            // if not esc, write byte as-is
+    // -- byte is esc: write esc twice --
+    emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                        // pass the destination fd
+    emitter.instruction("lea rsi, [rbp - 56]");                                 // ptr = address of esc byte
+    emitter.instruction("mov edx, 1");                                         // write one esc
+    emitter.instruction("call __rt_fd_write");                                 // emit first esc
+    emitter.instruction("add QWORD PTR [rbp - 24], rax");                      // accumulate
+    emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                        // pass the destination fd
+    emitter.instruction("lea rsi, [rbp - 56]");                                // ptr = address of esc byte
+    emitter.instruction("mov edx, 1");                                         // write second esc
+    emitter.instruction("call __rt_fd_write");                                 // emit second esc
+    emitter.instruction("add QWORD PTR [rbp - 24], rax");                      // accumulate
+    emitter.instruction("jmp __rt_fputcsv_x_qloop");                           // continue the quoted field loop
+
+    emitter.label("__rt_fputcsv_x_qchar");
+    // -- write the actual character --
+    emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                        // pass the destination fd
+    emitter.instruction("mov r8, QWORD PTR [rbp - 88]");                        // reload the current field string pointer
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 112]");                      // reload the byte index (already advanced)
+    emitter.instruction("sub rcx, 1");                                        // index of byte to write
+    emitter.instruction("lea rsi, [r8 + rcx]");                                // pointer to the byte
+    emitter.instruction("mov edx, 1");                                         // write exactly one byte
+    emitter.instruction("call __rt_fd_write");                                 // emit the byte
+    emitter.instruction("add QWORD PTR [rbp - 24], rax");                      // accumulate
+    emitter.instruction("jmp __rt_fputcsv_x_qloop");                           // continue the quoted field loop
+
+    // -- write closing quote (enc) --
+    emitter.label("__rt_fputcsv_x_close_q");
+    emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                       // pass the destination fd
+    emitter.instruction("lea rsi, [rbp - 48]");                                // ptr = address of enc byte
+    emitter.instruction("mov edx, 1");                                         // write one closing quote
+    emitter.instruction("call __rt_fd_write");                                // emit the closing quote
+    emitter.instruction("add QWORD PTR [rbp - 24], rax");                      // accumulate
+    emitter.instruction("jmp __rt_fputcsv_x_next");                            // advance to the next field
+
+    // -- write plain field (no quoting needed) --
+    emitter.label("__rt_fputcsv_x_plain");
+    emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                       // pass the destination fd
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 88]");                       // pass the field pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 96]");                      // pass the field length
+    emitter.instruction("call __rt_fd_write");                                 // emit the plain field
+    emitter.instruction("add QWORD PTR [rbp - 24], rax");                      // accumulate
+
+    // -- advance to next element --
+    emitter.label("__rt_fputcsv_x_next");
+    emitter.instruction("add QWORD PTR [rbp - 32], 1");                        // advance the field index
+    emitter.instruction("jmp __rt_fputcsv_x_loop");                           // continue emitting the remaining fields
+
+    // -- write trailing eol (custom or default "\n") --
+    emitter.label("__rt_fputcsv_x_eol");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                      // reload eol_ptr
+    emitter.instruction("test rax, rax");                                      // eol_ptr == 0?
+    emitter.instruction("jz __rt_fputcsv_x_eol_default");                      // use default "\n"
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 72]");                      // reload eol_len
+    emitter.instruction("test rcx, rcx");                                     // eol_len == 0?
+    emitter.instruction("jz __rt_fputcsv_x_eol_default");                      // use default "\n"
+    // -- write custom eol --
+    emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                      // pass the destination fd
+    emitter.instruction("mov rsi, rax");                                      // pass eol pointer
+    emitter.instruction("mov rdx, rcx");                                      // pass eol length
+    emitter.instruction("call __rt_fd_write");                                // emit the eol
+    emitter.instruction("add QWORD PTR [rbp - 24], rax");                      // accumulate
+    emitter.instruction("jmp __rt_fputcsv_x_ret");                            // return
+
+    emitter.label("__rt_fputcsv_x_eol_default");
+    emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                      // pass the destination fd
+    emitter.instruction("lea rsi, [rip + __rt_fputcsv_nl_lit]");               // pass the newline literal address
+    emitter.instruction("mov edx, 1");                                        // write exactly one trailing newline byte
+    emitter.instruction("call __rt_fd_write");                                // emit the trailing newline
+    emitter.instruction("add QWORD PTR [rbp - 24], rax");                      // accumulate the trailing newline byte count
+
+    // -- return total bytes written --
+    emitter.label("__rt_fputcsv_x_ret");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                      // return the total written byte count
+    emitter.instruction("leave");                                             // restore rbp + rsp
+    emitter.instruction("ret");                                               // return to caller
+
+    // -- literal data for newline --
     emitter.label("__rt_fputcsv_nl_lit");
-    emitter.instruction(".ascii \"\\n\"");                                      // trailing newline character literal written after the final CSV field
+    emitter.instruction(".ascii \"\\n\"");                                    // trailing newline character literal
 }

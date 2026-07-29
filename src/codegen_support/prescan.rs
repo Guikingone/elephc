@@ -202,6 +202,16 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    // STREAM_PF_INET6 is target-divergent (AF_INET6 = 30 on macOS, 10 on Linux).
+    let pf_inet6: i64 = match target_platform {
+        Platform::MacOS => 30,
+        Platform::Linux => 10,
+        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+    };
+    constants.insert(
+        "STREAM_PF_INET6".to_string(),
+        (ExprKind::IntLiteral(pf_inet6), PhpType::Int),
+    );
     for (name, value) in PREG_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),

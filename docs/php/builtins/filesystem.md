@@ -48,7 +48,7 @@ sidebar:
 | [`mkdir()`](./filesystem/mkdir.md) | `(string $directory): bool` | `bool` | ✓ | ✓ |
 | [`pathinfo()`](./filesystem/pathinfo.md) | `(string $path, int $flags = 15): array` | `array` | ✓ | ✓ |
 | [`putenv()`](./filesystem/putenv.md) | `(string $assignment): bool` | `bool` | ✓ | ✓ |
-| [`readfile()`](./filesystem/readfile.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
+| [`readfile()`](./filesystem/readfile.md) | `(string $filename, bool $use_include_path = false, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`readlink()`](./filesystem/readlink.md) | `(string $path): mixed` | `mixed` | ✓ | ✓ |
 | [`realpath()`](./filesystem/realpath.md) | `(string $path): mixed` | `mixed` | ✓ | ✓ |
 | [`realpath_cache_get()`](./filesystem/realpath_cache_get.md) | `(): array` | `array` | ✓ | ✓ |

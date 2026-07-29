@@ -37,8 +37,8 @@ code should guard failed opens before using the handle.
 | `fseek()` | `fseek(resource $handle, $offset [, $whence]): int` | Seek a stream. User wrappers route through `stream_seek()`. |
 | `ftell()` | `ftell(resource $handle): int` | Return the current stream position. User wrappers route through `stream_tell()`. |
 | `rewind()` | `rewind(resource $handle): bool` | Seek to the start of the stream. |
-| `fgetcsv()` | `fgetcsv(resource $handle [, $sep]): array` | Read and parse one CSV line. User wrappers are read through `stream_read()`. |
-| `fputcsv()` | `fputcsv(resource $handle, $fields [, $sep]): int` | Format and write one CSV line. User wrappers are written through `stream_write()`. |
+| `fgetcsv()` | `fgetcsv(resource $handle, ?int $length = null, string $separator = ',', string $enclosure = '"', string $escape = ''): array` | Read and parse one CSV line. Custom separator, enclosure, and escape (PHP 8.4 default `''` = RFC 4180 doubling mode) are honored. User wrappers are read through `stream_read()`. |
+| `fputcsv()` | `fputcsv(resource $handle, array $fields, string $separator = ',', string $enclosure = '"', string $escape = '\\', string $eol = "\n"): int` | Format and write one CSV line with custom separator, enclosure, escape, and end-of-line (PHP 8.1+ `eol`). User wrappers are written through `stream_write()`. |
 | `readline()` | `readline([$prompt]): string` | Read a line from standard input. |
 | `readfile()` | `readfile($filename): int\|false` | Open a path or wrapper URL, stream it to stdout, and return copied bytes; returns `false` when open fails. |
 | `fpassthru()` | `fpassthru(resource $handle): int` | Stream the remaining bytes of an open handle to stdout, returning `-1` on read failure. |

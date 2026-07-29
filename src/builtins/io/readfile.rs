@@ -10,14 +10,18 @@
 //!   failure. A check hook is required because the union return cannot be expressed
 //!   through the scalar `returns:` field.
 
-use crate::builtins::spec::BuiltinCheckCtx;
+use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
     name: "readfile",
     area: Io,
-    params: [filename: Str],
+    params: [
+        filename: Str,
+        use_include_path: Bool = DefaultSpec::Bool(false),
+        context: Mixed = DefaultSpec::Null
+    ],
     returns: Mixed,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(

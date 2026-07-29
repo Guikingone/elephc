@@ -2,7 +2,7 @@
 title: "fseek() — internals"
 description: "Compiler internals for fseek(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 177
+  order: 178
 ---
 
 ## `fseek()` — internals

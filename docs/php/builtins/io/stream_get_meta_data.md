@@ -2,7 +2,7 @@
 title: "stream_get_meta_data()"
 description: "Retrieves metadata from streams/file pointers."
 sidebar:
-  order: 223
+  order: 230
 ---
 
 ## stream_get_meta_data()

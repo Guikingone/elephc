@@ -27,11 +27,13 @@
 //!   accounting. `$closing` is passed as Mixed(int=0) (we don't yet
 //!   distinguish closing from non-closing dispatches).
 //! - The method's `int` return value (PSFS_PASS_ON / FEED_ME /
-//!   ERR_FATAL) is observed only to decide whether to emit output —
-//!   empty output brigade always yields a zero-length result regardless
-//!   of the status code. v1 limitation: FEED_ME doesn't request more
-//!   input from the stream layer; ERR_FATAL doesn't propagate as an
-//!   error to the caller.
+//!   ERR_FATAL) is observed to decide the result:
+//!   - `PSFS_PASS_ON` (2): walk `$out->_buckets` and concatenate the
+//!     `data` strings into `_stream_filter_buf`.
+//!   - `PSFS_FEED_ME` (1): return the original input buffer unchanged
+//!     so the stream layer can re-read and re-invoke the filter.
+//!   - `PSFS_ERR_FATAL` (0): return an empty result to signal a fatal
+//!     filter error to the caller.
 
 use crate::codegen_support::{
     abi, emit::Emitter, platform::Arch, sentinels::emit_branch_if_null_container,
@@ -178,7 +180,14 @@ fn emit_user_filter_brigade_invoke_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x5, [sp, #24]");                                   // method ptr
     emitter.instruction("blr x5");                                              // invoke filter()
 
-    // -- Walk out_brigade._buckets and concatenate the data fields --
+    // -- observe the PSFS return code (x0): 0=ERR_FATAL, 1=FEED_ME, 2=PASS_ON --
+    emitter.instruction("str x0, [sp, #64]");                                   // save PSFS code (reuse bucket slot, now free)
+    emitter.instruction("cmp x0, #0");                                          // ERR_FATAL?
+    emitter.instruction("b.eq __rt_ufbi_fatal");                                 // -> empty result (error signal)
+    emitter.instruction("cmp x0, #1");                                          // FEED_ME?
+    emitter.instruction("b.eq __rt_ufbi_feed_me");                              // -> passthrough (return input unchanged)
+
+    // -- PASS_ON: walk out_brigade._buckets and concatenate the data fields --
     emitter.instruction("ldr x0, [sp, #40]");                                   // out_brigade obj
     abi::emit_symbol_address(emitter, "x1", "_brigade_buckets_key");
     emitter.instruction("mov x2, #8");                                          // prepare AArch64 call argument
@@ -256,6 +265,22 @@ fn emit_user_filter_brigade_invoke_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
     emitter.instruction("add sp, sp, #128");                                    // release runtime stack frame
     emitter.instruction("ret");                                                 // return to caller
+
+    // -- PSFS_ERR_FATAL: return empty (the stream layer treats this as a filter error) --
+    emitter.label("__rt_ufbi_fatal");
+    abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");
+    emitter.instruction("mov x2, #0");                                          // empty result signals a fatal filter error
+    emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #128");                                    // release runtime stack frame
+    emitter.instruction("ret");                                                 // return empty result to the caller
+
+    // -- PSFS_FEED_ME: return the original input unchanged (the stream layer will re-read) --
+    emitter.label("__rt_ufbi_feed_me");
+    emitter.instruction("ldr x1, [sp, #8]");                                    // original buf_ptr
+    emitter.instruction("ldr x2, [sp, #16]");                                   // original buf_len
+    emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #128");                                    // release runtime stack frame
+    emitter.instruction("ret");                                                 // return original input unchanged
 
     emitter.label("__rt_ufbi_empty");
     abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");
@@ -384,7 +409,16 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // consumed mixed
     emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // closing mixed
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // method ptr
-    emitter.instruction("call r11");                                            // call selected function pointer
+    emitter.instruction("call r11");                                            // call filter()
+
+    // -- observe the PSFS return code (rax): 0=ERR_FATAL, 1=FEED_ME, 2=PASS_ON --
+    emitter.instruction("mov QWORD PTR [rbp - 72], rax");                        // save PSFS code (reuse bucket slot, now free)
+    emitter.instruction("test rax, rax");                                       // ERR_FATAL?
+    emitter.instruction("jz __rt_ufbi_fatal_x");                                 // -> empty result (error signal)
+    emitter.instruction("cmp rax, 1");                                          // FEED_ME?
+    emitter.instruction("je __rt_ufbi_feed_me_x");                              // -> passthrough (return input unchanged)
+
+    // -- PASS_ON: walk out_brigade._buckets, concatenate data --
 
     // -- Walk out_brigade._buckets, concatenate data --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // prepare SysV call argument
@@ -460,6 +494,30 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // move runtime value between registers
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
+
+    // -- PSFS_ERR_FATAL: return empty (the stream layer treats this as a filter error) --
+    emitter.label("__rt_ufbi_fatal_x");
+    abi::emit_symbol_address(emitter, "rax", "_stream_filter_buf");             // load runtime data address
+    emitter.instruction("xor edx, edx");                                        // empty result signals a fatal filter error
+    emitter.instruction("mov r12, QWORD PTR [rbp - 96]");                       // restore callee-saved regs
+    emitter.instruction("mov r13, QWORD PTR [rbp - 104]");                      // move runtime value between registers
+    emitter.instruction("mov r14, QWORD PTR [rbp - 112]");                      // move runtime value between registers
+    emitter.instruction("mov r15, QWORD PTR [rbp - 120]");                      // move runtime value between registers
+    emitter.instruction("mov rsp, rbp");                                        // move runtime value between registers
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return empty result to the caller
+
+    // -- PSFS_FEED_ME: return the original input unchanged (the stream layer will re-read) --
+    emitter.label("__rt_ufbi_feed_me_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // original buf_ptr
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // original buf_len
+    emitter.instruction("mov r12, QWORD PTR [rbp - 96]");                       // restore callee-saved regs
+    emitter.instruction("mov r13, QWORD PTR [rbp - 104]");                      // move runtime value between registers
+    emitter.instruction("mov r14, QWORD PTR [rbp - 112]");                      // move runtime value between registers
+    emitter.instruction("mov r15, QWORD PTR [rbp - 120]");                      // move runtime value between registers
+    emitter.instruction("mov rsp, rbp");                                        // move runtime value between registers
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return original input unchanged
 
     emitter.label("__rt_ufbi_empty_x");
     abi::emit_symbol_address(emitter, "rax", "_stream_filter_buf");             // load runtime data address

@@ -435,6 +435,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_closedir(emitter);
     io::emit_rewinddir(emitter);
     io::emit_stream_get_meta_data(emitter);
+    io::emit_stream_get_filters(emitter);
+    io::emit_get_http_response_headers(emitter);
+    io::emit_stream_record_meta(emitter);
     io::emit_gethostname(emitter);
     io::emit_gethostbyname(emitter);
     io::emit_gethostbyaddr(emitter);

@@ -2,7 +2,7 @@
 title: "fgetcsv() — internals"
 description: "Compiler internals for fgetcsv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 165
+  order: 166
 ---
 
 ## `fgetcsv()` — internals
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function fgetcsv(resource $stream, int $length = null, string $separator = ','): array
+function fgetcsv(resource $stream, int $length = null, string $separator = ',', string $enclosure = '"', string $escape = '\\'): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 1–3 arguments (2 optional).
+- **Arity**: takes 1–5 arguments (4 optional).
 
 ## Eval interpreter (magician)
 

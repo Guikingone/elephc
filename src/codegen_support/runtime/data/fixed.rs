@@ -466,8 +466,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // readdir/closedir/rewinddir helpers probe this table first; a non-zero
     // entry routes them through the glob iterator instead of the libc DIR*.
     out.push_str(".comm _glob_handles, 2048, 3\n");
-    out.push_str(".comm _stream_read_filters, 256, 3\n");
-    out.push_str(".comm _stream_write_filters, 256, 3\n");
+    // _stream_read_filters / _stream_write_filters: per-fd filter chain,
+    // 2 slots per fd (slot 0 = first applied, slot 1 = second). A zero byte
+    // means "no filter". 256 fds × 2 slots = 512 bytes each.
+    out.push_str(".comm _stream_read_filters, 512, 3\n");
+    out.push_str(".comm _stream_write_filters, 512, 3\n");
     out.push_str(".comm _stream_filter_buf, 65536, 3\n");
     // 64KB scratch used by length-growing stream filters (convert.base64-encode,
     // convert.quoted-printable-encode). The filter encodes into the scratch and
@@ -632,6 +635,19 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // returns the previous value (the PHP-observable contract); the size does not
     // currently change read granularity (reads return identical data).
     out.push_str(".comm _stream_chunk_size, 2048, 3\n");
+    // _stream_uri_ptr / _stream_uri_len: per-fd pointer/length of the URI that
+    // opened the stream, indexed by raw fd up to 256. A null pointer means
+    // "unset" and stream_get_meta_data() falls back to the empty string. The
+    // URI is persisted via __rt_str_persist so it survives past the caller's
+    // string lifetime.
+    out.push_str(".comm _stream_uri_ptr, 2048, 3\n");
+    out.push_str(".comm _stream_uri_len, 2048, 3\n");
+    // _stream_wrapper_id: per-fd small integer identifying the wrapper that
+    // opened the stream (0=plainfile, 1=http, 2=https, 3=ftp, 4=ftps,
+    // 5=phar, 6=php, 7=data, 8=compress.zlib, 9=compress.bzip2, 10=glob,
+    // 11=user). stream_get_meta_data() maps the id to the wrapper_type
+    // string; 0 (unset) falls back to "plainfile".
+    out.push_str(".comm _stream_wrapper_id, 2048, 3\n");
     // _stream_connect_host: per-fd transport host string (ptr, len) captured by
     // stream_socket_client so stream_socket_enable_crypto can default the TLS
     // SNI / peer-name to the connection host when no ssl.peer_name context
@@ -902,6 +918,17 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // __rt_hash_get. v1 limitation: only one active context at a time —
     // a fresh stream_context_create overwrites the slot.
     out.push_str(".comm _stream_context_options, 8, 3\n");
+    // _stream_context_table: per-context-handle options hash pointers,
+    // indexed by context id (1..=16). 16 slots × 8 B = 128 bytes.
+    out.push_str(".comm _stream_context_table, 128, 3\n");
+    // _stream_context_next_id: monotonic counter for the next context id.
+    out.push_str(".comm _stream_context_next_id, 8, 3\n");
+    // _http_resp_header_end: byte offset of the body start within
+    // _http_resp_buf, set by __rt_http_open after the CRLFCRLF scan.
+    out.push_str(".comm _http_resp_header_end, 8, 3\n");
+    // _eir_global_http_u_response_u_header: global slot for $http_response_header.
+    // The mangled name (underscore → _u) matches ir_global_symbol("http_response_header").
+    out.push_str(".comm _eir_global_http_u_response_u_header, 8, 3\n");
     // var_dump body literals (rodata): per-element prefix/suffix bytes used by
     // the array/hash walkers. NONE of them carry a leading indent: every
     // var_dump line is padded by `__rt_vd_pad`, which writes `_vd_indent`
@@ -1065,6 +1092,17 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _meta_stype_stdio\n_meta_stype_stdio:\n    .ascii \"STDIO\"\n");
     out.push_str(".globl _meta_stype_socket\n_meta_stype_socket:\n    .ascii \"tcp_socket\"\n");
     out.push_str(".globl _meta_wrapper_plainfile\n_meta_wrapper_plainfile:\n    .ascii \"plainfile\"\n");
+    out.push_str(".globl _meta_wrapper_http\n_meta_wrapper_http:\n    .ascii \"http\"\n");
+    out.push_str(".globl _meta_wrapper_https\n_meta_wrapper_https:\n    .ascii \"https\"\n");
+    out.push_str(".globl _meta_wrapper_ftp\n_meta_wrapper_ftp:\n    .ascii \"ftp\"\n");
+    out.push_str(".globl _meta_wrapper_ftps\n_meta_wrapper_ftps:\n    .ascii \"ftps\"\n");
+    out.push_str(".globl _meta_wrapper_phar\n_meta_wrapper_phar:\n    .ascii \"phar\"\n");
+    out.push_str(".globl _meta_wrapper_php\n_meta_wrapper_php:\n    .ascii \"php\"\n");
+    out.push_str(".globl _meta_wrapper_data\n_meta_wrapper_data:\n    .ascii \"data\"\n");
+    out.push_str(".globl _meta_wrapper_zlib\n_meta_wrapper_zlib:\n    .ascii \"compress.zlib\"\n");
+    out.push_str(".globl _meta_wrapper_bzip2\n_meta_wrapper_bzip2:\n    .ascii \"compress.bzip2\"\n");
+    out.push_str(".globl _meta_wrapper_glob\n_meta_wrapper_glob:\n    .ascii \"glob\"\n");
+    out.push_str(".globl _meta_wrapper_user\n_meta_wrapper_user:\n    .ascii \"user\"\n");
     out.push_str(".globl _meta_mode_r\n_meta_mode_r:\n    .ascii \"r\"\n");
     out.push_str(".globl _meta_mode_w\n_meta_mode_w:\n    .ascii \"w\"\n");
     out.push_str(".globl _meta_mode_rw\n_meta_mode_rw:\n    .ascii \"r+\"\n");

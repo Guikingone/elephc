@@ -379,6 +379,8 @@ pub fn emit_http(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_http_open_scan_next");                       // not the separator
     emitter.instruction("add x6, x6, #4");                                      // the body begins just past CRLFCRLF
     emitter.instruction("str x6, [sp, #32]");                                   // save the body start offset
+    abi::emit_symbol_address(emitter, "x9", "_http_resp_header_end");
+    emitter.instruction("str x6, [x9]");                                        // store the header end for $http_response_header
     emitter.instruction("b __rt_http_open_body");                               // headers are stripped
     emitter.label("__rt_http_open_scan_next");
     emitter.instruction("add x6, x6, #1");                                      // advance the scan index
@@ -760,7 +762,9 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_http_open_scan_next_x86");                    // not the separator
     emitter.instruction("lea rax, [rcx + 4]");                                  // the body begins just past CRLFCRLF
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the body start offset
-    emitter.instruction("jmp __rt_http_open_body_x86");                         // headers are stripped
+    abi::emit_symbol_address(emitter, "r9", "_http_resp_header_end");
+    emitter.instruction("mov QWORD PTR [r9], rax");                             // store the header end for $http_response_header
+    emitter.instruction("jmp __rt_http_open_body_x86");                        // headers are stripped
     emitter.label("__rt_http_open_scan_next_x86");
     emitter.instruction("inc rcx");                                             // advance the scan index
     emitter.instruction("jmp __rt_http_open_scan_x86");                         // keep scanning for the separator

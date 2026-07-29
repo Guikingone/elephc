@@ -16,9 +16,9 @@
 
 pub(crate) const STREAM_INT_CONSTANTS: &[(&str, i64)] = &[
     // Client / server connection flags.
-    ("STREAM_CLIENT_PERSISTENT", 1),
-    ("STREAM_CLIENT_ASYNC_CONNECT", 2),
-    ("STREAM_CLIENT_CONNECT", 4),
+    ("STREAM_CLIENT_CONNECT", 1),
+    ("STREAM_CLIENT_PERSISTENT", 2),
+    ("STREAM_CLIENT_ASYNC_CONNECT", 4),
     ("STREAM_SERVER_BIND", 4),
     ("STREAM_SERVER_LISTEN", 8),
     // Shutdown directions for stream_socket_shutdown().
@@ -98,11 +98,13 @@ pub(crate) const STREAM_INT_CONSTANTS: &[(&str, i64)] = &[
     ("STREAM_META_GROUP_NAME", 4),
     ("STREAM_META_GROUP", 5),
     ("STREAM_META_ACCESS", 6),
+    ("STREAM_META_MODIFIED", 7),
     ("STREAM_MKDIR_RECURSIVE", 1),
     ("STREAM_OPTION_BLOCKING", 1),
     ("STREAM_OPTION_READ_BUFFER", 2),
     ("STREAM_OPTION_WRITE_BUFFER", 3),
     ("STREAM_OPTION_READ_TIMEOUT", 4),
+    ("STREAM_OPTION_CHUNK_SIZE", 5),
     ("STREAM_BUFFER_NONE", 0),
     ("STREAM_BUFFER_LINE", 1),
     ("STREAM_BUFFER_FULL", 2),
@@ -123,6 +125,15 @@ pub(crate) const STREAM_INT_CONSTANTS: &[(&str, i64)] = &[
     ("FILE_SKIP_EMPTY_LINES", 4),
     ("FILE_APPEND", 8),
     ("FILE_NO_DEFAULT_CONTEXT", 16),
+    // seek() whence constants (also used by fseek).
+    ("SEEK_SET", 0),
+    ("SEEK_CUR", 1),
+    ("SEEK_END", 2),
+    // stream_seek() whence aliases (PHP does not expose STREAM_FROM_* publicly,
+    // but they are documented in some references; kept here for completeness).
+    ("STREAM_FROM_START", 0),
+    ("STREAM_FROM_CUR", 1),
+    ("STREAM_FROM_END", 2),
     // glob() flags (POSIX-portable values).
     ("GLOB_ERR", 4),
     ("GLOB_MARK", 8),
@@ -147,14 +158,14 @@ mod tests {
         assert_eq!(entry.1, 3);
     }
 
-    /// Verifies the stream constant invariant for stream client connect is four.
+    /// Verifies the stream constant invariant for stream client connect is one.
     #[test]
-    fn stream_client_connect_is_four() {
+    fn stream_client_connect_is_one() {
         let entry = STREAM_INT_CONSTANTS
             .iter()
             .find(|(name, _)| *name == "STREAM_CLIENT_CONNECT")
             .expect("STREAM_CLIENT_CONNECT defined");
-        assert_eq!(entry.1, 4);
+        assert_eq!(entry.1, 1);
     }
 
     /// Verifies the stream constant invariant for no duplicate constant names.

@@ -124,18 +124,34 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #16]");                                   // return string start pointer
     emitter.instruction("ldr x2, [sp, #24]");                                   // return actual bytes read as length
 
-    // -- apply an attached read filter to the bytes just read --
+    // -- apply attached read filters to the bytes just read (2-slot chain) --
+    //    Slot 0 = _stream_read_filters[fd], slot 1 = _stream_read_filters[fd+256]
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the file descriptor
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_stream_read_filters");
-    emitter.instruction("ldrb w3, [x9, x0]");                                   // read filter id for this descriptor
-    emitter.instruction("cbz w3, __rt_fread_ret");                              // skip when no read filter is attached
-    emitter.instruction("cmp w3, #128");                                        // user-filter id range (>= USER_FILTER_ID_BASE)?
-    emitter.instruction("b.lt __rt_fread_builtin_filter");                      // built-in filter: in-place transform
-    emitter.instruction("mov x3, #0");                                          // direction = 0 (read) for the user-filter dispatch
-    emitter.instruction("bl __rt_apply_user_stream_filter");                    // x1/x2 ← user filter's transformed string
+    // -- slot 0 --
+    emitter.instruction("ldrb w3, [x9, x0]");                                   // read filter id for slot 0
+    emitter.instruction("cbz w3, __rt_fread_slot1");                             // skip slot 0 when empty
+    emitter.instruction("cmp w3, #128");                                        // user-filter id range?
+    emitter.instruction("b.lt __rt_fread_builtin_slot0");                       // built-in filter
+    emitter.instruction("mov x3, #0");                                          // direction = 0 (read)
+    emitter.instruction("bl __rt_apply_user_stream_filter");                    // x1/x2 ← transformed
+    emitter.instruction("b __rt_fread_slot1");                                  // proceed to slot 1
+    emitter.label("__rt_fread_builtin_slot0");
+    emitter.instruction("bl __rt_apply_stream_filter");                         // transform in place
+    // -- slot 1 --
+    emitter.label("__rt_fread_slot1");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_stream_read_filters");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
+    emitter.instruction("add x10, x0, #256");                                   // fd+256 (slot 1 index)
+    emitter.instruction("ldrb w3, [x9, x10]");                                  // read filter id for slot 1
+    emitter.instruction("cbz w3, __rt_fread_ret");                              // skip slot 1 when empty
+    emitter.instruction("cmp w3, #128");                                        // user-filter id range?
+    emitter.instruction("b.lt __rt_fread_builtin_slot1");                       // built-in filter
+    emitter.instruction("mov x3, #0");                                          // direction = 0 (read)
+    emitter.instruction("bl __rt_apply_user_stream_filter");                    // x1/x2 ← transformed
     emitter.instruction("b __rt_fread_ret");                                    // common epilogue
-    emitter.label("__rt_fread_builtin_filter");
-    emitter.instruction("bl __rt_apply_stream_filter");                         // transform the read bytes in place; x2 = (possibly compacted) length on return
+    emitter.label("__rt_fread_builtin_slot1");
+    emitter.instruction("bl __rt_apply_stream_filter");                         // transform in place
 
     // -- restore frame and return --
     emitter.label("__rt_fread_ret");
@@ -204,21 +220,42 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // publish the updated concat-buffer offset for later string appenders
     emitter.instruction("mov rdx, rax");                                        // return the successful byte count in the x86_64 elephc string-length result register
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the concat-buffer start pointer in the x86_64 elephc string-pointer result register
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor for the read-filter lookup
+    // -- apply attached read filters (2-slot chain) --
+    //    Slot 0 = _stream_read_filters[fd], slot 1 = _stream_read_filters[fd+256]
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor
     abi::emit_symbol_address(emitter, "r11", "_stream_read_filters");           // materialize the read-filter table base
-    emitter.instruction("movzx ecx, BYTE PTR [r11 + r10]");                     // read filter id for this descriptor
-    emitter.instruction("test rcx, rcx");                                       // is a read filter attached to this stream?
-    emitter.instruction("jz __rt_fread_ret_x86");                               // skip when no read filter is attached
-    emitter.instruction("cmp rcx, 128");                                        // user-filter id range (>= USER_FILTER_ID_BASE)?
-    emitter.instruction("jl __rt_fread_builtin_filter_x86");                    // built-in filter: in-place transform
-    emitter.instruction("mov rdi, r10");                                        // fd into the user-filter dispatcher's first arg
-    emitter.instruction("mov rsi, rax");                                        // buf ptr into the dispatcher's second arg
+    // -- slot 0 --
+    emitter.instruction("movzx ecx, BYTE PTR [r11 + r10]");                     // read filter id for slot 0
+    emitter.instruction("test rcx, rcx");                                       // is slot 0 empty?
+    emitter.instruction("jz __rt_fread_slot1_x86");                             // skip slot 0 when empty
+    emitter.instruction("cmp rcx, 128");                                        // user-filter id range?
+    emitter.instruction("jl __rt_fread_builtin_slot0_x86");                     // built-in filter
+    emitter.instruction("mov rdi, r10");                                        // fd
+    emitter.instruction("mov rsi, rax");                                        // buf ptr
     // rdx already holds the byte count
-    emitter.instruction("xor ecx, ecx");                                        // direction = 0 (read) for the user-filter dispatch
-    emitter.instruction("call __rt_apply_user_stream_filter");                  // rax/rdx ← user filter's transformed string
+    emitter.instruction("xor ecx, ecx");                                        // direction = 0 (read)
+    emitter.instruction("call __rt_apply_user_stream_filter");                  // rax/rdx ← transformed
+    emitter.instruction("jmp __rt_fread_slot1_x86");                            // proceed to slot 1
+    emitter.label("__rt_fread_builtin_slot0_x86");
+    emitter.instruction("call __rt_apply_stream_filter");                       // transform in place
+    // -- slot 1 --
+    emitter.label("__rt_fread_slot1_x86");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload fd
+    abi::emit_symbol_address(emitter, "r11", "_stream_read_filters");           // materialize the read-filter table base
+    emitter.instruction("lea rcx, [r10 + 256]");                                // fd+256 (slot 1 index)
+    emitter.instruction("movzx ecx, BYTE PTR [r11 + rcx]");                     // read filter id for slot 1
+    emitter.instruction("test rcx, rcx");                                       // is slot 1 empty?
+    emitter.instruction("jz __rt_fread_ret_x86");                               // skip slot 1 when empty
+    emitter.instruction("cmp rcx, 128");                                        // user-filter id range?
+    emitter.instruction("jl __rt_fread_builtin_slot1_x86");                     // built-in filter
+    emitter.instruction("mov rdi, r10");                                        // fd
+    emitter.instruction("mov rsi, rax");                                        // buf ptr (post slot-0)
+    // rdx already holds the byte count (post slot-0)
+    emitter.instruction("xor ecx, ecx");                                        // direction = 0 (read)
+    emitter.instruction("call __rt_apply_user_stream_filter");                  // rax/rdx ← transformed
     emitter.instruction("jmp __rt_fread_ret_x86");                              // common epilogue
-    emitter.label("__rt_fread_builtin_filter_x86");
-    emitter.instruction("call __rt_apply_stream_filter");                       // transform the read bytes in place; rdx = (possibly compacted) length on return
+    emitter.label("__rt_fread_builtin_slot1_x86");
+    emitter.instruction("call __rt_apply_stream_filter");                       // transform in place
     emitter.label("__rt_fread_ret_x86");
     emitter.instruction("add rsp, 32");                                         // release the fread() spill slots before returning the successful string slice
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the successful fread() path

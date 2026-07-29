@@ -83,6 +83,8 @@ impl Checker {
         for (name, _value) in STREAM_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
+        // STREAM_PF_INET6 is target-divergent (AF_INET6 = 30 on macOS, 10 on Linux).
+        constants.insert("STREAM_PF_INET6".to_string(), PhpType::Int);
         for (name, _value) in PREG_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }

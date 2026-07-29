@@ -7,6 +7,7 @@
 //! Key details:
 //! - `check` validates the `stream` argument is a stream resource and returns `Int`.
 //! - Arguments are pre-inferred by the registry before the hook runs.
+//! - PHP 8.1+: `eol` defaults to `"\n"`.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::errors::CompileError;
@@ -19,7 +20,9 @@ builtin! {
         stream: Mixed,
         fields: Mixed,
         separator: Str = DefaultSpec::Str(","),
-        enclosure: Str = DefaultSpec::Str("\"")
+        enclosure: Str = DefaultSpec::Str("\""),
+        escape: Str = DefaultSpec::Str("\\"),
+        eol: Str = DefaultSpec::Str("\n")
     ],
     returns: Int,
     check: check,

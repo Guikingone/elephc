@@ -402,6 +402,96 @@ unlink("out.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies fgetcsv() honors a custom separator.
+#[test]
+fn test_fgetcsv_custom_separator() {
+    let (out, _dir) = compile_and_run_in_dir(
+        r#"<?php
+$f = fopen("php://memory", "r+");
+fwrite($f, "a;b;c\n1;2;3\n");
+rewind($f);
+$row1 = fgetcsv($f, 0, ";");
+$row2 = fgetcsv($f, 0, ";");
+echo $row1[0] . $row1[1] . $row1[2] . "\n";
+echo $row2[0] . $row2[1] . $row2[2] . "\n";
+"#,
+    );
+    assert_eq!(out, "abc\n123\n");
+}
+
+/// Verifies fgetcsv() honors a custom enclosure character.
+#[test]
+fn test_fgetcsv_custom_enclosure() {
+    let (out, _dir) = compile_and_run_in_dir(
+        r#"<?php
+$f = fopen("php://memory", "r+");
+fwrite($f, "'a','b,c','d'\n");
+rewind($f);
+$row = fgetcsv($f, 0, ",", "'");
+echo $row[0] . "|" . $row[1] . "|" . $row[2] . "\n";
+"#,
+    );
+    assert_eq!(out, "a|b,c|d\n");
+}
+
+/// Verifies fgetcsv() with PHP 8.4 doubling mode (escape="").
+#[test]
+fn test_fgetcsv_php84_doubling() {
+    let (out, _dir) = compile_and_run_in_dir(
+        r#"<?php
+$f = fopen("php://memory", "r+");
+fwrite($f, "\"a\"\"b\",\"c\"\n");
+rewind($f);
+$row = fgetcsv($f, 0, ",", "\"", "");
+echo $row[0] . "|" . $row[1] . "\n";
+"#,
+    );
+    assert_eq!(out, "a\"b|c\n");
+}
+
+/// Verifies fputcsv() honors custom separator and enclosure.
+#[test]
+fn test_fputcsv_custom_separator_enclosure() {
+    let (out, _dir) = compile_and_run_in_dir(
+        r#"<?php
+$f = fopen("php://memory", "r+");
+fputcsv($f, ["a", "b;c", "d"], ";", "'");
+rewind($f);
+echo fread($f, 100);
+"#,
+    );
+    assert_eq!(out, "a;'b;c';d\n");
+}
+
+/// Verifies fputcsv() honors a custom end-of-line string.
+#[test]
+fn test_fputcsv_custom_eol() {
+    let (out, _dir) = compile_and_run_in_dir(
+        r#"<?php
+$f = fopen("php://memory", "r+");
+fputcsv($f, ["a", "b"], ",", "\"", "\\", "\r\n");
+rewind($f);
+echo bin2hex(fread($f, 100));
+"#,
+    );
+    assert_eq!(out, "612c620d0a");
+}
+
+/// Verifies fputcsv+fgetcsv round-trip with custom delimiters and doubling mode.
+#[test]
+fn test_fputcsv_fgetcsv_roundtrip_custom() {
+    let (out, _dir) = compile_and_run_in_dir(
+        r##"<?php
+$f = fopen("php://memory", "r+");
+fputcsv($f, ["a;b", 'c"d'], ";", "#", "", "\n");
+rewind($f);
+$r = fgetcsv($f, 0, ";", "#", "");
+echo $r[0] . "|" . $r[1] . "\n";
+"##,
+    );
+    assert_eq!(out, "a;b|c\"d\n");
+}
+
 /// Verifies rewind() resets the read position to the start and data can be re-read.
 #[test]
 fn test_rewind() {
@@ -6744,6 +6834,74 @@ echo fread($w, 64);
 "#,
     );
     assert_eq!(out, "HELLO BRIGADE");
+}
+
+/// Verifies a user filter returning PSFS_ERR_FATAL yields an empty read result.
+#[test]
+fn test_user_filter_psfs_err_fatal() {
+    let out = compile_and_run(
+        r#"<?php
+class FatalFilter extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        return PSFS_ERR_FATAL;
+    }
+}
+stream_filter_register("fatal", "FatalFilter");
+$f = fopen("php://memory", "r+");
+fwrite($f, "hello\n");
+rewind($f);
+stream_filter_append($f, "fatal");
+$r = fread($f, 100);
+echo "len=" . strlen($r) . "|";
+"#,
+    );
+    assert_eq!(out, "len=0|");
+}
+
+/// Verifies a user filter returning PSFS_FEED_ME passes the input through unchanged.
+#[test]
+fn test_user_filter_psfs_feed_me() {
+    let out = compile_and_run(
+        r#"<?php
+class FeedMeFilter extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        return PSFS_FEED_ME;
+    }
+}
+stream_filter_register("feedme", "FeedMeFilter");
+$f = fopen("php://memory", "r+");
+fwrite($f, "hello\n");
+rewind($f);
+stream_filter_append($f, "feedme");
+echo fread($f, 100);
+"#,
+    );
+    assert_eq!(out, "hello\n");
+}
+
+/// Verifies a user filter returning PSFS_PASS_ON transforms the output (control).
+#[test]
+fn test_user_filter_psfs_pass_on_control() {
+    let out = compile_and_run(
+        r#"<?php
+class UpperFilter extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $b->data = strtoupper($b->data);
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("upper", "UpperFilter");
+$f = fopen("php://memory", "r+");
+fwrite($f, "hello\n");
+rewind($f);
+stream_filter_append($f, "upper");
+echo fread($f, 100);
+"#,
+    );
+    assert_eq!(out, "HELLO\n");
 }
 
 /// Verifies compiled PHP output for mixed object is truthy.
