@@ -12,18 +12,19 @@
 //!     [0, 8)        iovec for `fd_write`: { buf_ptr @0 (i32), buf_len @4 (i32) }
 //!     [8, 16)       `nwritten` cell for `fd_write` / `args_sizes_get` scratch (i32)
 //!     [16, 64)      number-formatting buffer (itoa/ftoa), written back-to-front
-//!     [64, 65600)   string-concatenation buffer (`_concat_buf`, 64 KiB)
+//!     [64, 65600)   legacy concat reservation, retained for stable static-data offsets
 //!   Compile-time data segments and the heap (later phases) start at `RT_SCRATCH_END`.
-//! - The concat buffer + `__rt_concat` + the `$__concat_off` cursor are "common"
-//!   runtime (no WASI), emitted for every module so any function can concatenate.
+//! - `__rt_concat` is heap-backed and bounds-checked. The legacy
+//!   `$__concat_off` cursor remains as an ABI-compatible no-op for existing
+//!   `ConcatReset` lowering; live strings never occupy the shared reservation.
 //!   WASI imports and the echo/exit helpers are "command" runtime, emitted only
 //!   for main-bearing modules (importing WASI forces `_start`-command semantics).
 
-use super::wat::{FuncImport, Global, ValType, WatModule};
+use super::wat::{DataSegment, FuncImport, Global, ValType, WatModule};
 
-/// Base offset of the string-concatenation buffer in linear memory.
+/// Base offset of the legacy string-concatenation reservation.
 const CONCAT_BASE: u32 = 64;
-/// Size of the string-concatenation buffer (matches the native 64 KiB `_concat_buf`).
+/// Size of the legacy reservation retained to keep static-data addresses stable.
 const CONCAT_SIZE: u32 = 65536;
 
 /// First linear-memory offset available to data segments / the heap; everything
@@ -42,8 +43,29 @@ pub(super) const FLOAT_SCRATCH_BASE: u32 = RT_SCRATCH_END;
 /// +4096); the ftoa/itoa scratch lands at +0x2000..+0x3000. 16 KiB bounds both.
 pub(super) const FLOAT_SCRATCH_SIZE: u32 = 0x4000;
 
-/// Adds the import-free runtime every module needs: the concat-buffer cursor
-/// global and the `__rt_concat` helper. Safe for reactor modules (no WASI).
+/// First byte reserved for command-runtime fatal diagnostics.
+const COMMAND_DATA_BASE: u32 = FLOAT_SCRATCH_BASE + FLOAT_SCRATCH_SIZE;
+const ERR_DIV_ZERO: &[u8] =
+    b"PHP Fatal error: Uncaught DivisionByZeroError: Division by zero\n";
+const ERR_MOD_ZERO: &[u8] =
+    b"PHP Fatal error: Uncaught DivisionByZeroError: Modulo by zero\n";
+const ERR_NEG_SHIFT: &[u8] =
+    b"PHP Fatal error: Uncaught ArithmeticError: Bit shift by negative number\n";
+const ERR_INTDIV_OVERFLOW: &[u8] = b"PHP Fatal error: Uncaught ArithmeticError: Division of PHP_INT_MIN by -1 is not an integer\n";
+const ERR_WASI: &[u8] = b"PHP Fatal error: WASI operation failed\n";
+const ERR_OOM: &[u8] = b"PHP Fatal error: Allowed memory size exhausted\n";
+
+/// First byte available to PHP string literals in a command module.
+pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
+    + ERR_DIV_ZERO.len() as u32
+    + ERR_MOD_ZERO.len() as u32
+    + ERR_NEG_SHIFT.len() as u32
+    + ERR_INTDIV_OVERFLOW.len() as u32
+    + ERR_WASI.len() as u32
+    + ERR_OOM.len() as u32;
+
+/// Adds the import-free runtime every module needs: the compatibility concat
+/// cursor global and the heap-backed `__rt_concat` helper.
 pub(super) fn emit_common_runtime(wm: &mut WatModule) {
     wm.add_global(Global {
         name: "__concat_off".to_string(),
@@ -91,6 +113,9 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
         params: vec![ValType::I32, ValType::I32],
         results: vec![ValType::I32],
     });
+    emit_failure_runtime(wm);
+    wm.add_raw_func(RT_WASI_WRITE_ALL);
+    wm.add_raw_func(RT_WASI_WRITE_OR_FAIL);
     wm.add_raw_func(RT_ECHO_I64);
     wm.add_raw_func(RT_ECHO_F64);
     wm.add_raw_func(RT_ECHO_STR);
@@ -101,10 +126,104 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_MIXED_WRITE_STDOUT);
 }
 
+/// Emits immutable fatal-message data and the command-runtime failure dispatcher.
+///
+/// Error code 1 is division by zero, 2 modulo by zero, 3 a negative shift,
+/// 4 `PHP_INT_MIN / -1` for integer division, 5 a WASI boundary failure, and
+/// 6 allocator exhaustion or arithmetic overflow.
+/// The helper writes the selected message to stderr, exits with status 255, and
+/// ends in `unreachable` so validation does not treat `proc_exit` as returning.
+fn emit_failure_runtime(wm: &mut WatModule) {
+    let messages = [
+        ERR_DIV_ZERO,
+        ERR_MOD_ZERO,
+        ERR_NEG_SHIFT,
+        ERR_INTDIV_OVERFLOW,
+        ERR_WASI,
+        ERR_OOM,
+    ];
+    let mut offsets = Vec::with_capacity(messages.len());
+    let mut cursor = COMMAND_DATA_BASE;
+    for message in messages {
+        offsets.push((cursor, message.len() as u32));
+        wm.add_data(DataSegment {
+            offset: cursor,
+            bytes: message.to_vec(),
+        });
+        cursor += message.len() as u32;
+    }
+    debug_assert_eq!(cursor, COMMAND_DATA_END);
+
+    let mut wat = String::from(
+        "(func $__rt_fail (param $code i32)\n  (local $ptr i32) (local $len i32)\n",
+    );
+    for (index, (offset, len)) in offsets.iter().enumerate() {
+        wat.push_str(&format!(
+            "  (if (i32.eq (local.get $code) (i32.const {}))\n    (then\n      (local.set $ptr (i32.const {}))\n      (local.set $len (i32.const {}))))\n",
+            index + 1,
+            offset,
+            len
+        ));
+    }
+    wat.push_str(
+        "  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $ptr) (local.get $len)))\n  (call $wasi_proc_exit (i32.const 255))\n  unreachable)",
+    );
+    wm.add_raw_func(&wat);
+}
+
+/// Repeatedly invokes WASI `fd_write` until every requested byte is written.
+///
+/// Returns the first host errno. A zero-progress write or an impossible
+/// `nwritten > remaining` response returns WASI `ERRNO_IO` (29), preventing an
+/// infinite loop or pointer underflow. The single iovec and `nwritten` cell use
+/// the reserved low-memory scratch region.
+const RT_WASI_WRITE_ALL: &str =
+    r#"(func $__rt_wasi_write_all (param $fd i32) (param $ptr i32) (param $len i32) (result i32)
+  (local $remaining i32) (local $cursor i32) (local $errno i32) (local $written i32)
+  (local.set $remaining (local.get $len))                         ;; bytes still to write
+  (local.set $cursor (local.get $ptr))                            ;; next byte address
+  (block $done
+    (loop $write
+      (br_if $done (i32.eqz (local.get $remaining)))              ;; all bytes written
+      (i32.store (i32.const 0) (local.get $cursor))               ;; iovec.buf_ptr
+      (i32.store (i32.const 4) (local.get $remaining))            ;; iovec.buf_len
+      (local.set $errno
+        (call $wasi_fd_write (local.get $fd) (i32.const 0) (i32.const 1) (i32.const 8))) ;; host write
+      (if (i32.ne (local.get $errno) (i32.const 0))
+        (then (return (local.get $errno))))                       ;; propagate host errno
+      (local.set $written (i32.load (i32.const 8)))               ;; bytes accepted by host
+      (if (i32.or
+            (i32.eqz (local.get $written))
+            (i32.gt_u (local.get $written) (local.get $remaining)))
+        (then (return (i32.const 29))))                           ;; ERRNO_IO on no/invalid progress
+      (local.set $cursor (i32.add (local.get $cursor) (local.get $written))) ;; advance source
+      (local.set $remaining (i32.sub (local.get $remaining) (local.get $written))) ;; shrink tail
+      (br $write)))
+  (i32.const 0))                                                  ;; success"#;
+
+/// Writes every requested byte or converts a WASI host error into the command
+/// runtime's deterministic fatal diagnostic and exit status.
+///
+/// `__rt_fail` deliberately calls `__rt_wasi_write_all` directly for its
+/// best-effort stderr diagnostic, avoiding recursion if stderr itself fails.
+const RT_WASI_WRITE_OR_FAIL: &str =
+    r#"(func $__rt_wasi_write_or_fail (param $fd i32) (param $ptr i32) (param $len i32)
+  (if (i32.ne
+        (call $__rt_wasi_write_all (local.get $fd) (local.get $ptr) (local.get $len))
+        (i32.const 0))
+    (then
+      (call $__rt_fail (i32.const 5))
+      unreachable)))"#;
+
 /// `__rt_argc`: returns PHP's `$argc` (the process argument count) via WASI
 /// `args_sizes_get`, which writes the count to the number-buffer scratch region.
 const RT_ARGC: &str = r#"(func $__rt_argc (result i64)
-  (drop (call $wasi_args_sizes_get (i32.const 16) (i32.const 20))) ;; argc@16, argv_buf_size@20
+  (local $errno i32)
+  (local.set $errno (call $wasi_args_sizes_get (i32.const 16) (i32.const 20))) ;; argc@16, argv_buf_size@20
+  (if (i32.ne (local.get $errno) (i32.const 0))
+    (then
+      (call $__rt_fail (i32.const 5))
+      unreachable))                                               ;; args_sizes_get failed
   (i64.extend_i32_u (i32.load (i32.const 16))))                    ;; return argc as i64"#;
 
 /// `__rt_strlen_c`: byte length of a NUL-terminated C string (used to measure the
@@ -131,12 +250,27 @@ const RT_ARGV: &str = r#"(func $__rt_argv (result i32)
   (local $i i32)
   (local $argp i32)
   (local $len i32)
-  (drop (call $wasi_args_sizes_get (i32.const 16) (i32.const 20)))   ;; argc@16, argv_buf_size@20
+  (local $errno i32)
+  (local.set $errno (call $wasi_args_sizes_get (i32.const 16) (i32.const 20))) ;; query argc and byte size
+  (if (i32.ne (local.get $errno) (i32.const 0))
+    (then
+      (call $__rt_fail (i32.const 5))
+      unreachable))                                                 ;; args_sizes_get failed
   (local.set $argc (i32.load (i32.const 16)))                        ;; load argc from scratch
   (local.set $bufsize (i32.load (i32.const 20)))                     ;; load argv byte-buffer size
+  (if (i32.gt_u (local.get $argc) (i32.const 1073741823))
+    (then
+      (call $__rt_fail (i32.const 5))
+      unreachable))                                                 ;; argc * 4 must not wrap wasm32
   (local.set $ptrs (call $__rt_heap_alloc (i32.mul (local.get $argc) (i32.const 4))))  ;; argc i32 pointers
   (local.set $buf (call $__rt_heap_alloc (local.get $bufsize)))      ;; argv byte buffer
-  (drop (call $wasi_args_get (local.get $ptrs) (local.get $buf)))    ;; fill the pointer array + buffer
+  (local.set $errno (call $wasi_args_get (local.get $ptrs) (local.get $buf))) ;; fill pointer array + buffer
+  (if (i32.ne (local.get $errno) (i32.const 0))
+    (then
+      (call $__rt_heap_free (local.get $ptrs))
+      (call $__rt_heap_free (local.get $buf))
+      (call $__rt_fail (i32.const 5))
+      unreachable))                                                 ;; args_get failed after balanced cleanup
   (local.set $arr (call $__rt_array_new (i64.extend_i32_u (local.get $argc)) (i64.const 16)))  ;; string array
   (local.set $i (i32.const 0))                                       ;; i = 0
   (block $end (loop $loop
@@ -179,37 +313,38 @@ const RT_MIXED_WRITE_STDOUT: &str = r#"(func $__rt_mixed_write_stdout (param $pt
       (return))))                                                    ;; done
 "#;
 
-/// `__rt_concat`: appends `a` then `b` into the concat buffer at the current
-/// `$__concat_off` cursor and returns the freshly-written region as `(ptr, len)`,
-/// advancing the cursor. Copying both operands (rather than only the right one)
-/// means the returned pointer always addresses a contiguous copy, so chained
-/// `a . b . c` concatenations are correct; the cursor is reset to a per-function
-/// baseline at statement boundaries by `ConcatReset`.
+/// `__rt_concat`: allocates an owned string and copies `a` then `b` into it.
+///
+/// Length addition and wasm32 narrowing are checked in i64 before allocation.
+/// The returned block is stamped with runtime kind 1 so ordinary ownership
+/// release frees intermediate concatenations. This avoids shared-buffer overlap
+/// across recursion, calls, and strings larger than 64 KiB.
 const RT_CONCAT: &str = r#"(func $__rt_concat (param $aptr i32) (param $alen i64) (param $bptr i32) (param $blen i64) (result i32) (result i64)
-  (local $start i32) (local $dest i32) (local $i i32) (local $al i32) (local $bl i32)
-  (local.set $start (global.get $__concat_off))           ;; result begins at the cursor
-  (local.set $dest (local.get $start))                       ;; write cursor starts at result base
-  (local.set $al (i32.wrap_i64 (local.get $alen)))           ;; a's byte length as i32
-  (local.set $bl (i32.wrap_i64 (local.get $blen)))           ;; b's byte length as i32
-  (local.set $i (i32.const 0))                               ;; copy index = 0
-  (block $enda (loop $copya                               ;; copy operand a
-    (br_if $enda (i32.ge_u (local.get $i) (local.get $al)))  ;; stop when a is fully copied
-    (i32.store8 (i32.add (local.get $dest) (local.get $i))
-                (i32.load8_u (i32.add (local.get $aptr) (local.get $i)))) ;; copy one byte of a
-    (local.set $i (i32.add (local.get $i) (i32.const 1)))    ;; i++
-    (br $copya)))                                            ;; next byte
-  (local.set $dest (i32.add (local.get $dest) (local.get $al))) ;; advance write cursor past a
-  (local.set $i (i32.const 0))                               ;; reset copy index for b
-  (block $endb (loop $copyb                               ;; copy operand b
-    (br_if $endb (i32.ge_u (local.get $i) (local.get $bl)))  ;; stop when b is fully copied
-    (i32.store8 (i32.add (local.get $dest) (local.get $i))
-                (i32.load8_u (i32.add (local.get $bptr) (local.get $i)))) ;; copy one byte of b
-    (local.set $i (i32.add (local.get $i) (i32.const 1)))    ;; i++
-    (br $copyb)))                                            ;; next byte
-  (global.set $__concat_off
-    (i32.add (i32.add (local.get $start) (local.get $al)) (local.get $bl))) ;; advance cursor
-  (local.get $start)                                      ;; result ptr
-  (i64.add (local.get $alen) (local.get $blen)))          ;; result len"#;
+  (local $total i64) (local $al i32) (local $bl i32) (local $result i32)
+  (if (i32.or
+        (i64.lt_s (local.get $alen) (i64.const 0))
+        (i64.lt_s (local.get $blen) (i64.const 0)))
+    (then
+      (call $__rt_oom)
+      unreachable))                                          ;; malformed negative length
+  (local.set $total (i64.add (local.get $alen) (local.get $blen))) ;; widened total length
+  (if (i32.or
+        (i64.lt_u (local.get $total) (local.get $alen))
+        (i64.gt_u (local.get $total) (i64.const 4294900736)))
+    (then
+      (call $__rt_oom)
+      unreachable))                                          ;; overflow or unaddressable wasm32 length
+  (local.set $al (i32.wrap_i64 (local.get $alen)))           ;; safe after total-length bound
+  (local.set $bl (i32.wrap_i64 (local.get $blen)))           ;; safe after total-length bound
+  (local.set $result (call $__rt_heap_alloc (i32.wrap_i64 (local.get $total)))) ;; owned result bytes
+  (i64.store (i32.sub (local.get $result) (i32.const 8)) (i64.const 1)) ;; runtime kind = string
+  (memory.copy (local.get $result) (local.get $aptr) (local.get $al)) ;; copy lhs bytes
+  (memory.copy
+    (i32.add (local.get $result) (local.get $al))
+    (local.get $bptr)
+    (local.get $bl))                                          ;; append rhs bytes
+  (local.get $result)                                         ;; owned result pointer
+  (local.get $total))                                         ;; result length"#;
 
 /// `__rt_echo_bool`: PHP `echo` of a boolean writes "1" for true and nothing for
 /// false. The value is the i64 boolean (0 or 1).
@@ -217,17 +352,17 @@ const RT_ECHO_BOOL: &str = r#"(func $__rt_echo_bool (param $v i64)
   (if (i64.ne (local.get $v) (i64.const 0))
     (then
       (i32.store8 (i32.const 16) (i32.const 49))            ;; '1' into the number buffer
-      (i32.store (i32.const 0) (i32.const 16))              ;; iovec.buf_ptr
-      (i32.store (i32.const 4) (i32.const 1))               ;; iovec.buf_len = 1
-      (drop (call $wasi_fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))))) ;; write "1""#;
+      (call $__rt_wasi_write_or_fail (i32.const 1) (i32.const 16) (i32.const 1))))) ;; write "1""#;
 
 /// `__rt_echo_str`: writes a string (a linear-memory pointer + byte length) to
 /// stdout via `fd_write`. The length is an i64 (PHP int) wrapped to the i32 the
 /// iovec field requires.
 const RT_ECHO_STR: &str = r#"(func $__rt_echo_str (param $ptr i32) (param $len i64)
-  (i32.store (i32.const 0) (local.get $ptr))                ;; iovec.buf_ptr
-  (i32.store (i32.const 4) (i32.wrap_i64 (local.get $len))) ;; iovec.buf_len
-  (drop (call $wasi_fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))) ;; write to stdout"#;
+  (if (i64.gt_u (local.get $len) (i64.const 4294967295))
+    (then
+      (call $__rt_fail (i32.const 5))
+      unreachable))                                          ;; wasm32 cannot address a larger byte range
+  (call $__rt_wasi_write_or_fail (i32.const 1) (local.get $ptr) (i32.wrap_i64 (local.get $len)))) ;; write to stdout"#;
 
 /// `__rt_echo_i64`: writes a signed 64-bit integer to stdout as decimal text.
 ///
@@ -264,9 +399,7 @@ const RT_ECHO_I64: &str = r#"(func $__rt_echo_i64 (param $v i64)
           (local.set $ptr (i32.sub (local.get $ptr) (i32.const 1))) ;; back up one byte for '-'
           (i32.store8 (local.get $ptr) (i32.const 45))))))     ;; '-'
   (local.set $len (i32.sub (i32.const 64) (local.get $ptr)))   ;; byte count
-  (i32.store (i32.const 0) (local.get $ptr))                   ;; iovec.buf_ptr
-  (i32.store (i32.const 4) (local.get $len))                   ;; iovec.buf_len
-  (drop (call $wasi_fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))) ;; write to stdout"#;
+  (call $__rt_wasi_write_or_fail (i32.const 1) (local.get $ptr) (local.get $len))) ;; write to stdout"#;
 
 /// `__rt_echo_f64`: writes a PHP float to stdout as `%.14G` text. The float arrives
 /// as a wasm `f64`; its bits are reinterpreted to an `i64` for `__rt_ftoa`, which
@@ -281,6 +414,161 @@ const RT_ECHO_F64: &str = r#"(func $__rt_echo_f64 (param $v f64)
   (call $__rt_ftoa (local.get $bits) (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80) (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 768) (i32.add (global.get $__float_scratch) (i32.const 4096))) ;; format into scratch+4096 -> (ptr,len)
   (local.set $len)                                          ;; pop ftoa length (result 1, on top)
   (local.set $ptr)                                          ;; pop ftoa pointer (result 0)
-  (i32.store (i32.const 0) (local.get $ptr))                ;; iovec.buf_ptr
-  (i32.store (i32.const 4) (local.get $len))                ;; iovec.buf_len
-  (drop (call $wasi_fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))) ;; write to stdout"#;
+  (call $__rt_wasi_write_or_fail (i32.const 1) (local.get $ptr) (local.get $len))) ;; write to stdout"#;
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Runtime regression tests for heap-backed string concatenation.
+    //!
+    //! Called from:
+    //! - `cargo test` through Rust's test harness.
+    //!
+    //! Key details:
+    //! - Modules are import-free reactors containing the common runtime and heap.
+    //! - Tests validate the bytes with `wasmparser` and execute under Wasmer when
+    //!   available, including strings larger than the former 64 KiB buffer.
+
+    use super::{
+        emit_common_runtime, RT_ARGV, RT_ECHO_BOOL, RT_ECHO_F64, RT_ECHO_I64, RT_ECHO_STR,
+        RT_WASI_WRITE_OR_FAIL,
+    };
+    use super::super::heap::emit_heap_runtime;
+    use super::super::wat::{DataSegment, WatModule};
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static TMP_SEQ: AtomicU32 = AtomicU32::new(0);
+
+    /// Verifies every PHP stdout helper converts a non-zero WASI errno into the
+    /// shared fatal path and that `$argv` rejects pointer-table multiplication
+    /// overflow before allocating.
+    #[test]
+    fn command_runtime_propagates_write_errors_and_guards_argv_size() {
+        for echo in [RT_ECHO_BOOL, RT_ECHO_STR, RT_ECHO_I64, RT_ECHO_F64] {
+            assert!(
+                echo.contains("call $__rt_wasi_write_or_fail"),
+                "echo helper bypasses the checked WASI write path:\n{echo}"
+            );
+            assert!(
+                !echo.contains("drop (call $__rt_wasi_write_all"),
+                "echo helper still discards the WASI errno:\n{echo}"
+            );
+        }
+        assert!(RT_WASI_WRITE_OR_FAIL.contains("call $__rt_fail (i32.const 5)"));
+        assert!(
+            RT_ARGV.contains("i32.gt_u (local.get $argc) (i32.const 1073741823)"),
+            "$argv must reject argc * 4 overflow before heap allocation"
+        );
+    }
+
+    /// Returns whether the Wasmer CLI is available for runtime assertions.
+    fn wasmer_available() -> bool {
+        std::process::Command::new("wasmer")
+            .arg("--version")
+            .output()
+            .is_ok()
+    }
+
+    /// Builds, validates, and invokes an import-free runtime driver.
+    fn run_concat_driver(
+        pages: u32,
+        heap_base: u32,
+        segments: &[(u32, Vec<u8>)],
+        driver: &str,
+    ) -> Option<String> {
+        let mut module = WatModule::new();
+        module.set_memory(pages, Some("memory"));
+        emit_common_runtime(&mut module);
+        emit_heap_runtime(&mut module, heap_base, pages * 65536);
+        for (offset, bytes) in segments {
+            module.add_data(DataSegment {
+                offset: *offset,
+                bytes: bytes.clone(),
+            });
+        }
+        module.add_raw_func(driver);
+        let wat = module.render();
+        let bytes =
+            ::wat::parse_str(&wat).unwrap_or_else(|error| panic!("invalid WAT: {error}\n{wat}"));
+        wasmparser::validate(&bytes)
+            .unwrap_or_else(|error| panic!("invalid WASM: {error}\n{wat}"));
+        if !wasmer_available() {
+            return None;
+        }
+        let sequence = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "elephc_wasm_concat_{}_{}",
+            std::process::id(),
+            sequence
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("m.wasm");
+        std::fs::write(&path, bytes).expect("write wasm");
+        let output = std::process::Command::new("wasmer")
+            .arg("run")
+            .arg("--invoke")
+            .arg("t")
+            .arg(&path)
+            .output()
+            .expect("run wasmer");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            output.status.success(),
+            "concat driver failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    /// Verifies a concatenation larger than 64 KiB grows the heap and preserves bytes.
+    #[test]
+    fn concat_grows_beyond_the_legacy_buffer() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $ptr i32) (local $len i64)
+  (call $__rt_concat (i32.const 90000) (i64.const 70000) (i32.const 160000) (i64.const 1))
+  (local.set $len)
+  (local.set $ptr)
+  (i64.add
+    (i64.mul (local.get $len) (i64.const 100000))
+    (i64.add
+      (i64.mul (i64.extend_i32_u (i32.load8_u (local.get $ptr))) (i64.const 100))
+      (i64.extend_i32_u (i32.load8_u (i32.add (local.get $ptr) (i32.const 70000)))))))"#;
+        let segments = [
+            (90000, vec![b'a'; 70000]),
+            (160000, vec![b'Z']),
+        ];
+        if let Some(output) = run_concat_driver(4, 170000, &segments, driver) {
+            assert_eq!(output, "7000109790");
+        }
+    }
+
+    /// Verifies a later concatenation cannot overwrite an earlier live result.
+    #[test]
+    fn concurrent_live_concat_results_do_not_alias() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $first i32) (local $second i32)
+  (call $__rt_concat (i32.const 90000) (i64.const 2) (i32.const 90002) (i64.const 2))
+  drop
+  (local.set $first)
+  (call $__rt_concat (i32.const 90004) (i64.const 2) (i32.const 90006) (i64.const 2))
+  drop
+  (local.set $second)
+  (drop (local.get $second))
+  (i64.or
+    (i64.shl (i64.extend_i32_u (i32.load8_u (local.get $first))) (i64.const 24))
+    (i64.or
+      (i64.shl (i64.extend_i32_u (i32.load8_u (i32.add (local.get $first) (i32.const 1)))) (i64.const 16))
+      (i64.or
+        (i64.shl (i64.extend_i32_u (i32.load8_u (i32.add (local.get $first) (i32.const 2)))) (i64.const 8))
+        (i64.extend_i32_u (i32.load8_u (i32.add (local.get $first) (i32.const 3))))))))"#;
+        let segments = [
+            (90000, b"AB".to_vec()),
+            (90002, b"CD".to_vec()),
+            (90004, b"xy".to_vec()),
+            (90006, b"zz".to_vec()),
+        ];
+        if let Some(output) = run_concat_driver(2, 100000, &segments, driver) {
+            assert_eq!(output, "1094861636");
+        }
+    }
+}

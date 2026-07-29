@@ -49,7 +49,10 @@
 //!   acquire gives the body an owned ref, and the array's deep free releases the cell
 //!   that `__rt_mixed_from_value` incref'd/persisted.
 
-use super::context::{wasm_fn_symbol, FnCtx, Result};
+use super::context::{FnCtx, Result};
+use super::symbols::{
+    closure_body_symbol, closure_wrapper_symbol, fcc_wrapper_symbol, function_symbol,
+};
 use super::inst::{
     ByRefSource, data_immediate, operand, resolve_by_ref_source, slot_payload_type, store_result,
 };
@@ -174,9 +177,28 @@ fn capture_tag_for_php_type(php: &PhpType, by_ref: bool) -> u8 {
     }
 }
 
+/// Returns the module's closures in canonical body-symbol order.
+///
+/// This order owns the descriptor `entry_index` ABI, capture-tag allocation, wrapper
+/// ladder, and final WAT function order. It deliberately does not inherit the EIR
+/// vector's construction order.
+pub(super) fn ordered_closures(module: &Module) -> Vec<&Function> {
+    let mut closures: Vec<_> = module.closures.iter().collect();
+    closures.sort_by_key(|function| closure_body_symbol(&function.name));
+    closures
+}
+
+/// Resolves a closure body and its canonical descriptor entry index by exact name.
+fn closure_entry<'a>(module: &'a Module, name: &str) -> Option<(usize, &'a Function)> {
+    ordered_closures(module)
+        .into_iter()
+        .enumerate()
+        .find(|(_, function)| function.name == name)
+}
+
 /// Emits one static per-closure capture-tag byte array into `wm` (in static memory
 /// below the heap) and returns `(advanced_cursor, tag_base_per_closure)`. The
-/// returned vec is indexed by the closure's position in `module.closures` (its
+/// returned vec is indexed by the closure's canonical body-symbol rank (its
 /// `entry_index`); a no-capture closure gets a `0` sentinel (no segment emitted),
 /// so indexing by `entry_index` is uniform. Each array holds one tag byte per
 /// capture param (the trailing `flags.closure_capture_count` params, source order),
@@ -188,7 +210,7 @@ pub(super) fn emit_closure_capture_tag_tables(
     mut cursor: u32,
 ) -> Result<(u32, Vec<u32>)> {
     let mut tag_ptrs: Vec<u32> = Vec::with_capacity(module.closures.len());
-    for f in &module.closures {
+    for f in ordered_closures(module) {
         let cap = f.flags.closure_capture_count;
         if cap == 0 {
             tag_ptrs.push(0);
@@ -231,8 +253,8 @@ pub(super) fn emit_closure_capture_tag_tables(
 ///
 /// The closure name is carried by an `Immediate::Data` index into the module's string
 /// pool (the same pool `ClosureNew` interns the `__eir_closure_<owner>_<n>` name into
-/// at lowering time). The `entry_index` is the closure `Function`'s position in
-/// `module.closures`, which the `__rt_closure_call` if-ladder keys on and which
+/// at lowering time). The `entry_index` is the closure `Function`'s canonical
+/// body-symbol rank, which the `__rt_closure_call` if-ladder keys on and which
 /// indexes `ctx.closure_tag_ptrs`.
 ///
 /// P7b supports by-value captures of `Int`/`Bool`/`Float`/`Str`/`Array`/`AssocArray`/
@@ -260,12 +282,7 @@ pub(super) fn lower_closure_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
         .get(data_id.as_raw() as usize)
         .cloned()
         .ok_or_else(|| WasmError::Unsupported(format!("closure new: unknown name {:?}", data_id)))?;
-    let (entry_index, closure_fn) = ctx
-        .module
-        .closures
-        .iter()
-        .enumerate()
-        .find(|(_, f)| f.name == name)
+    let (entry_index, closure_fn) = closure_entry(ctx.module, &name)
         .ok_or_else(|| WasmError::Unsupported(format!("closure new: no body for {}", name)))?;
     let capture_count = inst.operands.len();
     let visible_count = closure_fn.params.len().saturating_sub(capture_count);
@@ -307,7 +324,7 @@ pub(super) fn lower_closure_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
     );
     ctx.fb.ins(
         &format!("(i32.store offset=8 (local.get {}) (i32.const {}))", desc, entry_index),
-        "entry_index = position in module.closures",
+        "entry_index = canonical closure-symbol rank",
     );
     ctx.fb.ins(
         &format!("(i32.store offset=12 (local.get {}) (i32.const {}))", desc, capture_count),
@@ -343,7 +360,7 @@ pub(super) fn lower_closure_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
 
 /// Scans every function / class-method / closure body for `Op::FirstClassCallableNew`
 /// instructions whose target is a user FREE FUNCTION, returning the DISTINCT target
-/// names in first-seen order (the FCC entry registry).
+/// names in canonical PHP-symbol order (the FCC entry registry).
 ///
 /// A target qualifies iff its `Immediate::Data` name (interned in
 /// `module.data.strings`) contains no `::` (so it is not a static/instance-method
@@ -384,6 +401,11 @@ pub(super) fn collect_fcc_free_function_entries(module: &Module) -> Vec<String> 
             }
         }
     }
+    entries.sort_by(|left, right| {
+        crate::names::php_symbol_key(left)
+            .cmp(&crate::names::php_symbol_key(right))
+            .then_with(|| left.cmp(right))
+    });
     entries
 }
 
@@ -1031,7 +1053,7 @@ pub(super) fn emit_closure_dispatch(
         return Ok(());
     }
     let mut arms: Vec<(u32, String)> = Vec::new();
-    for (idx, f) in module.closures.iter().enumerate() {
+    for (idx, f) in ordered_closures(module).into_iter().enumerate() {
         let wrapper_symbol = wrapper_symbol(&f.name);
         let wat = build_closure_wrapper(&wrapper_symbol, f)?;
         wm.add_raw_func(&wat);
@@ -1380,14 +1402,6 @@ const RT_ARRAY_WALK_CALLABLE: &str = r#"(func $__rt_array_walk_callable (param $
       (br $L))))                                                     ;; continue walk loop
 "#;
 
-/// Derives the unified-ladder wrapper symbol for an FCC-of-free-function target
-/// `name`: `__fcc_wrap_<name>`, sanitized through `wasm_fn_symbol`. Distinct from
-/// both the user function symbol (`fn_<name>`) and the closure wrappers
-/// (`fn___closure_wrap_*`), so the three never collide in the module namespace.
-fn fcc_wrapper_symbol(name: &str) -> String {
-    wasm_fn_symbol(&format!("__fcc_wrap_{}", name))
-}
-
 /// Builds the raw WAT body of an FCC wrapper for a no-capture user free function:
 /// unbox each (visible) param from the Mixed-cell arg buffer, call the user body
 /// `fn_<name>`, box the result into a Mixed cell, and return the cell. This is the
@@ -1400,7 +1414,7 @@ fn fcc_wrapper_symbol(name: &str) -> String {
 /// carries Mixed cells, not ref-cell pointers, and the variadic split has no wrapper
 /// support yet, so those FCC shapes are deferred rather than miscompiled.
 fn build_fcc_wrapper(wrapper_symbol: &str, f: &Function) -> Result<String> {
-    let body_symbol = wasm_fn_symbol(&f.name);
+    let body_symbol = function_symbol(f);
     for p in &f.params {
         if p.by_ref || p.variadic {
             return Err(WasmError::Unsupported(format!(
@@ -1486,7 +1500,7 @@ fn build_closure_call_ladder(arms: &[(u32, String)]) -> String {
 /// stamped into the descriptor by `lower_closure_new` and read here from
 /// `[desc + 32 + j*16]` (NOT from the arg buffer, which carries only visible args).
 fn build_closure_wrapper(wrapper_symbol: &str, f: &Function) -> Result<String> {
-    let body_symbol = wasm_fn_symbol(&f.name);
+    let body_symbol = closure_body_symbol(&f.name);
     let cap = f.flags.closure_capture_count;
     // Defensive: `cap` is the trailing capture count set at lowering time, so
     // `cap <= params.len()` for well-formed modules. Guard so a malformed `Function`
@@ -1807,13 +1821,9 @@ fn box_result_wat(ir: &IrType, php: &PhpType) -> Result<String> {
     Ok(s)
 }
 
-/// Derives the wrapper symbol for a closure body name `__eir_closure_<owner>_<n>`:
-/// `__closure_wrap_<owner>_<n>`, then sanitizes through `wasm_fn_symbol`.
+/// Derives the category-separated wrapper symbol for a closure body.
 fn wrapper_symbol(closure_name: &str) -> String {
-    let tail = closure_name
-        .strip_prefix("__eir_closure_")
-        .unwrap_or(closure_name);
-    wasm_fn_symbol(&format!("__closure_wrap_{}", tail))
+    closure_wrapper_symbol(closure_name)
 }
 
 #[cfg(test)]
@@ -1993,7 +2003,7 @@ mod tests {
     /// P7a1 driver tests. The wrapper generated by `emit_closure_dispatch` unboxes the
     /// arg cell via `__rt_mixed_cast_int`, calls this body, and boxes the int result.
     fn int_closure_body_wat() -> &'static str {
-        r#"(func $fn___eir_closure_main_0 (param $p1 i64) (result i64)
+        r#"(func $fn_c__u__u_eir_u_closure_u_main_u_0 (param $p1 i64) (result i64)
   (i64.mul (local.get $p1) (i64.const 2)))                              ;; body: return arg * 2
 "#
     }
@@ -2144,7 +2154,7 @@ mod tests {
     /// are `(ptr i32, len i64)` — the wrapper's `unbox_capture_wat` Str arm pushes them in
     /// that order.
     fn str_capture_body_wat() -> &'static str {
-        r#"(func $fn___eir_closure_cap_gc_0 (param $cp i32) (param $cl i64) (result i32) (result i64)
+        r#"(func $fn_c__u__u_eir_u_closure_u_cap_u_gc_u_0 (param $cp i32) (param $cl i64) (result i32) (result i64)
   (call $__rt_incref (local.get $cp))                                   ;; EDIT 1: acquire the capture for the return value
   (local.get $cp)                                                       ;; return the captured string pointer
   (local.get $cl))                                                      ;; return the captured string length
@@ -2301,7 +2311,7 @@ mod tests {
     /// result cell. Body param is `(param $cap i64)` — the wrapper's `unbox_capture_wat`
     /// Callable arm pushes the descriptor i64.
     fn callable_capture_body_wat() -> &'static str {
-        r#"(func $fn___eir_closure_cap_call_gc_0 (param $cap i64) (result i64)
+        r#"(func $fn_c__u__u_eir_u_closure_u_cap_u_call_u_gc_u_0 (param $cap i64) (result i64)
   (call $__rt_incref (i32.wrap_i64 (local.get $cap)))                   ;; EDIT 1: acquire the capture for the return value
   (local.get $cap))                                                     ;; return the captured callable descriptor (i64)
 "#
@@ -2393,7 +2403,7 @@ mod tests {
     /// wrapper unbox incref (pre-Edit-2) would be uncompensated, leaking the
     /// captured descriptor's refcount permanently.
     fn nr_capture_body_wat() -> &'static str {
-        r#"(func $fn___eir_closure_cap_nr_0 (param $cap i64) (result i64)
+        r#"(func $fn_c__u__u_eir_u_closure_u_cap_u_nr_u_0 (param $cap i64) (result i64)
   (i64.const 42))                                                       ;; ignore the capture; return an int (non-return path)
 "#
     }
@@ -2486,7 +2496,7 @@ mod tests {
     /// passes the Iterable as a borrow (no incref), the body does not touch it, and
     /// the only release is via the descriptor's tag-12 release walk (Edit 4).
     fn iterable_gc_body_wat() -> &'static str {
-        r#"(func $fn___eir_closure_cap_iter_gc_0 (param $arr i32) (result i64)
+        r#"(func $fn_c__u__u_eir_u_closure_u_cap_u_iter_u_gc_u_0 (param $arr i32) (result i64)
   (i64.const 42))                                                     ;; ignore the capture; return a constant int
 "#
     }
@@ -2793,7 +2803,7 @@ mod tests {
     /// payload as an `i64` int result. The body ignores the type-tag word, which is
     /// sufficient for an e2e round-trip correctness check.
     fn tagged_scalar_capture_body_wat() -> &'static str {
-        r#"(func $fn___eir_closure_cap_ts_0 (param $payload i64) (param $tag i32) (result i64)
+        r#"(func $fn_c__u__u_eir_u_closure_u_cap_u_ts_u_0 (param $payload i64) (param $tag i32) (result i64)
   (local.get $payload))                                               ;; return the captured tagged-scalar payload as the int result
 "#
     }
@@ -2915,10 +2925,10 @@ mod tests {
 
     /// Hand-written WAT body for the user free function `dbl(int) -> int { x * 2 }`,
     /// defined under its canonical wasm symbol `fn_dbl` so the FCC wrapper's
-    /// `call $fn_dbl` resolves. The wrapper unboxes the arg cell via
+    /// `call $fn_u_dbl` resolves. The wrapper unboxes the arg cell via
     /// `__rt_mixed_cast_int`, calls this body, and boxes the int result.
     fn dbl_free_fn_body_wat() -> &'static str {
-        r#"(func $fn_dbl (param $p1 i64) (result i64)
+        r#"(func $fn_u_dbl (param $p1 i64) (result i64)
   (i64.mul (local.get $p1) (i64.const 2)))                              ;; body: return arg * 2
 "#
     }
@@ -3072,14 +3082,14 @@ mod tests {
 
     /// Hand-written WAT body for the FCC target free function `add2(int,int) -> int
     /// { a + b }`, defined under its canonical wasm symbol `fn_add2` so the FCC wrapper's
-    /// `call $fn_add2` resolves. Two params are deliberate: the second argument's
+    /// `call $fn_u_add2` resolves. Two params are deliberate: the second argument's
     /// Mixed-cell allocation reuses the first's heap slot (LIFO first-fit freelist) if the
     /// first cell was freed prematurely, so a missing `ArrayPush` incref aliases the two
     /// arg slots and corrupts the result — making the correctness test load-bearing for the
     /// incref. The FCC wrapper unboxes each arg via `__rt_mixed_cast_int` and boxes the int
     /// result.
     fn add2_free_fn_body_wat() -> &'static str {
-        r#"(func $fn_add2 (param $p1 i64) (param $p2 i64) (result i64)
+        r#"(func $fn_u_add2 (param $p1 i64) (param $p2 i64) (result i64)
   (i64.add (local.get $p1) (local.get $p2)))                            ;; body: return a + b
 "#
     }
@@ -3293,7 +3303,7 @@ mod tests {
     #[test]
     fn descriptor_invoke_fcc_free_fn_returns_121() {
         let driver = r#"(func $t (export "t") (result i64)
-  (call $fn_apply_via_descriptor_invoke))                              ;; dynamic add2(21, 100) -> 121
+  (call $fn_u_apply_u_via_u_descriptor_u_invoke))                              ;; dynamic add2(21, 100) -> 121
 "#;
         if let Some(o) = run_descriptor_invoke_driver(driver, "t") {
             assert_eq!(o, "121");
@@ -3311,7 +3321,7 @@ mod tests {
     #[test]
     fn descriptor_invoke_balanced_gc() {
         let driver = r#"(func $t (export "t") (result i64)
-  (drop (call $fn_apply_via_descriptor_invoke))                        ;; discard the 121 result
+  (drop (call $fn_u_apply_u_via_u_descriptor_u_invoke))                        ;; discard the 121 result
   (global.get $_gc_live))                                              ;; expect 0 (balanced)
 "#;
         if let Some(o) = run_descriptor_invoke_driver(driver, "t") {
@@ -3556,7 +3566,7 @@ mod tests {
     fn array_map_lowering_via_builtin_call_returns_4220() {
         let driver = r#"(func $t (export "t") (result i64)
   (local $res i32) (local $c0 i32) (local $c1 i32) (local $v0 i64) (local $v1 i64)
-  (local.set $res (call $fn_map_dbl))                                 ;; res = array_map(dbl(...), [21, 10])
+  (local.set $res (call $fn_u_map_u_dbl))                                 ;; res = array_map(dbl(...), [21, 10])
   (local.set $c0 (i32.wrap_i64 (i64.load offset=24 (local.get $res))))  ;; res[0] Mixed cell @ res+24
   (local.set $v0 (call $__rt_mixed_cast_int (local.get $c0)))         ;; res[0] -> int (expect 42)
   (local.set $c1 (i32.wrap_i64 (i64.load offset=40 (local.get $res))))  ;; res[1] Mixed cell @ res+40
@@ -3577,7 +3587,7 @@ mod tests {
     fn array_map_lowering_balanced_gc() {
         let driver = r#"(func $t (export "t") (result i64)
   (local $res i32)
-  (local.set $res (call $fn_map_dbl))                                 ;; res = array_map(dbl(...), [21, 10])
+  (local.set $res (call $fn_u_map_u_dbl))                                 ;; res = array_map(dbl(...), [21, 10])
   (call $__rt_decref_any (local.get $res))                           ;; release the mapped result array
   (global.get $_gc_live))                                             ;; expect 0 (balanced)
 "#;
@@ -3596,10 +3606,10 @@ mod tests {
 
     /// Hand-written WAT body for the user predicate `keep_gt2(int) -> bool { x > 2 }`,
     /// defined under its canonical wasm symbol `fn_keep_gt2` so the FCC wrapper's
-    /// `call $fn_keep_gt2` resolves. The wrapper unboxes the arg via `__rt_mixed_cast_int`,
+    /// `call $fn_u_keep_u_gt2` resolves. The wrapper unboxes the arg via `__rt_mixed_cast_int`,
     /// calls this body, and boxes the i64 0/1 result as a tag-3 bool Mixed cell.
     fn keep_gt2_free_fn_body_wat() -> &'static str {
-        r#"(func $fn_keep_gt2 (param $p1 i64) (result i64)
+        r#"(func $fn_u_keep_u_gt2 (param $p1 i64) (result i64)
   (i64.extend_i32_u (i64.gt_s (local.get $p1) (i64.const 2))))         ;; body: return (x > 2) as 0/1
 "#
     }
@@ -3864,7 +3874,7 @@ mod tests {
     fn array_filter_lowering_via_builtin_call() {
         let driver = r#"(func $t (export "t") (result i64)
   (local $res i32) (local $len i64) (local $e0 i64) (local $e1 i64) (local $e2 i64)
-  (local.set $res (call $fn_filter_keep_gt2))                         ;; res = array_filter([1..5], keep_gt2(...))
+  (local.set $res (call $fn_u_filter_u_keep_u_gt2))                         ;; res = array_filter([1..5], keep_gt2(...))
   (local.set $len (i64.load (local.get $res)))                       ;; kept length (expect 3)
   (local.set $e0 (call $__rt_array_get_int (local.get $res) (i64.const 0)))  ;; res[0] (expect 3)
   (local.set $e1 (call $__rt_array_get_int (local.get $res) (i64.const 1)))  ;; res[1] (expect 4)
@@ -3887,11 +3897,11 @@ mod tests {
 
     /// Hand-written WAT body for the user comparator `cmp_asc(int, int) -> int { a - b }`,
     /// defined under its canonical wasm symbol `fn_cmp_asc` so the FCC wrapper's
-    /// `call $fn_cmp_asc` resolves. The wrapper unboxes each arg via `__rt_mixed_cast_int`,
+    /// `call $fn_u_cmp_u_asc` resolves. The wrapper unboxes each arg via `__rt_mixed_cast_int`,
     /// calls this body, and boxes the i64 `a - b` result as a tag-0 int Mixed cell — so the
     /// runtime's `cmp_cell+8` lo-payload read sees the ascending comparison value.
     fn cmp_asc_free_fn_body_wat() -> &'static str {
-        r#"(func $fn_cmp_asc (param $p1 i64) (param $p2 i64) (result i64)
+        r#"(func $fn_u_cmp_u_asc (param $p1 i64) (param $p2 i64) (result i64)
   (i64.sub (local.get $p1) (local.get $p2)))                            ;; body: return a - b (ascending order)
 "#
     }
@@ -4167,7 +4177,7 @@ mod tests {
     fn usort_lowering_writes_back_to_local() {
         let driver = r#"(func $t (export "t") (result i64)
   (local $res i32) (local $e0 i64) (local $e1 i64) (local $e2 i64)
-  (local.set $res (call $fn_sort_local))                             ;; res = usort([3,1,2], cmp_asc(...)) (writeback -> local -> returned)
+  (local.set $res (call $fn_u_sort_u_local))                             ;; res = usort([3,1,2], cmp_asc(...)) (writeback -> local -> returned)
   (local.set $e0 (call $__rt_array_get_int (local.get $res) (i64.const 0)))  ;; res[0] (expect 1)
   (local.set $e1 (call $__rt_array_get_int (local.get $res) (i64.const 1)))  ;; res[1] (expect 2)
   (local.set $e2 (call $__rt_array_get_int (local.get $res) (i64.const 2)))  ;; res[2] (expect 3)
@@ -4190,7 +4200,7 @@ mod tests {
     fn uasort_lowering_writes_back_to_local() {
         let driver = r#"(func $t (export "t") (result i64)
   (local $res i32) (local $e0 i64) (local $e1 i64) (local $e2 i64)
-  (local.set $res (call $fn_sort_local))                             ;; res = uasort([3,1,2], cmp_asc(...)) (writeback -> local -> returned)
+  (local.set $res (call $fn_u_sort_u_local))                             ;; res = uasort([3,1,2], cmp_asc(...)) (writeback -> local -> returned)
   (local.set $e0 (call $__rt_array_get_int (local.get $res) (i64.const 0)))  ;; res[0] (expect 1)
   (local.set $e1 (call $__rt_array_get_int (local.get $res) (i64.const 1)))  ;; res[1] (expect 2)
   (local.set $e2 (call $__rt_array_get_int (local.get $res) (i64.const 2)))  ;; res[2] (expect 3)
@@ -4213,7 +4223,7 @@ mod tests {
     fn uksort_lowering_writes_back_to_local() {
         let driver = r#"(func $t (export "t") (result i64)
   (local $res i32) (local $e0 i64) (local $e1 i64) (local $e2 i64)
-  (local.set $res (call $fn_sort_local))                             ;; res = uksort([3,1,2], cmp_asc(...)) (writeback -> local -> returned)
+  (local.set $res (call $fn_u_sort_u_local))                             ;; res = uksort([3,1,2], cmp_asc(...)) (writeback -> local -> returned)
   (local.set $e0 (call $__rt_array_get_int (local.get $res) (i64.const 0)))  ;; res[0] (expect 1)
   (local.set $e1 (call $__rt_array_get_int (local.get $res) (i64.const 1)))  ;; res[1] (expect 2)
   (local.set $e2 (call $__rt_array_get_int (local.get $res) (i64.const 2)))  ;; res[2] (expect 3)
@@ -4235,13 +4245,13 @@ mod tests {
 
     /// Hand-written WAT body for the FCC target free function `sum2(int,int) -> int
     /// { carry + item }`, defined under its canonical wasm symbol `fn_sum2` so the FCC
-    /// wrapper's `call $fn_sum2` resolves. `__rt_array_reduce_callable` boxes the running
+    /// wrapper's `call $fn_u_sum2` resolves. `__rt_array_reduce_callable` boxes the running
     /// carry as arg0 (`$p1`) and the element as arg1 (`$p2`), so this body realizes the
     /// running sum the fold accumulates. The wrapper unboxes each arg via
     /// `__rt_mixed_cast_int` and boxes the int result, so the runtime's `rcell+8`
     /// lo-payload read sees the new carry.
     fn sum2_free_fn_body_wat() -> &'static str {
-        r#"(func $fn_sum2 (param $p1 i64) (param $p2 i64) (result i64)
+        r#"(func $fn_u_sum2 (param $p1 i64) (param $p2 i64) (result i64)
   (i64.add (local.get $p1) (local.get $p2)))                            ;; body: return carry + item
 "#
     }
@@ -4517,7 +4527,7 @@ mod tests {
     fn array_reduce_lowering_boxes_mixed_result() {
         let driver = r#"(func $t (export "t") (result i64)
   (local $cell i32)
-  (local.set $cell (call $fn_reduce_sum))                            ;; cell = array_reduce([1,2,3,4], sum2(...), 100) as Mixed
+  (local.set $cell (call $fn_u_reduce_u_sum))                            ;; cell = array_reduce([1,2,3,4], sum2(...), 100) as Mixed
   (call $__rt_mixed_cast_int (local.get $cell)))                     ;; unbox the boxed int carry -> 110
 "#;
         if let Some(o) = run_array_reduce_lowered_driver(driver, "t") {
@@ -4531,12 +4541,12 @@ mod tests {
 
     /// Hand-written WAT body for the FCC target free function `walk_acc(int) -> int`,
     /// defined under its canonical wasm symbol `fn_walk_acc` so the FCC wrapper's
-    /// `call $fn_walk_acc` resolves. Because `array_walk` is read-only (it DISCARDS the
+    /// `call $fn_u_walk_u_acc` resolves. Because `array_walk` is read-only (it DISCARDS the
     /// callback result), the callback's per-element effect is observed by ACCUMULATING the
     /// visited value into the module-level `$__walk_acc` global. Returns int 0, which
     /// `array_walk` discards. Used by all three `array_walk` tests.
     fn walk_acc_free_fn_body_wat() -> &'static str {
-        r#"(func $fn_walk_acc (param $p1 i64) (result i64)
+        r#"(func $fn_u_walk_u_acc (param $p1 i64) (result i64)
   (global.set $__walk_acc (i64.add (global.get $__walk_acc) (local.get $p1)))  ;; accumulate the visited value
   (i64.const 0))                                                               ;; return 0 (array_walk discards it)
 "#
@@ -4878,7 +4888,7 @@ mod tests {
     /// `walk_sum()` lowers `array_walk([1,2,3,4], walk_acc(...))` through the real
     /// typed `Op::RuntimeCall` -> `lower_array_walk` dispatch
     /// with a Void result, so the lowered `fn_walk_sum` returns void and the call runs
-    /// purely for side effects. The driver invokes `(call $fn_walk_sum)` (void — no
+    /// purely for side effects. The driver invokes `(call $fn_u_walk_u_sum)` (void — no
     /// `local.set`) then returns `(global.get $__walk_acc)`, asserting `10` (`1+2+3+4`).
     /// Proves the 2-operand op0=array / op1=callback order is consumed correctly AND the
     /// dispatch + `__rt_array_walk_callable` runtime wire up end-to-end; a no-op/aborted
@@ -4886,7 +4896,7 @@ mod tests {
     #[test]
     fn array_walk_lowering_via_builtin_call() {
         let driver = r#"(func $t (export "t") (result i64)
-  (call $fn_walk_sum)                                                ;; run array_walk([1,2,3,4], walk_acc(...)) for side effects (void)
+  (call $fn_u_walk_u_sum)                                                ;; run array_walk([1,2,3,4], walk_acc(...)) for side effects (void)
   (global.get $__walk_acc))                                          ;; accumulator after the lowered walk -> 10
 "#;
         if let Some(o) = run_array_walk_lowered_driver(driver, "t") {

@@ -346,15 +346,26 @@ pub(super) fn emit_class_metadata_tables(wm: &mut WatModule, module: &Module, cu
         return cursor;
     }
 
-    let id_to_ci: HashMap<u64, &ClassInfo> =
-        module.class_infos.values().map(|ci| (ci.class_id, ci)).collect();
+    let mut ordered_classes: Vec<_> = module.class_infos.iter().collect();
+    ordered_classes.sort_by(|(left, left_ci), (right, right_ci)| {
+        left_ci
+            .class_id
+            .cmp(&right_ci.class_id)
+            .then_with(|| left.cmp(right))
+    });
+    let mut id_to_ci: HashMap<u64, &ClassInfo> = HashMap::new();
     // class_id -> canonical class name (the `class_infos` key).
-    let id_to_name: HashMap<u64, &str> = module
-        .class_infos
-        .iter()
-        .map(|(name, ci)| (ci.class_id, name.as_str()))
-        .collect();
-    let max_id = module.class_infos.values().map(|ci| ci.class_id).max().unwrap_or(0);
+    let mut id_to_name: HashMap<u64, &str> = HashMap::new();
+    for (name, class_info) in &ordered_classes {
+        id_to_ci.entry(class_info.class_id).or_insert(class_info);
+        id_to_name
+            .entry(class_info.class_id)
+            .or_insert(name.as_str());
+    }
+    let max_id = ordered_classes
+        .last()
+        .map(|(_, class_info)| class_info.class_id)
+        .unwrap_or(0);
     let count = max_id + 1;
 
     // Per-class ascii name labels (1-aligned; the i64 arrays below re-align).
@@ -401,18 +412,24 @@ pub(super) fn emit_class_metadata_tables(wm: &mut WatModule, module: &Module, cu
             continue;
         }
         // Resolve each interface name to its interface_id; skip names not in the table.
-        let ifaces: Vec<u64> = ci
+        let mut ifaces: Vec<(u64, &str)> = ci
             .interfaces
             .iter()
-            .filter_map(|name| module.interface_infos.get(name).map(|ii| ii.interface_id))
+            .filter_map(|name| {
+                module
+                    .interface_infos
+                    .get(name)
+                    .map(|ii| (ii.interface_id, name.as_str()))
+            })
             .collect();
+        ifaces.sort();
         if ifaces.is_empty() {
             continue;
         }
         block_off.insert(cid, cursor);
         let mut bytes = Vec::with_capacity(8 + ifaces.len() * 16);
         bytes.extend_from_slice(&(ifaces.len() as i64).to_le_bytes()); // count
-        for iface_id in &ifaces {
+        for (iface_id, _) in &ifaces {
             bytes.extend_from_slice(&(*iface_id as i64).to_le_bytes()); // iface_id
             bytes.extend_from_slice(&0i64.to_le_bytes()); // impl_ptr (reserved)
         }
@@ -506,7 +523,11 @@ pub(super) fn emit_instanceof_target_table(wm: &mut WatModule, module: &Module, 
     for (name, ii) in &module.interface_infos {
         targets.push((name.clone(), ii.interface_id, 1));
     }
-    targets.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.2.cmp(&b.2)));
+    targets.sort_by(|a, b| {
+        a.1.cmp(&b.1)
+            .then_with(|| a.2.cmp(&b.2))
+            .then_with(|| a.0.cmp(&b.0))
+    });
 
     let mut cursor = (cursor + 7) & !7; // 8-align the name bytes and the i64-bearing rows
 
@@ -969,7 +990,12 @@ pub(super) fn mixed_method_candidates(
             .unwrap_or_else(|| class_name.clone());
         out.push((ci.class_id, class_name.clone(), impl_class));
     }
-    out.sort_by_key(|(cid, _, _)| *cid);
+    out.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
     out
 }
 

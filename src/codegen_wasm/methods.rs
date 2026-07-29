@@ -24,7 +24,8 @@
 //!   makes `parent::__construct()` chaining work.
 
 use super::classes::{mixed_method_candidates, mixed_tag_for_php_type};
-use super::context::{wasm_fn_symbol, FnCtx, Result};
+use super::context::{FnCtx, Result};
+use super::symbols::{function_symbol, method_dispatch_symbol, method_symbol};
 use super::inst::{data_immediate, operand};
 use super::values::WasmRepr;
 use super::wat::{ValType, WatModule};
@@ -99,9 +100,9 @@ pub(super) fn lower_method_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
         .unwrap_or_else(|| class_name.clone());
     let callee_symbol = if dynamic {
         let introducer = resolve_vtable_introducer(ctx, &class_name, &method_key)?;
-        wasm_fn_symbol(&format!("__dispatch::inst::{}::{}", introducer, method_key))
+        method_dispatch_symbol(&introducer, &method_key)
     } else {
-        wasm_fn_symbol(&format!("{}::{}", impl_class, method_name))
+        method_symbol(&format!("{}::{}", impl_class, method_name))
     };
     let mode = if dynamic { "dispatch" } else { "direct" };
 
@@ -223,9 +224,9 @@ fn emit_candidate_call(
     let dynamic = has_slot && !is_final;
     let callee_symbol = if dynamic {
         let introducer = resolve_vtable_introducer(ctx, class_name, method_key)?;
-        wasm_fn_symbol(&format!("__dispatch::inst::{}::{}", introducer, method_key))
+        method_dispatch_symbol(&introducer, method_key)
     } else {
-        wasm_fn_symbol(&format!("{}::{}", impl_class, method_name))
+        method_symbol(&format!("{}::{}", impl_class, method_name))
     };
     let mode = if dynamic { "dispatch" } else { "direct" };
 
@@ -540,7 +541,7 @@ pub(super) fn lower_static_method_call(ctx: &mut FnCtx, inst: &Instruction) -> R
             .get(&method_key)
             .cloned()
             .unwrap_or_else(|| receiver_class.clone());
-        let callee_symbol = wasm_fn_symbol(&format!("{}::{}", impl_class, method_name));
+        let callee_symbol = method_symbol(&format!("{}::{}", impl_class, method_name));
         ctx.fb.ins(
             &format!("i64.const {}", ci.class_id as i64),
             &format!("{}::{} called_class_id", receiver_class, method_name),
@@ -558,7 +559,7 @@ pub(super) fn lower_static_method_call(ctx: &mut FnCtx, inst: &Instruction) -> R
             .get(&method_key)
             .cloned()
             .unwrap_or_else(|| receiver_class.clone());
-        let callee_symbol = wasm_fn_symbol(&format!("{}::{}", impl_class, method_name));
+        let callee_symbol = method_symbol(&format!("{}::{}", impl_class, method_name));
         // Forward the current `this` (slot 0) as the receiver of the instance method.
         ctx.emit_load_slot(LocalSlotId::from_raw(0))?;
         for &arg in &inst.operands {
@@ -636,9 +637,21 @@ pub(super) fn emit_method_dispatch_stubs(wm: &mut WatModule, module: &Module) ->
                 .push(name.clone());
         }
     }
+    for class_children in children.values_mut() {
+        class_children.sort();
+    }
 
-    for (introducer, ci) in &module.class_infos {
-        for method_key in ci.vtable_slots.keys() {
+    let mut classes: Vec<_> = module.class_infos.iter().collect();
+    classes.sort_by(|(left, left_ci), (right, right_ci)| {
+        left_ci
+            .class_id
+            .cmp(&right_ci.class_id)
+            .then_with(|| left.cmp(right))
+    });
+    for (introducer, ci) in classes {
+        let mut method_keys: Vec<_> = ci.vtable_slots.keys().collect();
+        method_keys.sort();
+        for method_key in method_keys {
             let method_key = method_key.as_str();
             if ci.final_methods.contains(method_key) {
                 continue;
@@ -656,7 +669,12 @@ pub(super) fn emit_method_dispatch_stubs(wm: &mut WatModule, module: &Module) ->
                 continue;
             }
 
-            let subtree = collect_concrete_subtree(module, &children, introducer, method_key);
+            let mut subtree = collect_concrete_subtree(module, &children, introducer, method_key);
+            subtree.sort_by(|left, right| {
+                let left_id = module.class_infos.get(left).map(|class| class.class_id);
+                let right_id = module.class_infos.get(right).map(|class| class.class_id);
+                left_id.cmp(&right_id).then_with(|| left.cmp(right))
+            });
             let mut arms: Vec<(u64, String)> = Vec::new();
             let mut sig_fn: Option<&Function> = None;
             for class_name in &subtree {
@@ -671,20 +689,24 @@ pub(super) fn emit_method_dispatch_stubs(wm: &mut WatModule, module: &Module) ->
                     .unwrap_or_else(|| class_name.clone());
                 if let Some(f) = find_method_function(&module.class_methods, &impl_class, method_key)
                 {
-                    arms.push((class_ci.class_id, wasm_fn_symbol(&f.name)));
+                    arms.push((class_ci.class_id, function_symbol(f)));
                     if sig_fn.is_none() {
                         sig_fn = Some(f);
                     }
                 }
             }
+            arms.sort_by(|left, right| {
+                left.0
+                    .cmp(&right.0)
+                    .then_with(|| left.1.cmp(&right.1))
+            });
             let Some(sig_f) = sig_fn else {
                 // No concrete implementer in the subtree: the method is never
                 // dispatched at runtime, so no stub is needed.
                 continue;
             };
 
-            let stub_symbol =
-                wasm_fn_symbol(&format!("__dispatch::inst::{}::{}", introducer, method_key));
+            let stub_symbol = method_dispatch_symbol(introducer, method_key);
             let wat = build_dispatch_stub(&stub_symbol, sig_f, &arms);
             wm.add_raw_func(&wat);
         }

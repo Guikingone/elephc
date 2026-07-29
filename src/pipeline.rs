@@ -766,13 +766,17 @@ pub(crate) fn compile(config: CliConfig) {
     );
 }
 
-/// Lowers an EIR module to WebAssembly and writes the target artifacts.
+/// Lowers an EIR module to WebAssembly, validates the assembled bytes, and only
+/// then publishes the target artifacts (requirement WASM-ART-001).
 ///
-/// Always writes the `.wat` text module (the readable form, kept like a native
-/// `.s` file). When `emit_asm` is set, stops there. Otherwise encodes the `.wat`
-/// to a `.wasm` binary with the pure-Rust `wat` crate and writes it. The native
-/// runtime object, assembler, and linker are never involved. Exits the process
-/// with a diagnostic on any backend, encoding, or write error.
+/// The WAT is generated in memory, assembled to a `.wasm` binary with the
+/// pure-Rust `wat` crate, and type-validated with `wasmparser` before any file
+/// is written. `--emit-asm` performs the same assembly and validation even when
+/// only `.wat` is requested. The `.wat`, `.wasm`, and npm package are written
+/// through staged writes and renames, so backend, assembly, and validation
+/// failures publish nothing and write failures never expose partial destinations.
+/// The native runtime object, assembler, and linker are never involved. Exits
+/// the process with a diagnostic on any backend, validation, or write error.
 fn emit_wasm_artifacts(
     module: &ir::Module,
     emit: Emit,
@@ -791,69 +795,49 @@ fn emit_wasm_artifacts(
     };
     timings.record_since("codegen-wasm", phase_started);
 
+    let source_stem = Path::new(filename)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("output");
+
+    // Assemble, type-validate, and publish in one step: nothing is written until
+    // the bytes validate (`--emit-asm` included), and every artifact is written
+    // through staged writes so a failure never exposes a partial destination.
     let phase_started = Instant::now();
-    if let Err(e) = fs::write(&output_paths.asm, &wat) {
-        eprintln!("Error writing '{}': {}", output_paths.asm.display(), e);
+    if let Err(err) = codegen_wasm::publish_wasm_artifacts(
+        &wat,
+        emit,
+        emit_asm,
+        source_stem,
+        &output_paths.asm,
+        &output_paths.bin,
+        output_paths.package_dir.as_deref(),
+    ) {
+        eprintln!("{}", err);
         process::exit(1);
     }
-    timings.record_since("write-wat", phase_started);
+    timings.record_since("publish-wasm", phase_started);
 
+    timings.report();
     if emit_asm {
-        timings.report();
         println!(
             "Emitted WebAssembly text '{}' -> '{}'",
             filename,
             output_paths.asm.display()
         );
-        return;
-    }
-
-    let phase_started = Instant::now();
-    let wasm_bytes = match wat::parse_str(&wat) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            eprintln!(
-                "WebAssembly encoding error while assembling '{}': {}",
-                output_paths.asm.display(),
-                err
-            );
-            process::exit(1);
-        }
-    };
-    if matches!(emit, Emit::NpmPackage) {
+    } else if matches!(emit, Emit::NpmPackage) {
         let package_dir = output_paths
             .package_dir
             .as_deref()
             .expect("NPM output has a package directory");
-        let source_stem = Path::new(filename)
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or("output");
-        if let Err(e) = codegen_wasm::write_npm_package(package_dir, source_stem, &wasm_bytes) {
-            eprintln!(
-                "Error writing NPM package '{}': {}",
-                package_dir.display(),
-                e
-            );
-            process::exit(1);
-        }
-        timings.record_since("package-npm", phase_started);
-        timings.report();
         println!(
             "Compiled '{}' -> NPM package '{}'",
             filename,
             package_dir.display()
         );
-        return;
+    } else {
+        println!("Compiled '{}' -> '{}'", filename, output_paths.bin.display());
     }
-    if let Err(e) = fs::write(&output_paths.bin, &wasm_bytes) {
-        eprintln!("Error writing '{}': {}", output_paths.bin.display(), e);
-        process::exit(1);
-    }
-    timings.record_since("encode-wasm", phase_started);
-
-    timings.report();
-    println!("Compiled '{}' -> '{}'", filename, output_paths.bin.display());
 }
 
 /// Computes output paths for .s (assembly), .o (object), binary, and .map (source map) files

@@ -21,14 +21,18 @@
 
 use std::collections::HashMap;
 
-use super::context::{wasm_fn_symbol, FnCtx, Result};
+use super::context::{FnCtx, Result};
 use super::inst::{lower_instruction, reserve_iterators};
+use super::symbols::function_symbol;
+use super::transfer;
 use super::values::{declare_local, declare_param, WasmRepr};
 use super::wat::{FuncBuilder, ValType};
 use super::WasmError;
 use crate::ir::{
-    Function, Immediate, InstId, LocalSlotId, Module, Op, Terminator, ValueDef, ValueId,
+    Function, Immediate, InstId, IrHeapKind, IrType, LocalSlotId, Module, Op, Terminator,
+    ValueDef, ValueId,
 };
+use crate::types::PhpType;
 
 /// Lowers one EIR function to a WAT `FuncBuilder`.
 ///
@@ -71,7 +75,7 @@ pub fn lower_function(
     let (internal_name, export_name) = if is_main {
         ("_entry".to_string(), "_start".to_string())
     } else {
-        let name = wasm_fn_symbol(&function.name);
+        let name = function_symbol(function);
         (name.clone(), name)
     };
 
@@ -184,9 +188,57 @@ pub fn lower_function(
         "enter the dispatch loop at the entry block",
     );
 
+    if is_main {
+        emit_main_argc_argv_init(&mut ctx)?;
+    }
+
     emit_dispatch_loop(&mut ctx)?;
 
     Ok(ctx.fb)
+}
+
+/// Initializes source `$argc` and `$argv` locals in a `main` function prologue.
+///
+/// Locates the EIR local slots by name (the same metadata the native backend
+/// uses) and calls the WASI `__rt_argc`/`__rt_argv` helpers. Mixed-cell slots
+/// receive the value through the typed transfer layer, which boxes the concrete
+/// integer or array pointer.
+fn emit_main_argc_argv_init(ctx: &mut FnCtx) -> Result<()> {
+    if let Some(argc_slot) = ctx
+        .function
+        .locals
+        .iter()
+        .enumerate()
+        .find(|(_, local)| local.name.as_deref() == Some("argc"))
+        .map(|(idx, _)| LocalSlotId::from_raw(idx as u32))
+    {
+        ctx.fb.ins("call $__rt_argc", "load $argc from WASI");
+        transfer::emit_store_stack_value_into_slot(
+            ctx,
+            IrType::I64,
+            PhpType::Int,
+            argc_slot,
+        )?;
+    }
+
+    if let Some(argv_slot) = ctx
+        .function
+        .locals
+        .iter()
+        .enumerate()
+        .find(|(_, local)| local.name.as_deref() == Some("argv"))
+        .map(|(idx, _)| LocalSlotId::from_raw(idx as u32))
+    {
+        ctx.fb.ins("call $__rt_argv", "build $argv from WASI");
+        transfer::emit_store_stack_value_into_slot(
+            ctx,
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Str)),
+            argv_slot,
+        )?;
+    }
+
+    Ok(())
 }
 
 /// Emits the br_table dispatch loop containing every block body.
@@ -373,6 +425,7 @@ fn lower_terminator(ctx: &mut FnCtx, term: &Terminator) -> Result<()> {
         }
 
         Terminator::Return { value } => {
+            let returned_slot = value.and_then(|v| returned_local_slot(ctx.function, v));
             // Owner-slot release epilogue: release every ref-cell owner before
             // leaving the function. Runs first so the return value (pushed next)
             // is not stranded across the epilogue's local.get/local.set. Idempotent
@@ -384,11 +437,16 @@ fn lower_terminator(ctx: &mut FnCtx, term: &Terminator) -> Result<()> {
             // skipping the one this return moves out. Mirrors the native
             // reassigned_capture_epilogue_locals. Runs before the return value is
             // pushed so its local.get/local.set never strand the result.
-            let returned_slot = value.and_then(|v| returned_local_slot(ctx.function, v));
             ctx.emit_reassigned_capture_epilogue(returned_slot)?;
+            // Release ordinary owned locals that do not move out through this
+            // return. This is what runs object destructors at function end and
+            // during main shutdown, and balances owned strings/containers.
+            ctx.emit_local_epilogue_cleanup(returned_slot)?;
             if ctx.function.flags.is_main {
                 ctx.fb.ins("i32.const 0", "exit status 0");
                 ctx.fb.ins("call $wasi_proc_exit", "WASI proc_exit(0)");
+                ctx.fb
+                    .ins("unreachable", "WASI proc_exit is non-returning");
             } else {
                 if let Some(v) = value {
                     ctx.emit_load_value(*v)?;
@@ -413,7 +471,9 @@ fn lower_terminator(ctx: &mut FnCtx, term: &Terminator) -> Result<()> {
 /// Used by the `Return` epilogue to skip a reassigned closure-capture slot that is
 /// returned: the WASM return moves the slot's value out (no incref), so the capture
 /// release epilogue must not also release it. Recurses through the `ArrayToMixed` /
-/// `HashToMixed` in-place conversions, mirroring the native `direct_return_local_slot`.
+/// `HashToMixed` in-place conversions and ownership-neutral `Move`/`Borrow`
+/// forwarding, mirroring the native `direct_return_local_slot`. `Acquire` is
+/// intentionally not followed because it creates an independent owned value.
 fn returned_local_slot(function: &Function, value: ValueId) -> Option<LocalSlotId> {
     let value = function.value(value)?;
     let ValueDef::Instruction { inst, .. } = value.def else {
@@ -425,7 +485,7 @@ fn returned_local_slot(function: &Function, value: ValueId) -> Option<LocalSlotI
             Some(Immediate::LocalSlot(slot)) => Some(slot),
             _ => None,
         },
-        Op::ArrayToMixed | Op::HashToMixed => {
+        Op::ArrayToMixed | Op::HashToMixed | Op::Move | Op::Borrow => {
             let source = *inst.operands.first()?;
             returned_local_slot(function, source)
         }

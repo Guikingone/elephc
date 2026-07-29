@@ -2546,7 +2546,8 @@ fn persist_scratch_return_string(
     )
 }
 
-/// Acquires return values read from heap containers before local cleanup runs.
+/// Acquires return values borrowed from heap containers, ref-cells, static
+/// storage, or closure captures before the owning storage can be cleaned up.
 ///
 /// Function-static slots are included: the slot keeps owning its boxed value across
 /// calls, so `return $static_local` must hand the caller an extra reference — the
@@ -2587,6 +2588,7 @@ fn acquire_borrowed_return_value(
                 | Op::DynamicPropGet
                 | Op::NullsafePropGet
                 | Op::LoadStaticLocal
+                | Op::LoadRefCell
         )
     ) {
         return value;

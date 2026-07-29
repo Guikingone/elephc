@@ -175,7 +175,6 @@ pub(super) fn emit_ref_cell_release_seq(
     // release (unset / re-alias / foreach) followed by the epilogue is a no-op.
     ctx.fb
         .ins(&format!("local.get {}", ptr_local), "load owner cell ptr");
-    ctx.fb.ins("i32.eqz", "skip if owner already cleared");
     ctx.fb.raw("(if");
     ctx.fb.raw("(then");
     if needs_payload_release(payload_type) {
@@ -243,27 +242,31 @@ pub(super) fn lower_store_ref_cell(ctx: &mut FnCtx, inst: &Instruction) -> Resul
 /// unchanged. The owner is recorded for the `Return` epilogue.
 pub(super) fn lower_promote_local_ref_cell(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let (php_slot, owner_slot) = slot_pair_immediate(inst)?;
-    // Idempotency guard: if the slot already stores a ref-cell pointer (a P7c by-ref
-    // closure capture promoted it, or a prior `=&` did), the cell already exists and an
-    // owner is already registered. Re-promoting would `retain_and_store_slot_value`
-    // against the slot's now-stale/dangling value locals (UAF for refcounted types)
-    // and register a second owner under a different key (double-free + leak). Native
-    // guards this at `codegen_ir/lower_inst.rs` via `local_stores_ref_cell_pointer`;
-    // the EIR does not mark a by-ref-captured caller local ref-bound, so a subsequent
-    // `$y =& $x` reaches `Op::PromoteLocalRefCell($x)` and needs this no-op here. The
-    // following `Op::AliasLocalRefCell` then binds `$y` to the existing cell.
-    if ctx.ref_cell_ptrs.contains_key(&php_slot.as_raw()) {
-        return Ok(());
-    }
     let payload = payload_type(inst);
     let slot_repr = ctx.slot_repr(php_slot)?.clone();
 
-    // One i32 local carries the cell pointer for both the php-visible and owner slots.
-    let rc = ctx.fresh_temp(ValType::I32);
+    // One i32 local carries the cell pointer for the php-visible slot and every
+    // owner alias emitted for it. Reuse the local when another EIR path promotes
+    // the same slot, but keep the allocation check at runtime: two mutually
+    // exclusive branches are both lowered, and either branch may execute first.
+    let (rc, first_promotion) = match ctx.ref_cell_ptrs.get(&php_slot.as_raw()) {
+        Some(existing) => (existing.clone(), false),
+        None => (ctx.fresh_temp(ValType::I32), true),
+    };
     ctx.register_ref_cell_ptr(php_slot.as_raw(), rc.clone());
     ctx.register_ref_cell_ptr(owner_slot.as_raw(), rc.clone());
+    if first_promotion {
+        ctx.add_ref_cell_owner(owner_slot.as_raw(), payload.clone());
+    }
 
-    // Allocate the 16-byte cell and stash its pointer in the shared local.
+    // Allocate and populate only while the shared pointer is null. Sequential
+    // re-promotions therefore remain idempotent, while branch-local promotions
+    // each retain a real initialization path.
+    ctx.fb
+        .ins(&format!("local.get {}", rc), "existing ref cell pointer");
+    ctx.fb.ins("i32.eqz", "ref cell still uninitialized?");
+    ctx.fb.raw("(if");
+    ctx.fb.raw("(then");
     ctx.fb.ins("i32.const 16", "ref cell size (16 bytes)");
     ctx.fb.ins("call $__rt_heap_alloc", "allocate the ref cell");
     ctx.fb.ins(&format!("local.set {}", rc), "cell pointer");
@@ -271,8 +274,8 @@ pub(super) fn lower_promote_local_ref_cell(ctx: &mut FnCtx, inst: &Instruction) 
     // Retain the payload and store it into the cell, then release the slot's old value.
     retain_and_store_slot_value(ctx, &rc, &slot_repr, &payload)?;
     release_old_slot_value(ctx, &slot_repr, &payload)?;
-
-    ctx.add_ref_cell_owner(owner_slot.as_raw(), payload);
+    ctx.fb.raw(")");
+    ctx.fb.raw(")");
     Ok(())
 }
 

@@ -17,7 +17,9 @@
 //! - Borrow rule: `value_repr`/`slot_repr` borrow `ctx`; clone the needed strings
 //!   (via `local_refs()` or `.clone()`) before calling a `&mut self` method.
 
-use super::context::{wasm_fn_symbol, FnCtx, Result};
+use super::context::{FnCtx, Result};
+use super::symbols::{function_symbol, user_function_symbol};
+use super::transfer;
 use super::values::WasmRepr;
 use super::wat::ValType;
 use super::WasmError;
@@ -60,17 +62,17 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::IBitAnd => lower_int_binop(ctx, &inst, "i64.and"),
         Op::IBitOr => lower_int_binop(ctx, &inst, "i64.or"),
         Op::IBitXor => lower_int_binop(ctx, &inst, "i64.xor"),
-        Op::IShl => lower_int_binop(ctx, &inst, "i64.shl"),
-        Op::IShrA => lower_int_binop(ctx, &inst, "i64.shr_s"),
-        Op::ISDiv => lower_int_binop(ctx, &inst, "i64.div_s"),
-        Op::ISMod => lower_int_binop(ctx, &inst, "i64.rem_s"),
+        Op::IShl => lower_int_shift(ctx, &inst, true),
+        Op::IShrA => lower_int_shift(ctx, &inst, false),
+        Op::ISDiv => lower_signed_int_div(ctx, &inst),
+        Op::ISMod => lower_signed_int_mod(ctx, &inst),
         Op::INeg => lower_int_neg(ctx, &inst),
         Op::IBitNot => lower_int_bitnot(ctx, &inst),
         Op::IDiv => lower_int_div_to_float(ctx, &inst),
         Op::FAdd => lower_float_binop(ctx, &inst, "f64.add"),
         Op::FSub => lower_float_binop(ctx, &inst, "f64.sub"),
         Op::FMul => lower_float_binop(ctx, &inst, "f64.mul"),
-        Op::FDiv => lower_float_binop(ctx, &inst, "f64.div"),
+        Op::FDiv => lower_float_div(ctx, &inst),
         Op::FNeg => lower_float_neg(ctx, &inst),
         Op::ICmp => lower_int_cmp(ctx, &inst),
         Op::FCmp => lower_float_cmp(ctx, &inst),
@@ -248,15 +250,14 @@ fn lower_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         .get(data_id.as_raw() as usize)
         .cloned()
         .ok_or_else(|| WasmError::Unsupported(format!("call: unknown function data {:?}", data_id)))?;
-    let symbol = wasm_fn_symbol(&name);
-
     // Resolve the callee once and snapshot the by-ref param flags into owned data, so no
     // `&Function` borrow is held across the mutable `ctx` calls below. Reject a by-ref
     // variadic parameter up front (out of scope for P7c0b).
     let callee = ctx.module.functions.iter().find(|f| f.name == name);
-    let return_arity = callee
-        .map(|f| WasmRepr::val_types(f.return_type).len())
-        .unwrap_or(0);
+    let symbol = callee
+        .map(function_symbol)
+        .unwrap_or_else(|| user_function_symbol(&name));
+    // Callee return type is resolved near the call site for result storage.
     let by_ref_params: Vec<bool> = callee
         .map(|f| f.params.iter().map(|p| p.by_ref).collect())
         .unwrap_or_default();
@@ -268,16 +269,22 @@ fn lower_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         }
     }
 
-    // Pre-call pass: push each argument. By-ref params materialize a cell pointer (a temp
-    // cell for a fresh local, the shared pointer for an already-ref-bound local); all
-    // other args are pushed unchanged.
+    // Pre-call pass: push each argument in the callee parameter's representation.
+    // By-ref params materialize a cell pointer (a temp cell for a fresh local, the shared
+    // pointer for an already-ref-bound local); all other args go through the typed
+    // transfer layer so concrete values are boxed for Mixed/Union/Iterable parameters and
+    // Mixed cells are unboxed for concrete parameters.
     let mut temp_cells: Vec<TempCell> = Vec::new();
     let mut slot_to_cell: HashMap<u32, usize> = HashMap::new();
     for (i, &arg) in inst.operands.iter().enumerate() {
         let is_by_ref = i < by_ref_params.len() && by_ref_params[i];
         if is_by_ref {
             push_by_ref_arg(ctx, arg, &mut temp_cells, &mut slot_to_cell)?;
+        } else if let Some(param) = callee.map(|f| f.params.get(i)).flatten() {
+            transfer::emit_push_call_argument(ctx, arg, param.ir_type, param.php_type.codegen_repr())?;
         } else {
+            // Callee signature unknown (e.g. an unresolved extern): push the argument
+            // in its native representation; this is the best-effort fallback.
             ctx.emit_load_value(arg)?;
         }
     }
@@ -285,9 +292,15 @@ fn lower_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     ctx.fb
         .ins(&format!("call ${}", symbol), &format!("call {}", name));
 
-    if let Some(r) = inst.result {
-        ctx.emit_store_value(r)?;
+    let callee_return_type = callee.map(|f| f.return_type).unwrap_or(IrType::Void);
+    let callee_return_php = callee
+        .map(|f| f.return_php_type.codegen_repr())
+        .unwrap_or(PhpType::Void);
+
+    if let Some(_r) = inst.result {
+        transfer::emit_store_call_result(ctx, &inst, callee_return_type, callee_return_php)?;
     } else {
+        let return_arity = WasmRepr::val_types(callee_return_type).len();
         for _ in 0..return_arity {
             ctx.fb.ins("drop", "discard unused call result");
         }
@@ -564,6 +577,152 @@ fn lower_int_binop(ctx: &mut FnCtx, inst: &Instruction, wasm_op: &str) -> Result
     store_result(ctx, inst)
 }
 
+/// Lowers PHP integer shifts without inheriting WebAssembly's masked shift count.
+///
+/// PHP rejects a negative count, returns zero for left shifts by 64 or more, and
+/// sign-fills right shifts by 64 or more. WebAssembly instead masks an i64 shift
+/// count modulo 64, so both boundary cases are emitted explicitly.
+fn lower_int_shift(ctx: &mut FnCtx, inst: &Instruction, left: bool) -> Result<()> {
+    let lhs = ctx.fresh_temp(ValType::I64);
+    let rhs = ctx.fresh_temp(ValType::I64);
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb.ins(&format!("local.set {}", lhs), "shift lhs");
+    ctx.emit_load_value(operand(inst, 1)?)?;
+    ctx.fb.ins(&format!("local.set {}", rhs), "shift count");
+
+    ctx.fb.ins(&format!("local.get {}", rhs), "shift count");
+    ctx.fb.ins("i64.const 0", "minimum valid shift count");
+    ctx.fb.ins("i64.lt_s", "negative shift count?");
+    ctx.fb.ins("if", "reject PHP-negative shift count");
+    emit_runtime_failure(ctx, 3, "negative shift count");
+    ctx.fb.ins("end", "end negative shift guard");
+
+    ctx.fb.ins(&format!("local.get {}", rhs), "shift count");
+    ctx.fb.ins("i64.const 64", "PHP integer width");
+    ctx.fb.ins("i64.ge_u", "shift count is at least the integer width?");
+    ctx.fb
+        .ins("if (result i64)", "select PHP overshift result");
+    if left {
+        ctx.fb.ins("i64.const 0", "left overshift yields zero");
+    } else {
+        ctx.fb.ins("i64.const -1", "negative right-overshift result");
+        ctx.fb.ins("i64.const 0", "non-negative right-overshift result");
+        ctx.fb.ins(&format!("local.get {}", lhs), "right-shift lhs");
+        ctx.fb.ins("i64.const 0", "zero sign threshold");
+        ctx.fb.ins("i64.lt_s", "lhs is negative?");
+        ctx.fb.ins("select", "preserve the arithmetic sign");
+    }
+    ctx.fb.ins("else", "ordinary in-range shift");
+    ctx.fb.ins(&format!("local.get {}", lhs), "shift lhs");
+    ctx.fb.ins(&format!("local.get {}", rhs), "shift count");
+    ctx.fb.ins(
+        if left { "i64.shl" } else { "i64.shr_s" },
+        "perform in-range PHP shift",
+    );
+    ctx.fb.ins("end", "end overshift selection");
+    store_result(ctx, inst)
+}
+
+/// Lowers signed PHP integer division with explicit zero and overflow guards.
+///
+/// WebAssembly traps for both `rhs == 0` and `i64::MIN / -1`. PHP surfaces
+/// `DivisionByZeroError` and `ArithmeticError`, so command modules route those
+/// cases through the deterministic runtime failure path before `i64.div_s`.
+fn lower_signed_int_div(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let lhs = ctx.fresh_temp(ValType::I64);
+    let rhs = ctx.fresh_temp(ValType::I64);
+    capture_int_operands(ctx, inst, &lhs, &rhs)?;
+    emit_zero_divisor_guard(ctx, &rhs, 1, "integer division by zero");
+
+    ctx.fb.ins(&format!("local.get {}", lhs), "integer dividend");
+    ctx.fb.ins("i64.const -9223372036854775808", "PHP_INT_MIN");
+    ctx.fb.ins("i64.eq", "dividend is PHP_INT_MIN?");
+    ctx.fb.ins(&format!("local.get {}", rhs), "integer divisor");
+    ctx.fb.ins("i64.const -1", "overflowing divisor");
+    ctx.fb.ins("i64.eq", "divisor is -1?");
+    ctx.fb.ins("i32.and", "integer division overflow pair?");
+    ctx.fb.ins("if", "reject PHP_INT_MIN divided by -1");
+    emit_runtime_failure(ctx, 4, "integer division overflow");
+    ctx.fb.ins("end", "end integer division overflow guard");
+
+    ctx.fb.ins(&format!("local.get {}", lhs), "integer dividend");
+    ctx.fb.ins(&format!("local.get {}", rhs), "integer divisor");
+    ctx.fb.ins("i64.div_s", "PHP signed integer division");
+    store_result(ctx, inst)
+}
+
+/// Lowers signed PHP modulo with zero and `PHP_INT_MIN % -1` handling.
+///
+/// The latter is mathematically zero but may trap in WebAssembly engines when
+/// implemented through the signed division path, so it is selected explicitly.
+fn lower_signed_int_mod(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let lhs = ctx.fresh_temp(ValType::I64);
+    let rhs = ctx.fresh_temp(ValType::I64);
+    capture_int_operands(ctx, inst, &lhs, &rhs)?;
+    emit_zero_divisor_guard(ctx, &rhs, 2, "integer modulo by zero");
+
+    ctx.fb.ins(&format!("local.get {}", lhs), "integer dividend");
+    ctx.fb.ins("i64.const -9223372036854775808", "PHP_INT_MIN");
+    ctx.fb.ins("i64.eq", "dividend is PHP_INT_MIN?");
+    ctx.fb.ins(&format!("local.get {}", rhs), "integer divisor");
+    ctx.fb.ins("i64.const -1", "special divisor");
+    ctx.fb.ins("i64.eq", "divisor is -1?");
+    ctx.fb.ins("i32.and", "PHP_INT_MIN modulo -1?");
+    ctx.fb.ins("if (result i64)", "select modulo special case");
+    ctx.fb.ins("i64.const 0", "PHP_INT_MIN modulo -1 is zero");
+    ctx.fb.ins("else", "ordinary signed modulo");
+    ctx.fb.ins(&format!("local.get {}", lhs), "integer dividend");
+    ctx.fb.ins(&format!("local.get {}", rhs), "integer divisor");
+    ctx.fb.ins("i64.rem_s", "PHP signed modulo");
+    ctx.fb.ins("end", "end modulo special-case selection");
+    store_result(ctx, inst)
+}
+
+/// Captures two i64 operands in fresh locals without changing evaluation order.
+fn capture_int_operands(
+    ctx: &mut FnCtx,
+    inst: &Instruction,
+    lhs: &str,
+    rhs: &str,
+) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb.ins(&format!("local.set {}", lhs), "capture integer lhs");
+    ctx.emit_load_value(operand(inst, 1)?)?;
+    ctx.fb.ins(&format!("local.set {}", rhs), "capture integer rhs");
+    Ok(())
+}
+
+/// Emits the shared zero-divisor check for integer operations.
+fn emit_zero_divisor_guard(
+    ctx: &mut FnCtx,
+    rhs: &str,
+    failure_code: i32,
+    reason: &str,
+) {
+    ctx.fb.ins(&format!("local.get {}", rhs), "integer divisor");
+    ctx.fb.ins("i64.eqz", "zero divisor?");
+    ctx.fb.ins("if", reason);
+    emit_runtime_failure(ctx, failure_code, reason);
+    ctx.fb.ins("end", "end zero-divisor guard");
+}
+
+/// Emits a non-returning PHP runtime failure for command modules.
+///
+/// Import-free reactor modules cannot reference WASI; their exceptional path
+/// therefore remains an explicit `unreachable`, while the valid path and module
+/// stay portable. User-compiled PHP command modules call `__rt_fail`, which
+/// writes the PHP error class/message and exits deterministically.
+fn emit_runtime_failure(ctx: &mut FnCtx, failure_code: i32, reason: &str) {
+    let has_main = ctx.module.functions.iter().any(|f| f.flags.is_main);
+    if has_main {
+        ctx.fb
+            .ins(&format!("i32.const {}", failure_code), "runtime failure code");
+        ctx.fb.ins("call $__rt_fail", reason);
+    }
+    ctx.fb
+        .ins("unreachable", "exceptional arithmetic path does not return");
+}
+
 /// Lowers PHP integer add/subtract/multiply with overflow promotion to a boxed float.
 fn lower_checked_int_binop(
     ctx: &mut FnCtx,
@@ -718,6 +877,29 @@ fn lower_float_binop(ctx: &mut FnCtx, inst: &Instruction, wasm_op: &str) -> Resu
     store_result(ctx, inst)
 }
 
+/// Lowers PHP floating-point division with an explicit signed-zero divisor guard.
+///
+/// WebAssembly follows IEEE-754 and would produce an infinity for division by
+/// `+0.0` or `-0.0`; PHP's `/` operator raises `DivisionByZeroError` instead.
+fn lower_float_div(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let lhs = ctx.fresh_temp(ValType::F64);
+    let rhs = ctx.fresh_temp(ValType::F64);
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb.ins(&format!("local.set {}", lhs), "float dividend");
+    ctx.emit_load_value(operand(inst, 1)?)?;
+    ctx.fb.ins(&format!("local.set {}", rhs), "float divisor");
+    ctx.fb.ins(&format!("local.get {}", rhs), "float divisor");
+    ctx.fb.ins("f64.const 0", "positive zero");
+    ctx.fb.ins("f64.eq", "positive or negative zero divisor?");
+    ctx.fb.ins("if", "reject PHP float division by zero");
+    emit_runtime_failure(ctx, 1, "float division by zero");
+    ctx.fb.ins("end", "end float zero-divisor guard");
+    ctx.fb.ins(&format!("local.get {}", lhs), "float dividend");
+    ctx.fb.ins(&format!("local.get {}", rhs), "float divisor");
+    ctx.fb.ins("f64.div", "PHP float division");
+    store_result(ctx, inst)
+}
+
 /// Lowers `ConstI64`: pushes the immediate integer constant.
 fn lower_const_i64(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let n = i64_immediate(inst)?;
@@ -821,19 +1003,7 @@ fn lower_load_local(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         super::refcell::emit_cell_load(ctx, &ptr_local, &result_repr)?;
         return ctx.emit_store_value(result);
     }
-    let slot_refs = ctx.slot_repr(slot)?.local_refs();
-    let result_refs = ctx.value_repr(result)?.local_refs();
-    if slot_refs.len() != result_refs.len() {
-        return Err(WasmError::Unsupported(format!(
-            "load_local repr mismatch: slot has {} local(s), result has {}",
-            slot_refs.len(),
-            result_refs.len()
-        )));
-    }
-    for r in &slot_refs {
-        ctx.fb.ins(&format!("local.get {}", r), "load local slot");
-    }
-    ctx.emit_store_value(result)
+    transfer::emit_transfer_from_slot(ctx, slot, result)
 }
 
 /// Lowers `StoreLocal`: stores the operand value into the slot.
@@ -853,21 +1023,7 @@ fn lower_store_local(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         super::refcell::emit_cell_store(ctx, &ptr_local, &value_repr)?;
         return Ok(());
     }
-    let slot_refs = ctx.slot_repr(slot)?.local_refs();
-    let value_refs = ctx.value_repr(value)?.local_refs();
-    if slot_refs.len() != value_refs.len() {
-        return Err(WasmError::Unsupported(format!(
-            "store_local repr mismatch: slot has {} local(s), value has {}",
-            slot_refs.len(),
-            value_refs.len()
-        )));
-    }
-    ctx.emit_load_value(value)?;
-    // Pop in reverse so the first slot local takes the bottom-most stack value.
-    for r in slot_refs.iter().rev() {
-        ctx.fb.ins(&format!("local.set {}", r), "store local slot");
-    }
-    Ok(())
+    transfer::emit_transfer_to_slot(ctx, value, slot)
 }
 
 /// Lowers `INeg`: computes `0 - x`.
@@ -886,11 +1042,15 @@ fn lower_int_bitnot(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     store_result(ctx, inst)
 }
 
-/// Lowers `IDiv` (PHP `/`): widens both i64 operands to f64 and divides.
+/// Lowers `IDiv` (PHP `/`): guards zero, widens both i64 operands, and divides.
 fn lower_int_div_to_float(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
-    ctx.emit_load_value(operand(inst, 0)?)?;
+    let lhs = ctx.fresh_temp(ValType::I64);
+    let rhs = ctx.fresh_temp(ValType::I64);
+    capture_int_operands(ctx, inst, &lhs, &rhs)?;
+    emit_zero_divisor_guard(ctx, &rhs, 1, "PHP division by zero");
+    ctx.fb.ins(&format!("local.get {}", lhs), "integer dividend");
     ctx.fb.ins("f64.convert_i64_s", "lhs to float");
-    ctx.emit_load_value(operand(inst, 1)?)?;
+    ctx.fb.ins(&format!("local.get {}", rhs), "integer divisor");
     ctx.fb.ins("f64.convert_i64_s", "rhs to float");
     ctx.fb.ins("f64.div", "php / is float division");
     store_result(ctx, inst)
@@ -1092,16 +1252,25 @@ fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     store_result(ctx, inst)
 }
 
-/// Lowers `IsTruthy` for i64 (int/bool) and f64 operands; other reprs are unsupported.
+/// Lowers PHP truthiness for every scalar and heap representation used by EIR.
 fn lower_is_truthy(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let op0 = operand(inst, 0)?;
     let repr = ctx.value_repr(op0)?.clone();
+    let value = ctx
+        .function
+        .value(op0)
+        .cloned()
+        .ok_or_else(|| WasmError::Unsupported(format!("is_truthy source {:?} is missing", op0)))?;
     match repr {
         WasmRepr::I64(_) => {
-            ctx.emit_load_value(op0)?;
-            ctx.fb.ins("i64.const 0", "zero");
-            ctx.fb.ins("i64.ne", "truthy = x != 0");
-            ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
+            if matches!(value.php_type, PhpType::Void | PhpType::Never) {
+                ctx.fb.ins("i64.const 0", "null/never is false");
+            } else {
+                ctx.emit_load_value(op0)?;
+                ctx.fb.ins("i64.const 0", "zero");
+                ctx.fb.ins("i64.ne", "truthy = x != 0");
+                ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
+            }
         }
         WasmRepr::F64(_) => {
             ctx.emit_load_value(op0)?;
@@ -1109,8 +1278,76 @@ fn lower_is_truthy(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             ctx.fb.ins("f64.ne", "truthy = x != 0.0");
             ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
         }
-        other => {
-            return Err(WasmError::Unsupported(format!("is_truthy of {:?}", other)));
+        WasmRepr::Str { ptr, len } => {
+            ctx.fb
+                .ins(&format!("local.get {}", len), "string length");
+            ctx.fb.ins("i64.eqz", "empty string?");
+            ctx.fb.ins(
+                "if (result i64)",
+                "empty string is false; otherwise check PHP's special string zero",
+            );
+            ctx.fb.ins("i64.const 0", "empty string is false");
+            ctx.fb.ins("else", "non-empty string");
+            ctx.fb
+                .ins(&format!("local.get {}", len), "string length");
+            ctx.fb.ins("i64.const 1", "single-byte string length");
+            ctx.fb.ins("i64.eq", "single-byte string?");
+            ctx.fb
+                .ins("if (result i64)", "only the exact string \"0\" is false");
+            ctx.fb
+                .ins(&format!("local.get {}", ptr), "single-byte string pointer");
+            ctx.fb.ins("i32.load8_u", "load the only byte");
+            ctx.fb.ins("i32.const 48", "ASCII zero");
+            ctx.fb.ins("i32.ne", "single-byte string is not \"0\"");
+            ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
+            ctx.fb.ins("else", "multi-byte non-empty string");
+            ctx.fb.ins("i64.const 1", "non-empty non-\"0\" string is true");
+            ctx.fb.ins("end", "end single-byte string check");
+            ctx.fb.ins("end", "end string truthiness");
+        }
+        WasmRepr::Ptr(local) => match value.ir_type {
+            IrType::Heap(IrHeapKind::Array)
+            | IrType::Heap(IrHeapKind::Hash)
+            | IrType::Heap(IrHeapKind::Iterable) => {
+                ctx.fb
+                    .ins(&format!("local.get {}", local), "container pointer");
+                ctx.fb.ins("i64.load offset=0", "container length");
+                ctx.fb.ins("i64.const 0", "empty length");
+                ctx.fb.ins("i64.ne", "non-empty container");
+                ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
+            }
+            IrType::Heap(IrHeapKind::Mixed) | IrType::Heap(IrHeapKind::Union) => {
+                ctx.fb.ins(&format!("local.get {}", local), "boxed value");
+                ctx.fb
+                    .ins("call $__rt_mixed_cast_bool", "PHP Mixed truthiness");
+            }
+            IrType::Heap(IrHeapKind::Object) => {
+                ctx.fb.ins("i64.const 1", "objects are always truthy");
+            }
+            other => {
+                return Err(WasmError::Unsupported(format!(
+                    "is_truthy of heap type {:?}",
+                    other
+                )));
+            }
+        },
+        WasmRepr::Tagged { payload, tag } => {
+            ctx.fb.ins(&format!("local.get {}", tag), "tagged scalar tag");
+            ctx.fb.ins("i32.const 8", "tagged null tag");
+            ctx.fb.ins("i32.eq", "tagged scalar is null?");
+            ctx.fb
+                .ins("if (result i64)", "null is false; integer payload otherwise");
+            ctx.fb.ins("i64.const 0", "tagged null is false");
+            ctx.fb.ins("else", "non-null tagged scalar");
+            ctx.fb
+                .ins(&format!("local.get {}", payload), "tagged scalar payload");
+            ctx.fb.ins("i64.const 0", "zero");
+            ctx.fb.ins("i64.ne", "payload is nonzero");
+            ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
+            ctx.fb.ins("end", "end tagged-scalar truthiness");
+        }
+        WasmRepr::Void => {
+            ctx.fb.ins("i64.const 0", "void is false");
         }
     }
     store_result(ctx, inst)
@@ -1136,12 +1373,22 @@ fn lower_load_global(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     match name.as_str() {
         "argc" => {
             ctx.fb.ins("call $__rt_argc", "load $argc");
-            store_result(ctx, inst)
+            transfer::emit_store_stack_value_into_value(
+                ctx,
+                IrType::I64,
+                PhpType::Int,
+                inst.result.ok_or_else(|| WasmError::Unsupported("load_global argc without result".to_string()))?,
+            )
         }
         "argv" => {
             ctx.fb
                 .ins("call $__rt_argv", "build $argv (indexed string array)");
-            store_result(ctx, inst)
+            transfer::emit_store_stack_value_into_value(
+                ctx,
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(PhpType::Str)),
+                inst.result.ok_or_else(|| WasmError::Unsupported("load_global argv without result".to_string()))?,
+            )
         }
         other => Err(WasmError::Unsupported(format!("global ${}", other))),
     }
@@ -1719,23 +1966,48 @@ fn lower_array_walk(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     Ok(())
 }
 
-/// Lowers `exit`/`die`: an integer argument becomes the WASI exit status; any
-/// other argument (a message string) or no argument exits with status 0. Matching
-/// the native backend, a string message is NOT printed.
+/// Lowers `exit`/`die` with PHP's integer-versus-message behavior.
+///
+/// Integers and booleans become the process status. A string is written in full
+/// to stdout before exiting with status zero, and no argument exits with zero.
+/// Dynamically typed or float arguments are rejected until their PHP coercion
+/// diagnostics can be preserved instead of silently choosing the wrong branch.
 fn lower_exit(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
-    let int_code = inst.operands.first().is_some_and(|arg| {
-        ctx.function
-            .value(*arg)
-            .map(|v| v.php_type.codegen_repr() == PhpType::Int)
-            .unwrap_or(false)
-    });
-    if int_code {
-        ctx.emit_load_value(operand(inst, 0)?)?;
-        ctx.fb.ins("i32.wrap_i64", "exit code to i32");
-    } else {
-        ctx.fb.ins("i32.const 0", "exit status 0");
+    let status = ctx.fresh_temp(ValType::I32);
+    match inst.operands.first().copied() {
+        None => ctx.fb.ins("i32.const 0", "exit status 0"),
+        Some(argument) => {
+            let php_type = ctx.value_php_type(argument)?.codegen_repr();
+            match php_type {
+                PhpType::Int | PhpType::Bool => {
+                    ctx.emit_load_value(argument)?;
+                    ctx.fb.ins("i32.wrap_i64", "exit code to i32");
+                }
+                PhpType::Str => {
+                    ctx.emit_load_value(argument)?;
+                    ctx.fb
+                        .ins("call $__rt_echo_str", "print the PHP exit message");
+                    ctx.fb.ins("i32.const 0", "string exit status 0");
+                }
+                other => {
+                    return Err(WasmError::Unsupported(format!(
+                        "exit/die argument of type {:?} requiring runtime PHP coercion",
+                        other
+                    )));
+                }
+            }
+        }
     }
+    ctx.fb
+        .ins(&format!("local.set {}", status), "save exit status across cleanup");
+    ctx.emit_ref_cell_owner_epilogue()?;
+    ctx.emit_reassigned_capture_epilogue(None)?;
+    ctx.emit_local_epilogue_cleanup(None)?;
+    ctx.fb
+        .ins(&format!("local.get {}", status), "restore exit status after cleanup");
     ctx.fb.ins("call $wasi_proc_exit", "WASI proc_exit(code)");
+    ctx.fb
+        .ins("unreachable", "WASI proc_exit is non-returning");
     Ok(())
 }
 
@@ -1821,9 +2093,7 @@ fn lower_acquire(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             forward_value(ctx, value, inst)
         }
         WasmRepr::I64(_) | WasmRepr::F64(_) | WasmRepr::Void => forward_value(ctx, value, inst),
-        WasmRepr::Tagged { .. } => {
-            Err(WasmError::Unsupported("acquire of a Mixed value".to_string()))
-        }
+        WasmRepr::Tagged { .. } => forward_value(ctx, value, inst),
     }
 }
 
@@ -1875,9 +2145,7 @@ fn lower_release(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             Ok(())
         }
         WasmRepr::I64(_) | WasmRepr::F64(_) | WasmRepr::Void => Ok(()),
-        WasmRepr::Tagged { .. } => {
-            Err(WasmError::Unsupported("release of a Mixed value".to_string()))
-        }
+        WasmRepr::Tagged { .. } => Ok(()),
     }
 }
 
@@ -1894,20 +2162,7 @@ fn forward_value(ctx: &mut FnCtx, value: ValueId, inst: &Instruction) -> Result<
     let Some(result) = inst.result else {
         return Ok(());
     };
-    let value_refs = ctx.value_repr(value)?.local_refs();
-    let result_refs = ctx.value_repr(result)?.local_refs();
-    if value_refs.len() != result_refs.len() {
-        return Err(WasmError::Unsupported(format!(
-            "forward repr mismatch: operand has {} local(s), result has {}",
-            value_refs.len(),
-            result_refs.len()
-        )));
-    }
-    for r in &value_refs {
-        ctx.fb
-            .ins(&format!("local.get {}", r), "forward operand local");
-    }
-    ctx.emit_store_value(result)
+    transfer::emit_transfer_value(ctx, value, result)
 }
 
 /// Returns the local slot a value was loaded from, if its defining instruction is
@@ -2375,20 +2630,33 @@ fn lower_iter_current_value(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     }
 }
 
-/// Lowers `IsNull` for i64 operands by comparing against the null sentinel.
+/// Lowers `IsNull` from PHP type metadata and boxed/tagged runtime tags.
 fn lower_is_null(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let op0 = operand(inst, 0)?;
     let repr = ctx.value_repr(op0)?.clone();
-    match repr {
-        WasmRepr::I64(_) => {
-            ctx.emit_load_value(op0)?;
+    let php_type = ctx.value_php_type(op0)?.codegen_repr();
+    match (repr, php_type) {
+        (_, PhpType::Void | PhpType::Never) => {
+            ctx.fb.ins("i64.const 1", "statically null value");
+        }
+        (WasmRepr::Ptr(local), PhpType::Mixed | PhpType::Union(_)) => {
+            ctx.fb.ins(&format!("local.get {}", local), "boxed value");
             ctx.fb
-                .ins("i64.const 9223372036854775806", "null sentinel");
-            ctx.fb.ins("i64.eq", "is_null = x == sentinel");
+                .ins("call $__rt_mixed_unbox", "read boxed Mixed tag");
+            ctx.fb.ins("drop", "discard high payload");
+            ctx.fb.ins("drop", "discard low payload");
+            ctx.fb.ins("i32.const 8", "Mixed null tag");
+            ctx.fb.ins("i32.eq", "boxed value is null");
             ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
         }
-        other => {
-            return Err(WasmError::Unsupported(format!("is_null of {:?}", other)));
+        (WasmRepr::Tagged { tag, .. }, PhpType::TaggedScalar) => {
+            ctx.fb.ins(&format!("local.get {}", tag), "tagged scalar tag");
+            ctx.fb.ins("i32.const 8", "tagged null tag");
+            ctx.fb.ins("i32.eq", "tagged scalar is null");
+            ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
+        }
+        _ => {
+            ctx.fb.ins("i64.const 0", "statically non-null value");
         }
     }
     store_result(ctx, inst)

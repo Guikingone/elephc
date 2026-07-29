@@ -23,7 +23,9 @@ use std::collections::HashMap;
 use super::values::WasmRepr;
 use super::wat::{FuncBuilder, ValType};
 use super::WasmError;
-use crate::ir::{BlockId, DataId, Function, LocalSlotId, Module, ValueId};
+use crate::ir::{
+    BlockId, DataId, Function, Immediate, LocalKind, LocalSlotId, Module, Op, ValueId,
+};
 use crate::types::PhpType;
 
 /// The WebAssembly locals backing one `foreach` iterator.
@@ -51,20 +53,6 @@ pub(super) struct IterSlots {
 
 /// Result type for the lowering modules, using the parent module's `WasmError`.
 pub(super) type Result<T> = std::result::Result<T, WasmError>;
-
-/// Returns the WAT function symbol (without leading `$`) for a PHP function name.
-///
-/// Every character outside `[A-Za-z0-9_]` is replaced with `_` and the result is
-/// prefixed with `fn_`. Function definitions (`function::lower_function`) and call
-/// sites (`inst::lower_call`) MUST use this single helper so a `call $fn_<name>`
-/// always matches the defined function's name.
-pub(super) fn wasm_fn_symbol(name: &str) -> String {
-    let sanitized: String = name
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
-        .collect();
-    format!("fn_{}", sanitized)
-}
 
 /// Context for lowering a single EIR function to WebAssembly.
 ///
@@ -331,65 +319,18 @@ impl<'a> FnCtx<'a> {
     }
 
     /// Copies branch arguments into the target block's parameter locals using
-    /// parallel-move-safe ordering.
+    /// the type-aware transfer layer.
     ///
-    /// Builds the flat source-local and dest-local lists, emits every `local.get`
-    /// (forward order) before every `local.set` (reverse order). Because all gets
-    /// precede all sets, this is safe even when a destination param is also a
-    /// source arg (e.g. a loop block branching to itself).
+    /// Every source is loaded into temp locals before any destination is stored,
+    /// so the move remains safe even when a destination param is also a source
+    /// arg (e.g. a loop block branching to itself).  Concrete-to-Mixed conversions
+    /// are applied by the transfer helper rather than by matching component counts.
     pub(super) fn materialize_block_args(
         &mut self,
         target: BlockId,
         args: &[ValueId],
     ) -> Result<()> {
-        let target_block = self
-            .function
-            .block(target)
-            .ok_or_else(|| WasmError::Unsupported(format!("target block {:?} not found", target)))?;
-
-        let params = &target_block.params;
-        if args.len() != params.len() {
-            return Err(WasmError::Unsupported(format!(
-                "branch arg count {} != param count {}",
-                args.len(),
-                params.len()
-            )));
-        }
-
-        let mut src_refs: Vec<String> = Vec::new();
-        for arg in args {
-            let repr = self.value_repr(*arg)?.clone();
-            src_refs.extend(repr.local_refs());
-        }
-
-        let mut dest_refs: Vec<String> = Vec::new();
-        for param in params {
-            let repr = self.value_repr(*param)?.clone();
-            dest_refs.extend(repr.local_refs());
-        }
-
-        if src_refs.len() != dest_refs.len() {
-            return Err(WasmError::Unsupported(format!(
-                "source refs {} != dest refs {}",
-                src_refs.len(),
-                dest_refs.len()
-            )));
-        }
-
-        if src_refs.is_empty() {
-            return Ok(());
-        }
-
-        for src in &src_refs {
-            self.fb
-                .ins(&format!("local.get {}", src), "branch arg component");
-        }
-        for dest in dest_refs.iter().rev() {
-            self.fb
-                .ins(&format!("local.set {}", dest), "store param component");
-        }
-
-        Ok(())
+        super::transfer::emit_transfer_block_args(self, target, args)
     }
 
     /// Looks up the `$name` of the i32 local holding a slot's ref-cell pointer.
@@ -458,6 +399,104 @@ impl<'a> FnCtx<'a> {
         Ok(())
     }
 
+    /// Releases ordinary owned local slots at a function or main return.
+    ///
+    /// This mirrors the native frame epilogue: parameters, ref-cell-backed slots,
+    /// non-owning local kinds, never-written slots, and the slot moved out as the
+    /// return value are excluded. String pointers use the guarded string free;
+    /// arrays, hashes, objects, Mixed cells, and other refcounted pointers use the
+    /// kind dispatcher; callable descriptors are narrowed from their i64 ABI
+    /// carrier. Locals are cleared before release so destructor re-entry cannot
+    /// observe a stale owner in the current frame.
+    pub(super) fn emit_local_epilogue_cleanup(
+        &mut self,
+        returned_slot: Option<LocalSlotId>,
+    ) -> Result<()> {
+        let returned_raw = returned_slot.map(LocalSlotId::as_raw);
+        let candidates = self
+            .function
+            .locals
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index >= self.function.params.len())
+            .filter(|(_, local)| {
+                matches!(
+                    local.kind,
+                    LocalKind::PhpLocal
+                        | LocalKind::HiddenTemp
+                        | LocalKind::OwnedTemp
+                        | LocalKind::NamedArgTemp
+                )
+            })
+            .filter(|(index, local)| {
+                let raw = *index as u32;
+                if Some(raw) == returned_raw || self.ref_cell_ptrs.contains_key(&raw) {
+                    return false;
+                }
+                let slot = LocalSlotId::from_raw(raw);
+                let explicitly_stored = self.function.instructions.iter().any(|inst| {
+                    inst.op == Op::StoreLocal
+                        && matches!(
+                            inst.immediate,
+                            Some(Immediate::LocalSlot(candidate)) if candidate == slot
+                        )
+                });
+                explicitly_stored
+                    || (self.function.flags.is_main
+                        && local.name.as_deref() == Some("argv"))
+            })
+            .filter_map(|(index, local)| {
+                let php_type = local.php_type.codegen_repr();
+                if matches!(php_type, PhpType::Str | PhpType::Callable)
+                    || php_type.is_refcounted()
+                {
+                    Some((index as u32, php_type))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        for (raw, php_type) in candidates {
+            let repr = self.slot_repr(LocalSlotId::from_raw(raw))?.clone();
+            match repr {
+                WasmRepr::Ptr(local) => {
+                    self.fb
+                        .ins(&format!("local.get {}", local), "owned local pointer to release");
+                    self.fb.ins("i32.const 0", "clear owned local before release");
+                    self.fb.ins(&format!("local.set {}", local), "");
+                    self.fb
+                        .ins("call $__rt_decref_any", "release local value by runtime kind");
+                }
+                WasmRepr::Str { ptr, len } => {
+                    self.fb
+                        .ins(&format!("local.get {}", ptr), "owned local string to release");
+                    self.fb.ins("i32.const 0", "clear owned string pointer");
+                    self.fb.ins(&format!("local.set {}", ptr), "");
+                    self.fb.ins("i64.const 0", "clear owned string length");
+                    self.fb.ins(&format!("local.set {}", len), "");
+                    self.fb
+                        .ins("call $__rt_heap_free_safe", "free owned local string");
+                }
+                WasmRepr::I64(local) if php_type == PhpType::Callable => {
+                    self.fb
+                        .ins(&format!("local.get {}", local), "owned callable descriptor");
+                    self.fb
+                        .ins("i32.wrap_i64", "narrow callable descriptor to i32");
+                    self.fb.ins("i64.const 0", "clear callable local");
+                    self.fb.ins(&format!("local.set {}", local), "");
+                    self.fb
+                        .ins("call $__rt_decref_any", "release callable descriptor");
+                }
+                WasmRepr::I64(_)
+                | WasmRepr::F64(_)
+                | WasmRepr::Tagged { .. }
+                | WasmRepr::Void => {}
+            }
+        }
+        Ok(())
+    }
+
     /// Emits the by-value closure-capture release epilogue at a function return.
     ///
     /// Each slot the body reassigned (recorded in `Function::reassigned_capture_slots`)
@@ -486,7 +525,7 @@ impl<'a> FnCtx<'a> {
             .collect();
         slots.sort_unstable();
         for raw in slots {
-            if Some(raw) == returned_raw {
+            if Some(raw) == returned_raw || self.ref_cell_ptrs.contains_key(&raw) {
                 continue;
             }
             let slot = LocalSlotId::from_raw(raw);

@@ -10,6 +10,7 @@
 //! - All names are internal symbols without leading '$'; the builder adds '$' during render.
 //! - Data byte escaping follows WAT conventions with \HH hex escapes.
 
+use std::collections::HashMap;
 use std::fmt::Write;
 
 /// WebAssembly value type used to declare params, results, locals, and globals.
@@ -307,11 +308,42 @@ impl WatModule {
         self.raw_functions.push(wat.to_string());
     }
 
-    /// Renders this module as a complete `(module ...)` s-expression.
+    /// Renders this module after rejecting duplicate function identifiers.
     ///
     /// # Returns
     /// A string containing the full WAT module, newline-terminated.
+    #[cfg(test)]
     pub fn render(&self) -> String {
+        self.render_checked()
+            .unwrap_or_else(|error| panic!("invalid WAT module: {error}"))
+    }
+
+    /// Renders this module after validating identifier uniqueness.
+    pub(crate) fn render_checked(&self) -> Result<String, String> {
+        self.validate_unique_function_identifiers()?;
+        Ok(self.render_unchecked())
+    }
+
+    /// Rejects collisions across imported, raw-runtime, and lowered functions.
+    fn validate_unique_function_identifiers(&self) -> Result<(), String> {
+        let mut origins = HashMap::<&str, &str>::new();
+        for import in &self.imports {
+            record_function_identifier(&mut origins, &import.internal, "import")?;
+        }
+        for raw in &self.raw_functions {
+            let Some(name) = raw_function_identifier(raw) else {
+                return Err("raw function has no parseable `(func $identifier ...)` header".into());
+            };
+            record_function_identifier(&mut origins, name, "raw runtime function")?;
+        }
+        for function in &self.functions {
+            record_function_identifier(&mut origins, &function.name, "lowered function")?;
+        }
+        Ok(())
+    }
+
+    /// Renders the already-validated module as a complete WAT s-expression.
+    fn render_unchecked(&self) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "(module");
 
@@ -387,6 +419,34 @@ impl WatModule {
         let _ = writeln!(out, ")");
         out
     }
+}
+
+/// Records one function identifier and reports both collision origins.
+fn record_function_identifier<'a>(
+    origins: &mut HashMap<&'a str, &'static str>,
+    name: &'a str,
+    origin: &'static str,
+) -> Result<(), String> {
+    if name.is_empty() {
+        return Err(format!("{origin} has an empty function identifier"));
+    }
+    if let Some(previous) = origins.insert(name, origin) {
+        return Err(format!(
+            "duplicate WAT function identifier `${name}` ({previous} and {origin})"
+        ));
+    }
+    Ok(())
+}
+
+/// Extracts the identifier from a complete raw `(func $name ...)` definition.
+fn raw_function_identifier(wat: &str) -> Option<&str> {
+    wat.lines().find_map(|line| {
+        let header = line.trim_start().strip_prefix("(func $")?;
+        let end = header
+            .find(|ch: char| ch.is_ascii_whitespace() || matches!(ch, '(' | ')'))
+            .unwrap_or(header.len());
+        (end > 0).then_some(&header[..end])
+    })
 }
 
 /// Escapes bytes for WAT string literals.
@@ -595,5 +655,49 @@ mod tests {
         let rendered = module.render();
         assert!(rendered.contains("(global $constant i32 (i32.const 123))"));
         assert!(!rendered.contains("(mut i32)"));
+    }
+
+    /// Verifies duplicate identifiers across raw and lowered functions are rejected.
+    #[test]
+    fn duplicate_function_identifiers_are_rejected() {
+        let mut module = WatModule::new();
+        module.add_raw_func("(func $collision)");
+        module.add_func(FuncBuilder::new("collision"));
+
+        let error = module
+            .render_checked()
+            .expect_err("duplicate function identifiers must fail");
+        assert!(
+            error.contains(
+                "duplicate WAT function identifier `$collision` \
+                 (raw runtime function and lowered function)"
+            ),
+            "{error}"
+        );
+    }
+
+    /// Verifies imported identifiers participate in the same collision namespace.
+    #[test]
+    fn imported_function_identifier_collisions_are_rejected() {
+        let mut module = WatModule::new();
+        module.import_func(FuncImport {
+            module: "host".to_string(),
+            field: "call".to_string(),
+            internal: "collision".to_string(),
+            params: Vec::new(),
+            results: Vec::new(),
+        });
+        module.add_raw_func("  (func $collision\n  )");
+
+        let error = module
+            .render_checked()
+            .expect_err("import/function collisions must fail");
+        assert!(
+            error.contains(
+                "duplicate WAT function identifier `$collision` \
+                 (import and raw runtime function)"
+            ),
+            "{error}"
+        );
     }
 }

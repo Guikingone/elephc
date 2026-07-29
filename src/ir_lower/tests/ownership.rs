@@ -277,6 +277,42 @@ echo $value;
     );
 }
 
+/// Verifies a ref-cell payload returned by value is acquired before the owning
+/// cell is released by the function epilogue.
+#[test]
+fn returned_ref_cell_payload_is_promoted_to_an_owned_return() {
+    let module = super::lower_source(
+        r#"<?php
+class RefReturnValue {}
+function make_ref_return(): RefReturnValue {
+    $value = new RefReturnValue();
+    $alias =& $value;
+    return $value;
+}
+$result = make_ref_return();
+"#,
+    );
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "make_ref_return")
+        .expect("expected make_ref_return EIR function");
+    let ref_payload = function
+        .instructions
+        .iter()
+        .find(|instruction| instruction.op == Op::LoadRefCell)
+        .and_then(|instruction| instruction.result)
+        .expect("expected ref-cell payload load");
+    assert!(
+        function.instructions.iter().any(|instruction| {
+            instruction.op == Op::Acquire
+                && instruction.operands.first().copied() == Some(ref_payload)
+        }),
+        "a ref-cell payload must be acquired before returning: {}",
+        print_module(&module)
+    );
+}
+
 /// Verifies fresh boxed producers publish `Owned` instead of requiring codegen inference.
 #[test]
 fn fresh_boxed_producers_publish_owned_eir_metadata() {

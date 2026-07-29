@@ -19,8 +19,10 @@
 //!   containing instructions returns `WasmError::Unsupported` rather than emitting
 //!   silently-wrong code. Empty `main` (the P1 gate) lowers and runs end to end.
 
+mod artifacts;
 mod arrays;
 mod classes;
+mod capability;
 mod closures;
 mod context;
 mod float;
@@ -36,13 +38,21 @@ mod objects;
 mod refcount;
 mod refcell;
 mod runtime;
+mod symbols;
+mod transfer;
 mod values;
 mod wat;
+
+#[cfg(test)]
+mod transfer_tests;
 
 use crate::codegen::Emit;
 use crate::ir::Module;
 
-pub use npm::write_package as write_npm_package;
+// The artifact publish contract (assemble -> validate -> atomic write) is the
+// single entry point the pipeline uses; the lower-level helpers stay internal to
+// this module and are exercised by `artifacts::tests`.
+pub use artifacts::publish_wasm_artifacts;
 
 /// An error raised while lowering EIR to WebAssembly.
 #[derive(Debug)]
@@ -52,6 +62,8 @@ pub enum WasmError {
     /// pipeline can surface a clean diagnostic instead of emitting a broken
     /// module or panicking.
     Unsupported(String),
+    /// The backend constructed structurally conflicting WAT before assembly.
+    InvalidModule(String),
 }
 
 impl std::fmt::Display for WasmError {
@@ -60,6 +72,9 @@ impl std::fmt::Display for WasmError {
         match self {
             WasmError::Unsupported(what) => {
                 write!(f, "{} is not yet supported on the wasm32-wasi target", what)
+            }
+            WasmError::InvalidModule(what) => {
+                write!(f, "invalid wasm32-wasi module: {what}")
             }
         }
     }
@@ -81,6 +96,7 @@ impl std::error::Error for WasmError {}
 /// The WASI command shape is the only one wired today; the CLI rejects WASM
 /// `Cdylib` output before this function is called.
 pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
+    capability::validate_module(module)?;
     let _ = emit;
     let mut wm = wat::WatModule::new();
     // The WASI imports + `__rt_*` runtime are only added for command (main-bearing)
@@ -97,15 +113,25 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     // scratch region, recording (offset, byte_len) per DataId for ConstStr. The
     // float<->string scratch region sits between the concat buffer and the string
     // literals so a strtod/ftoa never runs through an in-flight concatenation.
-    let mut str_literals: Vec<(u32, u32)> = Vec::with_capacity(module.data.strings.len());
-    let mut cursor = runtime::RT_SCRATCH_END + runtime::FLOAT_SCRATCH_SIZE;
-    for s in &module.data.strings {
+    let mut str_literals: Vec<(u32, u32)> = vec![(0, 0); module.data.strings.len()];
+    let mut cursor = if has_main {
+        runtime::COMMAND_DATA_END
+    } else {
+        runtime::RT_SCRATCH_END + runtime::FLOAT_SCRATCH_SIZE
+    };
+    let mut ordered_strings: Vec<(usize, &String)> = module.data.strings.iter().enumerate().collect();
+    ordered_strings.sort_by(|(left_id, left), (right_id, right)| {
+        left.as_bytes()
+            .cmp(right.as_bytes())
+            .then_with(|| left_id.cmp(right_id))
+    });
+    for (data_id, s) in ordered_strings {
         let bytes = s.as_bytes();
         wm.add_data(wat::DataSegment {
             offset: cursor,
             bytes: bytes.to_vec(),
         });
-        str_literals.push((cursor, bytes.len() as u32));
+        str_literals[data_id] = (cursor, bytes.len() as u32);
         // 4-align the next literal.
         cursor = (cursor + bytes.len() as u32 + 3) & !3;
     }
@@ -135,7 +161,7 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
 
     // P7b: per-closure capture-tag byte arrays (one byte per by-value capture, in
     // source order), laid out in static memory below the heap. The recorded base
-    // address per closure (indexed by `module.closures` position = `entry_index`)
+    // address per closure (indexed by its canonical symbol rank = `entry_index`)
     // is stamped as the descriptor's `capture_tags_ptr` by `ClosureNew`, so the
     // release runtime can walk refcounted captures. Must land before `heap_base`
     // is computed so the arrays sit below the bump allocator. No-capture closures
@@ -160,7 +186,11 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     let pages = (heap_base / PAGE) + 2;
     let heap_end = pages * PAGE;
     wm.set_memory(pages, Some("memory"));
-    heap::emit_heap_runtime(&mut wm, heap_base, heap_end);
+    if has_main {
+        heap::emit_command_heap_runtime(&mut wm, heap_base, heap_end);
+    } else {
+        heap::emit_heap_runtime(&mut wm, heap_base, heap_end);
+    }
     refcount::emit_refcount_runtime(&mut wm);
     // Callable-descriptor refcount runtime: `__rt_callable_descriptor_release`, called
     // from `__rt_decref_any` kind-6 (P7a0). References only `__rt_decref_any` and
@@ -190,7 +220,9 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     float::emit_float_runtime(&mut wm, runtime::FLOAT_SCRATCH_BASE as i32);
 
     // Lower every user function; `main` becomes the WASI `_start` command entry.
-    for func in &module.functions {
+    let mut functions: Vec<_> = module.functions.iter().collect();
+    functions.sort_by_key(|function| symbols::function_symbol(function));
+    for func in functions {
         let fb = function::lower_function(module, func, &str_literals, &closure_tag_ptrs, &fcc_entries)?;
         wm.add_func(fb);
     }
@@ -203,7 +235,9 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     // `call $<name>` resolves a module-local function regardless of definition
     // order, so a `module.functions` entry calling `__construct` (via `ObjectNew`)
     // sees the method defined here even though methods are lowered after it.
-    for func in &module.class_methods {
+    let mut class_methods: Vec<_> = module.class_methods.iter().collect();
+    class_methods.sort_by_key(|function| symbols::function_symbol(function));
+    for func in class_methods {
         let fb = function::lower_function(module, func, &str_literals, &closure_tag_ptrs, &fcc_entries)?;
         wm.add_func(fb);
     }
@@ -214,7 +248,7 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     // tail). `lower_function` handles the body as-is. WAT `call $<name>` resolves across
     // the whole module regardless of definition order, so the P7a1 wrapper that calls a
     // closure body sees it defined here.
-    for func in &module.closures {
+    for func in closures::ordered_closures(module) {
         let fb = function::lower_function(module, func, &str_literals, &closure_tag_ptrs, &fcc_entries)?;
         wm.add_func(fb);
     }
@@ -230,7 +264,7 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     // lowered (wrappers call `fn___eir_closure_<owner>_<n>`) but before `wm.render()`.
     closures::emit_closure_dispatch(&mut wm, module, &fcc_entries)?;
 
-    Ok(wm.render())
+    wm.render_checked().map_err(WasmError::InvalidModule)
 }
 
 #[cfg(test)]
@@ -251,6 +285,7 @@ mod tests {
     //!   `wasmer` when it is available.
 
     use super::generate;
+    use super::symbols::user_function_symbol;
     use crate::codegen::platform::Target;
     use crate::codegen::Emit;
     use crate::ir::{
@@ -393,7 +428,7 @@ mod tests {
     #[test]
     fn br_with_args_lowers_to_valid_wasm() {
         let wat = generate(&br_with_args_module(), Emit::Executable).expect("br fn should lower");
-        assert!(wat.contains("(func $fn_thread"), "{wat}");
+        assert!(wat.contains("(func $fn_u_thread"), "{wat}");
         assert!(wat.contains("(result i64)"), "{wat}");
         assert!(wat.contains("return"), "{wat}");
         assemble_and_validate(&wat);
@@ -403,7 +438,7 @@ mod tests {
     #[test]
     fn switch_lowers_to_valid_wasm() {
         let wat = generate(&switch_module(), Emit::Executable).expect("switch fn should lower");
-        assert!(wat.contains("(func $fn_pick"), "{wat}");
+        assert!(wat.contains("(func $fn_u_pick"), "{wat}");
         assert!(wat.contains("i64.eq"), "{wat}");
         assemble_and_validate(&wat);
     }
@@ -1742,6 +1777,230 @@ mod tests {
         module.add_function(f);
         if let Some(out) = run_main(&module) {
             assert_eq!(out, "10");
+        }
+    }
+
+    /// Verifies two mutually exclusive promotions of the same local each emit a
+    /// runtime initialization guard. Calling both branch directions must release
+    /// both object payloads and run the destructor exactly once per call.
+    #[test]
+    fn ref_cell_promotion_is_runtime_idempotent_across_branches() {
+        let mut module = Module::new(Target::wasm());
+        let class = "BranchRefCell";
+        let class_data = module.data.intern_class_name(class);
+        let branch_name = module.data.intern_function_name("branch_ref_cell");
+        register_dtor_class(&mut module, class, 1, "D");
+
+        let mut branch =
+            Function::new("branch_ref_cell".to_string(), IrType::Void, PhpType::Void);
+        branch.params.push(FunctionParam {
+            name: "take_then".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Bool,
+            by_ref: false,
+            variadic: false,
+        });
+        let condition_slot = branch.add_local(
+            Some("take_then".to_string()),
+            IrType::I64,
+            PhpType::Bool,
+            LocalKind::PhpLocal,
+        );
+        let object_slot = branch.add_local(
+            Some("object".to_string()),
+            IrType::Heap(IrHeapKind::Object),
+            PhpType::Object(class.to_string()),
+            LocalKind::PhpLocal,
+        );
+        let owner_slot = branch.add_local(
+            Some("object\0owner".to_string()),
+            IrType::Heap(IrHeapKind::Object),
+            PhpType::Object(class.to_string()),
+            LocalKind::RefCell,
+        );
+        {
+            let mut builder = Builder::new(&mut branch);
+            let entry = builder.create_named_block("entry", Vec::new());
+            let then_block = builder.create_named_block("then", Vec::new());
+            let else_block = builder.create_named_block("else", Vec::new());
+            let done = builder.create_named_block("done", Vec::new());
+            builder.set_entry(entry);
+
+            builder.position_at_end(entry);
+            let object = emit_object_new(&mut builder, class, class_data);
+            builder.emit_store_local(object_slot, object);
+            let condition =
+                builder.emit_load_local(condition_slot, IrType::I64, PhpType::Bool);
+            builder.terminate(Terminator::CondBr {
+                cond: condition,
+                then_target: then_block,
+                then_args: Vec::new(),
+                else_target: else_block,
+                else_args: Vec::new(),
+            });
+
+            for block in [then_block, else_block] {
+                builder.position_at_end(block);
+                let _ = builder.emit(
+                    Op::PromoteLocalRefCell,
+                    Vec::new(),
+                    Some(Immediate::LocalSlotPair {
+                        first: object_slot,
+                        second: owner_slot,
+                    }),
+                    IrType::Void,
+                    PhpType::Object(class.to_string()),
+                    Ownership::NonHeap,
+                );
+                builder.terminate(Terminator::Br {
+                    target: done,
+                    args: Vec::new(),
+                });
+            }
+
+            builder.position_at_end(done);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(branch);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            for take_then in [true, false] {
+                let condition = builder.emit_const_bool(take_then);
+                let _ = builder.emit(
+                    Op::Call,
+                    vec![condition],
+                    Some(Immediate::Data(branch_name)),
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        let wat = generate(&module, Emit::Executable).expect("branch promotions should lower");
+        assert_eq!(
+            wat.matches("ref cell still uninitialized?").count(),
+            2,
+            "both branch-local promotions need runtime guards:\n{wat}"
+        );
+        if let Some(output) = run_main(&module) {
+            assert_eq!(output, "DD");
+        }
+    }
+
+    /// Verifies a by-value return loaded from a local ref-cell owns a retained
+    /// payload after the callee releases its cell owner. The destructor must run
+    /// only when the caller releases the returned object.
+    #[test]
+    fn acquired_ref_cell_return_survives_owner_epilogue() {
+        let mut module = Module::new(Target::wasm());
+        let class = "RefCellReturn";
+        let class_data = module.data.intern_class_name(class);
+        let make_name = module.data.intern_function_name("make_ref_cell_return");
+        let marker = module.data.intern_string("A");
+        register_dtor_class(&mut module, class, 1, "D");
+
+        let mut make = Function::new(
+            "make_ref_cell_return".to_string(),
+            IrType::Heap(IrHeapKind::Object),
+            PhpType::Object(class.to_string()),
+        );
+        let object_slot = make.add_local(
+            Some("object".to_string()),
+            IrType::Heap(IrHeapKind::Object),
+            PhpType::Object(class.to_string()),
+            LocalKind::PhpLocal,
+        );
+        let owner_slot = make.add_local(
+            Some("object\0owner".to_string()),
+            IrType::Heap(IrHeapKind::Object),
+            PhpType::Object(class.to_string()),
+            LocalKind::RefCell,
+        );
+        {
+            let mut builder = Builder::new(&mut make);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let object = emit_object_new(&mut builder, class, class_data);
+            builder.emit_store_local(object_slot, object);
+            let _ = builder.emit(
+                Op::PromoteLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair {
+                    first: object_slot,
+                    second: owner_slot,
+                }),
+                IrType::Void,
+                PhpType::Object(class.to_string()),
+                Ownership::NonHeap,
+            );
+            let borrowed = builder
+                .emit(
+                    Op::LoadRefCell,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(object_slot)),
+                    IrType::Heap(IrHeapKind::Object),
+                    PhpType::Object(class.to_string()),
+                    Ownership::MaybeOwned,
+                )
+                .expect("ref-cell payload");
+            let acquired = builder
+                .emit(
+                    Op::Acquire,
+                    vec![borrowed],
+                    None,
+                    IrType::Heap(IrHeapKind::Object),
+                    PhpType::Object(class.to_string()),
+                    Ownership::Owned,
+                )
+                .expect("owned return payload");
+            builder.terminate(Terminator::Return {
+                value: Some(acquired),
+            });
+        }
+        module.add_function(make);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let result = builder
+                .emit(
+                    Op::Call,
+                    Vec::new(),
+                    Some(Immediate::Data(make_name)),
+                    IrType::Heap(IrHeapKind::Object),
+                    PhpType::Object(class.to_string()),
+                    Ownership::Owned,
+                )
+                .expect("object-returning call");
+            echo_str(&mut builder, marker);
+            let _ = builder.emit(
+                Op::Release,
+                vec![result],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        if let Some(output) = run_main(&module) {
+            assert_eq!(output, "AD");
         }
     }
 
@@ -3258,6 +3517,110 @@ mod tests {
         }
     }
 
+    /// Verifies `exit("message")` writes the complete message and exits cleanly.
+    #[test]
+    fn exit_with_string_prints_before_terminating() {
+        let mut module = Module::new(Target::wasm());
+        let exit_name = module.data.intern_function_name("exit");
+        let message = module.data.intern_string("goodbye");
+        let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let value = builder.emit_const_str(message);
+            let _ = builder.emit(
+                Op::LanguageConstructCall,
+                vec![value],
+                Some(Immediate::Data(exit_name)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+        if let Some(output) = run_main(&module) {
+            assert_eq!(output, "goodbye");
+        }
+    }
+
+    /// Verifies `exit("message")` performs the same owned-local epilogue as an
+    /// ordinary return, so PHP destructors run after the message and before the
+    /// WASI process terminates.
+    #[test]
+    fn exit_runs_owned_local_destructors_before_terminating() {
+        let mut module = Module::new(Target::wasm());
+        let class = "ExitDtor";
+        let class_data = module.data.intern_class_name(class);
+        let exit_name = module.data.intern_function_name("exit");
+        let message = module.data.intern_string("X");
+        register_dtor_class(&mut module, class, 1, "D");
+
+        let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        let object_slot = function.add_local(
+            Some("object".to_string()),
+            IrType::Heap(IrHeapKind::Object),
+            PhpType::Object(class.to_string()),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let object = emit_object_new(&mut builder, class, class_data);
+            builder.emit_store_local(object_slot, object);
+            let value = builder.emit_const_str(message);
+            let _ = builder.emit(
+                Op::LanguageConstructCall,
+                vec![value],
+                Some(Immediate::Data(exit_name)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        if let Some(output) = run_main(&module) {
+            assert_eq!(output, "XD");
+        }
+    }
+
+    /// Verifies boolean exit arguments use integer status semantics.
+    #[test]
+    fn exit_with_true_sets_status_one() {
+        let mut module = Module::new(Target::wasm());
+        let exit_name = module.data.intern_function_name("exit");
+        let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let value = builder.emit_const_bool(true);
+            let _ = builder.emit(
+                Op::LanguageConstructCall,
+                vec![value],
+                Some(Immediate::Data(exit_name)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+        if let Some(code) = run_main_exit_code(&module) {
+            assert_eq!(code, 1);
+        }
+    }
+
     /// Verifies `echo` of booleans: true writes "1", false writes nothing.
     #[test]
     fn echo_booleans_writes_to_stdout() {
@@ -4419,8 +4782,16 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("m.wasm");
         std::fs::write(&path, &bytes).expect("write wasm");
+        let resolved_export = export
+            .strip_prefix("fn_")
+            .map(user_function_symbol)
+            .unwrap_or_else(|| export.to_string());
         let mut cmd = std::process::Command::new("wasmer");
-        cmd.arg("run").arg("--invoke").arg(export).arg(&path);
+        cmd.arg("run")
+            .arg("--invoke")
+            .arg(&resolved_export)
+            .arg(&path)
+            .arg("--");
         for a in args {
             cmd.arg(a);
         }
@@ -4428,11 +4799,90 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert!(
             out.status.success(),
-            "wasmer --invoke {export} failed: {}\n{}",
+            "wasmer --invoke {resolved_export} failed: {}\n{}",
             String::from_utf8_lossy(&out.stderr),
             wat
         );
         Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// Runs a command module expected to fail and returns its status code and stderr.
+    ///
+    /// The module is always assembled and validated. Execution is skipped when
+    /// Wasmer is unavailable, matching the other host-dependent WASM tests.
+    fn run_main_failure(module: &Module) -> Option<(Option<i32>, String)> {
+        let wat = generate(module, Emit::Executable).expect("failing module should lower");
+        let bytes = assemble_and_validate(&wat);
+        if !wasmer_available() {
+            return None;
+        }
+        let dir = unique_tmp_dir("failure");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("m.wasm");
+        std::fs::write(&path, &bytes).expect("write wasm");
+        let out = std::process::Command::new("wasmer")
+            .arg("run")
+            .arg(&path)
+            .output()
+            .expect("run wasmer");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!out.status.success(), "failure path unexpectedly succeeded\n{wat}");
+        Some((
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        ))
+    }
+
+    /// Builds a `main` command containing one integer binary operation.
+    fn int_binop_main(op: Op, lhs: i64, rhs: i64, result_type: IrType, php_type: PhpType) -> Module {
+        let mut module = Module::new(Target::wasm());
+        let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let lhs = builder.emit_const_i64(lhs);
+            let rhs = builder.emit_const_i64(rhs);
+            let _ = builder.emit(
+                op,
+                vec![lhs, rhs],
+                None,
+                result_type,
+                php_type,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+        module
+    }
+
+    /// Builds a `main` command containing one floating-point division.
+    fn float_div_main(lhs: f64, rhs: f64) -> Module {
+        let mut module = Module::new(Target::wasm());
+        let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let lhs = builder.emit_const_f64(lhs);
+            let rhs = builder.emit_const_f64(rhs);
+            let _ = builder.emit(
+                Op::FDiv,
+                vec![lhs, rhs],
+                None,
+                IrType::F64,
+                PhpType::Float,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+        module
     }
 
     /// Builds a two-i64-parameter function applying one EIR binary op to the args.
@@ -4441,6 +4891,148 @@ mod tests {
             b.emit(op, vec![p[0], p[1]], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
                 .expect("binop produces a value")
         })
+    }
+
+    /// Builds a function returning PHP truthiness for one string literal.
+    fn string_truthiness_fn(value: &str) -> Module {
+        let mut module = Module::new(Target::wasm());
+        let literal = module.data.intern_string(value);
+        let mut function =
+            Function::new("string_truthiness".to_string(), IrType::I64, PhpType::Bool);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let string = builder.emit_const_str(literal);
+            let truthy = builder
+                .emit(
+                    Op::IsTruthy,
+                    vec![string],
+                    None,
+                    IrType::I64,
+                    PhpType::Bool,
+                    Ownership::NonHeap,
+                )
+                .expect("truthiness produces a value");
+            builder.terminate(Terminator::Return {
+                value: Some(truthy),
+            });
+        }
+        module.add_function(function);
+        module
+    }
+
+    /// Builds a function returning truthiness for one `(payload, tag)` scalar.
+    fn tagged_truthiness_fn() -> Module {
+        let mut module = Module::new(Target::wasm());
+        let mut function =
+            Function::new("tagged_truthiness".to_string(), IrType::I64, PhpType::Bool);
+        function.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::TaggedScalar,
+            php_type: PhpType::TaggedScalar,
+            by_ref: false,
+            variadic: false,
+        });
+        let slot = function.add_local(
+            Some("value".to_string()),
+            IrType::TaggedScalar,
+            PhpType::TaggedScalar,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let value =
+                builder.emit_load_local(slot, IrType::TaggedScalar, PhpType::TaggedScalar);
+            let truthy = builder
+                .emit(
+                    Op::IsTruthy,
+                    vec![value],
+                    None,
+                    IrType::I64,
+                    PhpType::Bool,
+                    Ownership::NonHeap,
+                )
+                .expect("truthiness produces a value");
+            builder.terminate(Terminator::Return {
+                value: Some(truthy),
+            });
+        }
+        module.add_function(function);
+        module
+    }
+
+    /// Builds a function checking whether an integer payload is PHP null.
+    fn integer_is_null_fn(value: i64) -> Module {
+        let mut module = Module::new(Target::wasm());
+        let mut function =
+            Function::new("integer_is_null".to_string(), IrType::I64, PhpType::Bool);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let value = builder.emit_const_i64(value);
+            let is_null = builder
+                .emit(
+                    Op::IsNull,
+                    vec![value],
+                    None,
+                    IrType::I64,
+                    PhpType::Bool,
+                    Ownership::NonHeap,
+                )
+                .expect("is_null produces a value");
+            builder.terminate(Terminator::Return {
+                value: Some(is_null),
+            });
+        }
+        module.add_function(function);
+        module
+    }
+
+    /// Verifies PHP string and tagged-scalar truthiness, including `"0"` and null.
+    #[test]
+    fn truthiness_matches_php_for_strings_and_tagged_scalars() {
+        for (value, expected) in [("", "0"), ("0", "0"), ("00", "1"), ("x", "1")] {
+            if let Some(output) = invoke(
+                &string_truthiness_fn(value),
+                "fn_string_truthiness",
+                &[],
+            ) {
+                assert_eq!(output, expected, "truthiness mismatch for {value:?}");
+            }
+        }
+        if let Some(output) = invoke(
+            &tagged_truthiness_fn(),
+            "fn_tagged_truthiness",
+            &["9223372036854775806", "8"],
+        ) {
+            assert_eq!(output, "0");
+        }
+        if let Some(output) = invoke(
+            &tagged_truthiness_fn(),
+            "fn_tagged_truthiness",
+            &["7", "0"],
+        ) {
+            assert_eq!(output, "1");
+        }
+    }
+
+    /// Verifies an integer equal to the internal null sentinel remains a PHP integer.
+    #[test]
+    fn integer_null_sentinel_value_is_not_misclassified() {
+        if let Some(output) = invoke(
+            &integer_is_null_fn(9_223_372_036_854_775_806),
+            "fn_integer_is_null",
+            &[],
+        ) {
+            assert_eq!(output, "0");
+        }
     }
 
     /// Verifies integer add/sub/mul/and/intdiv/mod compute correct values.
@@ -4464,6 +5056,85 @@ mod tests {
         }
         if let Some(o) = invoke(&int_binop_fn("imod", Op::ISMod), "fn_imod", &["17", "5"]) {
             assert_eq!(o, "2");
+        }
+    }
+
+    /// Verifies PHP shift counts are not masked modulo 64 like raw WebAssembly shifts.
+    #[test]
+    fn integer_shifts_match_php_at_word_boundaries() {
+        if let Some(output) = invoke(&int_binop_fn("shl", Op::IShl), "fn_shl", &["1", "64"]) {
+            assert_eq!(output, "0");
+        }
+        if let Some(output) = invoke(&int_binop_fn("shr", Op::IShrA), "fn_shr", &["-1", "64"]) {
+            assert_eq!(output, "-1");
+        }
+        if let Some(output) = invoke(&int_binop_fn("shr", Op::IShrA), "fn_shr", &["1", "100"]) {
+            assert_eq!(output, "0");
+        }
+    }
+
+    /// Verifies signed modulo follows the dividend sign and handles MIN modulo -1.
+    #[test]
+    fn integer_modulo_matches_php_signed_edges() {
+        let modulo = || int_binop_fn("mod", Op::ISMod);
+        if let Some(output) = invoke(&modulo(), "fn_mod", &["5", "-2"]) {
+            assert_eq!(output, "1");
+        }
+        if let Some(output) = invoke(&modulo(), "fn_mod", &["-5", "2"]) {
+            assert_eq!(output, "-1");
+        }
+        if let Some(output) = invoke(
+            &modulo(),
+            "fn_mod",
+            &["-9223372036854775808", "-1"],
+        ) {
+            assert_eq!(output, "0");
+        }
+    }
+
+    /// Verifies arithmetic traps become deterministic PHP-classified failures.
+    #[test]
+    fn arithmetic_error_paths_report_php_failures() {
+        let cases = [
+            (
+                int_binop_main(Op::ISDiv, 1, 0, IrType::I64, PhpType::Int),
+                "DivisionByZeroError: Division by zero",
+            ),
+            (
+                int_binop_main(Op::ISMod, 1, 0, IrType::I64, PhpType::Int),
+                "DivisionByZeroError: Modulo by zero",
+            ),
+            (
+                int_binop_main(Op::IShl, 1, -1, IrType::I64, PhpType::Int),
+                "ArithmeticError: Bit shift by negative number",
+            ),
+            (
+                int_binop_main(
+                    Op::ISDiv,
+                    i64::MIN,
+                    -1,
+                    IrType::I64,
+                    PhpType::Int,
+                ),
+                "ArithmeticError: Division of PHP_INT_MIN by -1 is not an integer",
+            ),
+            (
+                int_binop_main(Op::IDiv, 1, 0, IrType::F64, PhpType::Float),
+                "DivisionByZeroError: Division by zero",
+            ),
+        ];
+        for (module, expected) in cases {
+            if let Some((status, stderr)) = run_main_failure(&module) {
+                assert_eq!(status, Some(255), "{stderr}");
+                assert!(stderr.contains(expected), "{stderr}");
+            }
+        }
+        if let Some((status, stderr)) = run_main_failure(&float_div_main(1.0, -0.0)) {
+            assert_eq!(status, Some(255), "{stderr}");
+            assert!(
+                stderr.contains("DivisionByZeroError: Division by zero"),
+                "{stderr}"
+            );
         }
     }
 
@@ -6700,10 +7371,11 @@ mod tests {
     }
 
     /// `$h[1]=10; $h[2]=20; $h[3]=30; unset($h[2]);` then
-    /// `return is_null($h[2])*10000 + $h[1]*100 + $h[3];` -> "11030" through `Op::HashUnset`.
+    /// `return missing($h[2])*10000 + $h[1]*100 + $h[3];` -> "11030" through `Op::HashUnset`.
     /// The hash lives in a PHP slot reloaded before the unset and each read, exercising the
-    /// removal write-back to the source slot: key 2 now misses (reads the null sentinel, so
-    /// `is_null` is 1) while keys 1 and 3 still resolve. Without the unset the result is 1030.
+    /// removal write-back to the source slot: key 2 now reads the backend's internal
+    /// missing-value sentinel while keys 1 and 3 still resolve. The test compares the
+    /// raw sentinel with `ICmp`; `IsNull(Int)` must remain false for every valid PHP int.
     #[test]
     fn hash_unset_removes_element_lowers() {
         let assoc = int_hash_type();
@@ -6742,7 +7414,15 @@ mod tests {
             let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
             let k2 = b.emit_const_i64(2);
             let g2 = b.emit(Op::HashGet, vec![h, k2], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
-            let removed = b.emit(Op::IsNull, vec![g2], None, IrType::I64, PhpType::Bool, Ownership::NonHeap).unwrap();
+            let missing = b.emit_const_i64(0x7fff_ffff_ffff_fffe);
+            let removed = b.emit(
+                Op::ICmp,
+                vec![g2, missing],
+                Some(Immediate::CmpPredicate(CmpPredicate::Eq)),
+                IrType::I64,
+                PhpType::Bool,
+                Ownership::NonHeap,
+            ).unwrap();
             let ten_k = b.emit_const_i64(10000);
             let removed_x = b.emit(Op::IMul, vec![removed, ten_k], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
             let hundred = b.emit_const_i64(100);
@@ -7862,6 +8542,165 @@ mod tests {
         f
     }
 
+    /// Builds a string-returning free function that makes its literal address observable in WAT.
+    fn string_returning_function(name: &str, literal: DataId) -> Function {
+        let mut function = Function::new(name.to_string(), IrType::Str, PhpType::Str);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let value = builder.emit_const_str(literal);
+            builder.terminate(Terminator::Return { value: Some(value) });
+        }
+        function
+    }
+
+    /// Builds a one-capture closure whose tag table participates in static-data allocation.
+    fn captured_void_closure(name: &str, ir_type: IrType, php_type: PhpType) -> Function {
+        let mut function = Function::new(name.to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_closure = true;
+        function.flags.closure_capture_count = 1;
+        function.params.push(FunctionParam {
+            name: "capture".to_string(),
+            ir_type,
+            php_type: php_type.clone(),
+            by_ref: false,
+            variadic: false,
+        });
+        function.add_local(
+            Some("capture".to_string()),
+            ir_type,
+            php_type,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        function
+    }
+
+    /// Builds the same semantic module with every backend-relevant insertion order reversed.
+    fn determinism_module(reverse: bool) -> Module {
+        let mut module = Module::new(Target::wasm());
+
+        let (alpha_literal, zeta_literal) = if reverse {
+            let alpha = module.data.intern_string("alpha");
+            let zeta = module.data.intern_string("zeta");
+            (alpha, zeta)
+        } else {
+            let zeta = module.data.intern_string("zeta");
+            let alpha = module.data.intern_string("alpha");
+            (alpha, zeta)
+        };
+        let alpha_function = string_returning_function("read_alpha", alpha_literal);
+        let zeta_function = string_returning_function("read_zeta", zeta_literal);
+        if reverse {
+            module.add_function(zeta_function);
+            module.add_function(alpha_function);
+        } else {
+            module.add_function(alpha_function);
+            module.add_function(zeta_function);
+        }
+
+        let alpha_closure = captured_void_closure(
+            "__eir_closure_alpha_0",
+            IrType::Str,
+            PhpType::Str,
+        );
+        let zeta_closure =
+            captured_void_closure("__eir_closure_zeta_0", IrType::I64, PhpType::Int);
+        if reverse {
+            module.add_closure(zeta_closure);
+            module.add_closure(alpha_closure);
+        } else {
+            module.add_closure(alpha_closure);
+            module.add_closure(zeta_closure);
+        }
+
+        let method_order = if reverse {
+            ["beta", "alpha"]
+        } else {
+            ["alpha", "beta"]
+        };
+        let mut alpha_class =
+            test_class_info(7, vec![("name".to_string(), PhpType::Str)], vec![None], false);
+        let mut zeta_class =
+            test_class_info(2, vec![("value".to_string(), PhpType::Int)], vec![None], false);
+        for method in method_order {
+            let method_key = crate::names::php_symbol_key(method);
+            alpha_class
+                .methods
+                .insert(method_key.clone(), method_sig(&[], PhpType::Int));
+            alpha_class
+                .method_impl_classes
+                .insert(method_key.clone(), "AlphaClass".to_string());
+            alpha_class
+                .vtable_slots
+                .insert(method_key.clone(), alpha_class.vtable_slots.len());
+            zeta_class
+                .methods
+                .insert(method_key.clone(), method_sig(&[], PhpType::Int));
+            zeta_class
+                .method_impl_classes
+                .insert(method_key.clone(), "ZetaClass".to_string());
+            zeta_class
+                .vtable_slots
+                .insert(method_key, zeta_class.vtable_slots.len());
+        }
+        alpha_class.vtable_methods = vec!["alpha".to_string(), "beta".to_string()];
+        zeta_class.vtable_methods = vec!["alpha".to_string(), "beta".to_string()];
+        if reverse {
+            module
+                .class_infos
+                .insert("ZetaClass".to_string(), zeta_class);
+            module
+                .class_infos
+                .insert("AlphaClass".to_string(), alpha_class);
+        } else {
+            module
+                .class_infos
+                .insert("AlphaClass".to_string(), alpha_class);
+            module
+                .class_infos
+                .insert("ZetaClass".to_string(), zeta_class);
+        }
+
+        let mut class_methods = Vec::new();
+        for (class, value) in [("AlphaClass", 10), ("ZetaClass", 20)] {
+            for (method, delta) in [("alpha", 1), ("beta", 2)] {
+                class_methods.push(instance_method_fn(
+                    class,
+                    method,
+                    IrType::I64,
+                    PhpType::Int,
+                    move |builder, _| Some(builder.emit_const_i64(value + delta)),
+                ));
+            }
+        }
+        if reverse {
+            class_methods.reverse();
+        }
+        module.class_methods = class_methods;
+        module
+    }
+
+    /// Verifies stable interning, metadata addresses, synthetic IDs, and WAT ordering.
+    #[test]
+    fn wasm_generation_is_independent_of_insertion_order() {
+        let forward = generate(&determinism_module(false), Emit::Executable)
+            .expect("forward insertion order should lower");
+        let reverse = generate(&determinism_module(true), Emit::Executable)
+            .expect("reverse insertion order should lower");
+
+        assert_eq!(forward, reverse);
+        assemble_and_validate(&forward);
+    }
+
     /// Emits `$obj->method(args...)` (Op::MethodCall): operands are `[receiver, args...]`,
     /// the immediate is the interned method-name string. Returns the result value id.
     fn emit_method_call(
@@ -8252,6 +9091,168 @@ mod tests {
         module.add_function(main);
         if let Some(out) = run_main(&module) {
             assert_eq!(out, "beforedtor");
+        }
+    }
+
+    /// Owned object locals are released by both ordinary-function and main
+    /// epilogues, so destructors run before returning to the caller and at
+    /// command shutdown even without an explicit EIR `Release`.
+    #[test]
+    fn destructor_runs_for_owned_locals_at_every_epilogue() {
+        let mut module = Module::new(Target::wasm());
+        let class = "P6eScope";
+        let work_data = module.data.intern_string("work");
+        let after_data = module.data.intern_string("after");
+        let done_data = module.data.intern_string("done");
+        let class_data = module.data.intern_class_name(class);
+        let worker_name = module.data.intern_function_name("worker");
+        register_dtor_class(&mut module, class, 1, "dtor");
+
+        let mut worker = Function::new("worker".to_string(), IrType::Void, PhpType::Void);
+        let worker_slot = worker.add_local(
+            Some("job".to_string()),
+            IrType::Heap(IrHeapKind::Object),
+            PhpType::Object(class.to_string()),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut worker);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            echo_str(&mut builder, work_data);
+            let object = emit_object_new(&mut builder, class, class_data);
+            builder.emit_store_local(worker_slot, object);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(worker);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        let main_slot = main.add_local(
+            Some("current".to_string()),
+            IrType::Heap(IrHeapKind::Object),
+            PhpType::Object(class.to_string()),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let _ = builder.emit(
+                Op::Call,
+                Vec::new(),
+                Some(Immediate::Data(worker_name)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            echo_str(&mut builder, after_data);
+            let object = emit_object_new(&mut builder, class, class_data);
+            builder.emit_store_local(main_slot, object);
+            echo_str(&mut builder, done_data);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        if let Some(output) = run_main(&module) {
+            assert_eq!(output, "workdtorafterdonedtor");
+        }
+    }
+
+    /// Verifies ownership-neutral `Move`/`Borrow` wrappers do not hide the local
+    /// slot moved out by a return. The caller must own the object until its
+    /// explicit release, so each destructor runs after the caller's marker.
+    #[test]
+    fn returned_local_through_move_or_borrow_survives_callee_cleanup() {
+        let mut module = Module::new(Target::wasm());
+        let class = "ForwardedReturn";
+        let class_data = module.data.intern_class_name(class);
+        register_dtor_class(&mut module, class, 1, "D");
+
+        let mut callees = Vec::new();
+        for (name, forwarding) in [
+            ("return_through_move", Op::Move),
+            ("return_through_borrow", Op::Borrow),
+        ] {
+            let call_name = module.data.intern_function_name(name);
+            callees.push(call_name);
+            let mut function = Function::new(
+                name.to_string(),
+                IrType::Heap(IrHeapKind::Object),
+                PhpType::Object(class.to_string()),
+            );
+            let object_slot = function.add_local(
+                Some("object".to_string()),
+                IrType::Heap(IrHeapKind::Object),
+                PhpType::Object(class.to_string()),
+                LocalKind::PhpLocal,
+            );
+            {
+                let mut builder = Builder::new(&mut function);
+                let entry = builder.create_named_block("entry", Vec::new());
+                builder.set_entry(entry);
+                builder.position_at_end(entry);
+                let object = emit_object_new(&mut builder, class, class_data);
+                builder.emit_store_local(object_slot, object);
+                let loaded = builder.emit_load_local(
+                    object_slot,
+                    IrType::Heap(IrHeapKind::Object),
+                    PhpType::Object(class.to_string()),
+                );
+                let forwarded = builder
+                    .emit(
+                        forwarding,
+                        vec![loaded],
+                        None,
+                        IrType::Heap(IrHeapKind::Object),
+                        PhpType::Object(class.to_string()),
+                        Ownership::Borrowed,
+                    )
+                    .expect("forwarded return value");
+                builder.terminate(Terminator::Return {
+                    value: Some(forwarded),
+                });
+            }
+            module.add_function(function);
+        }
+
+        let marker = module.data.intern_string("A");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            for call_name in callees {
+                let result = builder
+                    .emit(
+                        Op::Call,
+                        Vec::new(),
+                        Some(Immediate::Data(call_name)),
+                        IrType::Heap(IrHeapKind::Object),
+                        PhpType::Object(class.to_string()),
+                        Ownership::Owned,
+                    )
+                    .expect("object-returning call");
+                echo_str(&mut builder, marker);
+                let _ = builder.emit(
+                    Op::Release,
+                    vec![result],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        if let Some(output) = run_main(&module) {
+            assert_eq!(output, "ADAD");
         }
     }
 
@@ -9267,11 +10268,10 @@ mod tests {
         }
     }
 
-    /// `get_class()` with no args inside a P method -> "P" (the lexical class). The
-    /// 0-arg form resolves the enclosing `P::who` method name to class P and looks up
-    /// its name by class id.
+    /// Verifies the zero-argument `get_class()` form stays behind the capability
+    /// gate until its PHP-version-sensitive deprecation behavior is implemented.
     #[test]
-    fn get_class_no_arg_in_method_returns_lexical_class() {
+    fn get_class_no_arg_in_method_is_rejected_before_lowering() {
         let class = "P6fGCL";
         let mut module = Module::new(Target::wasm());
         let class_data = module.data.intern_class_name(class);
@@ -9306,15 +10306,20 @@ mod tests {
             b.terminate(Terminator::Return { value: None });
         }
         module.add_function(main);
-        if let Some(out) = run_main(&module) {
-            assert_eq!(out, class);
-        }
+        let error =
+            generate(&module, Emit::Executable).expect_err("zero-argument get_class must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported runtime function get_class"),
+            "{error}"
+        );
     }
 
-    /// `get_class()` with no args at the top level (no enclosing method) -> "" (the
-    /// empty missing-name row). Outside any class context there is no lexical class.
+    /// Verifies top-level zero-argument `get_class()` is rejected instead of
+    /// returning an empty string where PHP raises an `Error`.
     #[test]
-    fn get_class_no_arg_outside_method_returns_empty() {
+    fn get_class_no_arg_outside_method_is_rejected_before_lowering() {
         let mut module = Module::new(Target::wasm());
         let get_class_data = module.data.intern_function_name("get_class");
         let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
@@ -9354,15 +10359,20 @@ mod tests {
             b.terminate(Terminator::Return { value: None });
         }
         module.add_function(main);
-        if let Some(out) = run_main(&module) {
-            assert_eq!(out, "[]");
-        }
+        let error =
+            generate(&module, Emit::Executable).expect_err("top-level get_class must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported runtime function get_class"),
+            "{error}"
+        );
     }
 
-    /// `get_class(7)` (non-object) -> "" (the native-vs-PHP divergence: a non-object
-    /// operand yields the empty name, fixed cross-target later).
+    /// Verifies `get_class(7)` is rejected instead of returning an empty string;
+    /// PHP requires a `TypeError` for a non-object operand.
     #[test]
-    fn get_class_non_object_returns_empty() {
+    fn get_class_non_object_is_rejected_before_lowering() {
         let mut module = Module::new(Target::wasm());
         let get_class_data = module.data.intern_function_name("get_class");
         let open = module.data.intern_string("[");
@@ -9389,9 +10399,14 @@ mod tests {
             b.terminate(Terminator::Return { value: None });
         }
         module.add_function(main);
-        if let Some(out) = run_main(&module) {
-            assert_eq!(out, "[]");
-        }
+        let error =
+            generate(&module, Emit::Executable).expect_err("non-object get_class must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported runtime function get_class"),
+            "{error}"
+        );
     }
 
     /// `get_class($mixed)` (a Mixed operand) is rejected (mirrors the native

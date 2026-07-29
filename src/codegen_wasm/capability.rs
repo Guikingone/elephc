@@ -1,0 +1,2290 @@
+//! Purpose:
+//! Performs the pre-emission wasm32-wasi capability audit over a complete EIR
+//! module and aggregates every unsupported reachable construct.
+//!
+//! Called from:
+//! - `crate::codegen_wasm::generate` before WAT or artifact construction.
+//!
+//! Key details:
+//! - Every EIR function collection is inspected. Collections the backend cannot
+//!   yet emit are rejected explicitly instead of being silently omitted.
+//! - Opcode and terminator classification is exhaustive, so a new enum variant
+//!   cannot compile until its WASM status is decided.
+//! - Diagnostics name the collection, function, block, and instruction.
+
+use super::WasmError;
+use crate::ir::{
+    Function, Immediate, Instruction, IrHeapKind, IrType, Module, Op, RuntimeCallTarget,
+    RuntimeFnId, Terminator, UnaryStringRuntime, ValueDef, ValueId,
+};
+use crate::types::PhpType;
+
+/// Validates every function collection and returns one aggregate diagnostic.
+pub(super) fn validate_module(module: &Module) -> Result<(), WasmError> {
+    let mut issues = Vec::new();
+    scan_functions(module, "functions", &module.functions, true, &mut issues);
+    scan_functions(
+        module,
+        "class_methods",
+        &module.class_methods,
+        true,
+        &mut issues,
+    );
+    scan_functions(module, "closures", &module.closures, true, &mut issues);
+    scan_functions(
+        module,
+        "fiber_wrappers",
+        &module.fiber_wrappers,
+        false,
+        &mut issues,
+    );
+    scan_functions(
+        module,
+        "callback_wrappers",
+        &module.callback_wrappers,
+        false,
+        &mut issues,
+    );
+    scan_functions(
+        module,
+        "extern_callback_trampolines",
+        &module.extern_callback_trampolines,
+        false,
+        &mut issues,
+    );
+    scan_functions(
+        module,
+        "runtime_callable_invokers",
+        &module.runtime_callable_invokers,
+        false,
+        &mut issues,
+    );
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(WasmError::Unsupported(format!(
+            "WASM capability audit found {} issue(s):\n{}",
+            issues.len(),
+            issues
+                .iter()
+                .map(|issue| format!("  - {issue}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )))
+    }
+}
+
+/// Scans one module function collection and records collection-level omission.
+fn scan_functions(
+    module: &Module,
+    collection: &str,
+    functions: &[Function],
+    emitted: bool,
+    issues: &mut Vec<String>,
+) {
+    for function in functions {
+        if !emitted {
+            issues.push(format!(
+                "{collection}::{}: function collection is not emitted by wasm32-wasi",
+                function.name
+            ));
+        }
+        scan_function(module, collection, function, issues);
+    }
+}
+
+/// Scans types, instructions, runtime targets, and terminators in one function.
+fn scan_function(
+    module: &Module,
+    collection: &str,
+    function: &Function,
+    issues: &mut Vec<String>,
+) {
+    if function.flags.is_main
+        && (function.return_type != IrType::Void
+            || function.return_php_type.codegen_repr() != PhpType::Void)
+    {
+        issues.push(format!(
+            "{collection}::{}: main must declare a void return, got {:?}/{:?}",
+            function.name,
+            function.return_type,
+            function.return_php_type.codegen_repr()
+        ));
+    }
+    check_type(
+        function.return_type,
+        &format!("{collection}::{} return", function.name),
+        issues,
+    );
+    for (index, param) in function.params.iter().enumerate() {
+        check_type(
+            param.ir_type,
+            &format!("{collection}::{} param#{index}", function.name),
+            issues,
+        );
+    }
+    for local in &function.locals {
+        check_type(
+            local.ir_type,
+            &format!(
+                "{collection}::{} local#{}",
+                function.name,
+                local.id.as_raw()
+            ),
+            issues,
+        );
+    }
+    for block in &function.blocks {
+        for (index, value_id) in block.params.iter().enumerate() {
+            match function.value(*value_id) {
+                Some(value) => check_type(
+                    value.ir_type,
+                    &format!(
+                        "{collection}::{} block#{} param#{index}",
+                        function.name,
+                        block.id.as_raw()
+                    ),
+                    issues,
+                ),
+                None => issues.push(format!(
+                    "{collection}::{} block#{} param#{index}: missing value {:?}",
+                    function.name,
+                    block.id.as_raw(),
+                    value_id
+                )),
+            }
+        }
+        for inst_id in &block.instructions {
+            let Some(instruction) = function.instruction(*inst_id) else {
+                issues.push(format!(
+                    "{collection}::{} block#{} instruction#{:?}: missing instruction",
+                    function.name,
+                    block.id.as_raw(),
+                    inst_id
+                ));
+                continue;
+            };
+            if !op_is_supported(instruction.op) {
+                issues.push(format!(
+                    "{collection}::{} block#{} instruction#{}: unsupported op {}",
+                    function.name,
+                    block.id.as_raw(),
+                    inst_id.as_raw(),
+                    instruction.op.name()
+                ));
+            }
+            if instruction.op == Op::LanguageConstructCall && !function.flags.is_main {
+                issues.push(format!(
+                    "{collection}::{} block#{} instruction#{}: exit/die outside main cannot unwind caller-owned WASM frames",
+                    function.name,
+                    block.id.as_raw(),
+                    inst_id.as_raw()
+                ));
+            }
+            check_instruction_shape(
+                module,
+                collection,
+                function,
+                block.id.as_raw(),
+                inst_id.as_raw(),
+                instruction,
+                issues,
+            );
+            check_type(
+                instruction.result_type,
+                &format!(
+                    "{collection}::{} block#{} instruction#{} result",
+                    function.name,
+                    block.id.as_raw(),
+                    inst_id.as_raw()
+                ),
+                issues,
+            );
+            if instruction.op == Op::RuntimeCall {
+                check_runtime_call(
+                    module,
+                    collection,
+                    function,
+                    block.id.as_raw(),
+                    inst_id.as_raw(),
+                    instruction,
+                    issues,
+                );
+            }
+        }
+        match block.terminator.as_ref() {
+            Some(terminator) if !terminator_is_supported(terminator) => issues.push(format!(
+                "{collection}::{} block#{}: unsupported terminator {}",
+                function.name,
+                block.id.as_raw(),
+                terminator_name(terminator)
+            )),
+            None => issues.push(format!(
+                "{collection}::{} block#{}: missing terminator",
+                function.name,
+                block.id.as_raw()
+            )),
+            Some(Terminator::Return { value: Some(_) }) if function.flags.is_main => {
+                issues.push(format!(
+                    "{collection}::{} block#{}: main return value would be discarded before proc_exit(0)",
+                    function.name,
+                    block.id.as_raw()
+                ));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Records an exact lowerer-shape defect for the audited P0 instruction subset.
+///
+/// Other admitted opcodes still rely on their late lowerer diagnostics until
+/// their operand, immediate, result, and metadata contracts are audited here.
+fn check_instruction_shape(
+    module: &Module,
+    collection: &str,
+    function: &Function,
+    block: u32,
+    instruction: u32,
+    inst: &Instruction,
+    issues: &mut Vec<String>,
+) {
+    let issue = match inst.op {
+        Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul => {
+            checked_int_binop_shape_issue(function, inst)
+        }
+        Op::Cast => cast_shape_issue(function, inst),
+        Op::ArrayGet => array_get_shape_issue(function, inst),
+        Op::NullsafeMethodCall => nullsafe_method_call_shape_issue(module, function, inst),
+        _ => None,
+    };
+    if let Some(issue) = issue {
+        issues.push(format!(
+            "{collection}::{} block#{block} instruction#{instruction}: unsupported {} shape: {issue}",
+            function.name,
+            inst.op.name()
+        ));
+    }
+}
+
+/// Validates the two-integer to owned-Mixed contract of checked arithmetic.
+fn checked_int_binop_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
+    let [lhs, rhs] = inst.operands.as_slice() else {
+        return Some(format!(
+            "expected two integer operands, got {}",
+            inst.operands.len()
+        ));
+    };
+    for (label, operand) in [("lhs", lhs), ("rhs", rhs)] {
+        let Some(value) = function.value(*operand) else {
+            return Some(format!("{label} operand is missing from the value table"));
+        };
+        if value.ir_type != IrType::I64 || value.php_type.codegen_repr() != PhpType::Int {
+            return Some(format!(
+                "{label} must be int/I64, got {:?}/{:?}",
+                value.ir_type,
+                value.php_type.codegen_repr()
+            ));
+        }
+    }
+    if inst.result.is_none()
+        || inst.result_type != IrType::Heap(IrHeapKind::Mixed)
+        || inst.result_php_type.codegen_repr() != PhpType::Mixed
+    {
+        return Some(format!(
+            "checked arithmetic must materialize a Mixed cell, got {:?}/{:?}",
+            inst.result_type,
+            inst.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
+/// Validates the exact source/target pairs implemented by `lower_cast`.
+fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
+    let [operand] = inst.operands.as_slice() else {
+        return Some(format!(
+            "expected one source operand, got {}",
+            inst.operands.len()
+        ));
+    };
+    let Some(source) = function.value(*operand) else {
+        return Some("cast source is missing from the value table".to_string());
+    };
+    let Some(Immediate::CastTarget(target)) = inst.immediate else {
+        return Some("missing CastTarget immediate".to_string());
+    };
+    if inst.result.is_none() || target != inst.result_type {
+        return Some(format!(
+            "cast target {target:?} must equal the materialized result {:?}",
+            inst.result_type
+        ));
+    }
+
+    let source_php = source.php_type.codegen_repr();
+    let result_php = inst.result_php_type.codegen_repr();
+    let supported = match (source.ir_type, target) {
+        (IrType::Heap(IrHeapKind::Mixed), IrType::I64) => {
+            matches!(&source_php, PhpType::Mixed)
+                && matches!(&result_php, PhpType::Int | PhpType::Bool)
+        }
+        (IrType::Heap(IrHeapKind::Mixed), IrType::F64) => {
+            source_php == PhpType::Mixed && result_php == PhpType::Float
+        }
+        (IrType::Heap(IrHeapKind::Mixed), IrType::Str) => {
+            source_php == PhpType::Mixed && result_php == PhpType::Str
+        }
+        (IrType::I64, IrType::I64) => {
+            matches!(source_php, PhpType::Int | PhpType::Bool) && source_php == result_php
+        }
+        (IrType::F64, IrType::F64) => {
+            source_php == PhpType::Float && result_php == PhpType::Float
+        }
+        (IrType::Str, IrType::Str) => {
+            source_php == PhpType::Str && result_php == PhpType::Str
+        }
+        (IrType::I64, IrType::F64) => {
+            source_php == PhpType::Int && result_php == PhpType::Float
+        }
+        (IrType::F64, IrType::I64) => {
+            source_php == PhpType::Float && result_php == PhpType::Int
+        }
+        _ => false,
+    };
+    if !supported {
+        return Some(format!(
+            "unsupported conversion {:?}/{source_php:?} to {target:?}/{result_php:?}",
+            source.ir_type
+        ));
+    }
+    None
+}
+
+/// Validates indexed int/bool/string reads supported by `lower_array_get`.
+///
+/// Bounds warnings and the PHP null result for an out-of-range dynamic index
+/// remain a runtime-semantic surface; this static gate only proves the in-range
+/// storage contract used by the current getter helpers.
+fn array_get_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
+    let [array, index] = inst.operands.as_slice() else {
+        return Some(format!(
+            "expected an indexed array and integer index, got {} operands",
+            inst.operands.len()
+        ));
+    };
+    let Some(array_value) = function.value(*array) else {
+        return Some("array operand is missing from the value table".to_string());
+    };
+    let element_type = match (
+        array_value.ir_type,
+        array_value.php_type.codegen_repr(),
+    ) {
+        (IrType::Heap(IrHeapKind::Array), PhpType::Array(element)) => {
+            element.codegen_repr()
+        }
+        (ir_type, php_type) => {
+            return Some(format!(
+                "source must be an indexed array, got {ir_type:?}/{php_type:?}"
+            ))
+        }
+    };
+    let Some(index_value) = function.value(*index) else {
+        return Some("index operand is missing from the value table".to_string());
+    };
+    if index_value.ir_type != IrType::I64
+        || index_value.php_type.codegen_repr() != PhpType::Int
+    {
+        return Some(format!(
+            "index must be int/I64, got {:?}/{:?}",
+            index_value.ir_type,
+            index_value.php_type.codegen_repr()
+        ));
+    }
+    if inst.result.is_none() {
+        return Some("array_get must materialize its result".to_string());
+    }
+    let result_php = inst.result_php_type.codegen_repr();
+    let supported_result = match &element_type {
+        PhpType::Int | PhpType::Bool => {
+            inst.result_type == IrType::I64 && result_php == element_type
+        }
+        PhpType::Str => inst.result_type == IrType::Str && result_php == PhpType::Str,
+        _ => false,
+    };
+    if !supported_result {
+        return Some(format!(
+            "element {element_type:?} cannot lower into {:?}/{result_php:?}",
+            inst.result_type
+        ));
+    }
+    None
+}
+
+/// Validates the statically resolvable object and boxed Mixed/Union nullsafe paths.
+///
+/// A Mixed/Union receiver can still carry a non-object runtime tag or an object
+/// outside the closed candidate set. The lowerer currently traps for those
+/// dynamic cases; replacing that trap with the exact PHP fatal remains a runtime
+/// diagnostic surface rather than something this static shape gate can prove.
+fn nullsafe_method_call_shape_issue(
+    module: &Module,
+    function: &Function,
+    inst: &Instruction,
+) -> Option<String> {
+    let Some(method_name) = data_string(module, inst) else {
+        return Some("missing or invalid method-name Data immediate".to_string());
+    };
+    let Some((receiver, arguments)) = inst.operands.split_first() else {
+        return Some("missing receiver operand".to_string());
+    };
+    let Some(receiver_value) = function.value(*receiver) else {
+        return Some("receiver operand is missing from the value table".to_string());
+    };
+    let method_key = crate::names::php_symbol_key(method_name);
+    match receiver_value.php_type.codegen_repr() {
+        PhpType::Object(class_name) => {
+            let Some(class_info) = module.class_infos.get(&class_name) else {
+                return Some(format!("unknown receiver class {class_name}"));
+            };
+            let Some(signature) = class_info.methods.get(&method_key) else {
+                return Some(format!("unknown method {class_name}::{method_name}"));
+            };
+            if let Some(issue) = method_signature_shape_issue(
+                function,
+                arguments,
+                signature,
+                method_name,
+            ) {
+                return Some(issue);
+            }
+            let implementation = class_info
+                .method_impl_classes
+                .get(&method_key)
+                .map(String::as_str)
+                .unwrap_or(class_name.as_str());
+            let Some(body) = find_method_function(module, implementation, &method_key) else {
+                return Some(format!(
+                    "missing method body {implementation}::{method_name}"
+                ));
+            };
+            if let Some(issue) = method_body_argument_shape_issue(function, inst, body) {
+                return Some(issue);
+            }
+            direct_method_result_shape_issue(inst, body, &signature.return_type)
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            let result_php = inst.result_php_type.codegen_repr();
+            let boxed_result = inst.result.is_some()
+                && matches!(
+                    inst.result_type,
+                    IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union)
+                )
+                && matches!(&result_php, PhpType::Mixed | PhpType::Union(_));
+            if !boxed_result {
+                return Some(format!(
+                    "dynamic nullsafe dispatch requires a boxed Mixed/Union result, got {:?}/{result_php:?}",
+                    inst.result_type
+                ));
+            }
+
+            let candidates =
+                super::classes::mixed_method_candidates(module, &method_key, inst.operands.len());
+            if candidates.is_empty() {
+                return Some(format!(
+                    "no closed-world candidate for dynamic method {method_name}"
+                ));
+            }
+            for (_, class_name, implementation) in candidates {
+                let Some(class_info) = module.class_infos.get(&class_name) else {
+                    return Some(format!("missing candidate class {class_name}"));
+                };
+                let Some(signature) = class_info.methods.get(&method_key) else {
+                    return Some(format!(
+                        "missing candidate signature {class_name}::{method_name}"
+                    ));
+                };
+                if let Some(issue) = method_signature_shape_issue(
+                    function,
+                    arguments,
+                    signature,
+                    method_name,
+                ) {
+                    return Some(format!("{class_name}: {issue}"));
+                }
+                let Some(body) = find_method_function(module, &implementation, &method_key) else {
+                    return Some(format!(
+                        "missing candidate body {implementation}::{method_name}"
+                    ));
+                };
+                if let Some(issue) = method_body_argument_shape_issue(function, inst, body) {
+                    return Some(format!("{class_name}: {issue}"));
+                }
+                if !mixed_method_return_is_boxable(body.return_type, &signature.return_type) {
+                    return Some(format!(
+                        "{class_name}::{method_name} return {:?}/{:?} cannot be boxed",
+                        body.return_type,
+                        signature.return_type.codegen_repr()
+                    ));
+                }
+            }
+            None
+        }
+        other => Some(format!(
+            "receiver must be Object, Mixed, or Union, got {other:?}"
+        )),
+    }
+}
+
+/// Validates user-argument arity, by-reference state, and PHP parameter types.
+fn method_signature_shape_issue(
+    owner: &Function,
+    arguments: &[ValueId],
+    signature: &crate::types::FunctionSig,
+    method_name: &str,
+) -> Option<String> {
+    if signature.variadic.is_some() || signature.ref_params.iter().any(|by_ref| *by_ref) {
+        return Some(format!(
+            "{method_name} has a variadic or by-reference parameter"
+        ));
+    }
+    if signature.params.len() != arguments.len() {
+        return Some(format!(
+            "{method_name} expects {} arguments, got {}",
+            signature.params.len(),
+            arguments.len()
+        ));
+    }
+    for (index, (argument, (_, expected))) in
+        arguments.iter().zip(&signature.params).enumerate()
+    {
+        let Some(value) = owner.value(*argument) else {
+            return Some(format!("argument #{index} is missing from the value table"));
+        };
+        if value.php_type.codegen_repr() != expected.codegen_repr() {
+            return Some(format!(
+                "argument #{index} has PHP type {:?}, expected {:?}",
+                value.php_type.codegen_repr(),
+                expected.codegen_repr()
+            ));
+        }
+    }
+    None
+}
+
+/// Validates argument storage against the concrete method body's WASM signature.
+fn method_body_argument_shape_issue(
+    owner: &Function,
+    inst: &Instruction,
+    body: &Function,
+) -> Option<String> {
+    if body.params.len() != inst.operands.len() {
+        return Some(format!(
+            "method body {} expects {} total operands, got {}",
+            body.name,
+            body.params.len(),
+            inst.operands.len()
+        ));
+    }
+    if body
+        .params
+        .first()
+        .is_none_or(|parameter| parameter.ir_type != IrType::Heap(IrHeapKind::Object))
+    {
+        return Some(format!(
+            "method body {} has no Heap(Object) receiver parameter",
+            body.name
+        ));
+    }
+    for (index, (operand, parameter)) in inst
+        .operands
+        .iter()
+        .skip(1)
+        .zip(body.params.iter().skip(1))
+        .enumerate()
+    {
+        let Some(value) = owner.value(*operand) else {
+            return Some(format!(
+                "operand #{} is missing from the value table",
+                index + 1
+            ));
+        };
+        if value.ir_type != parameter.ir_type {
+            return Some(format!(
+                "operand #{} storage {:?} differs from {} parameter {:?}",
+                index + 1,
+                value.ir_type,
+                body.name,
+                parameter.ir_type
+            ));
+        }
+    }
+    None
+}
+
+/// Validates the direct object-call result against the concrete method body.
+fn direct_method_result_shape_issue(
+    inst: &Instruction,
+    body: &Function,
+    declared_php: &PhpType,
+) -> Option<String> {
+    let declared_php = declared_php.codegen_repr();
+    let has_exact_result = match body.return_type {
+        IrType::Void => {
+            inst.result.is_none()
+                && inst.result_type == IrType::Void
+                && inst.result_php_type.codegen_repr() == PhpType::Void
+        }
+        return_type => {
+            inst.result.is_some()
+                && inst.result_type == return_type
+                && inst.result_php_type.codegen_repr() == declared_php
+        }
+    };
+    if !has_exact_result {
+        return Some(format!(
+            "result {:?}/{:?} differs from method body {:?}/{declared_php:?}",
+            inst.result_type,
+            inst.result_php_type.codegen_repr(),
+            body.return_type
+        ));
+    }
+    None
+}
+
+/// Finds a concrete class-method body using the lowerer's name-matching rules.
+fn find_method_function<'a>(
+    module: &'a Module,
+    implementation: &str,
+    method_key: &str,
+) -> Option<&'a Function> {
+    module
+        .class_methods
+        .iter()
+        .find(|function| match function.name.rsplit_once("::") {
+            Some((class_name, method_name)) => {
+                class_name == implementation
+                    && crate::names::php_symbol_key(method_name) == method_key
+            }
+            None => false,
+        })
+}
+
+/// Returns whether dynamic dispatch can box the concrete method return.
+fn mixed_method_return_is_boxable(ir_type: IrType, php_type: &PhpType) -> bool {
+    let php_type = php_type.codegen_repr();
+    match ir_type {
+        IrType::I64 => matches!(
+            php_type,
+            PhpType::Int | PhpType::Bool | PhpType::Callable
+        ),
+        IrType::F64 => php_type == PhpType::Float,
+        IrType::Str => php_type == PhpType::Str,
+        IrType::Heap(IrHeapKind::Array) => matches!(php_type, PhpType::Array(_)),
+        IrType::Heap(IrHeapKind::Hash) => matches!(php_type, PhpType::AssocArray { .. }),
+        IrType::Heap(IrHeapKind::Object) => matches!(php_type, PhpType::Object(_)),
+        IrType::Heap(IrHeapKind::Mixed) => {
+            matches!(php_type, PhpType::Mixed | PhpType::Union(_))
+        }
+        IrType::Heap(IrHeapKind::Iterable | IrHeapKind::Union | IrHeapKind::Buffer)
+        | IrType::TaggedScalar
+        | IrType::Void => false,
+    }
+}
+
+/// Records a storage type the current wasm32 ABI cannot materialize safely.
+fn check_type(ir_type: IrType, context: &str, issues: &mut Vec<String>) {
+    let supported = match ir_type {
+        IrType::I64
+        | IrType::F64
+        | IrType::Str
+        | IrType::TaggedScalar
+        | IrType::Heap(IrHeapKind::Array)
+        | IrType::Heap(IrHeapKind::Hash)
+        | IrType::Heap(IrHeapKind::Object)
+        | IrType::Heap(IrHeapKind::Mixed)
+        | IrType::Heap(IrHeapKind::Iterable)
+        | IrType::Heap(IrHeapKind::Union)
+        | IrType::Void => true,
+        IrType::Heap(IrHeapKind::Buffer) => false,
+    };
+    if !supported {
+        issues.push(format!("{context}: unsupported storage type {ir_type:?}"));
+    }
+}
+
+/// Validates the typed target carried by one `RuntimeCall`.
+fn check_runtime_call(
+    module: &Module,
+    collection: &str,
+    function: &Function,
+    block: u32,
+    instruction: u32,
+    call: &Instruction,
+    issues: &mut Vec<String>,
+) {
+    let context = format!(
+        "{collection}::{} block#{block} instruction#{instruction}",
+        function.name
+    );
+    match call.immediate.clone() {
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))) => {
+            if !runtime_function_is_supported(target) {
+                issues.push(format!(
+                    "{context}: unsupported runtime function {}",
+                    target.as_eir()
+                ));
+                return;
+            }
+            if let Some(issue) = runtime_function_shape_issue(module, function, call, target) {
+                issues.push(format!(
+                    "{context}: unsupported runtime function {} shape: {issue}",
+                    target.as_eir()
+                ));
+            }
+        }
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)) => {
+            issues.push(format!(
+                "{context}: unsupported runtime target array.fetch_for_write"
+            ));
+        }
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::UnaryString(target))) => {
+            issues.push(format!(
+                "{context}: unsupported unary string runtime {}",
+                unary_string_name(target)
+            ));
+        }
+        _ => issues.push(format!("{context}: missing typed runtime target")),
+    }
+}
+
+/// Returns a diagnostic when an admitted runtime function does not match the
+/// exact operand, callback, and result subset implemented by its lowerer.
+fn runtime_function_shape_issue(
+    module: &Module,
+    function: &Function,
+    call: &Instruction,
+    target: RuntimeFnId,
+) -> Option<String> {
+    match target {
+        RuntimeFnId::GetClass => get_class_shape_issue(function, call),
+        RuntimeFnId::ArrayMap => array_map_shape_issue(module, function, call),
+        RuntimeFnId::Usort => usort_shape_issue(module, function, call),
+        RuntimeFnId::ArrayReduce => array_reduce_shape_issue(module, function, call),
+        _ => Some("the runtime function has no audited WASM shape contract".to_string()),
+    }
+}
+
+/// Validates the exact supported `get_class(object): string` form.
+fn get_class_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    let [operand] = call.operands.as_slice() else {
+        return Some(format!(
+            "expected one object operand, got {}",
+            call.operands.len()
+        ));
+    };
+    let Some(value) = function.value(*operand) else {
+        return Some("object operand is missing from the value table".to_string());
+    };
+    if value.ir_type != IrType::Heap(IrHeapKind::Object)
+        || !matches!(value.php_type.codegen_repr(), PhpType::Object(_))
+    {
+        return Some(format!(
+            "expected a statically object-typed Heap(Object) operand, got {:?}/{:?}",
+            value.ir_type,
+            value.php_type.codegen_repr()
+        ));
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::Str
+        || call.result_php_type.codegen_repr() != PhpType::Str
+    {
+        return Some(format!(
+            "expected a string result, got {:?}/{:?}",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
+/// Validates the exact single-array `array_map` subset and its static callback.
+fn array_map_shape_issue(
+    module: &Module,
+    function: &Function,
+    call: &Instruction,
+) -> Option<String> {
+    let [callback, array] = call.operands.as_slice() else {
+        return Some(format!(
+            "expected (callable, indexed array), got {} operands",
+            call.operands.len()
+        ));
+    };
+    let Some(callback_value) = function.value(*callback) else {
+        return Some("callback operand is missing from the value table".to_string());
+    };
+    if callback_value.php_type.codegen_repr() != PhpType::Callable {
+        return Some(format!(
+            "callback must be Callable, got {:?}",
+            callback_value.php_type.codegen_repr()
+        ));
+    }
+    let Some(array_value) = function.value(*array) else {
+        return Some("array operand is missing from the value table".to_string());
+    };
+    let element_type = match (
+        array_value.ir_type,
+        array_value.php_type.codegen_repr(),
+    ) {
+        (IrType::Heap(IrHeapKind::Array), PhpType::Array(element)) => {
+            element.codegen_repr()
+        }
+        (ir_type, php_type) => {
+            return Some(format!(
+                "source must be an indexed array, got {ir_type:?}/{php_type:?}"
+            ))
+        }
+    };
+    if !matches!(element_type, PhpType::Int | PhpType::Str) {
+        return Some(format!(
+            "source element type {element_type:?} is not represented exactly by the map runtime"
+        ));
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::Heap(IrHeapKind::Array)
+        || !matches!(
+            call.result_php_type.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        )
+    {
+        return Some(format!(
+            "array_map must materialize an indexed-array result, got {:?}/{:?}",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    let Some((callback_function, visible_count)) =
+        static_callable_contract(module, function, *callback)
+    else {
+        return Some(
+            "callback must resolve statically to a direct closure or user-function callable"
+                .to_string(),
+        );
+    };
+    if let Some(issue) = callable_wrapper_issue(callback_function, visible_count, 1) {
+        return Some(issue);
+    }
+    if let Some(param) = callback_function.params.first() {
+        let param_type = param.php_type.codegen_repr();
+        let compatible = match element_type {
+            PhpType::Int => param_type == PhpType::Int,
+            PhpType::Str => param_type == PhpType::Str,
+            _ => false,
+        };
+        if !compatible {
+            return Some(format!(
+                "callback parameter {:?} cannot receive source element {:?} without PHP coercion",
+                param_type, element_type
+            ));
+        }
+    }
+    if !callable_return_is_boxable(callback_function) {
+        return Some(format!(
+            "callback return {:?}/{:?} cannot be boxed by the WASM callable wrapper",
+            callback_function.return_type,
+            callback_function.return_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
+/// Validates the exact `usort(array<int>, callable): bool` subset.
+fn usort_shape_issue(
+    module: &Module,
+    function: &Function,
+    call: &Instruction,
+) -> Option<String> {
+    let [array, callback] = call.operands.as_slice() else {
+        return Some(format!(
+            "expected (array<int>, callable), got {} operands",
+            call.operands.len()
+        ));
+    };
+    if !value_is_int_array(function, *array) {
+        return Some("source must be an indexed array<int>".to_string());
+    }
+    if function
+        .value(*callback)
+        .is_none_or(|value| value.php_type.codegen_repr() != PhpType::Callable)
+    {
+        return Some("comparator must be Callable".to_string());
+    }
+    if call.result.is_some()
+        && (call.result_type != IrType::I64
+            || call.result_php_type.codegen_repr() != PhpType::Bool)
+    {
+        return Some(format!(
+            "used usort result must be bool/I64, got {:?}/{:?}",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    let Some((callback_function, visible_count)) =
+        static_callable_contract(module, function, *callback)
+    else {
+        return Some(
+            "comparator must resolve statically to a direct closure or user-function callable"
+                .to_string(),
+        );
+    };
+    if let Some(issue) = callable_wrapper_issue(callback_function, visible_count, 2) {
+        return Some(issue);
+    }
+    if callback_function.params[..visible_count]
+        .iter()
+        .any(|param| param.php_type.codegen_repr() != PhpType::Int)
+    {
+        return Some("comparator parameters must be int".to_string());
+    }
+    if callback_function.return_type != IrType::I64
+        || callback_function.return_php_type.codegen_repr() != PhpType::Int
+    {
+        return Some(format!(
+            "comparator must return int/I64, got {:?}/{:?}",
+            callback_function.return_type,
+            callback_function.return_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
+/// Validates the exact integer-carry `array_reduce` subset.
+fn array_reduce_shape_issue(
+    module: &Module,
+    function: &Function,
+    call: &Instruction,
+) -> Option<String> {
+    let [array, callback, initial] = call.operands.as_slice() else {
+        return Some(format!(
+            "expected (array<int>, callable, int), got {} operands",
+            call.operands.len()
+        ));
+    };
+    if !value_is_int_array(function, *array) {
+        return Some("source must be an indexed array<int>".to_string());
+    }
+    if function
+        .value(*callback)
+        .is_none_or(|value| value.php_type.codegen_repr() != PhpType::Callable)
+    {
+        return Some("callback must be Callable".to_string());
+    }
+    if function.value(*initial).is_none_or(|value| {
+        value.ir_type != IrType::I64 || value.php_type.codegen_repr() != PhpType::Int
+    }) {
+        return Some("initial carry must be an int/I64 value".to_string());
+    }
+    if call.result.is_some() {
+        let result_is_supported = match call.result_type {
+            IrType::I64 => call.result_php_type.codegen_repr() == PhpType::Int,
+            IrType::Heap(IrHeapKind::Mixed) => {
+                call.result_php_type.codegen_repr() == PhpType::Mixed
+            }
+            IrType::Heap(IrHeapKind::Union) => {
+                matches!(call.result_php_type.codegen_repr(), PhpType::Union(_))
+            }
+            _ => false,
+        };
+        if !result_is_supported {
+            return Some(format!(
+                "result must be int, Mixed, Union, or unused; got {:?}/{:?}",
+                call.result_type,
+                call.result_php_type.codegen_repr()
+            ));
+        }
+    }
+    let Some((callback_function, visible_count)) =
+        static_callable_contract(module, function, *callback)
+    else {
+        return Some(
+            "callback must resolve statically to a direct closure or user-function callable"
+                .to_string(),
+        );
+    };
+    if let Some(issue) = callable_wrapper_issue(callback_function, visible_count, 2) {
+        return Some(issue);
+    }
+    if callback_function.params[..visible_count]
+        .iter()
+        .any(|param| param.php_type.codegen_repr() != PhpType::Int)
+    {
+        return Some("callback parameters must be int".to_string());
+    }
+    if callback_function.return_type != IrType::I64
+        || callback_function.return_php_type.codegen_repr() != PhpType::Int
+    {
+        return Some(format!(
+            "callback must return int/I64, got {:?}/{:?}",
+            callback_function.return_type,
+            callback_function.return_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
+/// Returns whether a value is exactly an indexed `array<int>`.
+fn value_is_int_array(function: &Function, value: ValueId) -> bool {
+    function.value(value).is_some_and(|value| {
+        value.ir_type == IrType::Heap(IrHeapKind::Array)
+            && matches!(
+                value.php_type.codegen_repr(),
+                PhpType::Array(element) if element.codegen_repr() == PhpType::Int
+            )
+    })
+}
+
+/// Resolves a direct closure/FCC descriptor through ownership-only SSA moves.
+///
+/// Dynamic callables, block parameters, and values loaded from mutable locals
+/// remain rejected until callable descriptors carry a runtime signature.
+fn static_callable_contract<'a>(
+    module: &'a Module,
+    owner: &'a Function,
+    value: ValueId,
+) -> Option<(&'a Function, usize)> {
+    let mut current = value;
+    for _ in 0..=owner.values.len() {
+        let value = owner.value(current)?;
+        let ValueDef::Instruction { inst, .. } = value.def else {
+            return None;
+        };
+        let defining = owner.instruction(inst)?;
+        match defining.op {
+            Op::Move | Op::Borrow | Op::Acquire => {
+                let [source] = defining.operands.as_slice() else {
+                    return None;
+                };
+                current = *source;
+            }
+            Op::ClosureNew => {
+                let name = data_string(module, defining)?;
+                let function = module
+                    .closures
+                    .iter()
+                    .find(|function| function.name == name)?;
+                let visible = function
+                    .params
+                    .len()
+                    .checked_sub(function.flags.closure_capture_count)?;
+                return Some((function, visible));
+            }
+            Op::FirstClassCallableNew => {
+                let name = data_string(module, defining)?;
+                let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+                let function = module.functions.iter().find(|function| {
+                    crate::names::php_symbol_key(function.name.trim_start_matches('\\')) == key
+                })?;
+                return Some((function, function.params.len()));
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Resolves an instruction's `Immediate::Data` entry in the shared string pool.
+fn data_string<'a>(module: &'a Module, instruction: &Instruction) -> Option<&'a str> {
+    let Some(Immediate::Data(data)) = instruction.immediate else {
+        return None;
+    };
+    module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .map(String::as_str)
+}
+
+/// Returns the first wrapper-shape defect for a statically resolved callable.
+fn callable_wrapper_issue(
+    function: &Function,
+    visible_count: usize,
+    supplied_args: usize,
+) -> Option<String> {
+    if visible_count > supplied_args {
+        return Some(format!(
+            "callback declares {visible_count} visible parameters but the runtime supplies {supplied_args}"
+        ));
+    }
+    for param in &function.params[..visible_count] {
+        if param.by_ref || param.variadic {
+            return Some(format!(
+                "callback parameter {} is by-reference or variadic",
+                param.name
+            ));
+        }
+        if !callable_param_is_unboxable(param.ir_type) {
+            return Some(format!(
+                "callback parameter {} has unsupported storage {:?}",
+                param.name, param.ir_type
+            ));
+        }
+    }
+    None
+}
+
+/// Returns whether the callable wrapper can materialize one argument type.
+fn callable_param_is_unboxable(ir_type: IrType) -> bool {
+    matches!(
+        ir_type,
+        IrType::I64
+            | IrType::F64
+            | IrType::Str
+            | IrType::Heap(IrHeapKind::Array)
+            | IrType::Heap(IrHeapKind::Hash)
+            | IrType::Heap(IrHeapKind::Object)
+    )
+}
+
+/// Returns whether the callable wrapper can box one callback result.
+fn callable_return_is_boxable(function: &Function) -> bool {
+    matches!(
+        function.return_type,
+        IrType::I64
+            | IrType::F64
+            | IrType::Str
+            | IrType::Heap(IrHeapKind::Array)
+            | IrType::Heap(IrHeapKind::Hash)
+            | IrType::Heap(IrHeapKind::Object)
+            | IrType::Heap(IrHeapKind::Mixed)
+            | IrType::Void
+    )
+}
+
+/// Returns whether a typed runtime function is safe to admit through the WASM gate.
+///
+/// A partial lowering stays rejected when its accepted subset changes PHP-visible
+/// behavior. This keeps the capability audit conservative until the full public
+/// contract is implemented and differentially tested.
+fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
+    match target {
+        RuntimeFnId::GetClass
+        | RuntimeFnId::ArrayMap
+        | RuntimeFnId::Usort
+        | RuntimeFnId::ArrayReduce => true,
+        RuntimeFnId::ArrayFilter
+        | RuntimeFnId::Uasort
+        | RuntimeFnId::Uksort
+        | RuntimeFnId::ArrayWalk
+        | RuntimeFnId::ArrayAll
+        | RuntimeFnId::ArrayAny
+        | RuntimeFnId::ArrayChunk
+        | RuntimeFnId::ArrayColumn
+        | RuntimeFnId::ArrayCombine
+        | RuntimeFnId::ArrayDiff
+        | RuntimeFnId::ArrayDiffAssoc
+        | RuntimeFnId::ArrayDiffKey
+        | RuntimeFnId::ArrayFill
+        | RuntimeFnId::ArrayFillKeys
+        | RuntimeFnId::ArrayFind
+        | RuntimeFnId::ArrayFlip
+        | RuntimeFnId::ArrayIntersect
+        | RuntimeFnId::ArrayIntersectAssoc
+        | RuntimeFnId::ArrayIntersectKey
+        | RuntimeFnId::ArrayIsList
+        | RuntimeFnId::ArrayKeyExists
+        | RuntimeFnId::ArrayKeyFirst
+        | RuntimeFnId::ArrayKeyLast
+        | RuntimeFnId::ArrayKeys
+        | RuntimeFnId::ArrayMerge
+        | RuntimeFnId::ArrayMergeRecursive
+        | RuntimeFnId::ArrayMultisort
+        | RuntimeFnId::ArrayPad
+        | RuntimeFnId::ArrayPop
+        | RuntimeFnId::ArrayProduct
+        | RuntimeFnId::ArrayPush
+        | RuntimeFnId::ArrayRand
+        | RuntimeFnId::ArrayReplace
+        | RuntimeFnId::ArrayReplaceRecursive
+        | RuntimeFnId::ArrayReverse
+        | RuntimeFnId::ArraySearch
+        | RuntimeFnId::ArrayShift
+        | RuntimeFnId::ArraySlice
+        | RuntimeFnId::ArraySplice
+        | RuntimeFnId::ArraySum
+        | RuntimeFnId::ArrayUdiff
+        | RuntimeFnId::ArrayUintersect
+        | RuntimeFnId::ArrayUnique
+        | RuntimeFnId::ArrayUnshift
+        | RuntimeFnId::ArrayValues
+        | RuntimeFnId::ArrayWalkRecursive
+        | RuntimeFnId::Arsort
+        | RuntimeFnId::Asort
+        | RuntimeFnId::Count
+        | RuntimeFnId::InArray
+        | RuntimeFnId::Krsort
+        | RuntimeFnId::Ksort
+        | RuntimeFnId::Natcasesort
+        | RuntimeFnId::Natsort
+        | RuntimeFnId::Range
+        | RuntimeFnId::Rsort
+        | RuntimeFnId::Shuffle
+        | RuntimeFnId::Sort
+        | RuntimeFnId::CallUserFunc
+        | RuntimeFnId::CallUserFuncArray
+        | RuntimeFnId::ClassAlias
+        | RuntimeFnId::ClassExists
+        | RuntimeFnId::ClassImplements
+        | RuntimeFnId::ClassParents
+        | RuntimeFnId::ClassUses
+        | RuntimeFnId::EnumExists
+        | RuntimeFnId::FunctionExists
+        | RuntimeFnId::GetDeclaredClasses
+        | RuntimeFnId::GetDeclaredInterfaces
+        | RuntimeFnId::GetDeclaredTraits
+        | RuntimeFnId::GetLoadedExtensions
+        | RuntimeFnId::GetParentClass
+        | RuntimeFnId::InterfaceExists
+        | RuntimeFnId::IsA
+        | RuntimeFnId::IsSubclassOf
+        | RuntimeFnId::MethodExists
+        | RuntimeFnId::PregReplaceCallback
+        | RuntimeFnId::PropertyExists
+        | RuntimeFnId::TraitExists
+        | RuntimeFnId::ElephcPharBzip2Archive
+        | RuntimeFnId::ElephcPharDecompressArchive
+        | RuntimeFnId::ElephcPharGetFileMetadata
+        | RuntimeFnId::ElephcPharGetMetadata
+        | RuntimeFnId::ElephcPharGetSignatureHash
+        | RuntimeFnId::ElephcPharGetSignatureType
+        | RuntimeFnId::ElephcPharGetStub
+        | RuntimeFnId::ElephcPharGzipArchive
+        | RuntimeFnId::ElephcPharListEntries
+        | RuntimeFnId::ElephcPharSetCompression
+        | RuntimeFnId::ElephcPharSetFileMetadata
+        | RuntimeFnId::ElephcPharSetMetadata
+        | RuntimeFnId::ElephcPharSetStub
+        | RuntimeFnId::ElephcPharSetZipPassword
+        | RuntimeFnId::ElephcPharSignHash
+        | RuntimeFnId::ElephcPharSignOpenssl
+        | RuntimeFnId::Basename
+        | RuntimeFnId::Chdir
+        | RuntimeFnId::Chgrp
+        | RuntimeFnId::Chmod
+        | RuntimeFnId::Chown
+        | RuntimeFnId::Clearstatcache
+        | RuntimeFnId::Closedir
+        | RuntimeFnId::Copy
+        | RuntimeFnId::Dirname
+        | RuntimeFnId::DiskFreeSpace
+        | RuntimeFnId::DiskTotalSpace
+        | RuntimeFnId::Fclose
+        | RuntimeFnId::Fdatasync
+        | RuntimeFnId::Feof
+        | RuntimeFnId::Fflush
+        | RuntimeFnId::Fgetc
+        | RuntimeFnId::Fgetcsv
+        | RuntimeFnId::Fgets
+        | RuntimeFnId::File
+        | RuntimeFnId::FileExists
+        | RuntimeFnId::FileGetContents
+        | RuntimeFnId::FilePutContents
+        | RuntimeFnId::Fileatime
+        | RuntimeFnId::Filectime
+        | RuntimeFnId::Filegroup
+        | RuntimeFnId::Fileinode
+        | RuntimeFnId::Filemtime
+        | RuntimeFnId::Fileowner
+        | RuntimeFnId::Fileperms
+        | RuntimeFnId::Filesize
+        | RuntimeFnId::Filetype
+        | RuntimeFnId::Flock
+        | RuntimeFnId::Fnmatch
+        | RuntimeFnId::Fopen
+        | RuntimeFnId::Fpassthru
+        | RuntimeFnId::Fprintf
+        | RuntimeFnId::Fputcsv
+        | RuntimeFnId::Fread
+        | RuntimeFnId::Fscanf
+        | RuntimeFnId::Fseek
+        | RuntimeFnId::Fsockopen
+        | RuntimeFnId::Fstat
+        | RuntimeFnId::Fsync
+        | RuntimeFnId::Ftell
+        | RuntimeFnId::Ftruncate
+        | RuntimeFnId::Fwrite
+        | RuntimeFnId::Getcwd
+        | RuntimeFnId::Gethostbyaddr
+        | RuntimeFnId::Gethostbyname
+        | RuntimeFnId::Gethostname
+        | RuntimeFnId::Getprotobyname
+        | RuntimeFnId::Getprotobynumber
+        | RuntimeFnId::Getservbyname
+        | RuntimeFnId::Getservbyport
+        | RuntimeFnId::Glob
+        | RuntimeFnId::HashFile
+        | RuntimeFnId::IsDir
+        | RuntimeFnId::IsExecutable
+        | RuntimeFnId::IsFile
+        | RuntimeFnId::IsLink
+        | RuntimeFnId::IsReadable
+        | RuntimeFnId::IsWritable
+        | RuntimeFnId::IsWriteable
+        | RuntimeFnId::Lchgrp
+        | RuntimeFnId::Lchown
+        | RuntimeFnId::Link
+        | RuntimeFnId::Linkinfo
+        | RuntimeFnId::Lstat
+        | RuntimeFnId::Mkdir
+        | RuntimeFnId::ObClean
+        | RuntimeFnId::ObEndClean
+        | RuntimeFnId::ObEndFlush
+        | RuntimeFnId::ObFlush
+        | RuntimeFnId::ObGetClean
+        | RuntimeFnId::ObGetContents
+        | RuntimeFnId::ObGetFlush
+        | RuntimeFnId::ObGetLength
+        | RuntimeFnId::ObGetLevel
+        | RuntimeFnId::ObGetStatus
+        | RuntimeFnId::ObImplicitFlush
+        | RuntimeFnId::ObListHandlers
+        | RuntimeFnId::ObStart
+        | RuntimeFnId::Opendir
+        | RuntimeFnId::Pathinfo
+        | RuntimeFnId::Pclose
+        | RuntimeFnId::Pfsockopen
+        | RuntimeFnId::Popen
+        | RuntimeFnId::PrintR
+        | RuntimeFnId::Readdir
+        | RuntimeFnId::Readfile
+        | RuntimeFnId::Readline
+        | RuntimeFnId::Readlink
+        | RuntimeFnId::Realpath
+        | RuntimeFnId::RealpathCacheGet
+        | RuntimeFnId::RealpathCacheSize
+        | RuntimeFnId::Rename
+        | RuntimeFnId::Rewind
+        | RuntimeFnId::Rewinddir
+        | RuntimeFnId::Rmdir
+        | RuntimeFnId::Scandir
+        | RuntimeFnId::Stat
+        | RuntimeFnId::StreamBucketAppend
+        | RuntimeFnId::StreamBucketMakeWriteable
+        | RuntimeFnId::StreamBucketNew
+        | RuntimeFnId::StreamBucketPrepend
+        | RuntimeFnId::StreamContextCreate
+        | RuntimeFnId::StreamContextGetDefault
+        | RuntimeFnId::StreamContextGetOptions
+        | RuntimeFnId::StreamContextGetParams
+        | RuntimeFnId::StreamContextSetDefault
+        | RuntimeFnId::StreamContextSetOption
+        | RuntimeFnId::StreamContextSetParams
+        | RuntimeFnId::StreamCopyToStream
+        | RuntimeFnId::StreamFilterAppend
+        | RuntimeFnId::StreamFilterPrepend
+        | RuntimeFnId::StreamFilterRegister
+        | RuntimeFnId::StreamFilterRemove
+        | RuntimeFnId::StreamGetContents
+        | RuntimeFnId::StreamGetFilters
+        | RuntimeFnId::StreamGetLine
+        | RuntimeFnId::StreamGetMetaData
+        | RuntimeFnId::StreamGetTransports
+        | RuntimeFnId::StreamGetWrappers
+        | RuntimeFnId::StreamIsLocal
+        | RuntimeFnId::StreamIsatty
+        | RuntimeFnId::StreamResolveIncludePath
+        | RuntimeFnId::StreamSelect
+        | RuntimeFnId::StreamSetBlocking
+        | RuntimeFnId::StreamSetChunkSize
+        | RuntimeFnId::StreamSetReadBuffer
+        | RuntimeFnId::StreamSetTimeout
+        | RuntimeFnId::StreamSetWriteBuffer
+        | RuntimeFnId::StreamSocketAccept
+        | RuntimeFnId::StreamSocketClient
+        | RuntimeFnId::StreamSocketEnableCrypto
+        | RuntimeFnId::StreamSocketGetName
+        | RuntimeFnId::StreamSocketPair
+        | RuntimeFnId::StreamSocketRecvfrom
+        | RuntimeFnId::StreamSocketSendto
+        | RuntimeFnId::StreamSocketServer
+        | RuntimeFnId::StreamSocketShutdown
+        | RuntimeFnId::StreamSupportsLock
+        | RuntimeFnId::StreamWrapperRegister
+        | RuntimeFnId::StreamWrapperRestore
+        | RuntimeFnId::StreamWrapperUnregister
+        | RuntimeFnId::Symlink
+        | RuntimeFnId::SysGetTempDir
+        | RuntimeFnId::Tempnam
+        | RuntimeFnId::Tmpfile
+        | RuntimeFnId::Touch
+        | RuntimeFnId::Umask
+        | RuntimeFnId::Unlink
+        | RuntimeFnId::VarDump
+        | RuntimeFnId::Vfprintf
+        | RuntimeFnId::Abs
+        | RuntimeFnId::Acos
+        | RuntimeFnId::Asin
+        | RuntimeFnId::Atan
+        | RuntimeFnId::Atan2
+        | RuntimeFnId::Ceil
+        | RuntimeFnId::Clamp
+        | RuntimeFnId::Cos
+        | RuntimeFnId::Cosh
+        | RuntimeFnId::Deg2rad
+        | RuntimeFnId::Exp
+        | RuntimeFnId::Fdiv
+        | RuntimeFnId::Floor
+        | RuntimeFnId::Fmod
+        | RuntimeFnId::Hypot
+        | RuntimeFnId::Intdiv
+        | RuntimeFnId::Log
+        | RuntimeFnId::Log10
+        | RuntimeFnId::Log2
+        | RuntimeFnId::Max
+        | RuntimeFnId::Min
+        | RuntimeFnId::MtRand
+        | RuntimeFnId::Pi
+        | RuntimeFnId::Pow
+        | RuntimeFnId::Rad2deg
+        | RuntimeFnId::Rand
+        | RuntimeFnId::RandomInt
+        | RuntimeFnId::Round
+        | RuntimeFnId::Sin
+        | RuntimeFnId::Sinh
+        | RuntimeFnId::Sqrt
+        | RuntimeFnId::Tan
+        | RuntimeFnId::Tanh
+        | RuntimeFnId::ElephcPtrIsNull
+        | RuntimeFnId::ElephcPtrReadString
+        | RuntimeFnId::ElephcPtrWriteString
+        | RuntimeFnId::BufferFree
+        | RuntimeFnId::BufferLen
+        | RuntimeFnId::Ptr
+        | RuntimeFnId::PtrGet
+        | RuntimeFnId::PtrIsNull
+        | RuntimeFnId::PtrNull
+        | RuntimeFnId::PtrOffset
+        | RuntimeFnId::PtrRead16
+        | RuntimeFnId::PtrRead32
+        | RuntimeFnId::PtrRead8
+        | RuntimeFnId::PtrReadString
+        | RuntimeFnId::PtrSet
+        | RuntimeFnId::PtrSizeof
+        | RuntimeFnId::PtrWrite16
+        | RuntimeFnId::PtrWrite32
+        | RuntimeFnId::PtrWrite8
+        | RuntimeFnId::PtrWriteString
+        | RuntimeFnId::ZvalFree
+        | RuntimeFnId::ZvalPack
+        | RuntimeFnId::ZvalType
+        | RuntimeFnId::ZvalUnpack
+        | RuntimeFnId::IteratorApply
+        | RuntimeFnId::IteratorCount
+        | RuntimeFnId::IteratorToArray
+        | RuntimeFnId::SplAutoload
+        | RuntimeFnId::SplAutoloadCall
+        | RuntimeFnId::SplAutoloadExtensions
+        | RuntimeFnId::SplAutoloadFunctions
+        | RuntimeFnId::SplAutoloadRegister
+        | RuntimeFnId::SplAutoloadUnregister
+        | RuntimeFnId::SplClasses
+        | RuntimeFnId::SplObjectHash
+        | RuntimeFnId::SplObjectId
+        | RuntimeFnId::Chop
+        | RuntimeFnId::Chr
+        | RuntimeFnId::Crc32
+        | RuntimeFnId::CtypeAlnum
+        | RuntimeFnId::CtypeAlpha
+        | RuntimeFnId::CtypeDigit
+        | RuntimeFnId::CtypeSpace
+        | RuntimeFnId::Explode
+        | RuntimeFnId::GraphemeStrrev
+        | RuntimeFnId::Gzcompress
+        | RuntimeFnId::Gzdeflate
+        | RuntimeFnId::Gzinflate
+        | RuntimeFnId::Gzuncompress
+        | RuntimeFnId::Hash
+        | RuntimeFnId::HashAlgos
+        | RuntimeFnId::HashCopy
+        | RuntimeFnId::HashEquals
+        | RuntimeFnId::HashFinal
+        | RuntimeFnId::HashHmac
+        | RuntimeFnId::HashInit
+        | RuntimeFnId::HashUpdate
+        | RuntimeFnId::Htmlentities
+        | RuntimeFnId::Htmlspecialchars
+        | RuntimeFnId::Implode
+        | RuntimeFnId::InetNtop
+        | RuntimeFnId::InetPton
+        | RuntimeFnId::Ip2long
+        | RuntimeFnId::Lcfirst
+        | RuntimeFnId::Long2ip
+        | RuntimeFnId::Ltrim
+        | RuntimeFnId::MbEregMatch
+        | RuntimeFnId::MbStrlen
+        | RuntimeFnId::Md5
+        | RuntimeFnId::NumberFormat
+        | RuntimeFnId::Ord
+        | RuntimeFnId::Printf
+        | RuntimeFnId::Rtrim
+        | RuntimeFnId::Sha1
+        | RuntimeFnId::Sprintf
+        | RuntimeFnId::Sscanf
+        | RuntimeFnId::StrContains
+        | RuntimeFnId::StrEndsWith
+        | RuntimeFnId::StrIreplace
+        | RuntimeFnId::StrPad
+        | RuntimeFnId::StrRepeat
+        | RuntimeFnId::StrReplace
+        | RuntimeFnId::StrSplit
+        | RuntimeFnId::StrStartsWith
+        | RuntimeFnId::Strcasecmp
+        | RuntimeFnId::Strcmp
+        | RuntimeFnId::Strpos
+        | RuntimeFnId::Strrpos
+        | RuntimeFnId::Strstr
+        | RuntimeFnId::Substr
+        | RuntimeFnId::SubstrReplace
+        | RuntimeFnId::Trim
+        | RuntimeFnId::Ucfirst
+        | RuntimeFnId::Ucwords
+        | RuntimeFnId::Vprintf
+        | RuntimeFnId::Vsprintf
+        | RuntimeFnId::Wordwrap
+        | RuntimeFnId::ElephcGmmktimeRaw
+        | RuntimeFnId::ElephcMktimeRaw
+        | RuntimeFnId::ElephcStrtotimeRaw
+        | RuntimeFnId::Checkdate
+        | RuntimeFnId::ClassAttributeArgs
+        | RuntimeFnId::ClassAttributeNames
+        | RuntimeFnId::ClassGetAttributes
+        | RuntimeFnId::Date
+        | RuntimeFnId::DateDefaultTimezoneGet
+        | RuntimeFnId::DateDefaultTimezoneSet
+        | RuntimeFnId::Define
+        | RuntimeFnId::Defined
+        | RuntimeFnId::Exec
+        | RuntimeFnId::ExtensionLoaded
+        | RuntimeFnId::Getdate
+        | RuntimeFnId::Getenv
+        | RuntimeFnId::Gmdate
+        | RuntimeFnId::Gmmktime
+        | RuntimeFnId::Header
+        | RuntimeFnId::Hrtime
+        | RuntimeFnId::HttpResponseCode
+        | RuntimeFnId::JsonDecode
+        | RuntimeFnId::JsonEncode
+        | RuntimeFnId::JsonLastError
+        | RuntimeFnId::JsonLastErrorMsg
+        | RuntimeFnId::JsonValidate
+        | RuntimeFnId::Localtime
+        | RuntimeFnId::Microtime
+        | RuntimeFnId::Mktime
+        | RuntimeFnId::Passthru
+        | RuntimeFnId::PhpUname
+        | RuntimeFnId::Phpversion
+        | RuntimeFnId::PregMatch
+        | RuntimeFnId::PregMatchAll
+        | RuntimeFnId::PregReplace
+        | RuntimeFnId::PregSplit
+        | RuntimeFnId::Putenv
+        | RuntimeFnId::Serialize
+        | RuntimeFnId::ShellExec
+        | RuntimeFnId::Sleep
+        | RuntimeFnId::Strtotime
+        | RuntimeFnId::System
+        | RuntimeFnId::Time
+        | RuntimeFnId::Unserialize
+        | RuntimeFnId::Usleep
+        | RuntimeFnId::GetResourceId
+        | RuntimeFnId::GetResourceType
+        | RuntimeFnId::Gettype
+        | RuntimeFnId::IsCallable
+        | RuntimeFnId::IsFinite
+        | RuntimeFnId::IsInfinite
+        | RuntimeFnId::IsNan
+        | RuntimeFnId::IsNumeric
+        | RuntimeFnId::Settype
+        => false,
+    }
+}
+
+/// Returns the stable name of every unary-string runtime variant.
+fn unary_string_name(target: UnaryStringRuntime) -> &'static str {
+    match target {
+        UnaryStringRuntime::AddSlashes => "string.add_slashes",
+        UnaryStringRuntime::Base64Decode => "string.base64_decode",
+        UnaryStringRuntime::Base64Encode => "string.base64_encode",
+        UnaryStringRuntime::BinToHex => "string.bin_to_hex",
+        UnaryStringRuntime::HexToBin => "string.hex_to_bin",
+        UnaryStringRuntime::HtmlEntityDecode => "string.html_entity_decode",
+        UnaryStringRuntime::NlToBr => "string.nl_to_br",
+        UnaryStringRuntime::RawUrlDecode => "string.raw_url_decode",
+        UnaryStringRuntime::RawUrlEncode => "string.raw_url_encode",
+        UnaryStringRuntime::StripSlashes => "string.strip_slashes",
+        UnaryStringRuntime::StrReverse => "string.reverse",
+        UnaryStringRuntime::StrToLower => "string.to_lower",
+        UnaryStringRuntime::StrToUpper => "string.to_upper",
+        UnaryStringRuntime::UrlDecode => "string.url_decode",
+        UnaryStringRuntime::UrlEncode => "string.url_encode",
+    }
+}
+
+/// Returns whether an EIR terminator has an active WASM lowering.
+fn terminator_is_supported(terminator: &Terminator) -> bool {
+    match terminator {
+        Terminator::Br { .. }
+        | Terminator::CondBr { .. }
+        | Terminator::Switch { .. }
+        | Terminator::Return { .. }
+        | Terminator::Unreachable => true,
+        Terminator::Throw { .. }
+        | Terminator::Fatal { .. }
+        | Terminator::GeneratorSuspend { .. } => false,
+    }
+}
+
+/// Returns the stable diagnostic name for every EIR terminator.
+fn terminator_name(terminator: &Terminator) -> &'static str {
+    match terminator {
+        Terminator::Br { .. } => "br",
+        Terminator::CondBr { .. } => "cond_br",
+        Terminator::Switch { .. } => "switch",
+        Terminator::Return { .. } => "return",
+        Terminator::Throw { .. } => "throw",
+        Terminator::Fatal { .. } => "fatal",
+        Terminator::GeneratorSuspend { .. } => "generator_suspend",
+        Terminator::Unreachable => "unreachable",
+    }
+}
+
+/// Returns whether an EIR opcode has an active WASM dispatch.
+fn op_is_supported(op: Op) -> bool {
+    match op {
+        Op::ConstI64
+        | Op::ConstF64
+        | Op::ConstStr
+        | Op::ConstNull
+        | Op::ConstBool
+        | Op::LoadLocal
+        | Op::StoreLocal
+        | Op::LoadRefCell
+        | Op::StoreRefCell
+        | Op::PromoteLocalRefCell
+        | Op::AliasLocalRefCell
+        | Op::ReleaseLocalRefCell
+        | Op::LoadGlobal
+        | Op::IAdd
+        | Op::ISub
+        | Op::IMul
+        | Op::ICheckedAdd
+        | Op::ICheckedSub
+        | Op::ICheckedMul
+        | Op::IDiv
+        | Op::ISDiv
+        | Op::ISMod
+        | Op::INeg
+        | Op::IBitAnd
+        | Op::IBitOr
+        | Op::IBitXor
+        | Op::IBitNot
+        | Op::IShl
+        | Op::IShrA
+        | Op::FAdd
+        | Op::FSub
+        | Op::FMul
+        | Op::FDiv
+        | Op::FNeg
+        | Op::ICmp
+        | Op::FCmp
+        | Op::IsNull
+        | Op::IsTruthy
+        | Op::InstanceOf
+        | Op::IToF
+        | Op::FToI
+        | Op::Cast
+        | Op::MixedBox
+        | Op::MixedTagOf
+        | Op::StrConcat
+        | Op::StrLen
+        | Op::ConcatReset
+        | Op::ArrayNew
+        | Op::HashNew
+        | Op::ArrayLen
+        | Op::ArrayGet
+        | Op::HashGet
+        | Op::ArraySet
+        | Op::HashSet
+        | Op::HashUnset
+        | Op::ArrayPush
+        | Op::HashAppend
+        | Op::ArrayUnion
+        | Op::HashUnion
+        | Op::ArrayHashUnion
+        | Op::HashArrayUnion
+        | Op::IterStart
+        | Op::IterCurrentKey
+        | Op::IterCurrentValue
+        | Op::IterCurrentValueRef
+        | Op::IterNext
+        | Op::IterEnd
+        | Op::ObjectNew
+        | Op::PropGet
+        | Op::PropSet
+        | Op::NullsafePropGet
+        | Op::NullsafeMethodCall
+        | Op::MethodCall
+        | Op::StaticMethodCall
+        | Op::InstanceOfDynamic
+        | Op::Call
+        | Op::LanguageConstructCall
+        | Op::RuntimeCall
+        | Op::ClosureNew
+        | Op::ClosureCapture
+        | Op::ClosureCall
+        | Op::FirstClassCallableNew
+        | Op::CallableDescriptorInvoke
+        | Op::EchoValue
+        | Op::PrintValue
+        | Op::Acquire
+        | Op::Release
+        | Op::Move
+        | Op::Borrow
+        | Op::Nop => true,
+        Op::ConstClassName
+        | Op::ConstEnumCase
+        | Op::LoadCalledClassId
+        | Op::DataAddr
+        | Op::UnsetLocal
+        | Op::ReleaseLocalSlot
+        | Op::StoreGlobal
+        | Op::LoadStaticLocal
+        | Op::StoreStaticLocal
+        | Op::InitStaticLocal
+        | Op::LoadStaticProperty
+        | Op::StoreStaticProperty
+        | Op::LoadReflectionStaticProperty
+        | Op::StoreReflectionStaticProperty
+        | Op::ReflectionStaticPropertyInitialized
+        | Op::IPow
+        | Op::FPow
+        | Op::MixedNumericBinop
+        | Op::StrEq
+        | Op::StrCmp
+        | Op::StrLooseEq
+        | Op::StrictEq
+        | Op::StrictNotEq
+        | Op::LooseEq
+        | Op::LooseNotEq
+        | Op::Spaceship
+        | Op::TypePredicate
+        | Op::IsEmpty
+        | Op::IToStr
+        | Op::FToStr
+        | Op::BoolToStr
+        | Op::StrToI
+        | Op::StrToF
+        | Op::StrToNumber
+        | Op::ResourceToStr
+        | Op::InvokerRefArg
+        | Op::MixedUnbox
+        | Op::ArrayToMixed
+        | Op::HashToMixed
+        | Op::MixedCastBool
+        | Op::MixedCastInt
+        | Op::MixedCastFloat
+        | Op::MixedCastString
+        | Op::StrPersist
+        | Op::StrCharAt
+        | Op::StrInterpolate
+        | Op::WriteStrStdout
+        | Op::HashLen
+        | Op::ArrayGetSilent
+        | Op::HashGetSilent
+        | Op::ArrayIsset
+        | Op::HashIsset
+        | Op::ArrayElemAddr
+        | Op::MixedArrayAppend
+        | Op::ArrayEnsureUnique
+        | Op::HashEnsureUnique
+        | Op::ArrayCloneShallow
+        | Op::HashCloneShallow
+        | Op::HashSpread
+        | Op::ArrayToHash
+        | Op::ArraySetMixedKey
+        | Op::ArrayGetMixedKey
+        | Op::ArrayGetMixedKeySilent
+        | Op::ArrayKeyExists
+        | Op::OffsetExists
+        | Op::OffsetUnset
+        | Op::ListUnpack
+        | Op::IteratorMethodCall
+        | Op::SplRuntimeCall
+        | Op::EvalObjectNew
+        | Op::ObjectCloneShallow
+        | Op::DynamicObjectNew
+        | Op::DynamicObjectNewMixed
+        | Op::DynamicObjectNewWithoutConstructorMixed
+        | Op::PropInitialized
+        | Op::LoadPropRefCell
+        | Op::LoadArrayElemRefCell
+        | Op::BindRefCellPtr
+        | Op::DynamicPropGet
+        | Op::DynamicPropSet
+        | Op::MethodLookup
+        | Op::EvalStaticMethodCall
+        | Op::EnumBackingStringToInt
+        | Op::EnumBackingMixedToInt
+        | Op::ClassConstant
+        | Op::ScopedConstantGet
+        | Op::ClassAttrNames
+        | Op::ClassAttrArgs
+        | Op::ClassGetAttributes
+        | Op::FunctionVariantCall
+        | Op::ClosureBind
+        | Op::EvalLiteralCall
+        | Op::EvalScopeGet
+        | Op::EvalScopeSet
+        | Op::EvalFunctionCall
+        | Op::EvalFunctionCallArray
+        | Op::EvalFunctionExists
+        | Op::EvalClassExists
+        | Op::EvalConstantExists
+        | Op::EvalConstantFetch
+        | Op::ExternCall
+        | Op::ExprCall
+        | Op::CallableArrayNew
+        | Op::PipeCall
+        | Op::PtrCast
+        | Op::PtrRead
+        | Op::PtrWrite
+        | Op::PtrReadString
+        | Op::PtrWriteString
+        | Op::PtrOffset
+        | Op::PtrCheckNonnull
+        | Op::BufferNew
+        | Op::BufferLen
+        | Op::BufferGet
+        | Op::BufferSet
+        | Op::BufferFree
+        | Op::PackedFieldGet
+        | Op::PackedFieldSet
+        | Op::ExternGlobalLoad
+        | Op::ExternGlobalStore
+        | Op::WriteStdout
+        | Op::VarDump
+        | Op::PrintR
+        | Op::ErrorSuppressBegin
+        | Op::ErrorSuppressEnd
+        | Op::Warn
+        | Op::ThrowException
+        | Op::ThrowError
+        | Op::ThrowErrorValue
+        | Op::TryPushHandler
+        | Op::TryPopHandler
+        | Op::CatchCurrent
+        | Op::CatchBind
+        | Op::FinallyEnter
+        | Op::FinallyExit
+        | Op::FiberRuntimeCall
+        | Op::GeneratorNew
+        | Op::GeneratorYield
+        | Op::GeneratorYieldFrom
+        | Op::GeneratorReturn
+        | Op::IncludeOnceMark
+        | Op::IncludeOnceGuard
+        | Op::FunctionVariantMark
+        | Op::FunctionVariantDispatch
+        | Op::GcCollect
+        | Op::EnsureOwned => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_module;
+    use crate::codegen::platform::Target;
+    use crate::ir::{
+        Builder, Function, Immediate, IrHeapKind, IrType, Module, Op, Ownership,
+        RuntimeCallTarget, RuntimeFnId, Terminator,
+    };
+    use crate::types::PhpType;
+
+    /// Builds one terminated void function suitable for collection-audit tests.
+    fn void_function(name: &str) -> Function {
+        let mut function = Function::new(name.to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        function
+    }
+
+    /// Verifies all non-emitted EIR function collections are named in one error.
+    #[test]
+    fn reports_every_non_emitted_function_collection() {
+        let mut module = Module::new(Target::wasm());
+        module.fiber_wrappers.push(void_function("fiber"));
+        module.callback_wrappers.push(void_function("callback"));
+        module
+            .extern_callback_trampolines
+            .push(void_function("extern_callback"));
+        module
+            .runtime_callable_invokers
+            .push(void_function("runtime_invoker"));
+
+        let error = validate_module(&module).expect_err("omitted collections must fail");
+        let message = error.to_string();
+        assert!(message.contains("fiber_wrappers::fiber"), "{message}");
+        assert!(message.contains("callback_wrappers::callback"), "{message}");
+        assert!(
+            message.contains("extern_callback_trampolines::extern_callback"),
+            "{message}"
+        );
+        assert!(
+            message.contains("runtime_callable_invokers::runtime_invoker"),
+            "{message}"
+        );
+        assert!(message.contains("4 issue(s)"), "{message}");
+    }
+
+    /// Verifies unsupported opcodes and typed runtime functions are aggregated.
+    #[test]
+    fn aggregates_instruction_and_runtime_gaps() {
+        let mut module = Module::new(Target::wasm());
+        let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let _ = builder.emit(
+                Op::StrEq,
+                Vec::new(),
+                None,
+                IrType::I64,
+                PhpType::Bool,
+                Ownership::NonHeap,
+            );
+            let _ = builder.emit(
+                Op::RuntimeCall,
+                Vec::new(),
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::Count,
+                ))),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let error = validate_module(&module).expect_err("unsupported instructions must fail");
+        let message = error.to_string();
+        assert!(message.contains("unsupported op str_eq"), "{message}");
+        assert!(
+            message.contains("unsupported runtime function count"),
+            "{message}"
+        );
+        assert!(message.contains("2 issue(s)"), "{message}");
+    }
+
+    /// Verifies runtime functions with known PHP-visible divergences fail together
+    /// in the pre-emission audit instead of reaching their partial lowerings.
+    #[test]
+    fn rejects_semantically_partial_runtime_functions_before_lowering() {
+        let mut module = Module::new(Target::wasm());
+        let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            for target in [
+                RuntimeFnId::ArrayFilter,
+                RuntimeFnId::Uasort,
+                RuntimeFnId::Uksort,
+                RuntimeFnId::ArrayWalk,
+                RuntimeFnId::GetClass,
+            ] {
+                let _ = builder.emit(
+                    Op::RuntimeCall,
+                    Vec::new(),
+                    Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))),
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let error = validate_module(&module)
+            .expect_err("known PHP-visible runtime divergences must fail before lowering");
+        let message = error.to_string();
+        for name in ["array_filter", "uasort", "uksort", "array_walk"] {
+            assert!(
+                message.contains(&format!("unsupported runtime function {name}")),
+                "{message}"
+            );
+        }
+        assert!(
+            message.contains("unsupported runtime function get_class shape")
+                && message.contains("expected one object operand"),
+            "{message}"
+        );
+        assert!(message.contains("5 issue(s)"), "{message}");
+    }
+
+    /// Verifies admitted higher-order runtimes reject unproved callback,
+    /// result, and initial-carry shapes during the aggregate capability audit.
+    #[test]
+    fn rejects_invalid_admitted_runtime_shapes_before_lowering() {
+        let mut module = Module::new(Target::wasm());
+        let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let callback = builder
+                .emit(
+                    Op::ConstI64,
+                    Vec::new(),
+                    Some(Immediate::I64(0)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::NonHeap,
+                )
+                .expect("callback placeholder");
+            let array = builder
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(0)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::Owned,
+                )
+                .expect("array value");
+            let _ = builder.emit(
+                Op::RuntimeCall,
+                vec![callback, array],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::ArrayMap,
+                ))),
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(PhpType::Mixed)),
+                Ownership::Owned,
+            );
+            let _ = builder.emit(
+                Op::RuntimeCall,
+                vec![array, callback],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::Usort,
+                ))),
+                IrType::F64,
+                PhpType::Float,
+                Ownership::NonHeap,
+            );
+            let _ = builder.emit(
+                Op::RuntimeCall,
+                vec![array, callback, callback],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::ArrayReduce,
+                ))),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let error = validate_module(&module).expect_err("invalid runtime shapes must fail");
+        let message = error.to_string();
+        assert!(
+            message.contains("array_map shape")
+                && message.contains("must resolve statically to a direct closure"),
+            "{message}"
+        );
+        assert!(
+            message.contains("usort shape") && message.contains("result must be bool/I64"),
+            "{message}"
+        );
+        assert!(
+            message.contains("array_reduce shape")
+                && message.contains("initial carry must be an int/I64"),
+            "{message}"
+        );
+    }
+
+    /// Verifies the audited P0 instruction forms and main return contract are
+    /// rejected by the capability gate rather than by WAT lowering or validation.
+    #[test]
+    fn rejects_invalid_p0_instruction_shapes_before_lowering() {
+        let mut module = Module::new(Target::wasm());
+        let method_data = module.data.intern_string("get");
+        let mut function = Function::new("main".to_string(), IrType::I64, PhpType::Int);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let lhs = builder.emit_const_i64(1);
+            let rhs = builder.emit_const_i64(2);
+            let _ = builder.emit(
+                Op::ICheckedAdd,
+                vec![lhs, rhs],
+                None,
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            let _ = builder.emit(
+                Op::Cast,
+                vec![lhs],
+                Some(Immediate::CastTarget(IrType::Str)),
+                IrType::Str,
+                PhpType::Str,
+                Ownership::Owned,
+            );
+            let array = builder
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(1)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::Owned,
+                )
+                .expect("array value");
+            let _ = builder.emit(
+                Op::ArrayGet,
+                vec![array, lhs],
+                None,
+                IrType::F64,
+                PhpType::Float,
+                Ownership::NonHeap,
+            );
+            let object = builder
+                .emit(
+                    Op::ConstNull,
+                    Vec::new(),
+                    None,
+                    IrType::Heap(IrHeapKind::Object),
+                    PhpType::Object("P0Shape".to_string()),
+                    Ownership::NonHeap,
+                )
+                .expect("object-shaped placeholder");
+            let _ = builder.emit(
+                Op::RuntimeCall,
+                vec![object],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::GetClass,
+                ))),
+                IrType::F64,
+                PhpType::Float,
+                Ownership::NonHeap,
+            );
+            let mixed = builder
+                .emit(
+                    Op::MixedBox,
+                    vec![lhs],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .expect("mixed receiver");
+            let _ = builder.emit(
+                Op::NullsafeMethodCall,
+                vec![mixed],
+                Some(Immediate::Data(method_data)),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: Some(lhs) });
+        }
+        module.add_function(function);
+
+        let error = validate_module(&module).expect_err("P0 shapes must fail at the gate");
+        let message = error.to_string();
+        for expected in [
+            "main must declare a void return",
+            "unsupported ichecked_add shape",
+            "unsupported cast shape",
+            "unsupported array_get shape",
+            "unsupported runtime function get_class shape",
+            "unsupported nullsafe_method_call shape",
+            "main return value would be discarded",
+        ] {
+            assert!(message.contains(expected), "missing {expected:?}: {message}");
+        }
+    }
+
+    /// Verifies `exit`/`die` in a nested function is rejected until WASM can
+    /// unwind and clean every caller-owned frame before `proc_exit`.
+    #[test]
+    fn rejects_exit_outside_main_before_lowering() {
+        let mut module = Module::new(Target::wasm());
+        let mut function = Function::new("nested".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let _ = builder.emit(
+                Op::LanguageConstructCall,
+                Vec::new(),
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Unreachable);
+        }
+        module.add_function(function);
+
+        let error = validate_module(&module).expect_err("nested exit must fail before lowering");
+        let message = error.to_string();
+        assert!(
+            message.contains("exit/die outside main cannot unwind caller-owned WASM frames"),
+            "{message}"
+        );
+    }
+
+    /// Verifies unsupported block-parameter storage cannot bypass the audit.
+    #[test]
+    fn audits_block_parameter_types() {
+        let mut module = Module::new(Target::wasm());
+        let mut function = Function::new("buffer_param".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block(
+                "entry",
+                vec![(
+                    IrType::Heap(crate::ir::IrHeapKind::Buffer),
+                    PhpType::Buffer(Box::new(PhpType::Int)),
+                )],
+            );
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let error = validate_module(&module).expect_err("buffer block params must fail");
+        let message = error.to_string();
+        assert!(message.contains("block#0 param#0"), "{message}");
+        assert!(message.contains("unsupported storage type Heap(Buffer)"), "{message}");
+    }
+}

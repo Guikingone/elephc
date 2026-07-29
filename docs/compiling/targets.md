@@ -7,9 +7,9 @@ sidebar:
 
 elephc compiles to native machine code for a fixed set of first-class targets.
 All native targets are equal: a feature is not considered done until it works on
-every one of them. In addition to the native matrix, elephc can also target
-`wasm32-wasi`, which compiles to a WebAssembly module rather than native machine
-code; it is a non-native, growing-subset target documented separately below.
+every one of them. Elephc can also target experimental platforms outside this
+matrix. `wasm32-wasi` is one such target: it compiles to a WebAssembly module
+rather than native machine code and is documented separately below.
 
 ## Supported target matrix
 
@@ -18,11 +18,19 @@ code; it is a non-native, growing-subset target documented separately below.
 | `macos-aarch64` | macOS | ARM64 (Apple Silicon) |
 | `linux-aarch64` | Linux | ARM64 |
 | `linux-x86_64` | Linux | x86-64 |
-| `wasm32-wasi` | WebAssembly / WASI | wasm32 |
 
 By default the compiler targets the **host** it runs on, detected automatically.
-The native macOS/Linux targets are at full parity; `wasm32-wasi` supports a
-growing subset of the language (see [WebAssembly partial parity](#webassembly-partial-parity)).
+The native macOS/Linux targets are the first-class supported matrix.
+
+## Experimental targets
+
+| Target | Platform | Architecture | Status |
+|---|---|---|---|
+| `wasm32-wasi` | WebAssembly / WASI Preview 1 | wasm32 | Experimental; incomplete PHP/EIR parity and portability gates |
+
+Experimental target availability is not a first-class support guarantee. See
+[WebAssembly partial parity](#webassembly-partial-parity) for the currently
+tested surface and open gates.
 
 ## Selecting a target
 
@@ -51,18 +59,43 @@ scripts written for other toolchains keep working:
 The `wasm32-wasi` target is a non-native target: instead of emitting native
 assembly and invoking the system assembler and linker, it emits a WebAssembly
 module (`.wat`/`.wasm`) through the dedicated `src/codegen_wasm` backend, which
-consumes the same EIR the native backends use. It runs under any WASI host
-(for example `wasmer` or `wasmtime`), and `--emit npm` packages the resulting
-command module for Node.js 20 or newer.
+consumes the same EIR the native backends use. The target is experimental.
+The last established CI evidence installs Wasmer 4.3.7 for WASM-backed unit
+tests, and production artifact generation performs in-process Core validation
+with `wasmparser`. Local Wasmer 4.3.7 and Node 26.3.0 hello-module runs have
+also been observed, but local runs are not portability evidence. A pending
+shared-artifact workflow pins Wasmer 7.2.1, Wasmtime 47.0.2, `wasm-tools`
+1.254.0, Node 26.3.0, and TypeScript 6.0.3; it is not a passing portability gate
+until committed and observed green. `--emit npm` packages the resulting command
+module for Node.js 20 or newer.
 
 Unlike the native macOS/Linux targets, `wasm32-wasi` is **not yet at full
 parity**. It supports a growing subset of the language, and an EIR operation
 that the WebAssembly backend does not yet implement aborts compilation of the
-whole module rather than degrading a single function. As of this writing the
-higher-order array builtins implemented for `wasm32-wasi` are `array_map`,
-`array_filter`, `usort`, `uasort`, `uksort`, `array_reduce`, and `array_walk`,
-together with `call_user_func` and `call_user_func_array`. This list reflects
-current status and grows over time.
+whole module rather than degrading a single function. The pre-emission
+capability audit classifies known operation and runtime identities. Some
+operand, result, immediate, representation, ownership, callable, and
+control-flow shapes are checked for an audited P0 subset. Other admitted forms
+can still be rejected during in-memory lowering; such a late rejection remains
+a capability gap even though no artifact is published. The audited acceptance
+contract and remaining gaps are tracked in
+[WebAssembly and PHP Compliance](../specs/wasm-compliance.md).
+
+The durable tested inventory currently includes:
+
+- production in-process WAT assembly and Core 3.0 validation;
+- focused artifact publication, P0 shape-audit, and target-capability rejection
+  tests;
+- focused typed-transfer, `$argc`, void/Mixed result, block-argument, loop, and
+  deterministic-identifier regressions;
+- Wasmer-backed unit tests in the previously established CI jobs that install
+  Wasmer 4.3.7.
+
+It does not yet include a required passing Wasmtime/Node/`wasm-tools`
+same-artifact CI matrix, executable npm-package and TypeScript/JavaScript
+toolchain gates, a full php-src differential corpus, or exhaustive EIR shape,
+ownership, argument/environment, and process-status coverage. In particular,
+there is no durable Wasmtime `exit(7)` claim at this stage.
 
 To select it:
 
@@ -102,11 +135,12 @@ diagnostic.
 
 ## Cross-compilation notes
 
-Selecting a target different from the host produces assembly and an object file
-for that target. Producing a final linked binary still depends on having a
-linker and any target libraries available for that platform; the elephc test
-suite uses the Docker scripts under `scripts/` to build and run the Linux
-targets from a macOS host.
+Selecting a native target different from the host produces assembly and an
+object file for that target. Producing a final linked binary still depends on
+having a linker and any target libraries available for that platform; the
+elephc test suite uses the Docker scripts under `scripts/` to build and run the
+Linux targets from a macOS host. `wasm32-wasi` instead follows the artifact and
+host workflow described above.
 
 For the target-aware ABI and runtime details behind each platform, see
 [Architecture](../internals/architecture.md) and

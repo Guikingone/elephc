@@ -18,7 +18,7 @@ use crate::ir::IrType;
 
 /// How one EIR SSA value or local slot is realized as WebAssembly local(s).
 /// Each `String` is a WAT local reference of the form "$name".
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum WasmRepr {
     /// A single i64 local for PHP integer values.
     I64(String),
@@ -87,6 +87,23 @@ impl WasmRepr {
             WasmRepr::Ptr(name) => vec![name.clone()],
             WasmRepr::Str { ptr, len } => vec![ptr.clone(), len.clone()],
             WasmRepr::Tagged { payload, tag } => vec![payload.clone(), tag.clone()],
+            WasmRepr::Void => vec![],
+        }
+    }
+
+    /// Returns the WebAssembly value types for each component of this
+    /// representation, in canonical order.
+    ///
+    /// This is the storage-level counterpart to `val_types(IrType)`; it tells
+    /// callers what operand-stack values a loaded value of this representation
+    /// contributes, which is needed when capturing those values into temp locals.
+    pub fn component_val_types(&self) -> Vec<ValType> {
+        match self {
+            WasmRepr::I64(_) => vec![ValType::I64],
+            WasmRepr::F64(_) => vec![ValType::F64],
+            WasmRepr::Ptr(_) => vec![ValType::I32],
+            WasmRepr::Str { .. } => vec![ValType::I32, ValType::I64],
+            WasmRepr::Tagged { .. } => vec![ValType::I64, ValType::I32],
             WasmRepr::Void => vec![],
         }
     }

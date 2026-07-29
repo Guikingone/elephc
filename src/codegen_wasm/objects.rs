@@ -38,7 +38,8 @@
 //!   persists the incoming value, and stores lo + hi. Mixed slots split into MOVE (incoming is
 //!   already a Mixed cell) and BOX (`emit_box_value_into_mixed`).
 
-use super::context::{wasm_fn_symbol, FnCtx, Result};
+use super::context::{FnCtx, Result};
+use super::symbols::method_symbol;
 use super::inst::{data_immediate, operand, store_result};
 use super::values::WasmRepr;
 use super::wat::{DataSegment, Global, ValType, WatModule};
@@ -122,9 +123,21 @@ pub(super) fn emit_gc_desc_table(
         });
         return cursor;
     }
-    let id_to_ci: HashMap<u64, &ClassInfo> =
-        class_infos.values().map(|ci| (ci.class_id, ci)).collect();
-    let max_id = class_infos.values().map(|ci| ci.class_id).max().unwrap_or(0);
+    let mut ordered_classes: Vec<_> = class_infos.iter().collect();
+    ordered_classes.sort_by(|(left, left_ci), (right, right_ci)| {
+        left_ci
+            .class_id
+            .cmp(&right_ci.class_id)
+            .then_with(|| left.cmp(right))
+    });
+    let mut id_to_ci: HashMap<u64, &ClassInfo> = HashMap::new();
+    for (_, class_info) in &ordered_classes {
+        id_to_ci.entry(class_info.class_id).or_insert(class_info);
+    }
+    let max_id = ordered_classes
+        .last()
+        .map(|(_, class_info)| class_info.class_id)
+        .unwrap_or(0);
     let count = max_id + 1;
     // Missing/gap descriptor: a zero run so a gap class id reads tag 0 (skip) for every slot.
     let missing_off = cursor;
@@ -313,14 +326,21 @@ const RT_DECREF_OBJECT: &str = r#"(func $__rt_decref_object (param $ptr i32)
 /// emit `emit_object_runtime` must emit `emit_destructor_dispatch_stub` (or this with an
 /// empty map) so the `(call $__rt_call_object_destructor ...)` in `RT_DECREF_OBJECT`
 /// resolves. Both the arm symbol and the lowered `__destruct` definition are produced by
-/// the same `wasm_fn_symbol` helper, so they match by construction.
+/// the same category-specific `method_symbol` helper, so they match by construction.
 pub(super) fn emit_destructor_dispatch(
     wm: &mut WatModule,
     class_infos: &HashMap<String, ClassInfo>,
 ) -> Result<()> {
     let destruct_key = php_symbol_key("__destruct");
     let mut arms: Vec<(u64, String)> = Vec::new();
-    for ci in class_infos.values() {
+    let mut classes: Vec<_> = class_infos.iter().collect();
+    classes.sort_by(|(left, left_ci), (right, right_ci)| {
+        left_ci
+            .class_id
+            .cmp(&right_ci.class_id)
+            .then_with(|| left.cmp(right))
+    });
+    for (_, ci) in classes {
         let Some(impl_class) = ci.method_impl_classes.get(&destruct_key) else {
             continue;
         };
@@ -339,10 +359,14 @@ pub(super) fn emit_destructor_dispatch(
         }
         arms.push((
             ci.class_id,
-            wasm_fn_symbol(&format!("{}::__destruct", impl_class)),
+            method_symbol(&format!("{}::__destruct", impl_class)),
         ));
     }
-    arms.sort_by_key(|(class_id, _)| *class_id);
+    arms.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+    });
 
     let mut wat = String::new();
     wat.push_str("(func $__rt_call_object_destructor (param $obj i32)\n");
@@ -636,12 +660,12 @@ pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
                     class_name
                 )));
             }
-            // The ctor symbol is the same `wasm_fn_symbol("<Class>::__construct")` that
+            // The ctor symbol is the same `method_symbol("<Class>::__construct")` that
             // `function::lower_function` assigns to the class-method function, so a WAT
             // `call $<symbol>` resolves it. Push the fresh object ptr (`$this`) first
             // (deepest = first param), then each user arg via `emit_load_value` in source
             // order — the stack bottom->top `[obj, arg0, ...]` matches params `[this, ...]`.
-            let ctor_symbol = wasm_fn_symbol(&format!("{}::{}", impl_class, "__construct"));
+            let ctor_symbol = method_symbol(&format!("{}::{}", impl_class, "__construct"));
             ctx.fb.ins(&format!("local.get {}", obj), "push $this (fresh object) as first ctor arg");
             for &arg in inst.operands.iter() {
                 ctx.emit_load_value(arg)?;
