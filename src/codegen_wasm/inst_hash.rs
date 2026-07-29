@@ -172,11 +172,11 @@ pub(super) fn lower_hash_unset(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
 
 /// Lowers `Op::HashAppend` (`$h[] = v`). Materializes the value into temp locals and
 /// computes its per-entry runtime tag exactly like `lower_hash_set`, but lets the runtime
-/// derive the integer append key: `__rt_hash_append` scans for the next free integer key,
-/// then delegates to the copy-on-write-aware `__rt_hash_set` (which persists/increfs the
-/// value). The returned pointer is written back into the hash operand's value local and
-/// its source slot, mirroring `lower_hash_set`. Produces no result value; the hash operand
-/// IS the in/out storage.
+/// load the persisted integer append key and delegate to copy-on-write-aware
+/// `__rt_hash_set` (which persists/increfs the value). A zero runtime result denotes
+/// php-src's occupied saturated append key: command modules report `Error` through
+/// failure code 7, while import-free reactors retain a classified trap edge. The
+/// nonzero returned pointer is written back into the hash operand and source slot.
 pub(super) fn lower_hash_append(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let hash = operand(inst, 0)?;
     let value = operand(inst, 1)?;
@@ -201,8 +201,29 @@ pub(super) fn lower_hash_append(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
         .ins(&format!("i64.const {}", val_tag), "append value runtime tag");
     ctx.fb.ins(
         "call $__rt_hash_append",
-        "append at next int key (COW, persists/increfs value)",
+        "append at persisted next int key (COW, persists/increfs value)",
     );
+    let appended = ctx.fresh_temp(ValType::I32);
+    ctx.fb
+        .ins(&format!("local.set {}", appended), "capture append result pointer");
+    ctx.fb
+        .ins(&format!("local.get {}", appended), "append result pointer");
+    ctx.fb.ins("i32.eqz", "saturated append key occupied?");
+    ctx.fb
+        .ins("if", "PHP append failure (non-returning exceptional edge)");
+    if ctx.module.functions.iter().any(|function| function.flags.is_main) {
+        ctx.fb
+            .ins("i32.const 7", "occupied next array element failure code");
+        ctx.fb.ins(
+            "call $__rt_fail",
+            "report Cannot add element to the array as occupied",
+        );
+    }
+    ctx.fb
+        .ins("unreachable", "occupied next array element does not return");
+    ctx.fb.ins("end", "end append failure guard");
+    ctx.fb
+        .ins(&format!("local.get {}", appended), "successful append pointer");
 
     // The runtime returned the (possibly cloned/resized) pointer: store it back into the
     // hash operand value's local and mirror it to the source slot so a later LoadLocal

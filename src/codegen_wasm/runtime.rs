@@ -54,6 +54,8 @@ const ERR_NEG_SHIFT: &[u8] =
 const ERR_INTDIV_OVERFLOW: &[u8] = b"PHP Fatal error: Uncaught ArithmeticError: Division of PHP_INT_MIN by -1 is not an integer\n";
 const ERR_WASI: &[u8] = b"PHP Fatal error: WASI operation failed\n";
 const ERR_OOM: &[u8] = b"PHP Fatal error: Allowed memory size exhausted\n";
+const ERR_HASH_APPEND_OCCUPIED: &[u8] =
+    b"PHP Fatal error: Uncaught Error: Cannot add element to the array as the next element is already occupied\n";
 const ERR_METHOD_CALL_PREFIX: &[u8] =
     b"PHP Fatal error: Uncaught Error: Call to a member function ";
 const ERR_METHOD_CALL_SUFFIX: &[u8] = b"() on ";
@@ -79,6 +81,7 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + ERR_INTDIV_OVERFLOW.len() as u32
     + ERR_WASI.len() as u32
     + ERR_OOM.len() as u32
+    + ERR_HASH_APPEND_OCCUPIED.len() as u32
     + ERR_METHOD_CALL_PREFIX.len() as u32
     + ERR_METHOD_CALL_SUFFIX.len() as u32
     + PHP_TYPE_INT.len() as u32
@@ -160,7 +163,8 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
 ///
 /// Error code 1 is division by zero, 2 modulo by zero, 3 a negative shift,
 /// 4 `PHP_INT_MIN / -1` for integer division, 5 a WASI boundary failure, and
-/// 6 allocator exhaustion or arithmetic overflow.
+/// 6 allocator exhaustion or arithmetic overflow, and 7 an occupied saturated
+/// array append key.
 /// The helper writes the selected message to stderr, exits with status 255, and
 /// ends in `unreachable` so validation does not treat `proc_exit` as returning.
 fn emit_failure_runtime(wm: &mut WatModule) {
@@ -171,6 +175,7 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         ERR_INTDIV_OVERFLOW,
         ERR_WASI,
         ERR_OOM,
+        ERR_HASH_APPEND_OCCUPIED,
     ];
     let method_messages = [
         ERR_METHOD_CALL_PREFIX,

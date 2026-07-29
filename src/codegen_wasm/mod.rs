@@ -7074,7 +7074,7 @@ mod tests {
 
     /// `$h[] = 10; $h[] = 20; $h[] = 30; return $h[2];` -> "30" through `Op::HashAppend`.
     /// The hash lives in a PHP slot and is reloaded before each append, exercising the
-    /// runtime next-int-key scan AND the append write-back to the source slot. Reading
+    /// persisted next-int-key state AND the append write-back to the source slot. Reading
     /// key 2 proves the three appends landed at sequential integer keys 0, 1, 2.
     #[test]
     fn hash_append_assigns_sequential_int_keys() {
@@ -7115,8 +7115,8 @@ mod tests {
     }
 
     /// `$h[5] = 500; $h[] = 7; return $h[6];` -> "7" through `Op::HashAppend`. The append
-    /// key is the largest existing integer key (5) plus one, NOT the entry count, proving
-    /// the backend's next-key scan matches PHP/native semantics through compiled code.
+    /// key is the persisted next-free integer key after explicit key 5, NOT the entry
+    /// count, proving the backend matches PHP/native semantics through compiled code.
     #[test]
     fn hash_append_after_explicit_key_uses_max_plus_one() {
         let assoc = int_hash_type();

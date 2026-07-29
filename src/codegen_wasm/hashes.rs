@@ -24,27 +24,43 @@
 //!     +0 occupied (0 empty / 1 live / 2 tombstone), +8 key_lo, +16 key_hi
 //!     (-1 = int-key sentinel, else string length), +24 value_lo, +32 value_hi,
 //!     +40 value_tag, +48 prev, +56 next (prev/next are the insertion-order list).
+//! - A 32-byte Zend-semantics trailer follows the slots at `P + 40 + capacity*64`:
+//!   next-free integer key, logical table mode (uninitialized/packed/mixed),
+//!   logical `nNumUsed`, and logical table size. Keeping the trailer after the slots
+//!   preserves every existing header and entry offset while making append O(1).
 //! - Int keys hash with a Knuth multiplicative mix; string keys with FNV-1a. This
 //!   layout and hashing are byte-identical to the native hash runtime.
 
 use super::wat::WatModule;
+use crate::web_prelude::PhpVersion;
 
 /// Adds the hash-table helper/teardown runtime to `wm`: hashing, key equality,
 /// allocation, deep free, and the refcount-dispatcher's hash branch. Emitted after
 /// the heap, refcount, array, and mixed runtimes.
 pub(super) fn emit_hash_runtime(wm: &mut WatModule) {
+    emit_hash_runtime_for_version(wm, crate::codegen_support::compile_php_version());
+}
+
+/// Emits the hash runtime for one PHP compatibility profile.
+///
+/// PHP 8.2 initializes `nNextFreeElement` to zero, while PHP 8.3+ uses
+/// `ZEND_LONG_MIN` and remaps that sentinel to zero only for the first append.
+fn emit_hash_runtime_for_version(wm: &mut WatModule, php_version: PhpVersion) {
     wm.add_raw_func(RT_HASH_FNV1A);
     wm.add_raw_func(RT_HASH_KEY_HASH);
     wm.add_raw_func(RT_HASH_KEY_EQ);
     wm.add_raw_func(RT_HASH_NORMALIZE_KEY);
     wm.add_raw_func(RT_HASH_KEY_FROM_MIXED);
     wm.add_raw_func(RT_HASH_ITER_NEXT);
-    wm.add_raw_func(RT_HASH_NEW);
+    wm.add_raw_func(RT_HASH_META_ADDR);
+    wm.add_raw_func(RT_HASH_ZEND_TABLE_SIZE);
+    wm.add_raw_func(&hash_new_runtime(php_version));
     wm.add_raw_func(RT_HASH_GET);
     wm.add_raw_func(RT_HASH_INSERT_OWNED);
     wm.add_raw_func(RT_HASH_RESIZE);
     wm.add_raw_func(RT_HASH_CLONE_SHALLOW);
     wm.add_raw_func(RT_HASH_ENSURE_UNIQUE);
+    wm.add_raw_func(RT_HASH_RECORD_NEW_KEY);
     wm.add_raw_func(RT_HASH_SET);
     wm.add_raw_func(RT_HASH_UNSET);
     wm.add_raw_func(RT_HASH_APPEND);
@@ -53,6 +69,15 @@ pub(super) fn emit_hash_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_HASH_ARRAY_UNION);
     wm.add_raw_func(RT_HASH_FREE_DEEP);
     wm.add_raw_func(RT_DECREF_HASH);
+}
+
+/// Renders `__rt_hash_new` with the profile-specific initial next-free value.
+fn hash_new_runtime(php_version: PhpVersion) -> String {
+    let initial_next_free = match php_version {
+        PhpVersion::Php82 => 0,
+        PhpVersion::Php83 | PhpVersion::Php84 | PhpVersion::Php85 => i64::MIN,
+    };
+    RT_HASH_NEW.replace("__INITIAL_NEXT_FREE__", &initial_next_free.to_string())
 }
 
 /// `__rt_hash_fnv1a`: FNV-1a 64-bit hash of the `len` bytes at `ptr`. Each byte is
@@ -220,15 +245,41 @@ const RT_HASH_ITER_NEXT: &str = r#"(func $__rt_hash_iter_next (param $hash i32) 
   (i64.extend_i32_u (i64.ne (local.get $next) (i64.const -1))))  ;; result 1: has_more (1 unless -1)
 "#;
 
+/// `__rt_hash_meta_addr`: returns the address of the Zend-semantics trailer that
+/// immediately follows the capacity-sized 64-byte entry array.
+const RT_HASH_META_ADDR: &str = r#"(func $__rt_hash_meta_addr (param $hash i32) (result i32)
+  (i32.add
+    (i32.add (local.get $hash) (i32.const 40))
+    (i32.wrap_i64
+      (i64.mul
+        (i64.load (i32.add (local.get $hash) (i32.const 8)))
+        (i64.const 64)))))
+"#;
+
+/// `__rt_hash_zend_table_size`: rounds a capacity hint to php-src's minimum-eight,
+/// power-of-two logical table size used by the uninitialized-to-packed decision.
+const RT_HASH_ZEND_TABLE_SIZE: &str = r#"(func $__rt_hash_zend_table_size (param $capacity i64) (result i64)
+  (local $size i64)
+  (local.set $size (i64.const 8))                            ;; Zend's minimum table size
+  (block $done (loop $grow
+    (br_if $done (i64.ge_u (local.get $size) (local.get $capacity)))  ;; rounded up far enough
+    (if (i64.ge_u (local.get $size) (i64.const 4294967296))
+      (then unreachable))                                   ;; impossible wasm32 hash capacity
+    (local.set $size (i64.shl (local.get $size) (i64.const 1)))  ;; next power of two
+    (br $grow)))
+  (local.get $size))
+"#;
+
 /// `__rt_hash_new`: allocates an empty hash with `capacity` entry slots and a
 /// default `value_tag`. Stamps the hash kind word, initializes the header (empty
-/// insertion-order list), and zeroes every slot's `occupied` field (heap memory
-/// may be dirty from reuse).
+/// insertion-order list), zeroes every slot's `occupied` field (heap memory may
+/// be dirty from reuse), and initializes the trailing Zend-visible append state.
 const RT_HASH_NEW: &str = r#"(func $__rt_hash_new (param $capacity i64) (param $value_tag i64) (result i32)
   (local $bytes i32)
   (local $p i32)
   (local $i i64)
-  (local.set $bytes (i32.add (i32.const 40) (i32.wrap_i64 (i64.mul (local.get $capacity) (i64.const 64)))))  ;; 40B header + capacity*64 slots
+  (local $meta i32)
+  (local.set $bytes (i32.add (i32.const 72) (i32.wrap_i64 (i64.mul (local.get $capacity) (i64.const 64)))))  ;; 40B header + capacity*64 slots + 32B trailer
   (local.set $p (call $__rt_heap_alloc (local.get $bytes)))  ;; block: refcount=1
   (i64.store (i32.sub (local.get $p) (i32.const 8)) (i64.const 32771))  ;; kind = hash(3) | COW(0x8000)
   (i64.store (local.get $p) (i64.const 0))                   ;; count = 0
@@ -244,6 +295,12 @@ const RT_HASH_NEW: &str = r#"(func $__rt_hash_new (param $capacity i64) (param $
       (i64.const 0))                                         ;; occupied = empty
     (local.set $i (i64.add (local.get $i) (i64.const 1)))    ;; next slot
     (br $slot)))                                             ;; next slot
+  (local.set $meta (call $__rt_hash_meta_addr (local.get $p)))  ;; trailer after all entry slots
+  (i64.store (local.get $meta) (i64.const __INITIAL_NEXT_FREE__))  ;; profile-specific nNextFreeElement
+  (i64.store (i32.add (local.get $meta) (i32.const 8)) (i64.const 0))   ;; Zend mode = UNINITIALIZED
+  (i64.store (i32.add (local.get $meta) (i32.const 16)) (i64.const 0))  ;; Zend nNumUsed = 0
+  (i64.store (i32.add (local.get $meta) (i32.const 24))
+    (call $__rt_hash_zend_table_size (local.get $capacity)))  ;; logical Zend nTableSize
   (local.get $p))
 "#;
 
@@ -356,6 +413,9 @@ const RT_HASH_RESIZE: &str = r#"(func $__rt_hash_resize (param $hash i32) (resul
   (local $new i32)
   (local $cur i64)
   (local $oe i32)
+  (local $oldmeta i32)
+  (local $newmeta i32)
+  (local.set $oldmeta (call $__rt_hash_meta_addr (local.get $hash)))  ;; preserve semantic trailer across physical rehash
   (local.set $newcap (i64.shl (i64.load (i32.add (local.get $hash) (i32.const 8))) (i64.const 1)))  ;; newcap = capacity * 2
   (if (i64.lt_u (local.get $newcap) (i64.const 8))
     (then (local.set $newcap (i64.const 8))))                ;; minimum capacity 8
@@ -372,6 +432,11 @@ const RT_HASH_RESIZE: &str = r#"(func $__rt_hash_resize (param $hash i32) (resul
       (i64.load (i32.add (local.get $oe) (i32.const 40)))))  ;; value_tag (moved, not persisted)
     (local.set $cur (i64.load (i32.add (local.get $oe) (i32.const 56))))  ;; cur = next
     (br $walk)))                                             ;; next entry
+  (local.set $newmeta (call $__rt_hash_meta_addr (local.get $new)))
+  (i64.store (local.get $newmeta) (i64.load (local.get $oldmeta)))  ;; exact next-free
+  (i64.store (i32.add (local.get $newmeta) (i32.const 8)) (i64.load (i32.add (local.get $oldmeta) (i32.const 8))))   ;; exact logical mode
+  (i64.store (i32.add (local.get $newmeta) (i32.const 16)) (i64.load (i32.add (local.get $oldmeta) (i32.const 16)))) ;; exact logical nNumUsed
+  (i64.store (i32.add (local.get $newmeta) (i32.const 24)) (i64.load (i32.add (local.get $oldmeta) (i32.const 24)))) ;; exact logical nTableSize
   (call $__rt_heap_free (local.get $hash))                   ;; shallow free: children moved to `new`
   (local.get $new))
 "#;
@@ -392,6 +457,9 @@ const RT_HASH_CLONE_SHALLOW: &str = r#"(func $__rt_hash_clone_shallow (param $ha
   (local $vtag i64)
   (local $np i32)
   (local $nl i64)
+  (local $oldmeta i32)
+  (local $newmeta i32)
+  (local.set $oldmeta (call $__rt_hash_meta_addr (local.get $hash)))  ;; source semantic trailer
   (local.set $new (call $__rt_hash_new
     (i64.load (i32.add (local.get $hash) (i32.const 8)))
     (i64.load (i32.add (local.get $hash) (i32.const 16)))))  ;; fresh hash, same capacity + value_type
@@ -425,6 +493,17 @@ const RT_HASH_CLONE_SHALLOW: &str = r#"(func $__rt_hash_clone_shallow (param $ha
     (drop (call $__rt_hash_insert_owned (local.get $new) (local.get $klo) (local.get $khi) (local.get $vlo) (local.get $vhi) (local.get $vtag)))  ;; place into clone
     (local.set $cur (i64.load (i32.add (local.get $oe) (i32.const 56))))  ;; cur = next
     (br $walk)))                                             ;; next entry
+  (local.set $newmeta (call $__rt_hash_meta_addr (local.get $new)))
+  (i64.store (local.get $newmeta) (i64.load (local.get $oldmeta)))  ;; clone preserves next-free exactly
+  (i64.store (i32.add (local.get $newmeta) (i32.const 24)) (i64.load (i32.add (local.get $oldmeta) (i32.const 24))))  ;; clone preserves logical table size
+  (if (i64.eqz (i64.load (local.get $hash)))                 ;; php-src duplicates an empty source as UNINITIALIZED
+    (then
+      (i64.store (i32.add (local.get $newmeta) (i32.const 8)) (i64.const 0))
+      (i64.store (i32.add (local.get $newmeta) (i32.const 16)) (i64.const 0))
+      (i64.store (i32.add (local.get $newmeta) (i32.const 24)) (i64.const 8)))  ;; empty duplicate resets to HT_MIN_SIZE
+    (else
+      (i64.store (i32.add (local.get $newmeta) (i32.const 8)) (i64.load (i32.add (local.get $oldmeta) (i32.const 8))))
+      (i64.store (i32.add (local.get $newmeta) (i32.const 16)) (i64.load (i32.add (local.get $oldmeta) (i32.const 16))))))
   (local.get $new))
 "#;
 
@@ -443,6 +522,279 @@ const RT_HASH_ENSURE_UNIQUE: &str = r#"(func $__rt_hash_ensure_unique (param $ha
   (local.set $clone (call $__rt_hash_clone_shallow (local.get $hash)))  ;; duplicate before mutation
   (i32.store (i32.sub (local.get $hash) (i32.const 12)) (i32.sub (local.get $rc) (i32.const 1)))  ;; original loses this reference
   (local.get $clone))                                        ;; caller now owns the clone
+"#;
+
+/// `__rt_hash_record_new_key`: updates the trailing php-src-compatible logical
+/// `HashTable` state after a key that was known absent has been inserted.
+///
+/// Modes are 0 = UNINITIALIZED, 1 = PACKED, and 2 = MIXED. The PACKED branches
+/// reproduce `_zend_hash_index_add_or_update_i`: inserting below `nNumUsed` into
+/// a hole converts to MIXED, in-range extension resets next-free to `h + 1`, and
+/// sparse/string/negative keys use the monotonic MIXED rule.
+const RT_HASH_RECORD_NEW_KEY: &str = r#"(func $__rt_hash_record_new_key (param $hash i32) (param $key_lo i64) (param $key_hi i64)
+  (local $meta i32)
+  (local $mode i64)
+  (local $used i64)
+  (local $size i64)
+  (local $next i64)
+  (local $old_count i64)
+  (local $mixed i32)
+  (local.set $meta (call $__rt_hash_meta_addr (local.get $hash)))  ;; Zend-state trailer
+  (local.set $mode (i64.load (i32.add (local.get $meta) (i32.const 8))))  ;; logical flags
+  (local.set $used (i64.load (i32.add (local.get $meta) (i32.const 16)))) ;; logical nNumUsed
+  (local.set $size (i64.load (i32.add (local.get $meta) (i32.const 24)))) ;; logical nTableSize
+  (local.set $next (i64.load (local.get $meta)))             ;; nNextFreeElement
+  (local.set $old_count (i64.sub (i64.load (local.get $hash)) (i64.const 1)))  ;; count before this insertion
+  (local.set $mixed (i32.const 0))                           ;; no mixed insertion selected yet
+
+  local.get $key_hi                                         ;; string key?
+  i64.const 0
+  i64.ge_s
+  if
+    local.get $mode                                         ;; first string initializes MIXED directly
+    i64.eqz
+    if
+      local.get $meta
+      i32.const 8
+      i32.add
+      i64.const 2
+      i64.store                                             ;; mode = MIXED
+      local.get $meta
+      i32.const 16
+      i32.add
+      i64.const 1
+      i64.store                                             ;; nNumUsed = 1
+      return
+    end
+    i32.const 1
+    local.set $mixed                                        ;; existing PACKED/MIXED table
+  end
+
+  local.get $key_hi                                         ;; integer into UNINITIALIZED table?
+  i64.const -1
+  i64.eq
+  local.get $mode
+  i64.eqz
+  i32.and
+  if
+    local.get $key_lo
+    i64.const 0
+    i64.ge_s
+    local.get $key_lo
+    local.get $size
+    i64.lt_u
+    i32.and
+    if
+      local.get $meta
+      local.get $key_lo
+      i64.const 1
+      i64.add
+      i64.store                                             ;; add_to_packed resets next to h + 1
+      local.get $meta
+      i32.const 8
+      i32.add
+      i64.const 1
+      i64.store                                             ;; mode = PACKED
+      local.get $meta
+      i32.const 16
+      i32.add
+      local.get $key_lo
+      i64.const 1
+      i64.add
+      i64.store                                             ;; nNumUsed = h + 1
+      return
+    end
+    i32.const 1
+    local.set $mixed                                        ;; negative/out-of-range initializes MIXED
+  end
+
+  local.get $key_hi                                         ;; integer into PACKED table?
+  i64.const -1
+  i64.eq
+  local.get $mode
+  i64.const 1
+  i64.eq
+  i32.and
+  if
+    local.get $key_lo
+    i64.const 0
+    i64.lt_s
+    if
+      i32.const 1
+      local.set $mixed                                      ;; negative integer converts to MIXED
+    end
+    local.get $mixed
+    i32.eqz
+    if
+      local.get $key_lo
+      local.get $used
+      i64.lt_u
+      if
+        i32.const 1
+        local.set $mixed                                    ;; absent lower key is a packed hole
+      end
+    end
+    local.get $mixed
+    i32.eqz
+    if
+      local.get $key_lo
+      local.get $size
+      i64.lt_u
+      if
+        local.get $meta
+        local.get $key_lo
+        i64.const 1
+        i64.add
+        i64.store                                           ;; packed extension resets next
+        local.get $meta
+        i32.const 16
+        i32.add
+        local.get $key_lo
+        i64.const 1
+        i64.add
+        i64.store                                           ;; nNumUsed = h + 1
+        return
+      end
+    end
+    local.get $mixed
+    i32.eqz
+    if
+      local.get $key_lo
+      i64.const 1
+      i64.shr_u
+      local.get $size
+      i64.lt_u
+      local.get $size
+      i64.const 1
+      i64.shr_u
+      local.get $old_count
+      i64.lt_u
+      i32.and
+      if
+        local.get $size
+        i64.const 1
+        i64.shl
+        local.set $size
+        local.get $meta
+        i32.const 24
+        i32.add
+        local.get $size
+        i64.store                                           ;; packed table doubles
+        local.get $meta
+        local.get $key_lo
+        i64.const 1
+        i64.add
+        i64.store                                           ;; next = h + 1
+        local.get $meta
+        i32.const 16
+        i32.add
+        local.get $key_lo
+        i64.const 1
+        i64.add
+        i64.store                                           ;; nNumUsed = h + 1
+        return
+      end
+    end
+    local.get $mixed
+    i32.eqz
+    if
+      local.get $used
+      local.get $size
+      i64.ge_u
+      if
+        local.get $size
+        i64.const 1
+        i64.shl
+        local.set $size
+        local.get $meta
+        i32.const 24
+        i32.add
+        local.get $size
+        i64.store                                           ;; make room before PACKED -> MIXED
+      end
+      i32.const 1
+      local.set $mixed                                      ;; sparse packed key converts to MIXED
+    end
+  end
+
+  local.get $key_hi                                         ;; integer into existing MIXED table?
+  i64.const -1
+  i64.eq
+  local.get $mode
+  i64.const 2
+  i64.eq
+  i32.and
+  if
+    i32.const 1
+    local.set $mixed
+  end
+
+  local.get $mixed
+  if
+    local.get $used
+    local.get $size
+    i64.ge_u
+    if                                                     ;; ZEND_HASH_IF_FULL_DO_RESIZE
+      local.get $used
+      local.get $old_count
+      local.get $old_count
+      i64.const 5
+      i64.shr_u
+      i64.add
+      i64.gt_u
+      if
+        local.get $old_count
+        local.set $used                                    ;; compact tombstone buckets
+      else
+        local.get $size
+        i64.const 1
+        i64.shl
+        local.set $size
+        local.get $meta
+        i32.const 24
+        i32.add
+        local.get $size
+        i64.store                                          ;; grow mixed table
+      end
+    end
+    local.get $used
+    i64.const 1
+    i64.add
+    local.set $used                                        ;; append a mixed bucket
+    local.get $meta
+    i32.const 8
+    i32.add
+    i64.const 2
+    i64.store                                              ;; mode = MIXED
+    local.get $meta
+    i32.const 16
+    i32.add
+    local.get $used
+    i64.store                                              ;; persist nNumUsed
+    local.get $key_hi
+    i64.const -1
+    i64.eq
+    local.get $key_lo
+    local.get $next
+    i64.ge_s
+    i32.and
+    if
+      local.get $key_lo
+      i64.const 9223372036854775807
+      i64.eq
+      if
+        local.get $meta
+        i64.const 9223372036854775807
+        i64.store                                          ;; saturate at PHP_INT_MAX
+      else
+        local.get $meta
+        local.get $key_lo
+        i64.const 1
+        i64.add
+        i64.store                                          ;; monotonically advance next
+      end
+    end
+  end)
 "#;
 
 /// `__rt_hash_set`: the user-facing `$h[k] = v`. Splits a shared hash (COW), grows
@@ -529,6 +881,7 @@ const RT_HASH_SET: &str = r#"(func $__rt_hash_set (param $hash i32) (param $key_
                   (i64.eq (local.get $val_tag) (i64.const 10))))  ;; own the container value
         (then (call $__rt_incref (i32.wrap_i64 (local.get $val_lo)))))))
   (local.set $hash (call $__rt_hash_insert_owned (local.get $hash) (local.get $key_lo) (local.get $key_hi) (local.get $val_lo) (local.get $val_hi) (local.get $val_tag)))  ;; place the new entry
+  (call $__rt_hash_record_new_key (local.get $hash) (local.get $key_lo) (local.get $key_hi))  ;; advance/preserve Zend next-free state
   (local.get $hash))
 "#;
 
@@ -553,6 +906,11 @@ const RT_HASH_UNSET: &str = r#"(func $__rt_hash_unset (param $hash i32) (param $
   (local $next i64)
   (local $pe i32)
   (local $ne i32)
+  (local $meta i32)
+  (local $used i64)
+  (local $scan i64)
+  (local $packed_used i64)
+  (local $se i32)
   (local.set $hash (call $__rt_hash_ensure_unique (local.get $hash)))   ;; copy-on-write split
   (if (i32.eqz (local.get $hash)) (then (return (local.get $hash))))    ;; null hash -> nothing to remove
   (local.set $cap (i64.load (i32.add (local.get $hash) (i32.const 8)))) ;; capacity
@@ -601,44 +959,54 @@ const RT_HASH_UNSET: &str = r#"(func $__rt_hash_unset (param $hash i32) (param $
           (i64.store (i32.add (local.get $ne) (i32.const 48)) (local.get $prev)))  ;; successor.prev = prev
         (else (i64.store (i32.add (local.get $hash) (i32.const 32)) (local.get $prev))))  ;; tail = prev
       (i64.store (local.get $mentry) (i64.const 2))                    ;; tombstone the slot (NOT 0 - keeps probe chains)
-      (i64.store (local.get $hash) (i64.sub (i64.load (local.get $hash)) (i64.const 1)))))  ;; count -= 1
+      (i64.store (local.get $hash) (i64.sub (i64.load (local.get $hash)) (i64.const 1)))  ;; count -= 1
+      (local.set $meta (call $__rt_hash_meta_addr (local.get $hash)))
+      (local.set $used (i64.load (i32.add (local.get $meta) (i32.const 16))))
+      (if (i32.and
+            (i64.eq (i64.load (i32.add (local.get $meta) (i32.const 8))) (i64.const 1))
+            (i32.and
+              (i64.eq (local.get $key_hi) (i64.const -1))
+              (i64.eq (i64.add (local.get $key_lo) (i64.const 1)) (local.get $used))))
+        (then
+          (local.set $scan (i64.const 0))
+          (local.set $packed_used (i64.const 0))
+          (block $packed_done (loop $packed_scan
+            (br_if $packed_done (i64.ge_u (local.get $scan) (local.get $cap)))
+            (local.set $se (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $scan) (i64.const 64)))))
+            (if (i32.and
+                  (i64.eq (i64.load (local.get $se)) (i64.const 1))
+                  (i64.eq (i64.load (i32.add (local.get $se) (i32.const 16))) (i64.const -1)))
+              (then
+                (if (i64.ge_u (i64.load (i32.add (local.get $se) (i32.const 8))) (local.get $packed_used))
+                  (then
+                    (local.set $packed_used (i64.add (i64.load (i32.add (local.get $se) (i32.const 8))) (i64.const 1)))))))
+            (local.set $scan (i64.add (local.get $scan) (i64.const 1)))
+            (br $packed_scan)))
+          (i64.store (i32.add (local.get $meta) (i32.const 16)) (local.get $packed_used))))))  ;; packed nNumUsed drops across trailing holes only
   (local.get $hash))
 "#;
 
-/// `__rt_hash_append`: the user-facing `$h[] = v`. Computes the next PHP integer append
-/// key by scanning every live entry for the largest integer key and adding one (or 0 when
-/// the hash has no integer keys — matching the native append-key scan, which likewise does
-/// not track a monotonic next-free index), then delegates to `__rt_hash_set` with that key
-/// and `key_hi = -1`. `__rt_hash_set` owns the copy-on-write split, resize, and value
-/// persist/incref, so this routine only derives the key. Returns the resulting hash pointer.
+/// `__rt_hash_append`: the user-facing `$h[] = v`. Loads the persisted
+/// `nNextFreeElement` in O(1), remaps PHP 8.3+'s fresh `ZEND_LONG_MIN` sentinel
+/// to zero, rejects an occupied saturated key without mutation, and otherwise
+/// delegates ownership/COW/resize work to `__rt_hash_set`.
+///
+/// A zero return is an internal non-null-pointer sentinel consumed by
+/// `lower_hash_append`, which reports php-src's fatal `Error` in command modules
+/// and traps on the same exceptional edge in import-free reactors.
 const RT_HASH_APPEND: &str = r#"(func $__rt_hash_append (param $hash i32) (param $val_lo i64) (param $val_hi i64) (param $val_tag i64) (result i32)
-  (local $cap i64)
-  (local $i i64)
   (local $key i64)
-  (local $seen i64)
-  (local $entry i32)
-  (local $cand i64)
-  (local.set $cap (i64.load (i32.add (local.get $hash) (i32.const 8))))   ;; capacity from header
-  (local.set $i (i64.const 0))                                            ;; scan from slot 0
-  (local.set $key (i64.const 0))                                          ;; default append key 0 (no int keys)
-  (local.set $seen (i64.const 0))                                         ;; no integer key seen yet
-  (block $end (loop $scan
-    (br_if $end (i64.ge_u (local.get $i) (local.get $cap)))               ;; scanned every slot -> stop
-    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 64)))))  ;; &slot[i] = hash+40+i*64
-    (if (i64.eq (i64.load (local.get $entry)) (i64.const 1))              ;; live entry?
-      (then
-        (if (i64.eq (i64.load (i32.add (local.get $entry) (i32.const 16))) (i64.const -1))  ;; integer key (key_hi == -1)?
-          (then
-            (local.set $cand (i64.add (i64.load (i32.add (local.get $entry) (i32.const 8))) (i64.const 1)))  ;; candidate = int key + 1
-            (if (i64.eqz (local.get $seen))                               ;; first integer key seen?
-              (then
-                (local.set $key (local.get $cand))                       ;; seed the append key
-                (local.set $seen (i64.const 1)))                         ;; remember we saw one
-              (else
-                (if (i64.gt_s (local.get $cand) (local.get $key))        ;; larger than current best?
-                  (then (local.set $key (local.get $cand))))))))))       ;; keep the maximum int key + 1
-    (local.set $i (i64.add (local.get $i) (i64.const 1)))                 ;; advance to next slot
-    (br $scan)))                                                          ;; loop back-edge
+  (local $found i32)
+  (local.set $key (i64.load (call $__rt_hash_meta_addr (local.get $hash))))  ;; persisted nNextFreeElement
+  (if (i64.eq (local.get $key) (i64.const -9223372036854775808))
+    (then (local.set $key (i64.const 0))))                 ;; HASH_ADD_NEXT remaps fresh LONG_MIN to key 0
+  (call $__rt_hash_get (local.get $hash) (local.get $key) (i64.const -1))
+  (drop)                                                    ;; discard value_tag
+  (drop)                                                    ;; discard value_hi
+  (drop)                                                    ;; discard value_lo
+  (local.set $found)                                        ;; append key already occupied?
+  (if (local.get $found)
+    (then (return (i32.const 0))))                          ;; saturated PHP_INT_MAX collision: caller raises Error
   (call $__rt_hash_set (local.get $hash) (local.get $key) (i64.const -1) (local.get $val_lo) (local.get $val_hi) (local.get $val_tag)))
 "#;
 
@@ -863,7 +1231,7 @@ mod tests {
     //!   + hash runtimes and one exported driver, validates it with `wasmparser`,
     //!   and runs it under `wasmer`. Runs skip silently when `wasmer` is absent.
 
-    use super::emit_hash_runtime;
+    use super::emit_hash_runtime_for_version;
     use super::super::arrays::emit_array_runtime;
     use super::super::heap::emit_heap_runtime;
     use super::super::classes::{emit_class_metadata_stub, emit_class_runtime};
@@ -872,6 +1240,7 @@ mod tests {
     use super::super::refcount::emit_refcount_runtime;
     use super::super::closures::emit_closure_runtime;
     use super::super::wat::WatModule;
+    use crate::web_prelude::PhpVersion;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static TMP_SEQ: AtomicU32 = AtomicU32::new(0);
@@ -894,6 +1263,16 @@ mod tests {
     /// hash runtimes and `driver`, validates it, and runs `export` under `wasmer`,
     /// returning trimmed stdout. `None` if wasmer is absent; validation always runs.
     fn run_driver(driver: &str, export: &str) -> Option<String> {
+        run_driver_for_version(driver, export, PhpVersion::Php85)
+    }
+
+    /// Builds and runs a hash-runtime driver for the selected PHP compatibility
+    /// profile so version-dependent Zend state can be checked explicitly.
+    fn run_driver_for_version(
+        driver: &str,
+        export: &str,
+        php_version: PhpVersion,
+    ) -> Option<String> {
         let mut wm = WatModule::new();
         wm.set_memory(4, Some("memory"));
         emit_heap_runtime(&mut wm, 1024, 4 * 65536);
@@ -902,7 +1281,7 @@ mod tests {
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
-        emit_hash_runtime(&mut wm);
+        emit_hash_runtime_for_version(&mut wm, php_version);
         emit_object_runtime(&mut wm);
         emit_gc_desc_stub(&mut wm);
         emit_destructor_dispatch_stub(&mut wm);
@@ -1444,9 +1823,9 @@ mod tests {
         }
     }
 
-    /// `__rt_hash_append`'s next-key scan tracks the largest integer key, not the entry
-    /// count: appending 100 (key 0) then 200 (key 1), explicitly setting key 5 = 500, then
-    /// appending 999 places it at key 6 (max int key 5 + 1). Reading key 6 returns
+    /// `__rt_hash_append` uses the persisted next-free key, not the live entry count:
+    /// appending 100 (key 0) then 200 (key 1), explicitly setting key 5 = 500, then
+    /// appending 999 places it at key 6. Reading key 6 returns
     /// `found*1000 + value_lo` = 1*1000 + 999 = 1999.
     #[test]
     fn append_next_key_follows_max_int_key() {
@@ -1462,6 +1841,238 @@ mod tests {
   (i64.add (i64.mul (i64.extend_i32_u (local.get $found)) (i64.const 1000)) (local.get $vlo)))"#;
         if let Some(o) = run_driver(driver, "t") {
             assert_eq!(o, "1999");
+        }
+    }
+
+    /// A negative first integer key follows the selected php-src profile: PHP 8.2
+    /// keeps fresh next-free at 0, while PHP 8.3+ starts at `LONG_MIN` and therefore
+    /// advances `-3` to `-2`. Both reads return `found*100 + value` = 199.
+    #[test]
+    fn append_after_negative_key_is_php_version_sensitive() {
+        let driver_82 = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const -3) (i64.const -1) (i64.const 1) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_append (local.get $h) (i64.const 99) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $h) (i64.const 0) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (i64.add (i64.mul (i64.extend_i32_u (local.get $found)) (i64.const 100)) (local.get $vlo)))"#;
+        if let Some(o) = run_driver_for_version(driver_82, "t", PhpVersion::Php82) {
+            assert_eq!(o, "199");
+        }
+
+        let driver_85 = driver_82.replace(
+            "(call $__rt_hash_get (local.get $h) (i64.const 0) (i64.const -1))",
+            "(call $__rt_hash_get (local.get $h) (i64.const -2) (i64.const -1))",
+        );
+        if let Some(o) = run_driver_for_version(&driver_85, "t", PhpVersion::Php85) {
+            assert_eq!(o, "199");
+        }
+    }
+
+    /// Unsetting or overwriting key 5 never rolls back its persisted history:
+    /// each independent hash appends at key 6. The two appended values fold to
+    /// `11*1000 + 22` = 11022.
+    #[test]
+    fn append_history_survives_unset_and_overwrite() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i32) (local $b i32) (local $found i32)
+  (local $vlo i64) (local $vhi i64) (local $vtag i64) (local $av i64) (local $bv i64)
+  (local.set $a (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $a (call $__rt_hash_set (local.get $a) (i64.const 5) (i64.const -1) (i64.const 1) (i64.const 0) (i64.const 0)))
+  (local.set $a (call $__rt_hash_unset (local.get $a) (i64.const 5) (i64.const -1)))
+  (local.set $a (call $__rt_hash_append (local.get $a) (i64.const 11) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $a) (i64.const 6) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $av) (local.set $found)
+  (local.set $b (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $b (call $__rt_hash_set (local.get $b) (i64.const 5) (i64.const -1) (i64.const 1) (i64.const 0) (i64.const 0)))
+  (local.set $b (call $__rt_hash_set (local.get $b) (i64.const 5) (i64.const -1) (i64.const 2) (i64.const 0) (i64.const 0)))
+  (local.set $b (call $__rt_hash_append (local.get $b) (i64.const 22) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $b) (i64.const 6) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $bv) (local.set $found)
+  (i64.add (i64.mul (local.get $av) (i64.const 1000)) (local.get $bv)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "11022");
+        }
+    }
+
+    /// Reusing an emptied PACKED hash with key 2 resets append to 3, whereas an
+    /// emptied MIXED hash retains its former high-water mark 6. Appended values
+    /// at those keys fold to `70*1000 + 80` = 70080.
+    #[test]
+    fn packed_hole_reuse_and_mixed_hole_history_match_php() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $p i32) (local $m i32) (local $found i32)
+  (local $vlo i64) (local $vhi i64) (local $vtag i64) (local $pv i64) (local $mv i64)
+  (i32.store8 (i32.const 300) (i32.const 120))
+  (local.set $p (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $p (call $__rt_hash_set (local.get $p) (i64.const 5) (i64.const -1) (i64.const 1) (i64.const 0) (i64.const 0)))
+  (local.set $p (call $__rt_hash_unset (local.get $p) (i64.const 5) (i64.const -1)))
+  (local.set $p (call $__rt_hash_set (local.get $p) (i64.const 2) (i64.const -1) (i64.const 2) (i64.const 0) (i64.const 0)))
+  (local.set $p (call $__rt_hash_append (local.get $p) (i64.const 70) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $p) (i64.const 3) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $pv) (local.set $found)
+  (local.set $m (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $m (call $__rt_hash_set (local.get $m) (i64.const 300) (i64.const 1) (i64.const 1) (i64.const 0) (i64.const 0)))
+  (local.set $m (call $__rt_hash_set (local.get $m) (i64.const 5) (i64.const -1) (i64.const 1) (i64.const 0) (i64.const 0)))
+  (local.set $m (call $__rt_hash_unset (local.get $m) (i64.const 300) (i64.const 1)))
+  (local.set $m (call $__rt_hash_unset (local.get $m) (i64.const 5) (i64.const -1)))
+  (local.set $m (call $__rt_hash_set (local.get $m) (i64.const 2) (i64.const -1) (i64.const 2) (i64.const 0) (i64.const 0)))
+  (local.set $m (call $__rt_hash_append (local.get $m) (i64.const 80) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $m) (i64.const 6) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $mv) (local.set $found)
+  (i64.add (i64.mul (local.get $pv) (i64.const 1000)) (local.get $mv)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "70080");
+        }
+    }
+
+    /// Resizing and a refcount-triggered empty COW split both preserve next-free 6.
+    /// The resized table's append and the COW clone's append therefore produce
+    /// values 61 and 62 at key 6, folded as `61*1000 + 62` = 61062.
+    #[test]
+    fn append_history_survives_resize_and_empty_cow() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $r i32) (local $a i32) (local $b i32) (local $found i32)
+  (local $vlo i64) (local $vhi i64) (local $vtag i64) (local $rv i64) (local $bv i64)
+  (local.set $r (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $r (call $__rt_hash_set (local.get $r) (i64.const 0) (i64.const -1) (i64.const 0) (i64.const 0) (i64.const 0)))
+  (local.set $r (call $__rt_hash_set (local.get $r) (i64.const 1) (i64.const -1) (i64.const 1) (i64.const 0) (i64.const 0)))
+  (local.set $r (call $__rt_hash_set (local.get $r) (i64.const 2) (i64.const -1) (i64.const 2) (i64.const 0) (i64.const 0)))
+  (local.set $r (call $__rt_hash_set (local.get $r) (i64.const 3) (i64.const -1) (i64.const 3) (i64.const 0) (i64.const 0)))
+  (local.set $r (call $__rt_hash_set (local.get $r) (i64.const 4) (i64.const -1) (i64.const 4) (i64.const 0) (i64.const 0)))
+  (local.set $r (call $__rt_hash_set (local.get $r) (i64.const 5) (i64.const -1) (i64.const 5) (i64.const 0) (i64.const 0)))
+  (local.set $r (call $__rt_hash_append (local.get $r) (i64.const 61) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $r) (i64.const 6) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $rv) (local.set $found)
+  (local.set $a (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $a (call $__rt_hash_set (local.get $a) (i64.const 5) (i64.const -1) (i64.const 5) (i64.const 0) (i64.const 0)))
+  (local.set $a (call $__rt_hash_unset (local.get $a) (i64.const 5) (i64.const -1)))
+  (call $__rt_incref (local.get $a))
+  (local.set $b (call $__rt_hash_append (local.get $a) (i64.const 62) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $b) (i64.const 6) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $bv) (local.set $found)
+  (i64.add (i64.mul (local.get $rv) (i64.const 1000)) (local.get $bv)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "61062");
+        }
+    }
+
+    /// An empty clone resets logical table size to `HT_MIN_SIZE=8` but copies
+    /// next-free 16. Reusing key 8 therefore initializes MIXED and preserves 16,
+    /// so the following append is found at key 16 with value 88.
+    #[test]
+    fn empty_clone_resets_table_size_but_preserves_high_history() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $c i32) (local $i i64)
+  (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $i (i64.const 0))
+  (block $inserted (loop $insert
+    (br_if $inserted (i64.ge_u (local.get $i) (i64.const 16)))
+    (local.set $h (call $__rt_hash_set (local.get $h) (local.get $i) (i64.const -1) (local.get $i) (i64.const 0) (i64.const 0)))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))
+    (br $insert)))
+  (local.set $i (i64.const 0))
+  (block $removed (loop $remove
+    (br_if $removed (i64.ge_u (local.get $i) (i64.const 16)))
+    (local.set $h (call $__rt_hash_unset (local.get $h) (local.get $i) (i64.const -1)))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))
+    (br $remove)))
+  (local.set $c (call $__rt_hash_clone_shallow (local.get $h)))
+  (local.set $c (call $__rt_hash_set (local.get $c) (i64.const 8) (i64.const -1) (i64.const 8) (i64.const 0) (i64.const 0)))
+  (local.set $c (call $__rt_hash_append (local.get $c) (i64.const 88) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $c) (i64.const 16) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (i64.add (i64.mul (i64.extend_i32_u (local.get $found)) (i64.const 100)) (local.get $vlo)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "188");
+        }
+    }
+
+    /// Unioning into an empty high-history left array follows php-src's clone
+    /// reinitialization: a first positive key 2 resets append to 3, while a first
+    /// string key keeps next-free 6. Values at those append keys fold to 33044.
+    #[test]
+    fn union_reinitialization_depends_on_first_right_key_kind() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $left i32) (local $ri i32) (local $rs i32) (local $ui i32) (local $us i32)
+  (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local $iv i64) (local $sv i64)
+  (i32.store8 (i32.const 300) (i32.const 120))
+  (local.set $left (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $left (call $__rt_hash_set (local.get $left) (i64.const 5) (i64.const -1) (i64.const 5) (i64.const 0) (i64.const 0)))
+  (local.set $left (call $__rt_hash_unset (local.get $left) (i64.const 5) (i64.const -1)))
+  (local.set $ri (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $ri (call $__rt_hash_set (local.get $ri) (i64.const 2) (i64.const -1) (i64.const 2) (i64.const 0) (i64.const 0)))
+  (local.set $ui (call $__rt_hash_union (local.get $left) (local.get $ri)))
+  (local.set $ui (call $__rt_hash_append (local.get $ui) (i64.const 33) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $ui) (i64.const 3) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $iv) (local.set $found)
+  (local.set $rs (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $rs (call $__rt_hash_set (local.get $rs) (i64.const 300) (i64.const 1) (i64.const 1) (i64.const 0) (i64.const 0)))
+  (local.set $us (call $__rt_hash_union (local.get $left) (local.get $rs)))
+  (local.set $us (call $__rt_hash_append (local.get $us) (i64.const 44) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $us) (i64.const 6) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $sv) (local.set $found)
+  (i64.add (i64.mul (local.get $iv) (i64.const 1000)) (local.get $sv)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "33044");
+        }
+    }
+
+    /// A canonical numeric string key `"5"` advances integer append to 6, while
+    /// non-canonical `"05"` remains a string and leaves append at 0. Appended
+    /// values at those keys fold to `55*1000 + 66` = 55066.
+    #[test]
+    fn normalized_numeric_string_keys_affect_append_like_php() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i32) (local $b i32) (local $lo i64) (local $hi i64)
+  (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local $av i64) (local $bv i64)
+  (i32.store8 (i32.const 300) (i32.const 53))
+  (i32.store8 (i32.const 310) (i32.const 48))
+  (i32.store8 (i32.const 311) (i32.const 53))
+  (local.set $a (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (call $__rt_hash_normalize_key (i32.const 300) (i64.const 1))
+  (local.set $hi) (local.set $lo)
+  (local.set $a (call $__rt_hash_set (local.get $a) (local.get $lo) (local.get $hi) (i64.const 5) (i64.const 0) (i64.const 0)))
+  (local.set $a (call $__rt_hash_append (local.get $a) (i64.const 55) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $a) (i64.const 6) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $av) (local.set $found)
+  (local.set $b (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (call $__rt_hash_normalize_key (i32.const 310) (i64.const 2))
+  (local.set $hi) (local.set $lo)
+  (local.set $b (call $__rt_hash_set (local.get $b) (local.get $lo) (local.get $hi) (i64.const 5) (i64.const 0) (i64.const 0)))
+  (local.set $b (call $__rt_hash_append (local.get $b) (i64.const 66) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $b) (i64.const 0) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $bv) (local.set $found)
+  (i64.add (i64.mul (local.get $av) (i64.const 1000)) (local.get $bv)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "55066");
+        }
+    }
+
+    /// Inserting `PHP_INT_MAX` saturates next-free without wrapping. Append returns
+    /// the null failure sentinel while MAX is occupied; after unset it reuses MAX
+    /// once, and the following append fails again. The result bitfield is 7.
+    #[test]
+    fn append_at_php_int_max_saturates_and_never_wraps() {
+        let driver = r#"(func $t (export "t") (result i32)
+  (local $h i32) (local $first i32) (local $reuse i32) (local $second i32)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 9223372036854775807) (i64.const -1) (i64.const 1) (i64.const 0) (i64.const 0)))
+  (local.set $first (call $__rt_hash_append (local.get $h) (i64.const 2) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const 9223372036854775807) (i64.const -1)))
+  (local.set $reuse (call $__rt_hash_append (local.get $h) (i64.const 3) (i64.const 0) (i64.const 0)))
+  (local.set $second (call $__rt_hash_append (local.get $reuse) (i64.const 4) (i64.const 0) (i64.const 0)))
+  (i32.add
+    (i32.add
+      (i32.mul (i32.eqz (local.get $first)) (i32.const 4))
+      (i32.mul (i32.ne (local.get $reuse) (i32.const 0)) (i32.const 2)))
+    (i32.eqz (local.get $second))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "7");
         }
     }
 

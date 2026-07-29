@@ -721,6 +721,56 @@ fn test_cli_wasm_ignores_native_codegen_environment_defaults() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Compiles the php-src saturated-array append edge through PHP -> EIR -> WASM
+/// and verifies the command runtime reports the exact failure instead of wrapping
+/// `PHP_INT_MAX` to a negative key or surfacing an unclassified Wasm trap.
+#[test]
+fn test_cli_wasm_append_at_occupied_php_int_max_fails_like_php() {
+    if Command::new("wasmer").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_append_php_int_max");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+$a = [PHP_INT_MAX => 1];
+$a[] = 2;
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile saturated hash append to WASM");
+    assert!(
+        output.status.success(),
+        "saturated hash append compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wasm_path = dir.join("main.wasm");
+    assert!(wasm_path.exists(), "WASM compilation must publish main.wasm");
+    let run = Command::new("wasmer")
+        .arg("run")
+        .arg(&wasm_path)
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run saturated hash append under Wasmer");
+    assert_eq!(run.status.code(), Some(255));
+    assert!(run.stdout.is_empty(), "fatal append must not write stdout");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stderr),
+        "PHP Fatal error: Uncaught Error: Cannot add element to the array as the next element is already occupied\n"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Compiles an escaping by-ref closure from PHP source to wasm32-wasi and runs it
 /// twice under Wasmer. The creator's frame is gone before either call, so `23`
 /// proves the closure owns the ref cell instead of dereferencing freed storage.
