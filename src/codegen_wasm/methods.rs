@@ -52,13 +52,22 @@ pub(super) fn lower_method_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
         .ok_or_else(|| WasmError::Unsupported(format!("method call: unknown data {:?}", data_id)))?
         .clone();
     let method_key = php_symbol_key(&method_name);
+    let (method_ptr, method_len) = ctx.str_literal(data_id)?;
 
     let receiver = operand(inst, 0)?;
     let receiver_ty = ctx.value_php_type(receiver)?;
     let class_name = match receiver_ty {
         PhpType::Object(c) => c,
         PhpType::Mixed | PhpType::Union(_) => {
-            return lower_mixed_method_call(ctx, inst, receiver, &method_name, &method_key);
+            return lower_mixed_method_call(
+                ctx,
+                inst,
+                receiver,
+                &method_name,
+                &method_key,
+                method_ptr,
+                method_len,
+            );
         }
         other => {
             return Err(WasmError::Unsupported(format!(
@@ -138,14 +147,17 @@ pub(super) fn lower_method_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
 ///
 /// The unboxed object pointer is BORROWED from the Mixed cell (never freed here);
 /// the receiver cell is released by the EIR ownership pass. No candidates, a
-/// non-object receiver, or a no-match class id traps via `unreachable` (the
-/// PHP-exact fatal message is deferred to a `__rt_fatal_*` follow-up).
+/// A non-object receiver and a runtime class without the requested method both
+/// terminate through PHP-style fatal runtime helpers. No candidates are rejected
+/// before emission.
 pub(super) fn lower_mixed_method_call(
     ctx: &mut FnCtx,
     inst: &Instruction,
     receiver: ValueId,
     method_name: &str,
     method_key: &str,
+    method_ptr: u32,
+    method_len: u32,
 ) -> Result<()> {
     let candidates = mixed_method_candidates(ctx.module, method_key, inst.operands.len());
     if candidates.is_empty() {
@@ -189,10 +201,25 @@ pub(super) fn lower_mixed_method_call(
         ctx.fb.ins("br $mxdone", "candidate handled -> merge");
         ctx.fb.ins("end", "end candidate class id arm");
     }
-    ctx.fb.ins("unreachable", "no candidate class id matched");
+    ctx.fb.ins(&format!("local.get {}", cid), "unmatched receiver class id");
+    ctx.fb.ins(&format!("i32.const {}", method_ptr), "method-name pointer");
+    ctx.fb.ins(&format!("i32.const {}", method_len), "method-name byte length");
+    ctx.fb.ins(
+        "call $__rt_fail_undefined_method",
+        "raise PHP fatal for undefined object method",
+    );
+    ctx.fb.ins("unreachable", "fatal helper does not return");
     ctx.fb.ins("end", "end mixed dispatch merge");
     ctx.fb.ins("else", "receiver is not an object");
-    ctx.fb.ins("unreachable", "method call on a non-object mixed value");
+    ctx.fb.ins(&format!("i32.const {}", method_ptr), "method-name pointer");
+    ctx.fb.ins(&format!("i32.const {}", method_len), "method-name byte length");
+    ctx.fb.ins(&format!("local.get {}", mtag), "receiver runtime tag");
+    ctx.fb.ins("i32.wrap_i64", "runtime tag as i32");
+    ctx.fb.ins(
+        "call $__rt_fail_method_call_non_object",
+        "raise PHP fatal for non-object receiver",
+    );
+    ctx.fb.ins("unreachable", "fatal helper does not return");
     ctx.fb.ins("end", "end receiver object test");
     Ok(())
 }
@@ -364,8 +391,9 @@ fn box_call_result_into_mixed(
 /// EIR emits this op for `?->` on a `Mixed`/`Union` receiver. The receiver cell is
 /// unboxed: a null payload (tag 8) produces a boxed-null result; an object payload
 /// (tag 6) reuses the mixed class-id if-ladder (the same candidate arms as
-/// `lower_mixed_method_call`); any other tag traps. The null-result path requires a
-/// boxed (`Mixed`/`Union`) result slot; a concrete result slot is the
+/// `lower_mixed_method_call`); any other tag raises PHP's non-object method-call
+/// fatal. The null-result path requires a boxed (`Mixed`/`Union`) result slot; a
+/// concrete result slot is the
 /// heterogeneous-`?->` case, which is genuinely type-unsafe (null cannot merge into a
 /// concrete slot) and is deferred to P6g with a proper nullable result, surfacing
 /// here as `Unsupported` rather than miscompiling.
@@ -382,6 +410,7 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FnCtx, inst: &Instruction) ->
         .ok_or_else(|| WasmError::Unsupported(format!("nullsafe call: unknown data {:?}", data_id)))?
         .clone();
     let method_key = php_symbol_key(&method_name);
+    let (method_ptr, method_len) = ctx.str_literal(data_id)?;
     let receiver = operand(inst, 0)?;
     let receiver_ty = ctx.value_php_type(receiver)?;
     match receiver_ty {
@@ -452,10 +481,25 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FnCtx, inst: &Instruction) ->
                 ctx.fb.ins("br $nsdone", "candidate handled -> merge");
                 ctx.fb.ins("end", "end candidate class id arm");
             }
-            ctx.fb.ins("unreachable", "no candidate class id matched");
+            ctx.fb.ins(&format!("local.get {}", cid), "unmatched receiver class id");
+            ctx.fb.ins(&format!("i32.const {}", method_ptr), "method-name pointer");
+            ctx.fb.ins(&format!("i32.const {}", method_len), "method-name byte length");
+            ctx.fb.ins(
+                "call $__rt_fail_undefined_method",
+                "raise PHP fatal for undefined object method",
+            );
+            ctx.fb.ins("unreachable", "fatal helper does not return");
             ctx.fb.ins("end", "end nullsafe dispatch merge");
             ctx.fb.ins("else", "receiver is neither null nor object");
-            ctx.fb.ins("unreachable", "nullsafe call on a non-object non-null value");
+            ctx.fb.ins(&format!("i32.const {}", method_ptr), "method-name pointer");
+            ctx.fb.ins(&format!("i32.const {}", method_len), "method-name byte length");
+            ctx.fb.ins(&format!("local.get {}", mtag), "receiver runtime tag");
+            ctx.fb.ins("i32.wrap_i64", "runtime tag as i32");
+            ctx.fb.ins(
+                "call $__rt_fail_method_call_non_object",
+                "raise PHP fatal for non-object receiver",
+            );
+            ctx.fb.ins("unreachable", "fatal helper does not return");
             ctx.fb.ins("end", "end receiver object test");
             ctx.fb.ins("end", "end receiver null test");
             Ok(())

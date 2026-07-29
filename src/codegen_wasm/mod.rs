@@ -10479,6 +10479,102 @@ mod tests {
         }
     }
 
+    /// A Mixed integer passed through an otherwise valid dynamic method-call
+    /// site raises a PHP-style fatal with status 255 instead of a raw Core trap.
+    #[test]
+    fn mixed_method_call_on_integer_raises_php_fatal() {
+        let class = "P6fMMFatal";
+        let mut module = Module::new(Target::wasm());
+        let (_, method_data) = class_with_method(
+            &mut module,
+            class,
+            1,
+            "value",
+            IrType::I64,
+            PhpType::Int,
+            |builder, _| Some(builder.emit_const_i64(7)),
+        );
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let integer = builder.emit_const_i64(1);
+            let receiver = box_into_mixed(&mut builder, integer, PhpType::Mixed);
+            let _ = emit_method_call(
+                &mut builder,
+                receiver,
+                method_data,
+                vec![],
+                IrType::I64,
+                PhpType::Int,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        if let Some((status, stderr)) = run_main_failure(&module) {
+            assert_eq!(status, Some(255));
+            assert_eq!(
+                stderr,
+                "PHP Fatal error: Uncaught Error: Call to a member function value() on int\n"
+            );
+        }
+    }
+
+    /// A Mixed object whose runtime class lacks the requested method reports
+    /// that concrete class and method instead of hitting the dispatch fallthrough.
+    #[test]
+    fn mixed_undefined_method_raises_php_fatal() {
+        let defining_class = "P6fMMDefines";
+        let missing_class = "P6fMMMissing";
+        let mut module = Module::new(Target::wasm());
+        let (_, method_data) = class_with_method(
+            &mut module,
+            defining_class,
+            1,
+            "value",
+            IrType::I64,
+            PhpType::Int,
+            |builder, _| Some(builder.emit_const_i64(7)),
+        );
+        let missing_class_data = module.data.intern_class_name(missing_class);
+        module.class_infos.insert(
+            missing_class.to_string(),
+            test_class_info(2, vec![], vec![], false),
+        );
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let object = emit_object_new(&mut builder, missing_class, missing_class_data);
+            let receiver = box_into_mixed(&mut builder, object, PhpType::Mixed);
+            let _ = emit_method_call(
+                &mut builder,
+                receiver,
+                method_data,
+                vec![],
+                IrType::I64,
+                PhpType::Int,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        if let Some((status, stderr)) = run_main_failure(&module) {
+            assert_eq!(status, Some(255));
+            assert_eq!(
+                stderr,
+                "PHP Fatal error: Uncaught Error: Call to undefined method P6fMMMissing::value()\n"
+            );
+        }
+    }
+
     /// A method call on a Union(P) receiver dispatches the same way (Union routes to
     /// the mixed class-id ladder), echoing "7".
     #[test]

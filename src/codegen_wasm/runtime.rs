@@ -54,6 +54,22 @@ const ERR_NEG_SHIFT: &[u8] =
 const ERR_INTDIV_OVERFLOW: &[u8] = b"PHP Fatal error: Uncaught ArithmeticError: Division of PHP_INT_MIN by -1 is not an integer\n";
 const ERR_WASI: &[u8] = b"PHP Fatal error: WASI operation failed\n";
 const ERR_OOM: &[u8] = b"PHP Fatal error: Allowed memory size exhausted\n";
+const ERR_METHOD_CALL_PREFIX: &[u8] =
+    b"PHP Fatal error: Uncaught Error: Call to a member function ";
+const ERR_METHOD_CALL_SUFFIX: &[u8] = b"() on ";
+const PHP_TYPE_INT: &[u8] = b"int\n";
+const PHP_TYPE_STRING: &[u8] = b"string\n";
+const PHP_TYPE_FLOAT: &[u8] = b"float\n";
+const PHP_TYPE_BOOL: &[u8] = b"bool\n";
+const PHP_TYPE_ARRAY: &[u8] = b"array\n";
+const PHP_TYPE_NULL: &[u8] = b"null\n";
+const PHP_TYPE_RESOURCE: &[u8] = b"resource\n";
+const PHP_TYPE_CALLABLE: &[u8] = b"callable\n";
+const PHP_TYPE_UNKNOWN: &[u8] = b"unknown\n";
+const ERR_UNDEFINED_METHOD_PREFIX: &[u8] =
+    b"PHP Fatal error: Uncaught Error: Call to undefined method ";
+const ERR_UNDEFINED_METHOD_SEPARATOR: &[u8] = b"::";
+const ERR_UNDEFINED_METHOD_SUFFIX: &[u8] = b"()\n";
 
 /// First byte available to PHP string literals in a command module.
 pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
@@ -62,7 +78,21 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + ERR_NEG_SHIFT.len() as u32
     + ERR_INTDIV_OVERFLOW.len() as u32
     + ERR_WASI.len() as u32
-    + ERR_OOM.len() as u32;
+    + ERR_OOM.len() as u32
+    + ERR_METHOD_CALL_PREFIX.len() as u32
+    + ERR_METHOD_CALL_SUFFIX.len() as u32
+    + PHP_TYPE_INT.len() as u32
+    + PHP_TYPE_STRING.len() as u32
+    + PHP_TYPE_FLOAT.len() as u32
+    + PHP_TYPE_BOOL.len() as u32
+    + PHP_TYPE_ARRAY.len() as u32
+    + PHP_TYPE_NULL.len() as u32
+    + PHP_TYPE_RESOURCE.len() as u32
+    + PHP_TYPE_CALLABLE.len() as u32
+    + PHP_TYPE_UNKNOWN.len() as u32
+    + ERR_UNDEFINED_METHOD_PREFIX.len() as u32
+    + ERR_UNDEFINED_METHOD_SEPARATOR.len() as u32
+    + ERR_UNDEFINED_METHOD_SUFFIX.len() as u32;
 
 /// Adds the import-free runtime every module needs: the compatibility concat
 /// cursor global and the heap-backed `__rt_concat` helper.
@@ -134,7 +164,7 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
 /// The helper writes the selected message to stderr, exits with status 255, and
 /// ends in `unreachable` so validation does not treat `proc_exit` as returning.
 fn emit_failure_runtime(wm: &mut WatModule) {
-    let messages = [
+    let fixed_messages = [
         ERR_DIV_ZERO,
         ERR_MOD_ZERO,
         ERR_NEG_SHIFT,
@@ -142,10 +172,35 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         ERR_WASI,
         ERR_OOM,
     ];
-    let mut offsets = Vec::with_capacity(messages.len());
+    let method_messages = [
+        ERR_METHOD_CALL_PREFIX,
+        ERR_METHOD_CALL_SUFFIX,
+        PHP_TYPE_INT,
+        PHP_TYPE_STRING,
+        PHP_TYPE_FLOAT,
+        PHP_TYPE_BOOL,
+        PHP_TYPE_ARRAY,
+        PHP_TYPE_NULL,
+        PHP_TYPE_RESOURCE,
+        PHP_TYPE_CALLABLE,
+        PHP_TYPE_UNKNOWN,
+        ERR_UNDEFINED_METHOD_PREFIX,
+        ERR_UNDEFINED_METHOD_SEPARATOR,
+        ERR_UNDEFINED_METHOD_SUFFIX,
+    ];
+    let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
-    for message in messages {
+    for message in fixed_messages {
         offsets.push((cursor, message.len() as u32));
+        wm.add_data(DataSegment {
+            offset: cursor,
+            bytes: message.to_vec(),
+        });
+        cursor += message.len() as u32;
+    }
+    let mut method_offsets = Vec::with_capacity(method_messages.len());
+    for message in method_messages {
+        method_offsets.push((cursor, message.len() as u32));
         wm.add_data(DataSegment {
             offset: cursor,
             bytes: message.to_vec(),
@@ -169,6 +224,68 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         "  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $ptr) (local.get $len)))\n  (call $wasi_proc_exit (i32.const 255))\n  unreachable)",
     );
     wm.add_raw_func(&wat);
+    emit_method_call_failure_runtime(wm, &method_offsets);
+}
+
+/// Emits the fatal path used when a `Mixed` receiver is not an object.
+///
+/// The helper composes the PHP-visible method name with the runtime Mixed tag,
+/// writes the diagnostic to stderr, and terminates with PHP's fatal status 255.
+fn emit_method_call_failure_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
+    debug_assert_eq!(offsets.len(), 14);
+    let (prefix_ptr, prefix_len) = offsets[0];
+    let (suffix_ptr, suffix_len) = offsets[1];
+    let type_offsets = &offsets[2..11];
+    let mut wat = format!(
+        "(func $__rt_fail_method_call_non_object (param $method_ptr i32) (param $method_len i32) (param $tag i32)\n  (local $type_ptr i32) (local $type_len i32)\n  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {prefix_ptr}) (i32.const {prefix_len})))\n  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $method_ptr) (local.get $method_len)))\n  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {suffix_ptr}) (i32.const {suffix_len})))\n  (local.set $type_ptr (i32.const {}))\n  (local.set $type_len (i32.const {}))\n",
+        type_offsets[8].0, type_offsets[8].1
+    );
+    for (tag, type_index) in [
+        (0, 0),
+        (1, 1),
+        (2, 2),
+        (3, 3),
+        (4, 4),
+        (5, 4),
+        (8, 5),
+        (9, 6),
+        (10, 7),
+    ] {
+        let (type_ptr, type_len) = type_offsets[type_index];
+        wat.push_str(&format!(
+            "  (if (i32.eq (local.get $tag) (i32.const {tag}))\n    (then\n      (local.set $type_ptr (i32.const {type_ptr}))\n      (local.set $type_len (i32.const {type_len}))))\n"
+        ));
+    }
+    wat.push_str(
+        "  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $type_ptr) (local.get $type_len)))\n  (call $wasi_proc_exit (i32.const 255))\n  unreachable)",
+    );
+    wm.add_raw_func(&wat);
+    emit_undefined_method_failure_runtime(wm, &offsets[11..14]);
+}
+
+/// Emits the fatal path used when an object has no matching method dispatch arm.
+///
+/// The runtime class-name table supplies the concrete class name while the
+/// instruction's interned method-name bytes complete PHP's undefined-method text.
+fn emit_undefined_method_failure_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
+    debug_assert_eq!(offsets.len(), 3);
+    let (prefix_ptr, prefix_len) = offsets[0];
+    let (separator_ptr, separator_len) = offsets[1];
+    let (suffix_ptr, suffix_len) = offsets[2];
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_fail_undefined_method (param $cid i64) (param $method_ptr i32) (param $method_len i32)
+  (local $class_ptr i32) (local $class_len i64)
+  (call $__rt_class_name_by_cid (local.get $cid))
+  (local.set $class_len)
+  (local.set $class_ptr)
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {prefix_ptr}) (i32.const {prefix_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $class_ptr) (i32.wrap_i64 (local.get $class_len))))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {separator_ptr}) (i32.const {separator_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $method_ptr) (local.get $method_len)))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {suffix_ptr}) (i32.const {suffix_len})))
+  (call $wasi_proc_exit (i32.const 255))
+  unreachable)"#
+    ));
 }
 
 /// Repeatedly invokes WASI `fd_write` until every requested byte is written.
