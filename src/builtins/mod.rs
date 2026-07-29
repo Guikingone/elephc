@@ -16,6 +16,7 @@ pub mod semantics;
 pub mod spec;
 pub mod registry;
 pub mod docs;
+pub mod stream_compliance;
 mod convert;
 mod requirements;
 mod array;

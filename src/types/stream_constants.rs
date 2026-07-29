@@ -13,6 +13,54 @@
 //!   registered elsewhere (and `FNM_*` is target-sensitive). `STREAM_PF_INET6`
 //!   is target-divergent (AF_INET6: 30 on macOS, 10 on Linux) and is registered
 //!   target-sensitively when the socket layer lands.
+//! - The configured wrapper/transport/filter slices are shared by lowering and
+//!   Gate 0 compliance export so advertised capabilities cannot drift silently.
+
+pub(crate) const STREAM_WRAPPERS: &[&str] = &[
+    "file",
+    "php",
+    "data",
+    "ftp",
+    "http",
+    "https",
+    "ftps",
+    "compress.zlib",
+    "compress.bzip2",
+    "phar",
+    "glob",
+];
+
+pub(crate) const STREAM_TRANSPORTS: &[&str] = &[
+    "tcp",
+    "udp",
+    "unix",
+    "udg",
+    "tls",
+    "ssl",
+    "sslv2",
+    "sslv3",
+    "tlsv1.0",
+    "tlsv1.1",
+    "tlsv1.2",
+    "tlsv1.3",
+];
+
+pub(crate) const STREAM_FILTERS: &[&str] = &[
+    "string.toupper",
+    "string.tolower",
+    "string.rot13",
+    "string.strip_tags",
+    "convert.base64-encode",
+    "convert.base64-decode",
+    "convert.quoted-printable-encode",
+    "convert.quoted-printable-decode",
+    "convert.iconv.*",
+    "dechunk",
+    "zlib.deflate",
+    "zlib.inflate",
+    "bzip2.compress",
+    "bzip2.decompress",
+];
 
 pub(crate) const STREAM_INT_CONSTANTS: &[(&str, i64)] = &[
     // Client / server connection flags.

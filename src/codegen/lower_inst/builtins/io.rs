@@ -1548,13 +1548,7 @@ pub(crate) fn lower_stream_get_wrappers(
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "stream_get_wrappers", 0)?;
-    emit_static_string_array(
-        ctx,
-        &[
-            "file", "php", "data", "ftp", "http", "https", "ftps",
-            "compress.zlib", "compress.bzip2", "phar", "glob",
-        ],
-    );
+    emit_static_string_array(ctx, crate::types::stream_constants::STREAM_WRAPPERS);
     store_if_result(ctx, inst)
 }
 
@@ -1564,13 +1558,7 @@ pub(crate) fn lower_stream_get_transports(
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "stream_get_transports", 0)?;
-    emit_static_string_array(
-        ctx,
-        &[
-            "tcp", "udp", "unix", "udg", "tls", "ssl", "sslv2", "sslv3",
-            "tlsv1.0", "tlsv1.1", "tlsv1.2", "tlsv1.3",
-        ],
-    );
+    emit_static_string_array(ctx, crate::types::stream_constants::STREAM_TRANSPORTS);
     store_if_result(ctx, inst)
 }
 
@@ -1582,25 +1570,7 @@ pub(crate) fn lower_stream_get_filters(
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "stream_get_filters", 0)?;
-    emit_static_string_array(
-        ctx,
-        &[
-            "string.toupper",
-            "string.tolower",
-            "string.rot13",
-            "string.strip_tags",
-            "convert.base64-encode",
-            "convert.base64-decode",
-            "convert.quoted-printable-encode",
-            "convert.quoted-printable-decode",
-            "convert.iconv.*",
-            "dechunk",
-            "zlib.deflate",
-            "zlib.inflate",
-            "bzip2.compress",
-            "bzip2.decompress",
-        ],
-    );
+    emit_static_string_array(ctx, crate::types::stream_constants::STREAM_FILTERS);
     // -- append user-registered filter names from the runtime registry --
     abi::emit_call_label(ctx.emitter, "__rt_stream_get_filters");
     store_if_result(ctx, inst)
