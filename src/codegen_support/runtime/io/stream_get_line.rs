@@ -8,14 +8,12 @@
 //! Key details:
 //! - Reads one byte at a time into the concat buffer until the byte budget is
 //!   spent, EOF is reached, or the trailing bytes match the ending delimiter
-//!   (which is consumed and stripped). EOF/read failure sets `_eof_flags`.
+//!   (which is consumed and stripped). EOF/read failure updates `StreamState`.
 
-use crate::codegen_support::abi::emit_symbol_address;
-use crate::codegen_support::{emit::Emitter, platform::Arch};
-use crate::codegen_support::abi;
+use crate::codegen_support::{abi, abi::emit_symbol_address, emit::Emitter, platform::Arch};
 
 /// stream_get_line: read up to a length or an ending delimiter from a stream.
-/// Input:  x0=fd, x1=max length, x2=ending pointer, x3=ending length
+/// Input:  x0=handle, x1=max length, x2=ending pointer, x3=ending length
 /// Output: x1=string pointer (in concat_buf), x2=length read (delimiter stripped)
 pub fn emit_stream_get_line(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -28,15 +26,17 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.comment("--- runtime: stream_get_line ---");
     emitter.label_global("__rt_stream_get_line");
 
-    // Frame: [0..16) regs, [16) fd, [24) length, [32) ending ptr, [40) ending
-    //        len, [48) result start, [56) running total.
-    emitter.instruction("sub sp, sp, #64");                                     // frame for saved regs and parse state
+    // Frame: [0..16) regs, [16) handle, [24) length, [32) ending ptr, [40) ending
+    //        len, [48) result start, [56) running total, [64) backend fd.
+    emitter.instruction("sub sp, sp, #80");                                     // frame for saved regs and parse state
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
-    emitter.instruction("str x0, [sp, #16]");                                   // save the file descriptor
+    emitter.instruction("str x0, [sp, #16]");                                   // save the opaque stream handle
     emitter.instruction("str x1, [sp, #24]");                                   // save the maximum length
     emitter.instruction("str x2, [sp, #32]");                                   // save the ending-delimiter pointer
     emitter.instruction("str x3, [sp, #40]");                                   // save the ending-delimiter length
+    emitter.instruction("bl __rt_stream_fd");                                   // resolve the backend descriptor through StreamState
+    emitter.instruction("str x0, [sp, #64]");                                   // preserve the resolved backend descriptor
 
     emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // current concat-buffer offset
@@ -46,11 +46,14 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #56]");                                  // running total starts at zero
 
     // -- user-wrapper fd: read via stream_read into _user_wrapper_drain_buf --
-    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the file descriptor
+    emitter.instruction("ldr x0, [sp, #64]");                                   // reload the backend descriptor
     emitter.instruction("mov w9, #0x4000");                                     // high half of USER_WRAPPER_FD_BASE
     emitter.instruction("lsl w9, w9, #16");                                     // form 0x40000000 in w9
     emitter.instruction("cmp x0, x9");                                          // is this a synthetic user-wrapper fd?
-    emitter.instruction("b.ge __rt_sgl_wrapper_entry");                         // wrappers read via the feof-gated stream_read loop below
+    emitter.instruction("b.lo __rt_stream_get_line_loop");                      // native descriptors use the byte-read loop below
+    emitter.instruction("add x10, x9, #256");                                   // bound the 256 active wrapper slots
+    emitter.instruction("cmp x0, x10");                                         // is the backend above the wrapper range?
+    emitter.instruction("b.lo __rt_sgl_wrapper_entry");                         // wrappers read via the feof-gated stream_read loop below
 
     emitter.label("__rt_stream_get_line_loop");
     emitter.instruction("ldr x10, [sp, #56]");                                  // running total
@@ -62,7 +65,7 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x9]");                                       // current concat-buffer offset
     emit_symbol_address(emitter, "x11", "_concat_buf");
     emitter.instruction("add x1, x11, x10");                                    // single-byte write pointer
-    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the file descriptor
+    emitter.instruction("ldr x0, [sp, #64]");                                   // reload the file descriptor
     emitter.instruction("mov x2, #1");                                          // read exactly one byte
     emitter.syscall(3);
     if plat.needs_cmp_before_error_branch() {
@@ -130,10 +133,10 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #24]");                                  // maximum length
     emitter.instruction("cmp x10, x11");                                        // reached the byte budget?
     emitter.instruction("b.ge __rt_stream_get_line_done");                      // stop at the maximum length
-    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the wrapper fd
+    emitter.instruction("ldr x0, [sp, #64]");                                   // reload the wrapper fd
     emitter.instruction("bl __rt_feof");                                        // check stream_eof FIRST (x0 = 1 at EOF)
     emitter.instruction("cbnz x0, __rt_stream_get_line_done");                  // at EOF: return the bytes gathered so far
-    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the wrapper fd
+    emitter.instruction("ldr x0, [sp, #64]");                                   // reload the wrapper fd
     emitter.instruction("mov x1, #1");                                          // read exactly one byte
     emitter.instruction("bl __rt_fread");                                       // x1 = chunk ptr, x2 = len
     emitter.instruction("cbz x2, __rt_stream_get_line_done");                   // defensive: empty read also ends the line
@@ -171,16 +174,15 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("b __rt_stream_get_line_done");                         // a delimiter match is not EOF
 
     emitter.label("__rt_stream_get_line_eof");
-    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the file descriptor
-    emit_symbol_address(emitter, "x9", "_eof_flags");
-    emitter.instruction("mov w10, #1");                                         // EOF marker value
-    emitter.instruction("strb w10, [x9, x0]");                                  // record EOF for this descriptor
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the opaque stream handle
+    emitter.instruction("mov x1, #1");                                          // publish the EOF state
+    emitter.instruction("bl __rt_stream_eof_set");                              // update only this stream's stable state
 
     emitter.label("__rt_stream_get_line_done");
     emitter.instruction("ldr x1, [sp, #48]");                                   // return the result start pointer
     emitter.instruction("ldr x2, [sp, #56]");                                   // return the bytes read
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // release the frame
+    emitter.instruction("add sp, sp, #80");                                     // release the frame
     emitter.instruction("ret");                                                 // return the line slice
 }
 
@@ -190,15 +192,17 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: stream_get_line ---");
     emitter.label_global("__rt_stream_get_line");
 
-    // Frame: [rbp-8) fd, [rbp-16) length, [rbp-24) ending ptr, [rbp-32) ending
-    //        len, [rbp-40) result start, [rbp-48) running total.
+    // Frame: [rbp-8) handle, [rbp-16) length, [rbp-24) ending ptr, [rbp-32) ending
+    //        len, [rbp-40) result start, [rbp-48) running total, [rbp-56) backend fd.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 48");                                         // frame for the parse state
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the file descriptor
+    emitter.instruction("sub rsp, 64");                                         // frame for the parse state
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the opaque stream handle
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the maximum length
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the ending-delimiter pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the ending-delimiter length
+    emitter.instruction("call __rt_stream_fd");                                 // resolve the backend descriptor through StreamState
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // preserve the resolved backend descriptor
 
     abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // current concat-buffer offset
     abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // concat-buffer base address
@@ -207,10 +211,13 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // running total starts at zero
 
     // -- user-wrapper fd: read via stream_read into _user_wrapper_drain_buf --
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the file descriptor
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the backend descriptor
     emitter.instruction("mov r9d, 0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("cmp rax, r9");                                         // is this a synthetic user-wrapper fd?
-    emitter.instruction("jge __rt_sgl_wrapper_entry_x86");                      // wrappers read via the feof-gated stream_read loop below
+    emitter.instruction("jb __rt_stream_get_line_loop_x86");                    // native descriptors use the byte-read loop below
+    emitter.instruction("lea r10, [r9 + 256]");                                 // bound the 256 active wrapper slots
+    emitter.instruction("cmp rax, r10");                                        // is the backend above the wrapper range?
+    emitter.instruction("jb __rt_sgl_wrapper_entry_x86");                       // wrappers read via the feof-gated stream_read loop below
 
     emitter.label("__rt_stream_get_line_loop_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // running total
@@ -220,7 +227,7 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // current concat-buffer offset
     abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // concat-buffer base address
     emitter.instruction("lea rsi, [r10 + r9]");                                 // single-byte write pointer
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the file descriptor
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the file descriptor
     emitter.instruction("mov rdx, 1");                                          // read exactly one byte
     emitter.instruction("call read");                                           // read one byte through libc read()
     emitter.instruction("cmp rax, 0");                                          // classify libc read() as a byte, EOF, or failure
@@ -281,11 +288,11 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // running total
     emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // reached the byte budget?
     emitter.instruction("jge __rt_stream_get_line_done_x86");                   // stop at the maximum length
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the wrapper fd
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the wrapper fd
     emitter.instruction("call __rt_feof");                                      // check stream_eof FIRST (rax = 1 at EOF)
     emitter.instruction("test rax, rax");                                       // at EOF?
     emitter.instruction("jnz __rt_stream_get_line_done_x86");                   // at EOF: return the bytes gathered so far
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the wrapper fd
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the wrapper fd
     emitter.instruction("mov rsi, 1");                                          // read exactly one byte
     emitter.instruction("call __rt_fread");                                     // rax = chunk ptr, rdx = len
     emitter.instruction("test rdx, rdx");                                       // zero-length read?
@@ -325,14 +332,14 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_stream_get_line_done_x86");                   // a delimiter match is not EOF
 
     emitter.label("__rt_stream_get_line_eof_x86");
-    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the file descriptor
-    abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // eof-flag table base address
-    emitter.instruction("mov BYTE PTR [r10 + r9], 1");                          // record EOF for this descriptor
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle
+    emitter.instruction("mov esi, 1");                                          // publish the EOF state
+    emitter.instruction("call __rt_stream_eof_set");                            // update only this stream's stable state
 
     emitter.label("__rt_stream_get_line_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return the result start pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // return the bytes read
-    emitter.instruction("add rsp, 48");                                         // release the frame
+    emitter.instruction("add rsp, 64");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the line slice
 }

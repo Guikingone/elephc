@@ -190,6 +190,63 @@ fn web_reset_clears_static_property() {
     assert!(r2.ends_with("1"), "second response body: {:?}", r2);
 }
 
+/// Verifies request reset closes an abandoned user-wrapper resource exactly
+/// once before the next request runs in the same worker process.
+#[test]
+fn web_stream_registry_request_reset_closes_abandoned_resource_once() {
+    let dir = make_test_dir("web_stream_registry_reset");
+    let count_file = dir
+        .join("close-count.txt")
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let src = r#"<?php
+class RequestCloseWrapper {
+    public $context;
+
+    public function stream_open($path, $mode, $options, &$openedPath): bool {
+        return true;
+    }
+
+    public function stream_close(): void {
+        $count = file_exists("__COUNT_FILE__")
+            ? (int) file_get_contents("__COUNT_FILE__")
+            : 0;
+        file_put_contents("__COUNT_FILE__", (string) ($count + 1));
+    }
+}
+
+if (!in_array("reqclose", stream_get_wrappers(), true)) {
+    stream_wrapper_register("reqclose", "RequestCloseWrapper");
+}
+
+if (isset($_GET["hold"])) {
+    $heldStream = fopen("reqclose://request", "r");
+    echo is_resource($heldStream) ? "held" : "open-failed";
+} else {
+    echo "closed=";
+    echo file_exists("__COUNT_FILE__")
+        ? file_get_contents("__COUNT_FILE__")
+        : "0";
+}
+"#
+    .replace("__COUNT_FILE__", &count_file);
+    let bin = compile_web(&dir, &src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/?hold=1");
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("held"), "first response body: {:?}", first);
+    assert!(
+        second.ends_with("closed=1"),
+        "second response did not observe exact-once stream cleanup: {:?}",
+        second
+    );
+}
+
 /// Verifies that "Hello World" is served as the response body.
 #[test]
 fn web_server_serves_echo_body() {
@@ -1145,5 +1202,32 @@ echo ($s['opcache_statistics']['start_time'] > 1000000000 ? 'ST1' : 'ST0');";
         resp.ends_with("EN1:MEMOK:INTOK:MCK1:HR1:JIT1:SCR1:NSCR0:ST1"),
         "opcache_get_status --web array mismatch: {:?}",
         resp
+    );
+}
+
+/// Verifies the request-global default stream context is recreated as a live
+/// resource after each request reset rather than reusing a stale registry handle.
+#[test]
+fn web_default_stream_context_is_live_on_every_request() {
+    let dir = make_test_dir("web_default_stream_context_reset");
+    let src = "<?php $context = stream_context_get_default(); \
+        echo is_resource($context) ? get_resource_type($context) : 'dead';";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        first.ends_with("stream-context"),
+        "first request returned a non-live default context: {:?}",
+        first
+    );
+    assert!(
+        second.ends_with("stream-context"),
+        "request reset left a stale default-context handle: {:?}",
+        second
     );
 }

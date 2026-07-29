@@ -158,15 +158,15 @@ pub(crate) fn collect_constants(
     );
     constants.insert(
         "STDIN".to_string(),
-        (ExprKind::IntLiteral(0), PhpType::stream_resource()),
+        (ExprKind::IntLiteral(0x1_0000_0001), PhpType::stream_resource()),
     );
     constants.insert(
         "STDOUT".to_string(),
-        (ExprKind::IntLiteral(1), PhpType::stream_resource()),
+        (ExprKind::IntLiteral(0x1_0000_0002), PhpType::stream_resource()),
     );
     constants.insert(
         "STDERR".to_string(),
-        (ExprKind::IntLiteral(2), PhpType::stream_resource()),
+        (ExprKind::IntLiteral(0x1_0000_0003), PhpType::stream_resource()),
     );
     constants.insert(
         "LOCK_SH".to_string(),

@@ -1594,7 +1594,7 @@ fn lower_foreach(
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
     let source = lower_expr(ctx, array);
     let source_php_ty = ctx.builder.value_php_type(source.value);
-    let source_ty = source_php_ty.codegen_repr();
+    let source_ty = source_php_ty.clone();
     let key_needs_null_init = key_var.is_some_and(|name| !ctx.local_slots.contains_key(name));
     let value_needs_null_init = !ctx.local_slots.contains_key(value_var);
     // A foreach over a concretely-indexed array (`Array` of a non-Mixed element
@@ -1732,12 +1732,15 @@ fn lower_foreach(
 
 /// Returns the by-value foreach local type when Phase 04 can keep a concrete element.
 fn foreach_value_type(source_ty: &PhpType) -> PhpType {
-    match source_ty.codegen_repr() {
-        PhpType::Array(elem) => match elem.codegen_repr() {
-            PhpType::Callable => PhpType::Callable,
-            PhpType::Object(class_name) => PhpType::Object(class_name),
-            elem @ (PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool) => elem,
-            _ => PhpType::Mixed,
+    match source_ty {
+        PhpType::Array(elem) => match elem.as_ref() {
+            resource @ PhpType::Resource(_) => resource.clone(),
+            elem => match elem.codegen_repr() {
+                PhpType::Callable => PhpType::Callable,
+                PhpType::Object(class_name) => PhpType::Object(class_name),
+                elem @ (PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool) => elem,
+                _ => PhpType::Mixed,
+            },
         },
         PhpType::Object(class_name) if class_name == "Phar" || class_name == "PharData" => {
             PhpType::Object("PharFileInfo".to_string())
@@ -1748,9 +1751,9 @@ fn foreach_value_type(source_ty: &PhpType) -> PhpType {
 
 /// Returns the local value type used when a foreach binds the value by reference.
 fn foreach_ref_value_type(source_ty: &PhpType) -> PhpType {
-    match source_ty.codegen_repr() {
-        PhpType::Array(elem) => *elem,
-        PhpType::AssocArray { value, .. } => *value,
+    match source_ty {
+        PhpType::Array(elem) => elem.as_ref().clone(),
+        PhpType::AssocArray { value, .. } => value.as_ref().clone(),
         _ => PhpType::Mixed,
     }
 }

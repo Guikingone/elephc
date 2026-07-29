@@ -30,8 +30,8 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes (48 original + 16 for filename save)
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // establish new frame pointer
-    emitter.instruction("str x1, [sp, #32]");                                    // save filename ptr for stream metadata recording
-    emitter.instruction("str x2, [sp, #40]");                                    // save filename len for stream metadata recording
+    emitter.instruction("str x1, [sp, #32]");                                   // save filename ptr for stream metadata recording
+    emitter.instruction("str x2, [sp, #40]");                                   // save filename len for stream metadata recording
 
     // -- recognise user-registered stream wrappers before opening a real file
     //    (Phase 10 dispatch v1: silent-false on match; the wrapper class is
@@ -229,16 +229,6 @@ pub fn emit_fopen(emitter: &mut Emitter) {
 
     // -- restore frame and return fd in x0 --
     emitter.label("__rt_fopen_opened");
-    abi::emit_symbol_address(emitter, "x9", "_eof_flags");
-    emitter.instruction("strb wzr, [x9, x0]");                                  // clear stale EOF state for the newly opened descriptor
-    // -- record stream metadata (wrapper_id=0 for plainfile, saved filename) --
-    emitter.instruction("str x0, [sp, #0]");                                     // save fd on stack (caller-saved regs are clobbered by the call)
-    emitter.instruction("mov x0, x0");                                          // arg0 = fd (already in x0)
-    emitter.instruction("mov x1, #0");                                          // arg1 = wrapper_id (0 = plainfile)
-    emitter.instruction("ldr x2, [sp, #32]");                                   // arg2 = uri ptr (saved filename)
-    emitter.instruction("ldr x3, [sp, #40]");                                   // arg3 = uri len (saved filename)
-    emitter.instruction("bl __rt_stream_record_meta");                          // record the stream's wrapper id and URI
-    emitter.instruction("ldr x0, [sp, #0]");                                    // restore fd into x0 for the return
     emitter.label("__rt_fopen_return");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
@@ -458,16 +448,6 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fopen_opened_x86");
     emitter.instruction("cdqe");                                                // normalize the successful C int fd into the runtime's 64-bit descriptor value
-    abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // materialize the eof-flag table for the newly opened descriptor
-    emitter.instruction("mov BYTE PTR [r10 + rax], 0");                         // clear stale EOF state before returning the descriptor
-    // -- record stream metadata (wrapper_id=0 for plainfile, saved filename) --
-    emitter.instruction("push rax");                                            // save fd on stack (caller-saved regs are clobbered by the call)
-    emitter.instruction("mov rdi, rax");                                       // arg0 = fd
-    emitter.instruction("xor esi, esi");                                        // arg1 = wrapper_id (0 = plainfile)
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // arg2 = uri ptr (saved filename)
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // arg3 = uri len (saved filename)
-    emitter.instruction("call __rt_stream_record_meta");                        // record the stream's wrapper id and URI
-    emitter.instruction("pop rax");                                            // restore fd into rax for the return
     emitter.label("__rt_fopen_return_x86");
 
     emitter.instruction("add rsp, 32");                                         // release the temporary pathname and mode spill slots before returning the file descriptor

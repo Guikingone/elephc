@@ -17,7 +17,8 @@ use crate::codegen_support::abi;
 
 /// Emits the read-all stream helper.
 ///
-/// Input: `x0 = fd`. Output: `x1 = string pointer`, `x2 = total bytes read`.
+/// Input: `x0 = fd`, `x1 = state-owned chunk size`.
+/// Output: `x1 = string pointer`, `x2 = total bytes read`.
 /// The helper loops through `__rt_fread`, compacts each returned chunk into
 /// `_concat_buf`, and stops when EOF or an empty read is produced.
 pub fn emit_stream_get_contents(emitter: &mut Emitter) {
@@ -35,6 +36,7 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #64");                                    // establish the helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the source file descriptor
+    emitter.instruction("str x1, [sp, #48]");                                   // save the state-owned read-loop chunk size
 
     // -- record the start of the result inside the concat buffer --
     emit_symbol_address(emitter, "x9", "_concat_off");
@@ -61,17 +63,11 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
     emit_symbol_address(emitter, "x13", "_concat_off");
     emitter.instruction("str x12, [x13]");                                      // make __rt_fread append at the compact tail
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd for __rt_fread
-    // -- read the per-fd chunk size from _stream_chunk_size[fd] (default 4096 if unset) --
-    //    Synthetic user-wrapper fds (>= 0x40000000) skip the table lookup.
-    emitter.instruction("mov w11, #0x4000");                                     // high half of USER_WRAPPER_FD_BASE
-    emitter.instruction("lsl w11, w11, #16");                                    // form 0x40000000
-    emitter.instruction("cmp x0, x11");                                          // synthetic fd?
-    emitter.instruction("b.ge __rt_stream_get_contents_chunk_default");           // yes → use default 4096
-    emit_symbol_address(emitter, "x9", "_stream_chunk_size");
-    emitter.instruction("ldr x1, [x9, x0, lsl #3]");                            // load _stream_chunk_size[fd]
-    emitter.instruction("cbnz x1, __rt_stream_get_contents_chunk_loaded");      // non-zero → use it
+    // -- read with the chunk size carried by the authoritative StreamState --
+    emitter.instruction("ldr x1, [sp, #48]");                                   // reload the state-owned read-loop chunk size
+    emitter.instruction("cbnz x1, __rt_stream_get_contents_chunk_loaded");      // preserve an explicitly configured chunk size
     emitter.label("__rt_stream_get_contents_chunk_default");
-    emitter.instruction("mov x1, #4096");                                       // fallback to 4096 when unset or wrapper fd
+    emitter.instruction("mov x1, #4096");                                       // keep a defensive default for direct runtime callers
     emitter.label("__rt_stream_get_contents_chunk_loaded");
     emitter.instruction("bl __rt_fread");                                       // x1=chunk ptr, x2=chunk len
     emitter.instruction("cbz x2, __rt_stream_get_contents_release_done");       // empty read stops the read-all loop
@@ -119,7 +115,8 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
 
 /// Emits the AArch64 bounded stream_get_contents helper.
 ///
-/// Input: `x0 = fd`, `x1 = max bytes`. Output: `x1 = ptr`, `x2 = len`.
+/// Input: `x0 = fd`, `x1 = max bytes`, `x2 = state-owned chunk size`.
+/// Output: `x1 = ptr`, `x2 = len`.
 /// The loop calls `__rt_fread` repeatedly, compacts each returned chunk into
 /// `_concat_buf`, and stops at the requested byte count or EOF.
 fn emit_stream_get_contents_bounded_aarch64(emitter: &mut Emitter) {
@@ -127,11 +124,12 @@ fn emit_stream_get_contents_bounded_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: stream_get_contents_bounded ---");
     emitter.label_global("__rt_stream_get_contents_bounded");
 
-    emitter.instruction("sub sp, sp, #80");                                     // allocate locals plus saved frame pointer and return address
-    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #64");                                    // establish the helper frame pointer
+    emitter.instruction("sub sp, sp, #96");                                     // allocate locals plus chunk state and saved caller frame
+    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #80");                                    // establish the helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the source descriptor
     emitter.instruction("str x1, [sp, #8]");                                    // save the requested byte cap
+    emitter.instruction("str x2, [sp, #64]");                                   // save the state-owned read-loop chunk size
     emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // snapshot the concat-buffer start offset
     emitter.instruction("str x10, [sp, #16]");                                  // save the result start offset
@@ -156,22 +154,13 @@ fn emit_stream_get_contents_bounded_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #32]");                                   // running result length
     emitter.instruction("ldr x10, [sp, #8]");                                   // requested byte cap
     emitter.instruction("sub x1, x10, x9");                                     // remaining bytes needed (x1)
-    // -- read the per-fd chunk size from _stream_chunk_size[fd] (default 4096 if unset) --
-    //    Save x1 (remaining) and x9 (running length) on stack while we look up
-    //    the chunk size, since emit_symbol_address clobbers x9.
+    // -- cap this read by the chunk size carried by the authoritative StreamState --
     emitter.instruction("str x1, [sp, #48]");                                   // save remaining bytes
     emitter.instruction("str x9, [sp, #56]");                                   // save running result length
-    emitter.instruction("ldr x0, [sp, #0]");                                    // fd for chunk size lookup
-    //    Synthetic user-wrapper fds (>= 0x40000000) skip the table lookup.
-    emitter.instruction("mov w14, #0x4000");                                    // high half of USER_WRAPPER_FD_BASE
-    emitter.instruction("lsl w14, w14, #16");                                   // form 0x40000000
-    emitter.instruction("cmp x0, x14");                                         // synthetic fd?
-    emitter.instruction("b.ge __rt_stream_get_contents_bounded_chunk_default");  // yes → use default 4096
-    emit_symbol_address(emitter, "x9", "_stream_chunk_size");
-    emitter.instruction("ldr x11, [x9, x0, lsl #3]");                           // load _stream_chunk_size[fd]
-    emitter.instruction("cbnz x11, __rt_stream_get_contents_bounded_chunk_loaded"); // non-zero → use it
+    emitter.instruction("ldr x11, [sp, #64]");                                  // reload the state-owned read-loop chunk size
+    emitter.instruction("cbnz x11, __rt_stream_get_contents_bounded_chunk_loaded"); // preserve an explicitly configured chunk size
     emitter.label("__rt_stream_get_contents_bounded_chunk_default");
-    emitter.instruction("mov x11, #4096");                                       // fallback to 4096 when unset or wrapper fd
+    emitter.instruction("mov x11, #4096");                                      // keep a defensive default for direct runtime callers
     emitter.label("__rt_stream_get_contents_bounded_chunk_loaded");
     emitter.instruction("ldr x1, [sp, #48]");                                   // restore remaining bytes
     emitter.instruction("ldr x9, [sp, #56]");                                   // restore running result length
@@ -222,8 +211,8 @@ fn emit_stream_get_contents_bounded_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_stream_get_contents_bounded_done");
     emitter.instruction("ldr x1, [sp, #24]");                                   // return the result start pointer
     emitter.instruction("ldr x2, [sp, #32]");                                   // return the accumulated result length
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // release the helper frame
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the bounded string slice
 }
 
@@ -237,6 +226,7 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction("sub rsp, 64");                                         // reserve aligned locals for read-all accumulation
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source file descriptor
+    emitter.instruction("mov QWORD PTR [rbp - 56], rsi");                       // save the state-owned read-loop chunk size
     abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer offset
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // save the result start offset
     abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base address
@@ -258,17 +248,12 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r11, r8");                                         // compact append offset = start + total
     abi::emit_store_reg_to_symbol(emitter, "r11", "_concat_off", 0);            // make __rt_fread append at the compact tail
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload fd for __rt_fread
-    // -- read the per-fd chunk size from _stream_chunk_size[fd] (default 4096 if unset) --
-    //    Synthetic user-wrapper fds (>= 0x40000000) skip the table lookup.
-    emitter.instruction("mov r10d, 0x40000000");                                // USER_WRAPPER_FD_BASE
-    emitter.instruction("cmp rdi, r10");                                         // synthetic fd?
-    emitter.instruction("jge __rt_stream_get_contents_chunk_default_x86");       // yes → use default 4096
-    abi::emit_symbol_address(emitter, "r9", "_stream_chunk_size");
-    emitter.instruction("mov rsi, QWORD PTR [r9 + rdi * 8]");                  // load _stream_chunk_size[fd]
-    emitter.instruction("test rsi, rsi");                                       // unset (0)?
-    emitter.instruction("jnz __rt_stream_get_contents_chunk_loaded_x86");       // non-zero → use it
+    // -- read with the chunk size carried by the authoritative StreamState --
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // reload the state-owned read-loop chunk size
+    emitter.instruction("test rsi, rsi");                                       // was a custom chunk size supplied?
+    emitter.instruction("jnz __rt_stream_get_contents_chunk_loaded_x86");       // preserve the supplied chunk size
     emitter.label("__rt_stream_get_contents_chunk_default_x86");
-    emitter.instruction("mov rsi, 4096");                                       // fallback to 4096 when unset or wrapper fd
+    emitter.instruction("mov rsi, 4096");                                       // keep a defensive default for direct runtime callers
     emitter.label("__rt_stream_get_contents_chunk_loaded_x86");
     emitter.instruction("call __rt_fread");                                     // rax=chunk ptr, rdx=chunk len
     emitter.instruction("test rdx, rdx");                                       // empty chunk?
@@ -313,7 +298,8 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
 
 /// Emits the x86_64 bounded stream_get_contents helper.
 ///
-/// Input: `rdi = fd`, `rsi = max bytes`. Output: `rax = ptr`, `rdx = len`.
+/// Input: `rdi = fd`, `rsi = max bytes`, `rdx = state-owned chunk size`.
+/// Output: `rax = ptr`, `rdx = len`.
 /// The helper compacts each `__rt_fread` chunk into `_concat_buf` so filters or
 /// wrappers that return separate buffers still produce one contiguous result.
 fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
@@ -326,6 +312,7 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 64");                                         // reserve aligned locals for bounded accumulation
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source descriptor
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested byte cap
+    emitter.instruction("mov QWORD PTR [rbp - 64], rdx");                       // save the state-owned read-loop chunk size
     abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // snapshot the concat-buffer start offset
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the result start offset
     abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base
@@ -349,17 +336,12 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // running result length
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // requested byte cap
     emitter.instruction("sub rsi, r8");                                         // remaining bytes needed
-    // -- read the per-fd chunk size from _stream_chunk_size[fd] (default 4096 if unset) --
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload fd for chunk size lookup
-    emitter.instruction("mov r10d, 0x40000000");                                // USER_WRAPPER_FD_BASE
-    emitter.instruction("cmp rdi, r10");                                         // synthetic fd?
-    emitter.instruction("jge __rt_stream_get_contents_bounded_chunk_default_x86"); // yes → use default 4096
-    abi::emit_symbol_address(emitter, "r9", "_stream_chunk_size");
-    emitter.instruction("mov r10, QWORD PTR [r9 + rdi * 8]");                  // load _stream_chunk_size[fd]
-    emitter.instruction("test r10, r10");                                       // unset (0)?
-    emitter.instruction("jnz __rt_stream_get_contents_bounded_chunk_loaded_x86"); // non-zero → use it
+    // -- cap this read by the chunk size carried by the authoritative StreamState --
+    emitter.instruction("mov r10, QWORD PTR [rbp - 64]");                       // reload the state-owned read-loop chunk size
+    emitter.instruction("test r10, r10");                                       // was a custom chunk size supplied?
+    emitter.instruction("jnz __rt_stream_get_contents_bounded_chunk_loaded_x86"); // preserve the supplied chunk size
     emitter.label("__rt_stream_get_contents_bounded_chunk_default_x86");
-    emitter.instruction("mov r10, 4096");                                       // fallback to 4096 when unset or wrapper fd
+    emitter.instruction("mov r10, 4096");                                       // keep a defensive default for direct runtime callers
     emitter.label("__rt_stream_get_contents_bounded_chunk_loaded_x86");
     emitter.instruction("cmp rsi, r10");                                        // is the remaining cap bigger than one chunk?
     emitter.instruction("cmovg rsi, r10");                                      // request min(remaining, 4096)

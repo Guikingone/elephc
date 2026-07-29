@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, and resource scope-cleanup.
+//! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, and stream-registry lifecycle.
 
 #[path = "runtime_gc/basics.rs"]
 mod basics;
@@ -27,3 +27,9 @@ mod heap;
 mod heap_codegen;
 #[path = "runtime_gc/resource_scope_cleanup.rs"]
 mod resource_scope_cleanup;
+#[path = "runtime_gc/stream_registry.rs"]
+mod stream_registry;
+#[path = "runtime_gc/stream_backend_registry.rs"]
+mod stream_backend_registry;
+#[path = "runtime_gc/stream_context_registry.rs"]
+mod stream_context_registry;

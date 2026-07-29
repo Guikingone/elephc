@@ -18,7 +18,6 @@ use crate::names::php_symbol_key;
 use crate::types::{ClassInfo, PhpType};
 
 use super::super::super::context::FunctionContext;
-use super::super::predicates;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
 
 /// Lowers `settype($local, "type")` by mutating the resolved local slot and returning true.
@@ -543,34 +542,193 @@ fn const_bool_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Optio
 pub(crate) fn lower_is_resource(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "is_resource", 1)?;
     let value = expect_operand(inst, 0)?;
-    match ctx.raw_value_php_type(value)? {
-        PhpType::Resource(_) => emit_bool_result(ctx, true),
-        PhpType::Mixed | PhpType::Union(_) => predicates::emit_mixed_tag_eq(ctx, value, 9)?,
-        _ => emit_bool_result(ctx, false),
-    }
+    emit_resource_is_open(ctx, value)?;
     store_if_result(ctx, inst)
 }
 
-/// Lowers `get_resource_type(resource)` to elephc's current resource type label.
+/// Lowers `get_resource_type(resource)` from the live registry kind.
 pub(crate) fn lower_get_resource_type(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "get_resource_type", 1)?;
     let value = expect_operand(inst, 0)?;
-    ctx.load_value_to_result(value)?;
+    emit_resource_kind_if_open(ctx, value)?;
+    let context_label = ctx.next_label("resource_type_context");
+    let unknown_label = ctx.next_label("resource_type_unknown");
+    let done_label = ctx.next_label("resource_type_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {}", unknown_label));     // stale or closed resources have PHP type Unknown
+            ctx.emitter.instruction("cmp x0, #2");                              // registry kind 2 identifies stream contexts
+            ctx.emitter.instruction(&format!("b.eq {}", context_label));        // contexts use PHP's stream-context resource label
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did the handle resolve to a live registry entry?
+            ctx.emitter.instruction(&format!("jz {}", unknown_label));          // stale or closed resources have PHP type Unknown
+            ctx.emitter.instruction("cmp rax, 2");                              // registry kind 2 identifies stream contexts
+            ctx.emitter.instruction(&format!("je {}", context_label));          // contexts use PHP's stream-context resource label
+        }
+    }
     emit_string_result(ctx, b"stream");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the context and unknown labels for live streams
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the context and unknown labels for live streams
+        }
+    }
+    ctx.emitter.label(&context_label);
+    emit_string_result(ctx, b"stream-context");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip Unknown after materializing the context label
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip Unknown after materializing the context label
+        }
+    }
+    ctx.emitter.label(&unknown_label);
+    emit_string_result(ctx, b"Unknown");
+    ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
 
-/// Lowers `get_resource_id(resource)` by unboxing the native handle and making it one-based.
+/// Leaves a live registry kind in the result register, using kind one for legacy resources.
+fn emit_resource_kind_if_open(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let raw_type = ctx.raw_value_php_type(value)?;
+    ctx.load_value_to_result(value)?;
+    match raw_type {
+        PhpType::Resource(_) => {
+            if matches!(ctx.emitter.target.arch, Arch::X86_64) {
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the statically typed opaque handle to registry kind lookup
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_resource_kind_if_open");
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            let tag_ok_label = ctx.next_label("resource_kind_tag_ok");
+            let registry_label = ctx.next_label("resource_kind_registry");
+            let legacy_label = ctx.next_label("resource_kind_legacy");
+            let done_label = ctx.next_label("resource_kind_done");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #9");                      // require a boxed resource before reading its ownership marker
+                    ctx.emitter.instruction(&format!("b.eq {}", tag_ok_label)); // continue only for a boxed PHP resource
+                    ctx.emitter.instruction("mov x0, #0");                      // non-resource Mixed values have no resource kind
+                    ctx.emitter.instruction(&format!("b {}", done_label));      // skip resource marker dispatch
+                    ctx.emitter.label(&tag_ok_label);
+                    for marker in [1_u64, 3, 4, 9] {
+                        ctx.emitter.instruction(&format!("cmp x2, #{}", marker)); // compare a registry ownership marker
+                        ctx.emitter.instruction(&format!("b.eq {}", registry_label)); // registry resources resolve their authoritative kind
+                    }
+                    ctx.emitter.instruction(&format!("b {}", legacy_label));    // unmigrated tagged resources retain the legacy stream label
+                    ctx.emitter.label(&registry_label);
+                    ctx.emitter.instruction("mov x0, x1");                      // pass the opaque registry handle to kind lookup
+                    abi::emit_call_label(ctx.emitter, "__rt_resource_kind_if_open");
+                    ctx.emitter.instruction(&format!("b {}", done_label));      // preserve the registry kind result
+                    ctx.emitter.label(&legacy_label);
+                    ctx.emitter.instruction("mov x0, #1");                      // legacy live resources use the transitional stream kind
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 9");                      // require a boxed resource before reading its ownership marker
+                    ctx.emitter.instruction(&format!("je {}", tag_ok_label));   // continue only for a boxed PHP resource
+                    ctx.emitter.instruction("xor eax, eax");                    // non-resource Mixed values have no resource kind
+                    ctx.emitter.instruction(&format!("jmp {}", done_label));    // skip resource marker dispatch
+                    ctx.emitter.label(&tag_ok_label);
+                    for marker in [1_u64, 3, 4, 9] {
+                        ctx.emitter.instruction(&format!("cmp rsi, {}", marker)); // compare a registry ownership marker
+                        ctx.emitter.instruction(&format!("je {}", registry_label)); // registry resources resolve their authoritative kind
+                    }
+                    ctx.emitter.instruction(&format!("jmp {}", legacy_label));  // unmigrated tagged resources retain the legacy stream label
+                    ctx.emitter.label(&registry_label);
+                    abi::emit_call_label(ctx.emitter, "__rt_resource_kind_if_open");
+                    ctx.emitter.instruction(&format!("jmp {}", done_label));    // preserve the registry kind result
+                    ctx.emitter.label(&legacy_label);
+                    ctx.emitter.instruction("mov eax, 1");                      // legacy live resources use the transitional stream kind
+                }
+            }
+            ctx.emitter.label(&done_label);
+        }
+        _ => emit_bool_result(ctx, false),
+    }
+    Ok(())
+}
+
+/// Leaves whether a value is a currently open PHP resource in the integer result register.
+///
+/// Registry-owned stream markers (`high=1/3/4`) validate the opaque handle and
+/// its Live state. Legacy resource kinds stay tag-based until their dedicated
+/// ContextState and FilterState migrations move them into the same registry.
+fn emit_resource_is_open(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let raw_type = ctx.raw_value_php_type(value)?;
+    ctx.load_value_to_result(value)?;
+    match raw_type {
+        PhpType::Resource(_) => {
+            if matches!(ctx.emitter.target.arch, Arch::X86_64) {
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the statically typed resource handle to the registry
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_resource_is_open");
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            let tag_ok_label = ctx.next_label("resource_tag_ok");
+            let registry_label = ctx.next_label("resource_registry_check");
+            let true_label = ctx.next_label("resource_legacy_live");
+            let done_label = ctx.next_label("resource_live_done");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #9");                      // require the Mixed resource tag before inspecting its payload
+                    ctx.emitter.instruction(&format!("b.eq {}", tag_ok_label)); // continue only for a boxed PHP resource
+                    ctx.emitter.instruction("mov x0, #0");                      // non-resource Mixed values answer false
+                    ctx.emitter.instruction(&format!("b {}", done_label));      // skip resource marker dispatch
+                    ctx.emitter.label(&tag_ok_label);
+                    for marker in [1_u64, 3, 4, 9] {
+                        ctx.emitter.instruction(&format!("cmp x2, #{}", marker)); // compare the transitional registry ownership marker
+                        ctx.emitter.instruction(&format!("b.eq {}", registry_label)); // registry-owned streams validate their generation
+                    }
+                    ctx.emitter.instruction(&format!("b {}", true_label));      // legacy tagged resources remain live by tag for now
+                    ctx.emitter.label(&registry_label);
+                    ctx.emitter.instruction("mov x0, x1");                      // pass the opaque registry handle to the liveness helper
+                    abi::emit_call_label(ctx.emitter, "__rt_resource_is_open");
+                    ctx.emitter.instruction(&format!("b {}", done_label));      // preserve the registry liveness result
+                    ctx.emitter.label(&true_label);
+                    ctx.emitter.instruction("mov x0, #1");                      // an unmigrated resource tag remains a live resource
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 9");                      // require the Mixed resource tag before inspecting its payload
+                    ctx.emitter.instruction(&format!("je {}", tag_ok_label));   // continue only for a boxed PHP resource
+                    ctx.emitter.instruction("xor eax, eax");                    // non-resource Mixed values answer false
+                    ctx.emitter.instruction(&format!("jmp {}", done_label));    // skip resource marker dispatch
+                    ctx.emitter.label(&tag_ok_label);
+                    for marker in [1_u64, 3, 4, 9] {
+                        ctx.emitter.instruction(&format!("cmp rsi, {}", marker)); // compare the transitional registry ownership marker
+                        ctx.emitter.instruction(&format!("je {}", registry_label)); // registry-owned streams validate their generation
+                    }
+                    ctx.emitter.instruction(&format!("jmp {}", true_label));    // legacy tagged resources remain live by tag for now
+                    ctx.emitter.label(&registry_label);
+                    abi::emit_call_label(ctx.emitter, "__rt_resource_is_open");
+                    ctx.emitter.instruction(&format!("jmp {}", done_label));    // preserve the registry liveness result
+                    ctx.emitter.label(&true_label);
+                    ctx.emitter.instruction("mov eax, 1");                      // an unmigrated resource tag remains a live resource
+                }
+            }
+            ctx.emitter.label(&done_label);
+        }
+        _ => emit_bool_result(ctx, false),
+    }
+    Ok(())
+}
+
+/// Lowers `get_resource_id(resource)` from the opaque registry handle.
 pub(crate) fn lower_get_resource_id(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "get_resource_id", 1)?;
     let value = expect_operand(inst, 0)?;
-    super::io::load_stream_fd_to_result(ctx, value, "get_resource_id")?;
+    super::io::load_stream_handle_to_result(ctx, value, "get_resource_id")?;
     emit_resource_display_id_to_int(ctx);
     store_if_result(ctx, inst)
 }

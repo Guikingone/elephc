@@ -9,17 +9,13 @@
 //! - Mixed helpers use boxed tag/payload cells; tag constants and ownership rules are shared with type checking and codegen.
 //! - Null or sentinel payloads presented with a container-shaped tag (4–6) are
 //!   normalized to the canonical Mixed null tag before ownership or allocation.
-//! - Tag 9 (resource) takes no ownership, but it is this function that guarantees
-//!   every boxed resource carries a PHP resource id: the tag-9 arm calls
-//!   `__rt_resource_id_of`, which binds the next id when the native payload has
-//!   none yet and leaves an existing binding alone. Boxing is the one point every
-//!   resource passes through — `fopen`, `opendir`, `popen`, the stream filters, the
-//!   eval bridge and `zval_unpack` alike — so ids follow creation order without each
-//!   of those sites having to opt in, while `$b = $a` re-boxing the same payload keeps
-//!   the id it already had. Creation sites that can hand back a RECYCLED native payload
-//!   (a descriptor number the kernel reissued after `fclose`) call
-//!   `__rt_resource_id_mint` first, which overwrites instead of preserving; see
-//!   `runtime::resource_ids`.
+//! - Tag 9 (resource) binds its PHP display id and, for registry-owned stream kinds
+//!   1, 3, 4, and 9, retains the opaque handle through `__rt_resource_retain`.
+//!   Boxing is the ownership boundary shared by `fopen`, `opendir`, `popen`, stream
+//!   contexts, copies, and every later re-boxing of those handles. Legacy kind-0
+//!   resources keep only the pre-existing display-id bind.
+//!   Creation sites that can hand back a recycled legacy native payload still call
+//!   `__rt_resource_id_mint`; see `runtime::resource_ids`.
 //! - ONE RESOURCE KIND IS EXCLUDED: kind 2, the raw incremental-hash context. PHP 8
 //!   makes `hash_init()` return a `HashContext` OBJECT (`crate::hash_prelude`), so the
 //!   context belongs to the OBJECT handle space and must consume nothing from the
@@ -89,7 +85,21 @@ pub fn emit_mixed_from_value(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_from_value_alloc");                    // a HashContext is an OBJECT in PHP and must consume no resource id
     emitter.instruction("mov x0, x1");                                          // move the native resource payload into the registry argument
     emitter.instruction("bl __rt_resource_id_of");                              // bind a display id if this payload does not already have one
-    emitter.instruction("b __rt_mixed_from_value_alloc");                       // the id lives in the side table; the cell is boxed unchanged
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the resource kind after display-id binding
+    emitter.instruction("cmp x9, #1");                                          // kind 1 = registry-owned native stream
+    emitter.instruction("b.eq __rt_mixed_from_value_resource_retain");          // the Mixed box becomes another owner of the stream handle
+    emitter.instruction("cmp x9, #3");                                          // kind 3 = registry-owned process pipe
+    emitter.instruction("b.eq __rt_mixed_from_value_resource_retain");          // retain the popen stream handle for the Mixed owner
+    emitter.instruction("cmp x9, #4");                                          // kind 4 = registry-owned directory stream
+    emitter.instruction("b.eq __rt_mixed_from_value_resource_retain");          // retain the directory stream handle for the Mixed owner
+    emitter.instruction("cmp x9, #9");                                          // kind 9 = registry-owned stream context
+    emitter.instruction("b.eq __rt_mixed_from_value_resource_retain");          // retain the context handle for the Mixed owner
+    emitter.instruction("b __rt_mixed_from_value_alloc");                       // legacy resource kinds remain outside the stream registry for now
+
+    emitter.label("__rt_mixed_from_value_resource_retain");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // pass the opaque resource handle saved before display-id binding
+    emitter.instruction("bl __rt_resource_retain");                             // retain the registry entry for ownership by the new Mixed cell
+    emitter.instruction("b __rt_mixed_from_value_alloc");                       // allocate the box after the registry retain succeeds
 
     emitter.label("__rt_mixed_from_value_null_container");
     emitter.instruction("mov x9, #8");                                          // runtime tag 8 is the canonical boxed PHP null
@@ -160,8 +170,8 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_from_value_retain");                     // retain nested mixed cells before storing them inside the parent mixed cell
     emitter.instruction("cmp rax, 10");                                         // detect callable descriptors that participate in callable ownership
     emitter.instruction("je __rt_mixed_from_value_retain");                     // retain callable descriptors before storing them inside the mixed cell
-    emitter.instruction("cmp rax, 9");                                          // detect PHP resources, which carry a displayed id rather than ownership
-    emitter.instruction("je __rt_mixed_from_value_resource");                   // resources need a display id bound before they can be shown
+    emitter.instruction("cmp rax, 9");                                          // detect PHP resources, which carry registry or legacy native handles
+    emitter.instruction("je __rt_mixed_from_value_resource");                   // resources bind display identity and registry ownership as applicable
     emitter.instruction("jmp __rt_mixed_from_value_alloc");                     // scalars can be boxed directly without additional ownership work
 
     emitter.label("__rt_mixed_from_value_resource");
@@ -169,7 +179,21 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_from_value_alloc");                      // a HashContext is an OBJECT in PHP and must consume no resource id
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // move the native resource payload into the registry argument
     emitter.instruction("call __rt_resource_id_of");                            // bind a display id if this payload does not already have one
-    emitter.instruction("jmp __rt_mixed_from_value_alloc");                     // the id lives in the side table; the cell is boxed unchanged
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the resource kind after display-id binding
+    emitter.instruction("cmp r10, 1");                                          // kind 1 = registry-owned native stream
+    emitter.instruction("je __rt_mixed_from_value_resource_retain_x86");        // the Mixed box becomes another owner of the stream handle
+    emitter.instruction("cmp r10, 3");                                          // kind 3 = registry-owned process pipe
+    emitter.instruction("je __rt_mixed_from_value_resource_retain_x86");        // retain the popen stream handle for the Mixed owner
+    emitter.instruction("cmp r10, 4");                                          // kind 4 = registry-owned directory stream
+    emitter.instruction("je __rt_mixed_from_value_resource_retain_x86");        // retain the directory stream handle for the Mixed owner
+    emitter.instruction("cmp r10, 9");                                          // kind 9 = registry-owned stream context
+    emitter.instruction("je __rt_mixed_from_value_resource_retain_x86");        // retain the context handle for the Mixed owner
+    emitter.instruction("jmp __rt_mixed_from_value_alloc");                     // legacy resource kinds remain outside the stream registry for now
+
+    emitter.label("__rt_mixed_from_value_resource_retain_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // pass the opaque resource handle saved before display-id binding
+    emitter.instruction("call __rt_resource_retain");                           // retain the registry entry for ownership by the new Mixed cell
+    emitter.instruction("jmp __rt_mixed_from_value_alloc");                     // allocate the box after the registry retain succeeds
 
     emitter.label("__rt_mixed_from_value_null_container");
     emitter.instruction("mov QWORD PTR [rbp - 8], 8");                          // replace the container-shaped tag with canonical Mixed null

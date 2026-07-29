@@ -21,6 +21,7 @@ use super::io;
 use super::objects;
 use super::pointers;
 use super::resource_ids;
+use super::resources;
 use super::spl;
 use super::strings;
 use super::system;
@@ -203,6 +204,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_set_mixed_key(emitter);
     arrays::emit_array_get_mixed_key(emitter);
     arrays::emit_array_set_refcounted(emitter);
+    arrays::emit_array_set_resource(emitter);
     arrays::emit_array_set_str(emitter);
     arrays::emit_array_union(emitter);
     arrays::emit_array_hash_union(emitter);
@@ -353,6 +355,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // PHP resource-id registry (its own numbering space, unrelated to object handles)
     resource_ids::emit_resource_ids(emitter);
 
+    // Opaque generational stream/context/filter resource registry and stream-state accessors.
+    resources::emit_resource_runtime(emitter);
+
     // Object runtime functions
     objects::emit_object_handles(emitter);
     objects::emit_stdclass_new(emitter);
@@ -448,6 +453,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_getservbyname(emitter);
     io::emit_getservbyport(emitter);
     io::emit_stream_copy_to_stream(emitter);
+    io::emit_stream_context_merge_options(emitter);
     io::emit_stream_context_set_option_4(emitter);
     io::emit_get_string_context_option(emitter);
     io::emit_get_int_context_option(emitter);
@@ -773,11 +779,13 @@ mod tests {
         // A token is an internal helper label iff it is an `L`-localized `__rt_*`
         // name (what `label()` produces under dead stripping). `.alt_entry`
         // helpers stay bare `__rt_*`, so they never match here.
+        /// Returns whether one assembly token names a localized internal runtime helper.
         fn is_internal(tok: &str) -> bool {
             tok.starts_with("L__rt_")
         }
         // True when `s` is a bare label definition body (no whitespace, label
         // characters only, not purely numeric → not an assembler-local `N:`).
+        /// Returns whether one token can be a non-numeric assembly label definition.
         fn is_label_name(s: &str) -> bool {
             !s.is_empty()
                 && !s.bytes().all(|b| b.is_ascii_digit())

@@ -25,6 +25,7 @@ mod io;
 mod objects;
 mod pointers;
 mod resource_ids;
+pub(crate) mod resources;
 /// Standard PHP library constants, functions, and classes.
 pub(crate) mod spl;
 mod strings;

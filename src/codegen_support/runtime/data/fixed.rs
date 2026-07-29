@@ -276,6 +276,24 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // and for `php -r`. elephc already renders STDIN/STDOUT/STDERR as 1/2/3, so
     // starting user resources at 5 reproduces reference numbering end to end.
     out.push_str(".globl _resource_id_next\n_resource_id_next:\n    .quad 5\n");
+    // Gate 1 opaque resource registry. The slot array itself is allocated lazily
+    // from elephc's target-independent runtime heap. Handles contain only a
+    // generation and one-based slot index; no OS descriptor is PHP-visible.
+    out.push_str(".comm _resource_registry_ptr, 8, 3\n");
+    out.push_str(".comm _resource_registry_len, 8, 3\n");
+    out.push_str(".comm _resource_registry_cap, 8, 3\n");
+    out.push_str(".comm _resource_registry_free, 8, 3\n");
+    out.push_str(".comm _resource_registry_live, 8, 3\n");
+    out.push_str(".comm _resource_registry_epoch, 8, 3\n");
+    // Persistent 320-byte StreamState records for STDIN/STDOUT/STDERR. Their
+    // registry slots use generation one and PHP constants carry the corresponding
+    // opaque handles rather than exposing descriptors zero through two.
+    out.push_str(".comm _resource_std_stream_states, 960, 3\n");
+    out.push_str(".globl _resource_std_stream_uri_stdin\n_resource_std_stream_uri_stdin:\n    .ascii \"php://stdin\"\n");
+    out.push_str(".globl _resource_std_stream_uri_stdout\n_resource_std_stream_uri_stdout:\n    .ascii \"php://stdout\"\n");
+    out.push_str(".globl _resource_std_stream_uri_stderr\n_resource_std_stream_uri_stderr:\n    .ascii \"php://stderr\"\n");
+    out.push_str(".p2align 3\n.globl _resource_std_stream_uri_ptrs\n_resource_std_stream_uri_ptrs:\n    .quad _resource_std_stream_uri_stdin\n    .quad _resource_std_stream_uri_stdout\n    .quad _resource_std_stream_uri_stderr\n");
+    out.push_str(".globl _resource_std_stream_uri_lens\n_resource_std_stream_uri_lens:\n    .quad 11\n    .quad 12\n    .quad 12\n");
     out.push_str(&format!(".globl _heap_max\n_heap_max:\n    .quad {}\n", heap_size));
     out.push_str(".globl _heap_err_msg\n_heap_err_msg:\n    .ascii \"Fatal error: heap memory exhausted\\n\"\n");
     out.push_str(".globl _heap_dbg_bad_refcount_msg\n_heap_dbg_bad_refcount_msg:\n    .ascii \"Fatal error: heap debug detected bad refcount\\n\"\n");
@@ -457,15 +475,6 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _gc_peak, 8, 3\n");
     out.push_str(".comm _cstr_buf, 4096, 3\n");
     out.push_str(".comm _cstr_buf2, 4096, 3\n");
-    out.push_str(".comm _eof_flags, 256, 3\n");
-    out.push_str(".comm _popen_files, 2048, 3\n");
-    out.push_str(".comm _dir_handles, 2048, 3\n");
-    // Per-fd glob:// state pointers (256 fds × 8B). Each slot is a pointer to
-    // a heap-allocated glob_state struct (pathv ptr + pathc + index + the
-    // libc glob_t whose lifetime globfree() needs at closedir time). The
-    // readdir/closedir/rewinddir helpers probe this table first; a non-zero
-    // entry routes them through the glob iterator instead of the libc DIR*.
-    out.push_str(".comm _glob_handles, 2048, 3\n");
     // _stream_read_filters / _stream_write_filters: per-fd filter chain,
     // 2 slots per fd (slot 0 = first applied, slot 1 = second). A zero byte
     // means "no filter". 256 fds × 2 slots = 512 bytes each.
@@ -629,30 +638,6 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // table and route through the elephc-tls helpers when an entry is
     // non-zero, falling back to read/write/close syscalls otherwise.
     out.push_str(".comm _tls_sessions, 2048, 3\n");
-    // _stream_chunk_size: per-fd read/write chunk size set by
-    // stream_set_chunk_size, indexed by raw fd up to 256 (8 bytes each). A zero
-    // entry means "unset" and reports PHP's default of 8192. stream_set_chunk_size
-    // returns the previous value (the PHP-observable contract); the size does not
-    // currently change read granularity (reads return identical data).
-    out.push_str(".comm _stream_chunk_size, 2048, 3\n");
-    // _stream_uri_ptr / _stream_uri_len: per-fd pointer/length of the URI that
-    // opened the stream, indexed by raw fd up to 256. A null pointer means
-    // "unset" and stream_get_meta_data() falls back to the empty string. The
-    // URI is persisted via __rt_str_persist so it survives past the caller's
-    // string lifetime.
-    out.push_str(".comm _stream_uri_ptr, 2048, 3\n");
-    out.push_str(".comm _stream_uri_len, 2048, 3\n");
-    // _stream_wrapper_id: per-fd small integer identifying the wrapper that
-    // opened the stream (0=plainfile, 1=http, 2=https, 3=ftp, 4=ftps,
-    // 5=phar, 6=php, 7=data, 8=compress.zlib, 9=compress.bzip2, 10=glob,
-    // 11=user). stream_get_meta_data() maps the id to the wrapper_type
-    // string; 0 (unset) falls back to "plainfile".
-    out.push_str(".comm _stream_wrapper_id, 2048, 3\n");
-    // _stream_connect_host: per-fd transport host string (ptr, len) captured by
-    // stream_socket_client so stream_socket_enable_crypto can default the TLS
-    // SNI / peer-name to the connection host when no ssl.peer_name context
-    // option is set. 256 fds * 16 bytes (ptr + len). A zero len means "unset".
-    out.push_str(".comm _stream_connect_host, 4096, 3\n");
     // _stream_notification_callback: the callable descriptor pointer for the
     // stream context's `notification` option, captured at codegen time by
     // stream_context_create / stream_context_set_params. __rt_http_open fires
@@ -868,6 +853,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // registrations, each entry 32 bytes (protocol_ptr/len + class_ptr/len).
     // Slot is free when protocol_ptr is null. 64 × 32 = 2048 bytes.
     out.push_str(".comm _user_wrappers, 2048, 3\n");
+    // Registration flags are definition-scoped and copied into each StreamState
+    // at open time, so later unregister/reregister operations cannot mutate a
+    // live stream instance's STREAM_IS_URL behavior.
+    out.push_str(".comm _user_wrapper_flags, 512, 3\n");
     // _user_wrapper_handles: USER_WRAPPER_HANDLES_CAP = 256 active stream-handle
     // slots, each storing the wrapper object pointer keyed by synthetic fd
     // `USER_WRAPPER_FD_BASE + slot_index`. Slot is free when the stored pointer
@@ -911,18 +900,12 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // + dir] where dir=0 is read, dir=1 is write. Slot is null when no
     // user filter is attached. 256 fds × 2 dirs × 8 B = 4096 bytes.
     out.push_str(".comm _user_filter_instances, 4096, 3\n");
-    // _stream_context_options: pointer to the current stream-context
-    // options hash (nested array of `wrapper => option => value`).
-    // stream_context_create() stores its options arg here; consumers
-    // (http://, ftp://, fopen 4th arg) read it back through
-    // __rt_hash_get. v1 limitation: only one active context at a time —
-    // a fresh stream_context_create overwrites the slot.
+    // _stream_context_options: transient scratch used while constructing or
+    // selecting a registry-backed ContextState for legacy wrapper consumers.
     out.push_str(".comm _stream_context_options, 8, 3\n");
-    // _stream_context_table: per-context-handle options hash pointers,
-    // indexed by context id (1..=16). 16 slots × 8 B = 128 bytes.
-    out.push_str(".comm _stream_context_table, 128, 3\n");
-    // _stream_context_next_id: monotonic counter for the next context id.
-    out.push_str(".comm _stream_context_next_id, 8, 3\n");
+    // _stream_default_context_handle: process/request-global owner of the
+    // lazily allocated default ContextState registry handle.
+    out.push_str(".comm _stream_default_context_handle, 8, 3\n");
     // _http_resp_header_end: byte offset of the body start within
     // _http_resp_buf, set by __rt_http_open after the CRLFCRLF scan.
     out.push_str(".comm _http_resp_header_end, 8, 3\n");
@@ -1097,12 +1080,12 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _meta_wrapper_ftp\n_meta_wrapper_ftp:\n    .ascii \"ftp\"\n");
     out.push_str(".globl _meta_wrapper_ftps\n_meta_wrapper_ftps:\n    .ascii \"ftps\"\n");
     out.push_str(".globl _meta_wrapper_phar\n_meta_wrapper_phar:\n    .ascii \"phar\"\n");
-    out.push_str(".globl _meta_wrapper_php\n_meta_wrapper_php:\n    .ascii \"php\"\n");
+    out.push_str(".globl _meta_wrapper_php\n_meta_wrapper_php:\n    .ascii \"PHP\"\n");
     out.push_str(".globl _meta_wrapper_data\n_meta_wrapper_data:\n    .ascii \"data\"\n");
     out.push_str(".globl _meta_wrapper_zlib\n_meta_wrapper_zlib:\n    .ascii \"compress.zlib\"\n");
     out.push_str(".globl _meta_wrapper_bzip2\n_meta_wrapper_bzip2:\n    .ascii \"compress.bzip2\"\n");
     out.push_str(".globl _meta_wrapper_glob\n_meta_wrapper_glob:\n    .ascii \"glob\"\n");
-    out.push_str(".globl _meta_wrapper_user\n_meta_wrapper_user:\n    .ascii \"user\"\n");
+    out.push_str(".globl _meta_wrapper_user\n_meta_wrapper_user:\n    .ascii \"user-space\"\n");
     out.push_str(".globl _meta_mode_r\n_meta_mode_r:\n    .ascii \"r\"\n");
     out.push_str(".globl _meta_mode_w\n_meta_mode_w:\n    .ascii \"w\"\n");
     out.push_str(".globl _meta_mode_rw\n_meta_mode_rw:\n    .ascii \"r+\"\n");

@@ -1,32 +1,26 @@
 //! Purpose:
-//! Emits the `__rt_stream_record_meta` runtime helper, which records the
-//! wrapper id and URI string for a stream descriptor so that
-//! `stream_get_meta_data()` can report the real `wrapper_type` and `uri`
-//! instead of hardcoded `"plainfile"` / `""`.
+//! Emits handle-keyed stream metadata replacement for wrapper identity and URI.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::io`.
-//! - `__rt_fopen`, `__rt_http_open`, `__rt_https_open`, `__rt_ftp_open`,
-//!   `__rt_data_stream`, `__rt_tmpfile`, and other stream-open helpers,
-//!   after a successful open that produced a raw fd.
+//! - Stream-open lowering after a backend descriptor has entered the resource registry.
 //!
 //! Key details:
-//! - The URI is persisted via `__rt_str_persist` so it survives past the
-//!   caller's string lifetime (the caller's buffer may be freed or reused).
-//! - Tables: `_stream_wrapper_id[fd]` (u8), `_stream_uri_ptr[fd]` (u64),
-//!   `_stream_uri_len[fd]` (u64), indexed by raw fd up to 256.
-//! - fds >= 256 are silently skipped (no metadata recorded).
+//! - URI storage belongs to the stable StreamState rather than a reusable OS descriptor.
+//! - Replacement persists the new URI before releasing the previous allocation.
+//! - Userspace and buffered-Phar backend kinds override the caller's fallback wrapper id.
 
+use crate::codegen_support::runtime::resources::layout::{
+    STREAM_BACKEND_KIND_OFFSET, STREAM_BACKEND_PHAR_WRITE, STREAM_BACKEND_USER_DIRECTORY,
+    STREAM_BACKEND_USER_WRAPPER, STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_STATE_FLAG_IS_URL,
+    STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET, STREAM_WRAPPER_ID_OFFSET,
+};
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
-/// `__rt_stream_record_meta(fd, wrapper_id, uri_ptr, uri_len)`.
+/// Emits `__rt_stream_record_meta(handle, wrapper_id, uri_ptr, uri_len) -> handle`.
 ///
-/// Persists the URI string and stores the wrapper id for the given fd so
-/// `stream_get_meta_data()` can report accurate `wrapper_type` and `uri`.
-///
-/// Input:  AArch64 x0=fd, x1=wrapper_id, x2=uri_ptr, x3=uri_len.
-///         x86_64  rdi=fd, rsi=wrapper_id, rdx=uri_ptr, rcx=uri_len.
-/// Output: none (returns to caller; x0/rax is not preserved).
+/// AArch64 receives `x0/x1/x2/x3`; x86_64 receives `rdi/rsi/rdx/rcx`.
+/// Invalid or stale handles are returned unchanged without taking string ownership.
 pub fn emit_stream_record_meta(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_stream_record_meta_linux_x86_64(emitter);
@@ -34,94 +28,274 @@ pub fn emit_stream_record_meta(emitter: &mut Emitter) {
     }
 
     emitter.blank();
-    emitter.comment("--- runtime: stream_record_meta ---");
+    emitter.comment("--- runtime: replace handle-keyed stream metadata ---");
     emitter.label_global("__rt_stream_record_meta");
-
-    // Frame: [0]=fd [8]=wrapper_id [16]=uri_ptr [24]=uri_len [32]=x29 [40]=x30
-    emitter.instruction("sub sp, sp, #48");                                     // allocate the record-meta frame
-    emitter.instruction("stp x29, x30, [sp, #32]");                              // save frame pointer and return address
-    emitter.instruction("add x29, sp, #32");                                     // establish the helper frame pointer
-    emitter.instruction("str x0, [sp, #0]");                                     // save fd
-    emitter.instruction("str x1, [sp, #8]");                                     // save wrapper_id
-    emitter.instruction("str x2, [sp, #16]");                                    // save uri_ptr
-    emitter.instruction("str x3, [sp, #24]");                                    // save uri_len
-
-    // -- skip fds >= 256 (out of table range) --
-    emitter.instruction("ldr x0, [sp, #0]");                                     // reload fd
-    emitter.instruction("cmp x0, #256");                                         // fd >= 256?
-    emitter.instruction("b.ge __rt_stream_record_meta_ret");                      // skip recording for out-of-range fds
-
-    // -- persist the URI string so it survives past the caller's buffer --
-    emitter.instruction("ldr x1, [sp, #16]");                                    // uri_ptr
-    emitter.instruction("ldr x2, [sp, #24]");                                    // uri_len
-    emitter.instruction("bl __rt_str_persist");                                  // x0 = persisted uri pointer
-    emitter.instruction("str x0, [sp, #16]");                                    // save the persisted uri pointer
-
-    // -- store wrapper_id at _stream_wrapper_id[fd] --
-    emitter.instruction("ldr x0, [sp, #0]");                                     // reload fd
-    emitter.instruction("ldr x1, [sp, #8]");                                     // reload wrapper_id
-    abi::emit_symbol_address(emitter, "x2", "_stream_wrapper_id");               // wrapper-id table base
-    emitter.instruction("strb w1, [x2, x0]");                                     // _stream_wrapper_id[fd] = wrapper_id (low byte)
-
-    // -- store uri_ptr at _stream_uri_ptr[fd] --
-    abi::emit_symbol_address(emitter, "x2", "_stream_uri_ptr");                   // uri-ptr table base
-    emitter.instruction("ldr x3, [sp, #16]");                                    // reload persisted uri pointer
-    emitter.instruction("str x3, [x2, x0, lsl #3]");                              // _stream_uri_ptr[fd] = uri_ptr
-
-    // -- store uri_len at _stream_uri_len[fd] --
-    abi::emit_symbol_address(emitter, "x2", "_stream_uri_len");                   // uri-len table base
-    emitter.instruction("ldr x3, [sp, #24]");                                    // reload uri_len
-    emitter.instruction("str x3, [x2, x0, lsl #3]");                              // _stream_uri_len[fd] = uri_len
-
-    emitter.label("__rt_stream_record_meta_ret");
-    emitter.instruction("ldp x29, x30, [sp, #32]");                               // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                        // release the record-meta frame
-    emitter.instruction("ret");                                                  // return to the caller
+    emitter.instruction("sub sp, sp, #64");                                     // reserve metadata inputs, state, and a saved frame
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the caller frame and link register
+    emitter.instruction("add x29, sp, #48");                                    // establish a stable metadata frame
+    emitter.instruction("stp x0, x1, [sp, #0]");                                // preserve opaque handle and requested wrapper id
+    emitter.instruction("stp x2, x3, [sp, #16]");                               // preserve URI pointer and byte length
+    emitter.instruction("bl __rt_stream_state");                                // resolve Live or Closing stable StreamState
+    emitter.instruction("cbz x0, __rt_stream_record_meta_done");                // stale handles cannot acquire URI ownership
+    emitter.instruction("str x0, [sp, #32]");                                   // preserve StreamState across string persistence
+    emitter.instruction("ldp x1, x2, [sp, #16]");                               // load URI bytes for independent persistence
+    emitter.instruction("bl __rt_str_persist");                                 // duplicate URI into owned heap storage
+    emitter.instruction("str x1, [sp, #16]");                                   // preserve the new owned URI pointer
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload StreamState for atomic ownership replacement
+    emitter.instruction(&format!(
+        "ldr x10, [x9, #{}]", STREAM_URI_PTR_OFFSET
+    ));                                                                         // capture the previous owned URI allocation
+    emitter.instruction(&format!(
+        "str x1, [x9, #{}]", STREAM_URI_PTR_OFFSET
+    ));                                                                         // publish the new owned URI pointer
+    emitter.instruction("ldr x11, [sp, #24]");                                  // reload the caller-visible URI byte length
+    emitter.instruction(&format!(
+        "str x11, [x9, #{}]", STREAM_URI_LEN_OFFSET
+    ));                                                                         // publish the new URI byte length
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the requested wrapper id
+    emitter.instruction(&format!(
+        "ldr x13, [x9, #{}]", STREAM_OWNERSHIP_FLAGS_OFFSET
+    ));                                                                         // load instance flags before replacing URL identity
+    emitter.instruction(&format!(
+        "mov x14, #{}", STREAM_STATE_FLAG_IS_URL
+    ));                                                                         // materialize the StreamState URL-wrapper bit
+    emitter.instruction("bic x13, x13, x14");                                   // clear any previous URL-wrapper identity
+    emitter.instruction("cmp x11, #1");                                         // built-in remote wrapper ids start at HTTP
+    emitter.instruction("b.lo __rt_stream_record_meta_builtin_url_done");       // plainfile and unset wrappers are local
+    emitter.instruction("cmp x11, #4");                                         // built-in remote wrapper ids end at FTPS
+    emitter.instruction("b.hi __rt_stream_record_meta_builtin_url_done");       // all later built-in wrappers are local
+    emitter.instruction("orr x13, x13, x14");                                   // mark built-in HTTP(S)/FTP(S) instances as URL streams
+    emitter.label("__rt_stream_record_meta_builtin_url_done");
+    emitter.instruction(&format!(
+        "str x13, [x9, #{}]", STREAM_OWNERSHIP_FLAGS_OFFSET
+    ));                                                                         // publish the refreshed instance flags
+    emitter.instruction(&format!(
+        "ldr x12, [x9, #{}]", STREAM_BACKEND_KIND_OFFSET
+    ));                                                                         // inspect backend-specific wrapper identity
+    emitter.instruction(&format!(
+        "cmp x12, #{}", STREAM_BACKEND_USER_WRAPPER
+    ));                                                                         // is this a userspace stream-wrapper backend?
+    emitter.instruction("b.eq __rt_stream_record_meta_user");                   // userspace wrappers report a stable user-space identity
+    emitter.instruction(&format!(
+        "cmp x12, #{}", STREAM_BACKEND_USER_DIRECTORY
+    ));                                                                         // is this a userspace directory-wrapper backend?
+    emitter.instruction("b.eq __rt_stream_record_meta_user");                   // directory wrappers share the user-space metadata identity
+    emitter.instruction(&format!(
+        "cmp x12, #{}", STREAM_BACKEND_PHAR_WRITE
+    ));                                                                         // is this a buffered Phar write backend?
+    emitter.instruction("b.ne __rt_stream_record_meta_wrapper");                // preserve the caller's wrapper id for ordinary backends
+    emitter.instruction("mov x11, #5");                                         // wrapper id 5 selects the Phar wrapper literal
+    emitter.instruction("b __rt_stream_record_meta_wrapper");                   // publish the inferred Phar identity
+    emitter.label("__rt_stream_record_meta_user");
+    emitter.instruction("str x10, [sp, #40]");                                  // preserve detached URI ownership across definition lookup
+    emitter.instruction("ldp x0, x1, [sp, #16]");                               // pass the persisted URI bytes to wrapper-definition lookup
+    emitter.instruction("bl __rt_user_wrapper_uri_flags");                      // resolve registration flags at instance creation time
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload StreamState after definition lookup
+    emitter.instruction("ldr x10, [sp, #40]");                                  // reload detached previous URI ownership
+    emitter.instruction(&format!(
+        "tst x0, #{}", 1
+    ));                                                                         // did the definition declare STREAM_IS_URL?
+    emitter.instruction("b.eq __rt_stream_record_meta_user_flags_done");        // leave non-URL user wrappers local
+    emitter.instruction(&format!(
+        "ldr x13, [x9, #{}]", STREAM_OWNERSHIP_FLAGS_OFFSET
+    ));                                                                         // load instance flags for the URL bit update
+    emitter.instruction(&format!(
+        "orr x13, x13, #{}", STREAM_STATE_FLAG_IS_URL
+    ));                                                                         // preserve the definition's URL identity on this instance
+    emitter.instruction(&format!(
+        "str x13, [x9, #{}]", STREAM_OWNERSHIP_FLAGS_OFFSET
+    ));                                                                         // publish instance-local STREAM_IS_URL state
+    emitter.label("__rt_stream_record_meta_user_flags_done");
+    emitter.instruction("mov x11, #11");                                        // wrapper id 11 selects the user-space wrapper literal
+    emitter.label("__rt_stream_record_meta_wrapper");
+    emitter.instruction(&format!(
+        "str x11, [x9, #{}]", STREAM_WRAPPER_ID_OFFSET
+    ));                                                                         // publish the StreamState-owned wrapper identity
+    emitter.instruction("mov x0, x10");                                         // pass the detached previous URI to safe heap release
+    emitter.instruction("bl __rt_heap_free_safe");                              // release only live heap-backed URI storage
+    emitter.label("__rt_stream_record_meta_done");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // return the original opaque stream handle
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller frame and link register
+    emitter.instruction("add sp, sp, #64");                                     // release metadata scratch storage
+    emitter.instruction("ret");                                                 // return after replacement or stale-handle no-op
+    emit_user_wrapper_uri_flags_aarch64(emitter);
 }
 
-/// x86_64 Linux variant of `__rt_stream_record_meta`.
+/// Emits the Linux x86_64 handle-keyed stream metadata replacement helper.
 fn emit_stream_record_meta_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
-    emitter.comment("--- runtime: stream_record_meta ---");
+    emitter.comment("--- runtime: replace handle-keyed stream metadata ---");
     emitter.label_global("__rt_stream_record_meta");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable metadata frame
+    emitter.instruction("sub rsp, 64");                                         // reserve metadata inputs, state, and ownership replacement storage
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the opaque stream handle
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the requested wrapper id
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the URI pointer
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // preserve the URI byte length
+    emitter.instruction("call __rt_stream_state");                              // resolve Live or Closing stable StreamState
+    emitter.instruction("test rax, rax");                                       // did registry lookup resolve a stream state?
+    emitter.instruction("jz __rt_stream_record_meta_done_x86");                 // stale handles cannot acquire URI ownership
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve StreamState across string persistence
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // load the URI source pointer for persistence
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // load the URI byte length for persistence
+    emitter.instruction("call __rt_str_persist");                               // duplicate URI into owned heap storage
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the new owned URI pointer
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload StreamState for atomic ownership replacement
+    emitter.instruction(&format!(
+        "mov r11, QWORD PTR [r10 + {}]", STREAM_URI_PTR_OFFSET
+    ));                                                                         // capture the previous owned URI allocation
+    emitter.instruction(&format!(
+        "mov QWORD PTR [r10 + {}], rax", STREAM_URI_PTR_OFFSET
+    ));                                                                         // publish the new owned URI pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the caller-visible URI byte length
+    emitter.instruction(&format!(
+        "mov QWORD PTR [r10 + {}], rax", STREAM_URI_LEN_OFFSET
+    ));                                                                         // publish the new URI byte length
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the requested wrapper id
+    emitter.instruction(&format!(
+        "mov rdx, QWORD PTR [r10 + {}]", STREAM_OWNERSHIP_FLAGS_OFFSET
+    ));                                                                         // load instance flags before replacing URL identity
+    emitter.instruction(&format!(
+        "and rdx, -{}", STREAM_STATE_FLAG_IS_URL + 1
+    ));                                                                         // clear any previous URL-wrapper identity
+    emitter.instruction("cmp rax, 1");                                          // built-in remote wrapper ids start at HTTP
+    emitter.instruction("jb __rt_stream_record_meta_builtin_url_done_x86");     // plainfile and unset wrappers are local
+    emitter.instruction("cmp rax, 4");                                          // built-in remote wrapper ids end at FTPS
+    emitter.instruction("ja __rt_stream_record_meta_builtin_url_done_x86");     // all later built-in wrappers are local
+    emitter.instruction(&format!(
+        "or rdx, {}", STREAM_STATE_FLAG_IS_URL
+    ));                                                                         // mark built-in HTTP(S)/FTP(S) instances as URL streams
+    emitter.label("__rt_stream_record_meta_builtin_url_done_x86");
+    emitter.instruction(&format!(
+        "mov QWORD PTR [r10 + {}], rdx", STREAM_OWNERSHIP_FLAGS_OFFSET
+    ));                                                                         // publish the refreshed instance flags
+    emitter.instruction(&format!(
+        "mov rcx, QWORD PTR [r10 + {}]", STREAM_BACKEND_KIND_OFFSET
+    ));                                                                         // inspect backend-specific wrapper identity
+    emitter.instruction(&format!(
+        "cmp rcx, {}", STREAM_BACKEND_USER_WRAPPER
+    ));                                                                         // is this a userspace stream-wrapper backend?
+    emitter.instruction("je __rt_stream_record_meta_user_x86");                 // userspace wrappers report a stable user-space identity
+    emitter.instruction(&format!(
+        "cmp rcx, {}", STREAM_BACKEND_USER_DIRECTORY
+    ));                                                                         // is this a userspace directory-wrapper backend?
+    emitter.instruction("je __rt_stream_record_meta_user_x86");                 // directory wrappers share the user-space metadata identity
+    emitter.instruction(&format!(
+        "cmp rcx, {}", STREAM_BACKEND_PHAR_WRITE
+    ));                                                                         // is this a buffered Phar write backend?
+    emitter.instruction("jne __rt_stream_record_meta_wrapper_x86");             // preserve the caller's wrapper id for ordinary backends
+    emitter.instruction("mov eax, 5");                                          // wrapper id 5 selects the Phar wrapper literal
+    emitter.instruction("jmp __rt_stream_record_meta_wrapper_x86");             // publish the inferred Phar identity
+    emitter.label("__rt_stream_record_meta_user_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // preserve detached URI ownership across definition lookup
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the persisted URI pointer to definition lookup
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass the persisted URI byte length to definition lookup
+    emitter.instruction("call __rt_user_wrapper_uri_flags");                    // resolve registration flags at instance creation time
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload StreamState after definition lookup
+    emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // reload detached previous URI ownership
+    emitter.instruction("test eax, 1");                                         // did the definition declare STREAM_IS_URL?
+    emitter.instruction("jz __rt_stream_record_meta_user_flags_done_x86");      // leave non-URL user wrappers local
+    emitter.instruction(&format!(
+        "or QWORD PTR [r10 + {}], {}", STREAM_OWNERSHIP_FLAGS_OFFSET,
+        STREAM_STATE_FLAG_IS_URL
+    ));                                                                         // preserve the definition's URL identity on this instance
+    emitter.label("__rt_stream_record_meta_user_flags_done_x86");
+    emitter.instruction("mov eax, 11");                                         // wrapper id 11 selects the user-space wrapper literal
+    emitter.label("__rt_stream_record_meta_wrapper_x86");
+    emitter.instruction(&format!(
+        "mov QWORD PTR [r10 + {}], rax", STREAM_WRAPPER_ID_OFFSET
+    ));                                                                         // publish the StreamState-owned wrapper identity
+    emitter.instruction("mov rax, r11");                                        // pass the detached previous URI to safe heap release
+    emitter.instruction("call __rt_heap_free_safe");                            // release only live heap-backed URI storage
+    emitter.label("__rt_stream_record_meta_done_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the original opaque stream handle
+    emitter.instruction("add rsp, 64");                                         // release metadata scratch storage
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return after replacement or stale-handle no-op
+    emit_user_wrapper_uri_flags_x86_64(emitter);
+}
 
-    // Frame: rbp-relative, [-8]=fd [-16]=wrapper_id [-24]=uri_ptr [-32]=uri_len
-    emitter.instruction("push rbp");                                             // preserve the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                         // establish the helper frame pointer
-    emitter.instruction("sub rsp, 32");                                          // reserve the record-meta spill slots
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                          // save fd
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                         // save wrapper_id
-    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                         // save uri_ptr
-    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                         // save uri_len
+/// Emits the AArch64 leaf lookup that resolves definition flags for a user-wrapper URI.
+fn emit_user_wrapper_uri_flags_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: resolve user-wrapper definition flags for a URI ---");
+    emitter.label("__rt_user_wrapper_uri_flags");
+    emitter.instruction("mov x2, #0");                                          // start at wrapper definition slot zero
+    abi::emit_symbol_address(emitter, "x3", "_user_wrappers");
+    emitter.label("__rt_user_wrapper_uri_flags_scan");
+    emitter.instruction("cmp x2, #64");                                         // did lookup exhaust every definition slot?
+    emitter.instruction("b.hs __rt_user_wrapper_uri_flags_miss");               // no registered scheme matched the URI
+    emitter.instruction("add x4, x3, x2, lsl #5");                              // address the next 32-byte definition slot
+    emitter.instruction("ldr x5, [x4]");                                        // load the registered protocol pointer
+    emitter.instruction("cbz x5, __rt_user_wrapper_uri_flags_next");            // skip unregistered definition slots
+    emitter.instruction("ldr x6, [x4, #8]");                                    // load the registered protocol byte length
+    emitter.instruction("cmp x6, x1");                                          // must the URI contain protocol plus a colon?
+    emitter.instruction("b.hs __rt_user_wrapper_uri_flags_next");               // reject missing or truncated URI schemes
+    emitter.instruction("ldrb w7, [x0, x6]");                                   // load the URI byte immediately after the scheme
+    emitter.instruction("cmp w7, #58");                                         // does a colon terminate the URI scheme?
+    emitter.instruction("b.ne __rt_user_wrapper_uri_flags_next");               // reject prefix-only protocol matches
+    emitter.instruction("mov x7, #0");                                          // initialize protocol byte comparison
+    emitter.label("__rt_user_wrapper_uri_flags_cmp");
+    emitter.instruction("cmp x7, x6");                                          // have all protocol bytes matched?
+    emitter.instruction("b.hs __rt_user_wrapper_uri_flags_match");              // load flags from the matching definition slot
+    emitter.instruction("ldrb w8, [x5, x7]");                                   // load one registered protocol byte
+    emitter.instruction("ldrb w9, [x0, x7]");                                   // load the corresponding URI scheme byte
+    emitter.instruction("cmp w8, w9");                                          // do the protocol bytes match?
+    emitter.instruction("b.ne __rt_user_wrapper_uri_flags_next");               // continue scanning after a byte mismatch
+    emitter.instruction("add x7, x7, #1");                                      // advance the protocol comparison index
+    emitter.instruction("b __rt_user_wrapper_uri_flags_cmp");                   // compare the remaining protocol bytes
+    emitter.label("__rt_user_wrapper_uri_flags_match");
+    abi::emit_symbol_address(emitter, "x3", "_user_wrapper_flags");
+    emitter.instruction("ldr x0, [x3, x2, lsl #3]");                            // return the matching definition flags
+    emitter.instruction("ret");                                                 // return definition flags to metadata publication
+    emitter.label("__rt_user_wrapper_uri_flags_next");
+    emitter.instruction("add x2, x2, #1");                                      // advance to the next definition slot
+    emitter.instruction("b __rt_user_wrapper_uri_flags_scan");                  // continue scanning registered schemes
+    emitter.label("__rt_user_wrapper_uri_flags_miss");
+    emitter.instruction("mov x0, #0");                                          // unmatched URIs have no registration flags
+    emitter.instruction("ret");                                                 // return local-wrapper defaults
+}
 
-    // -- skip fds >= 256 (out of table range) --
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                          // reload fd
-    emitter.instruction("cmp rax, 256");                                          // fd >= 256?
-    emitter.instruction("jae __rt_stream_record_meta_ret_x86");                   // skip recording for out-of-range fds
-
-    // -- persist the URI string so it survives past the caller's buffer --
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                         // uri_ptr
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                         // uri_len
-    emitter.instruction("call __rt_str_persist");                                 // rax = persisted uri pointer
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                         // save the persisted uri pointer
-
-    // -- store wrapper_id at _stream_wrapper_id[fd] --
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                          // reload fd
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                         // reload wrapper_id
-    abi::emit_symbol_address(emitter, "r10", "_stream_wrapper_id");               // wrapper-id table base
-    emitter.instruction("mov BYTE PTR [r10 + rax], sil");                        // _stream_wrapper_id[fd] = wrapper_id (low byte)
-
-    // -- store uri_ptr at _stream_uri_ptr[fd] --
-    abi::emit_symbol_address(emitter, "r10", "_stream_uri_ptr");                  // uri-ptr table base
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                         // reload persisted uri pointer
-    emitter.instruction("mov QWORD PTR [r10 + rax * 8], r11");                    // _stream_uri_ptr[fd] = uri_ptr
-
-    // -- store uri_len at _stream_uri_len[fd] --
-    abi::emit_symbol_address(emitter, "r10", "_stream_uri_len");                  // uri-len table base
-    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                         // reload uri_len
-    emitter.instruction("mov QWORD PTR [r10 + rax * 8], r11");                    // _stream_uri_len[fd] = uri_len
-
-    emitter.label("__rt_stream_record_meta_ret_x86");
-    emitter.instruction("leave");                                                 // restore rbp + rsp
-    emitter.instruction("ret");                                                  // return to the caller
+/// Emits the x86_64 leaf lookup that resolves definition flags for a user-wrapper URI.
+fn emit_user_wrapper_uri_flags_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: resolve user-wrapper definition flags for a URI ---");
+    emitter.label("__rt_user_wrapper_uri_flags");
+    emitter.instruction("xor r8d, r8d");                                        // start at wrapper definition slot zero
+    abi::emit_symbol_address(emitter, "r9", "_user_wrappers");
+    emitter.label("__rt_user_wrapper_uri_flags_scan_x86");
+    emitter.instruction("cmp r8, 64");                                          // did lookup exhaust every definition slot?
+    emitter.instruction("jae __rt_user_wrapper_uri_flags_miss_x86");            // no registered scheme matched the URI
+    emitter.instruction("mov r11, r8");                                         // copy the definition slot for scaling
+    emitter.instruction("shl r11, 5");                                          // convert the slot index to a 32-byte offset
+    emitter.instruction("add r11, r9");                                         // address the next definition slot
+    emitter.instruction("mov r10, QWORD PTR [r11]");                            // load the registered protocol pointer
+    emitter.instruction("test r10, r10");                                       // is this definition slot occupied?
+    emitter.instruction("jz __rt_user_wrapper_uri_flags_next_x86");             // skip unregistered definition slots
+    emitter.instruction("mov rcx, QWORD PTR [r11 + 8]");                        // load the registered protocol byte length
+    emitter.instruction("cmp rcx, rsi");                                        // must the URI contain protocol plus a colon?
+    emitter.instruction("jae __rt_user_wrapper_uri_flags_next_x86");            // reject missing or truncated URI schemes
+    emitter.instruction("cmp BYTE PTR [rdi + rcx], 58");                        // does a colon terminate the URI scheme?
+    emitter.instruction("jne __rt_user_wrapper_uri_flags_next_x86");            // reject prefix-only protocol matches
+    emitter.instruction("xor edx, edx");                                        // initialize protocol byte comparison
+    emitter.label("__rt_user_wrapper_uri_flags_cmp_x86");
+    emitter.instruction("cmp rdx, rcx");                                        // have all protocol bytes matched?
+    emitter.instruction("jae __rt_user_wrapper_uri_flags_match_x86");           // load flags from the matching definition slot
+    emitter.instruction("movzx eax, BYTE PTR [r10 + rdx]");                     // load one registered protocol byte
+    emitter.instruction("movzx r11d, BYTE PTR [rdi + rdx]");                    // load the corresponding URI scheme byte
+    emitter.instruction("cmp al, r11b");                                        // do the protocol bytes match?
+    emitter.instruction("jne __rt_user_wrapper_uri_flags_next_x86");            // continue scanning after a byte mismatch
+    emitter.instruction("inc rdx");                                             // advance the protocol comparison index
+    emitter.instruction("jmp __rt_user_wrapper_uri_flags_cmp_x86");             // compare the remaining protocol bytes
+    emitter.label("__rt_user_wrapper_uri_flags_match_x86");
+    abi::emit_symbol_address(emitter, "r9", "_user_wrapper_flags");
+    emitter.instruction("mov rax, QWORD PTR [r9 + r8 * 8]");                    // return the matching definition flags
+    emitter.instruction("ret");                                                 // return definition flags to metadata publication
+    emitter.label("__rt_user_wrapper_uri_flags_next_x86");
+    emitter.instruction("inc r8");                                              // advance to the next definition slot
+    emitter.instruction("jmp __rt_user_wrapper_uri_flags_scan_x86");            // continue scanning registered schemes
+    emitter.label("__rt_user_wrapper_uri_flags_miss_x86");
+    emitter.instruction("xor eax, eax");                                        // unmatched URIs have no registration flags
+    emitter.instruction("ret");                                                 // return local-wrapper defaults
 }

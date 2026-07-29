@@ -4919,9 +4919,8 @@ fclose($m);
 /// Verifies compiled PHP output for stream context create returns resource.
 #[test]
 fn test_stream_context_create_returns_resource() {
-    // v1 stub: stream_context_create/get_default return a resource so PHP
-    // code that constructs or consults stream contexts compiles. The options
-    // are not yet persisted on the resource.
+    // Context creation and the lazy default each return a registry resource
+    // whose ContextState owns its independently persisted options and notifier.
     let out = compile_and_run(
         r#"<?php
 $c = stream_context_create(["http" => ["method" => "POST"]]);
@@ -4939,9 +4938,8 @@ echo stream_context_set_option($c, "http", "method", "GET") ? "set-ok" : "FAIL";
 /// Verifies compiled PHP output for stream context get options returns array.
 #[test]
 fn test_stream_context_get_options_returns_array() {
-    // stream_context_get_options now returns the hash that was passed to
-    // stream_context_create (Phase 11 B2 — single global context slot in v1).
-    // stream_context_get_params is still an empty-array stub.
+    // get_options returns the addressed ContextState's live COW snapshot, while
+    // get_params reconstructs the exact notification/options parameter map.
     let out = compile_and_run(
         r#"<?php
 $c = stream_context_create(["http" => ["method" => "POST"]]);
@@ -5069,13 +5067,11 @@ echo ($a && $b ? "ok" : "FAIL") . "|" . $count;
     assert_eq!(out, "ok|2");
 }
 
-/// Verifies compiled PHP output for stream context set option two arg replaces options.
+/// Verifies the two-argument stream context option form merges wrapper maps.
 #[test]
-fn test_stream_context_set_option_two_arg_replaces_options() {
-    // Phase 11 B2: the 2-arg form
-    // stream_context_set_option(ctx, options_array) overwrites the
-    // global persisted options hash, so a subsequent get_options sees
-    // the new wrapper set.
+fn test_stream_context_set_option_two_arg_merges_options() {
+    // The two-argument form merges incoming wrappers and each wrapper's option
+    // map into the addressed ContextState, preserving entries absent from the patch.
     let out = compile_and_run(
         r#"<?php
 $ctx = stream_context_create(["http" => ["method" => "POST"]]);
@@ -5496,6 +5492,31 @@ echo fclose($f) ? "1" : "0";
 "#,
     );
     assert_eq!(out, "hello|3|0|1");
+}
+
+/// Verifies the final owner of an abandoned wrapper stream closes it on unset.
+#[test]
+fn test_fopen_user_wrapper_closes_on_final_owner_unset() {
+    let out = compile_and_run(
+        r#"<?php
+class ScopeCloseWrapper {
+    public function stream_open($path, $mode, $options, &$openedPath): bool {
+        return true;
+    }
+
+    public function stream_close(): void {
+        echo "closed|";
+    }
+}
+
+stream_wrapper_register("scopecl", "ScopeCloseWrapper");
+$stream = fopen("scopecl://resource", "r");
+echo is_resource($stream) ? "open|" : "failed|";
+unset($stream);
+echo "after";
+"#,
+    );
+    assert_eq!(out, "open|closed|after");
 }
 
 /// Verifies compiled PHP output for fopen user wrapper fputcsv routes through stream write.
@@ -6468,6 +6489,25 @@ echo fread($pair[0], 16);
     assert_eq!(out, "2|ping|pong");
 }
 
+/// Verifies socket-pair elements own opaque registry handles after the result array is released.
+#[test]
+fn test_stream_socket_pair_handles_survive_result_array_release() {
+    let out = compile_and_run(
+        r#"<?php
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+$left = $pair[0];
+$right = $pair[1];
+$distinct = get_resource_id($left) !== get_resource_id($right);
+unset($pair);
+echo get_resource_type($left) . "|" . get_resource_type($right) . "|";
+echo $distinct ? "distinct|" : "same|";
+fwrite($left, "owned");
+echo fread($right, 5);
+"#,
+    );
+    assert_eq!(out, "stream|stream|distinct|owned");
+}
+
 /// Verifies compiled PHP output for stream socket get name udp.
 #[test]
 fn test_stream_socket_get_name_udp() {
@@ -6589,7 +6629,7 @@ echo ($again === $first ? "1" : "0");
     assert_eq!(out, "11");
 }
 
-/// Verifies compiled PHP output for closedir allows directory handle reuse.
+/// Verifies `closedir` invalidates the old PHP resource while a new handle remains usable.
 #[test]
 fn test_closedir_allows_directory_handle_reuse() {
     let out = compile_and_run(
@@ -6604,7 +6644,7 @@ echo (is_resource($d2) ? "r" : "?");
 echo (is_string($e) ? "ok" : "no");
 "#,
     );
-    assert_eq!(out, "rok");
+    assert_eq!(out, "?ok");
 }
 
 /// Verifies compiled PHP output for array literal of resources round trips.

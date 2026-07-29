@@ -7,16 +7,18 @@
 //!
 //! Key details:
 //! - Returns a `{string => mixed}` hash with the nine documented keys. `eof`
-//!   comes from the `_eof_flags` table; `seekable`/`stream_type` are derived
+//!   comes from the stable `StreamState`; `seekable`/`stream_type` are derived
 //!   from `lseek`; `blocked`/`mode` from `fcntl(F_GETFL)`.
-//! - `wrapper_type` is reported as `"plainfile"` and `uri` as the empty string:
-//!   elephc does not track per-resource open paths.
+//! - `wrapper_type` and `uri` come from handle-keyed StreamState metadata.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::abi;
+use crate::codegen_support::runtime::resources::layout::{
+    STREAM_FD_OFFSET, STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET, STREAM_WRAPPER_ID_OFFSET,
+};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
-/// stream_get_meta_data: build the metadata hash for a stream descriptor.
-/// Input:  AArch64 x0 = descriptor / x86_64 rdi = descriptor
+/// stream_get_meta_data: build the metadata hash for an opaque stream handle.
+/// Input:  AArch64 x0 = handle / x86_64 rdi = handle
 /// Output: pointer to a `{string => mixed}` hash table
 pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -31,13 +33,19 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     emitter.comment("--- runtime: stream_get_meta_data ---");
     emitter.label_global("__rt_stream_get_meta_data");
 
-    // Frame (96 bytes): [0]=fd [8]=hash [16]=seekable [24]=blocked [32]=eof
+    // Frame (112 bytes): [0]=handle [8]=hash [16]=seekable [24]=blocked [32]=eof
     //                   [40]=mode_ptr [48]=mode_len [56]=stype_ptr [64]=stype_len
-    //                   [80]=x29 [88]=x30
-    emitter.instruction("sub sp, sp, #96");                                     // allocate the metadata frame
-    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #80");                                    // establish the helper frame pointer
-    emitter.instruction("str x0, [sp, #0]");                                    // save the stream descriptor
+    //                   [72]=backend fd [80]=StreamState [96]=x29 [104]=x30
+    emitter.instruction("sub sp, sp, #112");                                    // allocate the metadata frame
+    emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #96");                                    // establish the helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the opaque stream handle
+    emitter.instruction("bl __rt_stream_state");                                // resolve handle-keyed metadata and backend state
+    emitter.instruction("str x0, [sp, #80]");                                   // preserve StreamState across metadata hash construction
+    emitter.instruction(&format!(
+        "ldr x0, [x0, #{}]", STREAM_FD_OFFSET
+    ));                                                                         // load the backend descriptor for native probes
+    emitter.instruction("str x0, [sp, #72]");                                   // preserve the descriptor for native metadata probes
 
     // -- seekability: lseek(fd, 0, SEEK_CUR) --
     emitter.instruction("mov x1, #0");                                          // offset 0
@@ -67,7 +75,7 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     emitter.label("__rt_sgmd_seek_done");
 
     // -- blocking mode + access mode: fcntl(fd, F_GETFL, 0) --
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the stream descriptor
+    emitter.instruction("ldr x0, [sp, #72]");                                   // reload the stream descriptor
     emitter.instruction("mov x1, #3");                                          // F_GETFL
     emitter.instruction("mov x2, #0");                                          // unused third argument
     emitter.syscall(92);
@@ -95,13 +103,10 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     emitter.instruction("str x10, [sp, #40]");                                  // save the mode pointer
     emitter.instruction("str x11, [sp, #48]");                                  // save the mode length
 
-    // -- end-of-file flag from the _eof_flags table --
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the stream descriptor
-    abi::emit_symbol_address(emitter, "x9", "_eof_flags");                      // load page of the EOF flag table
-    emitter.instruction("ldrb w10, [x9, x0]");                                  // load _eof_flags[fd]
-    emitter.instruction("cmp w10, #0");                                         // has end-of-file been observed?
-    emitter.instruction("cset x10, ne");                                        // eof = 1 when the flag byte is set
-    emitter.instruction("str x10, [sp, #32]");                                  // save the eof flag
+    // -- end-of-file flag from the authoritative StreamState --
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the opaque stream handle
+    emitter.instruction("bl __rt_stream_eof_get");                              // read the state-owned EOF predicate
+    emitter.instruction("str x0, [sp, #32]");                                   // save the EOF flag
 
     // -- create the metadata hash (capacity 16, value type = mixed) --
     emitter.instruction("mov x0, #16");                                         // initial capacity
@@ -114,21 +119,21 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     emit_set_bool_slot(emitter, "_meta_key_eof", 3, 32);
     emit_set_int_const(emitter, "_meta_key_unread_bytes", 12);
     emit_set_str_slots(emitter, "_meta_key_stream_type", 11, 56, 64);
-    // -- wrapper_type: read _stream_wrapper_id[fd] and map to the wrapper name literal --
+    // -- wrapper_type: map the StreamState wrapper id to its PHP-visible literal --
     emit_set_wrapper_type_aarch64(emitter);
     emit_set_str_slots(emitter, "_meta_key_mode", 4, 40, 48);
     emit_set_bool_slot(emitter, "_meta_key_seekable", 8, 16);
-    // -- uri: read _stream_uri_ptr[fd] / _stream_uri_len[fd] (fallback "") --
+    // -- uri: read the StreamState-owned URI pointer/length pair --
     emit_set_uri_aarch64(emitter);
 
     // -- return the completed hash --
     emitter.instruction("ldr x0, [sp, #8]");                                    // load the final hash pointer
-    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #96");                                     // release the metadata frame
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #112");                                    // release the metadata frame
     emitter.instruction("ret");                                                 // return the metadata hash pointer
 }
 
-/// Reads `_stream_wrapper_id[fd]` and loads the matching wrapper-type string
+/// Reads the StreamState wrapper id and loads the matching wrapper-type string
 /// literal into x3 (ptr) / x4 (len) / x5 (tag=1), then inserts the hash entry.
 /// Fallback id 0 (unset) → "plainfile".
 fn emit_set_wrapper_type_aarch64(emitter: &mut Emitter) {
@@ -141,52 +146,55 @@ fn emit_set_wrapper_type_aarch64(emitter: &mut Emitter) {
         ("_meta_wrapper_phar", 4),
         ("_meta_wrapper_php", 3),
         ("_meta_wrapper_data", 4),
-        ("_meta_wrapper_zlib", 12),
-        ("_meta_wrapper_bzip2", 13),
+        ("_meta_wrapper_zlib", 13),
+        ("_meta_wrapper_bzip2", 14),
         ("_meta_wrapper_glob", 4),
-        ("_meta_wrapper_user", 4),
+        ("_meta_wrapper_user", 10),
     ];
-    emitter.instruction("ldr x0, [sp, #0]");                                     // reload fd
-    abi::emit_symbol_address(emitter, "x6", "_stream_wrapper_id");               // wrapper-id table base
-    emitter.instruction("ldrb w7, [x6, x0]");                                     // load wrapper id byte
+    emitter.instruction("ldr x6, [sp, #80]");                                   // reload the stable StreamState pointer
+    emitter.instruction(&format!(
+        "ldr x7, [x6, #{}]", STREAM_WRAPPER_ID_OFFSET
+    ));                                                                         // load the handle-keyed wrapper id
     // Compare-and-branch chain: each comparison branches to a label that is
     // emitted after all comparisons, so the fall-through goes to the next
     // comparison rather than into the literal-load block.
     for (id, _) in wrappers.iter().enumerate() {
         let label = format!("__rt_sgmd_wid_{}", id);
-        emitter.instruction(&format!("cmp w7, #{}", id));                         // compare wrapper id
-        emitter.instruction(&format!("b.eq {}", label));                         // branch to the matching literal load
+        emitter.instruction(&format!("cmp w7, #{}", id));                       // compare wrapper id
+        emitter.instruction(&format!("b.eq {}", label));                        // branch to the matching literal load
     }
     // Fallback for unknown ids: use plainfile (same as id 0).
     abi::emit_symbol_address(emitter, "x3", "_meta_wrapper_plainfile");          // fallback wrapper name
     emitter.instruction("mov x4, #9");                                          // plainfile length
     emitter.instruction("mov x5, #1");                                          // value tag = string
-    emitter.instruction("b __rt_sgmd_wtype_put");                                // jump to the shared hash insert
+    emitter.instruction("b __rt_sgmd_wtype_put");                               // jump to the shared hash insert
     // Literal-load blocks (emitted after the compare chain).
     for (id, (sym, len)) in wrappers.iter().enumerate() {
         let label = format!("__rt_sgmd_wid_{}", id);
         emitter.label(&label);
         abi::emit_symbol_address(emitter, "x3", sym);                            // load the wrapper-name literal address
-        emitter.instruction(&format!("mov x4, #{}", len));                        // wrapper-name length
-        emitter.instruction("mov x5, #1");                                       // value tag = string
-        emitter.instruction("b __rt_sgmd_wtype_put");                            // jump to the shared hash insert
+        emitter.instruction(&format!("mov x4, #{}", len));                      // wrapper-name length
+        emitter.instruction("mov x5, #1");                                      // value tag = string
+        emitter.instruction("b __rt_sgmd_wtype_put");                           // jump to the shared hash insert
     }
     emitter.label("__rt_sgmd_wtype_put");
     emit_hash_put_aarch64(emitter, "_meta_key_wrapper_type", 12);
 }
 
-/// Reads `_stream_uri_ptr[fd]` / `_stream_uri_len[fd]` and loads them into
+/// Reads the StreamState URI pointer/length pair and loads it into
 /// x3 (ptr) / x4 (len) / x5 (tag=1), then inserts the hash entry.
 /// Fallback (ptr == 0) → empty string.
 fn emit_set_uri_aarch64(emitter: &mut Emitter) {
-    emitter.instruction("ldr x0, [sp, #0]");                                     // reload fd
-    abi::emit_symbol_address(emitter, "x6", "_stream_uri_ptr");                  // uri-ptr table base
-    emitter.instruction("ldr x3, [x6, x0, lsl #3]");                             // x3 = _stream_uri_ptr[fd]
-    abi::emit_symbol_address(emitter, "x6", "_stream_uri_len");                  // uri-len table base
-    emitter.instruction("ldr x4, [x6, x0, lsl #3]");                             // x4 = _stream_uri_len[fd]
-    emitter.instruction("cbz x3, __rt_sgmd_uri_empty");                          // null ptr → empty uri
+    emitter.instruction("ldr x6, [sp, #80]");                                   // reload the stable StreamState pointer
+    emitter.instruction(&format!(
+        "ldr x3, [x6, #{}]", STREAM_URI_PTR_OFFSET
+    ));                                                                         // load the handle-keyed URI pointer
+    emitter.instruction(&format!(
+        "ldr x4, [x6, #{}]", STREAM_URI_LEN_OFFSET
+    ));                                                                         // load the handle-keyed URI byte length
+    emitter.instruction("cbz x3, __rt_sgmd_uri_empty");                         // null ptr → empty uri
     emitter.instruction("mov x5, #1");                                          // value tag = string
-    emitter.instruction("b __rt_sgmd_uri_put");                                  // insert the uri entry
+    emitter.instruction("b __rt_sgmd_uri_put");                                 // insert the uri entry
     emitter.label("__rt_sgmd_uri_empty");
     emitter.instruction("mov x3, #0");                                          // ptr = null (empty string)
     emitter.instruction("mov x4, #0");                                          // len = 0
@@ -245,13 +253,20 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: stream_get_meta_data ---");
     emitter.label_global("__rt_stream_get_meta_data");
 
-    // Frame (rbp-relative): [-8]=fd [-16]=hash [-24]=seekable [-32]=blocked
+    // Frame (rbp-relative): [-8]=handle [-16]=hash [-24]=seekable [-32]=blocked
     //                       [-40]=eof [-48]=mode_ptr [-56]=mode_len
-    //                       [-64]=stype_ptr [-72]=stype_len
+    //                       [-64]=stype_ptr [-72]=stype_len [-80]=backend fd
+    //                       [-88]=StreamState
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 80");                                         // reserve the metadata spill slots
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the stream descriptor
+    emitter.instruction("sub rsp, 96");                                         // reserve aligned metadata spill slots
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the opaque stream handle
+    emitter.instruction("call __rt_stream_state");                              // resolve handle-keyed metadata and backend state
+    emitter.instruction("mov QWORD PTR [rbp - 88], rax");                       // preserve StreamState across metadata hash construction
+    emitter.instruction(&format!(
+        "mov rdi, QWORD PTR [rax + {}]", STREAM_FD_OFFSET
+    ));                                                                         // load the backend descriptor for native probes
+    emitter.instruction("mov QWORD PTR [rbp - 80], rdi");                       // preserve the descriptor for native metadata probes
 
     // -- seekability: lseek(fd, 0, SEEK_CUR) --
     emitter.instruction("xor esi, esi");                                        // offset 0
@@ -275,7 +290,7 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_sgmd_seek_done_x86");
 
     // -- blocking mode + access mode: fcntl(fd, F_GETFL, 0) --
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the stream descriptor
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // reload the stream descriptor
     emitter.instruction("mov esi, 3");                                          // F_GETFL
     emitter.instruction("xor edx, edx");                                        // unused third argument
     emitter.instruction("mov eax, 72");                                         // Linux x86_64 syscall 72 = fcntl
@@ -306,14 +321,10 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 56], 2");                         // save the mode length
     emitter.label("__rt_sgmd_mode_done_x86");
 
-    // -- end-of-file flag from the _eof_flags table --
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the stream descriptor
-    abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // address of the EOF flag table
-    emitter.instruction("movzx r11, BYTE PTR [r10 + rdi]");                     // load _eof_flags[fd]
-    emitter.instruction("test r11, r11");                                       // has end-of-file been observed?
-    emitter.instruction("setne r11b");                                          // eof = 1 when the flag byte is set
-    emitter.instruction("movzx r11, r11b");                                     // widen the eof flag to a full word
-    emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // save the eof flag
+    // -- end-of-file flag from the authoritative StreamState --
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle
+    emitter.instruction("call __rt_stream_eof_get");                            // read the state-owned EOF predicate
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the EOF flag
 
     // -- create the metadata hash (capacity 16, value type = mixed) --
     emitter.instruction("mov rdi, 16");                                         // initial capacity
@@ -326,16 +337,16 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emit_set_bool_slot_x86(emitter, "_meta_key_eof", 3, 40);
     emit_set_int_const_x86(emitter, "_meta_key_unread_bytes", 12);
     emit_set_str_slots_x86(emitter, "_meta_key_stream_type", 11, 64, 72);
-    // -- wrapper_type: read _stream_wrapper_id[fd] and map to the wrapper name literal --
+    // -- wrapper_type: map the StreamState wrapper id to its PHP-visible literal --
     emit_set_wrapper_type_x86(emitter);
     emit_set_str_slots_x86(emitter, "_meta_key_mode", 4, 48, 56);
     emit_set_bool_slot_x86(emitter, "_meta_key_seekable", 8, 24);
-    // -- uri: read _stream_uri_ptr[fd] / _stream_uri_len[fd] (fallback "") --
+    // -- uri: read the StreamState-owned URI pointer/length pair --
     emit_set_uri_x86(emitter);
 
     // -- return the completed hash --
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the final hash pointer
-    emitter.instruction("add rsp, 80");                                         // release the metadata spill slots
+    emitter.instruction("add rsp, 96");                                         // release the metadata spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the metadata hash pointer
 }
@@ -373,7 +384,7 @@ fn emit_set_int_const_x86(emitter: &mut Emitter, key_sym: &str, key_len: i64) {
     emit_hash_put_x86(emitter, key_sym, key_len);
 }
 
-/// Reads `_stream_wrapper_id[fd]` and loads the matching wrapper-type string
+/// Reads the StreamState wrapper id and loads the matching wrapper-type string
 /// literal into rcx (ptr) / r8 (len) / r9 (tag=1), then inserts the hash entry.
 /// Fallback id 0 (unset) → "plainfile".
 fn emit_set_wrapper_type_x86(emitter: &mut Emitter) {
@@ -386,53 +397,56 @@ fn emit_set_wrapper_type_x86(emitter: &mut Emitter) {
         ("_meta_wrapper_phar", 4),
         ("_meta_wrapper_php", 3),
         ("_meta_wrapper_data", 4),
-        ("_meta_wrapper_zlib", 12),
-        ("_meta_wrapper_bzip2", 13),
+        ("_meta_wrapper_zlib", 13),
+        ("_meta_wrapper_bzip2", 14),
         ("_meta_wrapper_glob", 4),
-        ("_meta_wrapper_user", 4),
+        ("_meta_wrapper_user", 10),
     ];
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                          // reload fd
-    abi::emit_symbol_address(emitter, "r10", "_stream_wrapper_id");               // wrapper-id table base
-    emitter.instruction("movzx eax, BYTE PTR [r10 + rax]");                      // load wrapper id byte
+    emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // reload the stable StreamState pointer
+    emitter.instruction(&format!(
+        "mov rax, QWORD PTR [r10 + {}]", STREAM_WRAPPER_ID_OFFSET
+    ));                                                                         // load the handle-keyed wrapper id
     for (id, _) in wrappers.iter().enumerate() {
         let label = format!("__rt_sgmd_wid_{}_x", id);
-        emitter.instruction(&format!("cmp eax, {}", id));                         // compare wrapper id
-        emitter.instruction(&format!("je {}", label));                            // branch to the matching literal load
+        emitter.instruction(&format!("cmp eax, {}", id));                       // compare wrapper id
+        emitter.instruction(&format!("je {}", label));                          // branch to the matching literal load
     }
     // Fallback for unknown ids: use plainfile (same as id 0).
     abi::emit_symbol_address(emitter, "rcx", "_meta_wrapper_plainfile");          // fallback wrapper name
-    emitter.instruction("mov r8, 9");                                            // plainfile length
-    emitter.instruction("mov r9, 1");                                            // value tag = string
-    emitter.instruction("jmp __rt_sgmd_wtype_put_x");                             // jump to the shared hash insert
+    emitter.instruction("mov r8, 9");                                           // plainfile length
+    emitter.instruction("mov r9, 1");                                           // value tag = string
+    emitter.instruction("jmp __rt_sgmd_wtype_put_x");                           // jump to the shared hash insert
     for (id, (sym, len)) in wrappers.iter().enumerate() {
         let label = format!("__rt_sgmd_wid_{}_x", id);
         emitter.label(&label);
         abi::emit_symbol_address(emitter, "rcx", sym);                            // load the wrapper-name literal address
-        emitter.instruction(&format!("mov r8, {}", len));                         // wrapper-name length
-        emitter.instruction("mov r9, 1");                                        // value tag = string
-        emitter.instruction("jmp __rt_sgmd_wtype_put_x");                         // jump to the shared hash insert
+        emitter.instruction(&format!("mov r8, {}", len));                       // wrapper-name length
+        emitter.instruction("mov r9, 1");                                       // value tag = string
+        emitter.instruction("jmp __rt_sgmd_wtype_put_x");                       // jump to the shared hash insert
     }
     emitter.label("__rt_sgmd_wtype_put_x");
     emit_hash_put_x86(emitter, "_meta_key_wrapper_type", 12);
 }
 
-/// Reads `_stream_uri_ptr[fd]` / `_stream_uri_len[fd]` and loads them into
+/// Reads the StreamState URI pointer/length pair and loads it into
 /// rcx (ptr) / r8 (len) / r9 (tag=1), then inserts the hash entry.
 /// Fallback (ptr == 0) → empty string.
 fn emit_set_uri_x86(emitter: &mut Emitter) {
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                          // reload fd
-    abi::emit_symbol_address(emitter, "r10", "_stream_uri_ptr");                  // uri-ptr table base
-    emitter.instruction("mov rcx, QWORD PTR [r10 + rax * 8]");                   // rcx = _stream_uri_ptr[fd]
-    abi::emit_symbol_address(emitter, "r10", "_stream_uri_len");                  // uri-len table base
-    emitter.instruction("mov r8, QWORD PTR [r10 + rax * 8]");                    // r8 = _stream_uri_len[fd]
-    emitter.instruction("test rcx, rcx");                                        // null ptr?
-    emitter.instruction("jz __rt_sgmd_uri_empty_x");                              // → empty uri
-    emitter.instruction("mov r9, 1");                                            // value tag = string
-    emitter.instruction("jmp __rt_sgmd_uri_put_x");                              // insert the uri entry
+    emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // reload the stable StreamState pointer
+    emitter.instruction(&format!(
+        "mov rcx, QWORD PTR [r10 + {}]", STREAM_URI_PTR_OFFSET
+    ));                                                                         // load the handle-keyed URI pointer
+    emitter.instruction(&format!(
+        "mov r8, QWORD PTR [r10 + {}]", STREAM_URI_LEN_OFFSET
+    ));                                                                         // load the handle-keyed URI byte length
+    emitter.instruction("test rcx, rcx");                                       // null ptr?
+    emitter.instruction("jz __rt_sgmd_uri_empty_x");                            // → empty uri
+    emitter.instruction("mov r9, 1");                                           // value tag = string
+    emitter.instruction("jmp __rt_sgmd_uri_put_x");                             // insert the uri entry
     emitter.label("__rt_sgmd_uri_empty_x");
-    emitter.instruction("xor ecx, ecx");                                         // ptr = 0 (empty string)
-    emitter.instruction("xor r8d, r8d");                                         // len = 0
-    emitter.instruction("mov r9, 1");                                            // value tag = string
+    emitter.instruction("xor ecx, ecx");                                        // ptr = 0 (empty string)
+    emitter.instruction("xor r8d, r8d");                                        // len = 0
+    emitter.instruction("mov r9, 1");                                           // value tag = string
     emitter.label("__rt_sgmd_uri_put_x");
     emit_hash_put_x86(emitter, "_meta_key_uri", 3);
 }

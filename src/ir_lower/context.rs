@@ -1829,13 +1829,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         argument: ValueId,
         result: ValueId,
     ) -> bool {
-        let argument_type = self.builder.value_php_type(argument).codegen_repr();
-        let result_type = self.builder.value_php_type(result).codegen_repr();
+        let argument_type = self.builder.value_php_type(argument);
+        let result_type = self.builder.value_php_type(result);
         if !Ownership::php_type_needs_lifetime_tracking(&argument_type)
             || !Ownership::php_type_needs_lifetime_tracking(&result_type)
         {
             return false;
         }
+        if matches!(
+            (&argument_type, &result_type),
+            (PhpType::Resource(_), PhpType::Resource(_))
+        ) {
+            return true;
+        }
+        let argument_type = argument_type.codegen_repr();
+        let result_type = result_type.codegen_repr();
         match (&argument_type, &result_type) {
             (PhpType::Mixed | PhpType::Union(_), _)
             | (_, PhpType::Mixed | PhpType::Union(_)) => true,

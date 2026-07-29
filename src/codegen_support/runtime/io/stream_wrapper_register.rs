@@ -8,18 +8,17 @@
 //!   `stream_wrapper_register` builtin.
 //!
 //! Key details:
-//! - Stores up to 16 `(protocol_ptr, protocol_len, class_ptr, class_len)`
-//!   tuples in `_user_wrappers` (each slot is 32 bytes; an empty slot has a
-//!   null `protocol_ptr`). Returns 1 on a successful registration, 0 when the
-//!   table is full.
+//! - Stores up to 64 `(protocol_ptr, protocol_len, class_ptr, class_len)`
+//!   tuples in `_user_wrappers` and the matching registration flags in
+//!   `_user_wrapper_flags`. An empty slot has a null `protocol_ptr`.
 //! - v1 records the registration but the wrapper class is not yet invoked by
 //!   `fopen`; the dispatch is a future Phase-10 commit.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits the `__rt_stream_wrapper_register` runtime helper.
-/// Input:  AArch64 x0 = proto ptr, x1 = proto len, x2 = class ptr, x3 = class len.
-///         x86_64  rdi = proto ptr, rsi = proto len, rdx = class ptr, rcx = class len.
+/// Input:  AArch64 x0 = proto ptr, x1 = proto len, x2 = class ptr, x3 = class len,
+///         x4 = flags. x86_64 uses rdi/rsi/rdx/rcx/r8 for the same values.
 /// Output: 1 when the registration was stored, 0 when the table is full.
 pub fn emit_stream_wrapper_register(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -30,6 +29,7 @@ pub fn emit_stream_wrapper_register(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stream_wrapper_register ---");
     emitter.label_global("__rt_stream_wrapper_register");
+    emitter.instruction("mov x8, x4");                                          // preserve registration flags while scanning definitions
 
     // -- scan _user_wrappers for the first empty slot --
     abi::emit_symbol_address(emitter, "x4", "_user_wrappers");
@@ -49,6 +49,8 @@ pub fn emit_stream_wrapper_register(emitter: &mut Emitter) {
     emitter.instruction("str x1, [x6, #8]");                                    // protocol length
     emitter.instruction("str x2, [x6, #16]");                                   // class-name pointer
     emitter.instruction("str x3, [x6, #24]");                                   // class-name length
+    abi::emit_symbol_address(emitter, "x7", "_user_wrapper_flags");
+    emitter.instruction("str x8, [x7, x5, lsl #3]");                            // store definition flags beside the registration slot
     emitter.instruction("mov x0, #1");                                          // return true for a successful registration
     emitter.instruction("ret");                                                 // return to the caller
 
@@ -62,6 +64,7 @@ fn emit_stream_wrapper_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stream_wrapper_register ---");
     emitter.label_global("__rt_stream_wrapper_register");
+    emitter.instruction("mov rax, r8");                                         // preserve registration flags while scanning definitions
 
     // -- scan _user_wrappers for the first empty slot --
     abi::emit_symbol_address(emitter, "r8", "_user_wrappers");                  // wrapper table base
@@ -84,6 +87,8 @@ fn emit_stream_wrapper_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10 + 8], rsi");                        // protocol length
     emitter.instruction("mov QWORD PTR [r10 + 16], rdx");                       // class-name pointer
     emitter.instruction("mov QWORD PTR [r10 + 24], rcx");                       // class-name length
+    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_flags");
+    emitter.instruction("mov QWORD PTR [r10 + r9 * 8], rax");                   // store definition flags beside the registration slot
     emitter.instruction("mov eax, 1");                                          // return true for a successful registration
     emitter.instruction("ret");                                                 // return to the caller
 

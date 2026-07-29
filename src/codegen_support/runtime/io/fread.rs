@@ -6,20 +6,21 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::io`.
 //!
 //! Key details:
-//! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
+//! - Native reads resolve their descriptor from an opaque stream handle and
+//!   publish EOF on the corresponding `StreamState`, including seekable short reads.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::abi;
 
-/// Emits the `__rt_fread` runtime helper for reading bytes from a file descriptor.
+/// Emits the `__rt_fread` runtime helper for reading bytes from a stream handle.
 ///
-/// On ARM64: reads into the concat buffer, updates `_concat_off`, sets `_eof_flags[fd]` on EOF,
+/// On ARM64: reads into the concat buffer, updates `_concat_off`, sets StreamState EOF,
 /// and returns (pointer, byte_count) in x1:x2.
 ///
 /// On x86_64: same semantics but uses libc `read()` and returns (pointer, byte_count) in rax:rdx.
 ///
 /// # Inputs
-/// - x0/rdi: file descriptor
+/// - x0/rdi: opaque stream handle
 /// - x1/rsi: number of bytes to read
 ///
 /// # Outputs
@@ -28,7 +29,7 @@ use crate::codegen_support::abi;
 ///
 /// # Side effects
 /// - Advances `_concat_off` by actual bytes read.
-/// - Sets `_eof_flags[fd] = 1` when the stream is exhausted.
+/// - Sets state-owned EOF on zero-byte reads and seekable short reads.
 pub fn emit_fread(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_fread_linux_x86_64(emitter);
@@ -39,22 +40,28 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.comment("--- runtime: fread ---");
     emitter.label_global("__rt_fread");
 
-    // -- user-wrapper synthetic fd path (Phase 10 step 4) --
+    // -- set up stack frame --
+    emitter.instruction("sub sp, sp, #64");                                     // allocate stream, descriptor, and read-result spill slots
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // establish new frame pointer
+
+    // -- save handle and requested length, then resolve the backend descriptor --
+    emitter.instruction("str x0, [sp, #0]");                                    // save the opaque stream handle
+    emitter.instruction("str x1, [sp, #8]");                                    // save requested read length
+    emitter.instruction("bl __rt_stream_fd");                                   // resolve the backend descriptor through StreamState
+    emitter.instruction("str x0, [sp, #32]");                                   // preserve the resolved backend descriptor
     emitter.instruction("mov w9, #0x4000");                                     // load the high half of USER_WRAPPER_FD_BASE = 0x40000000
     emitter.instruction("lsl w9, w9, #16");                                     // shift into bits 30..16 to form 0x40000000
-    emitter.instruction("cmp x0, x9");                                          // is this a synthetic user-wrapper fd?
-    emitter.instruction("b.lt __rt_fread_real_fd");                             // not a wrapper fd → issue the real read syscall path
-    emitter.instruction("b __rt_user_wrapper_fread");                           // wrapper fd: tail-call stream_read (uncond → cross-atom safe)
+    emitter.instruction("cmp x0, x9");                                          // is the backend below the wrapper range?
+    emitter.instruction("b.lo __rt_fread_real_fd");                             // native descriptors continue to the syscall path
+    emitter.instruction("add x10, x9, #256");                                   // bound the 256 active wrapper slots
+    emitter.instruction("cmp x0, x10");                                         // is the backend above the wrapper range?
+    emitter.instruction("b.hs __rt_fread_real_fd");                             // non-wrapper synthetic backends stay on the native path
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the requested byte count for stream_read
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller frame before wrapper tail dispatch
+    emitter.instruction("add sp, sp, #64");                                     // release native-read scratch storage
+    emitter.instruction("b __rt_user_wrapper_fread");                           // wrapper backend tail-calls stream_read
     emitter.label("__rt_fread_real_fd");
-
-    // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #32");                                    // establish new frame pointer
-
-    // -- save fd and requested length --
-    emitter.instruction("str x0, [sp, #0]");                                    // save file descriptor
-    emitter.instruction("str x1, [sp, #8]");                                    // save requested read length
 
     // -- get concat_buf write position --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
@@ -65,7 +72,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
 
     // -- TLS dispatch: route through elephc_tls_read when fd has an
     //    attached session (Phase 11 B3). --
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd for the TLS check
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload fd for the TLS check
     crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_tls_sessions");
     emitter.instruction("ldr x14, [x13, x0, lsl #3]");                          // _tls_sessions[fd] handle (0 = plain TCP)
     emitter.instruction("cbz x14, __rt_fread_do_syscall");                      // no TLS attached → fall through to read syscall
@@ -82,7 +89,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
 
     emitter.label("__rt_fread_do_syscall");
     // -- perform read syscall --
-    emitter.instruction("ldr x0, [sp, #0]");                                    // fd for read syscall
+    emitter.instruction("ldr x0, [sp, #32]");                                   // fd for read syscall
     emitter.instruction("mov x1, x12");                                         // buffer pointer for read
     emitter.instruction("ldr x2, [sp, #8]");                                    // number of bytes to read
     emitter.syscall(3);
@@ -107,14 +114,26 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("add x10, x10, x0");                                    // advance offset by bytes read
     emitter.instruction("str x10, [x9]");                                       // store updated offset
 
-    // -- set eof flag if read returned 0 --
+    // -- set EOF when the read returned fewer bytes than requested --
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload bytes read
-    emitter.instruction("cbnz x0, __rt_fread_done");                            // if bytes > 0, skip eof flag
+    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the requested byte count
+    emitter.instruction("cmp x0, x9");                                          // did the backend satisfy the complete request?
+    emitter.instruction("b.ge __rt_fread_done");                                // a full read does not prove EOF
+    emitter.instruction("cbz x0, __rt_fread_mark_eof");                         // a zero-byte read is EOF for every blocking backend
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the backend descriptor for a seekability probe
+    emitter.instruction("mov x1, #0");                                          // probe the current position without moving it
+    emitter.instruction("mov x2, #1");                                          // select SEEK_CUR for the non-mutating probe
+    emitter.syscall(199);
+    if emitter.platform.needs_cmp_before_error_branch() {
+        emitter.instruction("cmp x0, #0");                                      // Linux reports a non-seekable descriptor as a negative result
+    }
+    emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_fread_mark_eof")); // only seekable short reads prove EOF
+    emitter.instruction("b __rt_fread_done");                                   // sockets and pipes may legally return partial data
     emitter.label("__rt_fread_mark_eof");
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_eof_flags");
-    emitter.instruction("mov w10, #1");                                         // eof marker value
-    emitter.instruction("strb w10, [x9, x0]");                                  // set _eof_flags[fd] = 1
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the opaque stream handle
+    emitter.instruction("mov x1, #1");                                          // publish the EOF state
+    emitter.instruction("bl __rt_stream_eof_set");                              // update only this stream's stable state
+    emitter.instruction("b __rt_fread_done");                                   // preserve a successful short-read result
 
     emitter.label("__rt_fread_would_block");
     emitter.instruction("str xzr, [sp, #24]");                                  // return an empty read without setting EOF for EAGAIN/EWOULDBLOCK
@@ -126,11 +145,11 @@ pub fn emit_fread(emitter: &mut Emitter) {
 
     // -- apply attached read filters to the bytes just read (2-slot chain) --
     //    Slot 0 = _stream_read_filters[fd], slot 1 = _stream_read_filters[fd+256]
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the file descriptor
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the file descriptor
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_stream_read_filters");
     // -- slot 0 --
     emitter.instruction("ldrb w3, [x9, x0]");                                   // read filter id for slot 0
-    emitter.instruction("cbz w3, __rt_fread_slot1");                             // skip slot 0 when empty
+    emitter.instruction("cbz w3, __rt_fread_slot1");                            // skip slot 0 when empty
     emitter.instruction("cmp w3, #128");                                        // user-filter id range?
     emitter.instruction("b.lt __rt_fread_builtin_slot0");                       // built-in filter
     emitter.instruction("mov x3, #0");                                          // direction = 0 (read)
@@ -141,7 +160,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
     // -- slot 1 --
     emitter.label("__rt_fread_slot1");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_stream_read_filters");
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload fd
     emitter.instruction("add x10, x0, #256");                                   // fd+256 (slot 1 index)
     emitter.instruction("ldrb w3, [x9, x10]");                                  // read filter id for slot 1
     emitter.instruction("cbz w3, __rt_fread_ret");                              // skip slot 1 when empty
@@ -155,8 +174,8 @@ pub fn emit_fread(emitter: &mut Emitter) {
 
     // -- restore frame and return --
     emitter.label("__rt_fread_ret");
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -166,24 +185,35 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: fread ---");
     emitter.label_global("__rt_fread");
 
-    // -- user-wrapper synthetic fd path (Phase 10 step 4) --
-    emitter.instruction("mov r9d, 0x40000000");                                 // USER_WRAPPER_FD_BASE
-    emitter.instruction("cmp rdi, r9");                                         // is this a synthetic user-wrapper fd?
-    emitter.instruction("jge __rt_user_wrapper_fread");                         // dispatch into the wrapper's stream_read instead of issuing a read syscall
-
-    emitter.instruction("cmp rdi, 0");                                          // does fread() have a valid non-negative file descriptor to read from?
-    emitter.instruction("jge __rt_fread_fd_ok_x86");                            // continue to the normal read path when the file descriptor is valid
-    emitter.instruction("xor eax, eax");                                        // return an empty string pointer immediately when fopen() failed
-    emitter.instruction("xor edx, edx");                                        // return an empty string length immediately when fopen() failed
-    emitter.instruction("ret");                                                 // skip the stream read path entirely for invalid file descriptors
-
-    emitter.label("__rt_fread_fd_ok_x86");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while fread() uses local spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved file descriptor, length, and concat-buffer start pointer
-    emitter.instruction("sub rsp, 32");                                         // reserve aligned stack space for the fread() read-path temporaries
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned stream, descriptor, and read-result spill slots
 
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the file descriptor across the concat-buffer address computation and libc read() call
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the opaque stream handle
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the requested byte count across the concat-buffer address computation and libc read() call
+    emitter.instruction("call __rt_stream_fd");                                 // resolve the backend descriptor through StreamState
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve the resolved backend descriptor
+    emitter.instruction("mov r9d, 0x40000000");                                 // materialize USER_WRAPPER_FD_BASE
+    emitter.instruction("cmp rax, r9");                                         // is the backend below the wrapper range?
+    emitter.instruction("jb __rt_fread_real_fd_x86");                           // native descriptors continue to libc read
+    emitter.instruction("lea r10, [r9 + 256]");                                 // bound the 256 active wrapper slots
+    emitter.instruction("cmp rax, r10");                                        // is the backend above the wrapper range?
+    emitter.instruction("jae __rt_fread_real_fd_x86");                          // non-wrapper synthetic backends stay on the native path
+    emitter.instruction("mov rdi, rax");                                        // pass the synthetic backend descriptor to stream_read
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the requested byte count
+    emitter.instruction("add rsp, 48");                                         // release native-read scratch storage
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("jmp __rt_user_wrapper_fread");                         // wrapper backend tail-calls stream_read
+    emitter.label("__rt_fread_real_fd_x86");
+    emitter.instruction("cmp rax, 0");                                          // did descriptor resolution produce a valid backend?
+    emitter.instruction("jge __rt_fread_fd_ok_x86");                            // continue to the normal read path for non-negative descriptors
+    emitter.instruction("xor eax, eax");                                        // return an empty string pointer for an invalid stream
+    emitter.instruction("xor edx, edx");                                        // return an empty string length for an invalid stream
+    emitter.instruction("add rsp, 48");                                         // release native-read scratch storage
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // skip the read path for invalid stream handles
+
+    emitter.label("__rt_fread_fd_ok_x86");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer absolute offset before appending the fread() result
     abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base address once for the x86_64 fread() helper
     emitter.instruction("lea rax, [r11 + r10]");                                // compute the start pointer for the bytes that libc read() will append
@@ -191,7 +221,7 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
 
     // -- TLS dispatch: route through elephc_tls_read when fd has an
     //    attached session (Phase 11 B3). --
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload fd for the TLS table lookup
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload fd for the TLS table lookup
     abi::emit_symbol_address(emitter, "r11", "_tls_sessions");                  // load runtime data address
     emitter.instruction("mov r12, QWORD PTR [r11 + r10 * 8]");                  // _tls_sessions[fd] handle (0 = plain TCP)
     emitter.instruction("test r12, r12");                                       // check whether the runtime value is zero
@@ -205,7 +235,7 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jle __rt_fread_eof_x86");                              // TLS errors and EOF still mark the stream as exhausted
     emitter.instruction("jmp __rt_fread_read_ok_x86");                          // publish the successful TLS read
     emitter.label("__rt_fread_do_syscall_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the file descriptor as the first libc read() argument
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the file descriptor as the first libc read() argument
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the concat-buffer write pointer as the second libc read() argument
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // pass the requested byte count as the third libc read() argument
     emitter.instruction("call read");                                           // read the requested bytes into the concat-buffer append window through libc read()
@@ -215,14 +245,30 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fread_eof_x86");                              // zero-byte read means real EOF
 
     emitter.label("__rt_fread_read_ok_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the actual byte count across EOF publication
     abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // reload the previous concat-buffer absolute offset before publishing the fread() append
     emitter.instruction("add r10, rax");                                        // advance the concat-buffer offset by the number of bytes libc read() returned
     abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // publish the updated concat-buffer offset for later string appenders
-    emitter.instruction("mov rdx, rax");                                        // return the successful byte count in the x86_64 elephc string-length result register
+    emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // did the backend satisfy the complete request?
+    emitter.instruction("jge __rt_fread_publish_x86");                          // a full read does not prove EOF
+    emitter.instruction("test rax, rax");                                       // was this a universal zero-byte EOF read?
+    emitter.instruction("jz __rt_fread_mark_eof_x86");                          // zero bytes mark every blocking backend exhausted
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the backend descriptor for a seekability probe
+    emitter.instruction("xor esi, esi");                                        // probe the current position without moving it
+    emitter.instruction("mov edx, 1");                                          // select SEEK_CUR for the non-mutating probe
+    emitter.instruction("call lseek");                                          // seekable short reads prove the regular stream was exhausted
+    emitter.instruction("test rax, rax");                                       // did the position probe fail?
+    emitter.instruction("js __rt_fread_publish_x86");                           // sockets and pipes may legally return partial data
+    emitter.label("__rt_fread_mark_eof_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle
+    emitter.instruction("mov esi, 1");                                          // publish the EOF state
+    emitter.instruction("call __rt_stream_eof_set");                            // update only this stream's stable state
+    emitter.label("__rt_fread_publish_x86");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // return the successful byte count in the string-length register
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the concat-buffer start pointer in the x86_64 elephc string-pointer result register
     // -- apply attached read filters (2-slot chain) --
     //    Slot 0 = _stream_read_filters[fd], slot 1 = _stream_read_filters[fd+256]
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the file descriptor
     abi::emit_symbol_address(emitter, "r11", "_stream_read_filters");           // materialize the read-filter table base
     // -- slot 0 --
     emitter.instruction("movzx ecx, BYTE PTR [r11 + r10]");                     // read filter id for slot 0
@@ -240,7 +286,7 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_apply_stream_filter");                       // transform in place
     // -- slot 1 --
     emitter.label("__rt_fread_slot1_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload fd
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload fd
     abi::emit_symbol_address(emitter, "r11", "_stream_read_filters");           // materialize the read-filter table base
     emitter.instruction("lea rcx, [r10 + 256]");                                // fd+256 (slot 1 index)
     emitter.instruction("movzx ecx, BYTE PTR [r11 + rcx]");                     // read filter id for slot 1
@@ -257,7 +303,7 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fread_builtin_slot1_x86");
     emitter.instruction("call __rt_apply_stream_filter");                       // transform in place
     emitter.label("__rt_fread_ret_x86");
-    emitter.instruction("add rsp, 32");                                         // release the fread() spill slots before returning the successful string slice
+    emitter.instruction("add rsp, 48");                                         // release the fread() spill slots before returning the successful string slice
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the successful fread() path
     emitter.instruction("ret");                                                 // return the borrowed concat-buffer string slice to the caller
 
@@ -271,17 +317,17 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fread_would_block_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the concat-buffer start pointer for an empty transient read
     emitter.instruction("xor edx, edx");                                        // return a zero-length read result without setting EOF
-    emitter.instruction("add rsp, 32");                                         // release the fread() spill slots before returning the empty string
+    emitter.instruction("add rsp, 48");                                         // release the fread() spill slots before returning the empty string
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the would-block fread() path
     emitter.instruction("ret");                                                 // return the empty non-EOF read result
 
     emitter.label("__rt_fread_eof_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor so the eof-flag table can mark this stream as exhausted
-    abi::emit_symbol_address(emitter, "r11", "_eof_flags");                     // materialize the eof-flag table base address for the current stream descriptor
-    emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // mark the current file descriptor as EOF-reached after the zero-byte or failed read
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle
+    emitter.instruction("mov esi, 1");                                          // publish the EOF state
+    emitter.instruction("call __rt_stream_eof_set");                            // mark this stream exhausted after the zero-byte or failed read
     emitter.instruction("xor eax, eax");                                        // return an empty string pointer when libc read() reports EOF or failure
     emitter.instruction("xor edx, edx");                                        // return an empty string length when libc read() reports EOF or failure
-    emitter.instruction("add rsp, 32");                                         // release the fread() spill slots before returning the empty-string result
+    emitter.instruction("add rsp, 48");                                         // release the fread() spill slots before returning the empty-string result
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the EOF/error fread() path
     emitter.instruction("ret");                                                 // return the empty string result for the exhausted or failed stream read
 }

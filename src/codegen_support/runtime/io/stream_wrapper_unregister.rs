@@ -53,6 +53,8 @@ pub fn emit_stream_wrapper_unregister(emitter: &mut Emitter) {
 
     emitter.label("__rt_swu_match");
     emitter.instruction("str xzr, [x6]");                                       // clear the protocol pointer to free the slot
+    abi::emit_symbol_address(emitter, "x7", "_user_wrapper_flags");
+    emitter.instruction("str xzr, [x7, x5, lsl #3]");                           // clear stale definition flags before slot reuse
     emitter.instruction("mov x0, #1");                                          // return true for a successful unregistration
     emitter.instruction("ret");                                                 // return to the caller
 
@@ -100,6 +102,8 @@ fn emit_stream_wrapper_unregister_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_swu_match_x86");
     emitter.instruction("mov QWORD PTR [r10], 0");                              // clear the protocol pointer to free the slot
+    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_flags");
+    emitter.instruction("mov QWORD PTR [r10 + r9 * 8], 0");                     // clear stale definition flags before slot reuse
     emitter.instruction("mov eax, 1");                                          // return true for a successful unregistration
     emitter.instruction("ret");                                                 // return to the caller
 

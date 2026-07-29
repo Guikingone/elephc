@@ -404,7 +404,7 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let index = expect_operand(inst, 1)?;
     let value = expect_operand(inst, 2)?;
     let elem_ty = indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
-    let raw_value_ty = ctx.value_php_type(value)?.codegen_repr();
+    let raw_value_ty = ctx.raw_value_php_type(value)?;
     let value_ty = effective_array_set_value_type(&elem_ty, &raw_value_ty, inst)?;
     require_integer_like_index(ctx.value_php_type(index)?, inst)?;
     let source_local = source_load_local_slot(ctx, array)?;
@@ -720,6 +720,10 @@ fn lower_array_set_aarch64(
             ctx.load_string_value_to_regs(value, "x2", "x3")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_set_str");
         }
+        PhpType::Resource(_) => {
+            ctx.load_value_to_reg(value, "x2")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_set_resource");
+        }
         other if other.is_refcounted() => {
             ctx.load_value_to_reg(value, "x2")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_set_refcounted");
@@ -814,6 +818,10 @@ fn lower_array_set_x86_64(
             ctx.load_string_value_to_regs(value, "rdx", "rcx")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_set_str");
         }
+        PhpType::Resource(_) => {
+            ctx.load_value_to_reg(value, "rdx")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_set_resource");
+        }
         other if other.is_refcounted() => {
             ctx.load_value_to_reg(value, "rdx")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_set_refcounted");
@@ -840,7 +848,7 @@ fn emit_array_get_in_bounds_aarch64(
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, index_reg, 0x7fff_ffff_ffff_fffe);
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable => {
+        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Resource(_) => {
             ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
             ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)); // load the selected pointer-sized indexed-array element
             if matches!(elem_ty, PhpType::Callable) {
@@ -902,7 +910,7 @@ fn emit_array_get_in_bounds_x86_64(
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, index_reg, 0x7fff_ffff_ffff_fffe);
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable => {
+        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Resource(_) => {
             ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
             ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)); // load the selected pointer-sized indexed-array element
             if matches!(elem_ty, PhpType::Callable) {
@@ -1127,7 +1135,7 @@ fn lower_array_push_aarch64(
     value: ValueId,
     elem_ty: &PhpType,
 ) -> Result<()> {
-    let value_ty = ctx.value_php_type(value)?;
+    let value_ty = ctx.raw_value_php_type(value)?;
     if array_push_value_needs_mixed_unbox(elem_ty, &value_ty) {
         return lower_array_push_unboxed_mixed_aarch64(ctx, array, value, elem_ty);
     }
@@ -1143,6 +1151,15 @@ fn lower_array_push_aarch64(
             ctx.load_value_to_reg(array, "x9")?;
             ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the append helper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+        }
+        PhpType::Resource(_) => {
+            ctx.load_value_to_reg(value, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_resource_retain");
+            ctx.emitter.instruction("mov x1, x0");                              // pass the array-owned opaque resource handle to append
+            ctx.load_value_to_reg(array, "x9")?;
+            ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the append helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+            crate::codegen::emit_array_value_type_stamp(ctx.emitter, "x0", &value_ty);
         }
         PhpType::TaggedScalar if elem_ty.codegen_repr() == PhpType::Int => {
             ctx.load_value_to_result(value)?;
@@ -1195,7 +1212,7 @@ fn lower_array_push_x86_64(
     value: ValueId,
     elem_ty: &PhpType,
 ) -> Result<()> {
-    let value_ty = ctx.value_php_type(value)?;
+    let value_ty = ctx.raw_value_php_type(value)?;
     if array_push_value_needs_mixed_unbox(elem_ty, &value_ty) {
         return lower_array_push_unboxed_mixed_x86_64(ctx, array, value, elem_ty);
     }
@@ -1211,6 +1228,15 @@ fn lower_array_push_x86_64(
             ctx.load_value_to_reg(value, "rsi")?;
             ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the append helper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+        }
+        PhpType::Resource(_) => {
+            ctx.load_value_to_reg(value, "rdi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_resource_retain");
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the array-owned opaque resource handle to append
+            ctx.load_value_to_reg(array, "r11")?;
+            ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the append helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+            crate::codegen::emit_array_value_type_stamp(ctx.emitter, "rax", &value_ty);
         }
         PhpType::TaggedScalar if elem_ty.codegen_repr() == PhpType::Int => {
             ctx.load_value_to_result(value)?;
@@ -1652,6 +1678,9 @@ fn box_value_for_mixed_container(
 /// Returns the PHP element type for an indexed-array operand.
 fn indexed_array_element_type(array_ty: &PhpType, inst: &Instruction) -> Result<PhpType> {
     match array_ty {
+        PhpType::Array(elem_ty) if matches!(elem_ty.as_ref(), PhpType::Resource(_)) => {
+            Ok(elem_ty.as_ref().clone())
+        }
         PhpType::Array(elem_ty) => Ok(elem_ty.codegen_repr()),
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
@@ -1667,8 +1696,14 @@ fn effective_array_set_value_type(
     value_ty: &PhpType,
     inst: &Instruction,
 ) -> Result<PhpType> {
-    let elem_ty = elem_ty.codegen_repr();
-    let value_ty = value_ty.codegen_repr();
+    let elem_ty = match elem_ty {
+        PhpType::Resource(kind) => PhpType::Resource(kind.clone()),
+        other => other.codegen_repr(),
+    };
+    let value_ty = match value_ty {
+        PhpType::Resource(kind) => PhpType::Resource(kind.clone()),
+        other => other.codegen_repr(),
+    };
     if matches!(elem_ty, PhpType::Mixed) {
         return Ok(PhpType::Mixed);
     }
@@ -1694,6 +1729,7 @@ fn require_supported_array_set_value(value_ty: PhpType, inst: &Instruction) -> R
             | PhpType::Float
             | PhpType::Str
             | PhpType::TaggedScalar
+            | PhpType::Resource(_)
     ) {
         return Ok(value_ty);
     }
@@ -1722,6 +1758,9 @@ fn require_integer_like_index(index_ty: PhpType, inst: &Instruction) -> Result<(
 /// Rejects array-get result shapes that do not match the lowered array element type.
 fn require_array_get_result(elem_ty: &PhpType, inst: &Instruction) -> Result<()> {
     let result_ty = inst.result_php_type.codegen_repr();
+    if matches!(elem_ty, PhpType::Resource(_)) && result_ty == PhpType::Int {
+        return Ok(());
+    }
     if crate::codegen::sentinels::null_repr_is_tagged()
         && matches!(elem_ty, PhpType::Int)
         && result_ty == PhpType::TaggedScalar
