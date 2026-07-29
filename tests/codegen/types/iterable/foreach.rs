@@ -625,3 +625,309 @@ fn test_iterable_variadic_arg_stays_boxed_in_runtime_array() {
     );
     assert_eq!(out, "[[1,2]]");
 }
+
+// --- Issue #580: by-ref foreach over an array-element source ---
+//
+// `lower_foreach` read its source with a plain rvalue `lower_expr` regardless of the binding
+// mode. For an array element that read is an `array_get`, which hands back the parent's own
+// container *with a retain*: the element sits at refcount 2 while the loop runs, so `iter_start`
+// copy-on-writes it, and the loop mutates a private copy and drops it. Every write was lost.
+// A plain local source worked because loading a local yields the local's storage with no retain,
+// leaving refcount 1 and no copy.
+//
+// The by-ref source now takes `Op::ArrayGetForWrite`, which does the copy-on-write split itself
+// — receiver first, then element, publishing each back into the slot it came from — and returns
+// the element borrowed. Note that merely dropping the retain would be WORSE than the original
+// bug: `__rt_array_ensure_unique` consumes one reference from the shared source when it splits,
+// so a read that never took one would have the split cannibalize the parent's own reference.
+// `array_get`'s missing-key warning and null-container sentinel are reused unchanged.
+
+/// Regression for issue #580: by-ref `foreach` over an indexed element must mutate the parent
+/// array in place. Pre-fix the loop ran and assigned `$v` but `$a[0]` stayed `[1, 2]`.
+#[test]
+fn test_regression_580_by_ref_foreach_over_indexed_element_source() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [[1, 2]];
+foreach ($a[0] as &$v) { $v = $v * 2; }
+unset($v);
+echo implode(',', $a[0]);
+"#,
+    );
+    assert_eq!(out, "2,4");
+}
+
+/// Documents the hash half of issue #580, which this fix deliberately does NOT cover: binding a
+/// reference to a hash element is not implemented at all, so there is no alias to iterate (an
+/// explicit `$r = &$h['a'];` is rejected by the checker with "requires an indexed array").
+///
+/// The assertion pins the *current* wrong result on purpose. It exists so the borrowed element
+/// read stays restricted to the shapes where the parent really does share the storage.
+#[test]
+fn test_by_ref_foreach_over_hash_element_source_still_compiles_without_aliasing() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ['a' => [1, 2]];
+foreach ($h['a'] as &$w) { $w = $w * 10; }
+unset($w);
+echo implode(',', $h['a']);
+"#,
+    );
+    assert_eq!(out, "1,2");
+}
+
+/// Regression for issue #580: the mutation must be visible to the parent *during* the loop,
+/// not merely published at the end — PHP's by-ref binding aliases the element's storage, so
+/// reading the parent mid-loop already reflects the write.
+#[test]
+fn test_regression_580_by_ref_foreach_element_mutation_visible_during_loop() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [[1, 2]];
+foreach ($a[0] as &$v) { $v = $v * 2; echo $a[0][0], ';'; }
+unset($v);
+echo implode(',', $a[0]);
+"#,
+    );
+    assert_eq!(out, "2;2;2,4");
+}
+
+/// Regression for issue #580: a two-level element source must alias through both levels.
+#[test]
+fn test_regression_580_by_ref_foreach_over_nested_element_source() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [[[1, 2]]];
+foreach ($a[0][0] as &$v) { $v = $v * 2; }
+unset($v);
+echo implode(',', $a[0][0]);
+"#,
+    );
+    assert_eq!(out, "2,4");
+}
+
+/// Regression for issue #580: the key-and-value form takes the same source path, so it must
+/// mutate the parent too.
+#[test]
+fn test_regression_580_by_ref_foreach_element_source_with_key() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [[1, 2]];
+foreach ($a[0] as $k => &$v) { $v = $v + $k; }
+unset($v);
+echo implode(',', $a[0]);
+"#,
+    );
+    assert_eq!(out, "1,3");
+}
+
+/// Guard for issue #580: a by-VALUE `foreach` over an element source must NOT mutate the
+/// parent. The fix gives only the by-ref source a borrowed read; the by-value source must keep
+/// its retaining read, or this loop would start writing through to `$a[0]`.
+#[test]
+fn test_regression_580_by_value_foreach_over_element_source_does_not_mutate() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [[1, 2]];
+foreach ($a[0] as $v) { $v = $v * 2; }
+echo implode(',', $a[0]);
+"#,
+    );
+    assert_eq!(out, "1,2");
+}
+
+/// Guard for issue #580: the plain-local source already worked and must keep working.
+#[test]
+fn test_regression_580_by_ref_foreach_over_plain_local_still_mutates() {
+    let out = compile_and_run(
+        r#"<?php
+$p = [1, 2];
+foreach ($p as &$v) { $v = $v * 3; }
+unset($v);
+echo implode(',', $p);
+"#,
+    );
+    assert_eq!(out, "3,6");
+}
+
+/// Guard for issue #580: iterating an element source by reference must stay heap-clean — the
+/// borrowed read skips the retain, so a stray release would free storage the parent still owns
+/// and a stray retain would leak the element.
+#[test]
+fn test_regression_580_by_ref_foreach_element_source_is_leak_free() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [[1, 2]];
+foreach ($a[0] as &$v) { $v = $v * 2; }
+unset($v);
+echo implode(',', $a[0]);
+"#,
+    );
+    assert_eq!(out.stdout, "2,4");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #580: the element must still reach the loop mutable when a SECOND owner
+/// holds it, which is where a plain non-retaining read goes badly wrong.
+///
+/// The outer by-value loop boxes each row, so `$a[$k]` sits at refcount 2 while the inner loop
+/// runs. `__rt_array_ensure_unique` splits on that, and it CONSUMES one reference from the
+/// shared original when it does — a read that never took a reference of its own would therefore
+/// have the split cannibalize the parent's own reference, leaving `$a[$k]` dangling and the next
+/// iteration writing into freed storage (this program printed `6,8|3,4` from a reused block).
+/// The fetch-for-write read does the split itself and publishes the separated container back
+/// into the parent slot, so the parent keeps a live element and the writes land in it.
+#[test]
+fn test_regression_580_by_ref_foreach_element_source_shared_with_another_owner() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [[1, 2], [3, 4]];
+foreach ($a as $k => $row) {
+    foreach ($a[$k] as &$v) { $v = $v * 2; }
+    unset($v);
+}
+echo implode(',', $a[0]), '|', implode(',', $a[1]);
+"#,
+    );
+    assert_eq!(out.stdout, "2,4|6,8");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #580: a HASH element of an indexed source must be separated with the
+/// hash copy-on-write helper, not the indexed-array one.
+///
+/// `array<array{...}>` reaches the same fetch-for-write path as a nested indexed array, but its
+/// element is hash storage: splitting it with `__rt_array_ensure_unique` would hand a hash
+/// pointer to the indexed shallow-clone helper. Pairing the helper with the element's container
+/// kind is what keeps this shape correct — and this is the hash half that IS in scope, unlike a
+/// hash RECEIVER (`$h['a']`), which has no reference binding in elephc at all.
+#[test]
+fn test_regression_580_by_ref_foreach_over_hash_element_of_indexed_source() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [['x' => 1, 'y' => 2]];
+foreach ($a[0] as $k => &$v) { $v = $v * 2; }
+unset($v);
+echo $a[0]['x'], ',', $a[0]['y'];
+"#,
+    );
+    assert_eq!(out.stdout, "2,4");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Guard for issue #580: a missing index must keep warning and skipping the loop instead of
+/// reaching the fetch-for-write path with an out-of-bounds slot address.
+///
+/// The fetch-for-write read reuses `array_get`'s bounds and null-container guards precisely so
+/// this stays true: the miss takes the warning path and materializes the null-container
+/// sentinel, which `iter_start` normalizes and `iter_next` reports as empty (issue #556). A
+/// fresh read path that computed the element address first would write through a slot past the
+/// end of the array.
+#[test]
+fn test_regression_580_by_ref_foreach_over_missing_element_index_warns_and_skips() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [[1, 2]];
+foreach ($a[7] as &$v) { $v = $v * 2; }
+echo 'after:', implode(',', $a[0]);
+"#,
+    );
+    assert_eq!(out.stdout, "after:1,2");
+    assert!(
+        out.stderr.contains("Undefined array key 7"),
+        "expected the missing-index warning to survive the fetch-for-write read, got: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #580: the RECEIVER must be separated too, so the write is not visible
+/// through an alias of the parent array.
+///
+/// PHP separates `$a` on the way to separating `$a[0]`, and elephc's element WRITE path already
+/// does (`$a[0] = [9, 9]` splits the receiver inside `__rt_array_set_*`). Fetch-for-write
+/// publishes a new element pointer into the receiver's payload, so it owes the same guarantee:
+/// without it, `$b` — which shares the outer container — would observe the loop's writes.
+#[test]
+fn test_regression_580_by_ref_foreach_element_source_separates_aliased_parent() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [[1, 2]];
+$b = $a;
+foreach ($a[0] as &$v) { $v = $v * 2; }
+unset($v);
+echo implode(',', $a[0]), '|', implode(',', $b[0]);
+"#,
+    );
+    assert_eq!(out.stdout, "2,4|1,2");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #580: an alias of the ELEMENT keeps the pre-loop value, because the
+/// copy-on-write split gives the parent a fresh container and leaves the old one to its other
+/// owner. This is the half a plain `array_get` read could never get right: it shared the element
+/// with `$row` and then mutated a third, private copy that nobody could see.
+#[test]
+fn test_regression_580_by_ref_foreach_element_source_leaves_element_alias_untouched() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [[1, 2]];
+$row = $a[0];
+foreach ($a[0] as &$v) { $v = $v * 2; }
+unset($v);
+echo implode(',', $a[0]), '|', implode(',', $row);
+"#,
+    );
+    assert_eq!(out.stdout, "2,4|1,2");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #580: a subscript CHAIN is separated top-down, so an alias of an
+/// intermediate level keeps its pre-loop value.
+///
+/// `foreach ($a[0][0] as &$v)` separates `$a`, then `$a[0]` into `$a`'s slot, then `$a[0][0]`
+/// into `$a[0]`'s slot — the same order PHP uses. Lowering the intermediate `$a[0]` with a plain
+/// read instead would leave it shared with `$mid`, and publishing the innermost split into it
+/// would show up there.
+#[test]
+fn test_regression_580_by_ref_foreach_nested_element_source_separates_whole_chain() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [[[1, 2]]];
+$mid = $a[0];
+foreach ($a[0][0] as &$v) { $v = $v * 2; }
+unset($v);
+echo implode(',', $a[0][0]), '|', implode(',', $mid[0]);
+"#,
+    );
+    assert_eq!(out.stdout, "2,4|1,2");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}

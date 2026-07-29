@@ -8017,6 +8017,129 @@ fn lower_array_access(
     lower_array_access_with_missing_warning(ctx, array, index, expr, true)
 }
 
+/// Lowers `$base[...][$index]` as the source of a by-reference `foreach`, separating the element
+/// for writing instead of reading a copy of it.
+///
+/// A by-reference loop mutates its source container in place, and `iter_start` reaches that
+/// through `__rt_array_ensure_unique`, which copies as soon as the source is shared. The plain
+/// `array_get` read hands back the parent's container plus a reference of its own, so the
+/// element sat at refcount 2 and every write went into a private copy that the loop then
+/// dropped (issue #580). `Op::ArrayGetForWrite` performs the copy-on-write split itself —
+/// separating the receiver first, then the element, publishing each back into the slot it came
+/// from — and returns the element borrowed, so the loop mutates the very container the parent
+/// holds, exactly like PHP.
+///
+/// Falls back to the ordinary retaining read whenever the fetch-for-write would not be sound or
+/// the codegen cannot express it: a non-indexed receiver (hash elements have no reference
+/// binding in elephc at all), a non-integer key, a `Mixed` element (its read can materialize a
+/// fresh box rather than the slot's own storage), or a subscript chain not rooted in a local.
+/// The receiver is evaluated exactly once on both paths.
+pub(crate) fn lower_by_ref_foreach_element_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    index: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let array_value = lower_by_ref_foreach_source_receiver(ctx, array);
+    if !element_fetch_for_write_applies(ctx, &array_value, index, expr) {
+        if value_is_nullable(ctx, array_value.value) {
+            return lower_nullable_array_access(ctx, array_value, index, expr, true);
+        }
+        return lower_array_access_from_value(ctx, array_value, index, expr, true);
+    }
+    let index_value = lower_expr(ctx, index);
+    let index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+    let result_type = array_access_result_type(ctx, array_value.value, Op::ArrayGet, expr);
+    let result = ctx.emit_value(
+        Op::ArrayGetForWrite,
+        vec![array_value.value, index_value.value],
+        None,
+        result_type,
+        Op::ArrayGetForWrite.default_effects(),
+        Some(expr.span),
+    );
+    // The separated element belongs to the parent's slot, not to this read — pin that explicitly
+    // instead of leaving it at the `MaybeOwned` default, which `mark_owned_temporaries` is free
+    // to promote to `Owned` later, and which would then have the loop release the parent's
+    // element on the way out.
+    ctx.builder
+        .set_value_ownership(result.value, Ownership::Borrowed);
+    release_coerced_source_if_owned(ctx, index_value, Some(index.span));
+    // An intermediate that fell back to a retaining read owns a reference to the container it
+    // handed us, and holding it for the whole loop would be a leak. Dropping it here is safe
+    // precisely because `element_fetch_for_write_applies` demanded a local-rooted chain: the base
+    // local keeps every level alive until the loop ends. An intermediate that took the
+    // fetch-for-write path is already borrowed, so this is a no-op for it.
+    // `stabilize_borrowed_result_and_release_receiver` is deliberately NOT used — it would
+    // acquire the borrowed result first, restoring the refcount 2 that causes the copy.
+    if ctx.value_is_owning_temporary(array_value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(expr.span));
+    }
+    result
+}
+
+/// Lowers the receiver of a by-reference `foreach` element source, fetching it for write too
+/// when it is itself an eligible element.
+///
+/// A chain has to be separated top-down, exactly as PHP does it: `foreach ($a[0][0] as &$v)`
+/// separates `$a`, then `$a[0]` into `$a`'s slot, then `$a[0][0]` into `$a[0]`'s slot. Lowering
+/// the intermediate with a plain read instead would leave it shared, so publishing the innermost
+/// split into it would be visible through every alias of that intermediate. Each level hands the
+/// next one a container that is already unique, which is why the inner levels find nothing left
+/// to split and why nothing in the chain is owned by the reader.
+fn lower_by_ref_foreach_source_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+) -> LoweredValue {
+    if let ExprKind::ArrayAccess { array: receiver, index } = &array.kind {
+        return lower_by_ref_foreach_element_source(ctx, receiver, index, array);
+    }
+    lower_expr(ctx, array)
+}
+
+/// Returns whether a by-reference `foreach` source can take the fetch-for-write element read.
+///
+/// Requires an indexed receiver with an integer key (the shapes `Op::ArrayGetForWrite` lowers),
+/// a statically-known container element — an indexed array or a hash, the two kinds with a
+/// copy-on-write helper to split them — and a subscript chain rooted in a plain variable. The
+/// last condition is what makes dropping an intermediate receiver safe: a chain over a temporary
+/// — `f()[0]` — has no owner once the read returns, so borrowing out of it would leave the loop
+/// iterating freed storage.
+fn element_fetch_for_write_applies(
+    ctx: &LoweringContext<'_, '_>,
+    array_value: &LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+) -> bool {
+    if array_value.ir_type != IrType::Heap(IrHeapKind::Array) {
+        return false;
+    }
+    if value_is_nullable(ctx, array_value.value) {
+        return false;
+    }
+    if index_expr_key_type(ctx, index) != PhpType::Int {
+        return false;
+    }
+    let PhpType::Array(elem_ty) = ctx.builder.value_php_type(array_value.value).codegen_repr()
+    else {
+        return false;
+    };
+    let elem_ty = normalize_value_php_type(*elem_ty).codegen_repr();
+    if !matches!(elem_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        return false;
+    }
+    subscript_chain_is_variable_rooted(expr)
+}
+
+/// Returns whether a subscript expression bottoms out in a plain variable receiver.
+fn subscript_chain_is_variable_rooted(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(_) => true,
+        ExprKind::ArrayAccess { array, .. } => subscript_chain_is_variable_rooted(array),
+        _ => false,
+    }
+}
+
 /// Lowers array, hash, string, or ArrayAccess indexing with configurable
 /// undefined-offset warning behavior for native indexed-array reads. Suppressed
 /// warnings propagate through the whole subscript chain: PHP's `isset()` and `??`

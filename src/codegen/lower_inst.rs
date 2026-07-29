@@ -143,6 +143,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ArrayLen => arrays::lower_array_len(ctx, &inst),
         Op::ArrayGet => arrays::lower_array_get(ctx, &inst, true),
         Op::ArrayGetSilent => arrays::lower_array_get(ctx, &inst, false),
+        Op::ArrayGetForWrite => arrays::lower_array_get_for_write(ctx, &inst),
         Op::ArrayIsset => builtins::lower_array_isset(ctx, &inst),
         Op::ArrayElemAddr => arrays::lower_array_elem_addr(ctx, &inst),
         Op::ArraySet => arrays::lower_array_set(ctx, &inst),

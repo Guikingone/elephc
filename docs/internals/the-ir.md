@@ -540,6 +540,7 @@ across a reset point.
 | `HashNew(key_type, value_type, capacity)` | none | `Heap(Hash)` | `alloc_heap` |
 | `ArrayLen`, `HashLen` | container | `I64` | `reads_heap` |
 | `ArrayGet` | array, index | element type | `reads_heap`, `may_warn`, maybe `may_fatal` |
+| `ArrayGetForWrite` | array, index (`I64`) | element type, **borrowed** | `reads_heap`, `may_warn` |
 | `HashGet` | hash, key | value type | `reads_heap`, `may_warn`, maybe `may_fatal` |
 | `ArraySet` | array, index, value | `Void` | `writes_heap`, maybe `alloc_heap`, `refcount_op` |
 | `HashSet` | hash, key, value | `Void` | `writes_heap`, maybe `alloc_heap`, `refcount_op` |
@@ -555,6 +556,19 @@ across a reset point.
 All mutating operations must preserve copy-on-write. The builder emits
 `ArrayEnsureUnique`/`HashEnsureUnique` before mutation unless prior ownership
 proofs make it unnecessary.
+
+`ArrayGetForWrite` is the read side of that rule for a container element that is
+about to be mutated through an alias — today, the source of a by-reference
+`foreach` (issue #580). Unlike `ArrayGet` it takes no reference for the caller;
+it separates the receiver, then splits the element from any co-owner and stores
+the separated container back into the receiver's element slot, so the result is
+owned by the parent and unique. That is what lets `foreach ($a[0] as &$v)` write
+through to `$a[0]`: the plain retaining read left the element shared, and
+`IterStart`'s own copy-on-write split then gave the loop a private copy to mutate
+and discard. The op is restricted to indexed receivers with an integer key and an
+array or hash element (each split with its own runtime helper); every other shape
+keeps the retaining read. The receiver split only happens for a receiver that
+came from a local slot, since the new container has to be published somewhere.
 
 ### Iterables, SPL, and Foreach
 

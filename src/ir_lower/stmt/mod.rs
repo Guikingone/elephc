@@ -22,7 +22,8 @@ use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
     array_access_element_result_type, coerce_container_to_mixed_payload, coerce_to_int_at_span,
     index_expr_key_type, lower_array_access_from_lowered_receiver,
-    lower_callable_array_for_assignment, lower_array_literal_with_expected_type,
+    lower_by_ref_foreach_element_source, lower_callable_array_for_assignment,
+    lower_array_literal_with_expected_type,
     lower_closure_for_assignment, lower_expr,
     reflection_arg_array_binding_for_expr, reflection_class_binding_for_expr,
     reflection_function_binding_for_expr, reflection_method_binding_for_expr,
@@ -1592,7 +1593,7 @@ fn lower_foreach(
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
-    let source = lower_expr(ctx, array);
+    let source = lower_foreach_source(ctx, array, value_by_ref);
     let source_php_ty = ctx.builder.value_php_type(source.value);
     let source_ty = source_php_ty.codegen_repr();
     let key_needs_null_init = key_var.is_some_and(|name| !ctx.local_slots.contains_key(name));
@@ -1728,6 +1729,26 @@ fn lower_foreach(
     if ctx.value_is_owning_temporary(source) {
         crate::ir_lower::ownership::release_if_owned(ctx, source, Some(array.span));
     }
+}
+
+/// Lowers the `foreach` source expression under the loop's binding mode.
+///
+/// A by-VALUE loop iterates a copy, so it keeps the ordinary retaining read: the extra
+/// reference is what makes `__rt_array_ensure_unique` copy, and copying is precisely the
+/// semantics. A by-REFERENCE loop mutates the source in place, so an array-element source is
+/// fetched for writing instead — otherwise the read's own reference makes the runtime copy the
+/// element, and every write lands in a copy the loop then drops (issue #580).
+fn lower_foreach_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    value_by_ref: bool,
+) -> LoweredValue {
+    if value_by_ref {
+        if let ExprKind::ArrayAccess { array: receiver, index } = &array.kind {
+            return lower_by_ref_foreach_element_source(ctx, receiver, index, array);
+        }
+    }
+    lower_expr(ctx, array)
 }
 
 /// Returns the by-value foreach local type when Phase 04 can keep a concrete element.
