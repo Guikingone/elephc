@@ -410,9 +410,18 @@ jobs:
       - name: Verify pinned WASM tool versions
         shell: bash
         run: |
-          test "$(wasmer --version)" = "wasmer ${WASMER_VERSION}"
-          test "$(wasmtime --version | cut -d' ' -f2)" = "${WASMTIME_VERSION}"
-          test "$(wasm-tools --version)" = "wasm-tools ${WASM_TOOLS_VERSION}"
+          set -euo pipefail
+          wasmer_output="$(wasmer --version)"
+          wasmtime_output="$(wasmtime --version)"
+          wasm_tools_output="$(wasm-tools --version)"
+          printf '%s\n%s\n%s\n' \
+            "$wasmer_output" "$wasmtime_output" "$wasm_tools_output"
+          test "$(printf '%s\n' "$wasmer_output" | cut -d' ' -f2)" = \
+            "${WASMER_VERSION}"
+          test "$(printf '%s\n' "$wasmtime_output" | cut -d' ' -f2)" = \
+            "${WASMTIME_VERSION}"
+          test "$(printf '%s\n' "$wasm_tools_output" | cut -d' ' -f2)" = \
+            "${WASM_TOOLS_VERSION}"
 
       - name: Build WASM compiler
         run: cargo build --locked --bin elephc
