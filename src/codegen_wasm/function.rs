@@ -144,6 +144,7 @@ pub fn lower_function(
         fcc_entries,
         iter_state: std::collections::HashMap::new(),
         ref_cell_ptrs: std::collections::HashMap::new(),
+        owned_ref_cell_slots: std::collections::HashSet::new(),
         ref_cell_owners: Vec::new(),
     };
 
@@ -158,7 +159,7 @@ pub fn lower_function(
                 let slot_raw = LocalSlotId::from_raw(i as u32).as_raw();
                 match &param_reprs[i] {
                     WasmRepr::Ptr(ptr_local) => {
-                        ctx.register_ref_cell_ptr(slot_raw, ptr_local.clone());
+                        ctx.register_ref_cell_ptr(slot_raw, ptr_local.clone(), false);
                     }
                     _ => unreachable!("by-ref param {} must be declared as Ptr", i),
                 }

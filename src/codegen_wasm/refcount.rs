@@ -1,9 +1,9 @@
 //! Purpose:
 //! Emits the hand-authored WebAssembly (WAT) refcounting primitives for the
-//! wasm32-wasi backend: `__rt_incref`, the `__rt_decref_any` free dispatcher, and
-//! `__rt_str_persist` (copy a transient string into an owned heap block). These
-//! sit on top of the linear-memory allocator (`heap`) and back the EIR ownership
-//! ops (`Acquire` / `Release` / `Move` / `Borrow`).
+//! wasm32-wasi backend: `__rt_incref`, the `__rt_decref_any` free dispatcher,
+//! the dedicated ref-cell retain/release pair, and `__rt_str_persist` (copy a
+//! transient string into an owned heap block). These sit on top of the
+//! linear-memory allocator (`heap`) and back the EIR ownership ops.
 //!
 //! Called from:
 //! - `crate::codegen_wasm::generate()` for every module, right after the heap.
@@ -20,6 +20,9 @@
 //!   releases through `__rt_decref_object` (P6a: scalar-only, no property walk); kind
 //!   6 (callable descriptor) releases through `__rt_callable_descriptor_release`
 //!   (P7a0, emitted by `closures`); any other kind is a no-op today.
+//! - Ref cells use dedicated heap kind 7 and a stricter runtime validator before
+//!   touching their header. Their release takes a compile-time payload tag, so
+//!   scalar bits are never interpreted as a possible heap pointer.
 //! - `__rt_str_persist` always copies into a fresh heap block (PHP string value
 //!   semantics). The native runtime may incref an already-heap string instead; the
 //!   observable string content and lifetime are identical.
@@ -32,6 +35,9 @@ use super::wat::WatModule;
 pub(super) fn emit_refcount_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_INCREF);
     wm.add_raw_func(RT_DECREF_ANY);
+    wm.add_raw_func(RT_REF_CELL_IS_LIVE);
+    wm.add_raw_func(RT_REF_CELL_INCREF);
+    wm.add_raw_func(RT_REF_CELL_RELEASE);
     wm.add_raw_func(RT_STR_PERSIST);
 }
 
@@ -91,6 +97,85 @@ const RT_DECREF_ANY: &str = r#"(func $__rt_decref_any (param $ptr i32)
       (call $__rt_callable_descriptor_release (local.get $ptr)) ;; P7a0: decref + capture walk + free
       (return)))
   (return))
+"#;
+
+/// `__rt_ref_cell_is_live`: validates an owned ref-cell payload pointer before
+/// either dedicated ref-cell helper may read or mutate its refcount.
+///
+/// The range and alignment guards run before header loads. The allocator payload
+/// size must cover the 16-byte cell, the complete block must remain below the bump
+/// cursor, the full kind word must be the dedicated value 7, and the refcount must
+/// be non-zero. Borrowed foreach element addresses and ordinary heap values therefore
+/// fail closed instead of being mistaken for owned ref cells.
+const RT_REF_CELL_IS_LIVE: &str =
+    r#"(func $__rt_ref_cell_is_live (param $ptr i32) (result i32)
+  (local $size i32)
+  (if (i32.eqz (local.get $ptr)) (then (return (i32.const 0))))    ;; reject null
+  (if (i32.ne (i32.and (local.get $ptr) (i32.const 7)) (i32.const 0))
+    (then (return (i32.const 0))))                                 ;; reject misaligned/interior pointers
+  (if (i32.lt_u (local.get $ptr) (i32.add (global.get $__heap_base) (i32.const 16)))
+    (then (return (i32.const 0))))                                 ;; reject below first payload
+  (if (i32.ge_u (local.get $ptr) (global.get $__heap_ptr))
+    (then (return (i32.const 0))))                                 ;; reject at/after bump cursor
+  (local.set $size (i32.load (i32.sub (local.get $ptr) (i32.const 16))))  ;; allocator payload size
+  (if (i32.lt_u (local.get $size) (i32.const 16))
+    (then (return (i32.const 0))))                                 ;; ref-cell payload needs two words
+  (if (i64.gt_u
+        (i64.add (i64.extend_i32_u (local.get $ptr)) (i64.extend_i32_u (local.get $size)))
+        (i64.extend_i32_u (global.get $__heap_ptr)))
+    (then (return (i32.const 0))))                                 ;; reject incomplete/out-of-range block
+  (if (i64.ne (i64.load (i32.sub (local.get $ptr) (i32.const 8))) (i64.const 7))
+    (then (return (i32.const 0))))                                 ;; reject non-ref-cell heap kinds
+  (if (i32.eqz (i32.load (i32.sub (local.get $ptr) (i32.const 12))))
+    (then (return (i32.const 0))))                                 ;; reject freed/re-entrant blocks
+  (return (i32.const 1)))
+"#;
+
+/// `__rt_ref_cell_incref`: retains one proven live kind-7 ref cell.
+///
+/// Unlike generic `__rt_incref`, this helper refuses any pointer that does not
+/// satisfy the dedicated ref-cell header contract, so an interior array-element
+/// address cannot become descriptor-owned accidentally.
+const RT_REF_CELL_INCREF: &str = r#"(func $__rt_ref_cell_incref (param $ptr i32)
+  (if (i32.eqz (call $__rt_ref_cell_is_live (local.get $ptr)))
+    (then (return)))                                               ;; invalid/non-owned ref binding
+  (i32.store
+    (i32.sub (local.get $ptr) (i32.const 12))
+    (i32.add (i32.load (i32.sub (local.get $ptr) (i32.const 12))) (i32.const 1))))
+"#;
+
+/// `__rt_ref_cell_release`: releases one kind-7 ref-cell owner and destroys the
+/// payload plus cell exactly when the last owner disappears.
+///
+/// `payload_tag` uses the WASM capture-tag table (without the by-ref sentinel).
+/// Only tags known to carry an owned heap pointer load `[cell+0]`; scalar payload
+/// bits are never sent to `__rt_decref_any`.
+const RT_REF_CELL_RELEASE: &str =
+    r#"(func $__rt_ref_cell_release (param $ptr i32) (param $payload_tag i32)
+  (local $rc i32) (local $payload i32)
+  (if (i32.eqz (call $__rt_ref_cell_is_live (local.get $ptr)))
+    (then (return)))                                               ;; invalid/non-owned ref binding
+  (local.set $rc
+    (i32.add (i32.load (i32.sub (local.get $ptr) (i32.const 12))) (i32.const -1)))  ;; rc--
+  (if (i32.ne (local.get $rc) (i32.const 0))
+    (then
+      (i32.store (i32.sub (local.get $ptr) (i32.const 12)) (local.get $rc))
+      (return)))                                                   ;; another owner keeps the cell alive
+  (i32.store (i32.sub (local.get $ptr) (i32.const 12)) (i32.const 0))  ;; re-entrancy guard
+  (if
+    (i32.or
+      (i32.or
+        (i32.or
+          (i32.eq (local.get $payload_tag) (i32.const 1))
+          (i32.and
+            (i32.ge_u (local.get $payload_tag) (i32.const 4))
+            (i32.le_u (local.get $payload_tag) (i32.const 7))))
+        (i32.eq (local.get $payload_tag) (i32.const 10)))
+      (i32.eq (local.get $payload_tag) (i32.const 12)))
+    (then
+      (local.set $payload (i32.load offset=0 (local.get $ptr)))    ;; typed heap payload only
+      (call $__rt_decref_any (local.get $payload))))               ;; release string/container/callable
+  (call $__rt_heap_free (local.get $ptr)))                         ;; free cell after payload
 "#;
 
 /// `__rt_str_persist`: copies a string (data-segment literal or transient concat
@@ -255,6 +340,83 @@ mod tests {
   (global.get $_gc_live))"#;
         if let Some(o) = run_driver(driver, "t") {
             assert_eq!(o, "32");
+        }
+    }
+
+    /// Retaining a kind-7 ref cell creates a real second owner: the first release
+    /// leaves refcount 1 and the final release frees the cell, restoring `_gc_live`.
+    #[test]
+    fn ref_cell_retain_and_last_release_balance_heap() {
+        let driver = r#"(func $t (export "t") (result i32)
+  (local $cell i32) (local $first_ok i32)
+  (local.set $cell (call $__rt_heap_alloc (i32.const 16)))
+  (i64.store (i32.sub (local.get $cell) (i32.const 8)) (i64.const 7))
+  (i64.store (local.get $cell) (i64.const 42))
+  (call $__rt_ref_cell_incref (local.get $cell))
+  (call $__rt_ref_cell_release (local.get $cell) (i32.const 0))
+  (local.set $first_ok
+    (i32.and
+      (call $__rt_ref_cell_is_live (local.get $cell))
+      (i32.eq
+        (i32.load (i32.sub (local.get $cell) (i32.const 12)))
+        (i32.const 1))))
+  (call $__rt_ref_cell_release (local.get $cell) (i32.const 0))
+  (i32.and
+    (local.get $first_ok)
+    (i64.eq (global.get $_gc_live) (i64.const 0))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "1");
+        }
+    }
+
+    /// A scalar cell payload may numerically equal another live heap pointer.
+    /// Releasing it with tag 0 must never load/decref those integer bits.
+    #[test]
+    fn scalar_ref_cell_payload_never_decrefs_pointer_shaped_bits() {
+        let driver = r#"(func $t (export "t") (result i32)
+  (local $victim i32) (local $cell i32) (local $ok i32)
+  (local.set $victim (call $__rt_heap_alloc (i32.const 16)))
+  (i64.store (i32.sub (local.get $victim) (i32.const 8)) (i64.const 1))
+  (local.set $cell (call $__rt_heap_alloc (i32.const 16)))
+  (i64.store (i32.sub (local.get $cell) (i32.const 8)) (i64.const 7))
+  (i64.store (local.get $cell) (i64.extend_i32_u (local.get $victim)))
+  (call $__rt_ref_cell_release (local.get $cell) (i32.const 0))
+  (local.set $ok
+    (i32.and
+      (i32.eq
+        (i32.load (i32.sub (local.get $victim) (i32.const 12)))
+        (i32.const 1))
+      (i64.eq (global.get $_gc_live) (i64.const 32))))
+  (call $__rt_decref_any (local.get $victim))
+  (local.get $ok))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "1");
+        }
+    }
+
+    /// Dedicated ref-cell helpers reject an aligned interior address before
+    /// mutating a header; the owning cell keeps refcount 1 and is safely releasable.
+    #[test]
+    fn ref_cell_helpers_reject_interior_pointer() {
+        let driver = r#"(func $t (export "t") (result i32)
+  (local $cell i32) (local $interior i32) (local $ok i32)
+  (local.set $cell (call $__rt_heap_alloc (i32.const 16)))
+  (i64.store (i32.sub (local.get $cell) (i32.const 8)) (i64.const 7))
+  (local.set $interior (i32.add (local.get $cell) (i32.const 8)))
+  (call $__rt_ref_cell_incref (local.get $interior))
+  (call $__rt_ref_cell_release (local.get $interior) (i32.const 0))
+  (local.set $ok
+    (i32.and
+      (call $__rt_ref_cell_is_live (local.get $cell))
+      (i32.eq
+        (i32.load (i32.sub (local.get $cell) (i32.const 12)))
+        (i32.const 1))))
+  (call $__rt_ref_cell_release (local.get $cell) (i32.const 0))
+  (i32.and
+    (local.get $ok)
+    (i64.eq (global.get $_gc_live) (i64.const 0))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "1");
         }
     }
 

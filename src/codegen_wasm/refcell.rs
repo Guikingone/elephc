@@ -9,17 +9,16 @@
 //!   `emit_ref_cell_owner_epilogue` delegate the cell release sequence here.
 //!
 //! Key details:
-//! - A ref cell is a 16-byte heap block (no header/kind/refcount of its own) holding
-//!   a PHP value at @0 plus a second word at @8 (Str length, or a Tagged tag). For a
-//!   by-reference foreach the "cell" is instead the address of the array element
-//!   storage, so @8 is written ONLY for the two-word reprs (Str, Tagged) — writing @8
-//!   for a single-word element would overwrite the next array slot.
+//! - An owned ref cell is a kind-7 refcounted heap block with a 16-byte payload:
+//!   the PHP value at @0 plus a second word at @8 (Str length, or a Tagged tag).
+//!   A by-reference foreach binding is instead a borrowed array-element address,
+//!   so @8 is written ONLY for two-word reprs (Str, Tagged).
 //! - The cell pointer (or element address) is carried in a dedicated i32 local per
 //!   slot (`FnCtx::ref_cell_ptrs`); WASM locals are not addressable linear memory, so
 //!   a slot's value repr cannot itself hold the pointer.
-//! - Ownership: `PromoteLocalRefCell` records one owner (released by the `Return`
-//!   epilogue); `AliasLocalRefCell` and `IterCurrentValueRef` take borrows with no
-//!   owner. `ReleaseLocalRefCell` and the epilogue are null-guarded and idempotent.
+//! - Ownership: `PromoteLocalRefCell` records one owner; a closure capture retains
+//!   another real cell reference. `AliasLocalRefCell` and `IterCurrentValueRef`
+//!   add no owner. Release is kind-validated, refcounted, and idempotent.
 
 use super::context::{FnCtx, Result};
 use super::values::WasmRepr;
@@ -55,19 +54,54 @@ fn operand(inst: &Instruction, i: usize) -> Result<crate::ir::ValueId> {
     super::inst::operand(inst, i)
 }
 
-/// Returns whether a payload type owns storage that the cell must release on free.
+/// Returns the stable WASM payload tag used by ref-cell destruction.
 ///
-/// Strings and callables are special-cased (copy-on-acquire / descriptor), and every
-/// refcounted type (array/hash/object/mixed) owns heap storage. Scalars and tagged
-/// scalars carry no owned payload. All releases route through the kind-dispatched,
-/// range-guarded `__rt_decref_any`, so a borrowed/data-segment pointer is a safe no-op.
-fn needs_payload_release(ty: &PhpType) -> bool {
-    matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted()
+/// This matches the non-by-ref closure capture tags. The runtime only interprets
+/// tags `{1,4,5,6,7,10,12}` as owned heap pointers; all scalar tags skip the payload
+/// load entirely, preventing integer bits from being mistaken for an address.
+pub(super) fn payload_tag_for_php_type(ty: &PhpType) -> u8 {
+    match ty.codegen_repr() {
+        PhpType::Int => 0,
+        PhpType::Str => 1,
+        PhpType::Float => 2,
+        PhpType::Bool | PhpType::False => 3,
+        PhpType::Array(_) => 4,
+        PhpType::AssocArray { .. } => 5,
+        PhpType::Object(_) => 6,
+        PhpType::Mixed | PhpType::Union(_) => 7,
+        PhpType::Void => 8,
+        PhpType::Resource(_) => 9,
+        PhpType::Callable => 10,
+        PhpType::Pointer(_) => 11,
+        PhpType::Iterable => 12,
+        PhpType::Buffer(_) => 13,
+        PhpType::Packed(_) => 14,
+        PhpType::Never => 15,
+        PhpType::TaggedScalar => 16,
+    }
 }
 
 /// Returns the instruction's payload type as the backend representation sees it.
 fn payload_type(inst: &Instruction) -> PhpType {
     inst.result_php_type.codegen_repr()
+}
+
+/// Allocates one 16-byte owned ref cell and stamps its dedicated kind-7 header.
+///
+/// The allocator initializes refcount 1. All owned ref-cell allocation sites use
+/// this helper so ordinary promoted locals, closure captures, and transient call
+/// cells share the same validated runtime contract.
+pub(super) fn emit_ref_cell_allocation(ctx: &mut FnCtx, ptr_local: &str) {
+    ctx.fb.ins("i32.const 16", "ref cell payload size");
+    ctx.fb.ins("call $__rt_heap_alloc", "allocate owned ref cell");
+    ctx.fb
+        .ins(&format!("local.set {}", ptr_local), "save ref cell pointer");
+    ctx.fb
+        .ins(&format!("local.get {}", ptr_local), "ref cell pointer");
+    ctx.fb.ins("i32.const 8", "kind header displacement");
+    ctx.fb.ins("i32.sub", "address of ref cell kind header");
+    ctx.fb.ins("i64.const 7", "dedicated ref cell heap kind");
+    ctx.fb.ins("i64.store", "stamp ref cell kind 7");
 }
 
 /// Emits the typed cell store for a value whose components live in `repr`'s locals.
@@ -163,42 +197,28 @@ pub(super) fn emit_cell_load(ctx: &mut FnCtx, ptr_local: &str, repr: &WasmRepr) 
 ///
 /// `ptr_local` is the i32 local holding the 16-byte cell pointer; `payload_type` is
 /// the value type stored in the cell (already `codegen_repr`-applied). The sequence
-/// mirrors `ReleaseLocalRefCell`: skip if null (idempotent vs an explicit release that
-/// already zeroed the owner), release the payload by kind, free the 16-byte cell, then
-/// zero the owner local. Scalars skip the payload release and only free the cell.
+/// calls the dedicated kind-7 release helper with a compile-time payload tag, then
+/// zeroes the owner local. The runtime decrements the cell refcount and only the final
+/// owner releases the typed payload and frees the block. Scalar tags never load @0 as
+/// a pointer.
 pub(super) fn emit_ref_cell_release_seq(
     ctx: &mut FnCtx,
     ptr_local: &str,
     payload_type: &PhpType,
 ) -> Result<()> {
-    // Guard: skip the whole sequence if the owner was already cleared, so an explicit
-    // release (unset / re-alias / foreach) followed by the epilogue is a no-op.
     ctx.fb
-        .ins(&format!("local.get {}", ptr_local), "load owner cell ptr");
-    ctx.fb.raw("(if");
-    ctx.fb.raw("(then");
-    if needs_payload_release(payload_type) {
-        // Release the cell payload by kind. [cell+0] holds the payload pointer (string
-        // / array / hash / object / mixed / callable); __rt_decref_any dispatches on
-        // the heap header kind and is range-guarded, so a borrowed/data-segment pointer
-        // is a safe no-op.
-        ctx.fb
-            .ins(&format!("local.get {}", ptr_local), "cell address");
-        ctx.fb
-            .ins("i32.load offset=0", "load the payload pointer @ cell+0");
-        ctx.fb
-            .ins("call $__rt_decref_any", "release the cell payload by kind");
-    }
-    // Free the 16-byte cell block itself.
-    ctx.fb
-        .ins(&format!("local.get {}", ptr_local), "cell address");
-    ctx.fb.ins("call $__rt_heap_free", "free the 16-byte ref cell");
-    // Zero the owner so a later epilogue pass skips it.
+        .ins(&format!("local.get {}", ptr_local), "owned ref cell pointer");
+    ctx.fb.ins(
+        &format!("i32.const {}", payload_tag_for_php_type(payload_type)),
+        "ref cell payload release tag",
+    );
+    ctx.fb.ins(
+        "call $__rt_ref_cell_release",
+        "release one ref cell owner",
+    );
     ctx.fb.ins("i32.const 0", "null cell ptr");
     ctx.fb
         .ins(&format!("local.set {}", ptr_local), "clear the owner slot");
-    ctx.fb.raw(")");
-    ctx.fb.raw(")");
     Ok(())
 }
 
@@ -221,15 +241,119 @@ pub(super) fn lower_load_ref_cell(ctx: &mut FnCtx, inst: &Instruction) -> Result
 /// Lowers `Op::StoreRefCell`: store the operand value through the slot's cell pointer.
 ///
 /// Does NOT release the cell's previous payload — the EIR emits the prior-value
-/// release (load + release_if_owned) before this op. The operand's `WasmRepr` selects
-/// the typed store; only Str/Tagged write @8, so a foreach alias into an 8-byte
-/// scalar slot does not corrupt the neighbouring element.
+/// release (load + release_if_owned) before this op. A concrete operand uses its
+/// `WasmRepr`; an owned Mixed arithmetic result is first cast to the cell's payload
+/// type and then released. Only Str/Tagged write @8, so a foreach alias into an
+/// 8-byte scalar slot does not corrupt the neighbouring element.
 pub(super) fn lower_store_ref_cell(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let slot = slot_immediate(inst)?;
     let value = operand(inst, 0)?;
     let ptr_local = ctx.ref_cell_ptr(slot.as_raw())?.to_string();
-    let value_repr = ctx.value_repr(value)?.clone();
-    emit_cell_store(ctx, &ptr_local, &value_repr)
+    let target_php = inst.result_php_type.codegen_repr();
+    let source_repr = ctx.value_repr(value)?.clone();
+    let source = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| WasmError::Unsupported(format!("ref-cell store value {:?} missing", value)))?;
+    let source_php = source.php_type.codegen_repr();
+    let release_owned_mixed = source.ownership == crate::ir::Ownership::Owned
+        && source_php == PhpType::Mixed
+        && target_php != PhpType::Mixed;
+
+    let stored_repr = if source_php == PhpType::Mixed && target_php != PhpType::Mixed {
+        coerce_mixed_ref_cell_store(ctx, &source_repr, &target_php)?
+    } else {
+        source_repr.clone()
+    };
+    emit_cell_store(ctx, &ptr_local, &stored_repr)?;
+    if release_owned_mixed {
+        let WasmRepr::Ptr(source_ptr) = source_repr else {
+            return Err(WasmError::Unsupported(
+                "owned Mixed ref-cell store source is not a pointer".to_string(),
+            ));
+        };
+        ctx.fb
+            .ins(&format!("local.get {}", source_ptr), "consumed Mixed store source");
+        ctx.fb.ins(
+            "call $__rt_decref_any",
+            "release checked-arithmetic Mixed temporary after coercion",
+        );
+    }
+    Ok(())
+}
+
+/// Converts one boxed-Mixed source into the concrete shape of a ref-cell store.
+///
+/// Checked integer arithmetic intentionally yields an owned Mixed cell so overflow
+/// can promote to float. Stores through a statically typed reference must mirror the
+/// native backend: cast to the alias type first, store the concrete value, then let
+/// the caller release the consumed Mixed box. String casts return an owned copy.
+fn coerce_mixed_ref_cell_store(
+    ctx: &mut FnCtx,
+    source_repr: &WasmRepr,
+    target_php: &PhpType,
+) -> Result<WasmRepr> {
+    let WasmRepr::Ptr(source_ptr) = source_repr else {
+        return Err(WasmError::Unsupported(
+            "Mixed ref-cell store source is not a pointer".to_string(),
+        ));
+    };
+    match target_php {
+        PhpType::Int | PhpType::Bool => {
+            let converted = ctx.fresh_temp(ValType::I64);
+            ctx.fb
+                .ins(&format!("local.get {}", source_ptr), "Mixed cell to cast");
+            let helper = if *target_php == PhpType::Bool {
+                "__rt_mixed_cast_bool"
+            } else {
+                "__rt_mixed_cast_int"
+            };
+            ctx.fb
+                .ins(&format!("call ${}", helper), "cast Mixed ref-cell store value");
+            ctx.fb
+                .ins(&format!("local.set {}", converted), "save concrete i64 value");
+            Ok(WasmRepr::I64(converted))
+        }
+        PhpType::Float => {
+            let converted = ctx.fresh_temp(ValType::F64);
+            ctx.fb
+                .ins(&format!("local.get {}", source_ptr), "Mixed cell to cast");
+            ctx.fb.ins(
+                "call $__rt_mixed_cast_float",
+                "cast Mixed ref-cell store to float bits",
+            );
+            ctx.fb
+                .ins("f64.reinterpret_i64", "reinterpret cast bits as f64");
+            ctx.fb
+                .ins(&format!("local.set {}", converted), "save concrete float");
+            Ok(WasmRepr::F64(converted))
+        }
+        PhpType::Str => {
+            let len_i32 = ctx.fresh_temp(ValType::I32);
+            let ptr = ctx.fresh_temp(ValType::I32);
+            let len = ctx.fresh_temp(ValType::I64);
+            ctx.fb
+                .ins(&format!("local.get {}", source_ptr), "Mixed cell to cast");
+            ctx.fb.ins(
+                "call $__rt_mixed_cast_string",
+                "cast Mixed ref-cell store to owned string",
+            );
+            ctx.fb
+                .ins(&format!("local.set {}", len_i32), "save cast string length");
+            ctx.fb
+                .ins(&format!("local.set {}", ptr), "save cast string pointer");
+            ctx.fb
+                .ins(&format!("local.get {}", len_i32), "cast string length");
+            ctx.fb.ins("i64.extend_i32_u", "widen string length to i64");
+            ctx.fb
+                .ins(&format!("local.set {}", len), "save widened string length");
+            Ok(WasmRepr::Str { ptr, len })
+        }
+        _ => Err(WasmError::Unsupported(format!(
+            "Mixed ref-cell store to {:?} is not supported on wasm32-wasi",
+            target_php
+        ))),
+    }
 }
 
 /// Lowers `Op::PromoteLocalRefCell`: heap-alloc a 16-byte cell, retain the slot's
@@ -253,8 +377,8 @@ pub(super) fn lower_promote_local_ref_cell(ctx: &mut FnCtx, inst: &Instruction) 
         Some(existing) => (existing.clone(), false),
         None => (ctx.fresh_temp(ValType::I32), true),
     };
-    ctx.register_ref_cell_ptr(php_slot.as_raw(), rc.clone());
-    ctx.register_ref_cell_ptr(owner_slot.as_raw(), rc.clone());
+    ctx.register_ref_cell_ptr(php_slot.as_raw(), rc.clone(), true);
+    ctx.register_ref_cell_ptr(owner_slot.as_raw(), rc.clone(), true);
     if first_promotion {
         ctx.add_ref_cell_owner(owner_slot.as_raw(), payload.clone());
     }
@@ -267,9 +391,7 @@ pub(super) fn lower_promote_local_ref_cell(ctx: &mut FnCtx, inst: &Instruction) 
     ctx.fb.ins("i32.eqz", "ref cell still uninitialized?");
     ctx.fb.raw("(if");
     ctx.fb.raw("(then");
-    ctx.fb.ins("i32.const 16", "ref cell size (16 bytes)");
-    ctx.fb.ins("call $__rt_heap_alloc", "allocate the ref cell");
-    ctx.fb.ins(&format!("local.set {}", rc), "cell pointer");
+    emit_ref_cell_allocation(ctx, &rc);
 
     // Retain the payload and store it into the cell, then release the slot's old value.
     retain_and_store_slot_value(ctx, &rc, &slot_repr, &payload)?;
@@ -399,8 +521,9 @@ pub(super) fn release_old_slot_value(
 pub(super) fn lower_alias_local_ref_cell(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let (target_slot, source_slot) = slot_pair_immediate(inst)?;
     let src_rc = ctx.ref_cell_ptr(source_slot.as_raw())?.to_string();
+    let owned = ctx.ref_cell_has_owner(source_slot.as_raw());
     let target_rc = ctx.fresh_temp(ValType::I32);
-    ctx.register_ref_cell_ptr(target_slot.as_raw(), target_rc.clone());
+    ctx.register_ref_cell_ptr(target_slot.as_raw(), target_rc.clone(), owned);
     ctx.fb.ins(&format!("local.get {}", src_rc), "source cell pointer");
     ctx.fb
         .ins(&format!("local.set {}", target_rc), "target copies the cell pointer");
@@ -442,7 +565,7 @@ pub(super) fn lower_iter_current_value_ref(ctx: &mut FnCtx, inst: &Instruction) 
     let elem_size: i64 = if slots.elem == PhpType::Str { 16 } else { 8 };
 
     let rc = ctx.fresh_temp(ValType::I32);
-    ctx.register_ref_cell_ptr(slot.as_raw(), rc.clone());
+    ctx.register_ref_cell_ptr(slot.as_raw(), rc.clone(), false);
     ctx.fb.ins(&format!("local.get {}", src), "iterator source array");
     ctx.fb.ins("i32.const 24", "skip the indexed-array header (len/cap/elem_size)");
     ctx.fb.ins("i32.add", "source + header");

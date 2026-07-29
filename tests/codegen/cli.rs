@@ -721,6 +721,63 @@ fn test_cli_wasm_ignores_native_codegen_environment_defaults() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Compiles an escaping by-ref closure from PHP source to wasm32-wasi and runs it
+/// twice under Wasmer. The creator's frame is gone before either call, so `23`
+/// proves the closure owns the ref cell instead of dereferencing freed storage.
+#[test]
+fn test_cli_wasm_escaping_by_ref_closure_survives_creator_return() {
+    if Command::new("wasmer").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_escaping_ref_closure");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function make() {
+    $x = 1;
+    return function() use (&$x) {
+        return ++$x;
+    };
+}
+
+$f = make();
+echo $f(), $f();
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile escaping by-ref closure to WASM");
+    assert!(
+        output.status.success(),
+        "escaping by-ref closure compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wasm_path = dir.join("main.wasm");
+    assert!(wasm_path.exists(), "WASM compilation must publish main.wasm");
+    let run = Command::new("wasmer")
+        .arg("run")
+        .arg(&wasm_path)
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run escaping by-ref closure under Wasmer");
+    assert!(
+        run.status.success(),
+        "escaping by-ref closure trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "23");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `--debug-info` injects DWARF line-table directives into the emitted
 /// assembly: one `.file 1` header and a `.loc 1 <line> <col>` per source marker.
 #[test]

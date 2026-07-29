@@ -18,6 +18,18 @@ use crate::ir::{
     RuntimeFnId, Terminator, UnaryStringRuntime, ValueDef, ValueId,
 };
 use crate::types::PhpType;
+use std::collections::HashSet;
+
+/// Compile-time provenance of ref-bound local slots within one EIR function.
+///
+/// `owned` means the slot points at a promotable kind-7 heap cell. `borrowed`
+/// means the slot can point at caller-owned or interior array storage. A slot in
+/// both sets is conservatively non-escapable.
+#[derive(Default)]
+struct RefCellProvenance {
+    owned: HashSet<u32>,
+    borrowed: HashSet<u32>,
+}
 
 /// Validates every function collection and returns one aggregate diagnostic.
 pub(super) fn validate_module(module: &Module) -> Result<(), WasmError> {
@@ -100,6 +112,7 @@ fn scan_function(
     function: &Function,
     issues: &mut Vec<String>,
 ) {
+    let ref_cell_provenance = collect_ref_cell_provenance(function);
     if function.flags.is_main
         && (function.return_type != IrType::Void
             || function.return_php_type.codegen_repr() != PhpType::Void)
@@ -188,6 +201,7 @@ fn scan_function(
                 block.id.as_raw(),
                 inst_id.as_raw(),
                 instruction,
+                &ref_cell_provenance,
                 issues,
             );
             check_type(
@@ -247,6 +261,7 @@ fn check_instruction_shape(
     block: u32,
     instruction: u32,
     inst: &Instruction,
+    ref_cell_provenance: &RefCellProvenance,
     issues: &mut Vec<String>,
 ) {
     let issue = match inst.op {
@@ -256,6 +271,9 @@ fn check_instruction_shape(
         Op::Cast => cast_shape_issue(function, inst),
         Op::ArrayGet => array_get_shape_issue(function, inst),
         Op::NullsafeMethodCall => nullsafe_method_call_shape_issue(module, function, inst),
+        Op::ClosureNew => {
+            closure_new_by_ref_capture_issue(module, function, inst, ref_cell_provenance)
+        }
         _ => None,
     };
     if let Some(issue) = issue {
@@ -265,6 +283,130 @@ fn check_instruction_shape(
             inst.op.name()
         ));
     }
+}
+
+/// Collects conservative owned/borrowed ref-binding provenance for one function.
+///
+/// Promoted cells are owned; by-ref parameters and foreach element bindings are
+/// borrowed. Alias edges propagate both classifications to a fixed point. Ambiguous
+/// control-flow bindings therefore carry `borrowed` and cannot escape in a closure.
+fn collect_ref_cell_provenance(function: &Function) -> RefCellProvenance {
+    let mut provenance = RefCellProvenance::default();
+    let mut aliases = Vec::new();
+    for (index, param) in function.params.iter().enumerate() {
+        if param.by_ref {
+            provenance.borrowed.insert(index as u32);
+        }
+    }
+    for inst in &function.instructions {
+        match (inst.op, &inst.immediate) {
+            (Op::PromoteLocalRefCell, Some(Immediate::LocalSlotPair { first, second })) => {
+                provenance.owned.insert(first.as_raw());
+                provenance.owned.insert(second.as_raw());
+            }
+            (Op::AliasLocalRefCell, Some(Immediate::LocalSlotPair { first, second })) => {
+                aliases.push((first.as_raw(), second.as_raw()));
+            }
+            (Op::IterCurrentValueRef, Some(Immediate::LocalSlot(slot))) => {
+                provenance.borrowed.insert(slot.as_raw());
+            }
+            _ => {}
+        }
+    }
+    loop {
+        let mut changed = false;
+        for (target, source) in &aliases {
+            if provenance.owned.contains(source) {
+                changed |= provenance.owned.insert(*target);
+            }
+            if provenance.borrowed.contains(source) {
+                changed |= provenance.borrowed.insert(*target);
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    provenance
+}
+
+/// Reports a non-escapable by-ref `ClosureNew` operand before WAT emission.
+///
+/// Fresh `LoadLocal` operands are promotable. `LoadRefCell` operands require an
+/// unambiguous owned provenance; borrowed by-ref parameters, foreach element
+/// addresses, and aliases derived from either are rejected.
+fn closure_new_by_ref_capture_issue(
+    module: &Module,
+    function: &Function,
+    inst: &Instruction,
+    provenance: &RefCellProvenance,
+) -> Option<String> {
+    let Some(name) = data_string(module, inst) else {
+        return Some("missing closure-name data immediate".to_string());
+    };
+    let Some(closure) = module.closures.iter().find(|closure| closure.name == name) else {
+        return Some(format!("closure body {name:?} is missing"));
+    };
+    let capture_count = inst.operands.len();
+    if capture_count != closure.flags.closure_capture_count {
+        return Some(format!(
+            "operand count {capture_count} does not match closure capture_count {}",
+            closure.flags.closure_capture_count
+        ));
+    }
+    let Some(visible_count) = closure.params.len().checked_sub(capture_count) else {
+        return Some(format!(
+            "capture count {capture_count} exceeds closure parameter count {}",
+            closure.params.len()
+        ));
+    };
+    for (operand, param) in inst
+        .operands
+        .iter()
+        .zip(&closure.params[visible_count..])
+    {
+        if !param.by_ref {
+            continue;
+        }
+        let Some(value) = function.value(*operand) else {
+            return Some(format!(
+                "by-ref capture {} operand {:?} is missing",
+                param.name, operand
+            ));
+        };
+        let ValueDef::Instruction { inst: source_id, .. } = value.def else {
+            return Some(format!(
+                "by-ref capture {} source is not a local load",
+                param.name
+            ));
+        };
+        let Some(source) = function.instruction(source_id) else {
+            return Some(format!(
+                "by-ref capture {} source instruction {:?} is missing",
+                param.name, source_id
+            ));
+        };
+        match (source.op, &source.immediate) {
+            (Op::LoadLocal, Some(Immediate::LocalSlot(_))) => {}
+            (Op::LoadRefCell, Some(Immediate::LocalSlot(slot)))
+                if provenance.owned.contains(&slot.as_raw())
+                    && !provenance.borrowed.contains(&slot.as_raw()) => {}
+            (Op::LoadRefCell, Some(Immediate::LocalSlot(slot))) => {
+                return Some(format!(
+                    "by-ref capture {} cannot escape non-owned ref-bound local#{}",
+                    param.name,
+                    slot.as_raw()
+                ));
+            }
+            _ => {
+                return Some(format!(
+                    "by-ref capture {} source must be LoadLocal or an owned LoadRefCell",
+                    param.name
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// Validates the two-integer to owned-Mixed contract of checked arithmetic.
@@ -1907,8 +2049,8 @@ mod tests {
     use super::validate_module;
     use crate::codegen::platform::Target;
     use crate::ir::{
-        Builder, Function, Immediate, IrHeapKind, IrType, Module, Op, Ownership,
-        RuntimeCallTarget, RuntimeFnId, Terminator,
+        Builder, Function, FunctionParam, Immediate, IrHeapKind, IrType, LocalKind, Module, Op,
+        Ownership, RuntimeCallTarget, RuntimeFnId, Terminator,
     };
     use crate::types::PhpType;
 
@@ -1923,6 +2065,56 @@ mod tests {
             builder.terminate(Terminator::Return { value: None });
         }
         function
+    }
+
+    /// Adds a minimal closure whose only capture parameter is an int passed by
+    /// reference, returning the interned closure-name data id.
+    fn add_by_ref_int_closure(module: &mut Module, name: &str) -> crate::ir::DataId {
+        let name_id = module.data.intern_string(name);
+        let mut closure = Function::new(name.to_string(), IrType::Void, PhpType::Void);
+        closure.flags.is_closure = true;
+        closure.flags.closure_capture_count = 1;
+        closure.params.push(FunctionParam {
+            name: "captured".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: true,
+            variadic: false,
+        });
+        closure.add_local(
+            Some("captured".to_string()),
+            IrType::I64,
+            PhpType::Int,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut closure);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_closure(closure);
+        name_id
+    }
+
+    /// Emits one closure descriptor creation from `capture` in the positioned
+    /// builder and returns the callable value.
+    fn emit_by_ref_closure_new(
+        builder: &mut Builder<'_>,
+        capture: crate::ir::ValueId,
+        name_id: crate::ir::DataId,
+    ) -> crate::ir::ValueId {
+        builder
+            .emit(
+                Op::ClosureNew,
+                vec![capture],
+                Some(Immediate::Data(name_id)),
+                IrType::I64,
+                PhpType::Callable,
+                Ownership::Owned,
+            )
+            .expect("closure descriptor")
     }
 
     /// Verifies all non-emitted EIR function collections are named in one error.
@@ -2293,5 +2485,172 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("block#0 param#0"), "{message}");
         assert!(message.contains("unsupported storage type Heap(Buffer)"), "{message}");
+    }
+
+    /// Fresh locals and unambiguously owned promoted cells are both admitted as
+    /// escaping by-ref closure captures by the pre-emission capability gate.
+    #[test]
+    fn accepts_fresh_and_owned_by_ref_closure_captures() {
+        let mut module = Module::new(Target::wasm());
+        let name_id = add_by_ref_int_closure(&mut module, "__cap_owned_ref");
+
+        let mut fresh = Function::new("fresh_creator".to_string(), IrType::Void, PhpType::Void);
+        let fresh_slot = fresh.add_local(
+            Some("x".to_string()),
+            IrType::I64,
+            PhpType::Int,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut fresh);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let one = builder.emit_const_i64(1);
+            builder.emit_store_local(fresh_slot, one);
+            let capture = builder.emit_load_local(fresh_slot, IrType::I64, PhpType::Int);
+            let _ = emit_by_ref_closure_new(&mut builder, capture, name_id);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(fresh);
+
+        let mut owned = Function::new("owned_creator".to_string(), IrType::Void, PhpType::Void);
+        let owned_slot = owned.add_local(
+            Some("x".to_string()),
+            IrType::I64,
+            PhpType::Int,
+            LocalKind::PhpLocal,
+        );
+        let owner_slot = owned.add_local(
+            Some("__ref_owner_x".to_string()),
+            IrType::I64,
+            PhpType::Int,
+            LocalKind::HiddenTemp,
+        );
+        {
+            let mut builder = Builder::new(&mut owned);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let one = builder.emit_const_i64(1);
+            builder.emit_store_local(owned_slot, one);
+            let _ = builder.emit(
+                Op::PromoteLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair {
+                    first: owned_slot,
+                    second: owner_slot,
+                }),
+                IrType::Void,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            let capture = builder
+                .emit(
+                    Op::LoadRefCell,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(owned_slot)),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .expect("owned capture");
+            let _ = emit_by_ref_closure_new(&mut builder, capture, name_id);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(owned);
+
+        validate_module(&module).expect("owned by-ref capture shapes must be admitted");
+    }
+
+    /// By-ref parameters and foreach element addresses are borrowed bindings;
+    /// both must be rejected before WAT emission when a closure would outlive them.
+    #[test]
+    fn rejects_borrowed_by_ref_closure_captures_before_emission() {
+        let mut module = Module::new(Target::wasm());
+        let name_id = add_by_ref_int_closure(&mut module, "__cap_borrowed_ref");
+
+        let mut parameter =
+            Function::new("parameter_creator".to_string(), IrType::Void, PhpType::Void);
+        parameter.params.push(FunctionParam {
+            name: "x".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: true,
+            variadic: false,
+        });
+        let parameter_slot = parameter.add_local(
+            Some("x".to_string()),
+            IrType::I64,
+            PhpType::Int,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut parameter);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let capture = builder
+                .emit(
+                    Op::LoadRefCell,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(parameter_slot)),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .expect("borrowed parameter capture");
+            let _ = emit_by_ref_closure_new(&mut builder, capture, name_id);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(parameter);
+
+        let mut interior =
+            Function::new("interior_creator".to_string(), IrType::Void, PhpType::Void);
+        let interior_slot = interior.add_local(
+            Some("item".to_string()),
+            IrType::I64,
+            PhpType::Int,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut interior);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let _ = builder.emit(
+                Op::IterCurrentValueRef,
+                Vec::new(),
+                Some(Immediate::LocalSlot(interior_slot)),
+                IrType::Void,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            let capture = builder
+                .emit(
+                    Op::LoadRefCell,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(interior_slot)),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .expect("borrowed interior capture");
+            let _ = emit_by_ref_closure_new(&mut builder, capture, name_id);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(interior);
+
+        let error = validate_module(&module).expect_err("borrowed bindings must not escape");
+        let message = error.to_string();
+        assert!(message.contains("parameter_creator"), "{message}");
+        assert!(message.contains("interior_creator"), "{message}");
+        assert_eq!(
+            message
+                .matches("cannot escape non-owned ref-bound local#0")
+                .count(),
+            2,
+            "{message}"
+        );
     }
 }

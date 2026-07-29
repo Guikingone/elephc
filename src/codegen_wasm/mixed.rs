@@ -177,12 +177,12 @@ const RT_MIXED_CAST_BOOL: &str = r#"(func $__rt_mixed_cast_bool (param $ptr i32)
 /// native `__rt_mixed_cast_int` tag dispatch. Unboxes via `__rt_mixed_unbox` (which
 /// unwraps nested tag-7 cells and maps null to tag 8), then per tag: an int forwards its
 /// payload; a string casts through `__rt_str_to_int` (PHP string->int: saturating
-/// integer-form, float-form finite truncates toward zero, +/-INF or NaN -> 0); a float
-/// applies the same rule as the PHP string path (+/-INF/NaN -> 0, finite ->
-/// `i64.trunc_sat_f64_s`), which is more PHP-correct than the native `fcvtzs` (PHP gives
-/// `(int)(float)INF = 0`); a bool forwards its 0/1; an array/hash returns its element
-/// count (or 0 for a null container); a resource returns its 1-based display id
-/// (payload + 1); null/object/callable/other return 0. Borrows the cell (never frees).
+/// integer-form, float-form finite truncates toward zero with saturation, +/-INF or
+/// NaN -> 0); a float uses `__rt_float_to_int`, whose finite out-of-range results wrap
+/// modulo 2^64 like `zend_dval_to_lval` while +/-INF/NaN become 0; a bool forwards its
+/// 0/1; an array/hash returns its element count (or 0 for a null container); a resource
+/// returns its 1-based display id (payload + 1); null/object/callable/other return 0.
+/// Borrows the cell (never frees).
 const RT_MIXED_CAST_INT: &str = r#"(func $__rt_mixed_cast_int (param $ptr i32) (result i64) (local $tag i64) (local $lo i64) (local $hi i64) (local $cp i32) ;; cast a boxed Mixed cell to a PHP int, mirroring native tag dispatch
   (call $__rt_mixed_unbox (local.get $ptr))                             ;; unbox -> stack: tag, lo, hi
   (local.set $hi)                                                       ;; pop value high word
@@ -193,10 +193,7 @@ const RT_MIXED_CAST_INT: &str = r#"(func $__rt_mixed_cast_int (param $ptr i32) (
   (if (i64.eq (local.get $tag) (i64.const 1))                           ;; tag 1 = string
     (then (return (call $__rt_str_to_int (i32.wrap_i64 (local.get $lo)) (i32.wrap_i64 (local.get $hi)) (global.get $__float_scratch))))) ;; PHP string -> int (saturate, INF/NaN -> 0)
   (if (i64.eq (local.get $tag) (i64.const 2))                           ;; tag 2 = float
-    (then                                                               ;; PHP (int)float: ±INF/NaN -> 0, finite -> truncate toward zero
-      (if (i32.eq (i32.and (i32.wrap_i64 (i64.shr_u (local.get $lo) (i64.const 52))) (i32.const 2047)) (i32.const 2047)) ;; exponent field all ones?
-        (then (return (i64.const 0)))                                   ;; INF or NaN -> 0 (PHP (int)INF/NAN = 0, unlike saturating trunc)
-        (else (return (i64.trunc_sat_f64_s (f64.reinterpret_i64 (local.get $lo)))))))) ;; finite -> truncate toward zero, saturate out-of-range
+    (then (return (call $__rt_float_to_int (local.get $lo)))))          ;; PHP raw float cast: truncate, wrap finite OOR, non-finite -> 0
   (if (i64.eq (local.get $tag) (i64.const 3))                           ;; tag 3 = bool
     (then (return (local.get $lo))))                                    ;; already normalized 0/1
   (if (i32.or (i64.eq (local.get $tag) (i64.const 4)) (i64.eq (local.get $tag) (i64.const 5))) ;; tag 4/5 = array/hash
@@ -659,10 +656,10 @@ mod tests {
         }
     }
 
-    /// `__rt_mixed_cast_int` on float cells: finite in-range truncates toward zero,
-    /// +/-INF and NaN -> 0 (PHP `(int)(float)INF = 0`, unlike the native saturating
-    /// `fcvtzs` which yields INT64_MAX). Out-of-range finite saturates to INT64_MAX,
-    /// matching the native ARM64 `fcvtzs` and the string-cast saturating path.
+    /// `__rt_mixed_cast_int` on float cells truncates in-range values, maps +/-INF and
+    /// NaN to 0, and wraps finite out-of-range values modulo 2^64 like PHP's
+    /// `zend_dval_to_lval` path. This intentionally differs from numeric-string casts,
+    /// whose finite out-of-range values saturate.
     #[test]
     fn cast_int_float_php_parity() {
         // (f64 value, expected i64 decimal)
@@ -670,7 +667,12 @@ mod tests {
             (1.9, "1"),
             (-1.9, "-1"),
             (1e18, "1000000000000000000"),
-            (1e20, "9223372036854775807"),
+            (1e20, "7766279631452241920"),
+            (-1e20, "-7766279631452241920"),
+            (9_223_372_036_854_774_784.0, "9223372036854774784"),
+            (9_223_372_036_854_775_808.0, "-9223372036854775808"),
+            (-9_223_372_036_854_775_808.0, "-9223372036854775808"),
+            (-9_223_372_036_854_777_856.0, "9223372036854773760"),
             (f64::INFINITY, "0"),
             (f64::NEG_INFINITY, "0"),
             (f64::NAN, "0"),

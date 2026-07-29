@@ -32,10 +32,10 @@
 //!   that releases each refcounted slot (tag in {1,4,5,6,7,10,12} = str/array/assoc/
 //!   object/mixed/callable/iterable) via the kind-dispatched `__rt_decref_any` (so a
 //!   callable capture recurses through kind-6), and finally `__rt_heap_free` (unsafe;
-//!   refcount already 0). By-ref captures use tag sentinel 0xFF and are skipped (the
-//!   promoted cell outlives the closure). P7a0 descriptors have capture_count 0, so the
-//!   walk is a no-op today; the full walk is emitted now so P7b only needs `ClosureNew`
-//!   to populate slots.
+//!   refcount already 0). A by-ref capture uses tag sentinel 0xFF, owns one real
+//!   reference to its kind-7 ref cell, and stores the cell payload tag in the slot's
+//!   high word so destruction can call `__rt_ref_cell_release` without interpreting
+//!   scalar payload bits as pointers.
 //! - P7a1 closure call uses a uniform Mixed-cell arg buffer. `ClosureCall` boxes each
 //!   argument into a kind-5 cell (via `objects::emit_box_value_into_mixed`), pushes the
 //!   cell pointer into a `value_type`-7 array (`__rt_array_push_mixed`), and calls
@@ -86,7 +86,7 @@ pub(super) fn emit_closure_runtime(wm: &mut WatModule) {
 /// slot count/tags from the descriptor payload (`[ptr+12]` / `[ptr+16]`) instead of a
 /// class gc_desc, since a closure's capture layout is per-descriptor, not per-class.
 const RT_CALLABLE_DESCRIPTOR_RELEASE: &str = r#"(func $__rt_callable_descriptor_release (param $ptr i32)
-  (local $rc i32) (local $n i32) (local $tags i32) (local $i i32) (local $tag i32) (local $slot i32)
+  (local $rc i32) (local $n i32) (local $tags i32) (local $i i32) (local $tag i32) (local $slot i32) (local $payload_tag i32)
   (if (i32.eqz (local.get $ptr)) (then (return)))                    ;; guard: null pointer
   (if (i32.lt_u (local.get $ptr) (i32.add (global.get $__heap_base) (i32.const 16)))
     (then (return)))                                                  ;; guard: below first payload (borrowed/literal)
@@ -107,12 +107,19 @@ const RT_CALLABLE_DESCRIPTOR_RELEASE: &str = r#"(func $__rt_callable_descriptor_
       (br_if $walk_end (i32.ge_u (local.get $i) (local.get $n)))   ;; i >= n -> end walk
       (local.set $tag (i32.load8_u (i32.add (local.get $tags) (local.get $i))))  ;; tag = tags[i]
       ;; refcounted tags: 1 (str), 4 (array), 5 (assoc), 6 (object), 7 (mixed), 10 (callable), 12 (iterable).
-      ;; Scalars (0/2/3), null (8), by-ref sentinel (0xFF), 13 (buffer), and 16 (tagged-scalar, inline 2-word, non-refcounted) own no heap storage.
+      ;; By-ref sentinel 0xFF owns a kind-7 ref-cell reference; its payload tag lives in the slot high word.
+      (if (i32.eq (local.get $tag) (i32.const 255)) (then
+        (local.set $slot (i32.wrap_i64 (i64.load offset=32 (i32.add (local.get $ptr) (i32.mul (local.get $i) (i32.const 16))))))  ;; ref-cell ptr = low word
+        (local.set $payload_tag (i32.wrap_i64 (i64.load offset=40 (i32.add (local.get $ptr) (i32.mul (local.get $i) (i32.const 16))))))  ;; payload tag = high word
+        (call $__rt_ref_cell_release (local.get $slot) (local.get $payload_tag))  ;; release descriptor's cell owner
+      ) (else
+      ;; Scalars (0/2/3), null (8), 13 (buffer), and 16 (tagged-scalar, inline 2-word, non-refcounted) own no heap storage.
       (if (i32.or (i32.or (i32.or (i32.eq (local.get $tag) (i32.const 1)) (i32.and (i32.ge_u (local.get $tag) (i32.const 4)) (i32.le_u (local.get $tag) (i32.const 7)))) (i32.eq (local.get $tag) (i32.const 10))) (i32.eq (local.get $tag) (i32.const 12))) (then  ;; tag in {1,4,5,6,7,10,12} -> release the slot
         (local.set $slot (i32.wrap_i64 (i64.load offset=32 (i32.add (local.get $ptr) (i32.mul (local.get $i) (i32.const 16))))))  ;; slot ptr = low 8 bytes of [ptr+32+i*16]
         (call $__rt_decref_any (local.get $slot))                  ;; release the child (kind-dispatched; callable recurses via kind 6)
       )                                                            ;; close then (tag check)
       )                                                            ;; close if (tag check)
+      ))                                                           ;; close by-ref else / if
       (local.set $i (i32.add (local.get $i) (i32.const 1)))        ;; i++
       (br $walk)                                                   ;; loop back
     )                                                              ;; close loop $walk
@@ -147,34 +154,17 @@ const CAPTURE_SLOT_BYTES: i32 = 16;
 /// never stamps or reads WASM capture descriptors, so tag 16 is only a WASM concept.
 /// The release runtime (`__rt_callable_descriptor_release`) releases a slot iff its
 /// tag is in `{1,4,5,6,7,10,12}` (str/array/assoc/object/mixed/callable/iterable);
-/// scalars (`0/2/3`), null (`8`), the by-ref sentinel (`0xFF`), `13` (buffer,
-/// non-refcounted), and `16` (TaggedScalar — a 2-word inline scalar; the payload is
-/// NOT a heap ptr, so no decref is correct) own no heap storage and are skipped.
+/// scalars (`0/2/3`), null (`8`), `13` (buffer, non-refcounted), and `16`
+/// (TaggedScalar — a 2-word inline scalar; the payload is NOT a heap ptr) own no
+/// heap storage and are skipped. The by-ref sentinel (`0xFF`) instead owns a
+/// retained kind-7 ref cell and dispatches through `__rt_ref_cell_release`.
 /// Only the wrapper-supported set is reachable for P7b–P7d1c (see `lower_closure_new`),
 /// but the full table is emitted for forward-compat with future capture phases.
 fn capture_tag_for_php_type(php: &PhpType, by_ref: bool) -> u8 {
     if by_ref {
         return 0xFF;
     }
-    match php {
-        PhpType::Int => 0,
-        PhpType::Str => 1,
-        PhpType::Float => 2,
-        PhpType::Bool | PhpType::False => 3,
-        PhpType::Array(_) => 4,
-        PhpType::AssocArray { .. } => 5,
-        PhpType::Object(_) => 6,
-        PhpType::Mixed | PhpType::Union(_) => 7,
-        PhpType::Void => 8,
-        PhpType::Resource(_) => 9,
-        PhpType::Callable => 10,
-        PhpType::Pointer(_) => 11,
-        PhpType::Iterable => 12,
-        PhpType::Buffer(_) => 13,
-        PhpType::Packed(_) => 14,
-        PhpType::Never => 15,
-        PhpType::TaggedScalar => 16,
-    }
+    super::refcell::payload_tag_for_php_type(php)
 }
 
 /// Returns the module's closures in canonical body-symbol order.
@@ -266,9 +256,11 @@ pub(super) fn emit_closure_capture_tag_tables(
 /// The slot layout (tag + store shape) is derived from the **capture param** type
 /// (not the operand type), with an explicit operand/param type-drift cross-check so a
 /// future lowering divergence is a compile error, not a silent miscompile. By-ref
-/// captures (P7c/P7c0), by-ref/variadic visible params (m10), and
-/// `Buffer`/`Pointer`/`Resource`/`Packed`/`Never` captures are rejected; `TaggedScalar`
-/// (P7d1c) is accepted via a 2-word slot with capture tag 16 (non-refcounted, skipped).
+/// captures retain a validated, frame-owned kind-7 ref cell; borrowed/interior
+/// bindings are rejected before descriptor allocation. By-ref/variadic visible
+/// params (m10) and `Buffer`/`Pointer`/`Resource`/`Packed`/`Never` captures are
+/// rejected; `TaggedScalar` (P7d1c) is accepted via a 2-word slot with capture tag
+/// 16 (non-refcounted, skipped).
 /// Ownership: a non-`Owned` refcounted capture is `incref`'d (or `__rt_str_persist`'d
 /// for strings) so the descriptor owns a ref; an `Owned` operand's ref transfers
 /// directly (no incref), mirroring native
@@ -303,8 +295,15 @@ pub(super) fn lower_closure_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
     }
     // Validate every capture param up front so an unsupported capture fails before any
     // descriptor allocation (no half-stamped descriptor leaks on the error path).
-    for p in &closure_fn.params[visible_count..] {
+    for (operand, p) in inst
+        .operands
+        .iter()
+        .zip(&closure_fn.params[visible_count..])
+    {
         reject_unsupported_capture(&name, p)?;
+        if p.by_ref {
+            validate_by_ref_capture_source(ctx, *operand, p)?;
+        }
     }
 
     let total = DESCRIPTOR_PAYLOAD_BYTES + capture_count as i32 * CAPTURE_SLOT_BYTES;
@@ -702,35 +701,62 @@ fn stamp_capture_slot(
     Ok(())
 }
 
+/// Validates and resolves one by-ref capture source before descriptor allocation.
+///
+/// A plain local is promotable. An already-ref-bound local is escapable only when
+/// this frame owns its kind-7 cell; borrowed by-ref parameters and foreach element
+/// addresses are rejected deterministically before any descriptor is emitted.
+fn validate_by_ref_capture_source(
+    ctx: &FnCtx,
+    operand: ValueId,
+    cap_p: &crate::ir::FunctionParam,
+) -> Result<LocalSlotId> {
+    match resolve_by_ref_source(ctx, operand)? {
+        ByRefSource::AlreadyRefBound(raw) if ctx.ref_cell_has_owner(raw) => {
+            Ok(LocalSlotId::from_raw(raw))
+        }
+        ByRefSource::AlreadyRefBound(_) => Err(WasmError::Unsupported(format!(
+            "by-ref capture {} cannot escape a borrowed or interior ref binding on wasm32-wasi",
+            cap_p.name
+        ))),
+        ByRefSource::FreshLocal(slot) => Ok(slot),
+        ByRefSource::NonLocal => Err(WasmError::Unsupported(format!(
+            "by-ref capture {} of a non-local on wasm32-wasi (P7c: deferred)",
+            cap_p.name
+        ))),
+    }
+}
+
 /// Promotes a caller local into a persistent ref-cell for a by-ref closure capture, or
-/// returns the existing cell pointer if the slot is already ref-bound.
+/// returns the existing owned cell pointer if the slot is already ref-bound.
 ///
 /// Unlike P7c0b's transient temp cell (synthesized per call, written back + freed after),
 /// a by-ref closure capture's cell outlives the `ClosureNew`: the closure holds the cell
-/// pointer in its descriptor, so the cell must persist for the closure's lifetime. The
-/// cell is released once by the `Return` epilogue via `ref_cell_owners` (the descriptor's
-/// release walk skips the 0xFF by-ref tag), and the slot's old value is released here
-/// (WASM has no PhpLocal-exit-release epilogue, so the lingering slot reference must drop
-/// now). Mirrors the active native backend's `promote_local_slot_for_ref_capture`.
+/// pointer in its descriptor, so the cell must persist for the closure's lifetime.
+/// The creator owns the allocator's initial reference and the descriptor retains a
+/// second one when stamping the capture. The creator's `Return` epilogue therefore
+/// cannot destroy a cell still owned by an escaping closure.
 ///
-/// If the slot already stores a ref-cell pointer (a prior `use(&$x)`, a `=&` alias, or a
-/// by-ref free-function param), the existing cell is shared — no re-alloc, no second
-/// owner (`add_ref_cell_owner` dedups by slot). After this, the caller's subsequent
-/// `LoadLocal`/`StoreLocal` route through the cell (see `inst::lower_load_local` /
-/// `lower_store_local`).
+/// If the slot already stores a frame-owned ref-cell pointer (a prior `use(&$x)` or
+/// an owned `=&` alias), the existing cell is shared. Borrowed by-ref parameters and
+/// foreach element addresses are rejected by `validate_by_ref_capture_source`.
 fn promote_local_for_by_ref_capture(ctx: &mut FnCtx, slot: LocalSlotId) -> Result<String> {
     let slot_raw = slot.as_raw();
     if let Some(ptr) = ctx.ref_cell_ptrs.get(&slot_raw) {
-        return Ok(ptr.clone());
+        if ctx.ref_cell_has_owner(slot_raw) {
+            return Ok(ptr.clone());
+        }
+        return Err(WasmError::Unsupported(
+            "by-ref capture cannot promote a borrowed or interior ref binding on wasm32-wasi"
+                .to_string(),
+        ));
     }
     let slot_repr = ctx.slot_repr(slot)?.clone();
     let payload = slot_payload_type(ctx, slot)?;
     let ptr_local = ctx.fresh_temp(ValType::I32);
-    ctx.fb.ins("i32.const 16", "ref cell size (16 bytes)");
-    ctx.fb.ins("call $__rt_heap_alloc", "allocate the by-ref capture ref cell");
-    ctx.fb.ins(&format!("local.set {}", ptr_local), "by-ref capture cell pointer");
+    super::refcell::emit_ref_cell_allocation(ctx, &ptr_local);
     super::refcell::retain_and_store_slot_value(ctx, &ptr_local, &slot_repr, &payload)?;
-    ctx.register_ref_cell_ptr(slot_raw, ptr_local.clone());
+    ctx.register_ref_cell_ptr(slot_raw, ptr_local.clone(), true);
     ctx.add_ref_cell_owner(slot_raw, payload.clone());
     super::refcell::release_old_slot_value(ctx, &slot_repr, &payload)?;
     Ok(ptr_local)
@@ -740,10 +766,9 @@ fn promote_local_for_by_ref_capture(ctx: &mut FnCtx, slot: LocalSlotId) -> Resul
 ///
 /// Resolves the operand's source local (a `LoadLocal`/`LoadRefCell` of a php-visible
 /// local; non-locals are rejected, matching P7c0b's restriction), promotes it into a
-/// ref-cell (or reuses its existing cell), and stores the cell pointer (i32) into the
-/// slot's low word. The capture tag is 0xFF (`capture_tag_for_php_type` with `by_ref`),
-/// stamped by `emit_closure_capture_tag_tables`, so the descriptor's release walk skips
-/// it — the caller owns the cell, not the descriptor.
+/// ref-cell (or reuses its existing owned cell), retains one descriptor reference,
+/// and stores the cell pointer in the low word plus the payload-release tag in the
+/// high word. Static tag 0xFF makes descriptor destruction use the ref-cell helper.
 fn stamp_by_ref_capture_slot(
     ctx: &mut FnCtx,
     desc: &str,
@@ -752,22 +777,31 @@ fn stamp_by_ref_capture_slot(
     cap_p: &crate::ir::FunctionParam,
 ) -> Result<()> {
     let off = CAPTURE_SLOT_OFFSET + i as i32 * CAPTURE_SLOT_BYTES;
-    let slot = match resolve_by_ref_source(ctx, operand)? {
-        ByRefSource::AlreadyRefBound(raw) => LocalSlotId::from_raw(raw),
-        ByRefSource::FreshLocal(slot) => slot,
-        ByRefSource::NonLocal => {
-            return Err(WasmError::Unsupported(format!(
-                "by-ref capture {} of a non-local on wasm32-wasi (P7c: deferred)",
-                cap_p.name
-            )));
-        }
-    };
+    let slot = validate_by_ref_capture_source(ctx, operand, cap_p)?;
     let cell_ptr = promote_local_for_by_ref_capture(ctx, slot)?;
+    ctx.fb
+        .ins(&format!("local.get {}", cell_ptr), "by-ref capture cell pointer");
+    ctx.fb.ins(
+        "call $__rt_ref_cell_incref",
+        "retain one ref-cell owner for the descriptor",
+    );
     ctx.fb.ins(&format!("local.get {}", desc), "descriptor address");
     ctx.fb.ins(&format!("local.get {}", cell_ptr), "by-ref capture cell pointer");
     ctx.fb.ins(
         &format!("i32.store offset={}", off),
-        "stamp the cell pointer @ capture slot+0 (tag 0xFF, release walk skips)",
+        "stamp the ref-cell pointer @ capture slot+0",
+    );
+    ctx.fb.ins(&format!("local.get {}", desc), "descriptor address");
+    ctx.fb.ins(
+        &format!(
+            "i64.const {}",
+            super::refcell::payload_tag_for_php_type(&cap_p.php_type)
+        ),
+        "by-ref capture payload release tag",
+    );
+    ctx.fb.ins(
+        &format!("i64.store offset={}", off + 8),
+        "stamp the payload tag @ capture slot+8",
     );
     Ok(())
 }
@@ -1575,8 +1609,8 @@ fn build_closure_wrapper(wrapper_symbol: &str, f: &Function) -> Result<String> {
 /// at `[desc + slot_off]`: a single `i32.load` of the cell pointer stored by
 /// `stamp_by_ref_capture_slot`. The body's by-ref capture parameter is a single i32
 /// (`WasmRepr::Ptr`, declared by P7c0b's `lower_function`), so exactly one i32 is pushed.
-/// No incref: the body borrows the caller's cell (the caller owns it; the descriptor's
-/// release walk skips the 0xFF by-ref tag).
+/// No incref: the body borrows the descriptor-retained cell for the duration of the
+/// call. The descriptor's 0xFF release arm drops that retained owner at destruction.
 fn unbox_by_ref_capture_wat(slot_off: usize) -> Result<String> {
     let off = slot_off as i32;
     let mut s = String::new();
@@ -1965,6 +1999,33 @@ mod tests {
   (global.get $_gc_live))"#;
         if let Some(o) = run_driver(driver, "t") {
             assert_ne!(o, "0");
+        }
+    }
+
+    /// A descriptor with one 0xFF by-ref capture retains a real kind-7 cell
+    /// owner. Dropping the creator owner keeps the cell alive; destroying the
+    /// descriptor then releases the last cell owner and balances both allocations.
+    #[test]
+    fn by_ref_capture_descriptor_releases_last_cell_owner() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $cell i32) (local $desc i32)
+  (i32.store8 (i32.const 512) (i32.const 255))                    ;; static capture tag = by-ref
+  (local.set $cell (call $__rt_heap_alloc (i32.const 16)))        ;; creator owns ref cell rc 1
+  (i64.store (i32.sub (local.get $cell) (i32.const 8)) (i64.const 7)) ;; kind 7
+  (i64.store (local.get $cell) (i64.const 23))                    ;; scalar payload
+  (local.set $desc (call $__rt_heap_alloc (i32.const 48)))        ;; descriptor + one slot
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6)) ;; kind 6
+  (i64.store (local.get $desc) (i64.const 1))                     ;; Closure descriptor
+  (i32.store offset=12 (local.get $desc) (i32.const 1))           ;; capture_count = 1
+  (i32.store offset=16 (local.get $desc) (i32.const 512))         ;; capture_tags_ptr
+  (call $__rt_ref_cell_incref (local.get $cell))                  ;; descriptor owner: rc 1 -> 2
+  (i32.store offset=32 (local.get $desc) (local.get $cell))       ;; capture low = cell ptr
+  (i64.store offset=40 (local.get $desc) (i64.const 0))           ;; capture high = int tag
+  (call $__rt_ref_cell_release (local.get $cell) (i32.const 0))   ;; creator exits: rc 2 -> 1
+  (call $__rt_decref_any (local.get $desc))                       ;; descriptor -> cell rc 1 -> 0
+  (global.get $_gc_live))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "0");
         }
     }
 

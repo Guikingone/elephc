@@ -16,6 +16,48 @@
 
 use super::wat::{Global, ValType, WatModule};
 
+/// Converts raw IEEE-754 binary64 bits to a PHP integer on a 64-bit build.
+///
+/// Finite values are truncated toward zero and then reduced modulo 2^64 before
+/// the low word is interpreted as signed, matching `zend_dval_to_lval()` and its
+/// out-of-range slow path. NaN, infinities, signed zero, and subnormals become 0.
+/// The explicit `e < 116` split prevents WebAssembly from masking a shift count
+/// of 64 back to zero for values that are exact multiples of 2^64.
+const RT_FLOAT_TO_INT: &str = r#"(func $__rt_float_to_int (param $bits i64) (result i64)
+  (local $sign i64)
+  (local $exponent i64)
+  (local $e i64)
+  (local $mantissa i64)
+  (local $magnitude i64)
+  (local.set $sign (i64.and (i64.shr_u (local.get $bits) (i64.const 63)) (i64.const 1)))  ;; sign bit
+  (local.set $exponent (i64.and (i64.shr_u (local.get $bits) (i64.const 52)) (i64.const 2047)))  ;; biased exponent
+  (if (i64.eq (local.get $exponent) (i64.const 2047))
+    (then (return (i64.const 0))))                                  ;; NaN and infinities -> 0
+  (if (i64.eqz (local.get $exponent))
+    (then (return (i64.const 0))))                                  ;; signed zero and subnormals -> 0
+  (local.set $e (i64.sub (local.get $exponent) (i64.const 1023)))   ;; unbiased exponent
+  (if (i64.lt_s (local.get $e) (i64.const 0))
+    (then (return (i64.const 0))))                                  ;; finite magnitude below one truncates to 0
+  (local.set $mantissa
+    (i64.or
+      (i64.and (local.get $bits) (i64.const 0x000FFFFFFFFFFFFF))
+      (i64.const 0x0010000000000000)))                              ;; restore the implicit leading bit
+  (if (i64.lt_s (local.get $e) (i64.const 52))
+    (then
+      (local.set $magnitude
+        (i64.shr_u (local.get $mantissa) (i64.sub (i64.const 52) (local.get $e)))))  ;; truncate fractional bits
+    (else
+      (if (i64.lt_s (local.get $e) (i64.const 116))
+        (then
+          (local.set $magnitude
+            (i64.shl (local.get $mantissa) (i64.sub (local.get $e) (i64.const 52)))))  ;; low 64 bits of the integer magnitude
+        (else
+          (local.set $magnitude (i64.const 0))))))                  ;; e >= 116 is an exact multiple of 2^64
+  (if (result i64) (i64.eqz (local.get $sign))
+    (then (local.get $magnitude))
+    (else (i64.sub (i64.const 0) (local.get $magnitude)))))         ;; apply sign with wrapping subtraction
+"#;
+
 /// Decomposes an IEEE-754 binary64 (raw i64 bits) into four results, in order:
 /// sign (i32 0/1), integer mantissa (i64), signed base-2 exponent (i32), and a class
 /// code (i32: 0 finite non-zero, 1 infinity, 2 NaN, 3 zero). Magnitude = mantissa *
@@ -927,15 +969,15 @@ const RT_STR_TO_INT: &str = r#"  (func $__rt_str_to_int (param $ptr i32) (param 
 
 /// Registers the wasm32-wasi float<->string runtime helpers on `wm`.
 ///
-/// Currently emits the full float<->string pipeline: the `__rt_f64_decompose` decoder,
-/// the big-integer primitives, exact decimal digit extraction, round-to-14-significant,
-/// the `__rt_ftoa_scientific`/`__rt_ftoa_fixed` formatters, the `__rt_ftoa` top-level
-/// orchestrator, and the `__rt_str_to_f64` parser. The four strtod bignum buffers and
-/// the digit buffer are no longer hardcoded: `__rt_digits_to_f64` and `__rt_str_to_f64`
-/// take a `$scratch` base, and `base` is published as the immutable `$__float_scratch`
-/// global so runtime callers (casts, echo, mixed stdout) pass
-/// `(global.get $__float_scratch)`. Must be called before rendering any function that
-/// references these symbols.
+/// Currently emits the PHP float-to-int helper and the full float<->string pipeline:
+/// the `__rt_f64_decompose` decoder, the big-integer primitives, exact decimal digit
+/// extraction, round-to-14-significant, the `__rt_ftoa_scientific`/`__rt_ftoa_fixed`
+/// formatters, the `__rt_ftoa` top-level orchestrator, and the `__rt_str_to_f64`
+/// parser. The four strtod bignum buffers and the digit buffer are no longer
+/// hardcoded: `__rt_digits_to_f64` and `__rt_str_to_f64` take a `$scratch` base, and
+/// `base` is published as the immutable `$__float_scratch` global so runtime callers
+/// (casts, echo, mixed stdout) pass `(global.get $__float_scratch)`. Must be called
+/// before rendering any function that references these symbols.
 pub(super) fn emit_float_runtime(wm: &mut WatModule, base: i32) {
     wm.add_global(Global {
         name: "__float_scratch".to_string(),
@@ -943,6 +985,7 @@ pub(super) fn emit_float_runtime(wm: &mut WatModule, base: i32) {
         mutable: false,
         init: base as i64,
     });
+    wm.add_raw_func(RT_FLOAT_TO_INT);
     wm.add_raw_func(RT_F64_DECOMPOSE);
     wm.add_raw_func(RT_BIGNUM_MUL_U32);
     wm.add_raw_func(RT_BIGNUM_DIVMOD_U32);
@@ -1054,6 +1097,53 @@ mod tests {
   (local.set $sign)
   {witness})"#
         )
+    }
+
+    /// Driver template: pass one raw f64 bit pattern to the centralized PHP
+    /// float-to-int conversion helper and return its signed i64 result.
+    fn float_to_int_driver(bits: i64) -> String {
+        format!(
+            r#"(func $t (export "t") (result i64)
+  (call $__rt_float_to_int (i64.const {bits})))"#
+        )
+    }
+
+    /// PHP float-to-int conversion truncates in-range values, maps non-finite and
+    /// subnormal values to zero, and wraps finite out-of-range values modulo 2^64
+    /// instead of applying WebAssembly's saturating conversion.
+    #[test]
+    fn float_to_int_matches_php_64_bit_boundaries() {
+        let cases: &[(f64, i64)] = &[
+            (1.0e20, 7_766_279_631_452_241_920),
+            (-1.0e20, -7_766_279_631_452_241_920),
+            (9_223_372_036_854_774_784.0, 9_223_372_036_854_774_784),
+            (9_223_372_036_854_775_808.0, i64::MIN),
+            (-9_223_372_036_854_775_808.0, i64::MIN),
+            (-9_223_372_036_854_777_856.0, 9_223_372_036_854_773_760),
+            (f64::INFINITY, 0),
+            (f64::NEG_INFINITY, 0),
+            (f64::NAN, 0),
+            (0.0, 0),
+            (-0.0, 0),
+            (f64::from_bits(1), 0),
+            (f64::MAX, 0),
+            (1.9, 1),
+            (-1.9, -1),
+            (0.5, 0),
+            (-0.5, 0),
+        ];
+        for (value, expected) in cases {
+            if let Some(output) =
+                run_float_driver(&float_to_int_driver(value.to_bits() as i64), "t")
+            {
+                assert_eq!(
+                    output,
+                    expected.to_string(),
+                    "(int){value:?} (bits 0x{:016x}) mismatch",
+                    value.to_bits()
+                );
+            }
+        }
     }
 
     /// 2.0 decomposes to mantissa 2^52 = 4503599627370496 (frac 0 | implicit leading 1).
@@ -2966,5 +3056,3 @@ mod tests {
     }
 
 }
-
-

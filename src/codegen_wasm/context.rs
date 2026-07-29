@@ -18,7 +18,7 @@
 //!   pointer. Owner slots register for end-of-scope release in `ref_cell_owners`,
 //!   drained by the `Return` epilogue (see `refcell`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::values::WasmRepr;
 use super::wat::{FuncBuilder, ValType};
@@ -105,12 +105,19 @@ pub(super) struct FnCtx<'a> {
     /// `AliasLocalRefCell` (the target gets its own local, copied from the source).
     /// `LoadRefCell`/`StoreRefCell`/`ReleaseLocalRefCell` look the pointer up here;
     /// a missing entry means the slot is not ref-bound and is a lowering error.
-    /// (P7c0a: only Promote/Alias populate it; by-ref params stay rejected.)
+    /// By-ref parameters and foreach bindings also populate it as borrowed
+    /// provenance; capability checks prevent either binding from escaping.
     pub(super) ref_cell_ptrs: HashMap<u32, String>,
+    /// Slots whose current ref-cell binding points at an owned kind-7 heap cell.
+    ///
+    /// Aliases inherit this bit from their source. By-ref parameters and foreach
+    /// element bindings remain absent, so closure capture cannot make borrowed or
+    /// interior storage escape.
+    pub(super) owned_ref_cell_slots: HashSet<u32>,
     /// Owner slots needing end-of-scope release at every `Return`, paired with the
     /// payload `PhpType` (already `codegen_repr`-applied) that drives the release.
-    /// Collected when lowering `PromoteLocalRefCell` (owner slot + the instruction's
-    /// `result_php_type`). The `Return` epilogue releases each non-null owner; an
+    /// Collected when lowering `PromoteLocalRefCell` or directly promoting a fresh
+    /// closure capture. The `Return` epilogue releases each non-null owner; an
     /// explicit `ReleaseLocalRefCell` zeroes the owner first, so the epilogue skips
     /// it — idempotent, no double-free.
     pub(super) ref_cell_owners: Vec<(u32, PhpType)>,
@@ -349,19 +356,36 @@ impl<'a> FnCtx<'a> {
 
     /// Registers the i32 local holding a slot's ref-cell pointer.
     ///
-    /// Called by `PromoteLocalRefCell` (twice, for the php-visible and owner slot —
-    /// both share one local) and by `AliasLocalRefCell` (once, for the target slot,
-    /// which gets its own local). A later registration for the same slot overwrites
-    /// the previous mapping (re-aliasing repoints the slot to a fresh cell).
-    pub(super) fn register_ref_cell_ptr(&mut self, slot_raw: u32, local: String) {
+    /// Called by promotion (for php-visible and owner slots), aliases, by-ref
+    /// parameters, and foreach ref bindings. A later registration for the same
+    /// slot overwrites both its pointer mapping and owned/borrowed provenance.
+    pub(super) fn register_ref_cell_ptr(
+        &mut self,
+        slot_raw: u32,
+        local: String,
+        owned: bool,
+    ) {
         self.ref_cell_ptrs.insert(slot_raw, local);
+        if owned {
+            self.owned_ref_cell_slots.insert(slot_raw);
+        } else {
+            self.owned_ref_cell_slots.remove(&slot_raw);
+        }
+    }
+
+    /// Returns whether a ref-bound slot points at a cell owned by this frame.
+    ///
+    /// Aliases inherit ownership provenance when registered. By-ref parameters and
+    /// foreach element bindings do not, so escaping closure capture rejects them.
+    pub(super) fn ref_cell_has_owner(&self, slot_raw: u32) -> bool {
+        self.owned_ref_cell_slots.contains(&slot_raw)
     }
 
     /// Records an owner slot + payload type for the end-of-scope release epilogue.
     ///
-    /// Only called by `PromoteLocalRefCell`: an aliased target gets no owner (the
-    /// source's owner is the sole releaser), mirroring the native ownership
-    /// discipline where `release_ref_cell_owner(target)` early-returns.
+    /// Called by EIR promotion and by direct closure-capture promotion. An aliased
+    /// target adds no owner: the source frame's owner remains the sole frame-side
+    /// releaser, while closure descriptors retain their own runtime references.
     pub(super) fn add_ref_cell_owner(&mut self, owner_raw: u32, payload_type: PhpType) {
         if !self.ref_cell_owners.iter().any(|(s, _)| *s == owner_raw) {
             self.ref_cell_owners.push((owner_raw, payload_type));
@@ -372,10 +396,9 @@ impl<'a> FnCtx<'a> {
     ///
     /// `ptr_local` is the i32 local holding the cell pointer; `payload_type` is the
     /// value type stored in the cell (already `codegen_repr`-applied). The sequence
-    /// mirrors `ReleaseLocalRefCell`: skip if null (idempotent vs an explicit
-    /// release that already zeroed the owner), release the payload by kind, free
-    /// the 16-byte cell, then zero the owner local. Scalars (Int/Float/Bool/Tagged/
-    /// Pointer) skip the payload release and only free the cell.
+    /// calls the dedicated kind-7 release helper with a typed payload tag and then
+    /// zeroes the owner local. The helper frees the payload and cell only when the
+    /// final owner disappears.
     pub(super) fn emit_ref_cell_release(
         &mut self,
         ptr_local: &str,
@@ -386,9 +409,9 @@ impl<'a> FnCtx<'a> {
 
     /// Emits the owner-slot release epilogue at a function return.
     ///
-    /// Iterates every recorded owner slot and releases its cell (skip-if-null,
-    /// release payload, free cell, zero owner). Idempotent: an explicit
-    /// `ReleaseLocalRefCell` earlier zeroed that owner, so the epilogue skips it.
+    /// Iterates every recorded owner slot and drops one cell reference. Idempotent:
+    /// an explicit `ReleaseLocalRefCell` earlier zeroed that owner, so the runtime
+    /// release helper receives null and safely no-ops.
     /// Mirrors the native `emit_ref_cell_owner_epilogue_cleanup`.
     pub(super) fn emit_ref_cell_owner_epilogue(&mut self) -> Result<()> {
         let owners = self.ref_cell_owners.clone();

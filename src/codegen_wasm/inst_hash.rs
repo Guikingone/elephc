@@ -432,7 +432,8 @@ pub(super) fn lower_hash_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
 /// Materializes a hash key into two i64 temp locals `(key_lo, key_hi)`.
 ///
 /// Integer and boolean keys pass through with `key_hi = -1` (the int-key marker);
-/// float keys truncate toward zero to an int key, matching PHP's array-key coercion.
+/// float keys truncate toward zero and wrap finite out-of-range values modulo 2^64
+/// to an int key, matching PHP's 64-bit array-key coercion result.
 /// String keys are classified by `__rt_hash_normalize_key` (integer-like strings
 /// collapse to int keys, others keep `key_hi = len`). A Mixed-cell key is unboxed and
 /// classified by `__rt_hash_key_from_mixed`. Other representations (e.g. a tagged
@@ -454,7 +455,9 @@ fn materialize_hash_key(ctx: &mut FnCtx, key: crate::ir::ValueId) -> Result<(Str
         WasmRepr::F64(_) => {
             ctx.emit_load_value(key)?;
             ctx.fb
-                .ins("i64.trunc_sat_f64_s", "float key truncated toward zero to int");
+                .ins("i64.reinterpret_f64", "raw float hash-key bits");
+            ctx.fb
+                .ins("call $__rt_float_to_int", "apply PHP float hash-key coercion");
             ctx.fb
                 .ins(&format!("local.set {}", key_lo), "float hash key low word");
             ctx.fb.ins("i64.const -1", "int-key marker (key_hi = -1)");

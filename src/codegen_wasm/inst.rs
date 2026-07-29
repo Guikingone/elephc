@@ -445,10 +445,7 @@ fn synthesize_temp_cell(ctx: &mut FnCtx, slot: LocalSlotId) -> Result<TempCell> 
     let slot_repr = ctx.slot_repr(slot)?.clone();
     let payload = slot_payload_type(ctx, slot)?;
     let ptr_local = ctx.fresh_temp(ValType::I32);
-    ctx.fb.ins("i32.const 16", "temp ref cell size (16 bytes)");
-    ctx.fb.ins("call $__rt_heap_alloc", "allocate the temp ref cell");
-    ctx.fb
-        .ins(&format!("local.set {}", ptr_local), "temp cell pointer");
+    super::refcell::emit_ref_cell_allocation(ctx, &ptr_local);
     super::refcell::retain_and_store_slot_value(ctx, &ptr_local, &slot_repr, &payload)?;
     Ok(TempCell {
         slot_raw: slot.as_raw(),
@@ -1134,30 +1131,13 @@ fn lower_ftoi(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 
 /// Converts the f64 on the operand stack to a PHP integer.
 ///
-/// WebAssembly's saturating conversion already handles finite out-of-range values
-/// and NaN, but it maps infinities to the signed bounds while PHP maps both
-/// infinities to zero. Inspecting the exponent first preserves PHP's behavior.
+/// Routes raw IEEE-754 bits through the centralized runtime helper so finite
+/// out-of-range values use PHP's modulo-2^64 result instead of WebAssembly's
+/// saturating conversion. The helper also maps NaN and infinities to zero.
 fn emit_float_to_php_int(ctx: &mut FnCtx) {
-    let bits = ctx.fresh_temp(ValType::I64);
     ctx.fb.ins("i64.reinterpret_f64", "float bits for PHP int cast");
     ctx.fb
-        .ins(&format!("local.tee {}", bits), "retain float bits");
-    ctx.fb.ins("i64.const 52", "IEEE-754 exponent shift");
-    ctx.fb.ins("i64.shr_u", "extract exponent field");
-    ctx.fb.ins("i64.const 2047", "IEEE-754 exponent mask");
-    ctx.fb.ins("i64.and", "mask exponent field");
-    ctx.fb.ins("i64.const 2047", "INF/NaN exponent");
-    ctx.fb.ins("i64.eq", "float is INF or NaN?");
-    ctx.fb
-        .ins("if (result i64)", "PHP maps INF and NaN to integer zero");
-    ctx.fb.ins("i64.const 0", "PHP non-finite integer cast");
-    ctx.fb.ins("else", "finite float");
-    ctx.fb
-        .ins(&format!("local.get {}", bits), "restore finite float bits");
-    ctx.fb.ins("f64.reinterpret_i64", "restore finite float");
-    ctx.fb
-        .ins("i64.trunc_sat_f64_s", "truncate finite float toward zero");
-    ctx.fb.ins("end", "end PHP float-to-int cast");
+        .ins("call $__rt_float_to_int", "apply PHP 64-bit float-to-int semantics");
 }
 
 /// Lowers an explicit EIR cast, including boxed Mixed-to-scalar conversions.

@@ -279,6 +279,23 @@ fn test_fold_scalar_casts_when_result_is_unambiguous() {
     );
 }
 
+/// Verifies the first f64 at 2^63 is not folded through Rust's saturating `as`
+/// conversion; PHP requires the target runtime's float-to-int path for this value.
+#[test]
+fn test_keep_positive_i64_float_boundary_cast_unfolded() {
+    let expr = Expr::new(
+        ExprKind::Cast {
+            target: CastType::Int,
+            expr: Box::new(Expr::float_lit(9_223_372_036_854_775_808.0)),
+        },
+        Span::dummy(),
+    );
+
+    let folded = fold_constants(vec![Stmt::echo(expr.clone())]);
+
+    assert_eq!(folded, vec![Stmt::echo(expr)]);
+}
+
 /// Verifies int("42abc") is NOT folded — ambiguous string casts must stay unfolded.
 #[test]
 fn test_keep_ambiguous_string_casts_unfolded() {
