@@ -13,7 +13,7 @@ use crate::codegen_support::platform::Target;
 
 use super::catalog::PackageVersion;
 use super::error::{NativeError, NativeErrorKind};
-use super::recipes::pcre2;
+use super::recipes::{pcre2, zlib};
 use super::toolchain::NativeToolchain;
 
 /// Immutable inputs to one trusted package recipe invocation.
@@ -40,6 +40,7 @@ impl RecipeRunner for CuratedRecipes {
     fn build(&self, request: &RecipeRequest<'_>) -> Result<(), NativeError> {
         match (request.package, request.version.recipe_revision) {
             ("pcre2", 1) => pcre2::build(request),
+            ("zlib", 1) => zlib::build(request),
             (package, revision) => Err(NativeError::new(NativeErrorKind::Build, format!("no built-in recipe for {package} revision {revision}"))),
         }
     }

@@ -48,6 +48,8 @@ const PCRE2_ARCHIVES: &[&str] = &[
     "lib/libpcre2-8.a",
 ];
 const PCRE2_HEADERS: &[&str] = &["include/pcre2.h", "include/pcre2posix.h"];
+const ZLIB_ARCHIVES: &[&str] = &["lib/libz.a"];
+const ZLIB_HEADERS: &[&str] = &["include/zlib.h", "include/zconf.h"];
 const PCRE2_VERSIONS: &[PackageVersion] = &[PackageVersion {
     version: "10.47",
     source: SourceArchive {
@@ -63,11 +65,34 @@ const PCRE2_VERSIONS: &[PackageVersion] = &[PackageVersion {
     retained_headers: PCRE2_HEADERS,
     provides: &["pcre2"],
 }];
-const PACKAGES: &[PackageSpec] = &[PackageSpec {
-    name: "pcre2",
-    default_version: "10.47",
-    versions: PCRE2_VERSIONS,
+const ZLIB_VERSIONS: &[PackageVersion] = &[PackageVersion {
+    version: "1.3.2",
+    source: SourceArchive {
+        https_url:
+            "https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz",
+        sha256: "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16",
+        exact_size: 1_502_830,
+        body_limit: 16 * 1024 * 1024,
+    },
+    recipe_revision: 1,
+    dependencies: &[],
+    supported_targets: TARGETS,
+    ordered_link_outputs: ZLIB_ARCHIVES,
+    retained_headers: ZLIB_HEADERS,
+    provides: &["zlib"],
 }];
+const PACKAGES: &[PackageSpec] = &[
+    PackageSpec {
+        name: "pcre2",
+        default_version: "10.47",
+        versions: PCRE2_VERSIONS,
+    },
+    PackageSpec {
+        name: "zlib",
+        default_version: "1.3.2",
+        versions: ZLIB_VERSIONS,
+    },
+];
 
 /// Returns every package in deterministic catalog order.
 pub fn packages() -> &'static [PackageSpec] {
@@ -129,10 +154,28 @@ mod tests {
         assert_eq!(version.supported_targets, TARGETS);
     }
 
+    /// Verifies the official zlib source identity and static archive contract.
+    #[test]
+    fn zlib_catalog_snapshot_is_exact() {
+        let version = version("zlib", None).expect("catalogue entry");
+        assert_eq!(version.version, "1.3.2");
+        assert_eq!(version.source.exact_size, 1_502_830);
+        assert_eq!(
+            version.source.sha256,
+            "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16"
+        );
+        assert_eq!(version.ordered_link_outputs, ZLIB_ARCHIVES);
+        assert_eq!(version.retained_headers, ZLIB_HEADERS);
+        assert_eq!(version.supported_targets, TARGETS);
+    }
+
     /// Verifies unknown package and version inputs fail closed.
     #[test]
     fn catalog_rejects_unknown_selection() {
-        assert!(package("curl").unwrap_err().to_string().contains("known packages: pcre2"));
+        assert!(package("curl")
+            .unwrap_err()
+            .to_string()
+            .contains("known packages: pcre2, zlib"));
         assert!(version("pcre2", Some("10.46")).is_err());
     }
 }

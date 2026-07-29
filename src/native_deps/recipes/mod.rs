@@ -8,3 +8,4 @@
 //! - Each recipe consumes only catalog constants and selected toolchain data.
 
 pub mod pcre2;
+pub mod zlib;

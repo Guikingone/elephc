@@ -689,8 +689,8 @@ jobs:
             exit 1
           fi
 
-  managed-native-pcre2-smoke:
-    name: Managed PCRE2 Smoke (${{ matrix.target }})
+  managed-native-smoke:
+    name: Managed Native Packages (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -749,6 +749,19 @@ jobs:
             examples/date-json-regex/elephc.toml \
             examples/date-json-regex/elephc.lock
 
+      - name: Materialize catalog zlib and verify locked offline reuse
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/zlib-project"
+          ./target/debug/elephc native add zlib \
+            --target "${{ matrix.target }}" \
+            --manifest-path "$RUNNER_TEMP/zlib-project/elephc.toml"
+          ./target/debug/elephc native install \
+            --locked \
+            --offline \
+            --target "${{ matrix.target }}" \
+            --manifest-path "$RUNNER_TEMP/zlib-project/elephc.toml"
+
       - name: Compile and run regex through the production resolver
         shell: bash
         run: |
@@ -786,7 +799,7 @@ jobs:
       - codegen-tests-linux-aarch64
       - image-api-sync
       - builtins-docs-sync
-      - managed-native-pcre2-smoke
+      - managed-native-smoke
     if: always()
     steps:
       - name: Verify test jobs
@@ -805,7 +818,7 @@ jobs:
           test "${{ needs.codegen-tests-linux-aarch64.result }}" = "success"
           test "${{ needs.image-api-sync.result }}" = "success"
           test "${{ needs.builtins-docs-sync.result }}" = "success"
-          test "${{ needs.managed-native-pcre2-smoke.result }}" = "success"
+          test "${{ needs.managed-native-smoke.result }}" = "success"
 
   benchmark:
     name: Benchmark Suite
