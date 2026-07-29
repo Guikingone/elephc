@@ -775,8 +775,10 @@ pub(crate) fn compile(config: CliConfig) {
 /// only `.wat` is requested. The `.wat`, `.wasm`, and npm package are written
 /// through staged writes and renames, so backend, assembly, and validation
 /// failures publish nothing and write failures never expose partial destinations.
-/// The native runtime object, assembler, and linker are never involved. Exits
-/// the process with a diagnostic on any backend, validation, or write error.
+/// Cleanup failures after publication are emitted as non-fatal warnings because
+/// every requested destination has already committed. The native runtime object,
+/// assembler, and linker are never involved. Exits the process with a diagnostic
+/// on any backend, validation, or pre-commit publication error.
 fn emit_wasm_artifacts(
     module: &ir::Module,
     emit: Emit,
@@ -804,7 +806,7 @@ fn emit_wasm_artifacts(
     // the bytes validate (`--emit-asm` included), and every artifact is written
     // through staged writes so a failure never exposes a partial destination.
     let phase_started = Instant::now();
-    if let Err(err) = codegen_wasm::publish_wasm_artifacts(
+    match codegen_wasm::publish_wasm_artifacts(
         &wat,
         emit,
         emit_asm,
@@ -813,8 +815,17 @@ fn emit_wasm_artifacts(
         &output_paths.bin,
         output_paths.package_dir.as_deref(),
     ) {
-        eprintln!("{}", err);
-        process::exit(1);
+        Ok(outcome) => {
+            if !outcome.is_clean() {
+                for warning in outcome.cleanup_warnings() {
+                    eprintln!("warning: {warning}");
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!("{}", err);
+            process::exit(1);
+        }
     }
     timings.record_since("publish-wasm", phase_started);
 

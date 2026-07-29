@@ -28,9 +28,73 @@ use super::npm;
 
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// Successful WebAssembly publication, including any non-fatal failures while
+/// removing transaction-owned staging or backup paths after commit.
+#[derive(Debug, Default)]
+pub struct WasmPublishOutcome {
+    cleanup_warnings: Vec<WasmCleanupWarning>,
+}
+
+impl WasmPublishOutcome {
+    /// Returns every cleanup warning in the order the cleanup operations were
+    /// attempted.
+    pub fn cleanup_warnings(&self) -> &[WasmCleanupWarning] {
+        &self.cleanup_warnings
+    }
+
+    /// Reports whether the committed publication left no known transaction
+    /// debris.
+    pub fn is_clean(&self) -> bool {
+        self.cleanup_warnings.is_empty()
+    }
+}
+
+/// Non-fatal failure to remove transaction debris after the associated
+/// artifact was successfully committed.
+#[derive(Debug)]
+pub struct WasmCleanupWarning {
+    artifact: PathBuf,
+    source: io::Error,
+}
+
+impl WasmCleanupWarning {
+    /// Creates a warning associated with the successfully published artifact.
+    fn new(artifact: &Path, source: io::Error) -> Self {
+        Self {
+            artifact: artifact.to_path_buf(),
+            source,
+        }
+    }
+
+    /// Returns the successfully published artifact whose cleanup failed.
+    pub fn artifact(&self) -> &Path {
+        &self.artifact
+    }
+
+    /// Returns the underlying cleanup failure.
+    pub fn source(&self) -> &io::Error {
+        &self.source
+    }
+}
+
+impl std::fmt::Display for WasmCleanupWarning {
+    /// Formats a non-fatal cleanup diagnostic without implying that publication
+    /// itself failed.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "cleanup after publishing '{}' failed: {}",
+            self.artifact().display(),
+            self.source()
+        )
+    }
+}
+
 /// Error raised while assembling, validating, or publishing a WebAssembly
 /// artifact. Assembly and validation errors leave the filesystem untouched;
-/// publication errors never expose a partially written destination.
+/// publication errors never expose a partially written destination. Cleanup
+/// failures after commit are reported through `WasmPublishOutcome`, never as
+/// this error.
 #[derive(Debug)]
 pub enum WasmPublishError {
     /// `wat::parse_str` could not assemble the generated text into a binary.
@@ -192,12 +256,32 @@ impl StagedFile {
         self.finalized = true;
     }
 
-    /// Deletes retained transaction debris after the enclosing transaction has
-    /// committed every sibling artifact.
-    fn cleanup(&mut self) -> io::Result<()> {
-        remove_file_if_exists(&self.staging)?;
-        remove_file_if_exists(&self.backup)?;
-        Ok(())
+    /// Deletes retained transaction debris after commit, attempting both paths
+    /// and preserving every failure as a non-fatal warning.
+    fn cleanup_warnings(&mut self) -> Vec<WasmCleanupWarning> {
+        let mut warnings = Vec::new();
+        if let Err(error) = remove_file_if_exists(&self.staging) {
+            warnings.push(WasmCleanupWarning::new(
+                &self.destination,
+                io::Error::new(
+                    error.kind(),
+                    format!(
+                        "removing staging path '{}': {error}",
+                        self.staging.display()
+                    ),
+                ),
+            ));
+        }
+        if let Err(error) = remove_file_if_exists(&self.backup) {
+            warnings.push(WasmCleanupWarning::new(
+                &self.destination,
+                io::Error::new(
+                    error.kind(),
+                    format!("removing backup path '{}': {error}", self.backup.display()),
+                ),
+            ));
+        }
+        warnings
     }
 }
 
@@ -254,7 +338,7 @@ fn stage_file(path: &Path, bytes: &[u8]) -> io::Result<StagedFile> {
 fn publish_file_pair(
     mut first: StagedFile,
     mut second: StagedFile,
-) -> Result<(), WasmPublishError> {
+) -> Result<WasmPublishOutcome, WasmPublishError> {
     if let Err(error) = first.publish() {
         let error = rollback_file_pair_error(error, &mut first, &mut second);
         return Err(write_error(&first.destination, error));
@@ -264,14 +348,7 @@ fn publish_file_pair(
         return Err(write_error(&second.destination, error));
     }
 
-    first.commit();
-    second.commit();
-    let first_cleanup = first.cleanup();
-    let second_cleanup = second.cleanup();
-    if let Err(error) = combine_cleanup_errors(first_cleanup, second_cleanup) {
-        return Err(write_error(&first.destination, error));
-    }
-    Ok(())
+    Ok(commit_and_cleanup_file_pair(&mut first, &mut second))
 }
 
 /// Publishes a staged WAT and NPM directory as one recoverable transaction.
@@ -279,7 +356,7 @@ fn publish_file_and_package(
     mut wat: StagedFile,
     mut package: npm::StagedPackage,
     package_dir: &Path,
-) -> Result<(), WasmPublishError> {
+) -> Result<WasmPublishOutcome, WasmPublishError> {
     if let Err(error) = wat.publish() {
         let wat_rollback = wat.rollback();
         let package_rollback = package.rollback();
@@ -298,15 +375,25 @@ fn publish_file_and_package(
 
     wat.commit();
     package.commit();
-    let wat_cleanup = wat.cleanup();
+    let mut cleanup_warnings = wat.cleanup_warnings();
     let package_cleanup = package.cleanup();
-    if let Err(error) = combine_cleanup_errors(wat_cleanup, package_cleanup) {
-        return Err(WasmPublishError::Npm {
-            dir: package_dir.to_path_buf(),
-            source: error,
-        });
+    if let Err(error) = package_cleanup {
+        cleanup_warnings.push(WasmCleanupWarning::new(package_dir, error));
     }
-    Ok(())
+    Ok(WasmPublishOutcome { cleanup_warnings })
+}
+
+/// Commits two published files before attempting either cleanup, then returns
+/// every cleanup failure without changing the successful publication result.
+fn commit_and_cleanup_file_pair(
+    first: &mut StagedFile,
+    second: &mut StagedFile,
+) -> WasmPublishOutcome {
+    first.commit();
+    second.commit();
+    let mut cleanup_warnings = first.cleanup_warnings();
+    cleanup_warnings.extend(second.cleanup_warnings());
+    WasmPublishOutcome { cleanup_warnings }
 }
 
 /// Rolls both staged files back and appends any rollback failures to the
@@ -333,17 +420,6 @@ fn combine_rollback_errors(
         message.push_str(&format!("; second rollback failed ({rollback_error})"));
     }
     io::Error::new(error.kind(), message)
-}
-
-/// Combines cleanup failures after a multi-artifact transaction is committed.
-fn combine_cleanup_errors(first: io::Result<()>, second: io::Result<()>) -> io::Result<()> {
-    match (first, second) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-        (Err(first_error), Err(second_error)) => Err(io::Error::other(format!(
-            "first cleanup failed ({first_error}); second cleanup failed ({second_error})"
-        ))),
-    }
 }
 
 /// Wraps an I/O failure with the final artifact path expected by diagnostics.
@@ -394,10 +470,13 @@ fn remove_file_if_exists(path: &Path) -> io::Result<()> {
 ///
 /// The temp file lives in the same directory as `path` (so the rename is atomic
 /// on the same filesystem) and is named with a process- and counter-unique
-/// suffix to stay collision-free across parallel compilations. On any failure
-/// the temp file is removed before returning, so a partial destination is never
-/// exposed.
-pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), WasmPublishError> {
+/// suffix to stay collision-free across parallel compilations. Publication
+/// failures are returned before commit. Once committed, cleanup failures are
+/// returned as warnings in a successful `WasmPublishOutcome`.
+pub fn atomic_write(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<WasmPublishOutcome, WasmPublishError> {
     let mut file = stage_file(path, bytes).map_err(|source| write_error(path, source))?;
     if let Err(publish_error) = file.publish() {
         let source = match file.rollback() {
@@ -408,8 +487,16 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), WasmPublishError> {
         };
         return Err(write_error(path, source));
     }
+    Ok(commit_and_cleanup_file(&mut file))
+}
+
+/// Commits one published file before cleanup and converts every cleanup failure
+/// into a successful publication outcome warning.
+fn commit_and_cleanup_file(file: &mut StagedFile) -> WasmPublishOutcome {
     file.commit();
-    file.cleanup().map_err(|source| write_error(path, source))
+    WasmPublishOutcome {
+        cleanup_warnings: file.cleanup_warnings(),
+    }
 }
 
 /// Validates the generated WAT in memory and then publishes the WebAssembly
@@ -424,8 +511,9 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), WasmPublishError> {
 /// `asm_path` is the readable `.wat` destination, `bin_path` is the `.wasm`
 /// destination (unused for npm/`--emit-asm`), and `package_dir` is required for
 /// `Emit::NpmPackage`. Returns `WasmPublishError` for any rejected module or
-/// failed write. Assembly, validation, staging, and publication errors preserve
-/// all previous artifacts and leave no transaction-owned staging or backup path.
+/// pre-commit publication failure. Assembly, validation, staging, and
+/// publication errors preserve all previous artifacts. After commit, cleanup
+/// failures are returned as non-fatal warnings in `WasmPublishOutcome`.
 pub fn publish_wasm_artifacts(
     wat: &str,
     emit: Emit,
@@ -434,7 +522,7 @@ pub fn publish_wasm_artifacts(
     asm_path: &Path,
     bin_path: &Path,
     package_dir: Option<&Path>,
-) -> Result<(), WasmPublishError> {
+) -> Result<WasmPublishOutcome, WasmPublishError> {
     // Assemble and fully type-validate in memory before touching the filesystem.
     // This runs even for `--emit-asm`, so a `.wat` is only ever written once its
     // bytes have been validated.
@@ -482,12 +570,14 @@ mod tests {
     //!   test-only shim.
 
     use super::{
-        assemble_and_validate, publish_file_and_package, publish_file_pair,
-        publish_wasm_artifacts, stage_file, WasmPublishError,
+        assemble_and_validate, commit_and_cleanup_file, commit_and_cleanup_file_pair,
+        publish_file_and_package, publish_file_pair, publish_wasm_artifacts, stage_file,
+        WasmPublishError,
     };
     use crate::codegen_wasm::npm::stage_package;
     use crate::codegen::Emit;
     use std::fs;
+    use std::io;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -706,7 +796,7 @@ mod tests {
         let asm_path = dir.join("out.wat");
         let bin_path = dir.join("out.wasm");
 
-        publish_wasm_artifacts(
+        let outcome = publish_wasm_artifacts(
             valid_wat(),
             Emit::Executable,
             false,
@@ -717,6 +807,7 @@ mod tests {
         )
         .expect("valid WAT must publish");
 
+        assert!(outcome.is_clean(), "nominal publication should clean transaction paths");
         assert!(asm_path.is_file(), "the .wat should be published");
         let wasm = fs::read(&bin_path).expect("read published .wasm");
         wasmparser::validate(&wasm).expect("published .wasm must validate");
@@ -729,7 +820,7 @@ mod tests {
         let asm_path = dir.join("out.wat");
         let bin_path = dir.join("out.wasm");
 
-        publish_wasm_artifacts(
+        let outcome = publish_wasm_artifacts(
             valid_wat(),
             Emit::Executable,
             true,
@@ -740,6 +831,7 @@ mod tests {
         )
         .expect("valid WAT must publish");
 
+        assert!(outcome.is_clean(), "nominal atomic publication should clean staging");
         assert!(asm_path.is_file(), "the .wat should be published for --emit-asm");
         assert!(
             !bin_path.exists(),
@@ -758,7 +850,7 @@ mod tests {
         let bin_path = dir.join("out.wasm");
         let package_dir = dir.join("out-npm");
 
-        publish_wasm_artifacts(
+        let outcome = publish_wasm_artifacts(
             valid_wat(),
             Emit::NpmPackage,
             false,
@@ -769,6 +861,7 @@ mod tests {
         )
         .expect("valid WAT must publish npm package");
 
+        assert!(outcome.is_clean(), "nominal package publication should clean backups");
         assert!(asm_path.is_file(), "the .wat should be published alongside the package");
         assert!(package_dir.is_dir(), "the npm package directory should be published");
         let wasm = fs::read(package_dir.join("module.wasm")).expect("read package module.wasm");
@@ -867,8 +960,8 @@ mod tests {
         );
     }
 
-    /// Verifies backup-cleanup failure after the commit point cannot roll back
-    /// one published file while leaving its sibling committed.
+    /// Verifies backup-cleanup failure after commit is a successful publication
+    /// with a warning and cannot roll back either published sibling.
     #[test]
     fn cleanup_failure_after_commit_keeps_both_published_files() {
         let dir = unique_dir("cleanup-after-commit");
@@ -883,17 +976,32 @@ mod tests {
         second.publish().expect("publish wasm");
 
         // Turn the first retained backup into a directory so file cleanup fails.
-        // Both destinations are committed before cleanup begins; Drop must
-        // therefore leave both replacements visible.
+        // The production finalizer must commit both destinations before cleanup,
+        // retain the warning, and still attempt the sibling cleanup.
         fs::remove_file(&first.backup).expect("remove first backup file");
         fs::create_dir(&first.backup).expect("replace backup with directory");
-        first.commit();
-        second.commit();
 
-        let first_cleanup = first.cleanup();
-        let second_cleanup = second.cleanup();
-        assert!(first_cleanup.is_err(), "directory backup must reject file cleanup");
-        assert!(second_cleanup.is_ok(), "sibling cleanup should still run");
+        let second_backup = second.backup.clone();
+        let outcome = commit_and_cleanup_file_pair(&mut first, &mut second);
+        assert_eq!(
+            outcome.cleanup_warnings().len(),
+            1,
+            "cleanup failure must be preserved as one non-fatal warning"
+        );
+        let warning = &outcome.cleanup_warnings()[0];
+        assert_eq!(warning.artifact(), first_path);
+        assert_eq!(warning.source().kind(), io::ErrorKind::IsADirectory);
+        assert!(
+            warning.to_string().starts_with(&format!(
+                "cleanup after publishing '{}' failed:",
+                first_path.display()
+            )),
+            "warning must distinguish cleanup from publication failure: {warning}"
+        );
+        assert!(
+            !second_backup.exists(),
+            "sibling cleanup must still run after the first warning"
+        );
         drop(first);
         drop(second);
 
@@ -904,6 +1012,34 @@ mod tests {
         assert_eq!(
             fs::read(&second_path).expect("read committed wasm"),
             b"replacement-wasm"
+        );
+
+        fs::remove_dir_all(dir).expect("remove temporary directory");
+    }
+
+    /// Verifies file cleanup attempts both the staging and backup paths and
+    /// preserves both failures in deterministic operation order.
+    #[test]
+    fn cleanup_preserves_multiple_post_commit_warnings() {
+        let dir = unique_dir("multiple-cleanup-warnings");
+        let output_path = dir.join("out.wat");
+        let mut staged = stage_file(&output_path, b"replacement-wat").expect("stage wat");
+        staged.publish().expect("publish wat");
+
+        fs::create_dir(&staged.staging).expect("replace staging with directory");
+        fs::create_dir(&staged.backup).expect("replace backup with directory");
+        let outcome = commit_and_cleanup_file(&mut staged);
+        let warnings = outcome.cleanup_warnings();
+
+        assert_eq!(warnings.len(), 2, "both cleanup failures must be retained");
+        assert!(warnings[0].source().to_string().contains("removing staging path"));
+        assert!(warnings[1].source().to_string().contains("removing backup path"));
+        assert_eq!(warnings[0].artifact(), output_path);
+        assert_eq!(warnings[1].artifact(), output_path);
+        assert_eq!(
+            fs::read(&output_path).expect("read committed output"),
+            b"replacement-wat",
+            "cleanup warnings must not alter the committed artifact"
         );
 
         fs::remove_dir_all(dir).expect("remove temporary directory");
