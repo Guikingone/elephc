@@ -34,13 +34,16 @@ by another explicit path.
 | `native update` | `[<package>[@<exact-version>]] [--target TARGET] [--offline] [--manifest-path FILE]` | Refresh one or every dependency from the current catalog and install it. |
 | `native remove` | `<package> [--manifest-path FILE]` | Remove a declaration and lock entry without deleting the shared cache. |
 | `native list` | `[--target TARGET] [--manifest-path FILE]` | Print deterministic read-only package status. |
-| `native doctor` | `[--target TARGET] [--manifest-path FILE]` | Diagnose project, lock, cache, toolchain, and receipt state without mutation. |
+| `native doctor` | `[--target TARGET] [--manifest-path FILE]` | Diagnose project, lock, approximate cache size, stale staging, toolchain, and receipt state without mutation. |
+| `native prune` | `[--target TARGET]` | Explicitly remove abandoned staging, catalog-orphan artifacts, and old selected-target toolchain fingerprints from the global native cache. Never changes project files. |
 
 `--offline` guarantees that the downloader is never invoked. `--locked` is
 accepted only by `install` and rejects an absent or stale lock without rewriting
 it. `--manifest-path` names an `elephc.toml` file and disables ancestor
 discovery. Package versions are exact catalog versions; ranges and arbitrary
 URLs are rejected. `native --help` and `<command> --help` need no project.
+`native remove` changes only the selected project; global cache deletion happens
+only through the explicit `native prune` command.
 
 See [Native dependencies](native-dependencies.md) for project files, cache
 selection, toolchain overrides, and transactional behavior.

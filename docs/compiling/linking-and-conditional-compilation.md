@@ -12,7 +12,20 @@ which compile-time branches are taken.
 
 When a program calls into C libraries through [extern/FFI](../beyond-php/extern.md),
 those libraries must be linked into the binary. Raw link flags, managed native
-packages, and Rust bridge crates are distinct mechanisms.
+packages, Composer source, Rust bridge crates, and toolchains are distinct
+mechanisms:
+
+| Mechanism | Use it for | Do not use it for |
+|---|---|---|
+| `elephc native` | Reviewed runtime/builtin-oriented C packages with exact source, lock, recipe, and cached static outputs | Arbitrary FFI libraries, PHP packages, Rust crates, or tool installation |
+| Composer/autoload | PHP source dependencies resolved ahead of time | C archives or Rust bridges |
+| Auto-detected bridge / `--with-CRATE` | Optional Elephc Rust `staticlib` implementations | Catalogued C sources |
+| User/OS toolchain | `cc`, `ar`, `ranlib`, assembler, linker, Make, SDK, and cross tools | Project dependency locking |
+
+Raw `extern` linking is a separate user-supplied workflow layered onto the
+linker. In particular, DOOM and the SDL examples require a user-installed SDL
+plus `extern` and `--link`/`--link-path`; SDL is **not** installed or versioned
+by `elephc native`.
 
 ### Managed native packages
 
@@ -22,8 +35,9 @@ requirements against the nearest project's `elephc.toml`, deterministic
 `elephc.lock`, and verified target/toolchain cache receipt. It passes exact
 static archive paths to the linker; compilation never downloads or builds them.
 
-PCRE2 is the initial package. Regex use links its managed archives in the fixed
-shim/POSIX/8-bit order and has no production system-library fallback:
+The current catalog contains PCRE2 10.47 and zlib 1.3.2. Regex use links PCRE2's
+managed archives in the fixed shim/POSIX/8-bit order and has no production
+system-library fallback:
 
 ```bash
 elephc native add pcre2
@@ -31,8 +45,11 @@ elephc app.php
 ```
 
 Declaring PCRE2 does not force it into a program that does not use regex. Exact
-managed archives remain compatible with Linux's static-link preference. See
-[Native dependencies](native-dependencies.md) for the full workflow.
+managed archives remain compatible with Linux's static-link preference. zlib is
+the second exact pure-C recipe; it is available for curated runtime/builtin
+integration, not an automatic replacement for arbitrary `extern "z"` and `-lz`
+workflows. See [Native dependencies](native-dependencies.md) for the full
+workflow.
 
 ### `--link` / `-l`
 

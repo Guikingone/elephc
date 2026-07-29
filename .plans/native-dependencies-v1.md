@@ -1,10 +1,102 @@
 # Elephc Native Dependencies v1
 
-- **Status:** Frozen after GLM 5.2 and Kimi K2.7 `ACCEPT` verdicts
-- **Reviewed payload:** 1,063 lines, 47,778 bytes, SHA-256 `f9a6dd6610f4886c07c3372ce32b4f6510ae10f567371b3a95be89956c7b882d`
+- **Status:** v1 implemented on `feat/native-dependencies` (PR); design frozen after GLM 5.2 and Kimi K2.7 `ACCEPT` verdicts. Follow-up backlog tracked in the checklist below.
+- **Reviewed payload (original freeze):** 1,063 lines, 47,778 bytes, SHA-256 `f9a6dd6610f4886c07c3372ce32b4f6510ae10f567371b3a95be89956c7b882d`
 - **Owner:** primary agent
-- **Initial package:** PCRE2 10.47
+- **Catalog packages:** PCRE2 10.47 and zlib 1.3.2
 - **Supported targets:** `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## Checklist
+
+Progress tracker for the v1 ship and post-v1 improvements. Checked items are done
+on the feature branch / PR. Unchecked items are intentional follow-ups and must
+not weaken v1 invariants (no system fallback, compile read-only, exact lock,
+checksum, cache identity, transactional publication).
+
+### Done — v1 product surface
+
+- [x] `elephc native` CLI family: `add`, `install`, `update`, `remove`, `list`, `doctor`, `prune`
+- [x] Project files: comment-preserving `elephc.toml` + deterministic `elephc.lock`
+- [x] Embedded trusted catalog with exact versions only (no semver solver)
+- [x] Initial catalog package: PCRE2 10.47 (source URL, size, SHA-256, recipe rev 1)
+- [x] HTTPS download with size/SHA verification before source publication
+- [x] Content-addressed source cache (`sources/<sha256>.tar.gz`)
+- [x] Artifact cache keyed by package/version/recipe/source/target/ABI/toolchain fingerprint
+- [x] Cache root precedence: `ELEPHC_NATIVE_CACHE` → `$XDG_CACHE_HOME/elephc/native` → `$HOME/.cache/elephc/native`
+- [x] Strict tar.gz extraction (no symlinks/specials/setuid; entry/size/ratio bounds)
+- [x] Transactional staging + atomic artifact publication; failed builds leave no usable partial
+- [x] Advisory locks for project / source / artifact materialization
+- [x] `--locked` (no lock rewrite; requires current lock) and `--offline` (no downloader)
+- [x] Toolchain discovery (`cc`/`ar`/`ranlib`, host/cross overrides, preflight probe)
+- [x] PCRE2 recipe: static 8-bit + POSIX, Unicode, no JIT/shared/16/32-bit extras
+- [x] Elephc-owned opaque PCRE2 shim (`elephc_pcre2_v1_*`); fixed `[start,end]` int64 pairs
+- [x] Mandatory link order: `libelephc_pcre2_shim.a` → `libpcre2-posix.a` → `libpcre2-8.a`
+- [x] No production system-PCRE2 fallback (Homebrew/distro/`-lpcre2` do not satisfy managed requirement)
+- [x] Ordinary compile is read-only for native state (never download/build/repair/rewrite)
+- [x] `--check` / `--emit-ir` / `--emit-asm` do not require installed native artifacts
+- [x] Pay-for-use: non-regex programs neither require nor link PCRE2 merely because declared
+- [x] Typed ordered link plan shared by managed archives, bridges, user links, frameworks
+- [x] Linker split into focused modules (archive, bridges, command, sdk) with preserved behavior
+- [x] Regex/eval runtime feature detection emits `NativePackage("pcre2")` on final-link paths
+- [x] Supported targets in the same change: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+- [x] Reproducible example with committed manifest/lock: `examples/date-json-regex`
+- [x] User-facing docs (native guide, CLI/env, linking, pipeline, regex, architecture, runtime, …)
+- [x] CHANGELOG `[Unreleased]` entry; ROADMAP alignment where applicable
+- [x] Focused test suites (native manager, link planning, CLI, runtime features, shim ABI, regex)
+- [x] Managed-PCRE2 CI smoke (including locked offline reinstall) across supported targets
+- [x] Explicit four-mechanism separation documented: native packages ≠ Composer ≠ Rust bridges ≠ toolchains
+- [x] Adversarial review decisions recorded (sections 16–17); rejected alternatives stay rejected
+
+### Done — deliberate v1 non-goals (locked decisions)
+
+- [x] No Composer / PHP package management in `elephc native`
+- [x] No Cargo / `elephc-*` bridge management via `elephc native` (`--with-*` stays separate)
+- [x] No installing compilers, Make, CMake, SDKs, or cross toolchains
+- [x] No project-supplied recipes, arbitrary URLs, Git repos, or system-library declarations in catalog selection
+- [x] No silent system-library fallback for managed packages
+- [x] No download/build during ordinary `elephc <source.php>` compilation
+- [x] User FFI / showcase libs (e.g. Doom SDL2 via `extern` + `-l`/`-L`) remain on the user-link path, not `native`
+
+---
+
+### Todo — high priority (product / DX)
+
+- [x] **Uniform recovery diagnostics** — Every missing/stale/corrupt path (no project, no lock, undeclared package, missing artifact, wrong ABI/toolchain, offline miss) prints the same style of copy-paste recovery command and the discovered project path.
+- [x] **Softer first-run wall (without system fallback)** — Surface `elephc native add pcre2` in error text, README, and a minimal “hello preg” example so newcomers are not blocked by discoverability alone.
+- [x] **Scope documentation hard-sell** — Make the four mechanisms impossible to miss; call out explicitly that Doom/SDL and other `extern` + `--link`/`--link-path` workflows are **not** `elephc native` (and that v1 catalog is runtime/builtin-oriented).
+- [x] **Multi-target install docs / CI examples** — Lock covers all supported targets; cache is per-target. Document `elephc native install --locked --target …` for each matrix entry and show failure modes when only the host artifact exists.
+
+### Todo — medium priority (ops / maintainability)
+
+- [x] **Cache growth management**
+  - [x] `elephc native doctor` reports approximate cache size and stale staging summary
+  - [x] `elephc native prune` (or equivalent) for orphan/stale toolchain fingerprints and abandoned staging
+  - [x] Keep `remove` project-only (no silent global cache delete) unless an explicit prune flag is added
+- [x] **Document toolchain fingerprint** — What enters the fingerprint (cc/ar/ranlib/SDK), why a compiler bump invalidates artifacts, and how to key CI caches.
+- [x] **Split `src/native_deps/orchestration.rs`** — Extract materialize/publish helpers (and possibly command handlers) so the file is not a multi-responsibility ~700 LOC orchestrator+tests blob.
+- [x] **Transitive dependency guardrail / resolver** — Lock schema already has `dependencies` / `provides`, but install only walks manifest declarations. Before a second package with non-empty deps: either implement real transitive materialization or fail closed if catalog deps are non-empty and undeclared.
+- [x] **Second curated catalog package** — e.g. zlib or another small pure-C recipe, to prove the framework is not a one-off PCRE2 installer (still exact-version, still no system fallback).
+
+### Todo — low priority / later design
+
+- [ ] **Signed Elephc prebuilt artifacts** — Same lock/receipt model; provider selected by catalog; verified before cache publication; optional alternative to local `configure && make`.
+- [ ] **Explicit opt-in system provider (unsupported)** — Only if a real packager/debug need appears; never silent. Must not satisfy managed requirements by default; must be documented as non-reproducible.
+- [ ] **macOS-idiomatic cache default (cosmetic)** — Optional alignment with `~/Library/Caches/...` while preserving `ELEPHC_NATIVE_CACHE` / XDG precedence for Linux and CI.
+- [ ] **Recipe-revision bump UX** — When only `recipe_revision` changes at the same upstream version string: clear docs/diagnostics that a newer Elephc requires `native update` / non-locked install, and that `--locked` fails until the lock is refreshed.
+- [ ] **`eval` → PCRE2 coupling note** — Document why `eval_bridge` emits `NativePackage("pcre2")` (or narrow the requirement if not strictly needed).
+- [ ] **Repo process: `cargo fmt` policy vs PR/CI wording** — Align AGENTS.md “no global cargo fmt” with whatever the PR/CI actually enforces.
+
+### Explicit non-goals for follow-up (do not “fix” by undoing v1)
+
+These stay **rejected** unless a future design reopens them with a full contract rewrite:
+
+- [ ] ~~Silent system PCRE2 fallback when managed state is missing~~ — **rejected**
+- [ ] ~~Auto-install / network during ordinary compile~~ — **rejected**
+- [ ] ~~Treating user FFI libs (SDL, etc.) as mandatory `elephc native` packages in v1~~ — **rejected**
+- [ ] ~~Semver ranges / general-purpose package solving in v1~~ — **rejected**
+- [ ] ~~Project-injected recipes or arbitrary download URLs~~ — **rejected**
+
+---
 
 ## 1. Decision summary
 
@@ -24,6 +116,7 @@ elephc native update [<package>[@<exact-version>]]
 elephc native remove <package>
 elephc native list
 elephc native doctor
+elephc native prune
 ```
 
 `add` declares and installs. `install` materializes target artifacts described
@@ -33,10 +126,11 @@ the manifest and current catalog and never rewrites it. Ordinary PHP compilation
 never downloads or builds a native package and never mutates either project
 file.
 
-The implementation is generic at its package/catalog/resolution/link boundary,
-but v1 ships exactly one recipe: PCRE2. Composer packages, Rust bridge crates,
-toolchains, arbitrary user recipes, arbitrary URLs and prebuilt artifact
-distribution are not part of v1.
+The implementation is generic at its package/catalog/resolution/link boundary.
+The original v1 shipped PCRE2; the completed maintainability follow-up adds
+zlib 1.3.2 as the second exact source recipe. Composer packages, Rust bridge
+crates, toolchains, arbitrary user recipes, arbitrary URLs and prebuilt
+artifact distribution are not part of v1.
 
 PCRE2 is source-first. Elephc downloads the exact upstream release archive,
 checks its SHA-256, builds static archives for the selected target, and builds an
@@ -173,6 +267,9 @@ elephc native list
 
 elephc native doctor
     [--target TARGET] [--manifest-path FILE]
+
+elephc native prune
+    [--target TARGET]
 ```
 
 Rules:
@@ -198,6 +295,9 @@ Rules:
   omitted version selects the current catalog default.
 - `remove` changes manifest and lock but never deletes the shared global cache.
 - `list` and `doctor` never network and never mutate project or cache state.
+- `prune` is the explicit global-cache mutation for abandoned staging,
+  catalog-orphan artifacts and older selected-target toolchain fingerprints;
+  it never edits project files.
 - Success exits 0; usage, validation, integrity, toolchain and build errors exit
   non-zero. Diagnostics go to stderr; stable human-readable status goes to
   stdout.
@@ -357,7 +457,7 @@ verification changes. Compilation rejects an unrecognized receipt schema as a
 hard missing/incompatible-artifact error and prints
 `elephc native install --locked --target <target>` as the recovery command.
 
-## 7. Catalog and PCRE2 recipe
+## 7. Catalog and curated recipes
 
 ### 7.1 Catalog boundary
 
@@ -449,7 +549,22 @@ archiver/ranlib. The shim source is embedded in the Elephc binary via
 `include_str!` or `include_bytes!`; installed Elephc releases must not depend on
 the source repository being present.
 
-### 7.4 Toolchain selection
+### 7.4 zlib follow-up recipe
+
+- Package/version: zlib 1.3.2, recipe revision 1
+- Official release SHA-256:
+  `bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16`
+- Dependencies: none; provides: `zlib`
+- Retained outputs: `lib/libz.a`, `include/zlib.h`, `include/zconf.h`
+- Supported targets: the complete three-target matrix
+- Build: upstream static-only `configure`, selected `cc`/`ar`/`ranlib`, and
+  `make libz.a`, with the same PIC, scrubbed-environment, staging, receipt and
+  no-system-fallback invariants as PCRE2.
+
+zlib is catalogued for runtime/builtin-oriented future use. Merely declaring it
+does not map arbitrary `extern "z"` declarations to the managed artifact.
+
+### 7.5 Toolchain selection
 
 The public Elephc target matrix remains exactly `macos-aarch64`,
 `linux-aarch64` and `linux-x86_64`; GNU and musl are artifact ABI variants, not
@@ -787,9 +902,12 @@ src/native_deps/
   archive.rs      safe tar.gz extraction
   toolchain.rs    selection, target validation and fingerprint
   recipe.rs       curated recipe dispatch
+  materialize.rs  download/extract/build/receipt/publication state machine
+  prune.rs        explicit locked cache cleanup
   recipes/
     pcre2.rs
     pcre2_shim.c  embedded opaque shim source
+    zlib.rs
   doctor.rs       read-only project/tool/cache diagnosis
 
 src/link_plan.rs  reusable typed link representation
@@ -956,6 +1074,10 @@ Commit `examples/date-json-regex/elephc.toml` and its deterministic
 global artifact cache out of the repository; the example `.gitignore` continues
 to cover only generated compiler outputs, not its manifest or lock.
 
+The completed first-run DX follow-up also adds `examples/hello-preg/`, a minimal
+committed managed-PCRE2 project whose README leads with `elephc native add
+pcre2`.
+
 ## 14. Delivery lots and ownership
 
 Implementation begins only after this RFC has no unresolved blocking objection
@@ -1049,16 +1171,20 @@ alternative as an implicit default.
 
 ## 17. Explicit post-v1 extensions
 
-The design intentionally leaves these compatible additions:
+The design intentionally leaves these compatible additions. Remaining work is
+tracked by unchecked items in the top-of-file **Checklist**:
 
 - signed Elephc prebuilt artifacts as a provider selected by the same lock and
   verified before cache publication;
 - multiple catalogued versions and transitive native package dependencies;
 - mapping reviewed `extern "library"` declarations to a package `provides` set;
-- more curated packages such as zlib, bzip2, iconv, SQLite or SDL;
-- cache garbage collection and explicit reinstall commands;
+- more curated packages beyond the shipped PCRE2 and zlib recipes, such as
+  bzip2, iconv, SQLite or SDL;
+- future cache policies beyond explicit stale-fingerprint/staging pruning;
 - a separately designed safe system provider where a package-specific ABI
-  boundary makes that possible.
+  boundary makes that possible;
+- remaining low-priority DX follow-ups such as recipe-revision bump UX and the
+  eval→PCRE2 coupling note.
 
 None of these may weaken v1's no-script, exact-lock, checksum, cache-identity,
 transactional-publication or no-compile-install invariants.

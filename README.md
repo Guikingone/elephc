@@ -227,10 +227,31 @@ elephc --web app.php
 ./app --listen 0.0.0.0:8080 --workers 4
 ```
 
-`elephc native` manages a curated set of external C/C++ packages, initially
-PCRE2 10.47. It is separate from Composer's PHP source packages, Elephc's Rust
-bridge crates (`--with-<crate>`), and the user-installed compiler/SDK toolchain.
-Ordinary compilation never downloads or builds a native package. See [Native
+For the smallest regex first run:
+
+```bash
+cd examples/hello-preg
+elephc native add pcre2
+elephc main.php
+./main
+```
+
+`elephc native` manages a small, runtime/builtin-oriented catalog of verified C
+sources: PCRE2 10.47 and zlib 1.3.2. It is intentionally **not** the mechanism
+used for Composer packages, Rust bridge crates, compilers/SDKs, or arbitrary FFI
+libraries:
+
+| Need | Mechanism |
+|---|---|
+| Curated runtime/builtin C package | `elephc native` + `elephc.toml`/`elephc.lock` |
+| PHP source dependency | Composer + Elephc's compile-time autoloader |
+| Optional Rust implementation | Auto-detected bridge or `--with-<crate>` |
+| Compiler, SDK, Make, cross tools | Install and configure the toolchain yourself |
+
+The DOOM and SDL examples are user FFI workflows; SDL is **not** installed,
+locked, or satisfied by `elephc native`; they use `extern` plus
+`--link`/`--link-path`/`--framework`. Ordinary compilation never downloads or
+builds a native package. See [Native
 dependencies](docs/compiling/native-dependencies.md).
 
 Or via cargo:

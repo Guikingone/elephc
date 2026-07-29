@@ -27,7 +27,7 @@ Everything about driving the compiler: the command-line flags and the full path 
 - [The compilation pipeline](compiling/compilation-pipeline.md) — every phase from source text to binary, in order
 - [CLI reference](compiling/cli-reference.md) — the complete, authoritative list of every flag, value, default, and env override
 - [Targets and cross-compilation](compiling/targets.md) — the supported target matrix and `--target`
-- [Native dependencies](compiling/native-dependencies.md) — declare, lock, build, cache, and diagnose curated native packages with `elephc native`
+- [Native dependencies](compiling/native-dependencies.md) — declare, lock, build, cache, diagnose, and explicitly prune curated native packages with `elephc native`
 - [Optimization and codegen controls](compiling/optimization.md) — `--ir-opt` (EIR identity, peephole, and dead-instruction passes), `--regalloc`, `--null-repr`
 - [Output formats and diagnostics](compiling/output-and-diagnostics.md) — `--emit`, `--emit-asm`, `--emit-ir`, `--check`, `--timings`, `--source-map`, `--debug-info`, `--gc-stats`, `--heap-debug`
 - [Source maps](compiling/source-maps.md) — the `--source-map` v2 JSON schema (function ranges, labels, opcode/origin-tagged mappings, inverse line index) and `--debug-info` DWARF lines

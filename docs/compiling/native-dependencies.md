@@ -1,6 +1,6 @@
 ---
 title: "Native dependencies"
-description: "Declare, lock, install, inspect, and link curated native packages with elephc native."
+description: "Declare, lock, install, inspect, prune, and link curated native packages with elephc native."
 sidebar:
   order: 9
 ---
@@ -10,8 +10,12 @@ as **curated native packages**: the project declares an exact version, the lock
 records immutable catalog metadata, and `elephc native` builds verified static
 archives into a target- and toolchain-specific cache.
 
-PCRE2 10.47 is the first package. Programs using `preg_*`, `mb_ereg_match()`,
-`RegexIterator`, or `RecursiveRegexIterator` require it at final link time.
+The catalog contains PCRE2 10.47 and zlib 1.3.2. Programs using `preg_*`,
+`mb_ereg_match()`, `RegexIterator`, or `RecursiveRegexIterator` require PCRE2 at
+final link time. zlib is the second pure-C recipe and proves the manager is not
+PCRE2-specific; declaring it makes its verified static artifact available for
+future runtime/builtin integrations but does not by itself add `libz.a` to every
+program.
 
 ## Quick start
 
@@ -61,6 +65,9 @@ elephc native list
 
 elephc native doctor
     [--target TARGET] [--manifest-path FILE]
+
+elephc native prune
+    [--target TARGET]
 ```
 
 | Command | Effect |
@@ -70,7 +77,8 @@ elephc native doctor
 | `update` | Refresh one package, or every package when no name is given, from the current built-in catalog. |
 | `remove` | Remove the declaration and lock entry. Shared cached artifacts are retained. |
 | `list` | Read-only status for each declared package: `installed`, `missing`, `corrupt`, `stale`, or `toolchain-error`. |
-| `doctor` | Read-only project, lock, cache, toolchain, and receipt diagnostics. |
+| `doctor` | Read-only project, lock, cache-size, stale-staging, toolchain, and receipt diagnostics. |
+| `prune` | Explicitly remove abandoned staging, catalog-orphan artifacts, and old toolchain fingerprints for the selected target/ABI. |
 
 `--target` accepts the normal supported targets: `macos-aarch64`,
 `linux-aarch64`, and `linux-x86_64`. It defaults to the host. GNU and musl are
@@ -83,8 +91,10 @@ valid only for `install`; it requires an existing lock that exactly matches the
 manifest and the catalog and never rewrites it.
 
 `native list` and `native doctor` never use the network and never mutate the
-project or cache. `elephc native --help` and each verb's `--help` work without a
-project.
+project or cache. `native prune` is the one explicit global-cache cleanup
+command; it never changes `elephc.toml` or `elephc.lock`. `native remove` remains
+project-only and never silently deletes shared cached data. `elephc native
+--help` and each verb's `--help` work without a project.
 
 ## Project discovery and files
 
@@ -113,6 +123,49 @@ SHA-256, exact source size, recipe revision, provides set, dependencies, and
 ordered link outputs for all supported targets. It contains no absolute cache
 or compiler paths and is safe to commit. Do not edit it by hand.
 
+The installer currently materializes manifest declarations. If a future catalog
+package has native dependencies, every dependency must also be declared in the
+manifest; lock generation fails closed with `elephc native add <dependency>`
+instead of silently producing an incomplete transitive installation.
+
+## Multi-target locks and caches
+
+One committed lock describes **all three supported targets**, but installed
+artifacts are keyed and cached **per target, ABI, and toolchain fingerprint**.
+Installing on the developer's macOS host therefore does not install either
+Linux artifact. A Linux compile with only the macOS artifact cached fails
+without downloading and prints the exact target recovery command.
+
+Install each CI matrix entry explicitly:
+
+```bash
+elephc native install --locked --target macos-aarch64
+elephc native install --locked --target linux-aarch64
+elephc native install --locked --target linux-x86_64
+```
+
+On a non-host target, set all three target C-tool overrides before the command.
+A minimal GitHub Actions shape is:
+
+```yaml
+strategy:
+  matrix:
+    include:
+      - { runner: macos-14, target: macos-aarch64 }
+      - { runner: ubuntu-24.04-arm, target: linux-aarch64 }
+      - { runner: ubuntu-24.04, target: linux-x86_64 }
+env:
+  ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
+steps:
+  - run: elephc native install --locked --target "${{ matrix.target }}"
+  - run: elephc --target "${{ matrix.target }}" main.php
+```
+
+This example uses a native runner for each target. If one runner cross-installs
+another target, configure `ELEPHC_NATIVE_CC_<TARGET_ENV>`,
+`ELEPHC_NATIVE_AR_<TARGET_ENV>`, and
+`ELEPHC_NATIVE_RANLIB_<TARGET_ENV>` first.
+
 ## What happens during compilation
 
 Ordinary compilation is read-only with respect to native packages. It never
@@ -135,8 +188,15 @@ that does not use regex does not link PCRE2 merely because the project declares
 it. `--check`, `--emit-ir`, and `--emit-asm` do not perform the final link and
 therefore do not require an installed artifact.
 
-When state is missing, the diagnostic gives the recovery command. Typical
-repairs are:
+Every missing/stale/corrupt state uses the same diagnostic tail. It reports the
+discovered project and a command that can be pasted from any directory:
+
+```text
+project: /work/app
+recovery: cd -- '/work/app' && elephc native install --locked --target linux-x86_64
+```
+
+Typical raw recovery actions are:
 
 ```bash
 elephc native add pcre2
@@ -156,6 +216,21 @@ Source archives are content-addressed by SHA-256. Installed artifacts are keyed
 by package/version/recipe/source, Elephc target, target C ABI, and a fingerprint
 of the compiler, archiver, ranlib, and (on macOS) SDK. This prevents GNU, musl,
 different architectures, or incompatible toolchains from sharing artifacts.
+
+`elephc native doctor` reports the cache's approximate regular-file size plus a
+count/size summary and paths for staging or quarantine leftovers. Run:
+
+```bash
+elephc native prune
+elephc native prune --target linux-x86_64
+```
+
+to remove abandoned publication siblings older than 24 hours, artifacts whose
+catalog identity no longer exists, and older compiler fingerprints for the
+selected target and ABI. Cleanup takes the same per-artifact locks as
+installation, so it does not race publication of the same cache key; the
+currently selected fingerprint is retained. Source archives remain
+content-addressed and reusable.
 
 Downloads use HTTPS and are bounded and hashed before publication. Extraction
 rejects path escapes, links, device entries, and oversized archives. Builds and
@@ -198,6 +273,37 @@ All three commands are mandatory for a non-host target. Elephc validates the
 compiler tuple and that the archive tools accept its objects before downloading
 anything or changing project files.
 
+### Toolchain fingerprint
+
+The fingerprint hashes every effective input that can change produced objects
+or archives:
+
+- public Elephc target, compiler-reported tuple, and normalized GNU/musl/macOS ABI;
+- selected `cc`, `ar`, and `ranlib` command identities and normalized version
+  output (or the executable hash when a tool has no usable version output);
+- the selected macOS SDK version from `xcrun`;
+- fixed recipe flags such as `CFLAGS=-fPIC`; and
+- the allowlisted tool-launch environment (`PATH`, temporary-directory
+  variables, `SYSTEMROOT`, and fixed C locale).
+
+Changing Clang/GCC, binutils, Xcode/SDK, a command path, or one of those
+allowlisted values intentionally selects a different cache directory. The old
+artifact is not ABI-assumed compatible and can later be removed with `native
+prune`.
+
+For CI, cache the native root with at least the target and runner/toolchain image
+in the outer cache key:
+
+```yaml
+- uses: actions/cache@v4
+  with:
+    path: ${{ runner.temp }}/elephc-native
+    key: native-${{ matrix.target }}-${{ runner.os }}-${{ hashFiles('elephc.lock') }}
+```
+
+The internal fingerprint still prevents an unsafe hit after a compiler or SDK
+bump; the outer key controls restore efficiency rather than compatibility.
+
 ## Four dependency mechanisms
 
 These mechanisms solve different problems and are intentionally separate:
@@ -209,6 +315,13 @@ These mechanisms solve different problems and are intentionally separate:
 | Rust bridge crates | Optional Elephc workspace `staticlib` implementations such as `pdo`, `tls`, or `crypto` | Feature detection and `--with-<crate>` |
 | Toolchains | Assemblers, linkers, C compilers, Make, SDKs, and cross tools | The user or operating system |
 
-`elephc native` v1 manages only catalog packages. It is not a general package
-manager and does not replace Composer, Cargo, Homebrew, apt, or a cross-toolchain
-installer.
+The v1 catalog is deliberately runtime/builtin-oriented. It is not a general
+system or FFI package manager and does not replace Composer, Cargo, Homebrew,
+apt, or a cross-toolchain installer.
+
+In particular, the DOOM renderer, SDL framebuffer, SDL audio, and similar
+examples declare C functions with `extern` and link user-installed libraries
+with `--link`, `--link-path`, and sometimes `--framework`. Those are **not**
+`elephc native` packages. Adding zlib to the curated catalog does not turn
+arbitrary `extern "z"` declarations into managed requirements or make raw link
+flags satisfy a managed PCRE2 requirement.

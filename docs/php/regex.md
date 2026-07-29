@@ -21,6 +21,9 @@ cd path/to/project
 elephc native add pcre2
 ```
 
+The repository's minimal `examples/hello-preg/` project shows this exact
+first-run flow with a committed manifest and lock.
+
 This creates or updates `elephc.toml`, writes a deterministic `elephc.lock`, and
 builds the exact catalogued PCRE2 10.47 source into the target/toolchain cache.
 Commit both project files. The final linker uses verified exact archive paths;
@@ -55,11 +58,11 @@ elephc path/to/program.php
 ./path/to/program
 ```
 
-Compilation never downloads or builds PCRE2. Missing project state produces an
-actionable error such as `elephc native add pcre2` or `elephc native install
---locked --target <target>`. Front-end-only `--check`, `--emit-ir`, and
-`--emit-asm` paths do not perform the final link and therefore do not require an
-installed artifact.
+Compilation never downloads or builds PCRE2. Missing project state reports the
+discovered/search path and a copy-paste `recovery:` line containing
+`elephc native add pcre2` or `elephc native install --locked --target <target>`.
+Front-end-only `--check`, `--emit-ir`, and `--emit-asm` paths do not perform the
+final link and therefore do not require an installed artifact.
 
 ## Supported functions
 

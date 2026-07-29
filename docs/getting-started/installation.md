@@ -12,9 +12,10 @@ sidebar:
 
 Projects that install a curated native package also need a POSIX shell, Make, a
 target C compiler, `ar`, and `ranlib`. Elephc verifies and uses these tools but
-does not install them. PCRE2 itself does **not** need to be installed from a
-system package for production compilation; `elephc native add pcre2` downloads,
-verifies, and builds the catalogued source into Elephc's cache.
+does not install them. The catalogued PCRE2 and zlib sources do **not** need to
+be installed from system packages; for example, `elephc native add pcre2`
+downloads, verifies, and builds the exact source into Elephc's cache without a
+system fallback.
 
 On macOS, install Xcode Command Line Tools if you don't have them already:
 
