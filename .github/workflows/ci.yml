@@ -220,14 +220,26 @@ jobs:
     needs: build-archive-macos-aarch64
     runs-on: macos-14
     timeout-minutes: 45
+    env:
+      WASMER_VERSION: 7.2.1
+      WASMER_SHA256: 5d6b3ecc2d54568f34e150ea94997b5ac8901ea72ed9e1533b6c2bf7f69d6722
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install wasmer (WASM backend behavioral tests)
+      - name: Install checksum-pinned Wasmer
         shell: bash
         run: |
-          curl https://get.wasmer.io -sSfL | sh -s "v 4.3.7"
-          echo "$HOME/.wasmer/bin" >> "$GITHUB_PATH"
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/wasmer"
+          curl --proto '=https' --tlsv1.2 -fL \
+            "https://github.com/wasmerio/wasmer/releases/download/v${WASMER_VERSION}/wasmer-darwin-arm64.tar.gz" \
+            -o "$RUNNER_TEMP/wasmer.tar.gz"
+          printf '%s  %s\n' "$WASMER_SHA256" "$RUNNER_TEMP/wasmer.tar.gz" |
+            shasum -a 256 --check
+          tar -xzf "$RUNNER_TEMP/wasmer.tar.gz" -C "$RUNNER_TEMP/wasmer"
+          echo "$RUNNER_TEMP/wasmer/bin" >> "$GITHUB_PATH"
+          test "$("$RUNNER_TEMP/wasmer/bin/wasmer" --version | cut -d' ' -f2)" = \
+            "$WASMER_VERSION"
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
@@ -255,6 +267,9 @@ jobs:
     needs: build-archive-linux-x86_64
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      WASMER_VERSION: 7.2.1
+      WASMER_SHA256: c46d6ff34a12b40d2e57bfc2ccbb8b9e209b0987ab305233619798b264a6bae5
     container:
       image: ghcr.io/illegalstudio/elephc-ci:latest
       credentials:
@@ -263,11 +278,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install wasmer (WASM backend behavioral tests)
+      - name: Install checksum-pinned Wasmer
         shell: bash
         run: |
-          curl https://get.wasmer.io -sSfL | sh -s "v 4.3.7"
-          echo "$HOME/.wasmer/bin" >> "$GITHUB_PATH"
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/wasmer"
+          curl --proto '=https' --tlsv1.2 -fL \
+            "https://github.com/wasmerio/wasmer/releases/download/v${WASMER_VERSION}/wasmer-linux-amd64.tar.gz" \
+            -o "$RUNNER_TEMP/wasmer.tar.gz"
+          printf '%s  %s\n' "$WASMER_SHA256" "$RUNNER_TEMP/wasmer.tar.gz" |
+            sha256sum --check
+          tar -xzf "$RUNNER_TEMP/wasmer.tar.gz" -C "$RUNNER_TEMP/wasmer"
+          echo "$RUNNER_TEMP/wasmer/bin" >> "$GITHUB_PATH"
+          test "$("$RUNNER_TEMP/wasmer/bin/wasmer" --version | cut -d' ' -f2)" = \
+            "$WASMER_VERSION"
 
       - name: Download test archive
         uses: actions/download-artifact@v4
@@ -289,6 +313,9 @@ jobs:
     needs: build-archive-linux-aarch64
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
+    env:
+      WASMER_VERSION: 7.2.1
+      WASMER_SHA256: 5a434db36f96d483e9967aa1b3ffd129f5b8781ea58faf1b80aeee6f5fb91f63
     container:
       image: ghcr.io/illegalstudio/elephc-ci:latest
       credentials:
@@ -297,11 +324,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install wasmer (WASM backend behavioral tests)
+      - name: Install checksum-pinned Wasmer
         shell: bash
         run: |
-          curl https://get.wasmer.io -sSfL | sh -s "v 4.3.7"
-          echo "$HOME/.wasmer/bin" >> "$GITHUB_PATH"
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/wasmer"
+          curl --proto '=https' --tlsv1.2 -fL \
+            "https://github.com/wasmerio/wasmer/releases/download/v${WASMER_VERSION}/wasmer-linux-aarch64.tar.gz" \
+            -o "$RUNNER_TEMP/wasmer.tar.gz"
+          printf '%s  %s\n' "$WASMER_SHA256" "$RUNNER_TEMP/wasmer.tar.gz" |
+            sha256sum --check
+          tar -xzf "$RUNNER_TEMP/wasmer.tar.gz" -C "$RUNNER_TEMP/wasmer"
+          echo "$RUNNER_TEMP/wasmer/bin" >> "$GITHUB_PATH"
+          test "$("$RUNNER_TEMP/wasmer/bin/wasmer" --version | cut -d' ' -f2)" = \
+            "$WASMER_VERSION"
 
       - name: Download test archive
         uses: actions/download-artifact@v4
