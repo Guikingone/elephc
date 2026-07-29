@@ -23,7 +23,7 @@ available evidence is insufficient.
 | Area | Status | Durable evidence and remaining work |
 |---|---|---|
 | Normative contract | Partially satisfied | Core 3.0 and WASI Preview 1 are identified, with the WASI ABI pinned below. Every PHP acceptance run must still record immutable php-src revisions and the complete oracle environment. |
-| Independent implementation audits | Partially satisfied | Three independent Codex audits covered EIR/runtime semantics, hosts/npm/artifacts, and ownership/cleanup after the requested Ollama reviewers became unavailable and the project owner accepted the substitution. Their findings inform this specification; the final revision has not yet received three independent approvals. |
+| Independent implementation audits | Partially satisfied | GLM 5.2, Kimi K2.7, and MiniMax M3 independently audited Elephc `b3b399408c9fabcb7b32a428e09d4b7fca09e320` through dedicated Codex instances and accepted the same canonical 24-item registry after four convergence rounds. This establishes the implementation baseline, not approval of the future final revision. |
 | Initial baseline | Partially satisfied | Counts and corpus results were recorded at one compiler revision. They are historical observations, not a generated current-revision coverage report. |
 | Production validation and artifact integrity | Partially satisfied | Production in-process assembly/Core validation, external validation in the shared host job, and transaction-safe WAT/WASM/npm publication exist. Exhaustive invalid-input and rollback-path coverage remains open. |
 | Capability audit | Partially satisfied | Exhaustive identity classification and shape checks for an audited P0 subset exist. Other admitted operations still rely on late lowerer diagnostics, so operand/result types, immediates, representations, ownership, callable shapes, and control-flow shapes are not yet completely classified. |
@@ -33,18 +33,92 @@ available evidence is insufficient.
 | Allocator, ownership, COW, and adversarial safety | Partially satisfied | Focused implementation and cleanup tests exist. Exhaustive resource, malformed-state, aliasing, and failure-path evidence remains open. |
 | Deterministic artifacts | Partially satisfied | Deterministic IDs have focused tests, and the pinned CI gate compares WAT, WASM, npm trees, and packed archives from independent compiler processes. Relevant map insertion orders and the complete metadata-normalization contract remain open. |
 | PHP differential parity | Open | No committed full-version oracle matrix covers the declared reachable surface. |
-| Wasmer, Wasmtime, Node, and external-validator CI | Satisfied | CI run `30439017754` on Elephc `0505b837ad` validates and executes one artifact under checksum-pinned Wasmer 7.2.1, Wasmtime 47.0.2, `wasm-tools` 1.254.0, Node 26.3.0, and TypeScript 6.0.3. |
+| Wasmer, Wasmtime, Node, and external-validator CI | Satisfied | CI run `30439384471` on Elephc `b3b399408c9` validates and executes one artifact under checksum-pinned Wasmer 7.2.1, Wasmtime 47.0.2, `wasm-tools` 1.254.0, Node 26.3.0, and TypeScript 6.0.3. |
 | Executable npm package matrix | Partially satisfied | The pinned job proves direct execution, repeated imported `run()`, exact status/output, package contents, reproducible archives, and strict NodeNext declarations. Environment, preopen, thrown-host-error, and concurrent-instance cases remain open. |
 | Final exact-revision review | Open | Three independent reviewers must inspect the same final source revision and its recorded acceptance logs, with no unresolved blocker. |
 
 ### Audit provenance
 
-The originally requested GLM 5.2, Kimi K2.7, and MiniMax M3 reviewers were no
-longer available through Ollama. With the project owner's approval, three
-independent Codex reviews replaced them for the initial audit. This substitution
-changes the reviewer identities, not the completion threshold: three
-independent reviewers must still approve the exact revision proposed for merge
-and the same durable evidence bundle.
+The baseline audit used the requested `glm-5.2:cloud`,
+`kimi-k2.7-code:cloud`, and `minimax-m3:cloud` Ollama models. Each model ran
+through a dedicated Codex instance with filesystem access and inspected the
+same clean Elephc revision,
+`b3b399408c9fabcb7b32a428e09d4b7fca09e320`. The reviewers first produced
+independent findings, then voted on the same evidence-backed registry. A fourth
+round removed the remaining classification ambiguity by applying one closed
+taxonomy. All three accepted every canonical entry, its acceptance contract,
+and the implementation order without replacement.
+
+That consensus fixes the implementation baseline only. It is not transferable
+to a later commit: the final revision, evidence manifest, and logs still require
+three independent exact-revision approvals.
+
+### Canonical audit taxonomy
+
+The consensus registry uses the following closed classes:
+
+- **MERGE-BLOCKER-PROVEN**: a currently reachable public behavior is wrong, or
+  an admitted EIR shape directly violates the pre-emission capability
+  invariant;
+- **LATENT-BACKEND-GATE**: a real backend defect is currently shielded by a
+  pre-emission rejection of the PHP reproducer;
+- **FULL-COMPLIANCE-GATE**: valid PHP remains unsupported, or an exhaustive
+  versioned matrix is required, without a proven currently admitted wrong
+  behavior;
+- **HARDENING**: malformed or adversarial runtime state has no demonstrated
+  valid-PHP reachability;
+- **DOC/CI**: a public contract, documentation claim, artifact result, or CI
+  supply-chain requirement is wrong or incomplete.
+
+Severity measures the impact of one entry, not the overall size of the
+remaining campaign.
+
+### Canonical audit registry
+
+| ID | Stable requirement | Severity | Class | Required result |
+|---|---|---|---|---|
+| A | `WASM-OWN-001` escaping by-reference closure cells | Critical | MERGE-BLOCKER-PROVEN | The escaping-closure regression prints `23`; a captured cell is not freed by its creator's epilogue and is released exactly once after its final closure/local owner. |
+| B | `WASM-HASH-001` tombstone-aware insertion | High | LATENT-BACKEND-GATE | Probing is bounded, reuses the first tombstone, and a filled-then-fully-deleted table accepts reinsertion without hanging. |
+| C | `WASM-MEM-004` allocation-size narrowing | High | LATENT-BACKEND-GATE | Every capacity/length multiplication and `i64` to `i32` narrowing is checked before mutation; wasm32 boundary tests reach deterministic OOM/diagnostics rather than wrapped allocation. |
+| D1 | `WASM-NPM-002` JavaScript argument encoding | High | MERGE-BLOCKER-PROVEN | Embedded NUL and unpaired UTF-16 surrogates are rejected with a typed package error before WASI construction; no silent truncation or replacement is permitted. |
+| D2 | `WASM-ABI-003` environment and preopen boundary | Medium | FULL-COMPLIANCE-GATE | One documented mapping covers NUL, `=`, Unicode encoding, ordering, missing/empty values, duplicate limitations, path aliases, and repeated runs. |
+| E | `PHP-WASM-CAST-001` complete Mixed casts | High | FULL-COMPLIANCE-GATE | A generated source-tag by destination-type matrix matches pinned php-src profiles for values, warnings, errors, and ownership. |
+| F | `PHP-WASM-ARRAY-001` indexed read failures | Medium | LATENT-BACKEND-GATE | Negative/out-of-range reads use PHP warning/null behavior; internal integer/string sentinels never escape once the shape is admitted. |
+| G | `PHP-WASM-ERROR-001` invalid dynamic operations | Critical | MERGE-BLOCKER-PROVEN | Invalid operations such as a method call on an integer produce the pinned PHP `Error`, message, cleanup, stderr, and status, never a raw Core trap. |
+| H | `PHP-WASM-NUM-004` float-to-int conversion | High | MERGE-BLOCKER-PROVEN | Boundary, overflow, `NaN`, and infinity conversions match each pinned php-src profile; `(int) 1.0e20` is a mandatory regression. |
+| I | `WASM-HASH-002` PHP next-free key | Medium | LATENT-BACKEND-GATE | Hashes persist PHP's `nNextFreeElement` semantics across deletion, COW, clone, resize, explicit keys, and `PHP_INT_MAX`. |
+| J | `WASI-EXIT-001` complete PHP exit semantics | High | FULL-COMPLIANCE-GATE | Versioned scalar coercion/output, top-level return, exit outside main, cleanup/unwind, and the WASI i32 status boundary match pinned php-src and all host APIs. |
+| K | `WASM-ART-002` shape-complete capability audit | High | MERGE-BLOCKER-PROVEN | Every admitted shape is lowerable; every other shape is rejected before staging. No accepted module reaches a late backend `Unsupported`. |
+| L1 | `WASM-CALL-001` admitted callable shapes | High | MERGE-BLOCKER-PROVEN | All currently admitted call/method/closure/FCC shapes pass the capability-to-lowerer parity gate and positive execution corpus. |
+| L2 | `WASM-CALL-002` remaining PHP callables | High | FULL-COMPLIANCE-GATE | Valid PHP named/spread/variadic/by-ref/method/closure/FCC forms execute with PHP-equivalent evaluation, ABI, writeback, errors, and ownership. |
+| M1 | `WASM-MEM-005` malformed Mixed chains | Medium | HARDENING | Nested/cyclic/malformed Mixed chains are bounded and fail deterministically without unbounded loops or unchecked loads. |
+| M2 | `WASM-MEM-006` heap-pointer provenance | Medium | HARDENING | Refcount/free/header helpers accept only aligned starts of live allocations with complete in-bounds headers and payloads; interior pointers are rejected. |
+| M3 | `WASM-MEM-003` recursive PHP ownership | High | FULL-COMPLIANCE-GATE | Differential tests cover references, recursive structures, COW, capture cycles, destructors, normal/exceptional exits, and heap balance. |
+| N1 | `WASM-ART-003` post-commit cleanup result | Medium | DOC/CI | Publication either rolls back on every reported failure or reports committed success with a separate cleanup warning; rustdoc, API result, and tests describe the same state. |
+| N2 | `WASM-DOC-001` truthful public surface | High | DOC/CI | Changelog and public docs remove “any WASI host” and unsupported builtin claims and label the target experimental until every completion gate closes. |
+| N3 | `WASM-CI-001` verified Wasmer installation | Medium | DOC/CI | Every WASM CI job installs the pinned Wasmer artifact through a checksum-verified path; no WASM job executes an unverified `curl | sh` installer. |
+| O | `WASM-COVERAGE-001` generated full inventory | Global | FULL-COMPLIANCE-GATE | Current-revision reports cover `Op`, runtime targets/functions, unary runtimes, terminators, shapes, reachable PHP fixtures, exclusions, and a reproducible php-src differential matrix. |
+| P | `PHP-WASM-ERROR-002` diagnostics architecture | High | FULL-COMPLIANCE-GATE | Warnings, fatals, exceptions, suppression, `error_reporting`, messages, traces, cleanup, stderr, and statuses have one versioned PHP-equivalent path. |
+| R1 | `WASM-TRAP-001` reachable `unreachable` sites | Critical | MERGE-BLOCKER-PROVEN | Every currently PHP-observable `unreachable` path is replaced with PHP behavior; G is the mandatory initial regression. |
+| R2 | `WASM-TRAP-002` complete `unreachable` inventory | High | FULL-COMPLIANCE-GATE | Every emitted `unreachable` is generated into an inventory and classified as post-noreturn, proven invariant, deterministic OOM, or a PHP-visible path that must be implemented. |
+
+The exact current capability inventory at the audited SHA is 90 of 236 `Op`
+variants, 4 of 437 `RuntimeFnId` variants, 0 of 15
+`UnaryStringRuntime` variants, and 5 of 8 `Terminator` variants. These figures
+are evidence for `WASM-COVERAGE-001`, not acceptance thresholds.
+
+### Consensus implementation order
+
+The three reviewers accepted this dependency order:
+
+1. close A, D1, G, H, and R1;
+2. make K and L1 enforceable while generating the R2 inventory;
+3. close B, C, F, and I;
+4. close D2, J, L2, E, P, and M3;
+5. close M1 and M2;
+6. align N1, N2, and N3;
+7. regenerate O and run the final exact-revision differential, host, artifact,
+   ownership, and reviewer gates.
 
 ## Normative references
 
@@ -478,8 +552,8 @@ At the time of this audit, durable repository evidence covers:
   `wasmparser`;
 - focused artifact-publication tests, including malformed/type-invalid input
   and selected rollback paths;
-- [CI run `30439017754`](https://github.com/illegalstudio/elephc/actions/runs/30439017754)
-  on Elephc `0505b837ad`, which validates one artifact with `wasmparser`,
+- [CI run `30439384471`](https://github.com/illegalstudio/elephc/actions/runs/30439384471)
+  on Elephc `b3b399408c9`, which validates one artifact with `wasmparser`,
   `wasm-tools` 1.254.0, Wasmer 7.2.1, Wasmtime 47.0.2, and Node 26.3.0, then
   executes it on all three hosts with exact output and `exit(7)`;
 - the same job's partial-`fd_write`, repeated Node import, npm file-list,
