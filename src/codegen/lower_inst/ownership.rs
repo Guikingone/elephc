@@ -53,7 +53,6 @@ pub(super) fn lower_acquire(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     store_if_result(ctx, inst)
 }
 
-/// Lowers a release only for values that own or may own runtime-managed storage.
 /// Lowers `ReleaseUnlessAliases`: releases operand 0 only when it is not the same payload the
 /// call returned in operand 1.
 ///
@@ -112,6 +111,7 @@ pub(super) fn lower_release_unless_aliases(
     Ok(())
 }
 
+/// Lowers a release only for values that own or may own runtime-managed storage.
 pub(super) fn lower_release(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     let ownership = ctx.value_ownership(value)?;
