@@ -172,11 +172,12 @@ const RT_HASH_NORMALIZE_KEY: &str = r#"(func $__rt_hash_normalize_key (param $pt
 /// `__rt_hash_key_from_mixed`: turns a boxed `Mixed` array key into the two-word hash
 /// key `(key_lo, key_hi)` the `__rt_hash_*` runtime expects. Unboxes the cell (tags:
 /// 0=int, 1=string, 2=float, 3=bool, 8=null) and classifies: int/bool pass through as
-/// `(value, -1)`; a float truncates toward zero (PHP key coercion); a string is routed
-/// through `__rt_hash_normalize_key` so integer-like strings collapse to int keys; null
-/// becomes PHP's empty-string key `(0, 0)`. Any other (illegal) offset type falls back
-/// to its payload word as an int key — PHP would fatal, but the wasm backend has no
-/// exceptions yet. `key_hi == -1` marks an int key; `key_hi >= 0` marks a string key.
+/// `(value, -1)`; a float truncates toward zero and wraps finite out-of-range values
+/// modulo 2^64 (PHP 64-bit key coercion result); a string is routed through
+/// `__rt_hash_normalize_key` so integer-like strings collapse to int keys; null becomes
+/// PHP's empty-string key `(0, 0)`. Any other (illegal) offset type falls back to its
+/// payload word as an int key — PHP would fatal, but the wasm backend has no exceptions
+/// yet. `key_hi == -1` marks an int key; `key_hi >= 0` marks a string key.
 const RT_HASH_KEY_FROM_MIXED: &str = r#"(func $__rt_hash_key_from_mixed (param $ptr i32) (result i64 i64)
   (local $tag i64)
   (local $lo i64)
@@ -189,7 +190,7 @@ const RT_HASH_KEY_FROM_MIXED: &str = r#"(func $__rt_hash_key_from_mixed (param $
               (i64.eq (local.get $tag) (i64.const 3)))         ;; bool: low word is already the integer key
     (then (return (local.get $lo) (i64.const -1))))            ;; (value, -1) marks an int key
   (if (i64.eq (local.get $tag) (i64.const 2))                  ;; float key
-    (then (return (i64.trunc_sat_f64_s (f64.reinterpret_i64 (local.get $lo))) (i64.const -1))))  ;; truncate toward zero
+    (then (return (call $__rt_float_to_int (local.get $lo)) (i64.const -1))))  ;; PHP float key coercion
   (if (i64.eq (local.get $tag) (i64.const 1))                  ;; string key
     (then (return (call $__rt_hash_normalize_key (i32.wrap_i64 (local.get $lo)) (local.get $hi)))))  ;; int-like -> int, else string
   (if (i64.eq (local.get $tag) (i64.const 8))                  ;; null key
@@ -285,22 +286,47 @@ const RT_HASH_GET: &str = r#"(func $__rt_hash_get (param $hash i32) (param $key_
   (i32.const 0) (i64.const 0) (i64.const 0) (i64.const 8))    ;; saturated -> miss
 "#;
 
-/// `__rt_hash_insert_owned`: places an ALREADY-OWNED key/value into the first empty
-/// slot and appends it to the insertion-order list. Assumes the key is absent and
-/// the table has room — it neither persists strings, resizes, nor updates an
-/// existing key (used by resize/clone). Returns the same `hash` pointer.
+/// `__rt_hash_insert_owned`: places an ALREADY-OWNED key/value into the first
+/// tombstone in its probe chain, or the first empty slot when no tombstone was
+/// encountered, and appends it to the insertion-order list. The bounded full-table
+/// fallback reuses a remembered tombstone when no empty slot exists. Assumes the key
+/// is absent and the table has room — it neither persists strings, resizes, nor
+/// updates an existing key (used by set/resize/clone). Returns the same `hash` pointer.
 const RT_HASH_INSERT_OWNED: &str = r#"(func $__rt_hash_insert_owned (param $hash i32) (param $key_lo i64) (param $key_hi i64) (param $val_lo i64) (param $val_hi i64) (param $val_tag i64) (result i32)
   (local $cap i64)
   (local $slot i64)
+  (local $probes i64)
+  (local $first_tomb i64)
   (local $entry i32)
+  (local $occ i64)
   (local $tail i64)
   (local $tail_entry i32)
   (local.set $cap (i64.load (i32.add (local.get $hash) (i32.const 8))))  ;; capacity
   (local.set $slot (i64.rem_u (call $__rt_hash_key_hash (local.get $key_lo) (local.get $key_hi)) (local.get $cap)))  ;; initial bucket
-  (block $empty (loop $probe
+  (local.set $probes (i64.const 0))                          ;; probe counter = 0
+  (local.set $first_tomb (i64.const -1))                     ;; no reusable tombstone seen yet
+  (block $place (loop $probe
+    (if (i64.ge_u (local.get $probes) (local.get $cap))      ;; completed a full table tour?
+      (then
+        (if (i64.eq (local.get $first_tomb) (i64.const -1))  ;; no empty and no tombstone violates the room contract
+          (then unreachable))
+        (local.set $slot (local.get $first_tomb))            ;; full table with a tombstone -> reuse it
+        (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 64)))))  ;; &remembered tombstone
+        (br $place)))
     (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 64)))))  ;; &slot[slot]
-    (br_if $empty (i64.eqz (i64.load (local.get $entry))))   ;; found an empty slot
+    (local.set $occ (i64.load (local.get $entry)))           ;; occupied flag
+    (if (i32.and (i64.eq (local.get $occ) (i64.const 2))
+                 (i64.eq (local.get $first_tomb) (i64.const -1)))  ;; first tombstone in this probe chain?
+      (then (local.set $first_tomb (local.get $slot))))      ;; remember it, but keep probing
+    (if (i64.eqz (local.get $occ))                           ;; empty slot proves the absent key can be placed
+      (then
+        (if (i64.ne (local.get $first_tomb) (i64.const -1))  ;; prefer the first earlier tombstone
+          (then
+            (local.set $slot (local.get $first_tomb))
+            (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 64)))))))  ;; &remembered tombstone
+        (br $place)))
     (local.set $slot (i64.rem_u (i64.add (local.get $slot) (i64.const 1)) (local.get $cap)))  ;; next bucket (wrap)
+    (local.set $probes (i64.add (local.get $probes) (i64.const 1)))    ;; probe counter++
     (br $probe)))                                            ;; next probe
   (i64.store (local.get $entry) (i64.const 1))               ;; occupied = live
   (i64.store (i32.add (local.get $entry) (i32.const 8)) (local.get $key_lo))    ;; key_lo
@@ -976,6 +1002,28 @@ mod tests {
         }
     }
 
+    /// A boxed 1e20 float key uses PHP's modulo-2^64 integer result rather than
+    /// WebAssembly's saturating conversion; the second result remains the -1
+    /// integer-key marker.
+    #[test]
+    fn mixed_float_key_wraps_out_of_range_like_php() {
+        let bits = 1.0e20f64.to_bits() as i64;
+        let driver = format!(
+            r#"(func $t (export "t") (result i64)
+  (local $key i64) (local $marker i64)
+  (call $__rt_hash_key_from_mixed
+    (call $__rt_mixed_from_value (i64.const 2) (i64.const {bits}) (i64.const 0)))
+  (local.set $marker)
+  (local.set $key)
+  (if (i64.eq (local.get $marker) (i64.const -1))
+    (then (return (local.get $key))))
+  (i64.const 0))"#
+        );
+        if let Some(output) = run_driver(&driver, "t") {
+            assert_eq!(output, "7766279631452241920");
+        }
+    }
+
     /// `__rt_decref_hash` on a sole owner deep-frees the (empty) hash, restoring
     /// `_gc_live` to 0.
     #[test]
@@ -1531,6 +1579,154 @@ mod tests {
   (i64.add (i64.mul (i64.load (local.get $h)) (i64.const 1000)) (local.get $vlo)))"#;
         if let Some(o) = run_driver(driver, "t") {
             assert_eq!(o, "1055");
+        }
+    }
+
+    /// Colliding integer keys 1 and 9 start at bucket 5 in a capacity-8 table.
+    /// After key 1 is removed, lookup of key 9 must skip tombstone slot 5 and find
+    /// the surviving entry at slot 6 without disturbing count or insertion order.
+    #[test]
+    fn colliding_lookup_survives_an_earlier_tombstone() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 1) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 9) (i64.const -1) (i64.const 90) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const 1) (i64.const -1)))
+  (call $__rt_hash_get (local.get $h) (i64.const 9) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (i64.add
+    (i64.add
+      (i64.add
+        (i64.add
+          (i64.mul (i64.load (local.get $h)) (i64.const 1000000))
+          (i64.mul (local.get $vlo) (i64.const 1000)))
+        (i64.mul (i64.load (i32.add (local.get $h) (i32.const 360))) (i64.const 100)))
+      (i64.mul (i64.load (i32.add (local.get $h) (i32.const 24))) (i64.const 10)))
+    (i64.load (i32.add (local.get $h) (i32.const 32)))))"#;
+        if let Some(output) = run_driver(driver, "t") {
+            assert_eq!(output, "1090266");
+        }
+    }
+
+    /// Reinserting colliding key 1 after its removal reuses tombstone slot 5 rather
+    /// than the later empty slot 7. The reinserted entry is appended after key 9 in
+    /// insertion order, while count remains the number of live entries.
+    #[test]
+    fn colliding_reinsert_reuses_tombstone_and_appends_order() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $e5 i32) (local $e6 i32) (local $ok i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 1) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 9) (i64.const -1) (i64.const 90) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const 1) (i64.const -1)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 1) (i64.const -1) (i64.const 11) (i64.const 0) (i64.const 0)))
+  (local.set $e5 (i32.add (local.get $h) (i32.const 360)))
+  (local.set $e6 (i32.add (local.get $h) (i32.const 424)))
+  (local.set $ok (i64.mul (i64.extend_i32_u (i64.eq (i64.load (local.get $h)) (i64.const 2))) (i64.const 128)))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $h) (i32.const 24))) (i64.const 6))) (i64.const 64))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $h) (i32.const 32))) (i64.const 5))) (i64.const 32))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (local.get $e5)) (i64.const 1))) (i64.const 16))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $e5) (i32.const 8))) (i64.const 1))) (i64.const 8))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $e5) (i32.const 24))) (i64.const 11))) (i64.const 4))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $e6) (i32.const 56))) (i64.const 5))) (i64.const 2))))
+  (i64.add (local.get $ok) (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $e5) (i32.const 48))) (i64.const 6))))
+)"#;
+        if let Some(output) = run_driver(driver, "t") {
+            assert_eq!(output, "255");
+        }
+    }
+
+    /// A new colliding key 17 also prefers the first tombstone at slot 5 over the
+    /// later empty slot 7, and is appended after surviving key 9 in insertion order.
+    #[test]
+    fn new_colliding_key_reuses_first_tombstone() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $e5 i32) (local $e6 i32) (local $ok i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 1) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 9) (i64.const -1) (i64.const 90) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const 1) (i64.const -1)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 17) (i64.const -1) (i64.const 170) (i64.const 0) (i64.const 0)))
+  (local.set $e5 (i32.add (local.get $h) (i32.const 360)))
+  (local.set $e6 (i32.add (local.get $h) (i32.const 424)))
+  (local.set $ok (i64.mul (i64.extend_i32_u (i64.eq (i64.load (local.get $h)) (i64.const 2))) (i64.const 128)))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $h) (i32.const 24))) (i64.const 6))) (i64.const 64))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $h) (i32.const 32))) (i64.const 5))) (i64.const 32))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (local.get $e5)) (i64.const 1))) (i64.const 16))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $e5) (i32.const 8))) (i64.const 17))) (i64.const 8))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $e5) (i32.const 24))) (i64.const 170))) (i64.const 4))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $e6) (i32.const 56))) (i64.const 5))) (i64.const 2))))
+  (i64.add (local.get $ok) (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $e5) (i32.const 48))) (i64.const 6))))
+)"#;
+        if let Some(output) = run_driver(driver, "t") {
+            assert_eq!(output, "255");
+        }
+    }
+
+    /// `__rt_hash_insert_owned` terminates and reuses slot 2 when a capacity-4
+    /// table contains three live entries plus one tombstone and no empty bucket.
+    /// The new key is appended after the surviving 0,1,3 insertion order.
+    #[test]
+    fn insert_owned_reuses_tombstone_when_table_has_no_empty_slot() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $e0 i32) (local $e1 i32) (local $e2 i32) (local $e3 i32)
+  (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64) (local $ok i64)
+  (local.set $h (call $__rt_hash_new (i64.const 4) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 0) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 1) (i64.const -1) (i64.const 11) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 2) (i64.const -1) (i64.const 12) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 3) (i64.const -1) (i64.const 13) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const 2) (i64.const -1)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 6) (i64.const -1) (i64.const 60) (i64.const 0) (i64.const 0)))
+  (local.set $e0 (i32.add (local.get $h) (i32.const 40)))
+  (local.set $e1 (i32.add (local.get $h) (i32.const 104)))
+  (local.set $e2 (i32.add (local.get $h) (i32.const 168)))
+  (local.set $e3 (i32.add (local.get $h) (i32.const 232)))
+  (call $__rt_hash_get (local.get $h) (i64.const 6) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (local.set $ok (i64.mul (i64.extend_i32_u (i64.eq (i64.load (local.get $h)) (i64.const 4))) (i64.const 512)))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (local.get $e2)) (i64.const 1))) (i64.const 256))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $e2) (i32.const 8))) (i64.const 6))) (i64.const 128))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $e2) (i32.const 24))) (i64.const 60))) (i64.const 64))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eqz (i64.load (i32.add (local.get $h) (i32.const 24))))) (i64.const 32))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $h) (i32.const 32))) (i64.const 2))) (i64.const 16))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $e0) (i32.const 56))) (i64.const 1))) (i64.const 8))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $e1) (i32.const 56))) (i64.const 3))) (i64.const 4))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $e3) (i32.const 56))) (i64.const 2))) (i64.const 2))))
+  (i64.add (local.get $ok) (i64.extend_i32_u (i32.and (local.get $found) (i64.eq (local.get $vlo) (i64.const 60)))))
+)"#;
+        if let Some(output) = run_driver(driver, "t") {
+            assert_eq!(output, "1023");
+        }
+    }
+
+    /// Lookup and unset skip a tombstone whose stale string-key pointer is outside
+    /// linear memory. Any accidental equality check on occupied=2 would dereference
+    /// address 300000 and trap; both operations must instead advance to the empty slot.
+    #[test]
+    fn lookup_and_unset_skip_poisoned_tombstone_key() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $slot i64) (local $entry i32)
+  (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (i32.store8 (i32.const 300) (i32.const 120))
+  (local.set $h (call $__rt_hash_new (i64.const 4) (i64.const 0)))
+  (local.set $slot (i64.rem_u (call $__rt_hash_key_hash (i64.const 300) (i64.const 1)) (i64.const 4)))
+  (local.set $entry (i32.add (i32.add (local.get $h) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 64)))))
+  (i64.store (local.get $entry) (i64.const 2))
+  (i64.store (i32.add (local.get $entry) (i32.const 8)) (i64.const 300000))
+  (i64.store (i32.add (local.get $entry) (i32.const 16)) (i64.const 1))
+  (call $__rt_hash_get (local.get $h) (i64.const 300) (i64.const 1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const 300) (i64.const 1)))
+  (i64.add
+    (i64.add
+      (i64.mul (i64.extend_i32_u (i32.eqz (local.get $found))) (i64.const 100))
+      (i64.mul (i64.extend_i32_u (i64.eqz (i64.load (local.get $h)))) (i64.const 10)))
+    (i64.extend_i32_u (i64.eq (i64.load (local.get $entry)) (i64.const 2))))
+)"#;
+        if let Some(output) = run_driver(driver, "t") {
+            assert_eq!(output, "111");
         }
     }
 
