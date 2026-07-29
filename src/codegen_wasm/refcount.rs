@@ -185,7 +185,11 @@ const RT_STR_PERSIST: &str = r#"(func $__rt_str_persist (param $ptr i32) (param 
   (local $n i32)
   (local $new i32)
   (local $i i32)
-  (local.set $n (i32.wrap_i64 (local.get $len)))            ;; byte length
+  (local.set $n
+    (call $__rt_checked_layout
+      (local.get $len)
+      (i64.const 1)
+      (i64.const 0)))                                       ;; checked byte length; rejects negative/wasm32 overflow
   (local.set $new (call $__rt_heap_alloc (local.get $n)))   ;; fresh heap block (8-byte minimum)
   (i64.store (i32.sub (local.get $new) (i32.const 8)) (i64.const 1)) ;; stamp header kind = 1 (string)
   (local.set $i (i32.const 0))                              ;; i = 0 (copy cursor)

@@ -55,6 +55,8 @@ fn emit_hash_runtime_for_version(wm: &mut WatModule, php_version: PhpVersion) {
     wm.add_raw_func(RT_HASH_META_ADDR);
     wm.add_raw_func(RT_HASH_ZEND_TABLE_SIZE);
     wm.add_raw_func(&hash_new_runtime(php_version));
+    wm.add_raw_func(RT_HASH_VALIDATE_LAYOUT);
+    wm.add_raw_func(RT_HASH_PREFLIGHT_UNION);
     wm.add_raw_func(RT_HASH_GET);
     wm.add_raw_func(RT_HASH_INSERT_OWNED);
     wm.add_raw_func(RT_HASH_RESIZE);
@@ -279,7 +281,11 @@ const RT_HASH_NEW: &str = r#"(func $__rt_hash_new (param $capacity i64) (param $
   (local $p i32)
   (local $i i64)
   (local $meta i32)
-  (local.set $bytes (i32.add (i32.const 72) (i32.wrap_i64 (i64.mul (local.get $capacity) (i64.const 64)))))  ;; 40B header + capacity*64 slots + 32B trailer
+  (local.set $bytes
+    (call $__rt_checked_layout
+      (local.get $capacity)
+      (i64.const 64)
+      (i64.const 72)))                                      ;; checked 40B header + capacity*64 slots + 32B trailer
   (local.set $p (call $__rt_heap_alloc (local.get $bytes)))  ;; block: refcount=1
   (i64.store (i32.sub (local.get $p) (i32.const 8)) (i64.const 32771))  ;; kind = hash(3) | COW(0x8000)
   (i64.store (local.get $p) (i64.const 0))                   ;; count = 0
@@ -302,6 +308,38 @@ const RT_HASH_NEW: &str = r#"(func $__rt_hash_new (param $capacity i64) (param $
   (i64.store (i32.add (local.get $meta) (i32.const 24))
     (call $__rt_hash_zend_table_size (local.get $capacity)))  ;; logical Zend nTableSize
   (local.get $p))
+"#;
+
+/// `__rt_hash_validate_layout`: proves that a hash's physical slot/trailer layout
+/// is representable and that its live entry count does not exceed capacity.
+const RT_HASH_VALIDATE_LAYOUT: &str = r#"(func $__rt_hash_validate_layout (param $hash i32)
+  (local $count i64)
+  (local $capacity i64)
+  (local.set $count (i64.load (local.get $hash)))
+  (local.set $capacity (i64.load (i32.add (local.get $hash) (i32.const 8))))
+  (drop (call $__rt_checked_layout
+    (local.get $capacity)
+    (i64.const 64)
+    (i64.const 72)))                                        ;; header + slots + semantic trailer
+  (if (i64.gt_u (local.get $count) (local.get $capacity))
+    (then (call $__rt_oom) unreachable)))                   ;; malformed live count
+"#;
+
+/// `__rt_hash_preflight_union`: validates the worst-case capacity needed when
+/// every right-hand entry has a distinct key. Two slots per possible entry keep
+/// the result below the resize threshold; this runs before cloning or insertion.
+const RT_HASH_PREFLIGHT_UNION: &str = r#"(func $__rt_hash_preflight_union (param $left_count i64) (param $right_count i64)
+  (local $total i64)
+  (if (i64.gt_u
+        (local.get $left_count)
+        (i64.sub (i64.const 9223372036854775807) (local.get $right_count)))
+    (then (call $__rt_oom) unreachable))                   ;; signed count sum would overflow
+  (local.set $total (i64.add (local.get $left_count) (local.get $right_count)))
+  (drop (call $__rt_checked_layout
+    (local.get $total)
+    (i64.const 128)
+    (i64.const 72)))                                        ;; capacity=2*total, 64 bytes per slot
+)
 "#;
 
 /// `__rt_hash_get`: linear-probe lookup of `(key_lo, key_hi)`. Returns the 4-tuple
@@ -409,16 +447,20 @@ const RT_HASH_INSERT_OWNED: &str = r#"(func $__rt_hash_insert_owned (param $hash
 /// insertion order, MOVING (not copying) each key/value into a fresh table, then
 /// frees the old table shallowly. Returns the new hash pointer.
 const RT_HASH_RESIZE: &str = r#"(func $__rt_hash_resize (param $hash i32) (result i32)
+  (local $oldcap i64)
   (local $newcap i64)
   (local $new i32)
   (local $cur i64)
   (local $oe i32)
   (local $oldmeta i32)
   (local $newmeta i32)
-  (local.set $oldmeta (call $__rt_hash_meta_addr (local.get $hash)))  ;; preserve semantic trailer across physical rehash
-  (local.set $newcap (i64.shl (i64.load (i32.add (local.get $hash) (i32.const 8))) (i64.const 1)))  ;; newcap = capacity * 2
+  (call $__rt_hash_validate_layout (local.get $hash))       ;; prove current slot/trailer addresses before reading metadata
+  (local.set $oldcap (i64.load (i32.add (local.get $hash) (i32.const 8))))
+  (local.set $newcap (i64.add (local.get $oldcap) (local.get $oldcap)))  ;; double without a wrapping shift
   (if (i64.lt_u (local.get $newcap) (i64.const 8))
     (then (local.set $newcap (i64.const 8))))                ;; minimum capacity 8
+  (drop (call $__rt_checked_layout (local.get $newcap) (i64.const 64) (i64.const 72)))  ;; reject overflow before any allocation/move
+  (local.set $oldmeta (call $__rt_hash_meta_addr (local.get $hash)))  ;; preserve semantic trailer across physical rehash
   (local.set $new (call $__rt_hash_new (local.get $newcap) (i64.load (i32.add (local.get $hash) (i32.const 16)))))  ;; fresh larger table, same value_type
   (local.set $cur (i64.load (i32.add (local.get $hash) (i32.const 24))))  ;; cur = old head
   (block $done (loop $walk
@@ -813,9 +855,30 @@ const RT_HASH_SET: &str = r#"(func $__rt_hash_set (param $hash i32) (param $key_
   (local $oldtag i64)
   (local $np i32)
   (local $nl i64)
+  (local $count i64)
+  (local $need_resize i32)
+  (local $newcap i64)
+  (call $__rt_hash_validate_layout (local.get $hash))        ;; validate physical metadata before COW
+  (if (i64.ge_s (local.get $key_hi) (i64.const 0))
+    (then
+      (drop (call $__rt_checked_layout (local.get $key_hi) (i64.const 1) (i64.const 0)))))  ;; validate string-key length before COW
+  (if (i64.eq (local.get $val_tag) (i64.const 1))
+    (then
+      (drop (call $__rt_checked_layout (local.get $val_hi) (i64.const 1) (i64.const 0)))))  ;; validate string-value length before COW/release
+  (local.set $cap (i64.load (i32.add (local.get $hash) (i32.const 8))))
+  (local.set $count (i64.load (local.get $hash)))
+  (local.set $need_resize
+    (i64.ge_u
+      (i64.mul (local.get $count) (i64.const 4))
+      (i64.mul (local.get $cap) (i64.const 3))))            ;; products are safe after the bounded-layout proof
+  (if (local.get $need_resize)
+    (then
+      (local.set $newcap (i64.add (local.get $cap) (local.get $cap)))
+      (if (i64.lt_u (local.get $newcap) (i64.const 8))
+        (then (local.set $newcap (i64.const 8))))
+      (drop (call $__rt_checked_layout (local.get $newcap) (i64.const 64) (i64.const 72)))))  ;; prove resize before COW
   (local.set $hash (call $__rt_hash_ensure_unique (local.get $hash)))  ;; copy-on-write split
-  (if (i64.ge_u (i64.mul (i64.load (local.get $hash)) (i64.const 4))
-                (i64.mul (i64.load (i32.add (local.get $hash) (i32.const 8))) (i64.const 3)))  ;; count*4 >= capacity*3
+  (if (local.get $need_resize)
     (then (local.set $hash (call $__rt_hash_resize (local.get $hash)))))  ;; grow past 75% load
   (local.set $cap (i64.load (i32.add (local.get $hash) (i32.const 8))))  ;; capacity (post-resize)
   (local.set $slot (i64.rem_u (call $__rt_hash_key_hash (local.get $key_lo) (local.get $key_hi)) (local.get $cap)))  ;; initial bucket
@@ -1028,8 +1091,16 @@ const RT_HASH_UNION: &str = r#"(func $__rt_hash_union (param $a i32) (param $b i
   (local $vlo i64)
   (local $vhi i64)
   (local $vtag i64)
+  (call $__rt_hash_validate_layout (local.get $b))                    ;; validate right slots/trailer before clone or iteration
+  (call $__rt_hash_preflight_union
+    (i64.const 0)
+    (i64.load (local.get $b)))                                        ;; null-left clone still preflights the complete right result
   (if (i32.eqz (local.get $a))                                          ;; null left operand?
     (then (return (call $__rt_hash_clone_shallow (local.get $b)))))     ;; result is just a copy of b
+  (call $__rt_hash_validate_layout (local.get $a))                    ;; validate left slots/trailer before clone
+  (call $__rt_hash_preflight_union
+    (i64.load (local.get $a))
+    (i64.load (local.get $b)))                                        ;; worst-case distinct-key result before clone
   (local.set $result (call $__rt_hash_clone_shallow (local.get $a)))    ;; start from an owned copy of a
   (local.set $cur (i64.load (i32.add (local.get $b) (i32.const 24))))   ;; cur = b.head (insertion-order start)
   (block $done (loop $walk
@@ -1078,12 +1149,24 @@ const RT_ARRAY_HASH_UNION: &str = r#"(func $__rt_array_hash_union (param $a i32)
   (local $klo i64)
   (local $khi i64)
   (local $found i32)
-  (local.set $cap (i64.mul (i64.add (i64.load (local.get $a)) (i64.load (local.get $b))) (i64.const 2)))  ;; (a.len + b.count) * 2
+  (local $acap i64)
+  (local $aesz i64)
+  (local $total i64)
+  (local.set $alen (i64.load (local.get $a)))
+  (local.set $acap (i64.load (i32.add (local.get $a) (i32.const 8))))
+  (local.set $aesz (i64.load (i32.add (local.get $a) (i32.const 16))))
+  (drop (call $__rt_checked_layout (local.get $acap) (local.get $aesz) (i64.const 24)))  ;; validate indexed source layout
+  (if (i64.gt_u (local.get $alen) (local.get $acap))
+    (then (call $__rt_oom) unreachable))                               ;; malformed indexed length
+  (call $__rt_hash_validate_layout (local.get $b))                    ;; validate associative source layout
+  (call $__rt_hash_preflight_union (local.get $alen) (i64.load (local.get $b)))  ;; validate worst-case result before allocation
+  (local.set $total (i64.add (local.get $alen) (i64.load (local.get $b))))
+  (local.set $cap (i64.add (local.get $total) (local.get $total)))     ;; safe after checked worst-case union layout
   (if (i64.lt_s (local.get $cap) (i64.const 16))                        ;; below the minimum capacity?
     (then (local.set $cap (i64.const 16))))                            ;; clamp to 16
+  (drop (call $__rt_checked_layout (local.get $cap) (i64.const 64) (i64.const 72)))  ;; validate minimum-capacity clamp too
   (local.set $result (call $__rt_hash_new (local.get $cap) (i64.const 7)))  ;; fresh mixed-valued result hash
   (local.set $avt (i64.and (i64.shr_u (i64.load (i32.sub (local.get $a) (i32.const 8))) (i64.const 8)) (i64.const 127)))  ;; left value_type tag
-  (local.set $alen (i64.load (local.get $a)))                          ;; left indexed length
   (local.set $i (i64.const 0))                                         ;; left position cursor
   (block $lend (loop $lwalk                                            ;; promote each left indexed entry
     (br_if $lend (i64.ge_s (local.get $i) (local.get $alen)))          ;; promoted all left entries
@@ -1139,9 +1222,18 @@ const RT_HASH_ARRAY_UNION: &str = r#"(func $__rt_hash_array_union (param $a i32)
   (local $vlo i64)
   (local $vhi i64)
   (local $vtag i64)
+  (local $bcap i64)
+  (local $besz i64)
+  (call $__rt_hash_validate_layout (local.get $a))                    ;; validate left slots/trailer before clone
+  (local.set $blen (i64.load (local.get $b)))
+  (local.set $bcap (i64.load (i32.add (local.get $b) (i32.const 8))))
+  (local.set $besz (i64.load (i32.add (local.get $b) (i32.const 16))))
+  (drop (call $__rt_checked_layout (local.get $bcap) (local.get $besz) (i64.const 24)))  ;; validate indexed source layout
+  (if (i64.gt_u (local.get $blen) (local.get $bcap))
+    (then (call $__rt_oom) unreachable))                               ;; malformed indexed length
+  (call $__rt_hash_preflight_union (i64.load (local.get $a)) (local.get $blen))  ;; worst-case distinct-key result before clone
   (local.set $result (call $__rt_hash_clone_shallow (local.get $a)))   ;; own a copy of the left hash
   (local.set $bvt (i64.and (i64.shr_u (i64.load (i32.sub (local.get $b) (i32.const 8))) (i64.const 8)) (i64.const 127)))  ;; right value_type tag
-  (local.set $blen (i64.load (local.get $b)))                          ;; right indexed length
   (local.set $i (i64.const 0))                                         ;; right position cursor
   (block $done (loop $walk                                             ;; consider each right index
     (br_if $done (i64.ge_s (local.get $i) (local.get $blen)))          ;; considered every right index
@@ -1315,6 +1407,119 @@ mod tests {
             wat
         );
         Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// Builds and validates a hash-runtime reactor whose driver must terminate
+    /// through the deterministic reactor OOM trap.
+    fn driver_traps(driver: &str, export: &str) {
+        let mut wm = WatModule::new();
+        wm.set_memory(4, Some("memory"));
+        emit_heap_runtime(&mut wm, 1024, 4 * 65536);
+        emit_refcount_runtime(&mut wm);
+        emit_closure_runtime(&mut wm);
+        emit_array_runtime(&mut wm);
+        emit_mixed_runtime(&mut wm);
+        super::super::float::emit_float_runtime(&mut wm, 0x20000);
+        emit_hash_runtime_for_version(&mut wm, PhpVersion::Php85);
+        emit_object_runtime(&mut wm);
+        emit_gc_desc_stub(&mut wm);
+        emit_destructor_dispatch_stub(&mut wm);
+        emit_class_metadata_stub(&mut wm);
+        emit_class_runtime(&mut wm);
+        wm.add_raw_func(driver);
+        let wat = wm.render();
+        let bytes = ::wat::parse_str(&wat)
+            .unwrap_or_else(|e| panic!("WAT did not assemble: {e}\n{wat}"));
+        wasmparser::validate(&bytes)
+            .unwrap_or_else(|e| panic!("wasm did not validate: {e}\n{wat}"));
+        if !wasmer_available() {
+            return;
+        }
+        let dir = unique_tmp_dir();
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("m.wasm");
+        std::fs::write(&path, &bytes).expect("write wasm");
+        let out = std::process::Command::new("wasmer")
+            .arg("run")
+            .arg("--invoke")
+            .arg(export)
+            .arg(&path)
+            .output()
+            .expect("run wasmer");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            !out.status.success(),
+            "overflowing hash driver unexpectedly succeeded\n{wat}"
+        );
+    }
+
+    /// Hash allocation, resize, and union bounds reject maximal inputs without
+    /// allocating a multi-gigabyte linear-memory region or looping on a shift.
+    #[test]
+    fn oversized_hash_layouts_trap_without_large_allocation() {
+        driver_traps(
+            r#"(func $t (export "t")
+  (drop (call $__rt_hash_new
+    (i64.const 9223372036854775807)
+    (i64.const 0))))"#,
+            "t",
+        );
+        driver_traps(
+            r#"(func $t (export "t")
+  (local $h i32)
+  (local.set $h (call $__rt_hash_new (i64.const 4) (i64.const 0)))
+  (i64.store (i32.add (local.get $h) (i32.const 8)) (i64.const 9223372036854775807))
+  (drop (call $__rt_hash_resize (local.get $h))))"#,
+            "t",
+        );
+        driver_traps(
+            r#"(func $t (export "t")
+  (call $__rt_hash_preflight_union
+    (i64.const 9223372036854775807)
+    (i64.const 1)))"#,
+            "t",
+        );
+    }
+
+    /// All mutating hash paths validate layout/string lengths before COW, and all
+    /// three union forms preflight their worst-case result before clone/allocation.
+    #[test]
+    fn hash_mutation_and_union_preflights_precede_observable_work() {
+        let set_validate = super::RT_HASH_SET
+            .find("call $__rt_hash_validate_layout")
+            .expect("hash layout validation");
+        let set_string = super::RT_HASH_SET
+            .find("call $__rt_checked_layout")
+            .expect("hash string validation");
+        let set_cow = super::RT_HASH_SET
+            .find("call $__rt_hash_ensure_unique")
+            .expect("hash COW");
+        assert!(set_validate < set_cow);
+        assert!(set_string < set_cow);
+
+        let hash_preflight = super::RT_HASH_UNION
+            .find("call $__rt_hash_preflight_union")
+            .expect("hash+hash preflight");
+        let hash_clone = super::RT_HASH_UNION
+            .find("call $__rt_hash_clone_shallow")
+            .expect("hash+hash clone");
+        assert!(hash_preflight < hash_clone);
+
+        let array_hash_preflight = super::RT_ARRAY_HASH_UNION
+            .find("call $__rt_hash_preflight_union")
+            .expect("array+hash preflight");
+        let array_hash_new = super::RT_ARRAY_HASH_UNION
+            .find("call $__rt_hash_new")
+            .expect("array+hash allocation");
+        assert!(array_hash_preflight < array_hash_new);
+
+        let hash_array_preflight = super::RT_HASH_ARRAY_UNION
+            .find("call $__rt_hash_preflight_union")
+            .expect("hash+array preflight");
+        let hash_array_clone = super::RT_HASH_ARRAY_UNION
+            .find("call $__rt_hash_clone_shallow")
+            .expect("hash+array clone");
+        assert!(hash_array_preflight < hash_array_clone);
     }
 
     /// A fresh hash has count 0, the requested capacity, an empty insertion-order

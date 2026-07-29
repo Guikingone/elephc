@@ -515,12 +515,15 @@ const RT_FTOA: &str = r#"(func $__rt_ftoa (param $bits i64) (param $big i32) (pa
 /// whitespace, an optional sign, then either an `inf`/`nan` quick path or
 /// `[integer][.fraction][eExponent]`.
 ///
-/// Returns four i32s: `sign` (1 if a leading '-' was consumed), `ndig` (count of ASCII
-/// digit bytes written to `$out`, no sign and no point), `K` (decimal exponent such
-/// that value = int($out digits) × 10^K), and `class` (0 finite, 1 empty/no-digits ->
-/// 0.0, 2 infinity, 3 NaN). The `inf`/`nan` paths consume their three letters and
-/// short-circuit via `br $done` with `ndig`/`K` zeroed.
-const RT_PARSE_DECIMAL: &str = r#"  (func $__rt_parse_decimal (param $ptr i32) (param $len i32) (param $out i32) (result i32 i32 i32 i32) (local $i i32) (local $sign i32) (local $ndig i32) (local $K i32) (local $class i32) (local $frac i32) (local $c i32) (local $es i32) (local $ev i32) (local $tmp i32)  ;; decimal-string parser: ptr,len,out -> sign,ndig,K,class (4 results)
+/// Returns four i32s: `sign` (1 if a leading '-' was consumed), `ndig` (the bounded
+/// count of ASCII digits written to the 4096-byte `$out` buffer), `K` (decimal
+/// exponent adjusted for every digit rejected after that buffer), and `class`
+/// (0 finite, 1 empty/no-digits -> 0.0, 2 infinity, 3 NaN). The parser separately
+/// tracks total digits and a sticky nonzero-rejected flag. When necessary, that
+/// flag is jammed into the last stored tail digit so `__rt_digits_to_f64` can
+/// distinguish an exact half from a value infinitesimally above it without any
+/// out-of-bounds write. Decimal exponents saturate in i64 before `K` is clamped.
+const RT_PARSE_DECIMAL: &str = r#"  (func $__rt_parse_decimal (param $ptr i32) (param $len i32) (param $out i32) (result i32 i32 i32 i32) (local $i i32) (local $sign i32) (local $ndig i32) (local $total i64) (local $K i32) (local $k64 i64) (local $class i32) (local $frac i64) (local $c i32) (local $es i64) (local $ev i64) (local $sticky i32) (local $tmp i32)  ;; bounded decimal-string parser: ptr,len,out -> sign,stored,K,class
     (block $wse  ;; A: skip leading whitespace
       (loop $wsl (br_if $wse (i32.ge_s (local.get $i) (local.get $len))) (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))  ;; A: whitespace loop
         (if (i32.or (i32.and (i32.ge_s (local.get $c) (i32.const 9)) (i32.le_s (local.get $c) (i32.const 13))) (i32.eq (local.get $c) (i32.const 32)))  ;; A: whitespace byte? (9..13 or 32)
@@ -540,27 +543,60 @@ const RT_PARSE_DECIMAL: &str = r#"  (func $__rt_parse_decimal (param $ptr i32) (
           (if (i32.and (i32.and (i32.le_s (i32.add (local.get $i) (i32.const 3)) (local.get $len)) (i32.or (i32.eq (local.get $c) (i32.const 110)) (i32.eq (local.get $c) (i32.const 78)))) (i32.and (i32.or (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $i) (i32.const 1)))) (i32.const 97)) (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $i) (i32.const 1)))) (i32.const 65))) (i32.or (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $i) (i32.const 2)))) (i32.const 110)) (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $i) (i32.const 2)))) (i32.const 78)))))  ;; C: "nan"/"NAN"? (n/N, a/A, n/N, 3 bytes)
             (then (local.set $class (i32.const 3)) (local.set $i (i32.add (local.get $i) (i32.const 3))) (br $done)))))  ;; C: NaN -> class=3
       (block $ide  ;; D: integer digits
-        (loop $idl (br_if $ide (i32.ge_s (local.get $i) (local.get $len))) (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i)))) (br_if $ide (i32.lt_s (local.get $c) (i32.const 48))) (br_if $ide (i32.gt_s (local.get $c) (i32.const 57))) (i32.store8 (i32.add (local.get $out) (local.get $ndig)) (local.get $c)) (local.set $ndig (i32.add (local.get $ndig) (i32.const 1))) (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $idl)))  ;; D: integer-digit loop
+        (loop $idl (br_if $ide (i32.ge_s (local.get $i) (local.get $len))) (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i)))) (br_if $ide (i32.lt_s (local.get $c) (i32.const 48))) (br_if $ide (i32.gt_s (local.get $c) (i32.const 57)))
+          (if (i32.lt_u (local.get $ndig) (i32.const 4096))
+            (then (i32.store8 (i32.add (local.get $out) (local.get $ndig)) (local.get $c)) (local.set $ndig (i32.add (local.get $ndig) (i32.const 1))))
+            (else (if (i32.ne (local.get $c) (i32.const 48)) (then (local.set $sticky (i32.const 1))))))  ;; bounded store or remember a rejected nonzero digit
+          (local.set $total (i64.add (local.get $total) (i64.const 1))) (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $idl)))  ;; D: integer-digit loop
       (if (i32.lt_s (local.get $i) (local.get $len))  ;; bounds check: cursor < len before reading
         (then (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))  ;; load current byte ptr[i] into c
           (if (i32.eq (local.get $c) (i32.const 46))  ;; E: '.' -> consume, parse fraction digits
             (then (local.set $i (i32.add (local.get $i) (i32.const 1)))  ;; consume one byte (cursor++)
               (block $fde  ;; E: fraction digits
-                (loop $fdl (br_if $fde (i32.ge_s (local.get $i) (local.get $len))) (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i)))) (br_if $fde (i32.lt_s (local.get $c) (i32.const 48))) (br_if $fde (i32.gt_s (local.get $c) (i32.const 57))) (i32.store8 (i32.add (local.get $out) (local.get $ndig)) (local.get $c)) (local.set $ndig (i32.add (local.get $ndig) (i32.const 1))) (local.set $frac (i32.add (local.get $frac) (i32.const 1))) (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $fdl)))))))  ;; E: fraction-digit loop
+                (loop $fdl (br_if $fde (i32.ge_s (local.get $i) (local.get $len))) (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i)))) (br_if $fde (i32.lt_s (local.get $c) (i32.const 48))) (br_if $fde (i32.gt_s (local.get $c) (i32.const 57)))
+                  (if (i32.lt_u (local.get $ndig) (i32.const 4096))
+                    (then (i32.store8 (i32.add (local.get $out) (local.get $ndig)) (local.get $c)) (local.set $ndig (i32.add (local.get $ndig) (i32.const 1))))
+                    (else (if (i32.ne (local.get $c) (i32.const 48)) (then (local.set $sticky (i32.const 1))))))  ;; bounded store or remember a rejected nonzero digit
+                  (local.set $total (i64.add (local.get $total) (i64.const 1))) (local.set $frac (i64.add (local.get $frac) (i64.const 1))) (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $fdl)))))))  ;; E: fraction-digit loop
       (if (i32.lt_s (local.get $i) (local.get $len))  ;; bounds check: cursor < len before reading
         (then (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))  ;; load current byte ptr[i] into c
           (if (i32.or (i32.eq (local.get $c) (i32.const 101)) (i32.eq (local.get $c) (i32.const 69)))  ;; F: 'e' or 'E' -> parse exponent
-            (then (local.set $i (i32.add (local.get $i) (i32.const 1))) (local.set $es (i32.const 1))  ;; F: default exponent sign +1
+            (then (local.set $i (i32.add (local.get $i) (i32.const 1))) (local.set $es (i64.const 1))  ;; F: default exponent sign +1
               (if (i32.lt_s (local.get $i) (local.get $len))  ;; bounds check: cursor < len before reading
                 (then (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))  ;; load current byte ptr[i] into c
                   (if (i32.eq (local.get $c) (i32.const 45))  ;; ...
-                    (then (local.set $es (i32.const -1)) (local.set $i (i32.add (local.get $i) (i32.const 1)))))  ;; F: '-' -> exponent sign -1
+                    (then (local.set $es (i64.const -1)) (local.set $i (i32.add (local.get $i) (i32.const 1)))))  ;; F: '-' -> exponent sign -1
                   (if (i32.eq (local.get $c) (i32.const 43))  ;; B: '+' -> consume
                     (then (local.set $i (i32.add (local.get $i) (i32.const 1)))))))  ;; consume one byte (cursor++)
               (block $ede  ;; F: exponent digits
-                (loop $edl (br_if $ede (i32.ge_s (local.get $i) (local.get $len))) (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i)))) (br_if $ede (i32.lt_s (local.get $c) (i32.const 48))) (br_if $ede (i32.gt_s (local.get $c) (i32.const 57))) (local.set $ev (i32.add (i32.mul (local.get $ev) (i32.const 10)) (i32.sub (local.get $c) (i32.const 48)))) (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $edl))) (local.set $K (i32.add (local.get $K) (i32.mul (local.get $es) (local.get $ev))))))))  ;; F: exponent-digit loop
-      (if (i32.eqz (local.get $ndig))  ;; G: no digits parsed?
-        (then (local.set $class (i32.const 1)))) (local.set $K (i32.sub (local.get $K) (local.get $frac)))) (return (local.get $sign) (local.get $ndig) (local.get $K) (local.get $class)))  ;; G: K = es*ev - frac (decimal exponent)
+                (loop $edl (br_if $ede (i32.ge_s (local.get $i) (local.get $len))) (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i)))) (br_if $ede (i32.lt_s (local.get $c) (i32.const 48))) (br_if $ede (i32.gt_s (local.get $c) (i32.const 57)))
+                  (if (i64.lt_u (local.get $ev) (i64.const 1000000))
+                    (then
+                      (if (i64.gt_u (local.get $ev) (i64.const 99999))
+                        (then (local.set $ev (i64.const 1000000)))
+                        (else (local.set $ev (i64.add (i64.mul (local.get $ev) (i64.const 10)) (i64.extend_i32_u (i32.sub (local.get $c) (i32.const 48)))))))))  ;; saturating exponent accumulation
+                  (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $edl)))))))  ;; F: exponent-digit loop
+      (if (i64.eqz (local.get $total))  ;; G: no digits parsed?
+        (then (local.set $class (i32.const 1))))
+      (local.set $k64
+        (i64.add
+          (i64.sub (i64.mul (local.get $es) (local.get $ev)) (local.get $frac))
+          (i64.sub (local.get $total) (i64.extend_i32_u (local.get $ndig)))))  ;; compensate every rejected digit
+      (if (i64.gt_s (local.get $k64) (i64.const 1000000))
+        (then (local.set $k64 (i64.const 1000000))))           ;; positive exponent saturation
+      (if (i64.lt_s (local.get $k64) (i64.const -1000000))
+        (then (local.set $k64 (i64.const -1000000))))          ;; negative exponent saturation
+      (local.set $K (i32.wrap_i64 (local.get $k64)))
+      (if
+        (i32.and
+          (local.get $sticky)
+          (i32.gt_u (local.get $ndig) (i32.const 400)))
+        (then
+          (local.set $tmp (i32.add (local.get $out) (i32.sub (local.get $ndig) (i32.const 1))))
+          (if (i32.eq (i32.load8_u (local.get $tmp)) (i32.const 48))
+            (then (i32.store8 (local.get $tmp) (i32.const 49))))))  ;; jam rejected nonzero tail into the bounded stored tail
+    )
+    (return (local.get $sign) (local.get $ndig) (local.get $K) (local.get $class)))  ;; G: bounded digits + compensated exponent
 "#;
 
 /// Compares two little-endian base-2^32 big integers; returns i32 -1 / 0 / 1 for
@@ -705,14 +741,24 @@ const RT_BIGNUM_ZERO: &str = r#"  (func $__rt_bignum_zero (param $ptr i32) (para
 /// powers of two, extracts the 53-bit significand via binary long division against
 /// `den << 52`, rounds half-to-even, and assembles the bits. Trailing digits beyond
 /// `KEEP = 400` are dropped (with `K` adjusted) since they fall below the double
-/// subnormal ulp; magnitudes `>= 1e309` short-circuit to `+/-inf` and `< 1e-308` (the
-/// deferred subnormal range) to `+/-0`. Bignums use 96-limb fixed buffers at
+/// subnormal ulp; a sticky scan remembers whether that dropped tail was nonzero
+/// so an exact halfway comparison rounds upward when the original decimal was
+/// infinitesimally above the tie. Magnitudes `>= 1e309` short-circuit to `+/-inf`
+/// and `< 1e-308` (the deferred subnormal range) to `+/-0`. Bignums use 96-limb fixed buffers at
 /// `0x4000`/`0x4400`/`0x4800`/`0x4C00` (zero-initialized).
-const RT_DIGITS_TO_F64: &str = r#"  (func $__rt_digits_to_f64 (param $sign i32) (param $ndig i32) (param $K i32) (param $digptr i32) (param $scratch i32) (result i64) (local $i i32) (local $d i32) (local $a i32) (local $b i32) (local $dd i32) (local $cmp i32) (local $Q i64) (local $exp i32) (local $biased i32) (local $drop i32) (local $kc i32) ;; correctly-rounded decimal M*10^K -> f64 bits (sign,ndig,K,digptr)
+const RT_DIGITS_TO_F64: &str = r#"  (func $__rt_digits_to_f64 (param $sign i32) (param $ndig i32) (param $K i32) (param $digptr i32) (param $scratch i32) (result i64) (local $i i32) (local $d i32) (local $a i32) (local $b i32) (local $dd i32) (local $cmp i32) (local $Q i64) (local $exp i32) (local $biased i32) (local $drop i32) (local $kc i32) (local $sticky i32) ;; correctly-rounded decimal M*10^K -> f64 bits (sign,ndig,K,digptr)
     (call $__rt_bignum_zero (i32.add (local.get $scratch) (i32.const 0)) (i32.const 96)) ;; clear NUM (96 limbs) so a repeated call sees no stale mantissa
     (call $__rt_bignum_zero (i32.add (local.get $scratch) (i32.const 1024)) (i32.const 96)) ;; clear DEN (96 limbs) so a repeated call sees no stale denominator
     (if (i32.gt_s (local.get $ndig) (i32.const 400))                             ;; keep at most KEEP significant digits
       (then                                                                      ;; then: input longer than KEEP
+        (local.set $i (i32.const 400))                                           ;; first dropped digit
+        (block $sticky_done
+          (loop $sticky_scan
+            (br_if $sticky_done (i32.ge_u (local.get $i) (local.get $ndig)))
+            (if (i32.ne (i32.load8_u (i32.add (local.get $digptr) (local.get $i))) (i32.const 48))
+              (then (local.set $sticky (i32.const 1)) (br $sticky_done)))        ;; any nonzero dropped digit is sticky
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $sticky_scan)))
         (local.set $drop (i32.sub (local.get $ndig) (i32.const 400)))            ;; drop = ndig - KEEP
         (local.set $K (i32.add (local.get $K) (local.get $drop)))                ;; K += drop (value preserved to ~2^-1074)
         (local.set $ndig (i32.const 400))                                        ;; ndig = KEEP
@@ -805,8 +851,12 @@ const RT_DIGITS_TO_F64: &str = r#"  (func $__rt_digits_to_f64 (param $sign i32) 
     (if (i32.gt_s (local.get $cmp) (i32.const 0))                                ;; 2*rem > den ? (round up)
       (then (local.set $Q (i64.add (local.get $Q) (i64.const 1))))               ;; Q += 1 (round up)
     )                                                                            ;; end if
-    (if (i32.and (i32.eq (local.get $cmp) (i32.const 0)) (i64.ne (i64.and (local.get $Q) (i64.const 1)) (i64.const 0))) ;; exact half and Q odd ? (round to even)
-      (then (local.set $Q (i64.add (local.get $Q) (i64.const 1))))               ;; Q += 1 (round half to even)
+    (if (i32.and
+          (i32.eq (local.get $cmp) (i32.const 0))
+          (i32.or
+            (local.get $sticky)
+            (i64.ne (i64.and (local.get $Q) (i64.const 1)) (i64.const 0))))      ;; exact half: sticky tail rounds up, otherwise ties-to-even
+      (then (local.set $Q (i64.add (local.get $Q) (i64.const 1))))               ;; Q += 1 (above-half or odd exact tie)
     )                                                                            ;; end if
     (if (i64.eq (local.get $Q) (i64.const 0x20000000000000))                     ;; rounding carried Q to 2^53 ?
       (then                                                                      ;; then: normalize carry
@@ -2721,6 +2771,124 @@ mod tests {
     fn parse_digits_stripped() {
         if let Some(o) = run_float_driver(&parse_digits_driver("12345.6789"), "t") {
             assert_eq!(o, str_hash("123456789").to_string());
+        }
+    }
+
+    /// Builds a boundary driver with input at 0, the bounded digit buffer at 8192,
+    /// and an eight-byte canary immediately after its 4096-byte capacity. The
+    /// witness packs stored count, compensated K, last stored byte, and canary.
+    fn parse_boundary_driver(s: &str) -> String {
+        format!(
+            r#"(func $t (export "t") (result i64)
+  (local $sign i32) (local $ndig i32) (local $K i32) (local $class i32)
+{stores}  (i64.store (i32.const 12288) (i64.const 0x1122334455667788))
+  (call $__rt_parse_decimal (i32.const 0) (i32.const {len}) (i32.const 8192))
+  (local.set $class)
+  (local.set $K)
+  (local.set $ndig)
+  (local.set $sign)
+  (i64.or
+    (i64.or
+      (i64.shl (i64.extend_i32_u (local.get $ndig)) (i64.const 32))
+      (i64.shl (i64.extend_i32_u (i32.and (local.get $K) (i32.const 65535))) (i64.const 16)))
+    (i64.or
+      (i64.shl
+        (i64.load8_u
+          (i32.add (i32.const 8191) (local.get $ndig)))
+        (i64.const 8))
+      (i64.extend_i32_u
+        (i64.eq
+          (i64.load (i32.const 12288))
+          (i64.const 0x1122334455667788))))))"#,
+            stores = store_ascii(0, s),
+            len = s.len(),
+        )
+    }
+
+    /// Reconstructs the packed witness returned by `parse_boundary_driver`.
+    fn parse_boundary_witness(ndig: u32, k: i32, last: u8) -> String {
+        (((ndig as u64) << 32)
+            | (((k as u16) as u64) << 16)
+            | ((last as u64) << 8)
+            | 1)
+        .to_string()
+    }
+
+    /// The 4095/4096/4097 digit canaries prove the parser never writes beyond
+    /// its fixed buffer. The 4097th nonzero digit is represented by a compensated
+    /// K and a jammed sticky byte in the last stored tail position.
+    #[test]
+    fn parse_decimal_bounds_storage_and_preserves_rejected_sticky_tail() {
+        let below = "7".repeat(4095);
+        if let Some(output) = run_float_driver(&parse_boundary_driver(&below), "t") {
+            assert_eq!(output, parse_boundary_witness(4095, 0, b'7'));
+        }
+
+        let exact = "7".repeat(4096);
+        if let Some(output) = run_float_driver(&parse_boundary_driver(&exact), "t") {
+            assert_eq!(output, parse_boundary_witness(4096, 0, b'7'));
+        }
+
+        let rejected_sticky = format!("1{}1", "0".repeat(4095));
+        if let Some(output) =
+            run_float_driver(&parse_boundary_driver(&rejected_sticky), "t")
+        {
+            assert_eq!(output, parse_boundary_witness(4096, 1, b'1'));
+        }
+    }
+
+    /// Stores a long numeric string below the float scratch, converts it through
+    /// the complete parser/ratio-rounder, and returns its IEEE-754 bits.
+    fn long_strtod_driver(s: &str) -> String {
+        format!(
+            r#"(func $t (export "t") (result i64)
+{stores}  (call $__rt_str_to_f64
+    (i32.const 0)
+    (i32.const {len})
+    (i32.const 8192)
+    (global.get $__float_scratch))
+  (i64.load (i32.const 8192)))"#,
+            stores = store_ascii(0, s),
+            len = s.len(),
+        )
+    }
+
+    /// More than 4096 significant input digits with a compensating exponent still
+    /// produce exactly 1.0, proving rejected digits adjust K rather than truncate.
+    #[test]
+    fn strtod_long_compensated_exponent_matches_php_one() {
+        let input = format!("1{}e-4096", "0".repeat(4096));
+        if let Some(output) = run_float_driver(&long_strtod_driver(&input), "t") {
+            assert_eq!(output, "4607182418800017408");
+        }
+    }
+
+    /// The exact midpoint between 1.0 and its successor rounds to even, but a sole
+    /// nonzero digit beyond the 4096-byte buffer makes it strictly above halfway
+    /// and must therefore produce the successor bit pattern.
+    #[test]
+    fn strtod_rejected_nonzero_digit_breaks_an_exact_halfway_tie() {
+        let midpoint = "1.00000000000000011102230246251565404236316680908203125";
+        let midpoint_digits = midpoint.bytes().filter(u8::is_ascii_digit).count();
+        let input = format!("{midpoint}{}1", "0".repeat(4096 - midpoint_digits));
+        if let Some(output) = run_float_driver(&long_strtod_driver(&input), "t") {
+            assert_eq!(output, "4607182418800017409");
+        }
+    }
+
+    /// Arbitrarily long decimal exponents saturate before arithmetic can wrap:
+    /// the positive form becomes +INF and the negative form becomes +0.
+    #[test]
+    fn strtod_saturates_unbounded_decimal_exponents() {
+        if let Some(output) =
+            run_float_driver(&long_strtod_driver("1e999999999999999999999"), "t")
+        {
+            assert_eq!(output, "9218868437227405312");
+        }
+        if let Some(output) =
+            run_float_driver(&long_strtod_driver("1e-999999999999999999999"), "t")
+        {
+            assert_eq!(output, "0");
         }
     }
 

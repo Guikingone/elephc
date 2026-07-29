@@ -44,6 +44,7 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_GET_MIXED_STR);
     wm.add_raw_func(RT_ARRAY_ENSURE_UNIQUE);
     wm.add_raw_func(RT_ARRAY_CLONE_SHALLOW);
+    wm.add_raw_func(RT_ARRAY_PREFLIGHT_SET);
     wm.add_raw_func(RT_ARRAY_SET_INT);
     wm.add_raw_func(RT_ARRAY_SET_STR);
     wm.add_raw_func(RT_ARRAY_FREE_DEEP);
@@ -57,7 +58,11 @@ const RT_ARRAY_NEW: &str = r#"(func $__rt_array_new (param $capacity i64) (param
   (local $bytes i32)
   (local $arr i32)
   (local $kind i64)
-  (local.set $bytes (i32.add (i32.const 24) (i32.wrap_i64 (i64.mul (local.get $capacity) (local.get $elem_size)))))  ;; 24B header + capacity*elem_size slots
+  (local.set $bytes
+    (call $__rt_checked_layout
+      (local.get $capacity)
+      (local.get $elem_size)
+      (i64.const 24)))                                      ;; checked 24B header + capacity*elem_size slots
   (local.set $arr (call $__rt_heap_alloc (local.get $bytes)))  ;; block: refcount=1, kind=0
   (local.set $kind (i64.const 2))                              ;; low byte = indexed-array kind
   (if (i64.eq (local.get $elem_size) (i64.const 16))
@@ -84,14 +89,18 @@ const RT_ARRAY_GROW: &str = r#"(func $__rt_array_grow (param $array i32) (result
   (local.set $len (i64.load (local.get $array)))             ;; length
   (local.set $cap (i64.load (i32.add (local.get $array) (i32.const 8))))   ;; capacity
   (local.set $esz (i64.load (i32.add (local.get $array) (i32.const 16))))  ;; elem_size
-  (local.set $newcap (i64.shl (local.get $cap) (i64.const 1)))  ;; newcap = cap * 2
+  (drop (call $__rt_checked_layout (local.get $cap) (local.get $esz) (i64.const 24)))  ;; validate the source layout before reading/copying slots
+  (if (i64.gt_u (local.get $len) (local.get $cap))
+    (then (call $__rt_oom) unreachable))                     ;; malformed length cannot exceed capacity
+  (local.set $newcap (i64.add (local.get $cap) (local.get $cap)))  ;; newcap = cap * 2 (cap is bounded above)
   (if (i64.lt_s (local.get $newcap) (i64.const 8))
     (then (local.set $newcap (i64.const 8))))                ;; minimum capacity 8
+  (drop (call $__rt_checked_layout (local.get $newcap) (local.get $esz) (i64.const 24)))  ;; reject an unrepresentable doubled layout before allocation
   (local.set $new (call $__rt_array_new (local.get $newcap) (local.get $esz)))  ;; fresh larger array
   (i64.store (i32.sub (local.get $new) (i32.const 8))
              (i64.and (i64.load (i32.sub (local.get $array) (i32.const 8))) (i64.const 65535)))  ;; preserve old value_type/COW (low 16 bits)
   (i64.store (local.get $new) (local.get $len))              ;; copy length (capacity/elem_size set by array_new)
-  (local.set $nbytes (i32.wrap_i64 (i64.mul (local.get $len) (local.get $esz))))  ;; live payload bytes
+  (local.set $nbytes (call $__rt_checked_layout (local.get $len) (local.get $esz) (i64.const 0)))  ;; checked live payload bytes
   (local.set $i (i32.const 0))                                                   ;; i = 0 (copy cursor)
   (block $end (loop $copy
     (br_if $end (i32.ge_u (local.get $i) (local.get $nbytes)))                   ;; stop when all bytes copied
@@ -353,6 +362,51 @@ const RT_ARRAY_CLONE_SHALLOW: &str = r#"(func $__rt_array_clone_shallow (param $
   (local.get $new))                                         ;; return the independent clone
 "#;
 
+/// `__rt_array_preflight_set`: proves that an indexed assignment and every
+/// doubling step needed to reach it fit the wasm32 payload ceiling.
+///
+/// This helper runs before copy-on-write or string persistence. It also validates
+/// the source layout invariant (`0 <= length <= capacity`) and mirrors the
+/// empty-string-array capacity rescaling performed by `__rt_array_set_str`.
+const RT_ARRAY_PREFLIGHT_SET: &str = r#"(func $__rt_array_preflight_set (param $array i32) (param $index i64) (param $stride i64)
+  (local $len i64)
+  (local $cap i64)
+  (local $esz i64)
+  (local $newcap i64)
+  (if (i64.lt_s (local.get $index) (i64.const 0))
+    (then (call $__rt_oom) unreachable))                    ;; callers reject negative indexes before preflight
+  (if (i64.eq (local.get $index) (i64.const 9223372036854775807))
+    (then (call $__rt_oom) unreachable))                    ;; index+1 would overflow i64
+  (drop (call $__rt_checked_layout
+    (i64.add (local.get $index) (i64.const 1))
+    (local.get $stride)
+    (i64.const 24)))                                        ;; exact target slot bound: header + (index+1)*stride
+  (local.set $len (i64.load (local.get $array)))
+  (local.set $cap (i64.load (i32.add (local.get $array) (i32.const 8))))
+  (local.set $esz (i64.load (i32.add (local.get $array) (i32.const 16))))
+  (drop (call $__rt_checked_layout (local.get $cap) (local.get $esz) (i64.const 24)))  ;; validate current allocation metadata
+  (if (i64.gt_u (local.get $len) (local.get $cap))
+    (then (call $__rt_oom) unreachable))                    ;; reject malformed source metadata before COW
+  (if
+    (i32.and
+      (i64.eqz (local.get $len))
+      (i64.eq (local.get $stride) (i64.const 16)))
+    (then
+      (local.set $cap
+        (i64.div_u
+          (i64.mul (local.get $cap) (local.get $esz))
+          (i64.const 16)))))                                ;; mirror empty string-array shaping without mutation
+  (block $done
+    (loop $grow
+      (br_if $done (i64.lt_u (local.get $index) (local.get $cap)))  ;; planned capacity reaches target index
+      (local.set $newcap (i64.add (local.get $cap) (local.get $cap)))  ;; safe: current layout already bounded
+      (if (i64.lt_u (local.get $newcap) (i64.const 8))
+        (then (local.set $newcap (i64.const 8))))            ;; runtime minimum capacity
+      (drop (call $__rt_checked_layout (local.get $newcap) (local.get $stride) (i64.const 24)))  ;; validate overshooting power-of-two growth too
+      (local.set $cap (local.get $newcap))
+      (br $grow))))
+"#;
+
 /// `__rt_array_set_int`: assigns a scalar (int/bool, or float bits as i64) at
 /// `index`. Splits a shared array (COW), shapes an empty array to 8-byte slots,
 /// grows to fit, zero-fills any gap between the old length and `index`, then
@@ -362,6 +416,7 @@ const RT_ARRAY_SET_INT: &str = r#"(func $__rt_array_set_int (param $array i32) (
   (local $j i64)
   (if (i64.lt_s (local.get $index) (i64.const 0))
     (then (return (local.get $array))))                     ;; reject negative index
+  (call $__rt_array_preflight_set (local.get $array) (local.get $index) (i64.const 8))  ;; prove index+1 and all growth before COW
   (local.set $array (call $__rt_array_ensure_unique (local.get $array)))  ;; copy-on-write split
   (if (i64.eqz (i64.load (local.get $array)))               ;; empty -> shape as a scalar array
     (then
@@ -399,6 +454,8 @@ const RT_ARRAY_SET_STR: &str = r#"(func $__rt_array_set_str (param $array i32) (
   (local $j i64)
   (if (i64.lt_s (local.get $index) (i64.const 0))
     (then (return (local.get $array))))                     ;; reject negative index
+  (call $__rt_array_preflight_set (local.get $array) (local.get $index) (i64.const 16))  ;; prove index+1 and all growth before COW
+  (drop (call $__rt_checked_layout (local.get $len) (i64.const 1) (i64.const 0)))  ;; reject invalid/oversized string length before COW
   (local.set $array (call $__rt_array_ensure_unique (local.get $array)))  ;; copy-on-write split
   (if (i64.eqz (i64.load (local.get $array)))               ;; empty -> shape as a string array
     (then
@@ -606,6 +663,114 @@ mod tests {
             wat
         );
         Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// Builds and validates an indexed-array reactor whose exported driver must
+    /// terminate through the deterministic reactor OOM trap.
+    fn driver_traps(driver: &str, export: &str) {
+        let mut wm = WatModule::new();
+        wm.set_memory(3, Some("memory"));
+        emit_heap_runtime(&mut wm, 1024, 3 * 65536);
+        emit_refcount_runtime(&mut wm);
+        emit_closure_runtime(&mut wm);
+        emit_array_runtime(&mut wm);
+        emit_mixed_runtime(&mut wm);
+        super::super::float::emit_float_runtime(&mut wm, 0x20000);
+        super::super::hashes::emit_hash_runtime(&mut wm);
+        emit_object_runtime(&mut wm);
+        emit_gc_desc_stub(&mut wm);
+        emit_destructor_dispatch_stub(&mut wm);
+        emit_class_metadata_stub(&mut wm);
+        emit_class_runtime(&mut wm);
+        wm.add_raw_func(driver);
+        let wat = wm.render();
+        let bytes = ::wat::parse_str(&wat)
+            .unwrap_or_else(|e| panic!("WAT did not assemble: {e}\n{wat}"));
+        wasmparser::validate(&bytes)
+            .unwrap_or_else(|e| panic!("wasm did not validate: {e}\n{wat}"));
+        if !wasmer_available() {
+            return;
+        }
+        let dir = unique_tmp_dir();
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("m.wasm");
+        std::fs::write(&path, &bytes).expect("write wasm");
+        let out = std::process::Command::new("wasmer")
+            .arg("run")
+            .arg("--invoke")
+            .arg(export)
+            .arg(&path)
+            .output()
+            .expect("run wasmer");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            !out.status.success(),
+            "overflowing array driver unexpectedly succeeded\n{wat}"
+        );
+    }
+
+    /// Maximum i64 capacities/indexes and invalid string lengths must terminate
+    /// immediately instead of wrapping wasm32 or entering an unbounded loop.
+    #[test]
+    fn oversized_array_and_string_layouts_trap_without_large_allocation() {
+        driver_traps(
+            r#"(func $t (export "t")
+  (drop (call $__rt_array_new (i64.const 9223372036854775807) (i64.const 8))))"#,
+            "t",
+        );
+        driver_traps(
+            r#"(func $t (export "t")
+  (local $a i32)
+  (local.set $a (call $__rt_array_new (i64.const 4) (i64.const 8)))
+  (drop (call $__rt_array_set_int
+    (local.get $a)
+    (i64.const 9223372036854775807)
+    (i64.const 1))))"#,
+            "t",
+        );
+        driver_traps(
+            r#"(func $t (export "t")
+  (call $__rt_str_persist (i32.const 0) (i64.const -1))
+  (drop)
+  (drop))"#,
+            "t",
+        );
+        driver_traps(
+            r#"(func $t (export "t")
+  (call $__rt_str_persist (i32.const 0) (i64.const 9223372036854775807))
+  (drop)
+  (drop))"#,
+            "t",
+        );
+    }
+
+    /// Assignment preflights target growth and inbound string length before the
+    /// copy-on-write split or persistence can allocate or alter refcounts.
+    #[test]
+    fn array_set_preflight_precedes_every_observable_mutation() {
+        let int_preflight = super::RT_ARRAY_SET_INT
+            .find("call $__rt_array_preflight_set")
+            .expect("integer assignment preflight");
+        let int_cow = super::RT_ARRAY_SET_INT
+            .find("call $__rt_array_ensure_unique")
+            .expect("integer assignment COW");
+        assert!(int_preflight < int_cow);
+
+        let string_preflight = super::RT_ARRAY_SET_STR
+            .find("call $__rt_array_preflight_set")
+            .expect("string assignment preflight");
+        let string_length = super::RT_ARRAY_SET_STR
+            .find("call $__rt_checked_layout")
+            .expect("string length preflight");
+        let string_cow = super::RT_ARRAY_SET_STR
+            .find("call $__rt_array_ensure_unique")
+            .expect("string assignment COW");
+        let string_persist = super::RT_ARRAY_SET_STR
+            .find("call $__rt_str_persist")
+            .expect("string persistence");
+        assert!(string_preflight < string_cow);
+        assert!(string_length < string_cow);
+        assert!(string_cow < string_persist);
     }
 
     /// Building [10,20,30] then reading index 1 returns 20, and the length is 3.

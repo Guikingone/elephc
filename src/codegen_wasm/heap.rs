@@ -98,10 +98,41 @@ fn emit_heap_runtime_impl(
   unreachable)"#,
         );
     }
+    wm.add_raw_func(RT_CHECKED_LAYOUT);
     wm.add_raw_func(RT_HEAP_ALLOC);
     wm.add_raw_func(RT_HEAP_FREE);
     wm.add_raw_func(RT_HEAP_FREE_SAFE);
 }
+
+/// `__rt_checked_layout`: validates `header + count * stride` entirely in
+/// widened arithmetic and returns the representable wasm32 payload byte count.
+///
+/// The ceiling is the allocator's largest accepted payload request: it leaves
+/// room for the 16-byte heap header, the lowest 1024-byte heap base used by the
+/// runtime harness, and the final reserved wasm32 page. Invalid signed inputs,
+/// an oversized header, or a count above the division-first bound take the same
+/// deterministic OOM path as an allocator failure.
+const RT_CHECKED_LAYOUT: &str = r#"(func $__rt_checked_layout (param $count i64) (param $stride i64) (param $header i64) (result i32)
+  (local $remaining i64)
+  (if (i64.lt_s (local.get $count) (i64.const 0))
+    (then (call $__rt_oom) unreachable))                       ;; negative element count
+  (if (i64.le_s (local.get $stride) (i64.const 0))
+    (then (call $__rt_oom) unreachable))                       ;; zero/negative stride
+  (if (i64.lt_s (local.get $header) (i64.const 0))
+    (then (call $__rt_oom) unreachable))                       ;; negative header
+  (if (i64.gt_u (local.get $header) (i64.const 4294900720))
+    (then (call $__rt_oom) unreachable))                       ;; header alone exceeds the payload ceiling
+  (local.set $remaining
+    (i64.sub (i64.const 4294900720) (local.get $header)))      ;; safe only after header <= ceiling
+  (if (i64.gt_u
+        (local.get $count)
+        (i64.div_u (local.get $remaining) (local.get $stride)))
+    (then (call $__rt_oom) unreachable))                       ;; multiplication/addition would exceed wasm32
+  (i32.wrap_i64
+    (i64.add
+      (local.get $header)
+      (i64.mul (local.get $count) (local.get $stride)))))      ;; safe after the division-first bound
+"#;
 
 /// `__rt_heap_alloc`: returns the user pointer to a fresh block of at least `size`
 /// bytes (8-byte minimum, rounded up to a multiple of 8) with refcount 1. Reuses a
@@ -410,6 +441,47 @@ mod tests {
         let driver = r#"(func $t (export "t")
   (drop (call $__rt_heap_alloc (i32.const -1))))"#;
         driver_traps(1, driver, "t");
+    }
+
+    /// The checked-layout helper accepts both the zero-count/header-only case
+    /// and the exact largest 8-byte-stride count without allocating the layout.
+    #[test]
+    fn checked_layout_accepts_exact_boundaries_without_allocating() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (drop (call $__rt_checked_layout (i64.const 0) (i64.const 1) (i64.const 4294900720)))
+  (i64.extend_i32_u
+    (call $__rt_checked_layout
+      (i64.const 536862587)
+      (i64.const 8)
+      (i64.const 24))))"#;
+        if let Some(output) = run_driver(1, driver, "t") {
+            assert_eq!(output, "4294900720");
+        }
+    }
+
+    /// Every invalid checked-layout input traps before multiplication: one-past
+    /// the exact count, negative operands, zero stride, and an oversized header.
+    #[test]
+    fn checked_layout_rejects_invalid_and_overflowing_boundaries() {
+        let cases = [
+            (536_862_588_i64, 8_i64, 24_i64),
+            (-1, 8, 0),
+            (1, 0, 0),
+            (1, -1, 0),
+            (1, 8, -1),
+            (1, 1, 4_294_900_721),
+            (i64::MAX, 4, 16),
+        ];
+        for (count, stride, header) in cases {
+            let driver = format!(
+                r#"(func $t (export "t")
+  (drop (call $__rt_checked_layout
+    (i64.const {count})
+    (i64.const {stride})
+    (i64.const {header}))))"#
+            );
+            driver_traps(1, &driver, "t");
+        }
     }
 
     /// The safe free helper must reject a forged block whose declared payload
