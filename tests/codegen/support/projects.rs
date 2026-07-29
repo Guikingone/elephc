@@ -89,6 +89,14 @@ pub(crate) fn elephc_cli_command(dir: &Path) -> Command {
     cmd
 }
 
+/// Constructs a CLI command backed by a hermetic managed-PCRE2 project fixture.
+pub(crate) fn elephc_cli_command_with_managed_pcre2(dir: &Path) -> Command {
+    let cache = prepare_managed_pcre2_cli_project(dir);
+    let mut cmd = elephc_cli_command(dir);
+    cmd.env("ELEPHC_NATIVE_CACHE", cache);
+    cmd
+}
+
 // Compiles a PHP source string with conditional defines and runs the resulting binary.
 // Uses the full compiler pipeline (no CLI subprocess) with the default 8_388_608-byte heap.
 // Returns stdout. Cleans up the temporary directory after execution.
@@ -123,12 +131,33 @@ pub(crate) fn compile_and_run_with_defines(source: &str, defines: &[&str]) -> St
 // Used for CLI integration tests that exercise the binary interface end-to-end.
 /// Provides the Compile cli file and run helper used by the projects module.
 pub(crate) fn compile_cli_file_and_run(source: &str, defines: &[&str]) -> String {
+    compile_cli_file_and_run_with_native(source, defines, false)
+}
+
+/// Compiles and runs a CLI fixture with a verified managed-PCRE2 test artifact.
+pub(crate) fn compile_cli_file_and_run_with_managed_pcre2(
+    source: &str,
+    defines: &[&str],
+) -> String {
+    compile_cli_file_and_run_with_native(source, defines, true)
+}
+
+/// Compiles and runs one CLI fixture with optional managed-PCRE2 project setup.
+fn compile_cli_file_and_run_with_native(
+    source: &str,
+    defines: &[&str],
+    managed_pcre2: bool,
+) -> String {
     let dir = make_cli_test_dir("elephc_cli_test");
 
     let php_path = dir.join("main.php");
     fs::write(&php_path, source).unwrap();
 
-    let mut compile_cmd = elephc_cli_command(&dir);
+    let mut compile_cmd = if managed_pcre2 {
+        elephc_cli_command_with_managed_pcre2(&dir)
+    } else {
+        elephc_cli_command(&dir)
+    };
     for define in defines {
         compile_cmd.arg("--define").arg(define);
     }

@@ -642,7 +642,7 @@ fn append_test_frameworks(command: &mut Command, plan: &elephc::link_plan::LinkP
 }
 
 /// Compiles and archives the embedded shim against the test provider's system PCRE2 headers.
-fn test_pcre2_shim_archive() -> &'static Path {
+pub(crate) fn test_pcre2_shim_archive() -> &'static Path {
     static SHIM: OnceLock<std::path::PathBuf> = OnceLock::new();
 
     SHIM.get_or_init(|| {
@@ -754,12 +754,8 @@ fn test_pcre2_provider() -> &'static TestPcre2Provider {
             let library_dir = library.as_path();
             let has_headers = include_dir.join("pcre2.h").is_file()
                 && include_dir.join("pcre2posix.h").is_file();
-            let has_posix = ["a", "so", "dylib"]
-                .iter()
-                .any(|extension| library_dir.join(format!("libpcre2-posix.{extension}")).is_file());
-            let has_core = ["a", "so", "dylib"]
-                .iter()
-                .any(|extension| library_dir.join(format!("libpcre2-8.{extension}")).is_file());
+            let has_posix = library_dir.join("libpcre2-posix.a").is_file();
+            let has_core = library_dir.join("libpcre2-8.a").is_file();
             if has_headers && has_posix && has_core {
                 return TestPcre2Provider {
                     include_dir: include_dir.to_path_buf(),
@@ -768,9 +764,22 @@ fn test_pcre2_provider() -> &'static TestPcre2Provider {
             }
         }
         panic!(
-            "codegen regex tests require aligned pcre2.h, pcre2posix.h, libpcre2-posix and libpcre2-8"
+            "codegen regex tests require aligned pcre2.h, pcre2posix.h, \
+             libpcre2-posix.a and libpcre2-8.a"
         );
     })
+}
+
+/// Returns one header from the system-aligned PCRE2 test provider.
+pub(crate) fn test_pcre2_header_path(name: &str) -> std::path::PathBuf {
+    test_pcre2_provider().include_dir.join(name)
+}
+
+/// Returns one static archive from the system-aligned PCRE2 test provider.
+pub(crate) fn test_pcre2_static_archive_path(name: &str) -> std::path::PathBuf {
+    test_pcre2_provider()
+        .library_dir
+        .join(format!("lib{name}.a"))
 }
 
 /// Runs a compiled binary directly, using qemu on Linux x86_64 to emulate ARM64.
