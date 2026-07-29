@@ -1,9 +1,9 @@
 //! Purpose:
-//! Performs the pre-emission wasm32-wasi capability audit over a complete EIR
-//! module and aggregates every unsupported reachable construct.
+//! Audits a complete EIR module for wasm32-wasi capability and, after the
+//! aggregate static gate succeeds, returns its exact lowered plan.
 //!
 //! Called from:
-//! - `crate::codegen_wasm::generate` before WAT or artifact construction.
+//! - `crate::codegen_wasm::generate` as the sole capability-and-planning gate.
 //!
 //! Key details:
 //! - Every EIR function collection is inspected. Collections the backend cannot
@@ -11,8 +11,12 @@
 //! - Opcode and terminator classification is exhaustive, so a new enum variant
 //!   cannot compile until its WASM status is decided.
 //! - Diagnostics name the collection, function, block, and instruction.
+//! - A successful static audit delegates once to `plan::plan_module`; no WAT
+//!   lowering is repeated after the returned plan is accepted.
 
+use super::plan::{self, LoweredWasmPlan};
 use super::WasmError;
+use crate::codegen::Emit;
 use crate::ir::{
     Function, Immediate, Instruction, IrHeapKind, IrType, Module, Op, RuntimeCallTarget,
     RuntimeFnId, Terminator, UnaryStringRuntime, ValueDef, ValueId,
@@ -31,8 +35,8 @@ struct RefCellProvenance {
     borrowed: HashSet<u32>,
 }
 
-/// Validates every function collection and returns one aggregate diagnostic.
-pub(super) fn validate_module(module: &Module) -> Result<(), WasmError> {
+/// Audits every function collection and returns one aggregate diagnostic.
+fn audit_module(module: &Module) -> Result<(), WasmError> {
     let mut issues = Vec::new();
     scan_functions(module, "functions", &module.functions, true, &mut issues);
     scan_functions(
@@ -84,6 +88,20 @@ pub(super) fn validate_module(module: &Module) -> Result<(), WasmError> {
                 .join("\n")
         )))
     }
+}
+
+/// Audits and exactly lowers a module into the private plan consumed by generation.
+///
+/// Static capability issues retain their stable aggregate diagnostic and stop
+/// before lowering. Once this function returns a plan, every fallible lowering
+/// and identifier-consistency check has already succeeded; artifact publication
+/// still owns WAT assembly and binary validation.
+pub(super) fn validate_module(
+    module: &Module,
+    emit: Emit,
+) -> Result<LoweredWasmPlan, WasmError> {
+    audit_module(module)?;
+    plan::plan_module(module, emit)
 }
 
 /// Scans one module function collection and records collection-level omission.
@@ -2054,13 +2072,108 @@ fn op_is_supported(op: Op) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_module;
+    use super::{validate_module as validate_and_plan, LoweredWasmPlan, WasmError};
     use crate::codegen::platform::Target;
+    use crate::codegen::Emit;
     use crate::ir::{
-        Builder, Function, FunctionParam, Immediate, IrHeapKind, IrType, LocalKind, Module, Op,
-        Ownership, RuntimeCallTarget, RuntimeFnId, Terminator,
+        Builder, DataId, Function, FunctionParam, Immediate, IrHeapKind, IrType, LocalKind, Module,
+        Op, Ownership, RuntimeCallTarget, RuntimeFnId, Terminator,
     };
-    use crate::types::PhpType;
+    use crate::span::Span;
+    use crate::types::{ClassInfo, FunctionSig, PhpType};
+    use std::collections::{HashMap, HashSet};
+
+    /// Runs the production capability-and-planning gate for executable output.
+    fn validate_module(module: &Module) -> Result<LoweredWasmPlan, WasmError> {
+        validate_and_plan(module, Emit::Executable)
+    }
+
+    /// Builds the minimal resolved class metadata needed by WASM planning tests.
+    fn minimal_class_info(class_id: u64) -> ClassInfo {
+        ClassInfo {
+            class_id,
+            declaration_span: Span::dummy(),
+            parent: None,
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            allow_dynamic_properties: false,
+            constants: HashMap::new(),
+            constant_types: HashMap::new(),
+            constant_visibilities: HashMap::new(),
+            final_constants: HashSet::new(),
+            attribute_names: Vec::new(),
+            attribute_args: Vec::new(),
+            method_attribute_names: HashMap::new(),
+            method_attribute_args: HashMap::new(),
+            property_attribute_names: HashMap::new(),
+            property_attribute_args: HashMap::new(),
+            constant_attribute_names: HashMap::new(),
+            constant_attribute_args: HashMap::new(),
+            used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
+            properties: Vec::new(),
+            property_offsets: HashMap::new(),
+            property_declaring_classes: HashMap::new(),
+            defaults: Vec::new(),
+            property_visibilities: HashMap::new(),
+            property_set_visibilities: HashMap::new(),
+            declared_properties: HashSet::new(),
+            property_declared_slots: Vec::new(),
+            final_properties: HashSet::new(),
+            readonly_properties: HashSet::new(),
+            reference_properties: HashSet::new(),
+            owned_reference_properties: HashSet::new(),
+            promoted_properties: HashSet::new(),
+            property_reference_slots: Vec::new(),
+            abstract_properties: HashSet::new(),
+            abstract_property_hooks: HashMap::new(),
+            static_properties: Vec::new(),
+            static_defaults: Vec::new(),
+            static_property_declaring_classes: HashMap::new(),
+            static_property_visibilities: HashMap::new(),
+            declared_static_properties: HashSet::new(),
+            final_static_properties: HashSet::new(),
+            method_decls: Vec::new(),
+            methods: HashMap::new(),
+            static_methods: HashMap::new(),
+            late_static_method_returns: HashMap::new(),
+            late_static_static_method_returns: HashMap::new(),
+            callable_method_return_sigs: HashMap::new(),
+            callable_array_method_return_sigs: HashMap::new(),
+            method_visibilities: HashMap::new(),
+            final_methods: HashSet::new(),
+            method_declaring_classes: HashMap::new(),
+            method_impl_classes: HashMap::new(),
+            vtable_methods: Vec::new(),
+            vtable_slots: HashMap::new(),
+            static_method_visibilities: HashMap::new(),
+            final_static_methods: HashSet::new(),
+            static_method_declaring_classes: HashMap::new(),
+            static_method_impl_classes: HashMap::new(),
+            static_vtable_methods: Vec::new(),
+            static_vtable_slots: HashMap::new(),
+            interfaces: Vec::new(),
+            constructor_param_to_prop: Vec::new(),
+        }
+    }
+
+    /// Builds a declared no-argument void method signature.
+    fn void_signature() -> FunctionSig {
+        FunctionSig {
+            params: Vec::new(),
+            param_type_exprs: Vec::new(),
+            param_attributes: Vec::new(),
+            defaults: Vec::new(),
+            return_type: PhpType::Void,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: Vec::new(),
+            declared_params: Vec::new(),
+            variadic: None,
+            deprecation: None,
+        }
+    }
 
     /// Builds one terminated void function suitable for collection-audit tests.
     fn void_function(name: &str) -> Function {
@@ -2073,6 +2186,221 @@ mod tests {
             builder.terminate(Terminator::Return { value: None });
         }
         function
+    }
+
+    /// Builds a malformed branch from a Mixed cell into tagged-scalar storage.
+    fn invalid_mixed_transfer_module() -> Module {
+        let mut module = Module::new(Target::wasm());
+        let mut function =
+            Function::new("invalid_mixed_transfer".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block(
+                "entry",
+                vec![(IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed)],
+            );
+            let target = builder.create_named_block(
+                "target",
+                vec![(IrType::TaggedScalar, PhpType::TaggedScalar)],
+            );
+            builder.set_entry(entry);
+            let mixed = builder.block_param(entry, 0);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Br {
+                target,
+                args: vec![mixed],
+            });
+            builder.position_at_end(target);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+        module
+    }
+
+    /// Builds a module whose `ConstStr` references no real literal.
+    fn invalid_const_str_module() -> Module {
+        let mut module = Module::new(Target::wasm());
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let _ = builder.emit(
+                Op::ConstStr,
+                Vec::new(),
+                Some(Immediate::Data(DataId::from_raw(99))),
+                IrType::Str,
+                PhpType::Str,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        module
+    }
+
+    /// Builds a closure whose recorded capture count exceeds its parameters.
+    fn invalid_capture_count_module() -> Module {
+        let mut module = Module::new(Target::wasm());
+        let mut closure = void_function("__eir_closure_invalid_capture_0");
+        closure.flags.is_closure = true;
+        closure.flags.closure_capture_count = 1;
+        module.add_closure(closure);
+        module
+    }
+
+    /// Builds class metadata with a destructor implementation that no class declares.
+    fn stale_destructor_metadata_module() -> Module {
+        let mut module = Module::new(Target::wasm());
+        let mut class = minimal_class_info(1);
+        class.method_impl_classes.insert(
+            crate::names::php_symbol_key("__destruct"),
+            "MissingDestructorOwner".to_string(),
+        );
+        module.class_infos.insert("Victim".to_string(), class);
+        module
+    }
+
+    /// Builds an FCC target whose by-reference parameter cannot be wrapped.
+    fn invalid_fcc_wrapper_module() -> Module {
+        let mut module = Module::new(Target::wasm());
+        let target_name = module.data.intern_string("bad_fcc");
+        let mut target = Function::new("bad_fcc".to_string(), IrType::Void, PhpType::Void);
+        target.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: true,
+            variadic: false,
+        });
+        target.add_local(
+            Some("value".to_string()),
+            IrType::I64,
+            PhpType::Int,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut target);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(target);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let _ = builder.emit(
+                Op::FirstClassCallableNew,
+                Vec::new(),
+                Some(Immediate::Data(target_name)),
+                IrType::I64,
+                PhpType::Callable,
+                Ownership::Owned,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        module
+    }
+
+    /// Builds a branch whose argument count differs from the target parameters.
+    fn invalid_branch_arity_module() -> Module {
+        let mut module = Module::new(Target::wasm());
+        let mut function =
+            Function::new("invalid_branch_arity".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            let target =
+                builder.create_named_block("target", vec![(IrType::I64, PhpType::Int)]);
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Br {
+                target,
+                args: Vec::new(),
+            });
+            builder.position_at_end(target);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+        module
+    }
+
+    /// Builds one valid module combining class/destructor, closure, and FCC planning.
+    fn combined_plan_module() -> Module {
+        let mut module = Module::new(Target::wasm());
+        let destruct_key = crate::names::php_symbol_key("__destruct");
+        let mut class = minimal_class_info(1);
+        class
+            .methods
+            .insert(destruct_key.clone(), void_signature());
+        class
+            .method_impl_classes
+            .insert(destruct_key, "PlanClass".to_string());
+        module.class_infos.insert("PlanClass".to_string(), class);
+
+        let mut destructor = Function::new(
+            "PlanClass::__destruct".to_string(),
+            IrType::Void,
+            PhpType::Void,
+        );
+        destructor.flags.is_method = true;
+        destructor.params.push(FunctionParam {
+            name: "this".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Object),
+            php_type: PhpType::Object("PlanClass".to_string()),
+            by_ref: false,
+            variadic: false,
+        });
+        destructor.add_local(
+            Some("this".to_string()),
+            IrType::Heap(IrHeapKind::Object),
+            PhpType::Object("PlanClass".to_string()),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut destructor);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.class_methods.push(destructor);
+
+        let mut closure = void_function("__eir_closure_plan_combo_0");
+        closure.flags.is_closure = true;
+        module.add_closure(closure);
+
+        let fcc_name = module.data.intern_string("plan_fcc");
+        module.add_function(void_function("plan_fcc"));
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let _ = builder.emit(
+                Op::FirstClassCallableNew,
+                Vec::new(),
+                Some(Immediate::Data(fcc_name)),
+                IrType::I64,
+                PhpType::Callable,
+                Ownership::Owned,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        module
     }
 
     /// Adds a minimal closure whose only capture parameter is an int passed by
@@ -2123,6 +2451,162 @@ mod tests {
                 Ownership::Owned,
             )
             .expect("closure descriptor")
+    }
+
+    /// Verifies validation returns the exact lowered plan for an accepted module.
+    #[test]
+    fn accepted_module_returns_an_assemblable_plan() {
+        let mut module = Module::new(Target::wasm());
+        let mut main = void_function("main");
+        main.flags.is_main = true;
+        module.add_function(main);
+
+        let wat = validate_module(&module)
+            .expect("the capability gate should return the exact plan")
+            .into_wat();
+
+        assert!(wat.contains("(export \"_start\")"), "{wat}");
+        let bytes =
+            ::wat::parse_str(&wat).unwrap_or_else(|error| panic!("WAT did not assemble: {error}"));
+        wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::WASM3)
+            .validate_all(&bytes)
+            .unwrap_or_else(|error| panic!("WASM did not validate: {error}"));
+    }
+
+    /// Verifies one accepted plan combines classes, destructors, closures, and FCC.
+    #[test]
+    fn accepted_combined_module_plans_every_dispatch_surface() {
+        let wat = validate_module(&combined_plan_module())
+            .expect("the combined capability surface should produce one exact plan")
+            .into_wat();
+        let expected_symbols = [
+            super::super::symbols::method_symbol("PlanClass::__destruct"),
+            super::super::symbols::closure_body_symbol("__eir_closure_plan_combo_0"),
+            super::super::symbols::closure_wrapper_symbol("__eir_closure_plan_combo_0"),
+            super::super::symbols::fcc_wrapper_symbol("plan_fcc"),
+        ];
+        for symbol in expected_symbols {
+            assert!(wat.contains(&format!("${symbol}")), "missing ${symbol}: {wat}");
+        }
+        let bytes =
+            ::wat::parse_str(&wat).unwrap_or_else(|error| panic!("WAT did not assemble: {error}"));
+        wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::WASM3)
+            .validate_all(&bytes)
+            .unwrap_or_else(|error| panic!("WASM did not validate: {error}"));
+    }
+
+    /// Verifies an admitted opcode with a malformed shape fails inside validation.
+    #[test]
+    fn exact_lowering_failure_prevents_capability_acceptance() {
+        let mut module = Module::new(Target::wasm());
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let _ = builder.emit(
+                Op::ArrayNew,
+                Vec::new(),
+                None,
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(PhpType::Int)),
+                Ownership::Owned,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        let error =
+            validate_module(&module).expect_err("malformed lowering must prevent plan acceptance");
+        let message = error.to_string();
+        assert!(message.contains("array_new without a capacity"), "{message}");
+        assert!(
+            !message.contains("WASM capability audit found"),
+            "the exact lowerer error should be surfaced by the validation boundary: {message}"
+        );
+    }
+
+    /// Verifies representative late lowerer defects all remain inside validation.
+    #[test]
+    fn exact_plan_rejects_every_representative_late_unsupported_shape() {
+        let cases = [
+            (
+                invalid_mixed_transfer_module(),
+                "unboxing a Mixed cell to Tagged",
+            ),
+            (invalid_const_str_module(), "unknown string literal"),
+            (
+                invalid_capture_count_module(),
+                "capture_count 1 > params 0",
+            ),
+            (
+                stale_destructor_metadata_module(),
+                "class MissingDestructorOwner resolved as __destruct impl does not declare it",
+            ),
+            (
+                invalid_fcc_wrapper_module(),
+                "first-class callable of bad_fcc with by-ref/variadic param value",
+            ),
+            (
+                invalid_branch_arity_module(),
+                "branch arg count 0 != param count 1",
+            ),
+        ];
+
+        for (module, expected) in cases {
+            let error = validate_module(&module)
+                .expect_err("the malformed module must not produce an accepted plan");
+            let message = error.to_string();
+            assert!(message.contains(expected), "missing {expected:?}: {message}");
+            assert!(
+                !message.contains("WASM capability audit found"),
+                "the exact plan boundary should surface {expected:?}: {message}"
+            );
+        }
+    }
+
+    /// Verifies aggregate static diagnostics short-circuit exact planning.
+    #[test]
+    fn aggregate_audit_failure_precedes_exact_planning() {
+        let mut module = Module::new(Target::wasm());
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let _ = builder.emit(
+                Op::StrEq,
+                Vec::new(),
+                None,
+                IrType::I64,
+                PhpType::Bool,
+                Ownership::NonHeap,
+            );
+            let _ = builder.emit(
+                Op::ArrayNew,
+                Vec::new(),
+                None,
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(PhpType::Int)),
+                Ownership::Owned,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        let error = validate_module(&module)
+            .expect_err("the aggregate audit must reject before exact planning");
+        let message = error.to_string();
+        assert!(message.contains("WASM capability audit found 1 issue(s)"), "{message}");
+        assert!(message.contains("unsupported op str_eq"), "{message}");
+        assert!(
+            !message.contains("array_new without a capacity"),
+            "planning must not mask the stable aggregate diagnostic: {message}"
+        );
     }
 
     /// Verifies all non-emitted EIR function collections are named in one error.

@@ -35,6 +35,7 @@ mod methods;
 mod mixed;
 mod npm;
 mod objects;
+mod plan;
 mod refcount;
 mod refcell;
 mod runtime;
@@ -88,183 +89,14 @@ impl std::error::Error for WasmError {}
 /// `_start` and `memory`. The returned string is valid WebAssembly text that the
 /// pipeline encodes to `.wasm` with the `wat` crate.
 ///
-/// Sets up the module's WASI imports and memory, lowers every EIR function
-/// through `function::lower_function`, and renders the result. The `is_main`
-/// function becomes the `_start` command entry. Returns `WasmError::Unsupported`
-/// if any function uses an EIR construct the backend does not yet handle.
+/// The capability gate performs the exact lowering once and returns a private
+/// plan that already owns the rendered WAT. This public boundary only consumes
+/// that plan, so no unsupported construct can fail after capability acceptance.
 ///
 /// The WASI command shape is the only one wired today; the CLI rejects WASM
 /// `Cdylib` output before this function is called.
 pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
-    capability::validate_module(module)?;
-    let _ = emit;
-    let mut wm = wat::WatModule::new();
-    // The WASI imports + `__rt_*` runtime are only added for command (main-bearing)
-    // modules. Importing WASI makes a runtime treat the module as a command
-    // (requiring `_start`), so a reactor/library module with no main must not.
-    // Import-free runtime (concat buffer + cursor) is needed by every module.
-    runtime::emit_common_runtime(&mut wm);
-    let has_main = module.functions.iter().any(|f| f.flags.is_main);
-    if has_main {
-        runtime::emit_command_runtime(&mut wm);
-    }
-
-    // Lay out every interned string literal as a data segment above the runtime
-    // scratch region, recording (offset, byte_len) per DataId for ConstStr. The
-    // float<->string scratch region sits between the concat buffer and the string
-    // literals so a strtod/ftoa never runs through an in-flight concatenation.
-    let mut str_literals: Vec<(u32, u32)> = vec![(0, 0); module.data.strings.len()];
-    let mut cursor = if has_main {
-        runtime::COMMAND_DATA_END
-    } else {
-        runtime::RT_SCRATCH_END + runtime::FLOAT_SCRATCH_SIZE
-    };
-    let mut ordered_strings: Vec<(usize, &String)> = module.data.strings.iter().enumerate().collect();
-    ordered_strings.sort_by(|(left_id, left), (right_id, right)| {
-        left.as_bytes()
-            .cmp(right.as_bytes())
-            .then_with(|| left_id.cmp(right_id))
-    });
-    for (data_id, s) in ordered_strings {
-        let bytes = s.as_bytes();
-        wm.add_data(wat::DataSegment {
-            offset: cursor,
-            bytes: bytes.to_vec(),
-        });
-        str_literals[data_id] = (cursor, bytes.len() as u32);
-        // 4-align the next literal.
-        cursor = (cursor + bytes.len() as u32 + 3) & !3;
-    }
-
-    // Emit the per-class gc_desc data (one runtime tag byte per property) plus the
-    // class-indexed pointer table and the `$__gc_desc_ptrs` / `$__gc_desc_count` globals,
-    // advancing the static-data cursor. This must land before `heap_base` is computed so
-    // the descriptor data sits in static memory below the heap and is never overwritten by
-    // allocation. `__rt_decref_object` walks these descriptors to release refcounted
-    // property values before freeing an object at refcount zero.
-    cursor = objects::emit_gc_desc_table(&mut wm, &module.class_infos, cursor);
-
-    // P6f class-metadata tables (`__class_parent_ids`, `__class_interface_ptrs`,
-    // `__class_name_entries`, `__class_name_missing`), advancing the static-data
-    // cursor. Must land immediately after `emit_gc_desc_table` and before
-    // `heap_base` is computed so the tables sit in static memory below the heap,
-    // indexed by runtime class_id. Reuses `$__gc_desc_count` as the shared bounds.
-    cursor = classes::emit_class_metadata_tables(&mut wm, module, cursor);
-
-    // P6g: dynamic-string instanceof target lookup table
-    // (`__instanceof_target_entries` + `__instanceof_target_count`), advancing the
-    // static-data cursor. Must land immediately after `emit_class_metadata_tables` and
-    // before `heap_base` is computed so the table sits in static memory below the heap,
-    // scanned case-insensitively by `__rt_instanceof_lookup` (registered in
-    // `emit_class_runtime`).
-    cursor = classes::emit_instanceof_target_table(&mut wm, module, cursor);
-
-    // P7b: per-closure capture-tag byte arrays (one byte per by-value capture, in
-    // source order), laid out in static memory below the heap. The recorded base
-    // address per closure (indexed by its canonical symbol rank = `entry_index`)
-    // is stamped as the descriptor's `capture_tags_ptr` by `ClosureNew`, so the
-    // release runtime can walk refcounted captures. Must land before `heap_base`
-    // is computed so the arrays sit below the bump allocator. No-capture closures
-    // get a `0` sentinel (no segment emitted).
-    let (cursor, closure_tag_ptrs) = closures::emit_closure_capture_tag_tables(&mut wm, module, cursor)?;
-
-    // P7d2a: build the first-class-callable entry registry once, before any function
-    // is lowered. It collects the distinct user-free-function targets of every
-    // `Op::FirstClassCallableNew` in the module and assigns them unified callable-ladder
-    // indices AFTER the closures (`module.closures.len() + position`), so closures keep
-    // `0..N` and FCC entries take `N..N+M`. `FirstClassCallableNew` lowering reads it
-    // (via `FnCtx::fcc_entry_index`) to stamp descriptors; `emit_closure_dispatch` reads
-    // it to emit one FCC wrapper + ladder arm per entry. A builtin/extern/method FCC
-    // target is excluded here and rejected at lowering time (deferred slice).
-    let fcc_entries = closures::collect_fcc_free_function_entries(module);
-
-    // The heap begins 16-aligned just above the string/data region; reserve two
-    // pages of initial headroom above it. The bump allocator grows beyond
-    // `heap_end` with `memory.grow` when this region is exhausted.
-    const PAGE: u32 = 65536;
-    let heap_base = (cursor + 15) & !15;
-    let pages = (heap_base / PAGE) + 2;
-    let heap_end = pages * PAGE;
-    wm.set_memory(pages, Some("memory"));
-    if has_main {
-        heap::emit_command_heap_runtime(&mut wm, heap_base, heap_end);
-    } else {
-        heap::emit_heap_runtime(&mut wm, heap_base, heap_end);
-    }
-    refcount::emit_refcount_runtime(&mut wm);
-    // Callable-descriptor refcount runtime: `__rt_callable_descriptor_release`, called
-    // from `__rt_decref_any` kind-6 (P7a0). References only `__rt_decref_any` and
-    // `__rt_heap_free`, so it needs no extra globals; every module emitting the refcount
-    // runtime must emit this too, since `__rt_decref_any`'s kind-6 branch calls it and
-    // WAT requires the call target to be defined.
-    closures::emit_closure_runtime(&mut wm);
-    // Object refcount runtime: `__rt_decref_object`, called from `__rt_decref_any`
-    // kind-4. P6b performs the full gc_desc-driven property walk + `__rt_heap_free`.
-    objects::emit_object_runtime(&mut wm);
-    // P6e destructor dispatch: `__rt_call_object_destructor`, called from the free path
-    // above to run `__destruct` before the property walk. One if-ladder arm per class
-    // whose hierarchy declares `__destruct` (resolved via `method_impl_classes`).
-    objects::emit_destructor_dispatch(&mut wm, &module.class_infos)?;
-    // P6f class runtime helpers: `__rt_instanceof`, `__rt_mixed_instanceof`,
-    // `__rt_class_name_by_cid`, `__rt_class_name_by_obj`. They reference the
-    // class-metadata globals emitted above, so they must be registered after
-    // `emit_class_metadata_tables`. They safely return false/empty when
-    // `__gc_desc_count == 0` (no classes).
-    classes::emit_class_runtime(&mut wm);
-    arrays::emit_array_runtime(&mut wm);
-    mixed::emit_mixed_runtime(&mut wm);
-    hashes::emit_hash_runtime(&mut wm);
-    // Float<->string runtime (ftoa + strtod). Published with the `$__float_scratch`
-    // global set to `FLOAT_SCRATCH_BASE` so cast/echo/mixed-stdout callers pass
-    // `(global.get $__float_scratch)` as the bignum scratch base.
-    float::emit_float_runtime(&mut wm, runtime::FLOAT_SCRATCH_BASE as i32);
-
-    // Lower every user function; `main` becomes the WASI `_start` command entry.
-    let mut functions: Vec<_> = module.functions.iter().collect();
-    functions.sort_by_key(|function| symbols::function_symbol(function));
-    for func in functions {
-        let fb = function::lower_function(module, func, &str_literals, &closure_tag_ptrs, &fcc_entries)?;
-        wm.add_func(fb);
-    }
-
-    // Lower every class method (instance + static), so `__construct` and other
-    // methods become callable WAT functions. Reuses the same lowering as user
-    // functions: a non-static method's hidden leading `this` param is just param 0
-    // (`IrType::Heap(Object)` -> `WasmRepr::Ptr` / i32), and the body uses the
-    // already-supported `PropGet`/`PropSet`/`LoadLocal("this")`/`EchoValue` ops. WAT
-    // `call $<name>` resolves a module-local function regardless of definition
-    // order, so a `module.functions` entry calling `__construct` (via `ObjectNew`)
-    // sees the method defined here even though methods are lowered after it.
-    let mut class_methods: Vec<_> = module.class_methods.iter().collect();
-    class_methods.sort_by_key(|function| symbols::function_symbol(function));
-    for func in class_methods {
-        let fb = function::lower_function(module, func, &str_literals, &closure_tag_ptrs, &fcc_entries)?;
-        wm.add_func(fb);
-    }
-
-    // Lower every closure body (P7a0). A closure is a module-level EIR function with a
-    // synthetic `__eir_closure_<owner>_<n>` name and `FunctionFlags::is_closure`; its
-    // params are the visible user params ++ capture params (captures appended at the
-    // tail). `lower_function` handles the body as-is. WAT `call $<name>` resolves across
-    // the whole module regardless of definition order, so the P7a1 wrapper that calls a
-    // closure body sees it defined here.
-    for func in closures::ordered_closures(module) {
-        let fb = function::lower_function(module, func, &str_literals, &closure_tag_ptrs, &fcc_entries)?;
-        wm.add_func(fb);
-    }
-
-    // Emit per-(introducer, method) dispatch stubs for virtual instance methods,
-    // so every `call $<stub>` emitted by `MethodCall` lowering resolves to a
-    // defined function. Must run after class methods are lowered (stub signatures
-    // are read from the class-method `Function`s) but before `wm.render()`.
-    methods::emit_method_dispatch_stubs(&mut wm, module)?;
-
-    // Emit one wrapper per closure body plus the `__rt_closure_call` if-ladder that
-    // `ClosureCall` lowering dispatches through (P7a1). Must run after closure bodies are
-    // lowered (wrappers call `fn___eir_closure_<owner>_<n>`) but before `wm.render()`.
-    closures::emit_closure_dispatch(&mut wm, module, &fcc_entries)?;
-
-    wm.render_checked().map_err(WasmError::InvalidModule)
+    Ok(capability::validate_module(module, emit)?.into_wat())
 }
 
 #[cfg(test)]
