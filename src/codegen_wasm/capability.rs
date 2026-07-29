@@ -14,12 +14,14 @@
 //! - A successful static audit delegates once to `plan::plan_module`; no WAT
 //!   lowering is repeated after the returned plan is accepted.
 
+use super::calls::{classify_by_ref_source, resolve_direct_call, ByRefSource};
 use super::plan::{self, LoweredWasmPlan};
+use super::transfer;
 use super::WasmError;
 use crate::codegen::Emit;
 use crate::ir::{
     Function, Immediate, Instruction, IrHeapKind, IrType, Module, Op, RuntimeCallTarget,
-    RuntimeFnId, Terminator, UnaryStringRuntime, ValueDef, ValueId, Ownership,
+    Ownership, RuntimeFnId, Terminator, UnaryStringRuntime, ValueDef, ValueId,
 };
 use crate::types::PhpType;
 use std::collections::HashSet;
@@ -289,9 +291,22 @@ fn check_instruction_shape(
         Op::Cast => cast_shape_issue(function, inst),
         Op::ArrayGet | Op::ArrayGetSilent => array_get_shape_issue(function, inst),
         Op::ArrayToHash => array_to_hash_shape_issue(function, inst),
-        Op::NullsafeMethodCall => nullsafe_method_call_shape_issue(module, function, inst),
+        Op::Call => {
+            direct_call_shape_issue(module, function, inst, ref_cell_provenance)
+        }
+        Op::MethodCall | Op::NullsafeMethodCall => {
+            method_call_shape_issue(module, function, inst)
+        }
+        Op::StaticMethodCall => static_method_call_shape_issue(module, function, inst),
+        Op::ClosureCall => closure_call_shape_issue(module, function, inst),
+        Op::CallableDescriptorInvoke => {
+            callable_descriptor_invoke_shape_issue(module, function, inst)
+        }
         Op::ClosureNew => {
             closure_new_by_ref_capture_issue(module, function, inst, ref_cell_provenance)
+        }
+        Op::FirstClassCallableNew => {
+            first_class_callable_new_shape_issue(module, inst)
         }
         _ => None,
     };
@@ -363,8 +378,20 @@ fn closure_new_by_ref_capture_issue(
     let Some(name) = data_string(module, inst) else {
         return Some("missing closure-name data immediate".to_string());
     };
-    let Some(closure) = module.closures.iter().find(|closure| closure.name == name) else {
-        return Some(format!("closure body {name:?} is missing"));
+    let closures: Vec<&Function> = module
+        .closures
+        .iter()
+        .filter(|closure| closure.name == name)
+        .collect();
+    let closure = match closures.as_slice() {
+        [closure] => *closure,
+        [] => return Some(format!("closure body {name:?} is missing")),
+        _ => {
+            return Some(format!(
+                "closure body {name:?} is ambiguous across {} definitions",
+                closures.len()
+            ))
+        }
     };
     let capture_count = inst.operands.len();
     if capture_count != closure.flags.closure_capture_count {
@@ -379,6 +406,16 @@ fn closure_new_by_ref_capture_issue(
             closure.params.len()
         ));
     };
+    if let Some(issue) = callable_wrapper_signature_issue(closure, visible_count) {
+        return Some(issue);
+    }
+    if !callable_return_is_boxable(closure) {
+        return Some(format!(
+            "callable return {:?}/{:?} cannot be boxed by the WASM wrapper",
+            closure.return_type,
+            closure.return_php_type.codegen_repr()
+        ));
+    }
     for (operand, param) in inst
         .operands
         .iter()
@@ -424,6 +461,47 @@ fn closure_new_by_ref_capture_issue(
                 ));
             }
         }
+    }
+    None
+}
+
+/// Validates one free-function first-class callable against PHP name folding,
+/// collision rules, and the wrapper's supported parameter/result shapes.
+fn first_class_callable_new_shape_issue(
+    module: &Module,
+    inst: &Instruction,
+) -> Option<String> {
+    let Some(name) = data_string(module, inst) else {
+        return Some("missing callable-name Data immediate".to_string());
+    };
+    let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    let matches: Vec<&Function> = module
+        .functions
+        .iter()
+        .filter(|function| {
+            !function.flags.is_main
+                && crate::names::php_symbol_key(function.name.trim_start_matches('\\')) == key
+        })
+        .collect();
+    let function = match matches.as_slice() {
+        [function] => *function,
+        [] => return Some(format!("free-function callable target {name:?} is missing")),
+        _ => {
+            return Some(format!(
+                "free-function callable target {name:?} is ambiguous across {} definitions",
+                matches.len()
+            ))
+        }
+    };
+    if let Some(issue) = callable_wrapper_signature_issue(function, function.params.len()) {
+        return Some(issue);
+    }
+    if !callable_return_is_boxable(function) {
+        return Some(format!(
+            "callable return {:?}/{:?} cannot be boxed by the WASM wrapper",
+            function.return_type,
+            function.return_php_type.codegen_repr()
+        ));
     }
     None
 }
@@ -661,13 +739,148 @@ fn array_to_hash_shape_issue(function: &Function, inst: &Instruction) -> Option<
     None
 }
 
-/// Validates the statically resolvable object and boxed Mixed/Union nullsafe paths.
+/// Validates one direct-call target, its lowered arity, storage transfers, and
+/// by-reference source forms against the exact resolver used by emission.
+fn direct_call_shape_issue(
+    module: &Module,
+    owner: &Function,
+    inst: &Instruction,
+    ref_cell_provenance: &RefCellProvenance,
+) -> Option<String> {
+    let target = match resolve_direct_call(module, inst) {
+        Ok(target) => target,
+        Err(error) => return Some(error.to_string()),
+    };
+    if target.function.params.iter().any(|param| param.variadic) {
+        return Some(format!(
+            "target {:?} has a variadic parameter outside the L1 direct-call contract",
+            target.name
+        ));
+    }
+    if target.function.params.len() != inst.operands.len() {
+        return Some(format!(
+            "target {:?} expects {} lowered operands, got {}",
+            target.name,
+            target.function.params.len(),
+            inst.operands.len()
+        ));
+    }
+    for (index, (operand, parameter)) in inst
+        .operands
+        .iter()
+        .zip(&target.function.params)
+        .enumerate()
+    {
+        let Some(value) = owner.value(*operand) else {
+            return Some(format!("argument #{index} is missing from the value table"));
+        };
+        if parameter.by_ref {
+            let source = classify_by_ref_source(owner, *operand);
+            if let Some(issue) =
+                by_ref_source_shape_issue(owner, value, parameter, source)
+            {
+                return Some(format!("by-reference argument #{index}: {issue}"));
+            }
+            match source {
+                ByRefSource::NonLocal => {
+                    return Some(format!(
+                        "by-reference argument #{index} is not a supported local storage load"
+                    ))
+                }
+                ByRefSource::AlreadyRefBound(slot)
+                    if !ref_cell_provenance.owned.contains(&slot)
+                        && !ref_cell_provenance.borrowed.contains(&slot) =>
+                {
+                    return Some(format!(
+                        "by-reference argument #{index} reads unregistered ref-cell local#{slot}"
+                    ))
+                }
+                ByRefSource::AlreadyRefBound(_) | ByRefSource::FreshLocal(_) => {}
+            }
+            if value.ir_type != parameter.ir_type
+                || value.php_type.codegen_repr() != parameter.php_type.codegen_repr()
+            {
+                return Some(format!(
+                    "by-reference argument #{index} storage {:?}/{:?} differs from parameter {:?}/{:?}",
+                    value.ir_type,
+                    value.php_type.codegen_repr(),
+                    parameter.ir_type,
+                    parameter.php_type.codegen_repr()
+                ));
+            }
+        } else if let Err(error) = transfer::classify_transfer(
+            value.ir_type,
+            value.php_type.codegen_repr(),
+            parameter.ir_type,
+            parameter.php_type.codegen_repr(),
+        ) {
+            return Some(format!("argument #{index}: {error}"));
+        }
+    }
+    if let Some(result) = inst.result {
+        let Some(value) = owner.value(result) else {
+            return Some("call result is missing from the value table".to_string());
+        };
+        if let Err(error) = transfer::classify_transfer(
+            target.function.return_type,
+            target.function.return_php_type.codegen_repr(),
+            value.ir_type,
+            value.php_type.codegen_repr(),
+        ) {
+            return Some(format!("result: {error}"));
+        }
+    }
+    None
+}
+
+/// Validates the exact local/value/parameter metadata behind one by-reference
+/// direct-call argument before emission takes or promotes its cell address.
+fn by_ref_source_shape_issue(
+    owner: &Function,
+    value: &crate::ir::Value,
+    parameter: &crate::ir::FunctionParam,
+    source: ByRefSource,
+) -> Option<String> {
+    let slot_raw = match source {
+        ByRefSource::AlreadyRefBound(slot) => slot,
+        ByRefSource::FreshLocal(slot) => slot.as_raw(),
+        ByRefSource::NonLocal => return None,
+    };
+    let Some(slot) = owner
+        .locals
+        .iter()
+        .find(|slot| slot.id.as_raw() == slot_raw)
+    else {
+        return Some(format!("local#{slot_raw} is missing from the local table"));
+    };
+    let pair_is_valid = transfer::validate_storage_pair(slot.ir_type, &slot.php_type).is_ok()
+        && transfer::validate_storage_pair(value.ir_type, &value.php_type).is_ok()
+        && transfer::validate_storage_pair(parameter.ir_type, &parameter.php_type).is_ok();
+    let exact_metadata = slot.ir_type == value.ir_type
+        && value.ir_type == parameter.ir_type
+        && slot.php_type == value.php_type
+        && value.php_type == parameter.php_type;
+    if !pair_is_valid || !exact_metadata {
+        return Some(format!(
+            "local#{slot_raw} metadata {:?}/{:?}, loaded value {:?}/{:?}, and parameter {:?}/{:?} must match exactly",
+            slot.ir_type,
+            slot.php_type,
+            value.ir_type,
+            value.php_type,
+            parameter.ir_type,
+            parameter.php_type
+        ));
+    }
+    None
+}
+
+/// Validates the statically resolvable object and boxed Mixed/Union method paths.
 ///
 /// A Mixed/Union receiver can still carry a non-object runtime tag or an object
-/// outside the closed candidate set. The lowerer currently traps for those
-/// dynamic cases; replacing that trap with the exact PHP fatal remains a runtime
-/// diagnostic surface rather than something this static shape gate can prove.
-fn nullsafe_method_call_shape_issue(
+/// outside the closed candidate set. Those dynamic cases route through the PHP
+/// fatal helpers; this gate proves that every closed-world candidate shares the
+/// argument and result contract needed before runtime selection.
+fn method_call_shape_issue(
     module: &Module,
     function: &Function,
     inst: &Instruction,
@@ -684,6 +897,12 @@ fn nullsafe_method_call_shape_issue(
     let method_key = crate::names::php_symbol_key(method_name);
     match receiver_value.php_type.codegen_repr() {
         PhpType::Object(class_name) => {
+            if receiver_value.ir_type != IrType::Heap(IrHeapKind::Object) {
+                return Some(format!(
+                    "object receiver must use Heap(Object), got {:?}",
+                    receiver_value.ir_type
+                ));
+            }
             let Some(class_info) = module.class_infos.get(&class_name) else {
                 return Some(format!("unknown receiver class {class_name}"));
             };
@@ -708,22 +927,45 @@ fn nullsafe_method_call_shape_issue(
                     "missing method body {implementation}::{method_name}"
                 ));
             };
+            if let Some(issue) = method_body_signature_shape_issue(
+                body,
+                signature,
+                IrType::Heap(IrHeapKind::Object),
+            ) {
+                return Some(issue);
+            }
             if let Some(issue) = method_body_argument_shape_issue(function, inst, body) {
                 return Some(issue);
             }
             direct_method_result_shape_issue(inst, body, &signature.return_type)
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            let result_php = inst.result_php_type.codegen_repr();
-            let boxed_result = inst.result.is_some()
-                && matches!(
-                    inst.result_type,
-                    IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union)
-                )
-                && matches!(&result_php, PhpType::Mixed | PhpType::Union(_));
-            if !boxed_result {
+            if !matches!(
+                receiver_value.ir_type,
+                IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union)
+            ) {
                 return Some(format!(
-                    "dynamic nullsafe dispatch requires a boxed Mixed/Union result, got {:?}/{result_php:?}",
+                    "dynamic receiver must use Heap(Mixed/Union), got {:?}",
+                    receiver_value.ir_type
+                ));
+            }
+            let result_php = inst.result_php_type.codegen_repr();
+            if transfer::validate_storage_pair(inst.result_type, &inst.result_php_type).is_err()
+                && !(inst.result.is_none()
+                    && inst.result_type == IrType::Void
+                    && result_php == PhpType::Void)
+            {
+                return Some(format!(
+                    "dynamic mixed/union method dispatch has invalid result storage {:?}/{result_php:?}",
+                    inst.result_type
+                ));
+            }
+            let boxed_result = inst.result.is_some()
+                && inst.result_type == IrType::Heap(IrHeapKind::Mixed)
+                && result_php == PhpType::Mixed;
+            if inst.op == Op::NullsafeMethodCall && !boxed_result {
+                return Some(format!(
+                    "dynamic nullsafe dispatch requires a boxed Mixed result, got {:?}/{result_php:?}",
                     inst.result_type
                 ));
             }
@@ -757,15 +999,28 @@ fn nullsafe_method_call_shape_issue(
                         "missing candidate body {implementation}::{method_name}"
                     ));
                 };
+                if let Some(issue) = method_body_signature_shape_issue(
+                    body,
+                    signature,
+                    IrType::Heap(IrHeapKind::Object),
+                ) {
+                    return Some(format!("{class_name}: {issue}"));
+                }
                 if let Some(issue) = method_body_argument_shape_issue(function, inst, body) {
                     return Some(format!("{class_name}: {issue}"));
                 }
-                if !mixed_method_return_is_boxable(body.return_type, &signature.return_type) {
-                    return Some(format!(
-                        "{class_name}::{method_name} return {:?}/{:?} cannot be boxed",
-                        body.return_type,
-                        signature.return_type.codegen_repr()
-                    ));
+                if boxed_result {
+                    if !mixed_method_return_is_boxable(body.return_type, &body.return_php_type) {
+                        return Some(format!(
+                            "{class_name}::{method_name} return {:?}/{:?} cannot be boxed",
+                            body.return_type,
+                            body.return_php_type.codegen_repr()
+                        ));
+                    }
+                } else if let Some(issue) =
+                    direct_method_result_shape_issue(inst, body, &signature.return_type)
+                {
+                    return Some(format!("{class_name}: {issue}"));
                 }
             }
             None
@@ -774,6 +1029,122 @@ fn nullsafe_method_call_shape_issue(
             "receiver must be Object, Mixed, or Union, got {other:?}"
         )),
     }
+}
+
+/// Validates true-static and lexical `self::`/`parent::` method calls against
+/// the exact hidden-parameter ABI emitted by `methods::lower_static_method_call`.
+fn static_method_call_shape_issue(
+    module: &Module,
+    owner: &Function,
+    inst: &Instruction,
+) -> Option<String> {
+    let Some(target) = data_string(module, inst) else {
+        return Some("missing or invalid static-target Data immediate".to_string());
+    };
+    let Some((receiver_label, method_name)) = target.rsplit_once("::") else {
+        return Some(format!("malformed static target {target:?}"));
+    };
+    if receiver_label == "static" {
+        return Some(format!(
+            "static::{method_name} late-bound dispatch is outside the L1 call contract"
+        ));
+    }
+    let current_class = owner
+        .name
+        .rsplit_once("::")
+        .map(|(class_name, _)| class_name.to_string());
+    let receiver_class = match receiver_label {
+        "self" => match current_class.clone() {
+            Some(class_name) => class_name,
+            None => return Some("self:: outside a method".to_string()),
+        },
+        "parent" => {
+            let Some(class_name) = current_class.as_ref() else {
+                return Some("parent:: outside a method".to_string());
+            };
+            let Some(parent) = module
+                .class_infos
+                .get(class_name)
+                .and_then(|class| class.parent.clone())
+            else {
+                return Some(format!("class {class_name} has no parent"));
+            };
+            parent
+        }
+        named => named.to_string(),
+    };
+    let Some(class_info) = module.class_infos.get(&receiver_class) else {
+        return Some(format!("unknown class {receiver_class}"));
+    };
+    let method_key = crate::names::php_symbol_key(method_name);
+    let true_static = class_info.static_methods.contains_key(&method_key);
+    let lexical_instance = !true_static
+        && matches!(receiver_label, "self" | "parent")
+        && owner.flags.is_method
+        && !owner.flags.is_static
+        && class_info.methods.contains_key(&method_key);
+    let (signature, implementation, hidden_ir) = if true_static {
+        let Some(signature) = class_info.static_methods.get(&method_key) else {
+            return Some(format!(
+                "missing static signature {receiver_class}::{method_name}"
+            ));
+        };
+        let implementation = class_info
+            .static_method_impl_classes
+            .get(&method_key)
+            .map(String::as_str)
+            .unwrap_or(receiver_class.as_str());
+        (signature, implementation, IrType::I64)
+    } else if lexical_instance {
+        let Some(signature) = class_info.methods.get(&method_key) else {
+            return Some(format!(
+                "missing instance signature {receiver_class}::{method_name}"
+            ));
+        };
+        let implementation = class_info
+            .method_impl_classes
+            .get(&method_key)
+            .map(String::as_str)
+            .unwrap_or(receiver_class.as_str());
+        (signature, implementation, IrType::Heap(IrHeapKind::Object))
+    } else {
+        return Some(format!(
+            "target {target:?} is neither a true static method nor an applicable lexical instance method"
+        ));
+    };
+    if let Some(issue) =
+        method_signature_shape_issue(owner, &inst.operands, signature, method_name)
+    {
+        return Some(issue);
+    }
+    let Some(body) = find_method_function(module, implementation, &method_key) else {
+        return Some(format!(
+            "missing method body {implementation}::{method_name}"
+        ));
+    };
+    if let Some(issue) = method_body_signature_shape_issue(body, signature, hidden_ir) {
+        return Some(issue);
+    }
+    for (index, (operand, parameter)) in
+        inst.operands.iter().zip(body.params.iter().skip(1)).enumerate()
+    {
+        let Some(value) = owner.value(*operand) else {
+            return Some(format!("argument #{index} is missing from the value table"));
+        };
+        if value.ir_type != parameter.ir_type
+            || value.php_type.codegen_repr() != parameter.php_type.codegen_repr()
+        {
+            return Some(format!(
+                "argument #{index} storage {:?}/{:?} differs from {} parameter {:?}/{:?}",
+                value.ir_type,
+                value.php_type.codegen_repr(),
+                body.name,
+                parameter.ir_type,
+                parameter.php_type.codegen_repr()
+            ));
+        }
+    }
+    direct_method_result_shape_issue(inst, body, &signature.return_type)
 }
 
 /// Validates user-argument arity, by-reference state, and PHP parameter types.
@@ -808,6 +1179,70 @@ fn method_signature_shape_issue(
                 expected.codegen_repr()
             ));
         }
+    }
+    None
+}
+
+/// Validates one concrete method body's hidden ABI parameter, user parameter
+/// metadata, and return metadata against the checker-owned signature.
+fn method_body_signature_shape_issue(
+    body: &Function,
+    signature: &crate::types::FunctionSig,
+    hidden_ir: IrType,
+) -> Option<String> {
+    if body.params.len() != signature.params.len() + 1 {
+        return Some(format!(
+            "method body {} expects {} total parameters including its hidden receiver, signature requires {}",
+            body.name,
+            body.params.len(),
+            signature.params.len() + 1
+        ));
+    }
+    let Some(hidden) = body.params.first() else {
+        return Some(format!("method body {} has no hidden parameter", body.name));
+    };
+    let hidden_php = hidden.php_type.codegen_repr();
+    let hidden_php_matches = match hidden_ir {
+        IrType::I64 => hidden_php == PhpType::Int,
+        IrType::Heap(IrHeapKind::Object) => matches!(hidden_php, PhpType::Object(_)),
+        _ => false,
+    };
+    if hidden.ir_type != hidden_ir
+        || !hidden_php_matches
+        || transfer::validate_storage_pair(hidden.ir_type, &hidden.php_type).is_err()
+    {
+        return Some(format!(
+            "method body {} hidden parameter must be {:?} with matching PHP metadata, got {:?}/{hidden_php:?}",
+            body.name, hidden_ir, hidden.ir_type
+        ));
+    }
+    for (index, (parameter, (_, declared_php))) in body
+        .params
+        .iter()
+        .skip(1)
+        .zip(&signature.params)
+        .enumerate()
+    {
+        let parameter_php = parameter.php_type.codegen_repr();
+        let declared_php = declared_php.codegen_repr();
+        if parameter_php != declared_php
+            || transfer::validate_storage_pair(parameter.ir_type, &parameter.php_type).is_err()
+        {
+            return Some(format!(
+                "method body {} parameter #{index} {:?}/{parameter_php:?} differs from signature {declared_php:?}",
+                body.name, parameter.ir_type
+            ));
+        }
+    }
+    let body_return_php = body.return_php_type.codegen_repr();
+    let declared_return_php = signature.return_type.codegen_repr();
+    if body_return_php != declared_return_php
+        || transfer::validate_storage_pair(body.return_type, &body.return_php_type).is_err()
+    {
+        return Some(format!(
+            "method body {} return {:?}/{body_return_php:?} differs from signature {declared_return_php:?}",
+            body.name, body.return_type
+        ));
     }
     None
 }
@@ -849,13 +1284,17 @@ fn method_body_argument_shape_issue(
                 index + 1
             ));
         };
-        if value.ir_type != parameter.ir_type {
+        if value.ir_type != parameter.ir_type
+            || value.php_type.codegen_repr() != parameter.php_type.codegen_repr()
+        {
             return Some(format!(
-                "operand #{} storage {:?} differs from {} parameter {:?}",
+                "operand #{} storage {:?}/{:?} differs from {} parameter {:?}/{:?}",
                 index + 1,
                 value.ir_type,
+                value.php_type.codegen_repr(),
                 body.name,
-                parameter.ir_type
+                parameter.ir_type,
+                parameter.php_type.codegen_repr()
             ));
         }
     }
@@ -869,6 +1308,15 @@ fn direct_method_result_shape_issue(
     declared_php: &PhpType,
 ) -> Option<String> {
     let declared_php = declared_php.codegen_repr();
+    let body_php = body.return_php_type.codegen_repr();
+    if body_php != declared_php
+        || transfer::validate_storage_pair(body.return_type, &body.return_php_type).is_err()
+    {
+        return Some(format!(
+            "method body {} return {:?}/{body_php:?} differs from declared {declared_php:?}",
+            body.name, body.return_type
+        ));
+    }
     let has_exact_result = match body.return_type {
         IrType::Void => {
             inst.result.is_none()
@@ -912,24 +1360,13 @@ fn find_method_function<'a>(
 
 /// Returns whether dynamic dispatch can box the concrete method return.
 fn mixed_method_return_is_boxable(ir_type: IrType, php_type: &PhpType) -> bool {
-    let php_type = php_type.codegen_repr();
-    match ir_type {
-        IrType::I64 => matches!(
-            php_type,
-            PhpType::Int | PhpType::Bool | PhpType::Callable
-        ),
-        IrType::F64 => php_type == PhpType::Float,
-        IrType::Str => php_type == PhpType::Str,
-        IrType::Heap(IrHeapKind::Array) => matches!(php_type, PhpType::Array(_)),
-        IrType::Heap(IrHeapKind::Hash) => matches!(php_type, PhpType::AssocArray { .. }),
-        IrType::Heap(IrHeapKind::Object) => matches!(php_type, PhpType::Object(_)),
-        IrType::Heap(IrHeapKind::Mixed) => {
-            matches!(php_type, PhpType::Mixed | PhpType::Union(_))
-        }
-        IrType::Heap(IrHeapKind::Iterable | IrHeapKind::Union | IrHeapKind::Buffer)
-        | IrType::TaggedScalar
-        | IrType::Void => false,
-    }
+    transfer::classify_transfer(
+        ir_type,
+        php_type.codegen_repr(),
+        IrType::Heap(IrHeapKind::Mixed),
+        PhpType::Mixed,
+    )
+    .is_ok()
 }
 
 /// Records a storage type the current wasm32 ABI cannot materialize safely.
@@ -1286,6 +1723,157 @@ fn value_is_int_array(function: &Function, value: ValueId) -> bool {
     })
 }
 
+/// Validates a direct `ClosureCall` argument buffer and its result unboxing.
+///
+/// Dynamic descriptors remain admitted because an escaping closure can be
+/// loaded from a mutable local. When the descriptor producer is still visible
+/// in SSA, its wrapper contract is additionally checked statically.
+fn closure_call_shape_issue(
+    module: &Module,
+    owner: &Function,
+    inst: &Instruction,
+) -> Option<String> {
+    let Some((callable, arguments)) = inst.operands.split_first() else {
+        return Some("missing callable descriptor operand".to_string());
+    };
+    if !value_is_callable_descriptor(owner, *callable) {
+        return Some("callable operand must be Callable/I64".to_string());
+    }
+    for (index, argument) in arguments.iter().enumerate() {
+        let Some(value) = owner.value(*argument) else {
+            return Some(format!("argument #{index} is missing from the value table"));
+        };
+        if !closure_argument_is_boxable(value.ir_type, &value.php_type) {
+            return Some(format!(
+                "argument #{index} cannot be boxed from {:?}/{:?}",
+                value.ir_type,
+                value.php_type.codegen_repr()
+            ));
+        }
+    }
+    if let Some(issue) = closure_result_shape_issue(owner, inst) {
+        return Some(issue);
+    }
+    if let Some((target, visible_count)) = static_callable_contract(module, owner, *callable) {
+        if let Some(issue) = callable_wrapper_issue(target, visible_count, arguments.len()) {
+            return Some(issue);
+        }
+        if !callable_return_is_boxable(target) {
+            return Some(format!(
+                "callable return {:?}/{:?} cannot be boxed by the WASM wrapper",
+                target.return_type,
+                target.return_php_type.codegen_repr()
+            ));
+        }
+    }
+    None
+}
+
+/// Validates descriptor invocation through a pre-built positional
+/// `array<mixed>` and the result-cell conversion performed by the lowerer.
+fn callable_descriptor_invoke_shape_issue(
+    module: &Module,
+    owner: &Function,
+    inst: &Instruction,
+) -> Option<String> {
+    let [callable, arguments] = inst.operands.as_slice() else {
+        return Some(format!(
+            "expected callable and positional array, got {} operands",
+            inst.operands.len()
+        ));
+    };
+    if !value_is_callable_descriptor(owner, *callable) {
+        return Some("callable operand must be Callable/I64".to_string());
+    }
+    let Some(argument_value) = owner.value(*arguments) else {
+        return Some("argument container is missing from the value table".to_string());
+    };
+    let is_mixed_array = argument_value.ir_type == IrType::Heap(IrHeapKind::Array)
+        && matches!(
+            argument_value.php_type.codegen_repr(),
+            PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed
+        );
+    if !is_mixed_array {
+        return Some(format!(
+            "argument container must be array<mixed>/Heap(Array), got {:?}/{:?}",
+            argument_value.ir_type,
+            argument_value.php_type.codegen_repr()
+        ));
+    }
+    if let Some(issue) = closure_result_shape_issue(owner, inst) {
+        return Some(issue);
+    }
+    if let Some((target, visible_count)) = static_callable_contract(module, owner, *callable) {
+        if let Some(issue) = callable_wrapper_signature_issue(target, visible_count) {
+            return Some(issue);
+        }
+        if !callable_return_is_boxable(target) {
+            return Some(format!(
+                "callable return {:?}/{:?} cannot be boxed by the WASM wrapper",
+                target.return_type,
+                target.return_php_type.codegen_repr()
+            ));
+        }
+    }
+    None
+}
+
+/// Returns whether one EIR value carries the descriptor representation consumed
+/// by `__rt_closure_call`.
+fn value_is_callable_descriptor(function: &Function, value: ValueId) -> bool {
+    function.value(value).is_some_and(|value| {
+        value.ir_type == IrType::I64 && value.php_type.codegen_repr() == PhpType::Callable
+    })
+}
+
+/// Returns whether `objects::emit_box_value_into_mixed` implements this source.
+fn closure_argument_is_boxable(ir_type: IrType, php_type: &PhpType) -> bool {
+    if transfer::validate_storage_pair(ir_type, php_type).is_err() {
+        return false;
+    }
+    let php_type = php_type.codegen_repr();
+    match ir_type {
+        IrType::I64 => matches!(
+            php_type,
+            PhpType::Int | PhpType::Bool | PhpType::Callable
+        ),
+        IrType::F64 => php_type == PhpType::Float,
+        IrType::Str => php_type == PhpType::Str,
+        IrType::Heap(IrHeapKind::Array) => matches!(php_type, PhpType::Array(_)),
+        IrType::Heap(IrHeapKind::Hash) => matches!(php_type, PhpType::AssocArray { .. }),
+        IrType::Heap(IrHeapKind::Object) => matches!(php_type, PhpType::Object(_)),
+        IrType::Heap(
+            IrHeapKind::Mixed | IrHeapKind::Iterable | IrHeapKind::Union | IrHeapKind::Buffer,
+        )
+        | IrType::TaggedScalar
+        | IrType::Void => false,
+    }
+}
+
+/// Returns the first unsupported closure result-cell destination shape.
+fn closure_result_shape_issue(owner: &Function, inst: &Instruction) -> Option<String> {
+    let Some(result) = inst.result else {
+        return None;
+    };
+    let Some(value) = owner.value(result) else {
+        return Some("result is missing from the value table".to_string());
+    };
+    if value.ir_type == IrType::I64
+        && value.php_type.codegen_repr() == PhpType::Callable
+        && transfer::validate_storage_pair(value.ir_type, &value.php_type).is_ok()
+    {
+        return None;
+    }
+    transfer::classify_transfer(
+        IrType::Heap(IrHeapKind::Mixed),
+        PhpType::Mixed,
+        value.ir_type,
+        value.php_type.codegen_repr(),
+    )
+    .err()
+    .map(|error| format!("result cell cannot be stored: {error}"))
+}
+
 /// Resolves a direct closure/FCC descriptor through ownership-only SSA moves.
 ///
 /// Dynamic callables, block parameters, and values loaded from mutable locals
@@ -1359,6 +1947,15 @@ fn callable_wrapper_issue(
             "callback declares {visible_count} visible parameters but the runtime supplies {supplied_args}"
         ));
     }
+    callable_wrapper_signature_issue(function, visible_count)
+}
+
+/// Returns the first parameter-shape defect in a callable wrapper without
+/// making a claim about the runtime argument-array length.
+fn callable_wrapper_signature_issue(
+    function: &Function,
+    visible_count: usize,
+) -> Option<String> {
     for param in &function.params[..visible_count] {
         if param.by_ref || param.variadic {
             return Some(format!(
@@ -1366,10 +1963,12 @@ fn callable_wrapper_issue(
                 param.name
             ));
         }
-        if !callable_param_is_unboxable(param.ir_type) {
+        if !callable_param_is_unboxable(param) {
             return Some(format!(
-                "callback parameter {} has unsupported storage {:?}",
-                param.name, param.ir_type
+                "callback parameter {} has unsupported storage {:?}/{:?}",
+                param.name,
+                param.ir_type,
+                param.php_type.codegen_repr()
             ));
         }
     }
@@ -1377,31 +1976,38 @@ fn callable_wrapper_issue(
 }
 
 /// Returns whether the callable wrapper can materialize one argument type.
-fn callable_param_is_unboxable(ir_type: IrType) -> bool {
-    matches!(
-        ir_type,
-        IrType::I64
-            | IrType::F64
-            | IrType::Str
-            | IrType::Heap(IrHeapKind::Array)
-            | IrType::Heap(IrHeapKind::Hash)
-            | IrType::Heap(IrHeapKind::Object)
-    )
+fn callable_param_is_unboxable(param: &crate::ir::FunctionParam) -> bool {
+    if transfer::validate_storage_pair(param.ir_type, &param.php_type).is_err() {
+        return false;
+    }
+    let php_type = param.php_type.codegen_repr();
+    match param.ir_type {
+        IrType::I64 => matches!(
+            php_type,
+            PhpType::Int | PhpType::Bool | PhpType::Callable
+        ),
+        IrType::F64 => php_type == PhpType::Float,
+        IrType::Str => php_type == PhpType::Str,
+        IrType::Heap(IrHeapKind::Array) => matches!(php_type, PhpType::Array(_)),
+        IrType::Heap(IrHeapKind::Hash) => matches!(php_type, PhpType::AssocArray { .. }),
+        IrType::Heap(IrHeapKind::Object) => matches!(php_type, PhpType::Object(_)),
+        IrType::Heap(
+            IrHeapKind::Mixed | IrHeapKind::Iterable | IrHeapKind::Union | IrHeapKind::Buffer,
+        )
+        | IrType::TaggedScalar
+        | IrType::Void => false,
+    }
 }
 
 /// Returns whether the callable wrapper can box one callback result.
 fn callable_return_is_boxable(function: &Function) -> bool {
-    matches!(
+    transfer::classify_transfer(
         function.return_type,
-        IrType::I64
-            | IrType::F64
-            | IrType::Str
-            | IrType::Heap(IrHeapKind::Array)
-            | IrType::Heap(IrHeapKind::Hash)
-            | IrType::Heap(IrHeapKind::Object)
-            | IrType::Heap(IrHeapKind::Mixed)
-            | IrType::Void
+        function.return_php_type.codegen_repr(),
+        IrType::Heap(IrHeapKind::Mixed),
+        PhpType::Mixed,
     )
+    .is_ok()
 }
 
 /// Returns whether a typed runtime function is safe to admit through the WASM gate.
@@ -2248,6 +2854,85 @@ mod tests {
         }
     }
 
+    /// Builds a declared one-integer-to-integer method signature.
+    fn int_method_signature() -> FunctionSig {
+        FunctionSig {
+            params: vec![("value".to_string(), PhpType::Int)],
+            param_type_exprs: Vec::new(),
+            param_attributes: Vec::new(),
+            defaults: Vec::new(),
+            return_type: PhpType::Int,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false],
+            declared_params: vec![true],
+            variadic: None,
+            deprecation: None,
+        }
+    }
+
+    /// Rejects a same-width callable parameter hidden behind an integer method
+    /// signature before direct, static, or dynamic lowering can raw-copy it.
+    #[test]
+    fn method_body_contract_rejects_same_width_callable_parameter_drift() {
+        let mut body =
+            Function::new("C::f".to_string(), IrType::I64, PhpType::Int);
+        body.params.push(FunctionParam {
+            name: "called_class".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+        body.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Callable,
+            by_ref: false,
+            variadic: false,
+        });
+
+        let issue = super::method_body_signature_shape_issue(
+            &body,
+            &int_method_signature(),
+            IrType::I64,
+        )
+        .expect("same-width PHP metadata drift must be rejected");
+        assert!(issue.contains("parameter #0"));
+        assert!(issue.contains("Callable"));
+    }
+
+    /// Rejects a same-width callable return hidden behind an integer method
+    /// signature before direct storage or dynamic Mixed boxing.
+    #[test]
+    fn method_body_contract_rejects_same_width_callable_return_drift() {
+        let mut body =
+            Function::new("C::f".to_string(), IrType::I64, PhpType::Callable);
+        body.params.push(FunctionParam {
+            name: "called_class".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+        body.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+
+        let issue = super::method_body_signature_shape_issue(
+            &body,
+            &int_method_signature(),
+            IrType::I64,
+        )
+        .expect("same-width PHP return metadata drift must be rejected");
+        assert!(issue.contains("return"));
+        assert!(issue.contains("Callable"));
+    }
+
     /// Builds one terminated void function suitable for collection-audit tests.
     fn void_function(name: &str) -> Function {
         let mut function = Function::new(name.to_string(), IrType::Void, PhpType::Void);
@@ -2378,6 +3063,159 @@ mod tests {
                 PhpType::Callable,
                 Ownership::Owned,
             );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        module
+    }
+
+    /// Builds a dynamic-looking closure call whose body has an unsupported
+    /// visible Mixed parameter; `ClosureNew` must reject it before planning.
+    fn invalid_masked_closure_wrapper_param_module() -> Module {
+        let mut module = Module::new(Target::wasm());
+        let closure_name = "__eir_closure_bad_visible_0";
+        let closure_name_id = module.data.intern_string(closure_name);
+        let mut closure =
+            Function::new(closure_name.to_string(), IrType::I64, PhpType::Int);
+        closure.flags.is_closure = true;
+        closure.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Mixed),
+            php_type: PhpType::Mixed,
+            by_ref: false,
+            variadic: false,
+        });
+        {
+            let mut builder = Builder::new(&mut closure);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let result = builder.emit_const_i64(1);
+            builder.terminate(Terminator::Return {
+                value: Some(result),
+            });
+        }
+        module.add_closure(closure);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        let callable_slot = main.add_local(
+            Some("callable".to_string()),
+            IrType::I64,
+            PhpType::Callable,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let descriptor = builder
+                .emit(
+                    Op::ClosureNew,
+                    Vec::new(),
+                    Some(Immediate::Data(closure_name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .expect("closure descriptor");
+            builder.emit_store_local(callable_slot, descriptor);
+            let masked =
+                builder.emit_load_local(callable_slot, IrType::I64, PhpType::Callable);
+            let argument = builder.emit_const_i64(1);
+            let _ = builder.emit(
+                Op::ClosureCall,
+                vec![masked, argument],
+                None,
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        module
+    }
+
+    /// Builds a closure whose tagged-scalar return cannot be boxed by the
+    /// generated callable wrapper.
+    fn invalid_closure_wrapper_return_module() -> Module {
+        let mut module = Module::new(Target::wasm());
+        let closure_name = "__eir_closure_bad_return_0";
+        let closure_name_id = module.data.intern_string(closure_name);
+        let mut closure = Function::new(
+            closure_name.to_string(),
+            IrType::TaggedScalar,
+            PhpType::TaggedScalar,
+        );
+        closure.flags.is_closure = true;
+        module.add_closure(closure);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let _ = builder.emit(
+                Op::ClosureNew,
+                Vec::new(),
+                Some(Immediate::Data(closure_name_id)),
+                IrType::I64,
+                PhpType::Callable,
+                Ownership::Owned,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        module
+    }
+
+    /// Builds closure calls whose Mixed and null-sentinel arguments are outside
+    /// the exact boxing surface used by `lower_closure_call`.
+    fn invalid_closure_call_argument_boxing_module() -> Module {
+        let mut module = Module::new(Target::wasm());
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let callable = builder
+                .emit(
+                    Op::ConstI64,
+                    Vec::new(),
+                    Some(Immediate::I64(0)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::NonHeap,
+                )
+                .expect("dynamic callable placeholder");
+            let integer = builder.emit_const_i64(1);
+            let mixed = builder
+                .emit(
+                    Op::MixedBox,
+                    vec![integer],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .expect("mixed argument");
+            let null = builder.emit_const_null();
+            for argument in [mixed, null] {
+                let _ = builder.emit(
+                    Op::ClosureCall,
+                    vec![callable, argument],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
             builder.terminate(Terminator::Return { value: None });
         }
         module.add_function(main);
@@ -2526,6 +3364,455 @@ mod tests {
             .expect("closure descriptor")
     }
 
+    /// Verifies capability validation rejects a direct call whose lowered
+    /// operand count cannot satisfy the resolved target's exact WAT signature.
+    #[test]
+    fn direct_call_shape_rejects_arity_mismatch_before_lowering() {
+        let mut module = Module::new(Target::wasm());
+        let name = module.data.intern_function_name("Target");
+        let mut target = Function::new("target".to_string(), IrType::Void, PhpType::Void);
+        target.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+        module.add_function(target);
+        let owner = void_function("owner");
+        let call = crate::ir::Instruction::new(
+            Op::Call,
+            Vec::new(),
+            Some(Immediate::Data(name)),
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            Op::Call.default_effects(),
+            None,
+        );
+
+        let issue = super::direct_call_shape_issue(
+            &module,
+            &owner,
+            &call,
+            &super::RefCellProvenance::default(),
+        )
+        .expect("arity mismatch");
+
+        assert!(issue.contains("expects 1 lowered operands, got 0"), "{issue}");
+    }
+
+    /// Verifies a concrete heap pointer cannot cross a direct-call boundary
+    /// when its PHP payload layout differs from the resolved parameter.
+    #[test]
+    fn direct_call_shape_rejects_array_payload_type_mismatch() {
+        let mut module = Module::new(Target::wasm());
+        let name = module.data.intern_function_name("consume_strings");
+        let mut target =
+            Function::new("consume_strings".to_string(), IrType::Void, PhpType::Void);
+        target.params.push(FunctionParam {
+            name: "values".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Array),
+            php_type: PhpType::Array(Box::new(PhpType::Str)),
+            by_ref: false,
+            variadic: false,
+        });
+        module.add_function(target);
+        let mut owner = Function::new("owner".to_string(), IrType::Void, PhpType::Void);
+        let argument;
+        {
+            let mut builder = Builder::new(&mut owner);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            argument = builder
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::I64(0)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::Owned,
+                )
+                .expect("array argument");
+            builder.terminate(Terminator::Return { value: None });
+        }
+        let call = crate::ir::Instruction::new(
+            Op::Call,
+            vec![argument],
+            Some(Immediate::Data(name)),
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            Op::Call.default_effects(),
+            None,
+        );
+
+        let issue = super::direct_call_shape_issue(
+            &module,
+            &owner,
+            &call,
+            &super::collect_ref_cell_provenance(&owner),
+        )
+        .expect("array payload mismatch");
+
+        assert!(issue.contains("unsupported wasm value transfer"), "{issue}");
+    }
+
+    /// Verifies a direct call cannot route a Mixed cell through the generic
+    /// integer cast path when the callee expects a callable descriptor.
+    #[test]
+    fn direct_call_shape_rejects_generic_mixed_to_callable_unboxing() {
+        let mut module = Module::new(Target::wasm());
+        let name = module.data.intern_function_name("invoke");
+        let mut target = Function::new("invoke".to_string(), IrType::Void, PhpType::Void);
+        target.params.push(FunctionParam {
+            name: "callback".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Callable,
+            by_ref: false,
+            variadic: false,
+        });
+        module.add_function(target);
+        let mut owner = Function::new("owner".to_string(), IrType::Void, PhpType::Void);
+        let argument;
+        {
+            let mut builder = Builder::new(&mut owner);
+            let entry = builder.create_named_block(
+                "entry",
+                vec![(IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed)],
+            );
+            builder.set_entry(entry);
+            argument = builder.block_param(entry, 0);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        let call = crate::ir::Instruction::new(
+            Op::Call,
+            vec![argument],
+            Some(Immediate::Data(name)),
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            Op::Call.default_effects(),
+            None,
+        );
+
+        let issue = super::direct_call_shape_issue(
+            &module,
+            &owner,
+            &call,
+            &super::RefCellProvenance::default(),
+        )
+        .expect("generic Mixed-to-callable transfer must be rejected");
+
+        assert!(issue.contains("unboxing a Mixed cell"), "{issue}");
+        assert!(issue.contains("Callable"), "{issue}");
+    }
+
+    /// Verifies a malformed `LoadRefCell` cannot reach direct-call emission
+    /// unless the slot was registered as an owned or borrowed ref binding.
+    #[test]
+    fn direct_call_shape_rejects_unregistered_ref_cell_operand() {
+        let mut module = Module::new(Target::wasm());
+        let name = module.data.intern_function_name("mutate");
+        let mut target = Function::new("mutate".to_string(), IrType::Void, PhpType::Void);
+        target.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: true,
+            variadic: false,
+        });
+        module.add_function(target);
+        let mut owner = Function::new("owner".to_string(), IrType::Void, PhpType::Void);
+        let slot = owner.add_local(
+            Some("value".to_string()),
+            IrType::I64,
+            PhpType::Int,
+            LocalKind::PhpLocal,
+        );
+        let argument;
+        {
+            let mut builder = Builder::new(&mut owner);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            argument = builder
+                .emit(
+                    Op::LoadRefCell,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(slot)),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .expect("malformed ref-cell load");
+            builder.terminate(Terminator::Return { value: None });
+        }
+        let call = crate::ir::Instruction::new(
+            Op::Call,
+            vec![argument],
+            Some(Immediate::Data(name)),
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            Op::Call.default_effects(),
+            None,
+        );
+
+        let issue = super::direct_call_shape_issue(
+            &module,
+            &owner,
+            &call,
+            &super::collect_ref_cell_provenance(&owner),
+        )
+        .expect("unregistered ref cell");
+
+        assert!(issue.contains("unregistered ref-cell local"), "{issue}");
+    }
+
+    /// Verifies a by-reference `LoadLocal` cannot name a slot absent from the
+    /// function's local table, even when its result metadata matches the callee.
+    #[test]
+    fn direct_call_shape_rejects_missing_fresh_local_slot() {
+        let mut module = Module::new(Target::wasm());
+        let name = module.data.intern_function_name("mutate_missing");
+        let mut target =
+            Function::new("mutate_missing".to_string(), IrType::Void, PhpType::Void);
+        target.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: true,
+            variadic: false,
+        });
+        module.add_function(target);
+        let mut owner = Function::new("owner".to_string(), IrType::Void, PhpType::Void);
+        let missing = crate::ir::LocalSlotId::from_raw(99);
+        let argument;
+        {
+            let mut builder = Builder::new(&mut owner);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            argument = builder
+                .emit(
+                    Op::LoadLocal,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(missing)),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .expect("malformed local load");
+            builder.terminate(Terminator::Return { value: None });
+        }
+        let call = crate::ir::Instruction::new(
+            Op::Call,
+            vec![argument],
+            Some(Immediate::Data(name)),
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            Op::Call.default_effects(),
+            None,
+        );
+
+        let issue = super::direct_call_shape_issue(
+            &module,
+            &owner,
+            &call,
+            &super::RefCellProvenance::default(),
+        )
+        .expect("missing local must fail");
+
+        assert!(issue.contains("local#99 is missing"), "{issue}");
+    }
+
+    /// Verifies both fresh and already-bound by-reference sources reject local
+    /// metadata that differs from their loaded value and callee parameter.
+    #[test]
+    fn by_ref_sources_require_exact_slot_value_parameter_metadata() {
+        let mut owner = Function::new("owner".to_string(), IrType::Void, PhpType::Void);
+        let slot = owner.add_local(
+            Some("value".to_string()),
+            IrType::I64,
+            PhpType::Callable,
+            LocalKind::PhpLocal,
+        );
+        let fresh;
+        let bound;
+        {
+            let mut builder = Builder::new(&mut owner);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            fresh = builder.emit_load_local(slot, IrType::I64, PhpType::Int);
+            bound = builder
+                .emit(
+                    Op::LoadRefCell,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(slot)),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .expect("ref-cell load");
+            builder.terminate(Terminator::Return { value: None });
+        }
+        let parameter = FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: true,
+            variadic: false,
+        };
+
+        for (value_id, source) in [
+            (fresh, super::ByRefSource::FreshLocal(slot)),
+            (
+                bound,
+                super::ByRefSource::AlreadyRefBound(slot.as_raw()),
+            ),
+        ] {
+            let value = owner.value(value_id).expect("loaded value");
+            let issue = super::by_ref_source_shape_issue(&owner, value, &parameter, source)
+                .expect("metadata drift must fail");
+            assert!(issue.contains("must match exactly"), "{issue}");
+            assert!(issue.contains("Callable"), "{issue}");
+        }
+    }
+
+    /// Verifies a by-reference parameter's borrowed cell can be forwarded to
+    /// another by-reference callee without inventing a local owner.
+    #[test]
+    fn direct_call_shape_accepts_registered_borrowed_ref_cell_operand() {
+        let mut module = Module::new(Target::wasm());
+        let name = module.data.intern_function_name("forwarded_mutation");
+        let mut target =
+            Function::new("forwarded_mutation".to_string(), IrType::Void, PhpType::Void);
+        target.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: true,
+            variadic: false,
+        });
+        module.add_function(target);
+        let mut owner = Function::new("owner".to_string(), IrType::Void, PhpType::Void);
+        owner.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: true,
+            variadic: false,
+        });
+        let slot = owner.add_local(
+            Some("value".to_string()),
+            IrType::I64,
+            PhpType::Int,
+            LocalKind::PhpLocal,
+        );
+        let argument;
+        {
+            let mut builder = Builder::new(&mut owner);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            argument = builder
+                .emit(
+                    Op::LoadRefCell,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(slot)),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .expect("borrowed ref-cell load");
+            builder.terminate(Terminator::Return { value: None });
+        }
+        let call = crate::ir::Instruction::new(
+            Op::Call,
+            vec![argument],
+            Some(Immediate::Data(name)),
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            Op::Call.default_effects(),
+            None,
+        );
+
+        let issue = super::direct_call_shape_issue(
+            &module,
+            &owner,
+            &call,
+            &super::collect_ref_cell_provenance(&owner),
+        );
+
+        assert!(issue.is_none(), "{issue:?}");
+    }
+
+    /// Verifies descriptor invocation rejects an indexed array whose elements
+    /// are not Mixed cells, preventing the wrapper from interpreting 8-byte
+    /// integer slots as 16-byte cell slots.
+    #[test]
+    fn descriptor_invoke_shape_rejects_non_mixed_argument_array() {
+        let module = Module::new(Target::wasm());
+        let mut owner = Function::new("owner".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut owner);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let callable = builder
+                .emit(
+                    Op::ConstI64,
+                    Vec::new(),
+                    Some(Immediate::I64(0)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::NonHeap,
+                )
+                .expect("callable value");
+            let arguments = builder
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::I64(0)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::Owned,
+                )
+                .expect("argument array");
+            let _ = builder.emit(
+                Op::CallableDescriptorInvoke,
+                vec![callable, arguments],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        let invoke = owner
+            .instructions
+            .iter()
+            .find(|instruction| instruction.op == Op::CallableDescriptorInvoke)
+            .expect("descriptor invoke");
+
+        let issue = super::callable_descriptor_invoke_shape_issue(&module, &owner, invoke)
+            .expect("array<int> must be rejected");
+
+        assert!(issue.contains("array<mixed>"), "{issue}");
+    }
+
     /// Verifies validation returns the exact lowered plan for an accepted module.
     #[test]
     fn accepted_module_returns_an_assemblable_plan() {
@@ -2619,10 +3906,6 @@ mod tests {
                 "class MissingDestructorOwner resolved as __destruct impl does not declare it",
             ),
             (
-                invalid_fcc_wrapper_module(),
-                "first-class callable of bad_fcc with by-ref/variadic param value",
-            ),
-            (
                 invalid_branch_arity_module(),
                 "branch arg count 0 != param count 1",
             ),
@@ -2638,6 +3921,76 @@ mod tests {
                 "the exact plan boundary should surface {expected:?}: {message}"
             );
         }
+    }
+
+    /// Verifies an unsupported FCC wrapper is rejected by the static shape
+    /// audit rather than leaking to the exact WAT planning boundary.
+    #[test]
+    fn rejects_invalid_fcc_wrapper_before_lowering() {
+        let error = validate_module(&invalid_fcc_wrapper_module())
+            .expect_err("by-reference FCC parameter must fail capability");
+        let message = error.to_string();
+
+        assert!(message.contains("WASM capability audit found 1 issue(s)"), "{message}");
+        assert!(
+            message.contains("callback parameter value is by-reference or variadic"),
+            "{message}"
+        );
+    }
+
+    /// Verifies every `ClosureNew` audits visible wrapper parameters even when a
+    /// later local load masks the descriptor from static call resolution.
+    #[test]
+    fn rejects_masked_closure_wrapper_param_before_lowering() {
+        let error = validate_module(&invalid_masked_closure_wrapper_param_module())
+            .expect_err("unsupported visible closure parameter must fail capability");
+        let message = error.to_string();
+
+        assert!(
+            message.contains("callback parameter value has unsupported storage"),
+            "{message}"
+        );
+        assert!(
+            message.contains("WASM capability audit found"),
+            "wrapper defect must not leak to exact planning: {message}"
+        );
+    }
+
+    /// Verifies every `ClosureNew` audits its result-boxing contract before the
+    /// exact wrapper builder can return a late unsupported error.
+    #[test]
+    fn rejects_closure_wrapper_return_before_lowering() {
+        let error = validate_module(&invalid_closure_wrapper_return_module())
+            .expect_err("unsupported closure return must fail capability");
+        let message = error.to_string();
+
+        assert!(
+            message.contains("callable return TaggedScalar/TaggedScalar cannot be boxed"),
+            "{message}"
+        );
+        assert!(
+            message.contains("WASM capability audit found"),
+            "wrapper defect must not leak to exact planning: {message}"
+        );
+    }
+
+    /// Verifies closure-call argument admission mirrors the specialized boxer,
+    /// rejecting already-Mixed cells and I64 null sentinels at capability time.
+    #[test]
+    fn rejects_closure_call_arguments_outside_specialized_boxer() {
+        let error = validate_module(&invalid_closure_call_argument_boxing_module())
+            .expect_err("unsupported closure arguments must fail capability");
+        let message = error.to_string();
+
+        assert!(
+            message.contains("WASM capability audit found 2 issue(s)"),
+            "{message}"
+        );
+        assert!(
+            message.contains("cannot be boxed from Heap(Mixed)/Mixed"),
+            "{message}"
+        );
+        assert!(message.contains("cannot be boxed from I64/Void"), "{message}");
     }
 
     /// Verifies aggregate static diagnostics short-circuit exact planning.

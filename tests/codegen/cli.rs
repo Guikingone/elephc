@@ -849,6 +849,56 @@ foreach ($b as $key => $value) {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Compiles a PHP-source closure stored in a local, invokes it with one argument
+/// through the non-empty Mixed argument-buffer path, and checks exact output.
+#[test]
+fn test_cli_wasm_dynamic_closure_argument_prints_42() {
+    if Command::new("wasmer").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_dynamic_closure_42");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+$f = function(int $x): int { return $x + 1; };
+echo $f(41);
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile dynamic closure call to WASM");
+    assert!(
+        output.status.success(),
+        "dynamic closure compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wasm_path = dir.join("main.wasm");
+    assert!(wasm_path.exists(), "WASM compilation must publish main.wasm");
+    let run = Command::new("wasmer")
+        .arg("run")
+        .arg(&wasm_path)
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run dynamic closure call under Wasmer");
+    assert!(
+        run.status.success(),
+        "dynamic closure call trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "42");
+    assert!(run.stderr.is_empty(), "unexpected stderr: {:?}", run.stderr);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Compiles an escaping by-ref closure from PHP source to wasm32-wasi and runs it
 /// twice under Wasmer. The creator's frame is gone before either call, so `23`
 /// proves the closure owns the ref cell instead of dereferencing freed storage.

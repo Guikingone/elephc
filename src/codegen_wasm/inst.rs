@@ -17,8 +17,8 @@
 //! - Borrow rule: `value_repr`/`slot_repr` borrow `ctx`; clone the needed strings
 //!   (via `local_refs()` or `.clone()`) before calling a `&mut self` method.
 
+use super::calls::{classify_by_ref_source, resolve_direct_call, ByRefSource};
 use super::context::{FnCtx, Result};
-use super::symbols::{function_symbol, user_function_symbol};
 use super::transfer;
 use super::values::WasmRepr;
 use super::wat::ValType;
@@ -248,31 +248,35 @@ pub(super) fn data_immediate(inst: &Instruction) -> Result<DataId> {
 /// - Any other operand (literals, property reads, temporaries) is rejected with a clean
 ///   diagnostic (non-local by-ref deferred).
 fn lower_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
-    let data_id = data_immediate(inst)?;
-    let name = ctx
-        .module
-        .data
-        .function_names
-        .get(data_id.as_raw() as usize)
-        .cloned()
-        .ok_or_else(|| WasmError::Unsupported(format!("call: unknown function data {:?}", data_id)))?;
-    // Resolve the callee once and snapshot the by-ref param flags into owned data, so no
-    // `&Function` borrow is held across the mutable `ctx` calls below. Reject a by-ref
-    // variadic parameter up front (out of scope for P7c0b).
-    let callee = ctx.module.functions.iter().find(|f| f.name == name);
-    let symbol = callee
-        .map(function_symbol)
-        .unwrap_or_else(|| user_function_symbol(&name));
-    // Callee return type is resolved near the call site for result storage.
-    let by_ref_params: Vec<bool> = callee
-        .map(|f| f.params.iter().map(|p| p.by_ref).collect())
-        .unwrap_or_default();
-    if let Some(f) = callee {
-        if f.params.iter().any(|p| p.by_ref && p.variadic) {
-            return Err(WasmError::Unsupported(
-                "by-ref variadic parameter (P7c0b)".to_string(),
-            ));
-        }
+    let target = resolve_direct_call(ctx.module, inst)?;
+    let symbol = target.symbol;
+    let name = target.name.to_string();
+    let params: Vec<(IrType, PhpType, bool, bool)> = target
+        .function
+        .params
+        .iter()
+        .map(|param| {
+            (
+                param.ir_type,
+                param.php_type.codegen_repr(),
+                param.by_ref,
+                param.variadic,
+            )
+        })
+        .collect();
+    let callee_return_type = target.function.return_type;
+    let callee_return_php = target.function.return_php_type.codegen_repr();
+    if params.iter().any(|(_, _, _, variadic)| *variadic) {
+        return Err(WasmError::Unsupported(format!(
+            "variadic direct call target {name:?} is outside the wasm32-wasi L1 call contract"
+        )));
+    }
+    if params.len() != inst.operands.len() {
+        return Err(WasmError::Unsupported(format!(
+            "direct call target {name:?} expects {} lowered operands, got {}",
+            params.len(),
+            inst.operands.len()
+        )));
     }
 
     // Pre-call pass: push each argument in the callee parameter's representation.
@@ -282,26 +286,16 @@ fn lower_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     // Mixed cells are unboxed for concrete parameters.
     let mut temp_cells: Vec<TempCell> = Vec::new();
     let mut slot_to_cell: HashMap<u32, usize> = HashMap::new();
-    for (i, &arg) in inst.operands.iter().enumerate() {
-        let is_by_ref = i < by_ref_params.len() && by_ref_params[i];
-        if is_by_ref {
+    for (&arg, (param_ir, param_php, by_ref, _)) in inst.operands.iter().zip(&params) {
+        if *by_ref {
             push_by_ref_arg(ctx, arg, &mut temp_cells, &mut slot_to_cell)?;
-        } else if let Some(param) = callee.map(|f| f.params.get(i)).flatten() {
-            transfer::emit_push_call_argument(ctx, arg, param.ir_type, param.php_type.codegen_repr())?;
         } else {
-            // Callee signature unknown (e.g. an unresolved extern): push the argument
-            // in its native representation; this is the best-effort fallback.
-            ctx.emit_load_value(arg)?;
+            transfer::emit_push_call_argument(ctx, arg, *param_ir, param_php.clone())?;
         }
     }
 
     ctx.fb
         .ins(&format!("call ${}", symbol), &format!("call {}", name));
-
-    let callee_return_type = callee.map(|f| f.return_type).unwrap_or(IrType::Void);
-    let callee_return_php = callee
-        .map(|f| f.return_php_type.codegen_repr())
-        .unwrap_or(PhpType::Void);
 
     if let Some(_r) = inst.result {
         transfer::emit_store_call_result(ctx, &inst, callee_return_type, callee_return_php)?;
@@ -334,48 +328,6 @@ struct TempCell {
     ptr_local: String,
 }
 
-/// The source of a by-ref argument, resolved by introspecting the operand's defining
-/// instruction.
-pub(super) enum ByRefSource {
-    /// The operand is `LoadRefCell(slot)`: the caller's local is already ref-bound (from
-    /// a prior `=&`/foreach), so the existing cell pointer is shared with the callee.
-    AlreadyRefBound(u32),
-    /// The operand is `LoadLocal(slot)`: a fresh local to mirror into a temp cell.
-    FreshLocal(LocalSlotId),
-    /// Anything else (literals, property reads, temporaries, block params): non-local
-    /// by-ref, currently rejected with a clean diagnostic.
-    NonLocal,
-}
-
-/// Introspects a by-ref operand's defining instruction to classify its source.
-///
-/// EIR routes a ref-bound slot read through `LoadRefCell`; a plain local read is
-/// `LoadLocal`. Any other defining instruction (or a block-parameter definition) means
-/// the argument is not a local, so by-ref is unsupported (clean diagnostic). This keeps
-/// the ABI agreement — only a local's storage can be safely mirrored into / shared as a
-/// cell — enforced at the lowering edge.
-pub(super) fn resolve_by_ref_source(ctx: &FnCtx, arg: ValueId) -> Result<ByRefSource> {
-    let val = ctx
-        .function
-        .value(arg)
-        .ok_or_else(|| WasmError::Unsupported(format!("by-ref arg {:?} has no value", arg)))?;
-    let inst_id = match val.def {
-        ValueDef::Instruction { inst, .. } => inst,
-        _ => return Ok(ByRefSource::NonLocal),
-    };
-    let def = ctx
-        .function
-        .instruction(inst_id)
-        .ok_or_else(|| WasmError::Unsupported(format!("by-ref arg {:?} def missing", arg)))?;
-    Ok(match (def.op, &def.immediate) {
-        (Op::LoadRefCell, Some(Immediate::LocalSlot(slot))) => {
-            ByRefSource::AlreadyRefBound(slot.as_raw())
-        }
-        (Op::LoadLocal, Some(Immediate::LocalSlot(slot))) => ByRefSource::FreshLocal(*slot),
-        _ => ByRefSource::NonLocal,
-    })
-}
-
 /// Returns the `codegen_repr` payload `PhpType` of a local slot.
 ///
 /// Drives the retain kind (Callable special-case) and the cell's payload release in
@@ -401,7 +353,7 @@ fn push_by_ref_arg(
     temp_cells: &mut Vec<TempCell>,
     slot_to_cell: &mut HashMap<u32, usize>,
 ) -> Result<()> {
-    match resolve_by_ref_source(ctx, arg)? {
+    match classify_by_ref_source(ctx.function, arg) {
         ByRefSource::AlreadyRefBound(slot_raw) => {
             let ptr = ctx.ref_cell_ptr(slot_raw)?.to_string();
             ctx.fb.ins(

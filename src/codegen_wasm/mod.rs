@@ -21,6 +21,7 @@
 
 mod artifacts;
 mod arrays;
+mod calls;
 mod classes;
 mod capability;
 mod closures;

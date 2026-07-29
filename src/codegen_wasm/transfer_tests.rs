@@ -26,6 +26,141 @@ use std::sync::atomic::{AtomicU32, Ordering};
 /// Per-process counter for unique temp directories used by parallel wasmer runs.
 static TMP_SEQ: AtomicU32 = AtomicU32::new(0);
 
+/// Verifies equal-width i64 values do not bypass PHP-type validation at a call
+/// boundary, where treating an integer as a callable would corrupt dispatch.
+#[test]
+fn equal_width_scalar_transfer_still_requires_php_type_identity() {
+    let error = super::transfer::classify_transfer(
+        IrType::I64,
+        PhpType::Int,
+        IrType::I64,
+        PhpType::Callable,
+    )
+    .expect_err("int must not bit-copy into callable storage");
+
+    assert!(error.to_string().contains("unsupported wasm value transfer"));
+}
+
+/// Rejects malformed source metadata before any boxing branch can reinterpret
+/// same-width values as a different PHP runtime kind.
+#[test]
+fn malformed_source_storage_pairs_never_box_as_mixed() {
+    let malformed = [
+        (IrType::I64, PhpType::Object("C".to_string())),
+        (IrType::F64, PhpType::Int),
+        (IrType::Str, PhpType::Int),
+        (
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Object("C".to_string()),
+        ),
+    ];
+
+    for (source_ir, source_php) in malformed {
+        let error = super::transfer::classify_transfer(
+            source_ir,
+            source_php.clone(),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        )
+        .expect_err("malformed source pair must be rejected");
+        assert!(
+            error.to_string().contains("invalid source"),
+            "unexpected error for {source_ir:?}/{source_php:?}: {error}"
+        );
+    }
+}
+
+/// Rejects malformed destination metadata before Mixed unboxing selects a cast
+/// solely from the destination's WASM width.
+#[test]
+fn malformed_destination_storage_pairs_never_unbox_mixed() {
+    let malformed = [
+        (IrType::I64, PhpType::Object("C".to_string())),
+        (IrType::F64, PhpType::Int),
+        (IrType::Str, PhpType::Int),
+        (
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Object("C".to_string()),
+        ),
+    ];
+
+    for (dest_ir, dest_php) in malformed {
+        let error = super::transfer::classify_transfer(
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            dest_ir,
+            dest_php.clone(),
+        )
+        .expect_err("malformed destination pair must be rejected");
+        assert!(
+            error.to_string().contains("invalid destination"),
+            "unexpected error for {dest_ir:?}/{dest_php:?}: {error}"
+        );
+    }
+}
+
+/// Rejects canonical i64 destinations whose semantics need a specialized
+/// unboxer instead of the generic integer-cast transfer path.
+#[test]
+fn mixed_to_callable_or_pointer_requires_specialized_unboxing() {
+    for php_type in [PhpType::Callable, PhpType::Pointer(None)] {
+        let error = super::transfer::classify_transfer(
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            IrType::I64,
+            php_type.clone(),
+        )
+        .expect_err("generic Mixed unboxing must not reinterpret callable/pointer payloads");
+        assert!(
+            error.to_string().contains("unboxing a Mixed cell"),
+            "unexpected error for {php_type:?}: {error}"
+        );
+    }
+}
+
+/// Covers every canonical EIR storage family accepted by the shared pair
+/// validator, including the explicit null-sentinel exception.
+#[test]
+fn canonical_storage_pair_matrix_is_exhaustive() {
+    let canonical = [
+        (IrType::I64, PhpType::Int),
+        (IrType::I64, PhpType::Bool),
+        (IrType::I64, PhpType::Callable),
+        (IrType::I64, PhpType::Pointer(None)),
+        (IrType::F64, PhpType::Float),
+        (IrType::Str, PhpType::Str),
+        (IrType::TaggedScalar, PhpType::TaggedScalar),
+        (
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Int)),
+        ),
+        (
+            IrType::Heap(IrHeapKind::Hash),
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Int),
+            },
+        ),
+        (
+            IrType::Heap(IrHeapKind::Object),
+            PhpType::Object("C".to_string()),
+        ),
+        (IrType::Heap(IrHeapKind::Iterable), PhpType::Iterable),
+        (
+            IrType::Heap(IrHeapKind::Buffer),
+            PhpType::Buffer(Box::new(PhpType::Int)),
+        ),
+        (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed),
+        (IrType::Void, PhpType::Void),
+        (IrType::I64, PhpType::Void),
+    ];
+
+    for (ir_type, php_type) in canonical {
+        super::transfer::validate_storage_pair(ir_type, &php_type)
+            .unwrap_or_else(|error| panic!("{ir_type:?}/{php_type:?}: {error}"));
+    }
+}
+
 /// Returns a fresh temp directory path so concurrent wasmer runs cannot collide.
 fn unique_tmp_dir(tag: &str) -> std::path::PathBuf {
     let n = TMP_SEQ.fetch_add(1, Ordering::Relaxed);

@@ -49,13 +49,12 @@
 //!   acquire gives the body an owned ref, and the array's deep free releases the cell
 //!   that `__rt_mixed_from_value` incref'd/persisted.
 
+use super::calls::{classify_by_ref_source, ByRefSource};
 use super::context::{FnCtx, Result};
 use super::symbols::{
     closure_body_symbol, closure_wrapper_symbol, fcc_wrapper_symbol, function_symbol,
 };
-use super::inst::{
-    ByRefSource, data_immediate, operand, resolve_by_ref_source, slot_payload_type, store_result,
-};
+use super::inst::{data_immediate, operand, slot_payload_type, store_result};
 use super::objects::emit_box_value_into_mixed;
 use super::values::WasmRepr;
 use super::wat::{DataSegment, ValType, WatModule};
@@ -77,6 +76,12 @@ use crate::types::PhpType;
 pub(super) fn emit_closure_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_CALLABLE_DESCRIPTOR_RELEASE);
 }
+
+/// Non-returning corruption boundary shared by callable descriptor and argument
+/// guards. It intentionally has no WASI dependency so library-shaped modules
+/// without a command entry remain valid.
+const RT_FAIL_CALLABLE_DISPATCH: &str =
+    "(func $__rt_fail_callable_dispatch\n  unreachable)";
 
 /// `__rt_callable_descriptor_release`: the kind-6 release entry. Decrements the
 /// descriptor refcount; at zero, walks the capture slots (releasing each refcounted
@@ -711,7 +716,7 @@ fn validate_by_ref_capture_source(
     operand: ValueId,
     cap_p: &crate::ir::FunctionParam,
 ) -> Result<LocalSlotId> {
-    match resolve_by_ref_source(ctx, operand)? {
+    match classify_by_ref_source(ctx.function, operand) {
         ByRefSource::AlreadyRefBound(raw) if ctx.ref_cell_has_owner(raw) => {
             Ok(LocalSlotId::from_raw(raw))
         }
@@ -1073,8 +1078,9 @@ fn release_cell(ctx: &mut FnCtx, rcell: &str) {
 /// (result i32))` unboxes each arg slot to the body's declared parameter type (acquiring
 /// containers/callables so the body's Owned params balance), calls the body, boxes the
 /// body's result into a Mixed cell, and returns the cell. `__rt_closure_call` reads the
-/// `entry_index` from `[desc+8]` and tail-calls the matching wrapper; the fall-through is
-/// `unreachable` (a valid descriptor always carries a known index).
+/// `entry_index` from `[desc+8]` only after validating the descriptor allocation,
+/// heap kind, callable kind, and matching wrapper arm. Invalid descriptors, entry
+/// indices, and argument arrays route through one named failure helper.
 ///
 /// The ladder is UNIFIED (P7d2a): the `module.closures` wrappers take indices `0..N`
 /// (`N = module.closures.len()`), then one FCC wrapper per `fcc_entries` name takes
@@ -1088,12 +1094,35 @@ pub(super) fn emit_closure_dispatch(
     if module.closures.is_empty() && fcc_entries.is_empty() {
         return Ok(());
     }
-    let mut arms: Vec<(u32, String)> = Vec::new();
+    let mut arms: Vec<(u32, i64, u32, u32, String)> = Vec::new();
     for (idx, f) in ordered_closures(module).into_iter().enumerate() {
         let wrapper_symbol = wrapper_symbol(&f.name);
         let wat = build_closure_wrapper(&wrapper_symbol, f)?;
         wm.add_raw_func(&wat);
-        arms.push((idx as u32, wrapper_symbol));
+        let capture_count = u32::try_from(f.flags.closure_capture_count).map_err(|_| {
+            WasmError::Unsupported(format!(
+                "closure {} capture count exceeds the WASM descriptor index range",
+                f.name
+            ))
+        })?;
+        let descriptor_bytes = capture_count
+            .checked_mul(CAPTURE_SLOT_BYTES as u32)
+            .and_then(|capture_bytes| {
+                (DESCRIPTOR_PAYLOAD_BYTES as u32).checked_add(capture_bytes)
+            })
+            .ok_or_else(|| {
+                WasmError::Unsupported(format!(
+                    "closure {} descriptor size overflows wasm32",
+                    f.name
+                ))
+            })?;
+        arms.push((
+            idx as u32,
+            1,
+            capture_count,
+            descriptor_bytes,
+            wrapper_symbol,
+        ));
     }
     let base = module.closures.len() as u32;
     for (k, name) in fcc_entries.iter().enumerate() {
@@ -1104,8 +1133,15 @@ pub(super) fn emit_closure_dispatch(
         let wrapper_symbol = fcc_wrapper_symbol(name);
         let wat = build_fcc_wrapper(&wrapper_symbol, target)?;
         wm.add_raw_func(&wat);
-        arms.push((entry_index, wrapper_symbol));
+        arms.push((
+            entry_index,
+            11,
+            0,
+            DESCRIPTOR_PAYLOAD_BYTES as u32,
+            wrapper_symbol,
+        ));
     }
+    wm.add_raw_func(RT_FAIL_CALLABLE_DISPATCH);
     wm.add_raw_func(&build_closure_call_ladder(&arms));
     // The higher-order `array_map($f, $arr)` runtime (`__rt_array_map_callable`)
     // dispatches each element through this `__rt_closure_call` ladder, so it is
@@ -1467,6 +1503,14 @@ fn build_fcc_wrapper(wrapper_symbol: &str, f: &Function) -> Result<String> {
     // Shared unbox/box locals (reused per arg/result; each value is pushed before reuse).
     wat.push_str("  (local $ub_tag i64) (local $ub_lo i64) (local $ub_hi i64)\n");
     wat.push_str("  (local $rb_i64 i64) (local $rb_f64 f64) (local $rb_ptr i32) (local $rb_len i64)\n");
+    wat.push_str("  (local $args_len i64) (local $args_capacity i64) (local $args_size i32)\n");
+    let required_count = i64::try_from(f.params.len()).map_err(|_| {
+        WasmError::Unsupported(format!(
+            "first-class callable {} parameter count exceeds i64",
+            f.name
+        ))
+    })?;
+    append_arg_array_guard(&mut wat, required_count);
 
     // Unbox each parameter from the arg buffer and push it for the body call.
     for (i, p) in f.params.iter().enumerate() {
@@ -1500,30 +1544,155 @@ fn wat_ins(code: &str, comment: &str) -> String {
     format!("{}{};; {}\n", prefix, " ".repeat(pad), comment)
 }
 
-/// Builds the raw WAT `__rt_closure_call` if-ladder from the (entry_index, wrapper) arms.
-fn build_closure_call_ladder(arms: &[(u32, String)]) -> String {
+/// Appends the argument-array provenance, length, stride, and element-kind guard
+/// shared by closure and free-function wrappers.
+///
+/// A freshly allocated empty `array<mixed>` has length zero, 16-byte stride, and
+/// the allocator's initial value type 1 until the first Mixed push stamps type 7.
+/// That one empty state is valid; every non-empty wrapper input must be type 7.
+fn append_arg_array_guard(wat: &mut String, required_count: i64) {
+    wat.push_str("  ;; validate the complete argument-array header before reading a slot\n");
+    wat.push_str(
+        "  (if (i32.lt_u (local.get $args) (i32.add (global.get $__heap_base) (i32.const 16)))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
+    wat.push_str(
+        "  (if (i32.ge_u (local.get $args) (global.get $__heap_ptr))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
+    wat.push_str(
+        "  (if (i32.ne (i32.and (local.get $args) (i32.const 7)) (i32.const 0))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
+    wat.push_str(
+        "  (if (i32.ne (i32.and (i32.wrap_i64 (i64.load (i32.sub (local.get $args) (i32.const 8)))) (i32.const 255)) (i32.const 2))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
+    wat.push_str(
+        "  (if (i32.eqz (i32.load (i32.sub (local.get $args) (i32.const 12))))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
+    wat.push_str("  (local.set $args_size (i32.load (i32.sub (local.get $args) (i32.const 16))))\n");
+    wat.push_str(
+        "  (if (i32.lt_u (local.get $args_size) (i32.const 24))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
+    wat.push_str(
+        "  (if (i32.ne (i32.and (local.get $args_size) (i32.const 7)) (i32.const 0))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
+    wat.push_str(
+        "  (if (i64.gt_u (i64.add (i64.extend_i32_u (local.get $args)) (i64.extend_i32_u (local.get $args_size))) (i64.extend_i32_u (global.get $__heap_ptr)))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
+    wat.push_str("  (local.set $args_len (i64.load (local.get $args)))\n");
+    wat.push_str("  (local.set $args_capacity (i64.load offset=8 (local.get $args)))\n");
+    wat.push_str(
+        "  (if (i64.lt_s (local.get $args_len) (i64.const 0))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
+    wat.push_str(
+        "  (if (i64.lt_s (local.get $args_capacity) (i64.const 0))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
+    wat.push_str(
+        "  (if (i64.gt_u (local.get $args_len) (local.get $args_capacity))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
+    wat.push_str(&format!(
+        "  (if (i64.lt_u (local.get $args_len) (i64.const {}))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        required_count
+    ));
+    wat.push_str(
+        "  (if (i64.ne (i64.load offset=16 (local.get $args)) (i64.const 16))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
+    wat.push_str(
+        "  (if (i64.gt_u (local.get $args_capacity) (i64.extend_i32_u (i32.div_u (i32.sub (local.get $args_size) (i32.const 24)) (i32.const 16))))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
+    wat.push_str(
+        "  (if (i64.ne (local.get $args_len) (i64.const 0))\n    (then\n      (if (i32.ne (i32.and (i32.wrap_i64 (i64.shr_u (i64.load (i32.sub (local.get $args) (i32.const 8))) (i64.const 8))) (i32.const 127)) (i32.const 7))\n        (then (call $__rt_fail_callable_dispatch) unreachable))))\n",
+    );
+}
+
+/// Builds the raw WAT `__rt_closure_call` guarded if-ladder from
+/// `(entry_index, descriptor_kind, capture_count, descriptor_bytes, wrapper)`
+/// arms.
+fn build_closure_call_ladder(arms: &[(u32, i64, u32, u32, String)]) -> String {
     let mut wat = String::new();
     wat.push_str("(func $__rt_closure_call (param $desc i32) (param $args i32) (result i32)\n");
     wat.push_str("  (local $idx i32)\n");
+    wat.push_str("  (local $kind i64)\n");
+    wat.push_str("  (local $size i32)\n");
+    wat.push_str(
+        "  (if (i32.lt_u (local.get $desc) (i32.add (global.get $__heap_base) (i32.const 16)))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
+    wat.push_str(
+        "  (if (i32.ge_u (local.get $desc) (global.get $__heap_ptr))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
+    wat.push_str(
+        "  (if (i32.ne (i32.and (i32.wrap_i64 (i64.load (i32.sub (local.get $desc) (i32.const 8)))) (i32.const 255)) (i32.const 6))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
+    wat.push_str(
+        "  (local.set $size (i32.load (i32.sub (local.get $desc) (i32.const 16))))\n",
+    );
+    wat.push_str(
+        "  (if (i32.lt_u (local.get $size) (i32.const 32))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
+    wat.push_str(
+        "  (if (i32.ne (i32.and (local.get $size) (i32.const 7)) (i32.const 0))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
+    wat.push_str(
+        "  (if (i64.gt_u (i64.add (i64.extend_i32_u (local.get $desc)) (i64.extend_i32_u (local.get $size))) (i64.extend_i32_u (global.get $__heap_ptr)))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
+    wat.push_str(
+        "  (if (i32.eqz (i32.load (i32.sub (local.get $desc) (i32.const 12))))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
+    wat.push_str(&wat_ins("local.get $desc", "validated descriptor pointer"));
+    wat.push_str(&wat_ins("i64.load", "descriptor kind = [desc+0]"));
+    wat.push_str(&wat_ins("local.set $kind", "save the callable kind"));
+    wat.push_str(
+        "  (if (i32.eqz (i32.or (i64.eq (local.get $kind) (i64.const 1)) (i64.eq (local.get $kind) (i64.const 11))))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+    );
     wat.push_str(&wat_ins("local.get $desc", "descriptor pointer"));
     wat.push_str(&wat_ins("i32.load offset=8", "entry_index = [desc+8]"));
     wat.push_str(&wat_ins("local.set $idx", "save the dispatch key"));
-    for (idx, wrapper) in arms {
+    for (idx, expected_kind, expected_captures, descriptor_bytes, wrapper) in arms {
         wat.push_str(&format!(
-            "  ;; dispatch arm for closure entry_index {}\n",
-            idx
+            "  ;; dispatch arm for entry_index {} and descriptor kind {}\n",
+            idx, expected_kind
         ));
         wat.push_str(&wat_ins("local.get $idx", "load the dispatch key"));
         wat.push_str(&wat_ins(&format!("i32.const {}", idx), "the arm's entry_index"));
         wat.push_str(&wat_ins("i32.eq", "key == entry_index ?"));
+        wat.push_str(&wat_ins("local.get $kind", "load the descriptor kind"));
+        wat.push_str(&wat_ins(
+            &format!("i64.const {}", expected_kind),
+            "the arm's descriptor kind",
+        ));
+        wat.push_str(&wat_ins("i64.eq", "kind matches this arm?"));
+        wat.push_str(&wat_ins("i32.and", "entry and kind both match?"));
+        wat.push_str(&wat_ins("local.get $desc", "validated descriptor pointer"));
+        wat.push_str(&wat_ins(
+            "i32.load offset=12",
+            "descriptor capture count",
+        ));
+        wat.push_str(&wat_ins(
+            &format!("i32.const {}", expected_captures),
+            "the arm's capture count",
+        ));
+        wat.push_str(&wat_ins("i32.eq", "capture count matches this arm?"));
+        wat.push_str(&wat_ins("i32.and", "entry, kind, and captures match?"));
+        wat.push_str(&wat_ins("local.get $size", "descriptor payload bytes"));
+        wat.push_str(&wat_ins(
+            &format!("i32.const {}", descriptor_bytes),
+            "minimum bytes for this arm",
+        ));
+        wat.push_str(&wat_ins("i32.ge_u", "descriptor covers every capture slot?"));
+        wat.push_str(&wat_ins("i32.and", "complete descriptor shape matches?"));
         wat.push_str("  (if (then\n");
         wat.push_str(&wat_ins("local.get $desc", "forward the descriptor"));
         wat.push_str(&wat_ins("local.get $args", "forward the arg buffer"));
         wat.push_str(&format!("    call ${}\n", wrapper));
         wat.push_str("    return))\n");
     }
-    wat.push_str("  ;; a valid descriptor always carries a known entry_index\n");
-    wat.push_str(&wat_ins("unreachable", "fall-through: unknown entry_index traps"));
+    wat.push_str("  ;; reject an unknown or kind-mismatched entry without reading args\n");
+    wat.push_str(&wat_ins(
+        "call $__rt_fail_callable_dispatch",
+        "invalid callable dispatch",
+    ));
+    wat.push_str(&wat_ins(
+        "unreachable",
+        "failure helper is deliberately non-returning",
+    ));
     wat.push_str(")\n");
     wat
 }
@@ -1557,6 +1726,14 @@ fn build_closure_wrapper(wrapper_symbol: &str, f: &Function) -> Result<String> {
     // Shared unbox/box locals (reused per arg/result; each value is pushed before reuse).
     wat.push_str("  (local $ub_tag i64) (local $ub_lo i64) (local $ub_hi i64)\n");
     wat.push_str("  (local $rb_i64 i64) (local $rb_f64 f64) (local $rb_ptr i32) (local $rb_len i64)\n");
+    wat.push_str("  (local $args_len i64) (local $args_capacity i64) (local $args_size i32)\n");
+    let required_count = i64::try_from(vis).map_err(|_| {
+        WasmError::Unsupported(format!(
+            "closure {} visible parameter count exceeds i64",
+            f.name
+        ))
+    })?;
+    append_arg_array_guard(&mut wat, required_count);
 
     // Unbox each visible parameter from the arg buffer and push it for the body call.
     for (i, p) in f.params[..vis].iter().enumerate() {
@@ -1880,7 +2057,9 @@ mod tests {
     //!   `__rt_decref_any`, the refcount keep/free paths, and a callable boxed in a
     //!   Mixed cell releasing through the tag-10 arm. Create/call lowering is P7a1.
 
-    use super::emit_closure_runtime;
+    use super::{
+        build_closure_call_ladder, build_fcc_wrapper, emit_closure_runtime,
+    };
     use super::super::arrays::emit_array_runtime;
     use super::super::classes::{emit_class_metadata_stub, emit_class_runtime};
     use super::super::heap::emit_heap_runtime;
@@ -1897,6 +2076,76 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static TMP_SEQ: AtomicU32 = AtomicU32::new(0);
+
+    /// Verifies the unified ladder validates descriptor provenance and kind
+    /// before loading its entry index, and routes unknown entries through the
+    /// named corruption boundary.
+    #[test]
+    fn callable_ladder_guards_descriptor_before_entry_dispatch() {
+        let wat =
+            build_closure_call_ladder(&[(0, 1, 0, 32, "wrapper".to_string())]);
+        let header_guard = wat
+            .find("i32.const 6")
+            .expect("callable heap-kind guard");
+        let entry_load = wat
+            .find("i32.load offset=8")
+            .expect("descriptor entry load");
+
+        assert!(header_guard < entry_load, "{wat}");
+        assert!(wat.contains("descriptor kind = [desc+0]"), "{wat}");
+        assert!(wat.contains("call $__rt_fail_callable_dispatch"), "{wat}");
+    }
+
+    /// Verifies wrapper arity and array-layout guards precede the first 16-byte
+    /// Mixed-cell argument-slot read.
+    #[test]
+    fn callable_wrapper_guards_argument_array_before_slot_read() {
+        let mut function =
+            Function::new("guarded".to_string(), IrType::Void, PhpType::Void);
+        function.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+        let wat = build_fcc_wrapper("guarded_wrapper", &function).expect("wrapper WAT");
+        let length_guard = wat
+            .find("i64.lt_u (local.get $args_len) (i64.const 1)")
+            .expect("argument-count guard");
+        let slot_read = wat
+            .find("i64.load offset=24")
+            .expect("first argument slot read");
+        let alignment_guard = wat
+            .find("i32.and (local.get $args) (i32.const 7)")
+            .expect("argument-pointer alignment guard");
+        let refcount_guard = wat
+            .find("i32.load (i32.sub (local.get $args) (i32.const 12))")
+            .expect("argument-array refcount guard");
+        let payload_header_read = wat
+            .find("local.set $args_len (i64.load (local.get $args))")
+            .expect("argument-array payload header read");
+
+        assert!(length_guard < slot_read, "{wat}");
+        assert!(alignment_guard < payload_header_read, "{wat}");
+        assert!(refcount_guard < payload_header_read, "{wat}");
+        assert!(alignment_guard < refcount_guard, "{wat}");
+        assert!(wat.contains("i64.load offset=16"), "{wat}");
+        assert!(wat.contains("i32.const 7"), "{wat}");
+    }
+
+    /// Verifies the value-type-7 requirement is conditional on a non-empty
+    /// buffer, preserving a freshly allocated zero-argument `array<mixed>`.
+    #[test]
+    fn callable_wrapper_accepts_the_empty_unstamped_mixed_buffer_shape() {
+        let function = Function::new("empty".to_string(), IrType::Void, PhpType::Void);
+        let wat = build_fcc_wrapper("empty_wrapper", &function).expect("wrapper WAT");
+
+        assert!(
+            wat.contains("i64.ne (local.get $args_len) (i64.const 0)"),
+            "{wat}"
+        );
+    }
 
     /// Returns a unique temp directory path so concurrent wasmer runs never collide.
     fn unique_tmp_dir() -> std::path::PathBuf {

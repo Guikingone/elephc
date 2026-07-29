@@ -31,14 +31,39 @@ use crate::types::PhpType;
 /// Elephc's null sentinel value, loaded for the result of a void callee.
 const VOID_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
 
+/// The exact conversion family shared by capability validation and emission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TransferKind {
+    /// Source and destination have the same concrete WASM representation.
+    Copy,
+    /// A concrete source is boxed into a runtime Mixed cell.
+    BoxMixed,
+    /// A runtime Mixed cell is converted to a concrete destination.
+    UnboxMixed,
+}
+
 /// Returns true when an EIR/PHP pair is realized as a runtime Mixed cell pointer.
 ///
-/// A regular union lowers to `Heap(Union)` while its codegen representation is
-/// `Mixed`; a nullable-int union instead uses `TaggedScalar` and must not be
-/// treated as a Mixed cell.
+/// Ordinary unions are normalized to `Mixed` before this boundary; nullable-int
+/// unions use `TaggedScalar` and must not be treated as Mixed cells.
 fn is_mixed_cell_storage(ir: IrType, php: &PhpType) -> bool {
-    ir == IrType::Heap(IrHeapKind::Mixed)
-        || (ir == IrType::Heap(IrHeapKind::Union) && *php == PhpType::Mixed)
+    ir == IrType::Heap(IrHeapKind::Mixed) && php.codegen_repr() == PhpType::Mixed
+}
+
+/// Validates that one PHP type uses its canonical EIR storage representation.
+///
+/// Null values are the sole exception: EIR materializes their sentinel as
+/// `I64/Void`, while function-level void results use `Void/Void`.
+pub(super) fn validate_storage_pair(ir: IrType, php: &PhpType) -> Result<()> {
+    let php = php.codegen_repr();
+    let canonical_ir = IrType::from_php(&php);
+    if ir == canonical_ir || (ir == IrType::I64 && php == PhpType::Void) {
+        return Ok(());
+    }
+    Err(WasmError::Unsupported(format!(
+        "invalid wasm storage pair {:?}/{:?}; canonical EIR storage is {:?}",
+        ir, php, canonical_ir
+    )))
 }
 
 /// Returns true when a source representation can be copied bit-wise into the
@@ -56,7 +81,7 @@ fn reprs_match_for_copy(
         | (WasmRepr::F64(_), WasmRepr::F64(_))
         | (WasmRepr::Void, WasmRepr::Void)
         | (WasmRepr::Str { .. }, WasmRepr::Str { .. })
-        | (WasmRepr::Tagged { .. }, WasmRepr::Tagged { .. }) => true,
+        | (WasmRepr::Tagged { .. }, WasmRepr::Tagged { .. }) => source_php == dest_php,
         (WasmRepr::Ptr(_), WasmRepr::Ptr(_)) => {
             // If either side is a Mixed cell, the transfer is not a plain copy:
             // concrete-to-Mixed must box, and Mixed-to-concrete must unbox.
@@ -68,42 +93,102 @@ fn reprs_match_for_copy(
             // Concrete heap pointers are bit-compatible only when their EIR
             // storage kinds agree. Cross-kind pointer reinterpretation requires
             // an explicit lowering path instead of a count-only copy.
-            source_ir == dest_ir
+            source_ir == dest_ir && source_php == dest_php
         }
         _ => false,
     }
 }
 
+/// Classifies one source-to-destination transfer without emitting WAT.
+///
+/// This is the capability contract for call arguments and results. Emission
+/// consumes the same classification, preventing the static gate from drifting
+/// away from the conversion branches implemented below.
+pub(super) fn classify_transfer(
+    source_ir: IrType,
+    source_php: PhpType,
+    dest_ir: IrType,
+    dest_php: PhpType,
+) -> Result<TransferKind> {
+    validate_storage_pair(source_ir, &source_php).map_err(|error| {
+        WasmError::Unsupported(format!("invalid source for wasm value transfer: {error}"))
+    })?;
+    validate_storage_pair(dest_ir, &dest_php).map_err(|error| {
+        WasmError::Unsupported(format!(
+            "invalid destination for wasm value transfer: {error}"
+        ))
+    })?;
+    let source_php = source_php.codegen_repr();
+    let dest_php = dest_php.codegen_repr();
+    let source_repr = repr_for_ir(source_ir);
+    let dest_repr = repr_for_ir(dest_ir);
+    if is_mixed_cell_storage(dest_ir, &dest_php) {
+        if is_mixed_cell_storage(source_ir, &source_php) {
+            return Ok(TransferKind::Copy);
+        }
+        mixed_box_tag(&source_php, source_ir)?;
+        return Ok(TransferKind::BoxMixed);
+    }
+    if is_mixed_cell_storage(source_ir, &source_php) {
+        let supported = match dest_repr {
+            WasmRepr::I64(_) => matches!(dest_php, PhpType::Int | PhpType::Bool),
+            WasmRepr::F64(_) => dest_php == PhpType::Float,
+            WasmRepr::Str { .. } => dest_php == PhpType::Str,
+            WasmRepr::Ptr(_) => matches!(
+                dest_ir,
+                IrType::Heap(
+                    IrHeapKind::Array
+                        | IrHeapKind::Hash
+                        | IrHeapKind::Object
+                        | IrHeapKind::Iterable
+                )
+            ),
+            WasmRepr::Tagged { .. } | WasmRepr::Void => false,
+        };
+        if supported {
+            return Ok(TransferKind::UnboxMixed);
+        }
+        return Err(WasmError::Unsupported(format!(
+            "unboxing a Mixed cell to {:?} ({:?}) is not supported on wasm32-wasi",
+            dest_ir, dest_php
+        )));
+    }
+    if reprs_match_for_copy(
+        &source_repr,
+        source_ir,
+        &source_php,
+        &dest_repr,
+        dest_ir,
+        &dest_php,
+    ) {
+        return Ok(TransferKind::Copy);
+    }
+    Err(WasmError::Unsupported(format!(
+        "unsupported wasm value transfer from {:?} ({:?}/{:?}) to {:?} ({:?}/{:?})",
+        source_repr, source_php, source_ir, dest_repr, dest_php, dest_ir
+    )))
+}
+
 /// Returns the Mixed-cell boxing tag for a concrete source value.
 fn mixed_box_tag(source_php: &PhpType, source_ir: IrType) -> Result<i64> {
-    match source_ir {
-        IrType::I64 => {
-            if *source_php == PhpType::Bool {
-                Ok(3)
-            } else if *source_php == PhpType::Callable {
-                Ok(10)
-            } else {
-                Ok(0)
-            }
-        }
-        IrType::F64 => Ok(2),
-        IrType::Str => Ok(1),
-        IrType::Heap(IrHeapKind::Array) => Ok(4),
-        IrType::Heap(IrHeapKind::Hash) => Ok(5),
-        IrType::Heap(IrHeapKind::Object) => Ok(6),
-        IrType::Heap(IrHeapKind::Mixed) => Err(WasmError::Unsupported(
+    let source_php = source_php.codegen_repr();
+    match (source_ir, &source_php) {
+        (IrType::I64, PhpType::Int) => Ok(0),
+        (IrType::I64, PhpType::Bool) => Ok(3),
+        (IrType::I64, PhpType::Callable) => Ok(10),
+        (IrType::I64 | IrType::Void, PhpType::Void) => Ok(8),
+        (IrType::F64, PhpType::Float) => Ok(2),
+        (IrType::Str, PhpType::Str) => Ok(1),
+        (IrType::Heap(IrHeapKind::Array), PhpType::Array(_)) => Ok(4),
+        (IrType::Heap(IrHeapKind::Hash), PhpType::AssocArray { .. }) => Ok(5),
+        (IrType::Heap(IrHeapKind::Object), PhpType::Object(_)) => Ok(6),
+        (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed) => Err(WasmError::Unsupported(
             "mixed_box_tag called on an already-Mixed value".to_string(),
         )),
-        IrType::Heap(IrHeapKind::Iterable)
-        | IrType::Heap(IrHeapKind::Union)
-        | IrType::Heap(IrHeapKind::Buffer) => Err(WasmError::Unsupported(
-            "boxing a heap payload of this kind into a Mixed cell is not supported on wasm32-wasi"
-                .to_string(),
-        )),
-        IrType::TaggedScalar => Err(WasmError::Unsupported(
-            "boxing a tagged scalar into a Mixed cell is not supported on wasm32-wasi".to_string(),
-        )),
-        IrType::Void => Ok(8),
+        _ => Err(WasmError::Unsupported(format!(
+            "boxing {:?}/{:?} into a Mixed cell is not supported on wasm32-wasi",
+            source_ir, source_php
+        ))),
     }
 }
 
@@ -275,48 +360,25 @@ fn convert_temps_to_dest(
     dest_ir: IrType,
     dest_php: PhpType,
 ) -> Result<()> {
-    if is_mixed_cell_storage(dest_ir, &dest_php) {
-        if let WasmRepr::Ptr(_) = source_repr {
-            if is_mixed_cell_storage(source_ir, &source_php) {
-                ctx.fb.ins(
-                    &format!("local.get {}", source_temps[0]),
-                    "move existing mixed cell pointer",
-                );
-                return Ok(());
+    match classify_transfer(source_ir, source_php.clone(), dest_ir, dest_php.clone())? {
+        TransferKind::Copy => {
+            for name in source_temps {
+                ctx.fb
+                    .ins(&format!("local.get {}", name), "copy value component");
             }
+            Ok(())
         }
-        return emit_box_temps_into_mixed(
+        TransferKind::BoxMixed => emit_box_temps_into_mixed(
             ctx,
             source_temps,
             source_repr,
-            source_php.clone(),
+            source_php,
             source_ir,
-        );
-    }
-
-    if is_mixed_cell_storage(source_ir, &source_php) {
-        return emit_unbox_mixed_to_concrete(ctx, source_temps, dest_repr, dest_ir, &dest_php);
-    }
-
-    if reprs_match_for_copy(
-        source_repr,
-        source_ir,
-        &source_php,
-        dest_repr,
-        dest_ir,
-        &dest_php,
-    ) {
-        for name in source_temps {
-            ctx.fb
-                .ins(&format!("local.get {}", name), "copy value component");
+        ),
+        TransferKind::UnboxMixed => {
+            emit_unbox_mixed_to_concrete(ctx, source_temps, dest_repr, dest_ir, &dest_php)
         }
-        return Ok(());
     }
-
-    Err(WasmError::Unsupported(format!(
-        "unsupported wasm value transfer from {:?} ({:?}/{:?}) to {:?} ({:?})",
-        source_repr, source_php, source_ir, dest_repr, dest_php
-    )))
 }
 
 /// Boxes the value described by `source_temps` into a fresh owned Mixed cell via
