@@ -25,16 +25,16 @@ available evidence is insufficient.
 | Normative contract | Partially satisfied | Core 3.0 and WASI Preview 1 are identified, with the WASI ABI pinned below. Every PHP acceptance run must still record immutable php-src revisions and the complete oracle environment. |
 | Independent implementation audits | Partially satisfied | Three independent Codex audits covered EIR/runtime semantics, hosts/npm/artifacts, and ownership/cleanup after the requested Ollama reviewers became unavailable and the project owner accepted the substitution. Their findings inform this specification; the final revision has not yet received three independent approvals. |
 | Initial baseline | Partially satisfied | Counts and corpus results were recorded at one compiler revision. They are historical observations, not a generated current-revision coverage report. |
-| Production validation and artifact integrity | Partially satisfied | Production in-process assembly and Core validation plus focused artifact tests exist. External validation in the shared host job and transaction-safe publication of every output remain acceptance gates. |
+| Production validation and artifact integrity | Partially satisfied | Production in-process assembly/Core validation, external validation in the shared host job, and transaction-safe WAT/WASM/npm publication exist. Exhaustive invalid-input and rollback-path coverage remains open. |
 | Capability audit | Partially satisfied | Exhaustive identity classification and shape checks for an audited P0 subset exist. Other admitted operations still rely on late lowerer diagnostics, so operand/result types, immediates, representations, ownership, callable shapes, and control-flow shapes are not yet completely classified. |
 | Typed transfer and control flow | Partially satisfied | Focused transfer and regression tests exist. Exhaustive representation, branch, switch, ownership, and cross-host matrices remain open. |
-| WASI startup, arguments/environment, I/O, and process status | Partially satisfied | Focused implementation tests exist. The complete byte contracts, status boundaries, partial-write behavior, and three-host evidence remain open. |
+| WASI startup, arguments/environment, I/O, and process status | Partially satisfied | The pinned three-host job proves exact `$argc`/`$argv`, stdout/stderr, `exit(7)`, repeated Node runs, and partial-`fd_write` progress. Environment/preopen mapping, complete byte contracts, and the full status boundary remain open. |
 | Numeric and PHP error semantics | Partially satisfied | Selected regressions have local evidence. The versioned php-src differential matrix remains open. |
 | Allocator, ownership, COW, and adversarial safety | Partially satisfied | Focused implementation and cleanup tests exist. Exhaustive resource, malformed-state, aliasing, and failure-path evidence remains open. |
-| Deterministic artifacts | Partially satisfied | Deterministic IDs have focused tests, and two local CLI invocations produced identical WAT and WASM. A durable subprocess gate covering WAT, WASM, npm sources, and any normalized distribution archive remains open. |
+| Deterministic artifacts | Partially satisfied | Deterministic IDs have focused tests, and the pinned CI gate compares WAT, WASM, npm trees, and packed archives from independent compiler processes. Relevant map insertion orders and the complete metadata-normalization contract remain open. |
 | PHP differential parity | Open | No committed full-version oracle matrix covers the declared reachable surface. |
-| Wasmer, Wasmtime, Node, and external-validator CI | Open | The last established CI evidence installs Wasmer 4.3.7 for WASM-backed tests. A pending shared same-artifact job pins the wider toolchain, but it must be committed and observed green before it becomes evidence. |
-| Executable npm package matrix | Open | Package execution and JavaScript/TypeScript toolchain gates are not yet durable CI evidence. |
+| Wasmer, Wasmtime, Node, and external-validator CI | Satisfied | CI run `30439017754` on Elephc `0505b837ad` validates and executes one artifact under checksum-pinned Wasmer 7.2.1, Wasmtime 47.0.2, `wasm-tools` 1.254.0, Node 26.3.0, and TypeScript 6.0.3. |
+| Executable npm package matrix | Partially satisfied | The pinned job proves direct execution, repeated imported `run()`, exact status/output, package contents, reproducible archives, and strict NodeNext declarations. Environment, preopen, thrown-host-error, and concurrent-instance cases remain open. |
 | Final exact-revision review | Open | Three independent reviewers must inspect the same final source revision and its recorded acceptance logs, with no unresolved blocker. |
 
 ### Audit provenance
@@ -478,8 +478,13 @@ At the time of this audit, durable repository evidence covers:
   `wasmparser`;
 - focused artifact-publication tests, including malformed/type-invalid input
   and selected rollback paths;
-- Wasmer-backed unit tests in CI, where Wasmer 4.3.7 is installed for the
-  previously established relevant jobs;
+- [CI run `30439017754`](https://github.com/illegalstudio/elephc/actions/runs/30439017754)
+  on Elephc `0505b837ad`, which validates one artifact with `wasmparser`,
+  `wasm-tools` 1.254.0, Wasmer 7.2.1, Wasmtime 47.0.2, and Node 26.3.0, then
+  executes it on all three hosts with exact output and `exit(7)`;
+- the same job's partial-`fd_write`, repeated Node import, npm file-list,
+  reproducible WAT/WASM/package/archive, and strict TypeScript 6.0.3 NodeNext
+  checks;
 - compile-time exhaustive enum classification, focused shape checks for the
   audited P0 subset, and target-capability rejection tests;
 - focused typed-transfer, `$argc`, void/Mixed result, block-argument, loop, and
@@ -488,14 +493,12 @@ At the time of this audit, durable repository evidence covers:
 The following observations are useful but are not durable completion evidence:
 
 - local Wasmer 4.3.7 and Node 26.3.0 execution of a hello module;
-- local equality of WAT and WASM bytes from two compiler invocations;
-- the pending workflow's pinned Wasmer 7.2.1, Wasmtime 47.0.2,
-  `wasm-tools` 1.254.0, Node 26.3.0, and TypeScript 6.0.3 matrix until that job
-  is committed and observed green.
+- local `.lfc` source execution and additional smoke fixtures not retained by
+  the pinned job.
 
-No current durable gate proves shared-artifact execution on Wasmtime and Node,
-external `wasm-tools` validation, npm package execution and toolchain checks, a
-complete php-src differential corpus, or the full exit-status boundary.
+No current durable gate proves a complete php-src differential corpus, the full
+exit-status/environment/preopen boundaries, exhaustive EIR shapes, or the
+adversarial ownership/resource matrix.
 
 ### Evidence manifest
 

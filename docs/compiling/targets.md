@@ -60,14 +60,11 @@ The `wasm32-wasi` target is a non-native target: instead of emitting native
 assembly and invoking the system assembler and linker, it emits a WebAssembly
 module (`.wat`/`.wasm`) through the dedicated `src/codegen_wasm` backend, which
 consumes the same EIR the native backends use. The target is experimental.
-The last established CI evidence installs Wasmer 4.3.7 for WASM-backed unit
-tests, and production artifact generation performs in-process Core validation
-with `wasmparser`. Local Wasmer 4.3.7 and Node 26.3.0 hello-module runs have
-also been observed, but local runs are not portability evidence. A pending
-shared-artifact workflow pins Wasmer 7.2.1, Wasmtime 47.0.2, `wasm-tools`
-1.254.0, Node 26.3.0, and TypeScript 6.0.3; it is not a passing portability gate
-until committed and observed green. `--emit npm` packages the resulting command
-module for Node.js 20 or newer.
+Production artifact generation performs in-process Core validation with
+`wasmparser`. The dedicated host-portability job is green on Elephc
+`0505b837ad`; it checksum-pins Wasmer 7.2.1, Wasmtime 47.0.2, `wasm-tools`
+1.254.0, Node 26.3.0, and TypeScript 6.0.3. `--emit npm` packages the resulting
+command module for Node.js 20 or newer.
 
 Unlike the native macOS/Linux targets, `wasm32-wasi` is **not yet at full
 parity**. It supports a growing subset of the language, and an EIR operation
@@ -88,14 +85,14 @@ The durable tested inventory currently includes:
   tests;
 - focused typed-transfer, `$argc`, void/Mixed result, block-argument, loop, and
   deterministic-identifier regressions;
-- Wasmer-backed unit tests in the previously established CI jobs that install
-  Wasmer 4.3.7.
+- one shared artifact validated with `wasmparser`, `wasm-tools`, Wasmer,
+  Wasmtime, and Node, then executed under all three hosts with exact output and
+  `exit(7)`;
+- independent-process WAT/WASM/npm/archive reproducibility, partial `fd_write`,
+  repeated Node imports, npm contents, and strict TypeScript NodeNext checks.
 
-It does not yet include a required passing Wasmtime/Node/`wasm-tools`
-same-artifact CI matrix, executable npm-package and TypeScript/JavaScript
-toolchain gates, a full php-src differential corpus, or exhaustive EIR shape,
-ownership, argument/environment, and process-status coverage. In particular,
-there is no durable Wasmtime `exit(7)` claim at this stage.
+It does not yet include a full php-src differential corpus or exhaustive EIR
+shape, ownership, argument/environment/preopen, and process-status coverage.
 
 To select it:
 
