@@ -207,10 +207,15 @@ fn slot_immediate(inst: &Instruction) -> Result<LocalSlotId> {
     }
 }
 
-/// Extracts a `DataId` from the instruction's immediate, or an error.
+/// Extracts a `DataId` from an ordinary or source-profiled immediate.
+///
+/// The WASM backend currently supports profiled data only on forms whose
+/// admitted semantics do not vary with strict-PHP visibility. Unsupported
+/// source-sensitive forms are rejected by the capability audit.
 pub(super) fn data_immediate(inst: &Instruction) -> Result<DataId> {
     match &inst.immediate {
         Some(Immediate::Data(d)) => Ok(*d),
+        Some(Immediate::ProfiledData { data, .. }) => Ok(*data),
         _ => Err(WasmError::Unsupported(format!(
             "missing Data immediate in {:?}",
             inst.op
@@ -1424,7 +1429,10 @@ fn lower_language_construct_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<
 /// Lowers the typed runtime-call subset currently implemented by the WASM backend.
 fn lower_runtime_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let target = match inst.immediate {
-        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))) => target,
+        Some(Immediate::RuntimeCall(
+            RuntimeCallTarget::Function(target)
+            | RuntimeCallTarget::ProfiledFunction { target, .. },
+        )) => target,
         Some(Immediate::RuntimeCall(target)) => {
             return Err(WasmError::Unsupported(format!(
                 "runtime call target {:?}",

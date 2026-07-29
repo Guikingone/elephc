@@ -773,7 +773,10 @@ mod tests {
                 .emit(
                     Op::FirstClassCallableNew,
                     Vec::new(),
-                    Some(Immediate::Data(fcc_name)),
+                    Some(Immediate::ProfiledData {
+                        data: fcc_name,
+                        strict_php: true,
+                    }),
                     IrType::I64,
                     PhpType::Callable,
                     Ownership::Owned,
@@ -9660,9 +9663,12 @@ mod tests {
         b.emit(
             Op::RuntimeCall,
             operands,
-            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
-                RuntimeFnId::GetClass,
-            ))),
+            Some(Immediate::RuntimeCall(
+                RuntimeCallTarget::ProfiledFunction {
+                    target: RuntimeFnId::GetClass,
+                    strict_php: true,
+                },
+            )),
             IrType::Str,
             PhpType::Str,
             Ownership::NonHeap,

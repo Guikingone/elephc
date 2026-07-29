@@ -362,7 +362,7 @@ pub(super) fn lower_closure_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
 /// instructions whose target is a user FREE FUNCTION, returning the DISTINCT target
 /// names in canonical PHP-symbol order (the FCC entry registry).
 ///
-/// A target qualifies iff its `Immediate::Data` name (interned in
+/// A target qualifies iff its ordinary or source-profiled data name (interned in
 /// `module.data.strings`) contains no `::` (so it is not a static/instance-method
 /// callable, whose target name is `Receiver::method` / `object::method`) AND it
 /// resolves to a `module.functions` entry under PHP case-insensitive name matching
@@ -390,8 +390,10 @@ pub(super) fn collect_fcc_free_function_entries(module: &Module) -> Vec<String> 
             if inst.op != Op::FirstClassCallableNew {
                 continue;
             }
-            let Some(Immediate::Data(data_id)) = inst.immediate else {
-                continue;
+            let data_id = match inst.immediate {
+                Some(Immediate::Data(data_id))
+                | Some(Immediate::ProfiledData { data: data_id, .. }) => data_id,
+                _ => continue,
             };
             let Some(name) = module.data.strings.get(data_id.as_raw() as usize) else {
                 continue;

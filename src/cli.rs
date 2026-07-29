@@ -89,11 +89,11 @@ Modes:
 Output modes:
   --check                 Type-check only, no codegen (mutually exclusive with --emit-ir/--emit-asm)
   --emit-ir               Emit EIR text instead of compiling
-  --emit-asm              Emit assembly (.s) instead of linking
+  --emit-asm              Emit readable assembly (.s; .wat for WASM) instead of linking
   --emit KIND             Output kind: executable (default) | cdylib (native) | npm (WASM only)
 
 Target:
-  --target TARGET         macos-aarch64 | linux-aarch64 | linux-x86_64 | windows-x86_64 | wasm32-wasi (default: host)
+  --target TARGET         macos-aarch64 | linux-aarch64 | linux-x86_64 | wasm32-wasi (windows-x86_64 recognized, backend pending)
   --php-version VERSION   8.2 | 8.3 | 8.4 | 8.5 (default: 8.5)
 
 Codegen:
@@ -232,10 +232,9 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut with_crates: HashSet<String> = HashSet::new();
     let mut ini_overrides: Vec<(String, String)> = Vec::new();
     let null_repr_env = std::env::var("ELEPHC_NULL_REPR").ok();
-    let mut null_repr_overridden = matches!(
-        null_repr_env.as_deref(),
-        Some("tagged" | "sentinel")
-    );
+    // Environment defaults are native test-harness policy, not explicit user
+    // requests. Only a CLI flag should make WASM reject the native-only knob.
+    let mut null_repr_overridden = false;
     let mut null_repr = match null_repr_env.as_deref() {
         Some("tagged") => crate::codegen::NullRepr::Tagged,
         Some("sentinel") => crate::codegen::NullRepr::Sentinel,
@@ -244,10 +243,9 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     // The register allocator is on by default; an env override lets the test
     // harness compile the whole suite under the stack fallback for comparison.
     let regalloc_env = std::env::var("ELEPHC_REGALLOC").ok();
-    let mut regalloc_overridden = matches!(
-        regalloc_env.as_deref(),
-        Some("stack" | "linear")
-    );
+    // As above, the environment selects the native default without turning it
+    // into an explicit target-specific option.
+    let mut regalloc_overridden = false;
     let mut regalloc_linear = match regalloc_env.as_deref() {
         Some("stack") => false,
         Some("linear") => true,

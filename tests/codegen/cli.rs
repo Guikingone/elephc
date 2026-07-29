@@ -690,6 +690,37 @@ echo foo(1);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies native-only environment defaults do not make a WASM build fail as
+/// though the user had explicitly passed `--null-repr` or `--regalloc`.
+#[test]
+fn test_cli_wasm_ignores_native_codegen_environment_defaults() {
+    let dir = make_cli_test_dir("elephc_cli_wasm_native_env_defaults");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 1;\n").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .env("ELEPHC_NULL_REPR", "tagged")
+        .env("ELEPHC_REGALLOC", "stack")
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc CLI with native-only environment defaults");
+
+    assert!(
+        output.status.success(),
+        "native-only environment defaults must not reject WASM: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        dir.join("main.wat").exists(),
+        "WASM --emit-asm should publish main.wat"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `--debug-info` injects DWARF line-table directives into the emitted
 /// assembly: one `.file 1` header and a `.loc 1 <line> <col>` per source marker.
 #[test]

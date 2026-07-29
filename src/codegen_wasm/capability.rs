@@ -727,7 +727,10 @@ fn check_runtime_call(
         function.name
     );
     match call.immediate.clone() {
-        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))) => {
+        Some(Immediate::RuntimeCall(
+            RuntimeCallTarget::Function(target)
+            | RuntimeCallTarget::ProfiledFunction { target, .. },
+        )) => {
             if !runtime_function_is_supported(target) {
                 issues.push(format!(
                     "{context}: unsupported runtime function {}",
@@ -1091,10 +1094,11 @@ fn static_callable_contract<'a>(
     None
 }
 
-/// Resolves an instruction's `Immediate::Data` entry in the shared string pool.
+/// Resolves an ordinary or source-profiled data entry in the shared string pool.
 fn data_string<'a>(module: &'a Module, instruction: &Instruction) -> Option<&'a str> {
-    let Some(Immediate::Data(data)) = instruction.immediate else {
-        return None;
+    let data = match instruction.immediate {
+        Some(Immediate::Data(data)) | Some(Immediate::ProfiledData { data, .. }) => data,
+        _ => return None,
     };
     module
         .data
@@ -2187,9 +2191,12 @@ mod tests {
             let _ = builder.emit(
                 Op::RuntimeCall,
                 vec![object],
-                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
-                    RuntimeFnId::GetClass,
-                ))),
+                Some(Immediate::RuntimeCall(
+                    RuntimeCallTarget::ProfiledFunction {
+                        target: RuntimeFnId::GetClass,
+                        strict_php: true,
+                    },
+                )),
                 IrType::F64,
                 PhpType::Float,
                 Ownership::NonHeap,

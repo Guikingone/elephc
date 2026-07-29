@@ -55,7 +55,7 @@ selection, toolchain overrides, and transactional behavior.
 |---|---|---|---|
 | `<source-file>` | path | — | Required. A tagged `.php` or tagless `.lfc` file to compile. Other suffixes retain tagged-PHP behavior. |
 | `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`), `npm` (`npm-package`) | `executable` | Output artifact kind. `cdylib` builds a native C-ABI shared library. `npm` writes a Node.js ESM/WASI package to `<stem>-npm/` and requires `--target wasm32-wasi`. |
-| `--emit-asm` | — | off | Write generated assembly instead of a binary. |
+| `--emit-asm` | — | off | Write readable generated assembly instead of a binary: `.s` for native targets and `.wat` for `wasm32-wasi`. |
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
 | `--check` | — | off | Run front-end checks only; write nothing. |
 | `--strict-php` | — | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [Strict PHP mode](#strict-php-mode). |
