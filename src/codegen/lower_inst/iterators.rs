@@ -8,6 +8,15 @@
 //! Key details:
 //! - `IterStart` values reserve a fixed stack state for source, cursor, and current hash payload.
 //! - Current values are boxed into `Mixed` unless EIR preserves a concrete indexed-array element type.
+//! - A source that is not iterable does NOT abort. Every dispatch that misses the
+//!   indexed/hash/object cases — the static `NonIterable` kind, the `__rt_mixed_unbox` tag
+//!   dispatch, and the `__rt_heap_kind` dispatch — calls `__rt_warn_foreach_non_iterable`
+//!   (or, past `IterStart`, simply reports "no more elements") and parks the iterator in the
+//!   empty state built by `emit_empty_iterator_state`. That mirrors php-src, which raises
+//!   `foreach() argument must be of type array|object, <type> given` and continues. These
+//!   paths previously called `__rt_iterable_unsupported_kind`, which printed a
+//!   compiler-internal fatal and exited 70; that helper now only serves the SPL and
+//!   `IteratorIterator` sites, where the shape really is unsupported.
 
 use crate::codegen::platform::Arch;
 use crate::codegen::{abi, emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed};
@@ -30,11 +39,31 @@ const ITER_VALUE_TAG_OFFSET_DELTA: usize = 48;
 const ITER_VALUE_ADDR_OFFSET_DELTA: usize = 56;
 const ITER_SNAPSHOT_LEN_OFFSET_DELTA: usize = 64;
 
+/// The runtime value tag `__rt_warn_foreach_non_iterable` reads as "null".
+///
+/// Matches `crate::codegen_support::value_boxing::runtime_value_tag(&PhpType::Void)`.
+const NULL_VALUE_TAG: i64 = 8;
+
+/// The runtime value tag for a boolean, whose warning text depends on the payload.
+///
+/// Matches `crate::codegen_support::value_boxing::runtime_value_tag(&PhpType::Bool)`.
+const BOOL_VALUE_TAG: u8 = 3;
+
 enum IteratorSourceKind {
     Indexed { elem: PhpType },
     Hash,
     DynamicIterable,
     DynamicMixed,
+    /// A source whose STATIC type can never be iterated (`int`, `string`, `bool`, `null`, …).
+    ///
+    /// PHP does not reject this at compile time: `foreach (false as $x)` warns and skips the
+    /// loop. The checker mirrors that with a compile warning (`src/types/checker/stmt_check/
+    /// control_flow.rs`) and codegen emits the same E_WARNING at runtime, then leaves the
+    /// iterator state empty so `IterNext` reports "no more elements" on its first probe.
+    NonIterable {
+        /// Runtime value tag naming the offending value in the warning.
+        value_tag: u8,
+    },
     Object {
         class_name: String,
         aggregate_class_name: Option<String>,
@@ -54,6 +83,12 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
         CodegenIrError::invalid_module("iter_start missing result value".to_string())
     })?;
     let offset = ctx.value_frame_offset(result)?;
+    // -- statically non-iterable sources warn and skip before any value is loaded --
+    // A `float` source lives in `d0`, not the integer result register, so this must run
+    // BEFORE the unconditional `load_value_to_reg` below.
+    if let IteratorSourceKind::NonIterable { value_tag } = source_kind {
+        return initialize_non_iterable_iterator(ctx, offset, value_tag, source);
+    }
     let result_reg = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_reg(source, result_reg)?;
     if matches!(source_kind, IteratorSourceKind::DynamicMixed) {
@@ -62,6 +97,21 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     }
     if by_ref {
         ensure_unique_static_iter_source(ctx, source, &source_kind)?;
+        if matches!(
+            source_kind,
+            IteratorSourceKind::Indexed { .. } | IteratorSourceKind::Hash
+        ) {
+            // -- normalize a missed-read sentinel source to the canonical zero pointer --
+            // Only the iterator's private slot is normalized; the origin local keeps the
+            // sentinel so the user-visible value stays null. `IterNext` re-reads the live
+            // length from this slot every iteration, so folding the sentinel here keeps
+            // that hot path on the cheap zero check (issue #556).
+            crate::codegen::sentinels::emit_normalize_null_container_to_zero(
+                ctx.emitter,
+                result_reg,
+                abi::secondary_scratch_reg(ctx.emitter),
+            );
+        }
     }
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
     if matches!(source_kind, IteratorSourceKind::DynamicIterable) {
@@ -87,6 +137,8 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
         IteratorSourceKind::Hash => 0,
         IteratorSourceKind::DynamicIterable => 0,
         IteratorSourceKind::DynamicMixed => 0,
+        // Unreachable: `lower_iter_start` returns before this point for a non-iterable.
+        IteratorSourceKind::NonIterable { .. } => 0,
         IteratorSourceKind::Object { .. } => 0,
         IteratorSourceKind::Interface { .. } => 0,
     };
@@ -138,6 +190,11 @@ pub(super) fn lower_iter_next(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         IteratorSourceKind::DynamicIterable | IteratorSourceKind::DynamicMixed => {
             lower_dynamic_iter_next(ctx, offset, by_ref)?;
         }
+        // A non-iterable source has no elements: report "loop finished" on the first probe
+        // so the body never runs and the statement after the loop still executes.
+        IteratorSourceKind::NonIterable { .. } => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        }
         IteratorSourceKind::Object { class_name, .. } => {
             lower_object_iter_next(ctx, offset, &class_name)?;
         }
@@ -167,6 +224,12 @@ pub(super) fn lower_iter_current_key(
         },
         IteratorSourceKind::DynamicIterable | IteratorSourceKind::DynamicMixed => {
             lower_dynamic_iter_current_key(ctx, inst, offset)?;
+        }
+        // Dead code in practice — `IterNext` already reported "no more elements" — but the
+        // block is still emitted, so materialize a null Mixed rather than reading the
+        // uninitialized iterator state.
+        IteratorSourceKind::NonIterable { .. } => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
         }
         IteratorSourceKind::Object { class_name, .. } => {
             let return_ty = emit_object_iterator_method_call(ctx, offset, &class_name, "key")?;
@@ -203,6 +266,12 @@ pub(super) fn lower_iter_current_value(
         },
         IteratorSourceKind::DynamicIterable | IteratorSourceKind::DynamicMixed => {
             lower_dynamic_iter_current_value(ctx, inst, offset)?;
+        }
+        // Dead code in practice — `IterNext` already reported "no more elements" — but the
+        // block is still emitted, so materialize a null Mixed rather than reading the
+        // uninitialized iterator state.
+        IteratorSourceKind::NonIterable { .. } => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
         }
         IteratorSourceKind::Object { class_name, .. } => {
             let return_ty = emit_object_iterator_method_call(ctx, offset, &class_name, "current")?;
@@ -273,6 +342,14 @@ pub(super) fn lower_iter_current_value_ref(
         IteratorSourceKind::DynamicIterable | IteratorSourceKind::DynamicMixed => {
             bind_dynamic_current_value_ref(ctx, offset, slot)?;
         }
+        // Dead code in practice — `IterNext` already reported "no more elements" — but bind
+        // the slot to a null cell so nothing downstream dereferences stack garbage.
+        IteratorSourceKind::NonIterable { .. } => {
+            let local_offset = ctx.local_offset(slot)?;
+            let result_reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+            abi::store_at_offset(ctx.emitter, result_reg, local_offset);
+        }
         IteratorSourceKind::Object { .. } | IteratorSourceKind::Interface { .. } => {
             return Err(CodegenIrError::unsupported(
                 "by-reference foreach over object iterators in EIR backend",
@@ -295,7 +372,13 @@ fn initialize_dynamic_iterable_iterator(
     let object_case = ctx.next_label("iter_start_dyn_object");
     let done = ctx.next_label("iter_start_dyn_done");
     branch_on_dynamic_source_heap_kind(ctx, offset, &indexed_case, &hash_case, &object_case);
-    abi::emit_call_label(ctx.emitter, "__rt_iterable_unsupported_kind");
+    // -- the source is not a live array/object: warn like PHP and iterate zero times --
+    // The STATIC type here is `array`/`iterable`, so the only PHP-reachable value that
+    // misses every heap kind is a null container (a missed read, or an uninitialized
+    // `iterable` local); report it as `null given`.
+    emit_foreach_non_iterable_warning(ctx, NULL_VALUE_TAG);
+    emit_empty_iterator_state(ctx, offset);
+    abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&indexed_case);
     if by_ref {
@@ -339,7 +422,13 @@ fn initialize_dynamic_mixed_iterator(
     }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     branch_on_mixed_iterable_tag(ctx, &indexed_case, &hash_case, &object_case);
-    abi::emit_call_label(ctx.emitter, "__rt_iterable_unsupported_kind");
+    // -- the unboxed value is a scalar/null: warn like PHP and iterate zero times --
+    // `__rt_mixed_unbox` left the concrete runtime tag and payload low word in exactly the
+    // registers `__rt_warn_foreach_non_iterable` expects, so the offending value names
+    // itself (`false`, `int`, `string`, …) with no extra probing.
+    abi::emit_call_label(ctx.emitter, "__rt_warn_foreach_non_iterable");
+    emit_empty_iterator_state(ctx, offset);
+    abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&indexed_case);
     if by_ref {
@@ -374,12 +463,83 @@ fn initialize_dynamic_mixed_iterator(
     Ok(())
 }
 
+/// Initializes an iterator whose source is statically non-iterable.
+///
+/// PHP's `ZEND_FE_RESET_R` warns and skips the loop rather than aborting, so this emits the
+/// same `E_WARNING` and then parks the iterator in the empty state that
+/// `lower_iter_next`'s `NonIterable` arm reports as "finished". The value itself is never
+/// consumed except for a `bool`, whose payload chooses between `true` and `false` in the
+/// message — PHP names the VALUE, not the declared type.
+fn initialize_non_iterable_iterator(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+    value_tag: u8,
+    source: ValueId,
+) -> Result<()> {
+    if value_tag == BOOL_VALUE_TAG {
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        ctx.load_value_to_reg(source, result_reg)?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x1, x0");                          // pass the bool payload so the warning can print true or false
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the bool payload so the warning can print true or false
+            }
+        }
+    } else {
+        let payload_reg = match ctx.emitter.target.arch {
+            Arch::AArch64 => "x1",
+            Arch::X86_64 => "rdi",
+        };
+        abi::emit_load_int_immediate(ctx.emitter, payload_reg, 0);
+    }
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        i64::from(value_tag),
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_warn_foreach_non_iterable");
+    emit_empty_iterator_state(ctx, offset);
+    Ok(())
+}
+
+/// Emits the PHP `foreach()` non-iterable warning for a statically known runtime value tag.
+fn emit_foreach_non_iterable_warning(ctx: &mut FunctionContext<'_>, value_tag: i64) {
+    let payload_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdi",
+    };
+    abi::emit_load_int_immediate(ctx.emitter, payload_reg, 0);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), value_tag);
+    abi::emit_call_label(ctx.emitter, "__rt_warn_foreach_non_iterable");
+}
+
+/// Parks iterator state in the shape every `IterNext` path reads as "no more elements".
+///
+/// A zero source pointer makes `__rt_heap_kind` report kind 0, which now falls through to
+/// the dynamic `IterNext` false result instead of the removed fatal; the zero snapshot
+/// length keeps the indexed path from visiting anything even if it is entered.
+fn emit_empty_iterator_state(ctx: &mut FunctionContext<'_>, offset: usize) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+    abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+    abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
+    abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA);
+}
+
 /// Returns true when an `iter_start` instruction is preparing a by-reference foreach.
 fn iter_start_is_by_ref(inst: &Instruction) -> bool {
     matches!(inst.immediate, Some(Immediate::Bool(true)))
 }
 
 /// Splits statically typed array/hash sources before by-reference iteration.
+///
+/// A null/sentinel source — the value a missed read such as `foreach ($a[7] as &$v)`
+/// materializes — has nothing to split: the copy-on-write helpers recognize both the zero
+/// pointer and the in-band `NULL_SENTINEL` and return them unchanged (issue #556). The
+/// origin local and SSA slot therefore keep the sentinel; the caller normalizes only the
+/// iterator's private source slot afterwards.
 fn ensure_unique_static_iter_source(
     ctx: &mut FunctionContext<'_>,
     source: ValueId,
@@ -615,7 +775,16 @@ fn bind_dynamic_current_value_ref(
     let object_case = ctx.next_label("iter_ref_dyn_object");
     let done = ctx.next_label("iter_ref_dyn_done");
     branch_on_dynamic_source_heap_kind(ctx, offset, &indexed_case, &hash_case, &object_case);
-    abi::emit_call_label(ctx.emitter, "__rt_iterable_unsupported_kind");
+    // -- an empty iterator state reaches here; bind null instead of stack garbage --
+    // `IterStart` already warned and zeroed the source, and `IterNext` already reported
+    // "no more elements", so this block is unreachable at runtime.
+    {
+        let local_offset = ctx.local_offset(slot)?;
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+        abi::store_at_offset(ctx.emitter, result_reg, local_offset);
+        abi::emit_jump(ctx.emitter, &done);
+    }
 
     ctx.emitter.label(&indexed_case);
     bind_indexed_current_value_ref(ctx, offset, slot, &PhpType::Mixed)?;
@@ -642,7 +811,11 @@ fn lower_dynamic_iter_next(
     let object_case = ctx.next_label("iter_next_dyn_object");
     let done = ctx.next_label("iter_next_dyn_done");
     branch_on_dynamic_source_heap_kind(ctx, offset, &indexed_case, &hash_case, &object_case);
-    abi::emit_call_label(ctx.emitter, "__rt_iterable_unsupported_kind");
+    // -- a source that matches no heap kind has no elements left to visit --
+    // `IterStart` warned and zeroed the iterator state for a non-iterable, so reporting
+    // false here is what skips the loop body and lets the next statement run.
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&indexed_case);
     match ctx.emitter.target.arch {
@@ -675,7 +848,9 @@ fn lower_dynamic_iter_current_key(
     let object_case = ctx.next_label("iter_key_dyn_object");
     let done = ctx.next_label("iter_key_dyn_done");
     branch_on_dynamic_source_heap_kind(ctx, offset, &indexed_case, &hash_case, &object_case);
-    abi::emit_call_label(ctx.emitter, "__rt_iterable_unsupported_kind");
+    // -- unreachable: `IterNext` already reported "no more elements" for this state --
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&indexed_case);
     let result_reg = abi::int_result_reg(ctx.emitter);
@@ -708,7 +883,9 @@ fn lower_dynamic_iter_current_value(
     let object_case = ctx.next_label("iter_value_dyn_object");
     let done = ctx.next_label("iter_value_dyn_done");
     branch_on_dynamic_source_heap_kind(ctx, offset, &indexed_case, &hash_case, &object_case);
-    abi::emit_call_label(ctx.emitter, "__rt_iterable_unsupported_kind");
+    // -- unreachable: `IterNext` already reported "no more elements" for this state --
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&indexed_case);
     match ctx.emitter.target.arch {
@@ -867,6 +1044,33 @@ fn snapshot_indexed_array_length(ctx: &mut FunctionContext<'_>, offset: usize) {
     abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
     ctx.emitter.label(&done_label);
     abi::store_at_offset(ctx.emitter, len_reg, offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA);
+}
+
+/// Loads the live entry count from the indexed-array header in `array_reg` into `len_reg`,
+/// substituting zero for a zero source pointer. Used by the by-reference `IterNext`
+/// advancement, whose source slot `IterStart` has already normalized: a missed-read
+/// sentinel was folded to zero there, so the per-iteration hot path needs only the cheap
+/// zero check instead of the full null-container guard (issue #556). `len_reg` must not
+/// alias `array_reg`.
+fn load_live_indexed_array_length(ctx: &mut FunctionContext<'_>, array_reg: &str, len_reg: &str) {
+    let null_label = ctx.next_label("iter_len_null_source");
+    let done_label = ctx.next_label("iter_len_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cbz {}, {}", array_reg, null_label));    // zero sources (normalized missed reads) have no header to read
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("test {}, {}", array_reg, array_reg));    // is the source the canonical zero container pointer?
+            ctx.emitter.instruction(&format!("jz {}", null_label));             // zero sources (normalized missed reads) have no header to read
+        }
+    }
+    abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+    ctx.emitter.label(&done_label);
 }
 
 /// Boxes a concrete iterator method result when the EIR result slot expects `Mixed`.
@@ -1252,7 +1456,7 @@ fn lower_indexed_iter_next_aarch64(
     if by_ref {
         let array_reg = abi::int_result_reg(ctx.emitter);
         abi::load_at_offset(ctx.emitter, array_reg, offset - ITER_SOURCE_OFFSET_DELTA);
-        abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
+        load_live_indexed_array_length(ctx, array_reg, len_reg);
         ctx.emitter.instruction(&format!("cmp {}, {}", index_reg, len_reg));    // compare the candidate offset against the live array length
     } else {
         abi::load_at_offset(ctx.emitter, len_reg, offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA);
@@ -1283,7 +1487,7 @@ fn lower_indexed_iter_next_x86_64(
     if by_ref {
         let array_reg = abi::symbol_scratch_reg(ctx.emitter);
         abi::load_at_offset(ctx.emitter, array_reg, offset - ITER_SOURCE_OFFSET_DELTA);
-        abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
+        load_live_indexed_array_length(ctx, array_reg, len_reg);
         ctx.emitter.instruction(&format!("cmp {}, {}", index_reg, len_reg));    // compare the candidate offset against the live array length
     } else {
         abi::load_at_offset(ctx.emitter, len_reg, offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA);
@@ -1718,6 +1922,18 @@ fn iterator_source_kind_from_type(
             let source = object_iterator_source(ctx, class_name.trim_start_matches('\\'));
             Ok(source)
         }
+        // -- PHP-visible scalars: warn at runtime and iterate zero times, like php-src --
+        // The checker has already emitted a compile warning for these (it only lets a
+        // PHP-visible scalar through); compiler-internal types below stay a hard error.
+        ty @ (PhpType::Int
+        | PhpType::Float
+        | PhpType::Str
+        | PhpType::Bool
+        | PhpType::False
+        | PhpType::Void
+        | PhpType::Resource(_)) => Ok(IteratorSourceKind::NonIterable {
+            value_tag: crate::codegen::runtime_value_tag(&ty),
+        }),
         other => Err(CodegenIrError::unsupported(format!(
             "{} over PHP type {:?}",
             inst.op.name(),

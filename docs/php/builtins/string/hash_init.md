@@ -1,38 +1,28 @@
 ---
 title: "hash_init()"
-description: "Initialize an incremental hashing context."
+description: "Opens an incremental hashing context, returning a HashContext object. Provided by the compiler-injected hash prelude in compiled code; the eval interpreter still returns a resource."
 sidebar:
-  order: 377
+  order: 379
 ---
 
 ## hash_init()
 
 ```php
-function hash_init(string $algo, int $flags = 0, string $key = ''): mixed
+function hash_init(mixed $algo, mixed $flags = '0', mixed $key = '""'): mixed
 ```
 
-Initialize an incremental hashing context.
+Opens an incremental hashing context, returning a HashContext object. Provided by the compiler-injected hash prelude in compiled code; the eval interpreter still returns a resource.
 
 **Parameters**:
-- `$algo` (`string`)
-- `$flags` (`int`), default `0`, optional
-- `$key` (`string`), default `''`, optional
+- `$algo` (`mixed`)
+- `$flags` (`mixed`), default `'0'`, optional
+- `$key` (`mixed`), default `'""'`, optional
 
 **Returns**: `mixed`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
+- **Compiled (AOT)**: not available — compiled programs cannot call this builtin yet.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/hash_init.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_init.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
-
-## Internals
-
-For how `hash_init` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/hash_init.md).

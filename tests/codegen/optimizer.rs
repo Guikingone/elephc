@@ -29,6 +29,8 @@ mod dead_store_elimination;
 mod eir_constant_propagation;
 #[path = "optimizer/eir_licm.rs"]
 mod eir_licm;
+#[path = "optimizer/effects_v2.rs"]
+mod effects_v2;
 #[path = "optimizer/identity_arithmetic.rs"]
 mod identity_arithmetic;
 #[path = "optimizer/peephole.rs"]

@@ -99,6 +99,23 @@ elephc myfile.php
 ./myfile
 ```
 
+elephc also accepts tagless `.lfc` source. The whole file is code, so it has no
+`<?php` / `?>` tags and never emits plain text implicitly:
+
+```text
+echo "Hello from LFC!\n";
+```
+
+```bash
+elephc hello.lfc
+./hello
+```
+
+LFC files always expose elephc extensions. In mixed projects, `--strict-php`
+still audits every physical `.php` file while included or autoloaded `.lfc`
+files keep their extension-enabled profile. See
+[LFC source files](docs/beyond-php/lfc-source-files.md).
+
 The compiler is experimental and evolving. Not everything PHP supports is implemented, and you will find bugs. But as the DOOM showcase demonstrates, you can build real, non-trivial programs with it today.
 
 If you want to contribute, you're welcome. Mi casa es tu casa.
@@ -167,9 +184,10 @@ xattr -cr elephc
 > target-aware assembly emitter.
 
 ```bash
-# Compile a PHP file to a native binary
+# Compile tagged PHP or tagless LFC source to a native binary
 elephc hello.php
 ./hello
+elephc hello.lfc
 
 # Custom heap size (default: 8MB)
 elephc --heap-size=16777216 heavy.php
@@ -183,7 +201,7 @@ elephc --gc-stats heavy.php
 # Enable compile-time feature branches
 elephc --define DEBUG app.php
 
-# Accept only PHP-compatible constructs (reject every elephc extension)
+# Reject elephc extensions in every physical PHP file (.lfc stays extension-enabled)
 elephc --strict-php app.php
 
 # Print per-phase compiler timings
@@ -423,7 +441,7 @@ User-defined constants are also supported via `const NAME = value;` and `define(
 ## How it works
 
 ```
-PHP source → Lexer → Parser (AST) → Magic constants (per-file) → Conditional (ifdef/--define) → Autoload registry build (Composer + SPL rules) → Resolver (include declaration discovery, include/require inlining, per-file constants, once guards, function variant marks) → NameResolver (namespaces/use/FQNs) → Autoload run (class-triggered file insertion) → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → EIR lowering + validation → register allocation → EIR codegen → runtime cache → read-only native requirement resolution → typed link plan → as + ld → native executable
+Physical source (`.php` or `.lfc`) → source classification → Lexer → Parser (AST) → Magic constants (per-file) → strict-PHP audit (PHP files only) → Conditional (ifdef/--define) → Autoload registry build (Composer + SPL rules) → Resolver (include declaration discovery, include/require inlining, per-file constants, once guards, function variant marks) → NameResolver (namespaces/use/FQNs) → Autoload run (class-triggered file insertion) → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → EIR lowering + validation → register allocation → EIR codegen → runtime cache → read-only native requirement resolution → typed link plan → as + ld → native executable
 ```
 
 The compiler emits human-readable assembly for the selected target. You can inspect the `.s` file to see exactly what your PHP becomes:

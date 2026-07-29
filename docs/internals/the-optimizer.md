@@ -267,9 +267,19 @@ The optimizer now maintains a small local effect-analysis layer that sits undern
 Current coverage includes:
 
 - known pure / non-throwing builtins such as `strlen()`
+- registry builtins with argument-sensitive shared effects, such as a typed
+  `count(array)` read versus a dynamic `count(mixed)` fallback
 - user-defined functions whose bodies are themselves pure / non-throwing
 - user-defined static methods with the same conservative summary inference
-- private instance methods called on `$this`, where dispatch is statically known
+- instance methods on `$this`, `new Class`, `new self`, `new parent`, and
+  `new static`: fixed constructions plus final/private targets stay exact, while
+  virtual calls union every concrete override in the checked class hierarchy
+- named and literal-dynamic property reads on bounded receivers: untyped slots
+  are ordinary reads, typed slots can throw when uninitialized, and property
+  hooks or `__get` inherit their callable summaries
+- indexed and associative literal reads: a proven-present offset is an ordinary
+  read, a proven miss keeps its PHP warning but is not mislabeled catchable, and
+  runtime-dependent offsets retain the conservative barrier
 - direct closure calls and local closure aliases
 - named first-class callables and expr-calls on those callables
 - callable aliases that survive merges through:
@@ -282,7 +292,13 @@ Current coverage includes:
   - `match`
   when every surviving branch agrees on the same callable effect
 
-This analysis is still intentionally local. It does not try to solve general whole-program purity. Instead, it focuses on the small set of call shapes that matter most for AST rewriting today.
+The AST analysis is intentionally syntax-bounded. After lowering, a second
+target-independent fixed point uses checked EIR types and the complete class
+table to refine direct calls, virtual calls, and property reads. This gives the
+EIR optimizer the same safety distinctions without asking the AST pass to
+reconstruct checker state. A runtime `eval` bridge invalidates closed-world
+subclass expansion in both layers; exact fixed constructions and statically
+bound final/private targets remain eligible for refinement.
 
 ### Example
 
@@ -333,9 +349,11 @@ The optimizer is intentionally conservative about what counts as "pure" or "non-
 It now recognizes a useful subset of call expressions precisely, but it still does **not** assume purity for broad dynamic operations such as:
 
 - unknown function or method calls
-- dynamic instance dispatch beyond the statically-known `$this` / private-method case
+- runtime-computed method names, mixed receivers, eval-defined classes, and
+  instance targets outside the checked closed-world hierarchy
 - object creation
-- most property and array reads where runtime hooks or dynamic behavior could matter
+- runtime-computed property names when hooks/dynamic storage may intervene, and
+  array offsets whose presence cannot be proven
 - buffer allocation
 - increment/decrement
 - `throw`

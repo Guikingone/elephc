@@ -8,7 +8,7 @@
 //! - Verifies the Phase 03 ownership surface emits explicit acquire/release
 //!   markers for refcounted local values before the future EIR backend exists.
 
-use crate::ir::{print_module, Op, ValueDef};
+use crate::ir::{print_module, Op, Ownership, ValueDef};
 
 /// Returns the printed EIR for `main`, excluding built-in helper and property-init functions.
 fn main_function_text(text: &str) -> &str {
@@ -269,5 +269,117 @@ echo $value;
             .iter()
             .all(|inst| inst.op != Op::Release || inst.operands.first().copied() != Some(result)),
         "a user-call result borrowed from a local argument must not be released"
+    );
+    assert_ne!(
+        function.value(result).expect("call result metadata").ownership,
+        Ownership::Owned,
+        "borrowed call results must not publish an owning EIR contract"
+    );
+}
+
+/// Verifies fresh boxed producers publish `Owned` instead of requiring codegen inference.
+#[test]
+fn fresh_boxed_producers_publish_owned_eir_metadata() {
+    let module = super::lower_source(
+        r#"<?php
+function checked_add(int $value): mixed { return $value + 1; }
+function boxed_scalar(int $value): mixed { return $value; }
+function scratch_string(int $value): string { return "v" . $value; }
+echo checked_add(1);
+echo boxed_scalar(2);
+echo scratch_string(3);
+"#,
+    );
+
+    let mut observed = Vec::new();
+    for function in &module.functions {
+        for inst in &function.instructions {
+            if !matches!(inst.op, Op::ICheckedAdd | Op::MixedBox) {
+                continue;
+            }
+            let result = inst.result.expect("owning producer must have a result");
+            let ownership = function
+                .value(result)
+                .expect("owning producer result metadata")
+                .ownership;
+            observed.push((inst.op, ownership));
+            assert_eq!(
+                ownership,
+                Ownership::Owned,
+                "{} must publish owned EIR metadata",
+                inst.op.name()
+            );
+            assert_eq!(
+                inst.result_ownership,
+                Ownership::Owned,
+                "{} instruction metadata must match its result value",
+                inst.op.name()
+            );
+        }
+    }
+
+    assert!(
+        observed.iter().any(|(op, _)| *op == Op::ICheckedAdd),
+        "expected a checked-add producer"
+    );
+    assert!(
+        observed.iter().any(|(op, _)| *op == Op::MixedBox),
+        "expected a MixedBox producer"
+    );
+
+    let scratch_function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "scratch_string")
+        .expect("expected scratch_string EIR function");
+    let scratch_result = scratch_function
+        .instructions
+        .iter()
+        .find(|inst| inst.op == Op::StrConcat)
+        .and_then(|inst| inst.result)
+        .expect("expected a scratch string concat result");
+    assert_ne!(
+        scratch_function
+            .value(scratch_result)
+            .expect("scratch string metadata")
+            .ownership,
+        Ownership::Owned,
+        "concat scratch storage must retain its string-specific ownership contract"
+    );
+}
+
+/// Verifies a freshly boxed owned Mixed argument to a callee that returns it is not
+/// released as an argument temporary (issue #604). The argument box and the returned
+/// box are the same allocation, so the caller must let ownership flow through the
+/// result; releasing the argument as well frees the box once too often.
+#[test]
+fn owned_mixed_argument_returned_by_callee_is_not_released_as_arg_temp() {
+    let module = super::lower_source(
+        r#"<?php
+function idv(mixed $value): mixed { return $value; }
+function run(int $i): void {
+    $r = idv($i + 1);
+    echo $r;
+}
+run(5);
+"#,
+    );
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "run")
+        .expect("expected the run EIR function");
+    let argument = function
+        .instructions
+        .iter()
+        .find(|inst| inst.op == Op::Call)
+        .and_then(|inst| inst.operands.first().copied())
+        .expect("expected the idv call argument value");
+    assert!(
+        function
+            .instructions
+            .iter()
+            .all(|inst| inst.op != Op::Release || inst.operands.first().copied() != Some(argument)),
+        "a fresh owned Mixed argument returned by the callee must not also be released as an arg temporary"
     );
 }

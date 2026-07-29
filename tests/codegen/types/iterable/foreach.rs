@@ -276,10 +276,17 @@ fn test_by_ref_foreach_nested_json_decode_assoc_payloads() {
     assert_eq!(out, "101|102");
 }
 
-/// Verifies that a fatal error during `foreach` over a non-iterable `mixed` preserves prior side effects;
-/// "S" is echoed before the fatal error, confirming `side()` ran before the foreach check.
+/// Verifies `foreach` over a non-iterable `mixed` WARNS and continues instead of aborting, and
+/// that side effects sequenced before the loop are preserved: "S" is echoed by `side()` before
+/// the foreach check runs.
+///
+/// This test used to pin the opposite behavior — a compiler-internal
+/// `Fatal error: foreach over iterable with unsupported kind` and exit code 70. Reference PHP
+/// 8.5.6 (`php -d xdebug.mode=off`) prints `S` on stdout,
+/// `Warning: foreach() argument must be of type array|object, int given` on stderr, and exits 0;
+/// elephc now matches, minus the ` in <file> on line <n>` tail it does not synthesize.
 #[test]
-fn test_mixed_foreach_fatal_preserves_prior_side_effects() {
+fn test_mixed_foreach_over_non_iterable_warns_and_preserves_prior_side_effects() {
     let out = compile_and_run_capture(
         "<?php
         function side(): mixed {
@@ -292,11 +299,11 @@ fn test_mixed_foreach_fatal_preserves_prior_side_effects() {
         }
         ",
     );
-    assert!(!out.success, "program unexpectedly succeeded");
+    assert!(out.success, "program unexpectedly failed: {}", out.stderr);
     assert_eq!(out.stdout, "S");
-    assert!(
-        out.stderr
-            .contains("Fatal error: foreach over iterable with unsupported kind"),
+    assert_eq!(
+        out.stderr,
+        "Warning: foreach() argument must be of type array|object, int given\n",
         "{}",
         out.stderr
     );
@@ -527,7 +534,10 @@ fn test_iterable_value_in_indexed_array_stays_boxed() {
         show([id([1, 2])]);
         ",
     );
-    assert_eq!(out, "array:array(2) {\n}\n");
+    // The inner array dumps its elements: the boxed Mixed unbox lands on the real
+    // array and the walker reads its runtime value_type stamp. It used to print the
+    // empty `array(2) {\n}\n` shell.
+    assert_eq!(out, "array:array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n");
 }
 
 /// Verifies that a `mixed` iterable containing an inner associative array preserves
@@ -547,7 +557,10 @@ fn test_iterable_value_in_assoc_array_stays_boxed() {
         }
         ",
     );
-    assert_eq!(out, "array:array(2) {\n}\n");
+    // The inner array dumps its elements: the boxed Mixed unbox lands on the real
+    // array and the walker reads its runtime value_type stamp. It used to print the
+    // empty `array(2) {\n}\n` shell.
+    assert_eq!(out, "array:array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n");
 }
 
 /// Verifies an `iterable` value stored in a mixed associative array remains a boxed Mixed value
@@ -566,7 +579,10 @@ fn test_iterable_value_in_mixed_assoc_array_direct_read_stays_boxed() {
         var_dump($value);
         ",
     );
-    assert_eq!(out, "array:array(2) {\n}\n");
+    // The inner array dumps its elements: the boxed Mixed unbox lands on the real
+    // array and the walker reads its runtime value_type stamp. It used to print the
+    // empty `array(2) {\n}\n` shell.
+    assert_eq!(out, "array:array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n");
 }
 
 /// Verifies an inner `iterable` array appended to a plain array stays boxed and `is_iterable()` is

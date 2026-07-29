@@ -7029,14 +7029,12 @@ echo function_exists("time"); echo function_exists("phpversion"); echo function_
 echo function_exists("sys_get_temp_dir");');
 "#,
     );
-    assert_eq!(
-        out,
-        format!(
-            "time:{}:/tmp:cwd:call-time:{}:call-cwd:/tmp:1111",
-            env!("CARGO_PKG_VERSION"),
-            env!("CARGO_PKG_VERSION")
-        )
-    );
+    // `phpversion()` reports the PHP LANGUAGE version, not elephc's package version. The eval
+    // interpreter is a separate crate with no access to `--php-version`, so it reports the
+    // default profile (8.5) — identical to native here, since this program compiles with the
+    // default profile. See `EVAL_PHP_VERSION` in the magician for the documented divergence
+    // when `--php-version` is not 8.5.
+    assert_eq!(out, "time:8.5.0:/tmp:cwd:call-time:8.5.0:call-cwd:/tmp:1111");
 }
 
 /// Verifies eval `date()` formats timestamps and `mktime()` creates them.
@@ -13851,6 +13849,22 @@ try {
         out,
         "ValueError:\"live\" is not a valid backing value for enum EvalDynStatus"
     );
+}
+
+/// Verifies eval can construct, catch, inspect, and call inherited methods on
+/// the builtin `UnhandledMatchError` class through the native bridge.
+#[test]
+fn test_eval_fragment_constructs_unhandled_match_error() {
+    let out = compile_and_run(
+        r#"<?php
+eval('try {
+    throw new UnhandledMatchError("eval");
+} catch (UnhandledMatchError $error) {
+    echo ($error instanceof Error ? "yes:" : "no:") . $error->getMessage();
+}');
+"#,
+    );
+    assert_eq!(out, "yes:eval");
 }
 
 /// Verifies eval-declared enums reject magic methods PHP forbids on enums.

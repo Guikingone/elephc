@@ -57,6 +57,16 @@ impl Symbols {
     /// canonical_function
     pub(super) fn canonical_function(&self, name: &str) -> Option<String> {
         let key = php_symbol_key(name);
+        let extension_builtin =
+            crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
+                &key,
+                true,
+            )
+            .then(|| canonical_builtin_function_name(name))
+            .flatten();
+        if !crate::strict_php::is_enabled() && extension_builtin.is_some() {
+            return extension_builtin;
+        }
         self.functions
             .get(&key)
             .or_else(|| self.extern_functions.get(&key))

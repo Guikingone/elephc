@@ -65,8 +65,7 @@ impl EvalStreamResources {
 
     /// Allocates an eval-local stream filter resource handle.
     pub(crate) fn open_filter_resource(&mut self) -> i64 {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.take_next_id();
         self.filter_resources.insert(id);
         id
     }

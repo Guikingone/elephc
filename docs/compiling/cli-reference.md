@@ -15,12 +15,13 @@ exhaustive *what*.
 ## Synopsis
 
 ```text
-elephc [OPTIONS] <source.php>
+elephc [OPTIONS] <source-file>
 elephc native <COMMAND> [OPTIONS]
 ```
 
-Exactly one positional argument is required: the path to the PHP source file. The
-binary is written next to it, named after the source without its extension.
+Exactly one positional argument is required: the path to tagged `.php` or
+tagless `.lfc` source. The binary is written next to it, named after the source
+without its extension.
 Only an exact first argument of `native` selects the package command family. A
 source file literally named `native` must therefore be passed as `./native` or
 by another explicit path.
@@ -52,12 +53,12 @@ selection, toolchain overrides, and transactional behavior.
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `<source.php>` | path | — | Required. The PHP file to compile. |
+| `<source-file>` | path | — | Required. A tagged `.php` or tagless `.lfc` file to compile. Other suffixes retain tagged-PHP behavior. |
 | `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`) | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library. |
 | `--emit-asm` | — | off | Write generated assembly instead of a binary. |
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
 | `--check` | — | off | Run front-end checks only; write nothing. |
-| `--strict-php` | — | off | Reject every elephc extension; accept only PHP-compatible constructs. See [Strict PHP mode](#strict-php-mode). |
+| `--strict-php` | — | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [Strict PHP mode](#strict-php-mode). |
 | `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
 | `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |
 | `--php-version VERSION` | `8.2`, `8.3`, `8.4`, `8.5` | `8.5` | Select the maintained PHP compatibility profile for version-dependent behavior. Sessions use it for PHP 8.4 deprecations/validation and PHP 8.5 CHIPS/option semantics. |
@@ -140,10 +141,11 @@ See [Linking, heap, and conditional compilation](linking-and-conditional-compila
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--strict-php` | — | off | Accept only PHP-compatible constructs: every elephc extension becomes a compile error. |
+| `--strict-php` | — | off | Accept only PHP-compatible constructs in PHP-mode user files; LFC and compiler-generated source remain extension-enabled. |
 
-Under `--strict-php` the compiler rejects the [beyond-PHP extensions](../beyond-php/pointers.md)
-at the source level:
+Under `--strict-php` the compiler rejects the
+[beyond-PHP extensions](../beyond-php/pointers.md) at the source level in every
+physical PHP-mode file:
 
 - extension syntax — `ifdef` blocks, `packed class`, `extern` declarations,
   `ptr_cast<T>(...)`, `buffer_new<T>(...)`, typed local variable declarations
@@ -159,9 +161,13 @@ at the source level:
 - names prefixed with `__elephc_` are reserved for the compiler and rejected in
   user code.
 
-The audit covers the main file plus every `include`/`require`d and autoloaded
-user file. Compiler-injected preludes (PDO, timezone, image, web, …) are exempt,
-so programs using those PHP-level APIs keep compiling in strict mode.
+The audit covers a PHP entry plus every PHP-mode `include`/`require`d and
+autoloaded user file. Physical `.lfc` files are always extension-enabled, even
+when reached from a strict PHP entry; conversely, PHP included by an LFC entry
+is still audited. Compiler-injected preludes (PDO, timezone, image, web, …) are
+exempt, so programs using those PHP-level APIs keep compiling in strict mode.
+This same call-site profile controls direct and dynamic calls,
+`function_exists()`, `is_callable()`, first-class callables, and `eval()`.
 
 Strict mode also reaches `eval()`, matching PHP's runtime semantics for eval'd
 code: the compiled binary marks the eval bridge as strict, so extension
@@ -172,12 +178,89 @@ error. Fragments are never rejected at compile time: PHP only fails eval'd code
 when it actually executes, and strict mode preserves that. User functions that
 shadow extension names remain callable from eval'd code.
 
-`--strict-php` cannot be combined with `--define`: defines only feed the `ifdef`
-extension, which strict mode rejects.
+`--strict-php` may be combined with `--define`. LFC `ifdef` blocks consume the
+symbol normally, while a PHP-mode file containing `ifdef` is rejected by the
+strict audit before conditional compilation can remove either branch. Supplying
+an otherwise unused define is valid.
 
 Strict mode guarantees that the *constructs* used are PHP-compatible; it does
 not change elephc's static-subset semantics. A strict-valid program can still be
 rejected by the type checker in places where the PHP interpreter would run it.
+
+## INI directives
+
+An AOT binary has no `php.ini` to read at startup: its INI surface is compiled
+in. elephc therefore splits PHP's `-d` into two mechanisms — one at compile time
+and one at run time.
+
+| Flag | Values | Default | Description |
+|---|---|---|---|
+| `--ini KEY=VALUE` / `--ini=KEY=VALUE` | any `opcache.*` directive | — | Compile-time override of one INI directive. Repeatable; last wins for a repeated key. Splits on the FIRST `=`, so a value may itself contain `=`. An unknown key is accepted and ignored. |
+
+```bash
+elephc --ini opcache.enable_cli=1 --ini opcache.jit=tracing app.php
+```
+
+`--ini` is the exact analogue of `php -d`: it moves both `ini_get()` (the raw
+INI string, reported verbatim) and `opcache_get_configuration()['directives']`
+(the normalized typed value), and a value that does not parse for the
+directive's type is ignored, leaving the compiled-in default.
+
+### Runtime overrides: `ELEPHC_INI_*`
+
+Once a binary is built, a directive can still be re-pointed for a single run
+through an environment variable:
+
+```bash
+ELEPHC_INI_opcache__save_comments=0 ./app       # primary spelling
+env 'ELEPHC_INI_opcache.save_comments=0' ./app  # secondary spelling
+```
+
+- **Primary spelling** — `ELEPHC_INI_` + the directive with every `.` replaced
+  by `__`. This is the only form a POSIX shell can assign inline: `FOO.BAR=1
+  cmd` is a syntax error in `sh`/`bash`/`zsh`.
+- **Secondary spelling** — `ELEPHC_INI_` + the literal dotted directive name.
+  Consulted only when the primary is unset or empty; reachable through `env`,
+  `putenv`, Docker `--env`, and systemd unit files, all of which accept dots.
+- The directive part stays verbatim lowercase in both spellings. It is not
+  upper-cased, so multi-dot directive names cannot collide.
+
+Precedence is **baked default → `--ini` → `ELEPHC_INI_*`**; the environment
+wins. Both surfaces move together, exactly as `-d` moves both in reference PHP:
+
+```php
+// with ELEPHC_INI_opcache__save_comments=0
+ini_get('opcache.save_comments');                                    // '0'
+opcache_get_configuration()['directives']['opcache.save_comments'];  // false
+ini_get_all()['opcache.save_comments'];                              // '0'
+```
+
+A value that does not parse for the directive's type is **ignored** — the
+compile-time value stays, on both surfaces — rather than corrupting the report.
+An environment variable set to the empty string is treated as unset, because
+`getenv()` cannot distinguish the two.
+
+**Which directives are overridable at run time.** Only the ones elephc merely
+*reports*. Ten `opcache.*` directives are consumed at compile time to bake code
+or baked constants, and honoring them on the reporting surface alone would
+produce a binary that contradicts itself (`ini_get('opcache.enable_cli') === '1'`
+next to an `opcache_get_status()` that still returns `false`). Their environment
+variables are ignored; use `--ini` for them instead:
+
+`opcache.enable`, `opcache.enable_cli`, `opcache.memory_consumption`,
+`opcache.interned_strings_buffer`, `opcache.max_accelerated_files`,
+`opcache.revalidate_freq`, `opcache.jit`, `opcache.jit_buffer_size`,
+`opcache.restrict_api`, `opcache.preload`.
+
+The other 44 directives of the PHP 8.5 set are runtime-overridable.
+
+> **Not PHP parity — an elephc extension.** Reference PHP has *no*
+> per-directive environment override. Its only environment mechanisms are
+> file-granularity (`PHPRC`, `PHP_INI_SCAN_DIR`); `PHP_INI_opcache_jit=…`,
+> `opcache_jit=…` and `opcache.jit=…` in the environment all do nothing
+> (verified on PHP 8.5.6). `ELEPHC_INI_*` is elephc's answer to `-d` for an AOT
+> binary whose `php.ini` is compiled in, and `--strict-php` does not reject it
+> because it is not a language construct.
 
 ## Diagnostics and debugging
 
@@ -209,3 +292,7 @@ overrides. Native-package variables select the cache and target C toolchain:
 
 `TARGET_ENV` is the uppercase target with hyphens replaced by underscores, such
 as `LINUX_AARCH64`. All three tool overrides are required for a non-host target.
+
+The variables in this table are read by the **compiler**. A separate family,
+`ELEPHC_INI_<directive>`, is read by the **compiled binary** at run time — see
+[Runtime overrides](#runtime-overrides-elephc_ini_).

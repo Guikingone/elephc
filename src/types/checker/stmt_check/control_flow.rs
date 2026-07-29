@@ -7,6 +7,13 @@
 //!
 //! Key details:
 //! - Branch and loop handling must preserve PHP execution order and conservative type environments.
+//! - A `foreach` over a PHP-visible non-iterable (`int`, `string`, `bool`, `null`, `float`,
+//!   `resource`) is a WARNING, not an error: php-src raises
+//!   `foreach() argument must be of type array|object, <type> given` at runtime and keeps
+//!   going, so rejecting it would make elephc refuse a program PHP runs. Codegen emits the
+//!   matching runtime warning and skips the loop
+//!   (`IteratorSourceKind::NonIterable` in `crate::codegen::lower_inst::iterators`).
+//!   Compiler-internal types with no PHP spelling stay a hard error.
 
 use crate::errors::CompileError;
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
@@ -19,26 +26,58 @@ const FS_CURRENT_AS_PATHNAME: i64 = 32;
 const FS_CURRENT_MODE_MASK: i64 = 240;
 const FS_SKIP_DOTS: i64 = 4096;
 
-/// Widens locals whose indexed-array element type joins to `mixed` across the loop body's
-/// push sites (issue #452). Loop bodies are checked in a single pass, so without this the
-/// entry environment types an early push site against the pre-promotion element type even
-/// though the back edge brings the promoted array around; fixing the element type to
-/// `mixed` up front makes every push site see the fixed-point type.
-fn widen_loop_grown_array_pushes(
+/// Computes and records fixed-point array storage contracts before checking a loop body.
+///
+/// The shared analysis iterates over rebinds and growth sites with an evolving environment, so
+/// cascading promotions, non-literal RHSs, and raw-to-raw element changes converge before any
+/// header/body read is checked. EIR lowering later consumes the recorded contract for the same
+/// loop span rather than repeating expression inference.
+fn stabilize_loop_storage(
     checker: &mut Checker,
+    loop_span: crate::span::Span,
     body: &[Stmt],
     update: Option<&Stmt>,
     env: &mut TypeEnv,
 ) {
+    let key = (checker.current_loop_storage_scope.clone(), loop_span);
+    if let Some(recorded) = checker.loop_storage_types.get(&key).cloned() {
+        for (name, storage_type) in recorded {
+            env.insert(name, storage_type);
+        }
+        return;
+    }
     let snapshot = env.clone();
-    let names = crate::types::checker::loop_grown_mixed_array_pushes(
+    let mut call_types: std::collections::HashMap<crate::span::Span, PhpType> =
+        std::collections::HashMap::new();
+    let contracts = crate::types::checker::loop_carried_storage_types(
         body,
         update,
-        &|name| snapshot.get(name).cloned(),
-        &mut |expr| checker.infer_type(expr, &snapshot).ok(),
+        &snapshot,
+        &mut |expr, analysis_env| {
+            let is_call = matches!(
+                expr.kind,
+                ExprKind::FunctionCall { .. }
+                    | ExprKind::MethodCall { .. }
+                    | ExprKind::StaticMethodCall { .. }
+                    | ExprKind::ClosureCall { .. }
+                    | ExprKind::ExprCall { .. }
+            );
+            if is_call {
+                if let Some(cached) = call_types.get(&expr.span) {
+                    return Some(cached.clone());
+                }
+            }
+            let inferred = checker.infer_type(expr, analysis_env).ok()?;
+            if is_call {
+                call_types.insert(expr.span, inferred.clone());
+            }
+            Some(inferred)
+        },
     );
-    for name in names {
-        env.insert(name, PhpType::Array(Box::new(PhpType::Mixed)));
+    let recorded = checker.loop_storage_types.entry(key).or_default();
+    for (name, storage_type) in contracts {
+        recorded.insert(name.clone(), storage_type.clone());
+        env.insert(name, storage_type);
     }
 }
 
@@ -53,6 +92,27 @@ fn restore_narrowed_var(env: &mut TypeEnv, var: &str, saved: &Option<PhpType>) {
         None => {
             env.remove(var);
         }
+    }
+}
+
+/// Names a `foreach` source that PHP accepts but can never iterate, or `None` when the type
+/// has no PHP-visible spelling and must stay a hard compile error.
+///
+/// The names match what php-src prints in `foreach() argument must be of type array|object,
+/// <name> given` (captured from PHP 8.5.6): `int`, `float`, `string`, `null`, `resource`, and
+/// `true`/`false` for booleans. Only `PhpType::False` pins the boolean value at compile time;
+/// a general `bool` is reported as `bool` here, while the RUNTIME warning emitted by
+/// `__rt_warn_foreach_non_iterable` always prints the real `true`/`false`.
+fn non_iterable_foreach_argument_name(ty: &PhpType) -> Option<&'static str> {
+    match ty {
+        PhpType::Int => Some("int"),
+        PhpType::Float => Some("float"),
+        PhpType::Str => Some("string"),
+        PhpType::False => Some("false"),
+        PhpType::Bool => Some("bool"),
+        PhpType::Void => Some("null"),
+        PhpType::Resource(_) => Some("resource"),
+        _ => None,
     }
 }
 
@@ -144,6 +204,31 @@ impl Checker {
                     }
                     env.insert(value_var.clone(), PhpType::Mixed);
                     self.clear_foreach_callable_metadata(value_var);
+                } else if let Some(type_name) = non_iterable_foreach_argument_name(&arr_ty) {
+                    // php-src does NOT reject this: `ZEND_FE_RESET_R` raises
+                    // `foreach() argument must be of type array|object, <type> given`
+                    // (E_WARNING), skips the loop body, and execution continues. Mirroring
+                    // that as a hard error would make elephc reject a program PHP runs, so
+                    // the diagnostic is a compile warning and codegen emits the same
+                    // runtime warning (`IteratorSourceKind::NonIterable` in
+                    // `src/codegen/lower_inst/iterators.rs`). Compiler-internal types
+                    // (`Packed`, `Pointer`, `Buffer`, `Never`, `Callable`, `TaggedScalar`)
+                    // have no PHP-visible spelling and stay a hard error below.
+                    self.warnings.push(crate::errors::CompileWarning::new(
+                        stmt.span,
+                        &format!(
+                            "foreach() argument must be of type array|object, {} given; the loop body will never run",
+                            type_name
+                        ),
+                    ));
+                    // The body is still type-checked, so bind both loop variables the way
+                    // the `Mixed` source path does.
+                    if let Some(k) = key_var {
+                        env.insert(k.clone(), PhpType::Mixed);
+                        self.clear_foreach_callable_metadata(k);
+                    }
+                    env.insert(value_var.clone(), PhpType::Mixed);
+                    self.clear_foreach_callable_metadata(value_var);
                 } else {
                     return Err(CompileError::new(
                         stmt.span,
@@ -165,7 +250,7 @@ impl Checker {
                 }
                 // Widen after the key/value bindings are in the environment so a push of
                 // the foreach value variable joins with its real element type.
-                widen_loop_grown_array_pushes(self, body, None, env);
+                stabilize_loop_storage(self, stmt.span, body, None, env);
                 let errors = self.check_break_continue_target_body(body, env);
                 if errors.is_empty() {
                     Ok(())
@@ -269,16 +354,15 @@ impl Checker {
                     }
                 }
 
-                // Keep the accumulated complement for the statements after the `if` only when the
-                // chain is exhaustive by divergence: no else and every clause body diverges, so a
-                // fallthrough implies all conditions were false. Otherwise a taken non-diverging
-                // branch could reach the following code without the complement holding, so restore
-                // every narrowed variable to its pre-`if` type.
+                // Keep the accumulated complement for the statements after the `if` only when no
+                // guarded clause can fall through: there is no else and every clause ends in a
+                // non-fallthrough statement, so reaching the following code implies all conditions
+                // were false. Otherwise restore every narrowed variable to its pre-`if` type.
                 let keep_complement_after_if = applied_any_guard
                     && else_body.is_none()
                     && clauses
                         .iter()
-                        .all(|(_, body)| self.body_always_diverges(body));
+                        .all(|(_, body)| self.body_cannot_fall_through(body));
                 if !keep_complement_after_if {
                     for (var, original) in &saved_vars {
                         restore_narrowed_var(env, var, original);
@@ -292,7 +376,7 @@ impl Checker {
                 }
             }
             StmtKind::DoWhile { body, condition } => {
-                widen_loop_grown_array_pushes(self, body, None, env);
+                stabilize_loop_storage(self, stmt.span, body, None, env);
                 let errors = self.check_break_continue_target_body(body, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
                 if errors.is_empty() {
@@ -302,7 +386,7 @@ impl Checker {
                 }
             }
             StmtKind::While { condition, body } => {
-                widen_loop_grown_array_pushes(self, body, None, env);
+                stabilize_loop_storage(self, stmt.span, body, None, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
                 let errors = self.check_break_continue_target_body(body, env);
                 if errors.is_empty() {
@@ -320,7 +404,7 @@ impl Checker {
                 if let Some(s) = init {
                     self.check_stmt(s, env)?;
                 }
-                widen_loop_grown_array_pushes(self, body, update.as_deref(), env);
+                stabilize_loop_storage(self, stmt.span, body, update.as_deref(), env);
                 if let Some(c) = condition {
                     self.infer_type_with_assignment_effects(c, env)?;
                 }

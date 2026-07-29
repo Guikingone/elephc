@@ -24,8 +24,14 @@ pub(super) fn lower(
     target: RuntimeCallTarget,
 ) -> Result<()> {
     match target {
+        RuntimeCallTarget::ArrayFetchForWrite => {
+            super::lower_array_fetch_for_write_runtime_call(ctx, inst)
+        }
         RuntimeCallTarget::UnaryString(runtime) => lower_unary_string(ctx, inst, runtime),
         RuntimeCallTarget::Function(target) => super::runtime_functions::lower(ctx, inst, target),
+        RuntimeCallTarget::ProfiledFunction { target, .. } => {
+            super::runtime_functions::lower(ctx, inst, target)
+        }
     }
 }
 

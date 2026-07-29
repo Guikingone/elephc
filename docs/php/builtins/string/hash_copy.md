@@ -1,36 +1,26 @@
 ---
 title: "hash_copy()"
-description: "Copies the state of an incremental hashing context."
+description: "Clones an incremental hashing context into an independent HashContext object. Provided by the compiler-injected hash prelude in compiled code."
 sidebar:
-  order: 373
+  order: 375
 ---
 
 ## hash_copy()
 
 ```php
-function hash_copy(resource $context): mixed
+function hash_copy(mixed $context): mixed
 ```
 
-Copies the state of an incremental hashing context.
+Clones an incremental hashing context into an independent HashContext object. Provided by the compiler-injected hash prelude in compiled code.
 
 **Parameters**:
-- `$context` (`resource`)
+- `$context` (`mixed`)
 
 **Returns**: `mixed`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
+- **Compiled (AOT)**: not available — compiled programs cannot call this builtin yet.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/hash_copy.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_copy.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
-
-## Internals
-
-For how `hash_copy` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/hash_copy.md).

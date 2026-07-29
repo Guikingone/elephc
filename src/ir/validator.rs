@@ -299,7 +299,7 @@ fn validate_instruction_immediate(
         ConstF64 => require_immediate(inst_id, inst, "f64", |imm| matches!(imm, Imm::F64(_))),
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
         ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
-        | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell | EvalLiteralCall
+        | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell
         | EvalFunctionCallArray | EvalFunctionExists | EvalClassExists | EvalConstantExists
         | EvalConstantFetch
         | EvalStaticMethodCall
@@ -309,6 +309,9 @@ fn validate_instruction_immediate(
         | ReflectionStaticPropertyInitialized => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
         }
+        EvalLiteralCall => require_immediate(inst_id, inst, "profiled data id", |imm| {
+            matches!(imm, Imm::Data(_) | Imm::ProfiledData { .. })
+        }),
         LoadLocal | StoreLocal | UnsetLocal | LoadRefCell | StoreRefCell | ReleaseLocalRefCell
         | ReleaseLocalSlot | BindRefCellPtr
         | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {

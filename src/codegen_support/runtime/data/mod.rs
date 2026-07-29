@@ -89,6 +89,17 @@ pub(crate) const HASH_INIT_UNKNOWN_ALGO_MSG: &str =
 /// name or a non-cryptographic checksum (PHP rejects HMAC over crc32/adler/fnv/joaat).
 pub(crate) const HASH_HMAC_UNKNOWN_ALGO_MSG: &str =
     "hash_hmac(): Argument #1 ($algo) must be a valid cryptographic hashing algorithm";
+/// Catchable `\TypeError` message when `hash_update()` is handed a HashContext that
+/// `hash_final()` already consumed. Captured verbatim from PHP 8.5.6
+/// (`php -d xdebug.mode=off`); PHP words all three as one sentence naming the callee.
+pub(crate) const HASH_UPDATE_FINALIZED_CTX_MSG: &str =
+    "hash_update(): Argument #1 ($context) must be a valid, non-finalized HashContext";
+/// Catchable `\TypeError` message for a second `hash_final()` on the same context.
+pub(crate) const HASH_FINAL_FINALIZED_CTX_MSG: &str =
+    "hash_final(): Argument #1 ($context) must be a valid, non-finalized HashContext";
+/// Catchable `\TypeError` message for `hash_copy()` of an already-finalized context.
+pub(crate) const HASH_COPY_FINALIZED_CTX_MSG: &str =
+    "hash_copy(): Argument #1 ($context) must be a valid, non-finalized HashContext";
 /// Catchable `\ValueError` message when `mb_strlen()` receives an unknown encoding name.
 pub(crate) const MB_STRLEN_UNKNOWN_ENCODING_MSG: &str =
     "mb_strlen(): Argument #2 ($encoding) must be a valid encoding";

@@ -307,3 +307,61 @@ return true;"#
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies `get_resource_id()` numbers eval streams 5, 6, 7 like PHP 8.5.6 does.
+///
+/// This is the unit-level guard for the eval payload namespace, and it runs the REAL
+/// `EvalStreamResources` allocator against the fake mirror of the runtime resource-id
+/// registry, so it fails if either half drifts. Without the namespace base the eval
+/// payloads are 0, 1 and 2, which the registry answers as the standard streams'
+/// fixed ids, and this program prints `1,2,3`.
+///
+/// `var_dump()` is asserted alongside because it read a hard-coded `resource(0)` for
+/// as long as nothing checked it.
+#[test]
+fn execute_program_numbers_eval_stream_resources_like_php() {
+    let program = parse_fragment(
+        br#"$a = fopen("php://memory", "r");
+$b = fopen("php://memory", "r");
+$c = fopen("php://memory", "r");
+echo get_resource_id($a) . "," . get_resource_id($b) . "," . get_resource_id($c) . ":";
+var_dump($a);
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "5,6,7:resource(5) of type (stream)\n"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies a closed eval stream burns its id instead of releasing it for reuse.
+///
+/// php-src draws `zend_resource` handles from a monotonically increasing list index,
+/// so the stream opened after an `fclose()` takes the NEXT id: PHP 8.5.6 prints `5,7`
+/// for the equivalent program, never `5,6`.
+#[test]
+fn execute_program_does_not_recycle_a_closed_eval_stream_id() {
+    let program = parse_fragment(
+        br#"$a = fopen("php://memory", "r");
+$b = fopen("php://memory", "r");
+fclose($b);
+$c = fopen("php://memory", "r");
+echo get_resource_id($a) . "," . get_resource_id($c);
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "5,7");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}

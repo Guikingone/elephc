@@ -247,6 +247,11 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Pa
     }
 }
 
+/// Builds bridge archives needed by CLI-based fixtures before invoking the compiler binary.
+pub(crate) fn ensure_cli_bridge_staticlibs(actual_link_libs: &[&str]) {
+    ensure_bridge_staticlibs(actual_link_libs, &bridge_staticlib_dir());
+}
+
 /// Reports whether a bridge staticlib is missing or older than its package
 /// sources. This keeps codegen tests from linking stale bridge archives after a
 /// bridge crate changes inside the same worktree. Archived CI runs can declare

@@ -33,7 +33,8 @@ mod tests;
 thread_local! {
     static ACTIVE_FUNCTION_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
     static ACTIVE_STATIC_METHOD_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
-    static ACTIVE_PRIVATE_INSTANCE_METHOD_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
+    static ACTIVE_INSTANCE_METHOD_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
+    static ACTIVE_INSTANCE_DISPATCH_METADATA: RefCell<Option<InstanceDispatchMetadata>> = const { RefCell::new(None) };
     static ACTIVE_CLASS_EFFECT_CONTEXT: RefCell<Option<ClassEffectContext>> = const { RefCell::new(None) };
     static ACTIVE_CALLABLE_ALIAS_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
 }
@@ -55,37 +56,43 @@ pub fn propagate_constants(program: Program) -> Program {
     // known-pure user callables stop clearing the environment. Substitution
     // into by-ref argument positions is masked by `propagate_args`, which
     // keeps those arguments lvalues.
-    let (function_effects, static_method_effects, private_instance_method_effects) =
+    let (function_effects, static_method_effects, instance_method_effects) =
         compute_program_callable_effects(&program);
+    let instance_dispatch_metadata = collect_instance_dispatch_metadata(&program);
     let signatures = collect_by_ref_signatures(&program);
     with_callable_effects(
         function_effects,
         static_method_effects,
-        private_instance_method_effects,
+        instance_method_effects,
+        instance_dispatch_metadata,
         || with_by_ref_signatures(signatures, || propagate_block(program, HashMap::new()).0),
     )
 }
 
 /// Normalizes control flow structures (ifs, switches, try/catch) for easier optimization.
 pub fn normalize_control_flow(program: Program) -> Program {
-    let (function_effects, static_method_effects, private_instance_method_effects) =
+    let (function_effects, static_method_effects, instance_method_effects) =
         compute_program_callable_effects(&program);
+    let instance_dispatch_metadata = collect_instance_dispatch_metadata(&program);
     with_callable_effects(
         function_effects,
         static_method_effects,
-        private_instance_method_effects,
+        instance_method_effects,
+        instance_dispatch_metadata,
         || prune_block(program),
     )
 }
 
 /// Prunes branches with constant conditions that cannot be reached.
 pub fn prune_constant_control_flow(program: Program) -> Program {
-    let (function_effects, static_method_effects, private_instance_method_effects) =
+    let (function_effects, static_method_effects, instance_method_effects) =
         compute_program_callable_effects(&program);
+    let instance_dispatch_metadata = collect_instance_dispatch_metadata(&program);
     with_callable_effects(
         function_effects,
         static_method_effects,
-        private_instance_method_effects,
+        instance_method_effects,
+        instance_dispatch_metadata,
         || prune_block(program),
     )
 }
@@ -116,12 +123,14 @@ impl PropagatedValue {
 type ConstantEnv = HashMap<String, PropagatedValue>;
 /// Eliminates dead code for this module.
 pub fn eliminate_dead_code(program: Program) -> Program {
-    let (function_effects, static_method_effects, private_instance_method_effects) =
+    let (function_effects, static_method_effects, instance_method_effects) =
         compute_program_callable_effects(&program);
+    let instance_dispatch_metadata = collect_instance_dispatch_metadata(&program);
     with_callable_effects(
         function_effects,
         static_method_effects,
-        private_instance_method_effects,
+        instance_method_effects,
+        instance_dispatch_metadata,
         || dce_block(program),
     )
 }
@@ -169,15 +178,16 @@ impl Effect {
                     | crate::ir::Effects::OUTPUT
                     | crate::ir::Effects::REFCOUNT_OP,
             ),
-            may_throw: effects.intersects(
-                crate::ir::Effects::MAY_THROW
-                    | crate::ir::Effects::MAY_FATAL
-                    | crate::ir::Effects::MAY_WARN
-                    | crate::ir::Effects::MAY_DEOPT,
-            ),
+            may_throw: effects.contains(crate::ir::Effects::MAY_THROW),
             writes_globals: effects.contains(crate::ir::Effects::WRITES_GLOBAL),
         };
-        if effects.intersects(crate::ir::Effects::READS_FS | crate::ir::Effects::READS_PROCESS) {
+        if effects.intersects(
+            crate::ir::Effects::READS_FS
+                | crate::ir::Effects::READS_PROCESS
+                | crate::ir::Effects::MAY_FATAL
+                | crate::ir::Effects::MAY_WARN
+                | crate::ir::Effects::MAY_DEOPT,
+        ) {
             effect.has_side_effects = true;
         }
         effect
@@ -216,11 +226,42 @@ impl Effect {
     }
 }
 
-/// Carries class resolution context for private instance method effect analysis.
+/// Carries lexical class resolution context for method and property effect analysis.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ClassEffectContext {
     class_name: String,
     parent_name: Option<String>,
+}
+
+/// Class-level facts needed to resolve closed-world instance dispatch and property reads.
+#[derive(Clone, Debug, Default)]
+struct InstanceClassMetadata {
+    parent_name: Option<String>,
+    is_abstract: bool,
+    is_final: bool,
+    has_trait_uses: bool,
+    private_methods: HashSet<String>,
+    final_methods: HashSet<String>,
+    method_visibilities: HashMap<String, crate::parser::ast::Visibility>,
+    properties: HashMap<String, PropertyReadMetadata>,
+    has_magic_get: bool,
+}
+
+/// Declared property facts that determine whether a direct read can throw or invoke user code.
+#[derive(Clone, Debug)]
+struct PropertyReadMetadata {
+    declaring_class: String,
+    visibility: crate::parser::ast::Visibility,
+    typed: bool,
+    hooked: bool,
+}
+
+/// Closed-world class hierarchy and member facts installed during effect analysis.
+#[derive(Clone, Debug, Default)]
+struct InstanceDispatchMetadata {
+    classes: HashMap<String, InstanceClassMetadata>,
+    /// True when AST-level `eval()` can add subclasses beyond the declared hierarchy.
+    has_dynamic_class_barrier: bool,
 }
 
 /// Holds the body and never-return metadata for a function during effect analysis.
@@ -240,34 +281,38 @@ struct StaticMethodBody {
 
 /// Maps names to scalar constants during constant propagation.
 
-/// Installs function, static method, and private instance method effect maps for the closure's
-/// duration, then restores the previous maps. Effect analysis uses thread-local state so
-/// `block_effect` and `stmt_effect` can recursively query effects of nested callables.
+/// Installs function, static method, instance method, and class-dispatch summaries for the
+/// closure's duration, then restores the previous state.
 fn with_callable_effects<R>(
     function_effects: HashMap<String, Effect>,
     static_method_effects: HashMap<String, Effect>,
-    private_instance_method_effects: HashMap<String, Effect>,
+    instance_method_effects: HashMap<String, Effect>,
+    instance_dispatch_metadata: InstanceDispatchMetadata,
     f: impl FnOnce() -> R,
 ) -> R {
     ACTIVE_FUNCTION_EFFECTS.with(|function_slot| {
         ACTIVE_STATIC_METHOD_EFFECTS.with(|static_slot| {
-            ACTIVE_PRIVATE_INSTANCE_METHOD_EFFECTS.with(|instance_slot| {
-                let previous_functions = function_slot.replace(Some(function_effects));
-                let previous_static_methods = static_slot.replace(Some(static_method_effects));
-                let previous_instance_methods =
-                    instance_slot.replace(Some(private_instance_method_effects));
-                let result = f();
-                instance_slot.replace(previous_instance_methods);
-                static_slot.replace(previous_static_methods);
-                function_slot.replace(previous_functions);
-                result
+            ACTIVE_INSTANCE_METHOD_EFFECTS.with(|instance_slot| {
+                ACTIVE_INSTANCE_DISPATCH_METADATA.with(|metadata_slot| {
+                    let previous_functions = function_slot.replace(Some(function_effects));
+                    let previous_static_methods = static_slot.replace(Some(static_method_effects));
+                    let previous_instance_methods =
+                        instance_slot.replace(Some(instance_method_effects));
+                    let previous_metadata =
+                        metadata_slot.replace(Some(instance_dispatch_metadata));
+                    let result = f();
+                    metadata_slot.replace(previous_metadata);
+                    instance_slot.replace(previous_instance_methods);
+                    static_slot.replace(previous_static_methods);
+                    function_slot.replace(previous_functions);
+                    result
+                })
             })
         })
     })
 }
 
-/// Installs a class effect context for private instance method effect analysis, then restores
-/// the previous context.
+/// Installs a class effect context for instance dispatch analysis, then restores it.
 fn with_class_effect_context<R>(context: Option<ClassEffectContext>, f: impl FnOnce() -> R) -> R {
     ACTIVE_CLASS_EFFECT_CONTEXT.with(|slot| {
         let previous = slot.replace(context);
@@ -295,9 +340,9 @@ fn current_callable_alias_effects() -> HashMap<String, Effect> {
     ACTIVE_CALLABLE_ALIAS_EFFECTS.with(|slot| slot.borrow().clone().unwrap_or_default())
 }
 
-/// Computes the effect for every function, static method, and private instance method in the
+/// Computes the effect for every function, static method, and concrete instance method in the
 /// program. Uses a fixed-point iteration: effects start as PURE and are refined by examining
-/// bodies, accounting for nested calls.
+/// bodies, accounting for nested calls and closed-world override sets.
 fn compute_program_callable_effects(
     program: &[Stmt],
 ) -> (
@@ -309,8 +354,9 @@ fn compute_program_callable_effects(
     collect_program_function_bodies(program, &mut function_bodies);
     let mut static_method_bodies = HashMap::new();
     collect_program_static_method_bodies(program, &mut static_method_bodies);
-    let mut private_instance_method_bodies = HashMap::new();
-    collect_program_private_instance_method_bodies(program, &mut private_instance_method_bodies);
+    let mut instance_method_bodies = HashMap::new();
+    collect_program_instance_method_bodies(program, &mut instance_method_bodies);
+    let instance_dispatch_metadata = collect_instance_dispatch_metadata(program);
 
     let mut function_effects: HashMap<String, Effect> = function_bodies
         .keys()
@@ -322,7 +368,7 @@ fn compute_program_callable_effects(
         .cloned()
         .map(|name| (name, Effect::PURE))
         .collect();
-    let mut private_instance_method_effects: HashMap<String, Effect> = private_instance_method_bodies
+    let mut instance_method_effects: HashMap<String, Effect> = instance_method_bodies
         .keys()
         .cloned()
         .map(|name| (name, Effect::PURE))
@@ -331,50 +377,61 @@ fn compute_program_callable_effects(
     loop {
         let function_snapshot = function_effects.clone();
         let static_method_snapshot = static_method_effects.clone();
-        let private_instance_method_snapshot = private_instance_method_effects.clone();
+        let instance_method_snapshot = instance_method_effects.clone();
         let mut changed = false;
 
         ACTIVE_FUNCTION_EFFECTS.with(|function_slot| {
             ACTIVE_STATIC_METHOD_EFFECTS.with(|static_slot| {
-                ACTIVE_PRIVATE_INSTANCE_METHOD_EFFECTS.with(|instance_slot| {
-                    let previous_functions = function_slot.replace(Some(function_snapshot));
-                    let previous_static_methods = static_slot.replace(Some(static_method_snapshot));
-                    let previous_instance_methods =
-                        instance_slot.replace(Some(private_instance_method_snapshot));
+                ACTIVE_INSTANCE_METHOD_EFFECTS.with(|instance_slot| {
+                    ACTIVE_INSTANCE_DISPATCH_METADATA.with(|metadata_slot| {
+                        let previous_functions = function_slot.replace(Some(function_snapshot));
+                        let previous_static_methods =
+                            static_slot.replace(Some(static_method_snapshot));
+                        let previous_instance_methods =
+                            instance_slot.replace(Some(instance_method_snapshot));
+                        let previous_metadata =
+                            metadata_slot.replace(Some(instance_dispatch_metadata.clone()));
 
-                    for (name, function) in &function_bodies {
-                        let effect = never_declared_effect(function.declared_never, block_effect(&function.body));
-                        if function_effects.get(name).copied() != Some(effect) {
-                            function_effects.insert(name.clone(), effect);
-                            changed = true;
+                        for (name, function) in &function_bodies {
+                            let effect = never_declared_effect(
+                                function.declared_never,
+                                block_effect(&function.body),
+                            );
+                            if function_effects.get(name).copied() != Some(effect) {
+                                function_effects.insert(name.clone(), effect);
+                                changed = true;
+                            }
                         }
-                    }
 
-                    for (name, method) in &static_method_bodies {
-                        let effect = with_class_effect_context(Some(method.context.clone()), || {
-                            block_effect(&method.body)
-                        });
-                        let effect = never_declared_effect(method.declared_never, effect);
-                        if static_method_effects.get(name).copied() != Some(effect) {
-                            static_method_effects.insert(name.clone(), effect);
-                            changed = true;
+                        for (name, method) in &static_method_bodies {
+                            let effect =
+                                with_class_effect_context(Some(method.context.clone()), || {
+                                    block_effect(&method.body)
+                                });
+                            let effect = never_declared_effect(method.declared_never, effect);
+                            if static_method_effects.get(name).copied() != Some(effect) {
+                                static_method_effects.insert(name.clone(), effect);
+                                changed = true;
+                            }
                         }
-                    }
 
-                    for (name, method) in &private_instance_method_bodies {
-                        let effect = with_class_effect_context(Some(method.context.clone()), || {
-                            block_effect(&method.body)
-                        });
-                        let effect = never_declared_effect(method.declared_never, effect);
-                        if private_instance_method_effects.get(name).copied() != Some(effect) {
-                            private_instance_method_effects.insert(name.clone(), effect);
-                            changed = true;
+                        for (name, method) in &instance_method_bodies {
+                            let effect =
+                                with_class_effect_context(Some(method.context.clone()), || {
+                                    block_effect(&method.body)
+                                });
+                            let effect = never_declared_effect(method.declared_never, effect);
+                            if instance_method_effects.get(name).copied() != Some(effect) {
+                                instance_method_effects.insert(name.clone(), effect);
+                                changed = true;
+                            }
                         }
-                    }
 
-                    instance_slot.replace(previous_instance_methods);
-                    static_slot.replace(previous_static_methods);
-                    function_slot.replace(previous_functions);
+                        metadata_slot.replace(previous_metadata);
+                        instance_slot.replace(previous_instance_methods);
+                        static_slot.replace(previous_static_methods);
+                        function_slot.replace(previous_functions);
+                    })
                 });
             });
         });
@@ -383,7 +440,7 @@ fn compute_program_callable_effects(
             return (
                 function_effects,
                 static_method_effects,
-                private_instance_method_effects,
+                instance_method_effects,
             );
         }
     }
@@ -449,8 +506,8 @@ fn collect_program_static_method_bodies(
     }
 }
 
-/// Collects all private instance method bodies in classes into `out` for effect analysis.
-fn collect_program_private_instance_method_bodies(
+/// Collects all concrete instance method bodies in classes into `out` for effect analysis.
+fn collect_program_instance_method_bodies(
     stmts: &[Stmt],
     out: &mut HashMap<String, StaticMethodBody>,
 ) {
@@ -467,10 +524,7 @@ fn collect_program_private_instance_method_bodies(
                     parent_name: extends.as_ref().map(|parent| parent.as_str().to_string()),
                 };
                 for method in methods {
-                    if !method.is_static
-                        && method.has_body
-                        && matches!(method.visibility, crate::parser::ast::Visibility::Private)
-                    {
+                    if !method.is_static && method.has_body {
                         out.insert(
                             method_effect_key(name, &method.name),
                             StaticMethodBody {
@@ -483,7 +537,96 @@ fn collect_program_private_instance_method_bodies(
                 }
             }
             StmtKind::NamespaceBlock { body, .. } => {
-                collect_program_private_instance_method_bodies(body, out)
+                collect_program_instance_method_bodies(body, out)
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Collects class hierarchy, method modifiers, and direct property facts for effect resolution.
+fn collect_instance_dispatch_metadata(stmts: &[Stmt]) -> InstanceDispatchMetadata {
+    let mut metadata = InstanceDispatchMetadata {
+        has_dynamic_class_barrier: crate::ir_lower::body_contains_eval_call(stmts),
+        ..InstanceDispatchMetadata::default()
+    };
+    collect_instance_dispatch_metadata_into(stmts, &mut metadata);
+    metadata
+}
+
+/// Recursively adds class declarations from one statement block to dispatch metadata.
+fn collect_instance_dispatch_metadata_into(
+    stmts: &[Stmt],
+    metadata: &mut InstanceDispatchMetadata,
+) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::ClassDecl {
+                name,
+                extends,
+                is_abstract,
+                is_final,
+                trait_uses,
+                properties,
+                methods,
+                ..
+            } => {
+                let private_methods = methods
+                    .iter()
+                    .filter(|method| {
+                        !method.is_static
+                            && matches!(
+                                method.visibility,
+                                crate::parser::ast::Visibility::Private
+                            )
+                    })
+                    .map(|method| php_symbol_key(&method.name))
+                    .collect();
+                let final_methods = methods
+                    .iter()
+                    .filter(|method| !method.is_static && method.is_final)
+                    .map(|method| php_symbol_key(&method.name))
+                    .collect();
+                let method_visibilities = methods
+                    .iter()
+                    .filter(|method| !method.is_static)
+                    .map(|method| (php_symbol_key(&method.name), method.visibility.clone()))
+                    .collect();
+                let direct_properties = properties
+                    .iter()
+                    .filter(|property| !property.is_static)
+                    .map(|property| {
+                        (
+                            property.name.clone(),
+                            PropertyReadMetadata {
+                                declaring_class: name.clone(),
+                                visibility: property.visibility.clone(),
+                                typed: property.type_expr.is_some(),
+                                hooked: property.hooks.requires_get(),
+                            },
+                        )
+                    })
+                    .collect();
+                let has_magic_get = methods.iter().any(|method| {
+                    !method.is_static && php_symbol_key(&method.name) == "__get"
+                });
+                metadata.classes.insert(
+                    name.clone(),
+                    InstanceClassMetadata {
+                        parent_name: extends.as_ref().map(|parent| parent.as_str().to_string()),
+                        is_abstract: *is_abstract,
+                        is_final: *is_final,
+                        has_trait_uses: !trait_uses.is_empty(),
+                        private_methods,
+                        final_methods,
+                        method_visibilities,
+                        properties: direct_properties,
+                        has_magic_get,
+                    },
+                );
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                collect_instance_dispatch_metadata_into(body, metadata);
             }
             _ => {}
         }

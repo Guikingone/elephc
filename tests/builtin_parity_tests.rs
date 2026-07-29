@@ -20,11 +20,26 @@ const EVAL_DYNAMIC_DISPATCH_SOURCES: &[&str] = &[include_str!(
 )];
 
 /// Eval-only reflection probes exist because magician can inspect dynamic eval metadata before the AOT catalog exposes them.
+///
+/// The four `hash_*` context names are a DIFFERENT KIND of entry and are listed here
+/// deliberately, not because eval is ahead but because the two sides now model the
+/// value differently. On the AOT side `hash_init()` is no longer a builtin at all: it
+/// is an elephc-PHP wrapper injected by `elephc::hash_prelude` that returns a real
+/// `HashContext` OBJECT, over `internal: true` `__elephc_hash_ctx_*` builtins which are
+/// excluded from every php-visible set. Magician keeps its own registry-declared
+/// `hash_init` returning an eval RESOURCE, so `eval('var_dump(hash_init("md5"))')`
+/// still prints `resource(N)` where compiled code prints `object(HashContext)#N`.
+/// KNOWN DIVERGENCE, not parity — bringing eval onto the object model means teaching
+/// the interpreter to construct prelude-declared classes, which is out of scope here.
 const EVAL_ONLY_REFLECTION_BUILTINS: &[&str] = &[
     "get_called_class",
     "get_class_methods",
     "get_class_vars",
     "get_object_vars",
+    "hash_copy",
+    "hash_final",
+    "hash_init",
+    "hash_update",
 ];
 
 /// Static-only registered builtins exist in the compiler before magician/eval has runtime support.
@@ -159,6 +174,7 @@ const EVAL_DECLARATIVE_REGISTRY_BUILTINS: &[&str] = &[
     "disk_free_space",
     "disk_total_space",
     "exec",
+    "extension_loaded",
     "exit",
     "empty",
     "enum_exists",
@@ -213,6 +229,7 @@ const EVAL_DECLARATIVE_REGISTRY_BUILTINS: &[&str] = &[
     "get_declared_classes",
     "get_declared_interfaces",
     "get_declared_traits",
+    "get_loaded_extensions",
     "getenv",
     "gethostbyaddr",
     "gethostbyname",

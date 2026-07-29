@@ -274,7 +274,7 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `uasort()` | `uasort($arr, $callback): void` | Sort with user comparison, maintain keys |
 | `call_user_func()` | `call_user_func($callback, ...): mixed` | Call a callback value |
 | `call_user_func_array()` | `call_user_func_array($callback, $args): mixed` | Call with args from array |
-| `function_exists()` | `function_exists("name"): bool` | Check if a literal global or fully-qualified function name is defined |
+| `function_exists()` | `function_exists(string $name): bool` | Check if a global or fully-qualified function name is defined. A literal name const-folds; any other string expression is matched case-insensitively at run time against the functions this binary declares |
 | `isset()` | `isset($var, ...$vars): int` | Check that every variable or offset is defined and not null |
 
 `array_filter()` accepts `ARRAY_FILTER_USE_VALUE` (`0`), `ARRAY_FILTER_USE_BOTH` (`1`), and `ARRAY_FILTER_USE_KEY` (`2`). Invalid mode values throw `ValueError`.

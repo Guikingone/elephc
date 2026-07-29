@@ -122,6 +122,7 @@ pub enum RuntimeFnId {
     GetDeclaredClasses,
     GetDeclaredInterfaces,
     GetDeclaredTraits,
+    GetLoadedExtensions,
     GetParentClass,
     InterfaceExists,
     IsA,
@@ -443,6 +444,7 @@ pub enum RuntimeFnId {
     Define,
     Defined,
     Exec,
+    ExtensionLoaded,
     Getdate,
     Getenv,
     Gmdate,
@@ -684,6 +686,9 @@ impl RuntimeFnId {
             RuntimeFnId::InetNtop |
             RuntimeFnId::InetPton |
             RuntimeFnId::Ip2long |
+            RuntimeFnId::IsFinite |
+            RuntimeFnId::IsInfinite |
+            RuntimeFnId::IsNan |
             RuntimeFnId::IsNumeric |
             RuntimeFnId::Lcfirst |
             RuntimeFnId::Log |
@@ -727,11 +732,104 @@ impl RuntimeFnId {
             RuntimeFnId::Ucfirst |
             RuntimeFnId::Ucwords |
             RuntimeFnId::Wordwrap => crate::ir::Effects::empty(),
+            RuntimeFnId::Clamp => crate::ir::Effects::MAY_THROW,
+            RuntimeFnId::FunctionExists
+            | RuntimeFnId::Defined
+            | RuntimeFnId::JsonLastError
+            | RuntimeFnId::JsonLastErrorMsg
+            | RuntimeFnId::DateDefaultTimezoneGet
+            | RuntimeFnId::ObGetLevel => crate::ir::Effects::READS_GLOBAL,
+            RuntimeFnId::SplAutoloadExtensions => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits()
+                    | crate::ir::Effects::WRITES_GLOBAL.bits(),
+            ),
+            RuntimeFnId::SplAutoloadFunctions => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits(),
+            ),
+            RuntimeFnId::GetClass
+            | RuntimeFnId::GetParentClass
+            | RuntimeFnId::SplObjectId => crate::ir::Effects::READS_HEAP,
+            RuntimeFnId::SplObjectHash => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_CONCAT.bits(),
+            ),
+            RuntimeFnId::BufferLen => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
+            RuntimeFnId::Time => crate::ir::Effects::READS_PROCESS,
+            RuntimeFnId::Microtime | RuntimeFnId::Hrtime => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_PROCESS.bits()
+                        | crate::ir::Effects::ALLOC_HEAP.bits(),
+                )
+            }
+            RuntimeFnId::Getenv | RuntimeFnId::Gethostname => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_PROCESS.bits()
+                        | crate::ir::Effects::ALLOC_CONCAT.bits(),
+                )
+            }
+            RuntimeFnId::PhpUname => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::ALLOC_CONCAT.bits()
+                    | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
+            RuntimeFnId::Phpversion => crate::ir::Effects::PURE,
+            RuntimeFnId::MtRand | RuntimeFnId::Rand | RuntimeFnId::RandomInt => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_PROCESS.bits()
+                        | crate::ir::Effects::WRITES_PROCESS.bits(),
+                )
+            }
+            RuntimeFnId::Sleep | RuntimeFnId::Usleep => crate::ir::Effects::WRITES_PROCESS,
+            RuntimeFnId::Sprintf | RuntimeFnId::Vsprintf => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_HEAP.bits()
+                        | crate::ir::Effects::ALLOC_CONCAT.bits()
+                        | crate::ir::Effects::MAY_WARN.bits(),
+                )
+            }
             _ => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::REFCOUNT_OP.bits()
                     & !crate::ir::Effects::WRITES_GLOBAL.bits(),
             ),
+        }
+    }
+
+    /// Returns effects intrinsic to a callback builtin before invoking user code.
+    ///
+    /// Optimizer effect analysis combines this base with a statically-known closure or
+    /// first-class-callable summary. Dynamic callbacks still use [`Self::effects`].
+    pub const fn intrinsic_effects(self) -> crate::ir::Effects {
+        use crate::ir::Effects as E;
+        match self {
+            RuntimeFnId::ArrayAll
+            | RuntimeFnId::ArrayAny
+            | RuntimeFnId::ArrayFilter
+            | RuntimeFnId::ArrayFind
+            | RuntimeFnId::ArrayMap
+            | RuntimeFnId::ArrayReduce
+            | RuntimeFnId::ArrayWalk
+            | RuntimeFnId::ArrayWalkRecursive
+            | RuntimeFnId::ArrayUdiff
+            | RuntimeFnId::ArrayUintersect => {
+                E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
+            }
+            RuntimeFnId::PregReplaceCallback => E::from_bits_retain(
+                E::READS_HEAP.bits() | E::ALLOC_HEAP.bits() | E::MAY_WARN.bits(),
+            ),
+            RuntimeFnId::Uasort
+            | RuntimeFnId::Uksort
+            | RuntimeFnId::Usort => {
+                E::from_bits_retain(
+                    E::READS_HEAP.bits() | E::WRITES_HEAP.bits() | E::REFCOUNT_OP.bits(),
+                )
+            }
+            RuntimeFnId::CallUserFunc => E::PURE,
+            RuntimeFnId::CallUserFuncArray => E::READS_HEAP,
+            _ => self.effects(),
         }
     }
 
@@ -855,7 +953,9 @@ impl RuntimeFnId {
     /// Returns the callback operand inspected for runtime string dispatch, if any.
     pub const fn string_callback_operand_index(self) -> Option<usize> {
         match self {
-            RuntimeFnId::ArrayMap => Some(0),
+            RuntimeFnId::ArrayMap
+            | RuntimeFnId::CallUserFunc
+            | RuntimeFnId::CallUserFuncArray => Some(0),
             RuntimeFnId::ArrayFilter
             | RuntimeFnId::ArrayReduce
             | RuntimeFnId::ArrayWalk
@@ -906,6 +1006,14 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayDiff
                 | RuntimeFnId::ArrayFill
                 | RuntimeFnId::ArrayFillKeys
+                // Every `array_flip` lowering allocates its destination table before writing a
+                // single entry — `__rt_hash_flip` calls `__rt_hash_new`, the indexed helpers
+                // call `__rt_array_new` — so the result can never alias the source. The default
+                // `MayAliasArguments` bucket suppressed the release of an owned source
+                // temporary, which leaked the whole source table on `array_flip(build())` while
+                // the same call through a named local stayed clean. Its Fresh-owning siblings
+                // `ArrayKeys` / `ArrayValues` were already listed here; this was the gap.
+                | RuntimeFnId::ArrayFlip
                 | RuntimeFnId::ArrayIntersect
                 | RuntimeFnId::ArrayKeys
                 | RuntimeFnId::ArrayMap
@@ -930,11 +1038,26 @@ impl RuntimeFnId {
                 | RuntimeFnId::ObGetStatus
                 | RuntimeFnId::ObListHandlers
                 | RuntimeFnId::PregSplit
+                // print_r renders into the `_print_r_buf` capture buffer and `__rt_pr_finish`
+                // copies those bytes out through `__rt_str_persist`, so every mode returns
+                // storage that is freshly allocated and cannot alias an argument: return mode
+                // yields an owned heap string, echo mode a non-heap `true`, and the runtime-flag
+                // mode a fresh Mixed cell. The default `MayAliasArguments` bucket made
+                // `value_is_scratch_string` classify the return-mode string as concat scratch and
+                // skip its release, leaking one block per `print_r($v, true)` call.
+                | RuntimeFnId::PrintR
                 | RuntimeFnId::PtrReadString
                 | RuntimeFnId::Range
                 | RuntimeFnId::StrSplit
                 | RuntimeFnId::Strpos
                 | RuntimeFnId::Strrpos
+                // Strstr's result is `string|false`, so its lowering boxes BOTH arms into a
+                // fresh Mixed cell and `__rt_mixed_from_value` persists (copies) the string
+                // payload — it no longer hands back a borrowed slice of the haystack. Leaving
+                // it in the default `MayAliasArguments` bucket kept an owned haystack
+                // temporary alive for the boxed result's whole lifetime, which leaked one
+                // block per iteration for `strstr($h, $cond ? "a" : "b")` in a loop.
+                | RuntimeFnId::Strstr
                 | RuntimeFnId::ZvalUnpack
         ) {
             BuiltinResultOwnership::Fresh
@@ -1027,6 +1150,7 @@ impl RuntimeFnId {
             RuntimeFnId::GetDeclaredClasses => "get_declared_classes",
             RuntimeFnId::GetDeclaredInterfaces => "get_declared_interfaces",
             RuntimeFnId::GetDeclaredTraits => "get_declared_traits",
+            RuntimeFnId::GetLoadedExtensions => "get_loaded_extensions",
             RuntimeFnId::GetParentClass => "get_parent_class",
             RuntimeFnId::InterfaceExists => "interface_exists",
             RuntimeFnId::IsA => "is_a",
@@ -1289,12 +1413,12 @@ impl RuntimeFnId {
             RuntimeFnId::Gzuncompress => "gzuncompress",
             RuntimeFnId::Hash => "hash",
             RuntimeFnId::HashAlgos => "hash_algos",
-            RuntimeFnId::HashCopy => "hash_copy",
+            RuntimeFnId::HashCopy => "__elephc_hash_ctx_copy",
             RuntimeFnId::HashEquals => "hash_equals",
-            RuntimeFnId::HashFinal => "hash_final",
+            RuntimeFnId::HashFinal => "__elephc_hash_ctx_final",
             RuntimeFnId::HashHmac => "hash_hmac",
-            RuntimeFnId::HashInit => "hash_init",
-            RuntimeFnId::HashUpdate => "hash_update",
+            RuntimeFnId::HashInit => "__elephc_hash_ctx_init",
+            RuntimeFnId::HashUpdate => "__elephc_hash_ctx_update",
             RuntimeFnId::Htmlentities => "htmlentities",
             RuntimeFnId::Htmlspecialchars => "htmlspecialchars",
             RuntimeFnId::Implode => "implode",
@@ -1348,6 +1472,7 @@ impl RuntimeFnId {
             RuntimeFnId::Define => "define",
             RuntimeFnId::Defined => "defined",
             RuntimeFnId::Exec => "exec",
+            RuntimeFnId::ExtensionLoaded => "extension_loaded",
             RuntimeFnId::Getdate => "getdate",
             RuntimeFnId::Getenv => "getenv",
             RuntimeFnId::Gmdate => "gmdate",

@@ -16,8 +16,112 @@ pub(crate) use crate::codegen::Emit;
 use crate::codegen::platform::Target;
 use crate::native_deps::{native_help, parse_native_args, NativeCommand, NativeParseOutcome};
 
-/// Usage string printed to stderr when command-line arguments are invalid or missing.
-pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--php-version 8.2|8.3|8.4|8.5] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--emit-asm] [--emit KIND] [--check] [--strict-php] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--source-map] [--debug-info] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] [--with-CRATE] <source.php>";
+/// Short usage line shown after every parameter error, alongside the `--help` hint.
+/// The full categorized reference lives in `HELP`.
+pub(crate) const USAGE: &str = "Usage: elephc [OPTIONS] <source-file>";
+
+/// ASCII mascot printed by `--mascotte`, embedded at compile time (not read
+/// from a filesystem path — the original source file lives outside this
+/// repo, on one contributor's machine, and wouldn't exist anywhere else).
+const MASCOTTE_ART: &str = "        _ooOoo_
+       o8888888o
+       (| -_- |)
+       0\\  =  /0
+     ___/`---'\\___
+  .'  \\\\|     |//  '.
+  / \\\\|||  :  |||// \\
+  \\  '-.\\\\___//.-'  /
+   '-._   '-'   _.-'
+     `-.______.-'
+        `=---='";
+
+/// Fixed pool of zen/developer quotes `--mascotte` picks from at random.
+const ZEN_QUOTES: &[&str] = &[
+    "There is no cloud, just someone else's computer.",
+    "It works on my machine.",
+    "The best code is no code at all.",
+    "Premature optimization is the root of all evil.",
+    "Simplicity is the ultimate sophistication.",
+    "The obstacle is the path.",
+    "First, solve the problem. Then, write the code.",
+    "A bug in production is worth two in the backlog.",
+    "When in doubt, print it out.",
+    "Silence is also an answer — usually a segfault.",
+];
+
+/// Returns true if `--mascotte` appears anywhere in the argument list.
+pub(crate) fn wants_mascotte(args: &[String]) -> bool {
+    args.iter().any(|a| a == "--mascotte")
+}
+
+/// Prints the ASCII mascot and a randomly chosen quote to stdout. The index
+/// comes from the current time's sub-second microseconds — good enough for a
+/// cosmetic banner, no `rand` dependency needed.
+pub(crate) fn print_mascotte() {
+    let micros = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_micros())
+        .unwrap_or(0);
+    let quote = ZEN_QUOTES[(micros as usize) % ZEN_QUOTES.len()];
+    println!("{}\n\n  \"{}\"\n", MASCOTTE_ART, quote);
+}
+
+/// Returns true if `-h` or `--help` appears anywhere in the argument list, so
+/// help always wins regardless of position or what else was passed alongside
+/// it (e.g. `elephc --check --help app.php` still shows help).
+fn wants_help(args: &[String]) -> bool {
+    args.iter().any(|a| a == "-h" || a == "--help")
+}
+
+/// Full `--help` reference text, categorized by section. Printed to stdout
+/// with exit code 0 — this is a successful, requested action, not an error.
+pub(crate) const HELP: &str = "Usage: elephc [OPTIONS] <source-file>
+
+A PHP-to-native AOT compiler
+
+Arguments:
+  <source-file>           Tagged .php or tagless .lfc source file to compile
+
+Modes:
+  --web                   Compile as a prefork HTTP server
+  --strict-php            Reject elephc extensions in tagged PHP source; .lfc remains extension-enabled
+
+Output modes:
+  --check                 Type-check only, no codegen (mutually exclusive with --emit-ir/--emit-asm)
+  --emit-ir               Emit EIR text instead of compiling
+  --emit-asm              Emit assembly (.s) instead of linking
+  --emit KIND             Output kind: executable (default) | cdylib
+
+Target:
+  --target TARGET         macos-aarch64 | linux-aarch64 | linux-x86_64 (default: host)
+  --php-version VERSION   8.2 | 8.3 | 8.4 | 8.5 (default: 8.5)
+
+Codegen:
+  --heap-size=BYTES       Fixed heap size in bytes (default: 8388608)
+  --null-repr=MODE        sentinel (default) | tagged
+  --regalloc=MODE         linear (default) | stack
+  --ir-opt=on|off         EIR optimization passes (default: on; --no-ir-opt is an alias for --ir-opt=off)
+  --gc-stats              Print GC statistics at exit
+  --heap-debug            Enable heap debug instrumentation
+  --define SYMBOL         Define a symbol for `ifdef` conditional compilation
+  --ini KEY=VALUE         Bake an INI directive override (repeatable; opcache.* honored)
+
+Linking:
+  --link LIB, -l LIB      Extra library to link
+  --link-path DIR, -L DIR Extra library search path
+  --framework NAME        macOS framework to link
+  --with-CRATE            Force-link a bridge crate (pdo, tls, crypto, phar, tz, image, web, eval)
+
+Diagnostics:
+  --timings               Report per-phase compile timings to stderr
+  --quiet, -q             Disable the live spinner and colorized output
+  --source-map            Emit a .map source map alongside the assembly
+  --debug-info            Embed DWARF line info for debuggers
+
+Other:
+  -h, --help              Print this help and exit
+  --mascotte              Print an ASCII mascot and a random quote before output
+";
 
 /// Configuration derived from command-line arguments, passed to the compile pipeline.
 /// Controls heap allocation size, debug output, code generation options, and linking behavior.
@@ -54,6 +158,17 @@ pub(crate) struct CliConfig {
     /// the API is available even when feature auto-detection would not trigger.
     /// `--with-web` is folded into `web` instead, since it aliases `--web`.
     pub(crate) with_crates: HashSet<String>,
+    /// Suppresses the live spinner and bridge-library "Linking" event lines,
+    /// forcing plain output regardless of whether stderr is a terminal.
+    /// Errors, warnings, and the final success line are unaffected.
+    pub(crate) quiet: bool,
+    /// Compile-time INI directive overrides from repeated `--ini <key>=<value>` flags, in
+    /// the order supplied (last-wins per key is resolved downstream). For this increment only
+    /// `opcache.*` keys are meaningful — they are baked into the OPcache configuration surface
+    /// (`opcache_get_configuration`/`opcache_get_status`/`ini_get`/enabled-state). A non-opcache
+    /// key is stored but ignored by the opcache layer (general INI is a future increment); it is
+    /// never an error so a forward-looking `--ini` invocation does not break.
+    pub(crate) ini_overrides: Vec<(String, String)>,
 }
 
 /// A fully parsed top-level invocation of either the compiler or native package manager.
@@ -86,8 +201,11 @@ pub(crate) fn parse_args(args: &[String]) -> Command {
 /// Parses legacy compilation arguments into a normalized configuration.
 fn parse_compile_args(args: &[String]) -> CliConfig {
     if args.len() < 2 {
-        eprintln!("{USAGE}");
-        process::exit(1);
+        fail("no source file given");
+    }
+    if wants_help(args) {
+        println!("{HELP}");
+        process::exit(0);
     }
 
     let mut heap_size: usize = 8_388_608; // 8MB default
@@ -109,7 +227,9 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut defines: HashSet<String> = HashSet::new();
     let mut strict_php = false;
     let mut web = false;
+    let mut quiet = false;
     let mut with_crates: HashSet<String> = HashSet::new();
+    let mut ini_overrides: Vec<(String, String)> = Vec::new();
     let mut null_repr = match std::env::var("ELEPHC_NULL_REPR").as_deref() {
         Ok("tagged") => crate::codegen::NullRepr::Tagged,
         Ok("sentinel") => crate::codegen::NullRepr::Sentinel,
@@ -166,6 +286,12 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             emit_source_map = true;
         } else if arg == "--debug-info" {
             emit_debug_info = true;
+        } else if arg == "--quiet" || arg == "-q" {
+            quiet = true;
+        } else if arg == "--mascotte" {
+            // Already handled in main() before parse_args ran (so the banner
+            // prints before --help/errors/compilation); recognized here only
+            // so it isn't mistaken for an unknown flag.
         } else if let Some(value) = arg.strip_prefix("--null-repr=") {
             null_repr = parse_null_repr(value);
         } else if let Some(value) = arg.strip_prefix("--regalloc=") {
@@ -186,6 +312,18 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
                 fail(message);
             }
             defines.insert(symbol.to_string());
+        } else if arg == "--ini" {
+            i += 1;
+            let assignment = required_value(args, i, "Missing key=value after --ini");
+            match parse_ini_assignment(&assignment) {
+                Ok(entry) => ini_overrides.push(entry),
+                Err(message) => fail(&message),
+            }
+        } else if let Some(assignment) = arg.strip_prefix("--ini=") {
+            match parse_ini_assignment(assignment) {
+                Ok(entry) => ini_overrides.push(entry),
+                Err(message) => fail(&message),
+            }
         } else if arg == "--link" || arg == "-l" {
             i += 1;
             extra_link_libs.push(required_value(
@@ -237,10 +375,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
 
     let filename = match filename_arg {
         Some(filename) => filename,
-        None => {
-            eprintln!("{USAGE}");
-            process::exit(1);
-        }
+        None => fail("no source file given"),
     };
     let output_modes = usize::from(emit_ir) + usize::from(emit_asm) + usize::from(check_only);
     if output_modes > 1 {
@@ -258,10 +393,6 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     if web && emit_ir {
         fail("--web cannot be combined with --emit-ir");
     }
-    if let Err(message) = validate_strict_php_defines(strict_php, &defines) {
-        fail(message);
-    }
-
     CliConfig {
         filename,
         heap_size,
@@ -286,7 +417,25 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         strict_php,
         web,
         with_crates,
+        quiet,
+        ini_overrides,
     }
+}
+
+/// Parses a single `--ini KEY=VALUE` assignment into a `(key, value)` pair, splitting on the
+/// FIRST `=` so an INI value that itself contains `=` is preserved intact. The key is trimmed
+/// (a stray CLI space is not part of a directive name) and must be non-empty; the value is taken
+/// verbatim (INI values are used exactly as supplied — e.g. `opcache.memory_consumption=256`
+/// must report `"256"`). Kept pure (no IO/exit) so the split rule is unit-testable.
+fn parse_ini_assignment(assignment: &str) -> Result<(String, String), String> {
+    let (key, value) = assignment
+        .split_once('=')
+        .ok_or_else(|| format!("Invalid --ini '{assignment}': expected KEY=VALUE"))?;
+    let key = key.trim();
+    if key.is_empty() {
+        return Err(format!("Invalid --ini '{assignment}': empty key"));
+    }
+    Ok((key.to_string(), value.to_string()))
 }
 
 /// Parses the required PHP compatibility version after `--php-version`.
@@ -309,21 +458,6 @@ fn parse_php_version(value: &str) -> crate::web_prelude::PhpVersion {
             value
         ))
     })
-}
-
-/// Validates that `--strict-php` is not combined with `--define` symbols.
-///
-/// Defines only feed `ifdef` conditional compilation, which strict mode rejects
-/// outright, so the combination is always a configuration mistake. Kept pure
-/// (no IO/exit) so the rule can be unit-tested.
-fn validate_strict_php_defines(
-    strict_php: bool,
-    defines: &HashSet<String>,
-) -> Result<(), &'static str> {
-    if strict_php && !defines.is_empty() {
-        return Err("--strict-php cannot be combined with --define: ifdef conditional compilation is an elephc extension");
-    }
-    Ok(())
 }
 
 /// Parse the required emit-kind argument at the given index, or fail if missing.
@@ -419,10 +553,20 @@ fn validate_define_symbol(symbol: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Prints a message to stderr and exits the process with code 1.
-/// Never returns.
+/// Builds the full parameter-error text: an `error: ` prefix, the short usage
+/// line, and a hint to run `--help` for the full reference. Kept pure (no
+/// IO/exit) so the format can be unit-tested without spawning a process.
+fn format_fail_message(message: &str) -> String {
+    format!(
+        "error: {}\n\n{}\n\nRun 'elephc --help' for more information.",
+        message, USAGE
+    )
+}
+
+/// Prints a formatted parameter-error message to stderr and exits the
+/// process with code 1. Never returns.
 fn fail(message: &str) -> ! {
-    eprintln!("{}", message);
+    eprintln!("{}", format_fail_message(message));
     process::exit(1);
 }
 
@@ -577,6 +721,52 @@ mod tests {
         assert!(config.with_crates.is_empty());
     }
 
+    /// Verifies `--ini KEY=VALUE` splits on the first `=`, trims the key, and preserves a value
+    /// that itself contains `=`; an empty or `=`-less assignment is rejected.
+    #[test]
+    fn ini_assignment_splits_on_first_equals() {
+        assert_eq!(
+            parse_ini_assignment("opcache.enable_cli=1").unwrap(),
+            ("opcache.enable_cli".to_string(), "1".to_string())
+        );
+        // Value keeps later `=` intact (split on FIRST `=`).
+        assert_eq!(
+            parse_ini_assignment("opcache.blacklist_filename=a=b").unwrap(),
+            ("opcache.blacklist_filename".to_string(), "a=b".to_string())
+        );
+        // A stray space around the key is trimmed.
+        assert_eq!(
+            parse_ini_assignment(" opcache.jit =tracing").unwrap(),
+            ("opcache.jit".to_string(), "tracing".to_string())
+        );
+        assert!(parse_ini_assignment("no_equals_here").is_err());
+        assert!(parse_ini_assignment("=value").is_err());
+    }
+
+    /// Verifies repeated `--ini` flags (both split and `=` spellings) accumulate in order, and
+    /// the default is an empty override list.
+    #[test]
+    fn ini_flags_accumulate_in_order() {
+        let args = vec![
+            "elephc".into(),
+            "--ini".into(),
+            "opcache.enable_cli=1".into(),
+            "--ini=opcache.jit=tracing".into(),
+            "app.php".into(),
+        ];
+        let config = compile_config(&args);
+        assert_eq!(
+            config.ini_overrides,
+            vec![
+                ("opcache.enable_cli".to_string(), "1".to_string()),
+                ("opcache.jit".to_string(), "tracing".to_string()),
+            ]
+        );
+
+        let no_ini = compile_config(&["elephc".into(), "app.php".into()]);
+        assert!(no_ini.ini_overrides.is_empty());
+    }
+
     /// Verifies `--strict-php` sets the strict-PHP flag on the parsed config.
     #[test]
     fn strict_php_flag_sets_strict() {
@@ -593,26 +783,99 @@ mod tests {
         assert!(!config.strict_php);
     }
 
-    /// Verifies `--strict-php` combined with `--define` is rejected: defines only
-    /// feed `ifdef` conditional compilation, which strict mode rejects outright,
-    /// so accepting the combination would silently hide a configuration mistake.
+    /// Verifies strict mode and conditional symbols may coexist for mixed PHP/LFC projects.
     #[test]
-    fn strict_php_with_define_conflict_is_rejected() {
-        let mut defines = HashSet::new();
-        defines.insert("FEATURE".to_string());
-        assert!(validate_strict_php_defines(true, &defines).is_err());
+    fn strict_php_with_define_is_accepted() {
+        let args = vec![
+            "elephc".into(),
+            "--strict-php".into(),
+            "--define".into(),
+            "FEATURE".into(),
+            "app.lfc".into(),
+        ];
+        let config = compile_config(&args);
+        assert!(config.strict_php);
+        assert!(config.defines.contains("FEATURE"));
     }
 
-    /// Verifies `--strict-php` without defines and `--define` without strict mode
-    /// both pass the conflict validation.
+    /// Verifies `--quiet` sets the quiet flag.
     #[test]
-    fn strict_php_defines_validation_accepts_non_conflicting() {
-        let empty = HashSet::new();
-        let mut defines = HashSet::new();
-        defines.insert("FEATURE".to_string());
-        assert!(validate_strict_php_defines(true, &empty).is_ok());
-        assert!(validate_strict_php_defines(false, &defines).is_ok());
-        assert!(validate_strict_php_defines(false, &empty).is_ok());
+    fn quiet_flag_sets_quiet() {
+        let args = vec!["elephc".into(), "--quiet".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(config.quiet);
+    }
+
+    /// Verifies `-q` is accepted as a short alias for `--quiet`.
+    #[test]
+    fn short_quiet_flag_sets_quiet() {
+        let args = vec!["elephc".into(), "-q".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(config.quiet);
+    }
+
+    /// Verifies quiet defaults to false when not passed.
+    #[test]
+    fn quiet_defaults_to_false() {
+        let args = vec!["elephc".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(!config.quiet);
+    }
+
+    /// Verifies `--help` is detected anywhere in the argument list.
+    #[test]
+    fn wants_help_detects_long_flag_anywhere() {
+        let args = vec![
+            "elephc".into(),
+            "--check".into(),
+            "--help".into(),
+            "app.php".into(),
+        ];
+        assert!(wants_help(&args));
+    }
+
+    /// Verifies `-h` is detected as the short alias for `--help`.
+    #[test]
+    fn wants_help_detects_short_flag() {
+        let args = vec!["elephc".into(), "-h".into()];
+        assert!(wants_help(&args));
+    }
+
+    /// Verifies a normal argument list without `--help`/`-h` is not mistaken for a help request.
+    #[test]
+    fn wants_help_false_without_help_flag() {
+        let args = vec!["elephc".into(), "app.php".into()];
+        assert!(!wants_help(&args));
+    }
+
+    /// Verifies `--mascotte` is detected anywhere in the argument list.
+    #[test]
+    fn wants_mascotte_detects_flag_anywhere() {
+        let args = vec![
+            "elephc".into(),
+            "--check".into(),
+            "--mascotte".into(),
+            "app.php".into(),
+        ];
+        assert!(wants_mascotte(&args));
+    }
+
+    /// Verifies a normal argument list without `--mascotte` is not mistaken for one.
+    #[test]
+    fn wants_mascotte_false_without_flag() {
+        let args = vec!["elephc".into(), "app.php".into()];
+        assert!(!wants_mascotte(&args));
+    }
+
+    /// Verifies a parameter-error message is formatted as `error: <message>`
+    /// followed by the short usage line and the `--help` hint, so every
+    /// parsing failure (unknown flag, bad value, missing file) reads the same way.
+    #[test]
+    fn format_fail_message_has_error_prefix_usage_and_hint() {
+        let msg = format_fail_message("Unknown flag: --bogus");
+        assert!(msg.starts_with("error: Unknown flag: --bogus"));
+        assert!(msg.contains(USAGE));
+        assert!(msg.contains("Run 'elephc --help' for more information."));
     }
 
     /// Verifies only an exact first positional `native` selects the package command family.

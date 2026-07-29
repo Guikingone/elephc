@@ -59,10 +59,17 @@ impl Clone for InterfaceDeclInfo {
 ///
 /// Checks for name collisions with user-declared types before inserting; returns
 /// `CompileError` if any builtin name is already present. Insertion order sets
-/// the inheritance chain: Error/Exception extend Throwable; TypeError/ValueError
-/// extend Error; RuntimeException/ReflectionException extend Exception;
+/// the inheritance chain: Error/Exception extend Throwable; TypeError/ValueError/
+/// ArithmeticError/AssertionError/UnhandledMatchError extend Error;
+/// ArgumentCountError extends TypeError; DivisionByZeroError extends
+/// ArithmeticError; RuntimeException/ReflectionException extend Exception;
 /// JsonException extends RuntimeException; FiberError extends Error. Fiber is
 /// final with no parent.
+///
+/// The nominal parents mirror reference PHP 8.5.6 exactly, verified with
+/// `php -d xdebug.mode=off -r 'var_dump(class_parents("ArgumentCountError"));'`
+/// (`["TypeError", "Error"]`), the same probe for `DivisionByZeroError`
+/// (`["ArithmeticError", "Error"]`) and `AssertionError` (`["Error"]`).
 pub(crate) fn inject_builtin_throwables(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,
@@ -71,8 +78,12 @@ pub(crate) fn inject_builtin_throwables(
         "Throwable",
         "Error",
         "TypeError",
+        "ArgumentCountError",
         "ValueError",
         "ArithmeticError",
+        "DivisionByZeroError",
+        "AssertionError",
+        "UnhandledMatchError",
         "Exception",
         "RuntimeException",
         "ReflectionException",
@@ -246,6 +257,29 @@ pub(crate) fn inject_builtin_throwables(
             trait_aliases: Vec::new(),
         },
     );
+    // ArgumentCountError is the ONLY builtin Error subclass that is not a direct
+    // child of Error: reference PHP nests it under TypeError, so
+    // `catch (TypeError $e)` must catch it. Declaring it lets `catch`, `throw`,
+    // `new`, and `instanceof` resolve the name; it inherits the whole Throwable
+    // API transitively from Error.
+    class_map.insert(
+        "ArgumentCountError".to_string(),
+        FlattenedClass {
+            name: "ArgumentCountError".to_string(),
+            span: crate::span::Span::dummy(),
+            extends: Some("TypeError".to_string()),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            methods: Vec::new(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
+        },
+    );
     class_map.insert(
         "ValueError".to_string(),
         FlattenedClass {
@@ -268,6 +302,71 @@ pub(crate) fn inject_builtin_throwables(
         "ArithmeticError".to_string(),
         FlattenedClass {
             name: "ArithmeticError".to_string(),
+            span: crate::span::Span::dummy(),
+            extends: Some("Error".to_string()),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            methods: Vec::new(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
+        },
+    );
+    // DivisionByZeroError is what reference PHP raises for `$a / 0`, `$a % 0`, and
+    // `intdiv($a, 0)` — an ArithmeticError subclass, so the wider
+    // `catch (ArithmeticError $e)` still matches. The `intdiv()` zero-divisor
+    // lowering in `crate::codegen::lower_inst::builtins::math::binary` throws it.
+    class_map.insert(
+        "DivisionByZeroError".to_string(),
+        FlattenedClass {
+            name: "DivisionByZeroError".to_string(),
+            span: crate::span::Span::dummy(),
+            extends: Some("ArithmeticError".to_string()),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            methods: Vec::new(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
+        },
+    );
+    // AssertionError is a PHP builtin Error subclass raised by a failing `assert()`
+    // under `zend.assertions=1`. Declaring it lets explicit new, throw, catch, and
+    // instanceof resolve the class; elephc's `assert()` lowering does not construct
+    // it (see the ERROR-class docs for that divergence).
+    class_map.insert(
+        "AssertionError".to_string(),
+        FlattenedClass {
+            name: "AssertionError".to_string(),
+            span: crate::span::Span::dummy(),
+            extends: Some("Error".to_string()),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            methods: Vec::new(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
+        },
+    );
+    // UnhandledMatchError is a PHP builtin Error subclass. Declaring it lets explicit new, throw,
+    // catch, and instanceof expressions resolve the class and inherit the Throwable API. The
+    // current implicit no-match path remains a fatal EIR terminator and does not construct it.
+    class_map.insert(
+        "UnhandledMatchError".to_string(),
+        FlattenedClass {
+            name: "UnhandledMatchError".to_string(),
             span: crate::span::Span::dummy(),
             extends: Some("Error".to_string()),
             implements: Vec::new(),

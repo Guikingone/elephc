@@ -24,12 +24,12 @@ sidebar:
 | [`gzuncompress()`](./string/gzuncompress.md) | `(string $data, int $max_length = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`hash()`](./string/hash.md) | `(string $algo, string $data, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`hash_algos()`](./string/hash_algos.md) | `(): array` | `array` | ✓ | ✓ |
-| [`hash_copy()`](./string/hash_copy.md) | `(resource $context): mixed` | `mixed` | ✓ | ✓ |
+| [`hash_copy()`](./string/hash_copy.md) | `(mixed $context): mixed` | `mixed` | — | ✓ |
 | [`hash_equals()`](./string/hash_equals.md) | `(string $known_string, string $user_string): bool` | `bool` | ✓ | ✓ |
-| [`hash_final()`](./string/hash_final.md) | `(resource $context, bool $binary = false): string` | `string` | ✓ | ✓ |
+| [`hash_final()`](./string/hash_final.md) | `(mixed $context, mixed $binary = 'false'): mixed` | `mixed` | — | ✓ |
 | [`hash_hmac()`](./string/hash_hmac.md) | `(string $algo, string $data, string $key, bool $binary = false): string` | `string` | ✓ | ✓ |
-| [`hash_init()`](./string/hash_init.md) | `(string $algo, int $flags = 0, string $key = ''): mixed` | `mixed` | ✓ | ✓ |
-| [`hash_update()`](./string/hash_update.md) | `(resource $context, string $data): bool` | `bool` | ✓ | ✓ |
+| [`hash_init()`](./string/hash_init.md) | `(mixed $algo, mixed $flags = '0', mixed $key = '""'): mixed` | `mixed` | — | ✓ |
+| [`hash_update()`](./string/hash_update.md) | `(mixed $context, mixed $data): mixed` | `mixed` | — | ✓ |
 | [`hex2bin()`](./string/hex2bin.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`html_entity_decode()`](./string/html_entity_decode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`htmlentities()`](./string/htmlentities.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` | ✓ | ✓ |
@@ -68,7 +68,7 @@ sidebar:
 | [`strpos()`](./string/strpos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`strrev()`](./string/strrev.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`strrpos()`](./string/strrpos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
-| [`strstr()`](./string/strstr.md) | `(string $haystack, string $needle, bool $before_needle = false): string` | `string` | ✓ | ✓ |
+| [`strstr()`](./string/strstr.md) | `(string $haystack, string $needle, bool $before_needle = false): mixed` | `mixed` | ✓ | ✓ |
 | [`strtolower()`](./string/strtolower.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`strtoupper()`](./string/strtoupper.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`substr()`](./string/substr.md) | `(string $string, int $offset, int $length = null): string` | `string` | ✓ | ✓ |

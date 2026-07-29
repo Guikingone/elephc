@@ -5,8 +5,10 @@
 //! - Leaf filesystem stream builtin files that need stream-resource coercions.
 //!
 //! Key details:
-//! - Runtime resource payloads are zero-based while PHP-visible ids are
-//!   one-based resource handles.
+//! - Runtime resource payloads are zero-based keys into `EvalStreamResources`.
+//!   They are NOT recoverable from the PHP-visible resource id: that id comes
+//!   from the runtime's own mint-on-demand registry and is deliberately
+//!   independent of the payload. Always go through `eval_resource_payload()`.
 
 use super::super::super::*;
 /// Converts a runtime resource cell into eval's zero-based stream id.
@@ -14,11 +16,7 @@ pub(in crate::interpreter) fn eval_stream_resource_id(
     stream: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<i64, EvalStatus> {
-    if values.type_tag(stream)? != EVAL_TAG_RESOURCE {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let display_id = eval_int_value(stream, values)?;
-    display_id.checked_sub(1).ok_or(EvalStatus::RuntimeFatal)
+    eval_resource_payload(stream, values)
 }
 
 /// Converts a stream length argument into a non-negative `usize`.

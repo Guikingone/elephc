@@ -350,8 +350,11 @@ optimizer reasoning, and summaries for source wrappers.
 
 ## Effects
 
-Each instruction and terminator carries an immutable `Effects` summary assigned
-by the builder. Effects are conservative and PHP-observable.
+Each instruction and terminator carries an `Effects` summary. The builder
+assigns a conservative opcode or semantic-descriptor default; after the complete
+module is lowered, an effect-refinement fixed point may replace the summary on
+explicitly refinable direct calls, instance calls, and property reads. Final
+effects are immutable after validation and remain PHP-observable.
 
 ```rust
 pub struct Effects {
@@ -397,7 +400,18 @@ Effect sources:
 - Scalar arithmetic and comparison: hardcoded by opcode.
 - Registry builtins: from `BuiltinSemantics::effects`, either a fixed bitset or a
   shared resolver over normalized argument types.
-- User functions/methods/closures: from analyzed function body effects.
+- User functions/methods/closures: from a whole-module monotone fixed point over
+  lowered bodies. Direct calls inherit the target summary; virtual instance calls
+  union every concrete implementation reachable from the checked receiver type,
+  while a fixed `object_new` receiver remains exact. A runtime eval bridge keeps
+  non-exact class dispatch conservative because it can register new subclasses.
+- Array/hash reads: typed opcodes distinguish ordinary/silent reads from
+  warning-producing misses; they do not claim a catchable exception merely
+  because a PHP warning is observable.
+- Property reads: checked class layouts distinguish declared untyped slots,
+  typed-slot initialization errors, missing-property warnings, synthetic
+  property hooks, and `__get`. Runtime-computed names retain warning/deopt and
+  any reachable typed-slot or magic-method effects.
 - Callable aliases and first-class callables: from `src/optimize/effects/calls.rs`
   and descriptor metadata.
 - Extern calls: conservative unless the extern declaration later gains explicit
@@ -409,6 +423,12 @@ Pure means no flags set. A pure operation may be CSE'd or removed if its result
 is unused. Any operation with `may_throw`, `may_fatal`, `may_warn`, `output`,
 `writes_*`, `alloc_*`, or `refcount_op` is observable unless a later pass proves
 otherwise.
+
+`may_throw` is reserved for catchable PHP exceptions. A warning, fatal path, or
+dynamic deoptimization remains observable through its own flag but does not by
+itself make a surrounding `catch` reachable. Unknown calls and reads keep the
+conservative union; refinement only removes flags proved impossible from
+checked module metadata.
 
 ## Instruction Set
 

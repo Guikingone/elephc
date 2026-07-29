@@ -5997,7 +5997,7 @@ pub fn inject_if_used(program: crate::parser::ast::Program, force: bool) -> crat
         return program;
     }
     let tokens = crate::lexer::tokenize(IMAGE_PRELUDE_SRC).expect("image prelude must tokenize");
-    let mut combined = crate::parser::parse(&tokens).expect("image prelude must parse");
+    let mut combined = crate::parser::parse_internal(&tokens).expect("image prelude must parse");
     combined.extend(program);
     combined
 }

@@ -44,6 +44,7 @@ pub(super) fn emit_throw_state_error(emitter: &mut Emitter) {
 
     emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
     emitter.instruction("str x9, [x0, #-8]");                                   // stamp the kind in the uniform heap header
+    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
     abi::emit_load_symbol_to_reg(emitter, "x9", "_fiber_error_class_id", 0);    // x9 = runtime class id of FiberError
     emitter.instruction("str x9, [x0]");                                        // store FiberError class id at the object header
 
@@ -85,6 +86,7 @@ pub(super) fn emit_construct(emitter: &mut Emitter) {
     emitter.instruction("mov x21, x0");                                         // x21 = Fiber object pointer (kept until return)
     emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
     emitter.instruction("str x9, [x21, #-8]");                                  // stamp the kind in the uniform heap header
+    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new Fiber object to its PHP object handle (x0 still holds it)
     emitter.instruction("str x20, [x21]");                                      // store the runtime class_id at the object header
 
     // -- zero-initialise every Fiber field before populating the meaningful ones --

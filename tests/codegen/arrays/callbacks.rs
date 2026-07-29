@@ -1294,3 +1294,111 @@ echo count(Array_Uintersect([1, 2, 3, 4], [2, 4], "cmp"));
     );
     assert_eq!(out, "22");
 }
+
+// --- array_map() over ASSOCIATIVE sources (`__rt_hash_map`) ---
+//
+// php-src's single-array `array_map()` PRESERVES string keys. Before `__rt_hash_map` existed the
+// checker rejected an associative second argument outright with
+// `array_map() second argument must be array`, so every fixture below used to be a compile error.
+// The sources come from a FUNCTION RETURN rather than a literal because a literal associative
+// array is const-folded, which hid the defect and would hide a regression the same way.
+
+/// Verifies `array_map()` over a `string => string` hash keeps the source keys.
+/// Fixture: `["a" => "p", "b" => "q"]` mapped through a suffixing closure.
+#[test]
+fn test_array_map_assoc_string_values_preserves_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function build(): array { return ["a" => "p", "b" => "q"]; }
+$m = array_map(function (string $s): string { return $s . "!"; }, build());
+foreach ($m as $k => $v) { echo $k, "=", $v, ";"; }
+"#,
+    );
+    assert_eq!(out, "a=p!;b=q!;");
+}
+
+/// Verifies `array_map()` over a `string => int` hash keeps the source keys.
+/// Fixture: `["a" => 1, "b" => 2]` doubled through an arrow function.
+#[test]
+fn test_array_map_assoc_int_values_preserves_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function build(): array { return ["a" => 1, "b" => 2]; }
+$m = array_map(fn (int $n): int => $n * 2, build());
+foreach ($m as $k => $v) { echo $k, "=", $v, ";"; }
+"#,
+    );
+    assert_eq!(out, "a=2;b=4;");
+}
+
+/// Verifies `array_map()` over an INTEGER-keyed hash keeps those integer keys.
+/// Fixture: `[5 => "x", 7 => "y"]` stays keyed by 5 and 7, not reindexed to 0 and 1.
+#[test]
+fn test_array_map_assoc_int_keys_are_not_reindexed() {
+    let out = compile_and_run(
+        r#"<?php
+function build(): array { return [5 => "x", 7 => "y"]; }
+$m = array_map(function (string $s): string { return $s . "!"; }, build());
+foreach ($m as $k => $v) { echo $k, "=", $v, ";"; }
+"#,
+    );
+    assert_eq!(out, "5=x!;7=y!;");
+}
+
+/// Verifies the callback may change the VALUE type while the keys survive unchanged.
+/// Fixture: a `string => string` hash mapped to `string => int` through strlen().
+#[test]
+fn test_array_map_assoc_callback_may_change_the_value_type() {
+    let out = compile_and_run(
+        r#"<?php
+function build(): array { return ["a" => "xx", "b" => "yyy"]; }
+$m = array_map(function (string $s): int { return strlen($s); }, build());
+foreach ($m as $k => $v) { echo $k, "=", $v, ";"; }
+"#,
+    );
+    assert_eq!(out, "a=2;b=3;");
+}
+
+/// Verifies a CAPTURING closure reaches `__rt_hash_map` through its callback environment.
+/// Fixture: the captured suffix is appended to every value of a `string => string` hash.
+#[test]
+fn test_array_map_assoc_capturing_closure() {
+    let out = compile_and_run(
+        r#"<?php
+function build(): array { return ["a" => "p", "b" => "q"]; }
+function go(string $sfx): array {
+    $f = function (string $s) use ($sfx): string { return $s . $sfx; };
+    return array_map($f, build());
+}
+foreach (go("-Z") as $k => $v) { echo $k, "=", $v, ";"; }
+"#,
+    );
+    assert_eq!(out, "a=p-Z;b=q-Z;");
+}
+
+/// Verifies a callable-array (static method) callback works over an associative source.
+/// Fixture: `['T', 'up']` applied to a `string => string` hash.
+#[test]
+fn test_array_map_assoc_static_method_callable_array() {
+    let out = compile_and_run(
+        r#"<?php
+class T { public static function up(string $s): string { return $s . "*"; } }
+function build(): array { return ["a" => "p", "b" => "q"]; }
+foreach (array_map(['T', 'up'], build()) as $k => $v) { echo $k, "=", $v, ";"; }
+"#,
+    );
+    assert_eq!(out, "a=p*;b=q*;");
+}
+
+/// Verifies an empty associative source maps to an empty array without entering the loop body.
+/// Fixture: a hash emptied by unset() before the map.
+#[test]
+fn test_array_map_assoc_empty_source() {
+    let out = compile_and_run(
+        r#"<?php
+function build(): array { $a = ["a" => 1]; unset($a["a"]); return $a; }
+echo count(array_map(function (int $n): int { return $n; }, build()));
+"#,
+    );
+    assert_eq!(out, "0");
+}

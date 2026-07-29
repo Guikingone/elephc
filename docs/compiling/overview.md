@@ -5,7 +5,8 @@ sidebar:
   order: 1
 ---
 
-elephc is an ahead-of-time compiler: it reads a `.php` file and produces a
+elephc is an ahead-of-time compiler: it reads a tagged `.php` or tagless `.lfc`
+file and produces a
 standalone native binary with no PHP, Zend Engine, or external virtual-machine
 dependency. Ordinary source is machine code linked against a small hand-written
 runtime baked into the executable. Experimental dynamic `eval()` is the explicit
@@ -19,10 +20,23 @@ elephc hello.php
 ./hello
 ```
 
+For extension-oriented programs, `.lfc` removes PHP's opening and closing tags:
+
+```text
+echo "Hello from tagless source!\n";
+```
+
+```bash
+elephc hello.lfc
+./hello
+```
+
 The compiler writes the output binary next to the source file, using the source
-name without its extension (`hello.php` → `hello`). Nothing else is produced by
-default — no intermediate object files are left behind, no cache pollution in
-your project directory.
+name without its extension (`hello.php` or `hello.lfc` → `hello`). Nothing else
+is produced by default — no intermediate object files are left behind, no cache
+pollution in your project directory. See
+[LFC source files](../beyond-php/lfc-source-files.md) for tags, mixed-project
+includes/autoloading, and `--strict-php`.
 
 ```bash
 elephc src/app.php     # produces ./src/app

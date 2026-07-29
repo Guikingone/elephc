@@ -2,7 +2,7 @@
 title: "strval() — internals"
 description: "Compiler internals for strval(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 457
+  order: 459
 ---
 
 ## `strval()` — internals

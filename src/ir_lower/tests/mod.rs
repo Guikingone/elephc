@@ -12,10 +12,11 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::codegen::platform::Target;
-use crate::ir::print_module;
+use crate::ir::{print_module, Terminator};
 
 mod arrays;
 mod corpus;
+mod effects;
 mod exhaustive;
 mod ownership;
 
@@ -34,21 +35,39 @@ fn lower_file(path: &Path) -> crate::ir::Module {
 /// Runs the `--emit-ir` frontend ordering for a source string and base path.
 fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate::ir::Module {
     let target = Target::detect_host();
-    let tokens = crate::lexer::tokenize(source).expect("tokenize failed");
-    let parsed = crate::parser::parse(&tokens).expect("parse failed");
+    let source_mode = crate::source::SourceMode::from_path(main_file_path);
+    let tokens =
+        crate::lexer::tokenize_with_mode(source, source_mode).expect("tokenize failed");
+    let parsed =
+        crate::parser::parse_with_mode(&tokens, source_mode).expect("parse failed");
     let main_file_path = PathBuf::from(main_file_path);
-    let parsed = crate::magic_constants::substitute_file_and_scope_constants(parsed, &main_file_path);
-    let parsed = crate::conditional::apply(parsed, &HashSet::new());
+    let defines = HashSet::new();
+    let parsed = crate::source::finalize_physical_program(
+        parsed,
+        &main_file_path,
+        source_mode,
+        &defines,
+    )
+    .expect("physical-source finalization failed");
     let (autoload_registry, parsed) = crate::autoload::Registry::build(parent, parsed);
-    let ast = crate::resolver::resolve(parsed, parent).expect("resolver failed");
+    let (ast, _) =
+        crate::resolver::resolve_collecting_includes_with_defines(parsed, parent, &defines)
+            .expect("resolver failed");
     let ast = crate::autoload::collect_aliases(ast);
     let ast = crate::pdo_prelude::inject_if_used(ast, false);
     let ast = crate::tz_prelude::inject_if_used(ast, false);
     let ast = crate::list_id_prelude::inject_if_used(ast);
     let ast = crate::var_export_prelude::inject_if_used(ast);
     let ast = crate::image_prelude::inject_if_used(ast, false);
+    let ast = crate::hash_prelude::inject_if_used(ast, false);
     let ast = crate::name_resolver::resolve(ast).expect("name resolution failed");
-    let ast = crate::autoload::run(ast, parent, &autoload_registry).expect("autoload failed");
+    let (ast, _) = crate::autoload::run_collecting_included_with_defines(
+        ast,
+        parent,
+        &autoload_registry,
+        &defines,
+    )
+    .expect("autoload failed");
     let ast = crate::optimize::fold_constants(ast);
     let check_result = crate::types::check_with_target(&ast, target).expect("type check failed");
     let ast = crate::optimize::propagate_constants(ast);
@@ -86,6 +105,56 @@ while (time()) {
     assert!(text.contains("function main"), "missing lowered main: {text}");
     assert!(text.contains("array_new"), "missing array construction: {text}");
     assert!(text.contains("iter_start"), "missing foreach iterator: {text}");
+}
+
+/// Verifies dead `try.after` joins are terminated as unreachable for heap-returning functions,
+/// with and without a `finally` body.
+#[test]
+fn dead_try_after_joins_are_unreachable() {
+    let module = lower_source(
+        r#"<?php
+final class Conn { public function __construct(public string $dsn) {} }
+final class Factory {
+    public function create(string $dsn): Conn {
+        try { return new Conn($dsn); }
+        catch (\Throwable $e) { throw new \RuntimeException('fail'); }
+    }
+}
+final class ArrayFactory {
+    public function values(): array {
+        try { return [1, 2]; }
+        catch (\Throwable $e) { throw new \RuntimeException('fail'); }
+        finally { $cleanup = true; }
+    }
+}
+echo (new Factory())->create('pg')->dsn;
+echo (new ArrayFactory())->values()[0];
+"#,
+    );
+
+    let create = module
+        .class_methods
+        .iter()
+        .find(|function| function.name == "Factory::create")
+        .expect("missing Factory::create EIR");
+    let create_after = create
+        .blocks
+        .iter()
+        .find(|block| block.name == "try.after")
+        .expect("missing Factory::create try.after block");
+    assert_eq!(create_after.terminator, Some(Terminator::Unreachable));
+
+    let values = module
+        .class_methods
+        .iter()
+        .find(|function| function.name == "ArrayFactory::values")
+        .expect("missing ArrayFactory::values EIR");
+    let values_after = values
+        .blocks
+        .iter()
+        .find(|block| block.name == "try.after")
+        .expect("missing ArrayFactory::values try.after block");
+    assert_eq!(values_after.terminator, Some(Terminator::Unreachable));
 }
 
 /// Verifies class method declarations are lowered into the class-method table.
@@ -162,6 +231,19 @@ fn strlen_uses_backend_neutral_eir_graph() {
     assert!(
         !text.contains("builtin_call @strlen"),
         "strlen leaked through the legacy name-based backend boundary: {text}"
+    );
+}
+
+/// Verifies nested autovivification carries a typed fetch-for-write runtime identity.
+#[test]
+fn nested_autovivify_uses_typed_fetch_for_write_runtime_call() {
+    let module = lower_source(
+        "<?php $items = [['x', 'y'], 7]; $items[7][1] = 'patched'; echo $items[7][1];",
+    );
+    let text = print_module(&module);
+    assert!(
+        text.contains("runtime.array.fetch_for_write"),
+        "missing typed fetch-for-write runtime call: {text}"
     );
 }
 

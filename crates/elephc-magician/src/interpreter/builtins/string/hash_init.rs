@@ -69,9 +69,5 @@ pub(in crate::interpreter) fn eval_hash_context_resource_id(
     hash_context: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<i64, EvalStatus> {
-    if values.type_tag(hash_context)? != EVAL_TAG_RESOURCE {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let display_id = eval_int_value(hash_context, values)?;
-    display_id.checked_sub(1).ok_or(EvalStatus::RuntimeFatal)
+    eval_resource_payload(hash_context, values)
 }

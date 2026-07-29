@@ -258,7 +258,7 @@ fn datetime_zone_list_identifiers() -> ClassMethod {
     );
     let tokens =
         crate::lexer::tokenize(&src).expect("listIdentifiers body source must tokenize");
-    let body = crate::parser::parse(&tokens).expect("listIdentifiers body source must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("listIdentifiers body source must parse");
     ClassMethod {
         name: "listIdentifiers".to_string(),
         visibility: Visibility::Public,
@@ -301,7 +301,7 @@ fn datetime_zone_list_identifiers() -> ClassMethod {
 /// tokenize/parse failure, which is a compiler bug in the static source.
 fn parse_tz_body(src: &str) -> Vec<Stmt> {
     let tokens = crate::lexer::tokenize(src).expect("tz method body must tokenize");
-    crate::parser::parse(&tokens).expect("tz method body must parse")
+    crate::parser::parse_internal(&tokens).expect("tz method body must parse")
 }
 
 /// `DateTimeZone::getLocation(): array|false` — returns the zone's country code,
@@ -529,7 +529,7 @@ if ($timezone === null) {
 fn datetime_immutable_constructor() -> ClassMethod {
     let tokens =
         crate::lexer::tokenize(CONSTRUCT_SRC).expect("DateTime constructor source must tokenize");
-    let body = crate::parser::parse(&tokens).expect("DateTime constructor source must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("DateTime constructor source must parse");
     method(
         "__construct",
         vec![
@@ -645,7 +645,7 @@ return $r;
 /// the object's own timezone, with `u`/`v` reflecting the stored microseconds. Body is `FORMAT_SRC`.
 fn datetime_immutable_format() -> ClassMethod {
     let tokens = crate::lexer::tokenize(FORMAT_SRC).expect("format() body source must tokenize");
-    let body = crate::parser::parse(&tokens).expect("format() body source must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("format() body source must parse");
     method(
         "format",
         vec![("format".to_string(), Some(TypeExpr::Str), None, false)],
@@ -1088,7 +1088,7 @@ if ($__micro < 0) {
 $__ts = $__ts + $__carry;
 "#;
     let tokens = crate::lexer::tokenize(src).expect("modify body must tokenize");
-    let mut body = crate::parser::parse(&tokens).expect("modify body must parse");
+    let mut body = crate::parser::parse_internal(&tokens).expect("modify body must parse");
     body.extend(result_tail_micro(
         Expr::new(ExprKind::Variable("__ts".to_string()), dummy()),
         Some(Expr::new(ExprKind::Variable("__micro".to_string()), dummy())),
@@ -1537,7 +1537,7 @@ fn datetime_create_from_format(class_name: &str) -> ClassMethod {
     let src = CREATE_FROM_FORMAT_SRC.replace("__CFF_CLASS__", class_name);
     let tokens =
         crate::lexer::tokenize(&src).expect("createFromFormat body source must tokenize");
-    let body = crate::parser::parse(&tokens).expect("createFromFormat body source must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("createFromFormat body source must parse");
     ClassMethod {
         name: "createFromFormat".to_string(),
         visibility: Visibility::Public,
@@ -1588,7 +1588,7 @@ return ["warning_count" => 0, "warnings" => [], "error_count" => $ec, "errors" =
 fn datetime_get_last_errors(class_name: &str) -> ClassMethod {
     let src = GET_LAST_ERRORS_SRC.replace("__GLE_CLASS__", class_name);
     let tokens = crate::lexer::tokenize(&src).expect("getLastErrors body source must tokenize");
-    let body = crate::parser::parse(&tokens).expect("getLastErrors body source must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("getLastErrors body source must parse");
     ClassMethod {
         name: "getLastErrors".to_string(),
         visibility: Visibility::Public,
@@ -1630,7 +1630,7 @@ fn datetime_create_from_object(method_name: &str, target_class: &str) -> ClassMe
     let src = CREATE_FROM_OBJECT_SRC.replace("__TARGET__", target_class);
     let tokens =
         crate::lexer::tokenize(&src).expect("createFrom* body source must tokenize");
-    let body = crate::parser::parse(&tokens).expect("createFrom* body source must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("createFrom* body source must parse");
     ClassMethod {
         name: method_name.to_string(),
         visibility: Visibility::Public,
@@ -1675,7 +1675,7 @@ fn datetime_create_from_timestamp(class_name: &str) -> ClassMethod {
     let src = CREATE_FROM_TIMESTAMP_SRC.replace("__CFT_CLASS__", class_name);
     let tokens =
         crate::lexer::tokenize(&src).expect("createFromTimestamp body source must tokenize");
-    let body = crate::parser::parse(&tokens).expect("createFromTimestamp body source must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("createFromTimestamp body source must parse");
     ClassMethod {
         name: "createFromTimestamp".to_string(),
         visibility: Visibility::Public,
@@ -1723,7 +1723,7 @@ return $this->setTimestamp(__elephc_mktime_raw($h, $mi, $se, 1, $day, $year));
 fn datetime_set_isodate(class_name: &str) -> ClassMethod {
     let tokens =
         crate::lexer::tokenize(SET_ISODATE_SRC).expect("setISODate body source must tokenize");
-    let body = crate::parser::parse(&tokens).expect("setISODate body source must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("setISODate body source must parse");
     ClassMethod {
         name: "setISODate".to_string(),
         visibility: Visibility::Public,
@@ -1941,7 +1941,7 @@ fn datetime_date_parse_from_format() -> ClassMethod {
     let tokens = crate::lexer::tokenize(DATE_PARSE_FROM_FORMAT_SRC)
         .expect("date_parse_from_format body source must tokenize");
     let body =
-        crate::parser::parse(&tokens).expect("date_parse_from_format body source must parse");
+        crate::parser::parse_internal(&tokens).expect("date_parse_from_format body source must parse");
     ClassMethod {
         name: "__elephc_date_parse_from_format".to_string(),
         visibility: Visibility::Public,
@@ -2026,7 +2026,7 @@ return ["sec" => $sec, "usec" => $usec, "minuteswest" => $mw, "dsttime" => $dst]
 fn datetime_gettimeofday() -> ClassMethod {
     let tokens =
         crate::lexer::tokenize(GETTIMEOFDAY_SRC).expect("gettimeofday body source must tokenize");
-    let body = crate::parser::parse(&tokens).expect("gettimeofday body source must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("gettimeofday body source must parse");
     ClassMethod {
         name: "__elephc_gettimeofday".to_string(),
         visibility: Visibility::Public,
@@ -2231,7 +2231,7 @@ return $s . "";
 fn datetime_extract_micros() -> ClassMethod {
     let tokens =
         crate::lexer::tokenize(EXTRACT_MICROS_SRC).expect("extract_micros body must tokenize");
-    let body = crate::parser::parse(&tokens).expect("extract_micros body must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("extract_micros body must parse");
     ClassMethod {
         name: "__elephc_extract_micros".to_string(),
         visibility: Visibility::Public,
@@ -2301,7 +2301,7 @@ return $__out;
 fn datetime_extract_modify_micros() -> ClassMethod {
     let tokens = crate::lexer::tokenize(EXTRACT_MODIFY_MICROS_SRC)
         .expect("extract_modify_micros body must tokenize");
-    let body = crate::parser::parse(&tokens).expect("extract_modify_micros body must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("extract_modify_micros body must parse");
     ClassMethod {
         name: "__elephc_extract_modify_micros".to_string(),
         visibility: Visibility::Public,
@@ -2326,7 +2326,7 @@ fn datetime_extract_modify_micros() -> ClassMethod {
 fn datetime_strip_modify_micros() -> ClassMethod {
     let tokens = crate::lexer::tokenize(STRIP_MODIFY_MICROS_SRC)
         .expect("strip_modify_micros body must tokenize");
-    let body = crate::parser::parse(&tokens).expect("strip_modify_micros body must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("strip_modify_micros body must parse");
     ClassMethod {
         name: "__elephc_strip_modify_micros".to_string(),
         visibility: Visibility::Public,
@@ -2351,7 +2351,7 @@ fn datetime_strip_modify_micros() -> ClassMethod {
 fn datetime_strip_micros() -> ClassMethod {
     let tokens =
         crate::lexer::tokenize(STRIP_MICROS_SRC).expect("strip_micros body must tokenize");
-    let body = crate::parser::parse(&tokens).expect("strip_micros body must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("strip_micros body must parse");
     ClassMethod {
         name: "__elephc_strip_micros".to_string(),
         visibility: Visibility::Public,
@@ -2379,7 +2379,7 @@ fn datetime_strip_micros() -> ClassMethod {
 fn datetime_strftime() -> ClassMethod {
     let tokens =
         crate::lexer::tokenize(STRFTIME_SRC).expect("strftime body source must tokenize");
-    let body = crate::parser::parse(&tokens).expect("strftime body source must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("strftime body source must parse");
     ClassMethod {
         name: "__elephc_strftime".to_string(),
         visibility: Visibility::Public,
@@ -2603,7 +2603,7 @@ return false;
 fn datetime_tz_name_from_abbr() -> ClassMethod {
     let tokens =
         crate::lexer::tokenize(TZ_NAME_FROM_ABBR_SRC).expect("tz_name_from_abbr must tokenize");
-    let body = crate::parser::parse(&tokens).expect("tz_name_from_abbr must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("tz_name_from_abbr must parse");
     ClassMethod {
         name: "__elephc_timezone_name_from_abbr".to_string(),
         visibility: Visibility::Public,
@@ -2778,7 +2778,7 @@ return [
 /// `STRPTIME_SRC` for the supported specifiers and return shape.
 fn datetime_strptime() -> ClassMethod {
     let tokens = crate::lexer::tokenize(STRPTIME_SRC).expect("strptime body source must tokenize");
-    let body = crate::parser::parse(&tokens).expect("strptime body source must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("strptime body source must parse");
     ClassMethod {
         name: "__elephc_strptime".to_string(),
         visibility: Visibility::Public,
@@ -2806,7 +2806,7 @@ fn datetime_strptime() -> ClassMethod {
 /// `date_sunrise()`, and `date_sunset()`. See `SUN_RS_SRC` for the algorithm and return shape.
 fn datetime_sun_rs() -> ClassMethod {
     let tokens = crate::lexer::tokenize(SUN_RS_SRC).expect("sun_rs body source must tokenize");
-    let body = crate::parser::parse(&tokens).expect("sun_rs body source must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("sun_rs body source must parse");
     ClassMethod {
         name: "__elephc_sun_rs".to_string(),
         visibility: Visibility::Public,
@@ -2838,7 +2838,7 @@ fn datetime_sun_rs() -> ClassMethod {
 /// otherwise; the `mixed` return type preserves each branch's runtime tag. See `SUN_VAL_SRC`.
 fn datetime_sun_val() -> ClassMethod {
     let tokens = crate::lexer::tokenize(SUN_VAL_SRC).expect("sun_val body source must tokenize");
-    let body = crate::parser::parse(&tokens).expect("sun_val body source must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("sun_val body source must parse");
     ClassMethod {
         name: "__elephc_sun_val".to_string(),
         visibility: Visibility::Public,
@@ -2866,7 +2866,7 @@ fn datetime_sun_val() -> ClassMethod {
 /// `DateTime` backing the `date_sun_info()` procedural function. See `SUN_INFO_SRC`.
 fn datetime_sun_info() -> ClassMethod {
     let tokens = crate::lexer::tokenize(SUN_INFO_SRC).expect("sun_info body source must tokenize");
-    let body = crate::parser::parse(&tokens).expect("sun_info body source must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("sun_info body source must parse");
     ClassMethod {
         name: "__elephc_date_sun_info".to_string(),
         visibility: Visibility::Public,
@@ -2897,7 +2897,7 @@ fn datetime_sun_info() -> ClassMethod {
 /// substitute PHP's ini defaults; `$returnFormat` defaults to `SUNFUNCS_RET_STRING` (1).
 fn datetime_sunfunc() -> ClassMethod {
     let tokens = crate::lexer::tokenize(SUNFUNC_SRC).expect("sunfunc body source must tokenize");
-    let body = crate::parser::parse(&tokens).expect("sunfunc body source must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("sunfunc body source must parse");
     ClassMethod {
         name: "__elephc_date_sunfunc".to_string(),
         visibility: Visibility::Public,
@@ -2957,7 +2957,7 @@ fn datetime_sunfunc() -> ClassMethod {
 fn datetime_date_parse() -> ClassMethod {
     let tokens =
         crate::lexer::tokenize(DATE_PARSE_SRC).expect("date_parse body source must tokenize");
-    let body = crate::parser::parse(&tokens).expect("date_parse body source must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("date_parse body source must parse");
     ClassMethod {
         name: "__elephc_date_parse".to_string(),
         visibility: Visibility::Public,
@@ -3317,7 +3317,7 @@ return $iv;
 fn date_interval_create_from_date_string() -> ClassMethod {
     let tokens = crate::lexer::tokenize(CREATE_FROM_DATE_STRING_SRC)
         .expect("createFromDateString body source must tokenize");
-    let body = crate::parser::parse(&tokens).expect("createFromDateString body source must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("createFromDateString body source must parse");
     ClassMethod {
         name: "createFromDateString".to_string(),
         visibility: Visibility::Public,

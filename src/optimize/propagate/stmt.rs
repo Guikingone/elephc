@@ -111,6 +111,12 @@ pub(crate) fn propagate_block(body: Vec<Stmt>, mut env: ConstantEnv) -> (Vec<Stm
 /// propagation and computing the output environment for each statement variant.
 /// Returns the rewritten statement and the constant environment after the statement.
 pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
+    let source_mode = stmt.source_mode;
+    crate::source::with_parse_mode(source_mode, || propagate_stmt_in_source_mode(stmt, env))
+}
+
+/// Propagates one statement while reconstructed nodes inherit its physical source mode.
+fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
     let span = stmt.span;
     match stmt.kind {
         StmtKind::Synthetic(stmts) => {

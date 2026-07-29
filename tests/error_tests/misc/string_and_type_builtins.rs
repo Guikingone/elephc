@@ -31,10 +31,22 @@ expect_builtin_arity_error!(
 );
 
 // Tests strstr() arity error when called with only one argument (needs haystack + needle).
+// The optional third parameter (`$before_needle`) is now accepted, so the derived phrasing is
+// the two-value-range one (`substr()` reads the same way). Reference PHP 8.5.6 raises
+// "strstr() expects at least 2 arguments, 1 given" here and "expects at most 3 arguments" for a
+// fourth, i.e. the same 2..=3 window.
 expect_builtin_arity_error!(
     test_error_strstr_wrong_args,
     "<?php strstr(\"abc\");",
-    "strstr() takes exactly 2 arguments"
+    "strstr() takes 2 or 3 arguments"
+);
+
+// Tests strstr() arity error when called with a fourth argument (max is haystack + needle +
+// before_needle).
+expect_builtin_arity_error!(
+    test_error_strstr_too_many_args,
+    "<?php strstr(\"abc\", \"b\", true, 1);",
+    "strstr() takes 2 or 3 arguments"
 );
 
 // Tests strtolower() arity error when called with no arguments.

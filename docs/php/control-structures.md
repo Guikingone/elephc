@@ -243,6 +243,9 @@ echo $result; // two
 ```
 
 If no arm matches and there is no `default`, elephc aborts with a fatal runtime error.
+That implicit path does not currently construct a catchable `UnhandledMatchError`;
+the builtin class is available for explicit `new`, `throw`, `catch`, and `instanceof`
+expressions.
 
 Arms may produce values of different types (objects, arrays, strings, ints, `null`),
 and an arm may be a `throw` expression. When the arm types are heterogeneous, the
@@ -282,6 +285,31 @@ Supported subset:
 - built-in `Error` and `Exception` classes and the `Throwable` interface are available without declaring them
 - `Error` and `Exception` provide `$message`, `$code`, `$previous`, `__construct($message = "", $code = 0, $previous = null)`, and the standard `Throwable` methods: `getMessage()`, `getCode()`, `getFile()`, `getLine()`, `getTrace()`, `getTraceAsString()`, `getPrevious()`, and `__toString()`
 - the SPL exception hierarchy is built-in: `LogicException`, `BadFunctionCallException`, `BadMethodCallException`, `DomainException`, `InvalidArgumentException`, `LengthException`, `OutOfRangeException`, `RuntimeException`, `OutOfBoundsException`, `OverflowException`, `RangeException`, `UnderflowException`, `UnexpectedValueException`. Each is a marker subclass that inherits the constructor, `$message`, and the standard `Throwable` methods from `Exception`. Catch a specific type (`InvalidArgumentException`), an intermediate parent (`LogicException`), or the root (`Exception`/`Throwable`)
+- the built-in `Error` hierarchy is available on the same terms, with PHP's exact parents:
+
+  | class | extends |
+  | --- | --- |
+  | `Error` | implements `Throwable` |
+  | `TypeError` | `Error` |
+  | `ArgumentCountError` | `TypeError` |
+  | `ValueError` | `Error` |
+  | `ArithmeticError` | `Error` |
+  | `DivisionByZeroError` | `ArithmeticError` |
+  | `AssertionError` | `Error` |
+  | `UnhandledMatchError` | `Error` |
+  | `FiberError` | `Error` |
+
+  Each is a marker subclass inheriting the constructor, `$message`, `$code`, `$previous`, and the standard `Throwable` methods from `Error`, exactly as the SPL exceptions inherit theirs from `Exception`. Catch matching walks the whole chain, so an `ArgumentCountError` is caught by `catch (ArgumentCountError)`, `catch (TypeError)`, `catch (Error)`, and `catch (Throwable)` — the first matching clause in source order wins. `Error` and `Exception` remain disjoint branches of `Throwable`: neither catches the other.
+- `intdiv($a, 0)` raises a catchable `DivisionByZeroError` with PHP's `Division by zero` message. `intdiv(PHP_INT_MIN, -1)` raises the parent `ArithmeticError` with `Division of PHP_INT_MIN by -1 is not an integer`, matching PHP.
+
+Divergences in the `Error` hierarchy:
+
+- **Static rejection instead of a runtime `ArgumentCountError`/`TypeError`.** elephc is an AOT compiler: a call whose arity or argument types are provably wrong is a COMPILE error, not a runtime throw. `opcache_reset(1)` fails the build with `Function 'opcache_reset' expects 0 arguments, got 1`, where PHP 8.5 would compile it and throw `ArgumentCountError: opcache_reset() expects exactly 0 arguments, 1 given` when the line executes. The `catch (\ArgumentCountError $e)` clause itself compiles fine — only the statically provable error is reported earlier and more loudly. Wrap a genuinely dynamic call if you need the runtime behavior.
+- `AssertionError` can be thrown, caught, and inspected from userland, but nothing in elephc raises it: `assert()` is not a supported builtin (`Undefined function: assert`), so there is no `zend.assertions=1` path to fail.
+- `UnhandledMatchError` can be thrown and caught from userland, but an unmatched `match` arm is still a fatal terminator rather than a constructed, catchable `UnhandledMatchError` (see the `match` section above).
+- `$a / 0` and `$a % 0` do NOT throw. `/` yields `INF` and `%` yields `0`, where PHP 8 raises `DivisionByZeroError` with `Division by zero` / `Modulo by zero`. Use `intdiv()` when you need the catchable error.
+- An UNCAUGHT throwable prints `Fatal error: uncaught exception` and exits non-zero, rather than PHP's `PHP Fatal error:  Uncaught TypeError: msg in file:line` with a stack trace. This applies to every throwable, `Exception` included. The one exception is a throwable raised by a codegen guard (`intdiv()` by zero, the `array_keys()` argument check), which names its class: `Fatal error: Uncaught DivisionByZeroError: Division by zero`.
+- Engine-only `Error` subclasses are NOT declared: `ParseError`, `CompileError`, `DateError`/`DateObjectError`/`DateRangeError`, `Random\RandomError`/`Random\BrokenRandomEngineError`, `Uri\UriError`, and `FFI\Exception`. They exist in PHP only to report failures elephc either resolves at compile time (a parse error) or does not implement, so declaring them would add a name that nothing can ever raise.
 - `throw <expr>;` where `<expr>` has an object type implementing `Throwable`
 - `throw <expr>` can also be used inside expressions such as `??` and ternaries
 - `catch (ClassName $e)` and `catch (TypeA | TypeB $e)` for multi-catch

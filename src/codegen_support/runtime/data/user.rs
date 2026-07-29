@@ -215,6 +215,10 @@ pub(crate) fn emit_runtime_data_user(
         ("_spl_type_error_class_id", "TypeError"),
         ("_spl_value_error_class_id", "ValueError"),
         ("_spl_arithmetic_error_class_id", "ArithmeticError"),
+        // Emitted for the `intdiv($a, 0)` / `$a % 0` zero-divisor guards, which
+        // raise reference PHP's catchable DivisionByZeroError from codegen with
+        // no EIR class reference to hang the id off.
+        ("_spl_division_by_zero_error_class_id", "DivisionByZeroError"),
     ] {
         let class_id = all_class_id_by_name
             .get(class_name)
@@ -254,6 +258,21 @@ pub(crate) fn emit_runtime_data_user(
                 out.push_str(&format!("    .quad _class_json_desc_{}\n", class_id));
             } else {
                 out.push_str("    .quad _class_json_desc_missing\n");
+            }
+        }
+    }
+
+    // Per-class var_dump descriptor pointer table — used by
+    // `__rt_var_dump_object` to walk EVERY declared property, not just the
+    // public subset the JSON descriptor carries, and with PHP's rendered
+    // `["p":protected]` key text instead of serialize's NUL-mangled key.
+    out.push_str(".globl _class_vd_desc_ptrs\n_class_vd_desc_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_vd_desc_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_vd_desc_missing\n");
             }
         }
     }
@@ -486,6 +505,10 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str("    .quad 0\n"); // flags
     out.push_str("    .quad 0\n"); // jsonSerialize target
     out.push_str("    .quad 0\n"); // public property count
+    // _class_vd_desc_missing: zero properties (a class id with no var_dump metadata).
+    out.push_str("    .p2align 3\n");
+    out.push_str(".globl _class_vd_desc_missing\n_class_vd_desc_missing:\n");
+    out.push_str("    .quad 0\n"); // property count = 0
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _class_vtable_missing\n_class_vtable_missing:\n");
     out.push_str("    .quad 0\n");
@@ -903,6 +926,51 @@ pub(crate) fn emit_runtime_data_user(
             out.push_str(&format!("    .quad {}\n", mangled_len)); // mangled key byte length
             out.push_str(&format!("    .quad {}\n", offset)); // byte offset within the object
             out.push_str(&format!("    .quad {}\n", tag)); // runtime value tag
+        }
+
+        // var_dump property-info table: one row per RENDERED property, carrying the
+        // text PHP renders BETWEEN the `[` and `]` of the key line (`"p"`,
+        // `"p":protected`, `"p":"C":private`), the property's byte offset within the
+        // object, its runtime value tag, and the declared type name
+        // `uninitialized(...)` needs. `__rt_var_dump_object` walks this by class id.
+        // Kept separate from `_class_serprop_*` because serialize's key is NUL-mangled
+        // and separate from `_class_json_desc_*` because JSON only carries public
+        // properties — and, unlike both of those, this table honours `__debugInfo()`
+        // (see `var_dump_debug_info_projection`), because `var_dump` is the only PHP
+        // renderer that consults `__debugInfo` AND the only elephc renderer that
+        // enumerates object properties at all.
+        let vd_rows = var_dump_descriptor_rows(class_info, class_name);
+        for (row_index, row) in vd_rows.iter().enumerate() {
+            out.push_str(&format!(
+                ".globl _class_vd_pkey_{}_{}\n_class_vd_pkey_{}_{}:\n    .ascii \"{}\"\n",
+                class_info.class_id, row_index, class_info.class_id, row_index,
+                escaped_ascii(&row.key),
+            ));
+            out.push_str(&format!(
+                ".globl _class_vd_ptype_{}_{}\n_class_vd_ptype_{}_{}:\n    .ascii \"{}\"\n",
+                class_info.class_id, row_index, class_info.class_id, row_index,
+                escaped_ascii(&row.type_name),
+            ));
+        }
+        out.push_str("    .p2align 3\n");
+        out.push_str(&format!(
+            ".globl _class_vd_desc_{}\n_class_vd_desc_{}:\n",
+            class_info.class_id, class_info.class_id,
+        ));
+        out.push_str(&format!("    .quad {}\n", vd_rows.len()));
+        for (row_index, row) in vd_rows.iter().enumerate() {
+            out.push_str(&format!(
+                "    .quad _class_vd_pkey_{}_{}\n",
+                class_info.class_id, row_index
+            ));
+            out.push_str(&format!("    .quad {}\n", row.key.len())); // rendered key byte length
+            out.push_str(&format!("    .quad {}\n", row.offset)); // byte offset within the object
+            out.push_str(&format!("    .quad {}\n", row.tag)); // runtime value tag
+            out.push_str(&format!(
+                "    .quad _class_vd_ptype_{}_{}\n",
+                class_info.class_id, row_index
+            ));
+            out.push_str(&format!("    .quad {}\n", row.type_name.len())); // declared type-name byte length
         }
 
         out.push_str("    .p2align 3\n");
@@ -2321,6 +2389,203 @@ fn mangled_property_name(class_info: &ClassInfo, class_name: &str, prop_name: &s
             out
         }
         _ => prop_name.as_bytes().to_vec(),
+    }
+}
+
+/// Renders the text PHP's `var_dump` places BETWEEN the `[` and `]` of a
+/// property key line.
+///
+/// PHP annotates the key with the property's visibility: `"p"` for public,
+/// `"p":protected`, and `"p":"C":private` where `C` is the DECLARING class (a
+/// private property inherited into a subclass keeps the parent's name). The
+/// declaring class comes from `property_declaring_classes`, the same source
+/// serialize's NUL-mangling uses, so the two renderings can never disagree.
+/// One rendered row of a `_class_vd_desc_*` table: everything
+/// `__rt_var_dump_object` needs to print a single `["key"]=> value` pair.
+///
+/// A row is NOT necessarily a declared property — when the class declares a
+/// foldable `__debugInfo()`, rows come from that projection instead (different
+/// key text, different order, possibly fewer rows), but each row still points at
+/// a real property slot so the walker reads a real value.
+struct VarDumpRow {
+    /// Text PHP renders between the `[` and `]`, quotes included.
+    key: String,
+    /// Byte offset of the backing property within the object.
+    offset: usize,
+    /// Runtime value tag of the backing property.
+    tag: u64,
+    /// Declared type name `uninitialized(...)` prints.
+    type_name: String,
+}
+
+/// Builds the `var_dump` rows for a class: the `__debugInfo()` projection when the
+/// class declares a foldable one, otherwise every declared property in layout order.
+fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<VarDumpRow> {
+    if let Some(projection) = var_dump_debug_info_projection(class_info) {
+        return projection
+            .into_iter()
+            .filter_map(|(key, prop_name)| {
+                let (layout_index, (_, prop_ty)) = class_info
+                    .properties
+                    .iter()
+                    .enumerate()
+                    .find(|(_, (name, _))| *name == prop_name)?;
+                Some(VarDumpRow {
+                    key: format!("\"{}\"", key),
+                    offset: class_info
+                        .property_offsets
+                        .get(&prop_name)
+                        .copied()
+                        .unwrap_or(8 + layout_index * 16),
+                    tag: prop_value_tag(class_info, &prop_name, prop_ty),
+                    type_name: var_dump_property_type_name(prop_ty),
+                })
+            })
+            .collect();
+    }
+    class_info
+        .properties
+        .iter()
+        .enumerate()
+        .map(|(layout_index, (prop_name, prop_ty))| VarDumpRow {
+            key: var_dump_property_key(class_info, class_name, prop_name),
+            offset: class_info
+                .property_offsets
+                .get(prop_name)
+                .copied()
+                .unwrap_or(8 + layout_index * 16),
+            tag: prop_value_tag(class_info, prop_name, prop_ty),
+            type_name: var_dump_property_type_name(prop_ty),
+        })
+        .collect()
+}
+
+/// Folds a class's `__debugInfo()` into the `(array key, property name)` pairs
+/// `var_dump` should print, or `None` when the method is absent or its body is not
+/// a shape this compiler can resolve statically.
+///
+/// WHY STATICALLY. PHP calls `__debugInfo()` at dump time and prints the returned
+/// array in place of the declared properties. elephc's `var_dump` object walker is
+/// hand-written assembly driven entirely by `_class_vd_desc_*`, so honouring
+/// `__debugInfo` dynamically would mean emitting a PHP method call, an array walk,
+/// and the matching refcount handling inside that walker on every architecture.
+/// The overwhelmingly common body — PHP's own `HashContext::__debugInfo()` included
+/// — is a pure projection of properties, which the descriptor can express exactly:
+/// a row already names a key and points at a property slot, so a projection is just
+/// a different row list. That keeps the change to this table and costs no assembly.
+///
+/// SUPPORTED SHAPE (must match completely, else `None`):
+/// `public function __debugInfo() { return ['k1' => $this->p1, 'k2' => $this->p2]; }`
+/// — a single `return` of an associative array literal whose every key is a string
+/// literal and whose every value is `$this-><declared property>`. `return [];` is
+/// supported and yields zero rows. Reordering and renaming come free.
+///
+/// DELIBERATELY UNSUPPORTED, and why `None` means "fall back" rather than "error":
+/// bodies that compute values (`'n' => count($this->items)`), read another object,
+/// use non-string or NUL-mangled keys (the synthetic SPL container bodies do), or
+/// span several statements cannot be reduced to a property slot. Before this
+/// function existed elephc ignored `__debugInfo()` for every class, so falling back
+/// to the declared-property list preserves that behaviour exactly and turns no
+/// currently-compiling program into an error. It is a KNOWN DIVERGENCE from PHP,
+/// not parity — `tests/var_dump_object_tests.rs` pins it as such.
+fn var_dump_debug_info_projection(class_info: &ClassInfo) -> Option<Vec<(String, String)>> {
+    use crate::parser::ast::{ExprKind, StmtKind};
+
+    let method = class_info
+        .method_decls
+        .iter()
+        .find(|m| m.name.eq_ignore_ascii_case("__debugInfo"))?;
+    if method.is_static || !method.has_body {
+        return None;
+    }
+    let [only_stmt] = method.body.as_slice() else {
+        return None;
+    };
+    let StmtKind::Return(Some(returned)) = &only_stmt.kind else {
+        return None;
+    };
+    let pairs = match &returned.kind {
+        ExprKind::ArrayLiteralAssoc(pairs) => pairs,
+        // `return [];` parses as a positional literal; an empty one is a valid
+        // (and exact) zero-row projection. A non-empty positional literal has
+        // integer keys pointing at non-property values, so it is not foldable.
+        ExprKind::ArrayLiteral(items) if items.is_empty() => return Some(Vec::new()),
+        _ => return None,
+    };
+
+    let mut projection = Vec::with_capacity(pairs.len());
+    for (key_expr, value_expr) in pairs {
+        let ExprKind::StringLiteral(key) = &key_expr.kind else {
+            return None;
+        };
+        // A NUL byte marks php-src's visibility mangling, which this projection
+        // does not reproduce; leave such classes on the declared-property path.
+        if key.contains('\0') {
+            return None;
+        }
+        let ExprKind::PropertyAccess { object, property } = &value_expr.kind else {
+            return None;
+        };
+        // `$this` normally parses to `ExprKind::This`; the `Variable("this")`
+        // spelling is accepted too because synthetic method bodies build it that way.
+        let reads_this = match &object.kind {
+            ExprKind::This => true,
+            ExprKind::Variable(receiver) => receiver == "this",
+            _ => false,
+        };
+        if !reads_this {
+            return None;
+        }
+        if !class_info
+            .properties
+            .iter()
+            .any(|(name, _)| name == property)
+        {
+            return None;
+        }
+        projection.push((key.clone(), property.clone()));
+    }
+    Some(projection)
+}
+
+/// Renders the text PHP prints between the `[` and `]` of a declared property's
+/// `var_dump` key line, including its visibility suffix.
+fn var_dump_property_key(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> String {
+    match class_info.property_visibilities.get(prop_name) {
+        Some(Visibility::Protected) => format!("\"{}\":protected", prop_name),
+        Some(Visibility::Private) => {
+            let declaring = class_info
+                .property_declaring_classes
+                .get(prop_name)
+                .map(String::as_str)
+                .unwrap_or(class_name);
+            format!("\"{}\":\"{}\":private", prop_name, declaring)
+        }
+        _ => format!("\"{}\"", prop_name),
+    }
+}
+
+/// Renders the declared type name PHP prints inside `uninitialized(...)` for a
+/// typed property read before its first write.
+///
+/// PHP echoes the SOURCE type text; `ClassInfo` only retains the resolved
+/// `PhpType`, so this reconstructs the canonical spelling for the shapes a
+/// property declaration can actually take. Unions and intersections collapse to
+/// `mixed` — a property can only be uninitialized when it is typed and
+/// default-less, and the walker's `uninitialized(...)` line is the only consumer.
+fn var_dump_property_type_name(prop_ty: &PhpType) -> String {
+    match prop_ty {
+        PhpType::Int => "int".to_string(),
+        PhpType::Float => "float".to_string(),
+        PhpType::Str => "string".to_string(),
+        PhpType::Bool => "bool".to_string(),
+        PhpType::False => "false".to_string(),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => "array".to_string(),
+        PhpType::Iterable => "iterable".to_string(),
+        PhpType::Callable => "callable".to_string(),
+        PhpType::Object(class_name) if !class_name.is_empty() => class_name.clone(),
+        PhpType::Object(_) => "object".to_string(),
+        _ => "mixed".to_string(),
     }
 }
 

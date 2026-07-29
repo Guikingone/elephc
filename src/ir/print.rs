@@ -200,6 +200,14 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::RuntimeRef(id) => {
             let _ = write!(out, " runtime#{}", id.0);
         }
+        Immediate::ProfiledData { data: id, strict_php } => {
+            let _ = write!(
+                out,
+                " data#{} profile={}",
+                id.as_raw(),
+                if *strict_php { "strict-php" } else { "elephc" }
+            );
+        }
         Immediate::RuntimeCall(target) => {
             let _ = write!(out, " runtime.{}", target.as_eir());
         }

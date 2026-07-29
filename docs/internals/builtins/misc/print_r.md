@@ -2,7 +2,7 @@
 title: "print_r() — internals"
 description: "Compiler internals for print_r(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 299
+  order: 301
 ---
 
 ## `print_r()` — internals
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`

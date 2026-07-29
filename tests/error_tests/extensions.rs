@@ -54,6 +54,26 @@ fn test_error_buffer_scalar_assign_type_mismatch() {
     );
 }
 
+/// Verifies that a statically known string cannot be used to read a buffer,
+/// even though a boxed Mixed index is converted to int at runtime.
+#[test]
+fn test_error_buffer_read_rejects_static_string_index() {
+    expect_error(
+        "<?php buffer<int> $values = buffer_new<int>(2); string $index = \"0\"; echo $values[$index];",
+        "Buffer index must be integer",
+    );
+}
+
+/// Verifies that a statically known string cannot be used to write a buffer,
+/// preserving the checker boundary around the Mixed runtime conversion.
+#[test]
+fn test_error_buffer_write_rejects_static_string_index() {
+    expect_error(
+        "<?php buffer<int> $values = buffer_new<int>(2); string $index = \"0\"; $values[$index] = 1;",
+        "Buffer index must be integer",
+    );
+}
+
 /// Verifies that packed buffer elements cannot be assigned directly; must use field access.
 #[test]
 fn test_error_buffer_packed_element_requires_field_assignment() {

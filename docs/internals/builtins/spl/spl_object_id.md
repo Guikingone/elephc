@@ -2,7 +2,7 @@
 title: "spl_object_id() — internals"
 description: "Compiler internals for spl_object_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 351
+  order: 353
 ---
 
 ## `spl_object_id()` — internals
@@ -26,7 +26,7 @@ sidebar:
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
 - **Result ownership**: `may_alias_arguments`
-- **Effects**: `static (16 declared effects)`
+- **Effects**: `static (1 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`

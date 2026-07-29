@@ -35,12 +35,213 @@ return function_exists("sys_get_temp_dir");"#,
         values.output,
         format!(
             "time:{}:/tmp:cwd:call-time:{}:call-cwd:/tmp:111",
-            eval_compiler_php_version(),
-            eval_compiler_php_version()
+            EVAL_PHP_VERSION,
+            EVAL_PHP_VERSION
         )
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval `opcache_get_configuration()` builds the compile-target OPcache
+/// configuration array (directives + version + blacklist) with the same typed,
+/// normalized 8.5 defaults the native prelude renders, and that `function_exists`
+/// reports the prelude-provided name.
+#[test]
+fn execute_program_dispatches_opcache_get_configuration_builtin() {
+    let program = parse_fragment(
+        br#"$c = opcache_get_configuration();
+echo $c['version']['opcache_product_name']; echo ':';
+echo $c['version']['version']; echo ':';
+echo $c['directives']['opcache.jit']; echo ':';
+echo $c['directives']['opcache.memory_consumption']; echo ':';
+echo $c['directives']['opcache.optimization_level']; echo ':';
+echo $c['directives']['opcache.jit_hot_loop']; echo ':';
+echo $c['directives']['opcache.enable'] ? '1' : '0';
+echo $c['directives']['opcache.enable_cli'] ? '1' : '0'; echo ':';
+echo count($c['directives']); echo ':';
+echo count($c['blacklist']);
+return function_exists('opcache_get_configuration');"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Zend OPcache:8.5.0:disable:134217728:2147401727:61:10:54:0"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies eval `opcache_reset()` returns the compile-time cache-enabled boolean using
+/// the CLI default (the eval interpreter has no runtime SAPI), which is `false` —
+/// matching reference-PHP `php script.php` where `opcache.enable_cli` is off — and that
+/// `function_exists` reports the prelude-provided name. Also exercises the
+/// dynamic-callable dispatch path (`call_user_func`).
+#[test]
+fn execute_program_dispatches_opcache_reset_builtin() {
+    let program = parse_fragment(
+        br#"echo opcache_reset() ? '1' : '0'; echo ':';
+echo call_user_func('opcache_reset') ? '1' : '0'; echo ':';
+echo function_exists('opcache_reset') ? '1' : '0';
+return opcache_reset();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    // CLI default: opcache_reset() disabled -> false ('0'); function_exists -> true ('1').
+    assert_eq!(values.output, "0:0:1");
+    assert_eq!(values.get(result), FakeValue::Bool(false));
+}
+
+/// Verifies eval `opcache_get_status()` reports the compile-time cache-enabled state
+/// using the CLI default (the eval interpreter has no runtime SAPI), which is disabled,
+/// so it returns `false` — matching reference-PHP `php script.php`. The optional
+/// `$include_scripts` argument does not change the disabled result, and `function_exists`
+/// reports the prelude-provided name. Also exercises the dynamic-callable dispatch path
+/// (`call_user_func`).
+#[test]
+fn execute_program_dispatches_opcache_get_status_builtin() {
+    let program = parse_fragment(
+        br#"echo opcache_get_status() === false ? '1' : '0'; echo ':';
+echo opcache_get_status(false) === false ? '1' : '0'; echo ':';
+echo call_user_func('opcache_get_status') === false ? '1' : '0'; echo ':';
+echo function_exists('opcache_get_status') ? '1' : '0';
+return opcache_get_status();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    // CLI default: opcache_get_status() disabled -> false ('1' for the `=== false`
+    // checks); function_exists -> true ('1').
+    assert_eq!(values.output, "1:1:1:1");
+    assert_eq!(values.get(result), FakeValue::Bool(false));
+}
+
+/// Verifies eval `opcache_is_script_cached()` returns `false` (empty-cache interim) under
+/// the CLI default, that `function_exists` reports the prelude-provided name, and that the
+/// dynamic-callable dispatch path (`call_user_func`) agrees.
+#[test]
+fn execute_program_dispatches_opcache_is_script_cached_builtin() {
+    let program = parse_fragment(
+        br#"echo opcache_is_script_cached('/x') ? '1' : '0'; echo ':';
+echo call_user_func('opcache_is_script_cached', '/x') ? '1' : '0'; echo ':';
+echo function_exists('opcache_is_script_cached') ? '1' : '0';
+return opcache_is_script_cached('/x');"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    // Empty-cache interim: not cached -> false ('0'); function_exists -> true ('1').
+    assert_eq!(values.output, "0:0:1");
+    assert_eq!(values.get(result), FakeValue::Bool(false));
+}
+
+/// Verifies eval `opcache_invalidate()` returns `false` under the CLI default (disabled
+/// cache), accepting both the 1-arg and 2-arg (`$force`) forms, that `function_exists`
+/// reports the prelude-provided name, and that the dynamic-callable dispatch path agrees.
+#[test]
+fn execute_program_dispatches_opcache_invalidate_builtin() {
+    let program = parse_fragment(
+        br#"echo opcache_invalidate('/x') ? '1' : '0'; echo ':';
+echo opcache_invalidate('/x', true) ? '1' : '0'; echo ':';
+echo call_user_func('opcache_invalidate', '/x') ? '1' : '0'; echo ':';
+echo function_exists('opcache_invalidate') ? '1' : '0';
+return opcache_invalidate('/x');"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    // CLI default: disabled cache -> false ('0') for 1-arg and 2-arg forms;
+    // function_exists -> true ('1').
+    assert_eq!(values.output, "0:0:0:1");
+    assert_eq!(values.get(result), FakeValue::Bool(false));
+}
+
+/// Verifies eval `opcache_compile_file()` returns `false` under the CLI default (no runtime
+/// compiler, disabled cache), that `function_exists` reports the prelude-provided name, and
+/// that the dynamic-callable dispatch path agrees. The eval const-folder has no notice
+/// channel, so — unlike the native runtime — it emits no diagnostic.
+#[test]
+fn execute_program_dispatches_opcache_compile_file_builtin() {
+    let program = parse_fragment(
+        br#"echo opcache_compile_file('/x') ? '1' : '0'; echo ':';
+echo call_user_func('opcache_compile_file', '/x') ? '1' : '0'; echo ':';
+echo function_exists('opcache_compile_file') ? '1' : '0';
+return opcache_compile_file('/x');"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    // CLI default: compile cannot run -> false ('0'); function_exists -> true ('1').
+    assert_eq!(values.output, "0:0:1");
+    assert_eq!(values.get(result), FakeValue::Bool(false));
+}
+
+/// Verifies eval `opcache_is_script_cached_in_file_cache()` returns `false` — reference PHP
+/// gates it on `opcache.file_cache`, whose C default is NULL, so an unconfigured PHP 8.5.6
+/// answers `false` for every path (VERIFIED), and elephc has no file cache at all. Also
+/// checks `function_exists` reports the prelude-provided name and that the
+/// dynamic-callable dispatch path agrees.
+#[test]
+fn execute_program_dispatches_opcache_is_script_cached_in_file_cache_builtin() {
+    let program = parse_fragment(
+        br#"echo opcache_is_script_cached_in_file_cache('/x') ? '1' : '0'; echo ':';
+echo call_user_func('opcache_is_script_cached_in_file_cache', '/x') ? '1' : '0'; echo ':';
+echo function_exists('opcache_is_script_cached_in_file_cache') ? '1' : '0';
+return opcache_is_script_cached_in_file_cache('/x');"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    // No file cache configured -> false ('0'); function_exists -> true ('1').
+    assert_eq!(values.output, "0:0:1");
+    assert_eq!(values.get(result), FakeValue::Bool(false));
+}
+
+/// Verifies eval `opcache_jit_blacklist()` evaluates to PHP `NULL` (declared `void` in
+/// reference PHP 8.5.6, whose call `var_export`s as `NULL` — VERIFIED), that
+/// `function_exists` reports the prelude-provided name, and that the dynamic-callable
+/// dispatch path agrees. Elephc has no JIT, so the no-op is the whole behavior.
+#[test]
+fn execute_program_dispatches_opcache_jit_blacklist_builtin() {
+    let program = parse_fragment(
+        br#"echo opcache_jit_blacklist(function () {}) === null ? '1' : '0'; echo ':';
+echo call_user_func('opcache_jit_blacklist', function () {}) === null ? '1' : '0'; echo ':';
+echo function_exists('opcache_jit_blacklist') ? '1' : '0';
+return opcache_jit_blacklist(function () {});"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    // void function -> null ('1' for both `=== null` checks); function_exists -> true ('1').
+    assert_eq!(values.output, "1:1:1");
+    assert_eq!(values.get(result), FakeValue::Null);
+}
+
 /// Verifies eval `date()` formats libc local timestamps and `mktime()` builds them.
 #[test]
 fn execute_program_dispatches_date_mktime_builtins() {
@@ -533,5 +734,53 @@ return function_exists("inet_ntop");"#,
             values.output,
             "192.168.1.1:255.255.255.255:3232235777:bad-ip:01020304:bad-pton:1.2.3.4:bad-ntop:127.0.0.1:0:111"
         );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies eval `get_loaded_extensions()` returns the compile-time-known extension lists.
+#[test]
+fn execute_program_dispatches_get_loaded_extensions_builtin() {
+    let program = parse_fragment(
+        br#"$ext = get_loaded_extensions();
+echo count($ext) . ":" . $ext[0] . ":";
+echo (in_array("json", $ext) ? "json" : "bad") . ":";
+echo (in_array("Zend OPcache", $ext) ? "opcache" : "bad") . ":";
+echo (in_array("curl", $ext) ? "bad" : "no-curl") . ":";
+$zend = get_loaded_extensions(true);
+echo count($zend) . ":" . $zend[0] . ":";
+echo (in_array("Reflection", $zend) ? "bad" : "no-reflection") . ":";
+echo is_array($ext) ? "array" : "bad";
+return function_exists("get_loaded_extensions");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "10:Core:json:opcache:no-curl:1:Zend OPcache:no-reflection:array"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies eval `extension_loaded()` resolves the compile-time-known extension set.
+#[test]
+fn execute_program_dispatches_extension_loaded_builtin() {
+    let program = parse_fragment(
+        br#"echo extension_loaded("json") ? "1" : "0";
+echo extension_loaded("Zend OPcache") ? "1" : "0";
+echo extension_loaded("opcache") ? "1" : "0";
+echo extension_loaded("curl") ? "1" : "0";
+return function_exists("extension_loaded");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "1100");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

@@ -21,6 +21,16 @@ macro_rules! impl_lifecycle_scalar_ops {
         }
     }
 
+    /// Returns the PHP object handle reported by `spl_object_id()`.
+    fn php_object_handle(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus> {
+        let handle = unsafe { __elephc_eval_value_object_handle(object.as_ptr()) };
+        if handle == 0 {
+            Err(EvalStatus::RuntimeFatal)
+        } else {
+            Ok(handle)
+        }
+    }
+
     /// Returns the object payload that the next release would destroy, when known.
     fn final_object_identity_for_release(
         &mut self,

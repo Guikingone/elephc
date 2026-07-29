@@ -66,7 +66,7 @@ pub fn inject_if_used(program: Program, force: bool) -> Program {
         return program;
     }
     let tokens = crate::lexer::tokenize(TZ_PRELUDE_SRC).expect("tz prelude must tokenize");
-    let mut combined = crate::parser::parse(&tokens).expect("tz prelude must parse");
+    let mut combined = crate::parser::parse_internal(&tokens).expect("tz prelude must parse");
     combined.extend(program);
     combined
 }

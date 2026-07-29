@@ -1197,6 +1197,10 @@ def slug(name: str) -> str:
 # `check_builtin()` arms (which sometimes narrow to the wrong type, e.g.
 # `array_shift` returns `mixed`, not the array element type).
 RETURN_TYPE_OVERRIDES: Dict[str, str] = {
+    # phpversion() is `string`, phpversion($extension) is `string|false`; the
+    # registry records the union-covering `Mixed` for the whole arity, so the
+    # documented return type is recovered here (reference PHP's own signature).
+    "phpversion": "string|false",
     # array_shift / array_pop return the shifted element which is `mixed`
     # in PHP's loose type system.
     "array_shift": "mixed",
@@ -1281,8 +1285,35 @@ DESCRIPTION_OVERRIDES: Dict[str, str] = {
     "print_r": "Prints human-readable information about a variable.",
     "var_dump": "Dumps information about a variable, including its type and value.",
     "var_export": "Outputs or returns a parsable string representation of a variable.",
-    "phpversion": "Returns the current PHP version information.",
+    "phpversion": "Returns the targeted PHP language version, or one extension's version.",
     "php_uname": "Returns information about the operating system PHP is running on.",
+    # The four incremental hash-context functions are NOT eval-only, despite being
+    # absent from the static builtin catalog. Compiled code gets them from the
+    # compiler-injected hash prelude (`src/hash_prelude.rs`), where they are
+    # elephc-PHP wrappers over `internal: true` `__elephc_hash_ctx_*` builtins so
+    # that `hash_init()` can return a real `HashContext` OBJECT (PHP 8 parity).
+    # Without these overrides the generator would fall back to its eval-only
+    # boilerplate and tell readers that "compiled (AOT) code does not support it
+    # yet", which is the opposite of the truth. See `docs/php/strings.md` for the
+    # full `HashContext` surface and its known divergences.
+    "hash_init": (
+        "Opens an incremental hashing context, returning a HashContext object. "
+        "Provided by the compiler-injected hash prelude in compiled code; the eval "
+        "interpreter still returns a resource."
+    ),
+    "hash_update": (
+        "Feeds data into an incremental hashing context. Provided by the "
+        "compiler-injected hash prelude in compiled code."
+    ),
+    "hash_final": (
+        "Finalizes an incremental hashing context and returns the digest (hex, or raw "
+        "bytes when $binary). Provided by the compiler-injected hash prelude in "
+        "compiled code."
+    ),
+    "hash_copy": (
+        "Clones an incremental hashing context into an independent HashContext object. "
+        "Provided by the compiler-injected hash prelude in compiled code."
+    ),
 }
 
 

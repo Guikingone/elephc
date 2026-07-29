@@ -21,7 +21,7 @@ use crate::codegen_support::{abi, platform::Arch};
 ///
 /// # Input
 /// - ARM64: x0 holds the boxed mixed pointer on entry
-/// - x86_64: rdi holds the boxed mixed pointer on entry
+/// - x86_64: rax holds the boxed mixed pointer on entry
 ///
 /// # Output
 /// - ARM64: integer result returned in x0
@@ -84,7 +84,8 @@ pub fn emit_mixed_cast_int(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_cast_int_done");                          // return the null-container cast result
 
     emitter.label("__rt_mixed_cast_int_from_resource");
-    emitter.instruction("add x0, x1, #1");                                      // convert the native resource payload into the 1-based display id
+    emitter.instruction("mov x0, x1");                                          // move the native resource payload into the registry argument
+    emitter.instruction("bl __rt_resource_id_of");                              // PHP casts a resource to its RESOURCE ID, not to its native payload
 
     emitter.label("__rt_mixed_cast_int_done");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
@@ -99,7 +100,7 @@ pub fn emit_mixed_cast_int(emitter: &mut Emitter) {
 /// Results are returned in rax.
 ///
 /// # ABI
-/// - Input: rdi = boxed mixed pointer
+/// - Input: rax = boxed mixed pointer
 /// - Output: rax = integer result
 /// - Clobbers: rax, rdi, rdx, xmm0, rsp; preserves rbp
 fn emit_mixed_cast_int_linux_x86_64(emitter: &mut Emitter) {
@@ -157,7 +158,8 @@ fn emit_mixed_cast_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_cast_int_done_linux_x86_64");           // return the null-container cast result
 
     emitter.label("__rt_mixed_cast_int_from_resource_linux_x86_64");
-    emitter.instruction("lea rax, [rdi + 1]");                                  // convert the native resource payload into the 1-based display id
+    emitter.instruction("mov rax, rdi");                                        // move the native resource payload into the registry argument
+    abi::emit_call_label(emitter, "__rt_resource_id_of");                       // PHP casts a resource to its RESOURCE ID, not to its native payload
 
     emitter.label("__rt_mixed_cast_int_done_linux_x86_64");
     emitter.instruction("add rsp, 16");                                         // release the aligned temporary slot reserved for nested helper calls

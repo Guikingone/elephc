@@ -2,7 +2,7 @@
 title: "sprintf() — internals"
 description: "Compiler internals for sprintf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 400
+  order: 402
 ---
 
 ## `sprintf()` — internals
@@ -26,7 +26,7 @@ sidebar:
 - **Validation**: `signature`
 - **Result type source**: `declared`
 - **Result ownership**: `may_alias_arguments`
-- **Effects**: `static (16 declared effects)`
+- **Effects**: `static (3 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`

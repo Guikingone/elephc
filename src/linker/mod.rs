@@ -57,6 +57,18 @@ pub(crate) fn crate_flag_names() -> Vec<&'static str> {
     bridges::crate_flag_names()
 }
 
+/// Returns bridge library/flag pairs present in one planned named-library set.
+pub(crate) fn bridges_in(
+    link_libraries: &[String],
+) -> Vec<(&'static str, &'static str)> {
+    bridges::bridges_in(link_libraries)
+}
+
+/// Maps one bridge library name to its canonical PHP extension, when distinct.
+pub(crate) fn php_extension_for_lib(lib_name: &str) -> Option<&'static str> {
+    bridges::php_extension_for_lib(lib_name)
+}
+
 /// Invokes the target assembler for one generated assembly source file.
 pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
     let mut assembler = Command::new(target.assembler_cmd());

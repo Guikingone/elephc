@@ -78,6 +78,8 @@ mod control;
 mod includes;
 #[path = "parser_tests/functions.rs"]
 mod functions;
+#[path = "parser_tests/lfc.rs"]
+mod lfc;
 #[path = "parser_tests/classes.rs"]
 mod classes;
 #[path = "parser_tests/namespaces.rs"]

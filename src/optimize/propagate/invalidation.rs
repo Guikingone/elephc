@@ -265,7 +265,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
             expr_invalidation(object)
                 .union(args_invalidation(args))
                 .union(callee_inv)
-                .union(top_level_globals_guard(private_instance_method_call_effect(
+                .union(top_level_globals_guard(instance_method_call_effect(
                     object, method,
                 )))
         }

@@ -1039,7 +1039,7 @@ fn lower_tagged_scalar_to_int(
 /// Lowers logical negation.
 fn lower_not(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
-    let value = ctx.truthy(value, Some(expr.span));
+    let value = ctx.truthy_consuming(value, Some(expr.span));
     let zero = lower_int_literal(ctx, 0, expr);
     ctx.emit_value(
         Op::ICmp,
@@ -1097,7 +1097,7 @@ fn lower_logical_binary(
     expr: &Expr,
 ) -> LoweredValue {
     let lhs = lower_expr(ctx, left);
-    let lhs = ctx.truthy(lhs, Some(left.span));
+    let lhs = ctx.truthy_consuming(lhs, Some(left.span));
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
     let rhs_block = ctx.builder.create_named_block("logical.rhs", Vec::new());
     let const_block = ctx.builder.create_named_block("logical.const", Vec::new());
@@ -1117,7 +1117,7 @@ fn lower_logical_binary(
 
     ctx.builder.position_at_end(rhs_block);
     let rhs = lower_expr(ctx, right);
-    let rhs = ctx.truthy(rhs, Some(right.span));
+    let rhs = ctx.truthy_consuming(rhs, Some(right.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, rhs, expr.span);
     branch_to(ctx, merge);
 
@@ -1151,13 +1151,14 @@ fn lower_logical_xor(
     )
 }
 
-/// Converts a lowered PHP value into a canonical boolean value for value-level logical ops.
+/// Converts a lowered PHP value into a canonical boolean and releases an owned input.
 fn lower_truthy_bool(
     ctx: &mut LoweringContext<'_, '_>,
     input: LoweredValue,
     span: Option<crate::span::Span>,
 ) -> LoweredValue {
-    match ctx.builder.value_php_type(input.value).codegen_repr() {
+    let owns_input = ctx.value_is_owning_temporary(input);
+    let result = match ctx.builder.value_php_type(input.value).codegen_repr() {
         PhpType::Bool => input,
         PhpType::Int => {
             let zero = ctx
@@ -1191,7 +1192,11 @@ fn lower_truthy_bool(
             Op::IsTruthy.default_effects(),
             span,
         ),
+    };
+    if owns_input && result.value != input.value {
+        crate::ir_lower::ownership::release_if_owned(ctx, input, span);
     }
+    result
 }
 
 /// Lowers null coalesce so the default expression is evaluated only for null values.
@@ -1289,8 +1294,28 @@ fn wider_type_for_merge(left: &PhpType, right: &PhpType) -> PhpType {
         return left;
     }
     match (&left, &right) {
-        (PhpType::Array(_), PhpType::Array(_)) => right.clone(),
-        (PhpType::AssocArray { .. }, PhpType::AssocArray { .. }) => right.clone(),
+        // Mismatched element types must widen elementwise (issue #549): letting
+        // one side win wholesale relabels the other side's runtime slots, so
+        // typed reads through the merged type misinterpret the payload bytes.
+        (PhpType::Array(left_elem), PhpType::Array(right_elem)) => {
+            PhpType::Array(Box::new(merge_ir_indexed_element_type(
+                (**left_elem).clone(),
+                (**right_elem).clone(),
+            )))
+        }
+        (
+            PhpType::AssocArray { key: left_key, value: left_value },
+            PhpType::AssocArray { key: right_key, value: right_value },
+        ) => PhpType::AssocArray {
+            key: Box::new(merge_ir_assoc_value_type(
+                (**left_key).clone(),
+                (**right_key).clone(),
+            )),
+            value: Box::new(merge_ir_assoc_value_type(
+                (**left_value).clone(),
+                (**right_value).clone(),
+            )),
+        },
         (
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
@@ -1876,9 +1901,10 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     if let Some(value) = lower_eval_class_probe(ctx, canonical, args, expr) {
         return value;
     }
-    let sig = call_signature(ctx, canonical);
+    let extension_builtin = source_prefers_extension_builtin(canonical);
+    let sig = call_signature(ctx, canonical, extension_builtin);
     let is_extern = ctx.extern_functions.contains_key(canonical);
-    let is_user_function = ctx.functions.contains_key(canonical);
+    let is_user_function = ctx.functions.contains_key(canonical) && !extension_builtin;
     let operands = if is_extern || is_user_function {
         lower_args_with_signature(ctx, sig.as_ref(), args)
     } else {
@@ -2019,13 +2045,25 @@ fn emit_builtin_call_value(
     let (op, immediate, effects) = if let Some(fragment) = eval_literal {
         (
             Op::EvalLiteralCall,
-            Some(Immediate::Data(ctx.intern_string(fragment))),
+            Some(Immediate::ProfiledData {
+                data: ctx.intern_string(fragment),
+                strict_php: crate::strict_php::is_enabled(),
+            }),
             Op::EvalLiteralCall.default_effects(),
         )
     } else {
+        let data = ctx.intern_function_name(name);
+        let immediate = if php_symbol_key(name.trim_start_matches('\\')) == "eval" {
+            Immediate::ProfiledData {
+                data,
+                strict_php: crate::strict_php::is_enabled(),
+            }
+        } else {
+            Immediate::Data(data)
+        };
         (
             Op::LanguageConstructCall,
-            Some(Immediate::Data(ctx.intern_function_name(name))),
+            Some(immediate),
             effects_lookup::language_construct_effects(name),
         )
     };
@@ -2113,6 +2151,7 @@ fn eval_literal_needs_barrier(ctx: &LoweringContext<'_, '_>, fragment: &str) -> 
     let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
         fragment,
         ctx.source_path(),
+        crate::strict_php::is_enabled(),
         static_call_supported,
         |receiver, method, args| {
             eval_literal_static_method_supported_by_lowering(ctx, receiver, method, args)
@@ -2156,6 +2195,7 @@ fn eval_literal_scope_barrier_writes(
     let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
         fragment,
         ctx.source_path(),
+        crate::strict_php::is_enabled(),
         static_call_supported,
         |receiver, method, args| {
             eval_literal_static_method_supported_by_lowering(ctx, receiver, method, args)
@@ -3050,7 +3090,7 @@ fn lower_magic_property_isset(
     )];
     let result =
         lower_method_call_with_receiver(ctx, object, "__isset", &args, Op::MethodCall, arg);
-    ctx.truthy(result, Some(arg.span))
+    ctx.truthy_consuming(result, Some(arg.span))
 }
 
 /// Lowers `__isset` for nullable receivers, returning false instead of calling on null.
@@ -3098,7 +3138,7 @@ fn lower_nullable_magic_property_isset(
     )];
     let result =
         lower_method_call_with_receiver(ctx, object, "__isset", &args, Op::MethodCall, arg);
-    let result = ctx.truthy(result, Some(arg.span));
+    let result = ctx.truthy_consuming(result, Some(arg.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, result, arg.span);
     branch_to(ctx, merge);
 
@@ -3326,7 +3366,7 @@ fn lower_instance_callable_call_user_func(
     Some(ctx.emit_value(
         Op::ExprCall,
         operands,
-        None,
+        callable_profile_immediate(),
         result_type,
         Op::ExprCall.default_effects(),
         Some(expr.span),
@@ -3366,7 +3406,7 @@ fn lower_dynamic_call_user_func(
     Some(ctx.emit_value(
         Op::ExprCall,
         operands,
-        None,
+        callable_profile_immediate(),
         PhpType::Mixed,
         Op::ExprCall.default_effects(),
         Some(expr.span),
@@ -3642,7 +3682,7 @@ fn emit_callable_descriptor_invoke(
     let result = ctx.emit_value(
         Op::CallableDescriptorInvoke,
         vec![callback.value, arg_container.value],
-        None,
+        callable_profile_immediate(),
         result_type,
         Op::CallableDescriptorInvoke.default_effects(),
         Some(span),
@@ -4465,7 +4505,11 @@ fn lower_static_callable_call(
             ))
         }
         StaticCallableBinding::Builtin(function_name) => {
-            let sig = call_signature(ctx, &function_name);
+            let sig = call_signature(
+                ctx,
+                &function_name,
+                source_prefers_extension_builtin(&function_name),
+            );
             let operands = lower_builtin_call_args(ctx, &function_name, sig.as_ref(), callback_args);
             let php_type = call_return_type(ctx, &function_name, &operands);
             Some(emit_builtin_call_value(
@@ -4730,40 +4774,50 @@ pub(crate) fn lower_bound_closure_for_assignment(
     Some(closure_value)
 }
 
-/// Resolves the statically-known class name of an object expression used as the
-/// receiver of an instance first-class callable (`$obj->m(...)`).
-///
-/// Returns the normalized class name for `$var` (from `local_types`), `$this`
-/// (the current class), and `new` expressions; `None` when the receiver class
-/// cannot be determined statically.
+/// Resolves the statically-known class name of an object expression used as an instance-call
+/// receiver, including declared property and chained-call results.
 fn instance_callable_object_class(
     ctx: &LoweringContext<'_, '_>,
     object: &Expr,
 ) -> Option<String> {
-    match &object.kind {
-        ExprKind::Variable(name) => ctx
-            .local_types
-            .get(name)
-            .and_then(class_name_from_php_type),
-        ExprKind::This => ctx.current_class.as_deref().and_then(normalized_class_name),
-        ExprKind::NewObject { class_name, .. } => normalized_class_name(class_name.as_str()),
+    instance_callable_object_class_and_nullability(ctx, object).map(|(class_name, _)| class_name)
+}
+
+/// Resolves one instance-call receiver class and whether its expression may produce `null`.
+fn instance_callable_object_class_and_nullability(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+) -> Option<(String, bool)> {
+    let object_type = match &object.kind {
+        ExprKind::Variable(name) => ctx.local_types.get(name).cloned()?,
+        ExprKind::This => PhpType::Object(ctx.current_class.clone()?),
+        ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.to_string()),
         ExprKind::NewDynamicObject { fallback_class, .. } => {
-            normalized_class_name(fallback_class.as_str())
+            PhpType::Object(fallback_class.to_string())
         }
         ExprKind::FunctionCall { name, .. } => ctx
             .functions
             .get(name.as_str())
-            .and_then(|sig| class_name_from_php_type(&sig.return_type)),
-        _ => class_name_from_php_type(&infer_expr_type_syntactic(object)),
-    }
-}
-
-/// Returns a non-empty normalized class name for an object PHP type.
-fn class_name_from_php_type(ty: &PhpType) -> Option<String> {
-    match ty.codegen_repr() {
-        PhpType::Object(class_name) => normalized_class_name(&class_name),
-        _ => None,
-    }
+            .map(|sig| sig.return_type.clone())?,
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)?
+        }
+        ExprKind::NullsafePropertyAccess { object, property } => {
+            nullsafe_property_access_expr_type_for_ir(ctx, object, property)?
+        }
+        ExprKind::MethodCall { object, method, .. } => {
+            method_call_expr_type_for_ir(ctx, object, method)?
+        }
+        ExprKind::NullsafeMethodCall { object, method, .. } => {
+            nullsafe_method_call_expr_type_for_ir(ctx, object, method)?
+        }
+        ExprKind::StaticMethodCall {
+            receiver, method, ..
+        } => static_method_call_expr_type_for_ir(ctx, receiver, method)?,
+        _ => infer_expr_type_syntactic(object),
+    };
+    let (class_name, nullable) = singular_object_class(&object_type)?;
+    normalized_class_name(class_name).map(|class_name| (class_name, nullable))
 }
 
 /// Trims PHP's optional leading namespace separator from class metadata names.
@@ -4792,7 +4846,11 @@ where
 fn call_signature(
     ctx: &LoweringContext<'_, '_>,
     name: &str,
+    prefer_extension_builtin: bool,
 ) -> Option<FunctionSig> {
+    if prefer_extension_builtin {
+        return builtin_call_signature(name);
+    }
     if let Some(sig) = ctx.functions.get(name) {
         return Some(sig.clone());
     }
@@ -4800,6 +4858,15 @@ fn call_signature(
         return Some(function_sig_from_extern_for_descriptor(sig));
     }
     builtin_call_signature(name)
+}
+
+/// Returns whether the active source profile must prefer an elephc extension over a shadow.
+fn source_prefers_extension_builtin(name: &str) -> bool {
+    !crate::strict_php::is_enabled()
+        && crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
+            &php_symbol_key(name.trim_start_matches('\\')),
+            true,
+        )
 }
 
 /// Looks up a PHP builtin call signature using the normalized global builtin name.
@@ -5435,7 +5502,7 @@ fn lower_static_settype(
         return None;
     };
     let target_ty = static_settype_target_type(&type_arg)?;
-    let sig = call_signature(ctx, name);
+    let sig = call_signature(ctx, name, source_prefers_extension_builtin(name));
     let operands = lower_builtin_call_args(ctx, name, sig.as_ref(), args);
     let result = emit_builtin_call_value(ctx, name, operands, PhpType::Bool, expr.span, None);
     ctx.set_local_type(local_name, target_ty);
@@ -5454,7 +5521,7 @@ fn static_settype_arg_exprs(
     if !crate::types::call_args::has_named_args(args) {
         return Some((args[0].clone(), args[1].clone()));
     }
-    let sig = call_signature(ctx, name)?;
+    let sig = call_signature(ctx, name, source_prefers_extension_builtin(name))?;
     let call_span = args
         .first()
         .map(|arg| arg.span)
@@ -7507,7 +7574,7 @@ fn release_value_after_retaining_insert(
 }
 
 /// Returns the indexed-array type that the EIR backend can faithfully materialize.
-fn array_literal_type_for_ir(
+pub(crate) fn array_literal_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     items: &[Expr],
     expr: &Expr,
@@ -7533,7 +7600,15 @@ fn array_literal_element_type_for_ir(
     match &item.kind {
         ExprKind::Null => PhpType::Mixed,
         ExprKind::Spread(inner) => match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
-            PhpType::Array(elem) => elem.codegen_repr(),
+            // A spread of an empty/unknown array (`array<never>`, e.g. a `$x = []` local or a
+            // bare-`array`-returning method) contributes no element constraint, so widen its
+            // Void/Never element to Mixed rather than collapsing the outer literal to
+            // `array<never>` — which would normalize to a `Void` element and emit an unsupported
+            // `array_push for PHP type Void` (`[...$acc, ...$this->more()]`).
+            PhpType::Array(elem) => match elem.codegen_repr() {
+                PhpType::Void | PhpType::Never => PhpType::Mixed,
+                other => other,
+            },
             _ => PhpType::Mixed,
         },
         ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, item).codegen_repr(),
@@ -7558,6 +7633,23 @@ fn array_literal_element_type_for_ir(
             }
             ir_array_storage_type(infer_expr_type_syntactic(item))
         }
+        // Calls must use declared EIR return metadata rather than the syntactic `Int` fallback,
+        // or an object result is cast into an incorrectly stamped scalar array.
+        ExprKind::MethodCall { object, method, .. } => {
+            method_call_expr_type_for_ir(ctx, object, method)
+                .and_then(materializable_array_element_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
+        }
+        ExprKind::NullsafeMethodCall { object, method, .. } => {
+            nullsafe_method_call_expr_type_for_ir(ctx, object, method)
+                .and_then(materializable_array_element_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
+        }
+        ExprKind::StaticMethodCall { receiver, method, .. } => {
+            static_method_call_expr_type_for_ir(ctx, receiver, method)
+                .and_then(materializable_array_element_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
+        }
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
             .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
         ExprKind::PropertyAccess { object, property } => property_access_expr_type_for_ir(
@@ -7567,6 +7659,19 @@ fn array_literal_element_type_for_ir(
         )
         .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
         _ => ir_array_storage_type(infer_expr_type_syntactic(item)),
+    }
+}
+
+/// Returns the EIR array storage type for a resolved element type, or `None` when the type
+/// cannot be an array element. A `Void`/`Never` method return (a value-less call whose result
+/// is nonetheless collected into a literal) has no array-element representation — stamping it
+/// would emit an unsupported `array_push for PHP type Void` — so the caller keeps its syntactic
+/// fallback for that degenerate case, exactly as before this arm existed (no regression).
+fn materializable_array_element_type(return_type: PhpType) -> Option<PhpType> {
+    let stored = ir_array_storage_type(return_type);
+    match stored.codegen_repr() {
+        PhpType::Void | PhpType::Never => None,
+        _ => Some(stored),
     }
 }
 
@@ -7582,16 +7687,7 @@ fn ir_array_storage_type(php_type: PhpType) -> PhpType {
 
 /// Merges indexed-array element types for EIR storage metadata.
 fn merge_ir_indexed_element_type(left: PhpType, right: PhpType) -> PhpType {
-    if left == right {
-        return left;
-    }
-    if matches!(left.codegen_repr(), PhpType::Void | PhpType::Never) {
-        return right;
-    }
-    if matches!(right.codegen_repr(), PhpType::Void | PhpType::Never) {
-        return left;
-    }
-    PhpType::Mixed
+    ir_array_storage_type(PhpType::widen_array_branch_element(left, right))
 }
 
 /// Lowers an associative array literal.
@@ -7704,6 +7800,21 @@ fn assoc_array_literal_value_type_for_ir(
             }
             ir_array_storage_type(infer_expr_type_syntactic(value))
         }
+        ExprKind::MethodCall { object, method, .. } => {
+            method_call_expr_type_for_ir(ctx, object, method)
+                .and_then(materializable_array_element_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
+        }
+        ExprKind::NullsafeMethodCall { object, method, .. } => {
+            nullsafe_method_call_expr_type_for_ir(ctx, object, method)
+                .and_then(materializable_array_element_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
+        }
+        ExprKind::StaticMethodCall { receiver, method, .. } => {
+            static_method_call_expr_type_for_ir(ctx, receiver, method)
+                .and_then(materializable_array_element_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
+        }
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
             .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
         ExprKind::PropertyAccess { object, property } => property_access_expr_type_for_ir(
@@ -7794,6 +7905,21 @@ pub(super) fn property_access_expr_type_for_ir(
         .map(|(_, ty)| normalize_value_php_type(ty.codegen_repr()))
 }
 
+/// Returns the declared property result type plus `null` when a nullsafe receiver may be null.
+fn nullsafe_property_access_expr_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> Option<PhpType> {
+    let property_type = property_access_expr_type_for_ir(ctx, object, property)?;
+    let (_, nullable) = instance_callable_object_class_and_nullability(ctx, object)?;
+    if nullable {
+        Some(nullable_result_type(property_type))
+    } else {
+        Some(property_type)
+    }
+}
+
 /// Returns the declared result type for an instance method call before its receiver is lowered.
 pub(super) fn method_call_expr_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
@@ -7806,18 +7932,24 @@ pub(super) fn method_call_expr_type_for_ir(
         .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
 }
 
+/// Returns the declared method result type plus `null` when a nullsafe receiver may be null.
+fn nullsafe_method_call_expr_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    method: &str,
+) -> Option<PhpType> {
+    let return_type = method_call_expr_type_for_ir(ctx, object, method)?;
+    let (_, nullable) = instance_callable_object_class_and_nullability(ctx, object)?;
+    if nullable {
+        Some(nullable_result_type(return_type))
+    } else {
+        Some(return_type)
+    }
+}
+
 /// Merges associative-array value types for EIR storage metadata.
 fn merge_ir_assoc_value_type(left: PhpType, right: PhpType) -> PhpType {
-    if left == right {
-        return left;
-    }
-    if matches!(left, PhpType::Never) {
-        return right;
-    }
-    if matches!(right, PhpType::Never) {
-        return left;
-    }
-    PhpType::Mixed
+    ir_array_storage_type(PhpType::widen_array_branch_element(left, right))
 }
 
 /// Lowers a match expression with lazy arm-result evaluation.
@@ -7955,7 +8087,10 @@ fn lower_array_access_from_value(
                 Op::HashGetSilent
             }
         }
-        IrType::Heap(IrHeapKind::Buffer) => Op::BufferGet,
+        IrType::Heap(IrHeapKind::Buffer) => {
+            index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+            Op::BufferGet
+        }
         IrType::Str => {
             index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
             Op::StrCharAt
@@ -7963,9 +8098,14 @@ fn lower_array_access_from_value(
         _ => Op::RuntimeCall,
     };
     let result_type = array_access_result_type(ctx, array_value.value, op, expr);
+    let mut operands = vec![array_value.value, index_value.value];
+    if matches!(op, Op::RuntimeCall) {
+        let warning_flag = emit_bool_literal(ctx, warn_on_missing, Some(expr.span));
+        operands.push(warning_flag.value);
+    }
     let result = ctx.emit_value(
         op,
-        vec![array_value.value, index_value.value],
+        operands,
         None,
         result_type,
         op.default_effects(),
@@ -8034,9 +8174,25 @@ fn lower_nullable_array_access(
     take_owned_temp(ctx, &temp_name, expr.span)
 }
 
+/// Lowers a subscript read whose receiver has already been evaluated,
+/// including the nullable-receiver guard. Used by the nested-assign parent
+/// lowering when a receiver produced by a for-write chain turns out not to be
+/// a boxed Mixed cell (e.g. ArrayAccess object intermediates, issue #555).
+pub(crate) fn lower_array_access_from_lowered_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    if value_is_nullable(ctx, receiver.value) {
+        return lower_nullable_array_access(ctx, receiver, index, expr, true);
+    }
+    lower_array_access_from_value(ctx, receiver, index, expr, true)
+}
+
 /// Returns the statically-known key type for an array index expression.
 /// Used to decide between Op::ArrayGet (int key) and Op::ArrayGetMixedKey.
-fn index_expr_key_type(_ctx: &LoweringContext<'_, '_>, index: &Expr) -> PhpType {
+pub(crate) fn index_expr_key_type(_ctx: &LoweringContext<'_, '_>, index: &Expr) -> PhpType {
     let ty = infer_expr_type_syntactic(index);
     normalized_array_key_type(index, ty)
 }
@@ -8268,7 +8424,7 @@ fn lower_ternary(
     expr: &Expr,
 ) -> LoweredValue {
     let cond = lower_expr(ctx, condition);
-    let cond = ctx.truthy(cond, Some(condition.span));
+    let cond = ctx.truthy_consuming(cond, Some(condition.span));
     let result_type = branch_merge_result_type(ctx, then_expr, else_expr, expr);
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let split_initialized = ctx.initialized_slots_snapshot();
@@ -8528,6 +8684,8 @@ fn lower_closure_with_context(
         capture_params.push((capture.clone(), php_type, by_ref));
     }
     let name = ctx.next_closure_name();
+    let loop_storage_scope =
+        crate::types::nested_loop_storage_scope(&ctx.loop_storage_scope, expr.span);
     let by_ref_return = matches!(&expr.kind, ExprKind::Closure { by_ref_return: true, .. });
     let signature = if contextual_arg_types.is_empty() {
         function::lower_closure_function(
@@ -8541,6 +8699,7 @@ fn lower_closure_with_context(
             &capture_params,
             self_ref_callable_capture,
             by_ref_return,
+            loop_storage_scope,
         )
     } else {
         function::lower_closure_function_with_context(
@@ -8555,6 +8714,7 @@ fn lower_closure_with_context(
             contextual_arg_types,
             self_ref_callable_capture,
             by_ref_return,
+            loop_storage_scope,
         )
     };
     let data = ctx.intern_string(&name);
@@ -8582,7 +8742,7 @@ fn lower_closure_with_context(
 }
 
 /// Returns true when a statement body contains an `eval(...)` call.
-fn body_contains_eval_call(body: &[Stmt]) -> bool {
+pub(crate) fn body_contains_eval_call(body: &[Stmt]) -> bool {
     body.iter().any(stmt_contains_eval_call)
 }
 
@@ -8866,7 +9026,14 @@ fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, args: &[Expr
     }
     let mut operands = vec![callable.value];
     operands.extend(lower_args_with_signature(ctx, instance_signature.as_ref(), args));
-    ctx.emit_value(Op::ClosureCall, operands, None, result_type, Op::ClosureCall.default_effects(), Some(expr.span))
+    ctx.emit_value(
+        Op::ClosureCall,
+        operands,
+        callable_profile_immediate(),
+        result_type,
+        Op::ClosureCall.default_effects(),
+        Some(expr.span),
+    )
 }
 
 /// Lowers `$object(...)` when the local object has an `__invoke` method.
@@ -8957,7 +9124,14 @@ fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, args: &[Exp
     }
     let mut operands = vec![lowered_callee.value];
     operands.extend(lower_args(ctx, args));
-    ctx.emit_value(Op::ExprCall, operands, None, result_type, Op::ExprCall.default_effects(), Some(expr.span))
+    ctx.emit_value(
+        Op::ExprCall,
+        operands,
+        callable_profile_immediate(),
+        result_type,
+        Op::ExprCall.default_effects(),
+        Some(expr.span),
+    )
 }
 
 /// Recognizes the parser's internal `call_user_func([$object, $method], ...)`
@@ -9145,7 +9319,7 @@ fn lower_expr_call_from_value(
     ctx.emit_value(
         Op::ExprCall,
         operands,
-        None,
+        callable_profile_immediate(),
         result_type,
         Op::ExprCall.default_effects(),
         Some(expr.span),
@@ -10475,7 +10649,7 @@ fn lower_closure_bind_method(
             Some(ctx.emit_value(
                 Op::CallableDescriptorInvoke,
                 vec![bound.value, arg_container.value],
-                None,
+                callable_profile_immediate(),
                 PhpType::Mixed,
                 Op::CallableDescriptorInvoke.default_effects(),
                 Some(expr.span),
@@ -13125,10 +13299,29 @@ fn release_owned_call_arg_temporaries_with_signature(
             let independently_boxed = signature.is_some_and(|signature| {
                 call_arg_gets_independent_mixed_box(signature, parameter_index, &php_type)
             });
-            if !independently_boxed
-                && return_alias.may_alias_parameter(parameter_index)
-                && result.is_some_and(|result| ctx.call_result_may_alias_arg(*value, result))
-            {
+            // The call result reuses this argument's payload — so the argument release
+            // must be suppressed and the ownership left to flow through the result —
+            // in either of two cases:
+            //  - a summary that *may* return this parameter, under the conservative
+            //    alias check (which excludes fresh checked-arithmetic boxes so an
+            //    unproven callee still releases them, issue #486); or
+            //  - a callee *proven* to return this parameter, where even a fresh
+            //    boxed `$i + 1` argument is handed straight back and must not be
+            //    released twice (issue #604).
+            // `ReturnArgAlias::Parameters` is a MAY summary (a union over branches), so
+            // `proven_aliases_parameter` also holds for a callee that returns the
+            // parameter only conditionally (`if ($c) return $x; return 7;`). Suppressing
+            // the argument release on every path then leaks the owned box on the runtime
+            // paths that do not return it — the same deliberate leak-over-crash trade-off
+            // the `may_alias` suppression already makes for array/hash arguments. A
+            // follow-up issue tracks runtime alias disambiguation.
+            let result_reuses_arg = result.is_some_and(|result| {
+                (return_alias.may_alias_parameter(parameter_index)
+                    && ctx.call_result_may_alias_arg(*value, result))
+                    || (return_alias.proven_aliases_parameter(parameter_index)
+                        && ctx.arg_and_result_types_can_alias(*value, result))
+            });
+            if !independently_boxed && result_reuses_arg {
                 continue;
             }
             crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));
@@ -13665,7 +13858,7 @@ fn lower_static_method_descriptor_call(
     ctx.emit_value(
         Op::ExprCall,
         operands,
-        None,
+        callable_profile_immediate(),
         result_type,
         Op::ExprCall.default_effects(),
         Some(expr.span),
@@ -13696,7 +13889,7 @@ fn lower_static_method_descriptor_value_call(
     Some(ctx.emit_value(
         Op::ExprCall,
         operands,
-        None,
+        callable_profile_immediate(),
         result_type,
         Op::ExprCall.default_effects(),
         Some(expr.span),
@@ -13842,11 +14035,19 @@ fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, target: &Callab
     ctx.emit_value(
         Op::FirstClassCallableNew,
         operands,
-        Some(Immediate::Data(data)),
+        Some(Immediate::ProfiledData {
+            data,
+            strict_php: crate::strict_php::is_enabled(),
+        }),
         PhpType::Callable,
         Op::FirstClassCallableNew.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Returns the strict-PHP visibility profile attached to runtime callable selection.
+fn callable_profile_immediate() -> Option<Immediate> {
+    Some(Immediate::Bool(crate::strict_php::is_enabled()))
 }
 
 /// Lowers a pointer cast.
@@ -14615,15 +14816,123 @@ fn coerce_value_for_temp(
     if source_ty == target_ty {
         return value;
     }
-    match target_ty {
+    match &target_ty {
         PhpType::Mixed => ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)),
         PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never => {
             coerce_to_int_at_span(ctx, value, Some(span))
         }
         PhpType::Float => coerce_to_float_at_span(ctx, value, Some(span)),
         PhpType::Str => coerce_to_string_at_span(ctx, value, Some(span)),
-        _ => value,
+        _ => coerce_container_to_mixed_payload(ctx, value, &source_ty, &target_ty, span),
     }
+}
+
+/// Widens a typed container value to boxed-Mixed element storage before it is stored.
+///
+/// Branch merges and stable loop-local contracts can require `Mixed` element storage, so each
+/// concrete container must box its slots via `ArrayToMixed` / `HashToMixed`: storing the raw
+/// pointer would let Mixed-element reads misinterpret typed slot bytes. Borrowed sources are
+/// retained first so the conversion's copy-on-write split rewrites a private copy; owning
+/// temporaries transfer their reference into the converted result.
+pub(super) fn coerce_container_to_mixed_payload(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    source_ty: &PhpType,
+    target_ty: &PhpType,
+    span: crate::span::Span,
+) -> LoweredValue {
+    let target_has_mixed_payload = match target_ty {
+        PhpType::Array(elem) => elem.codegen_repr() == PhpType::Mixed,
+        PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
+        _ => false,
+    };
+    if !target_has_mixed_payload {
+        return value;
+    }
+    let op = match (source_ty, target_ty) {
+        (PhpType::Array(source_elem), PhpType::Array(_))
+            if source_elem.codegen_repr() != PhpType::Mixed =>
+        {
+            Op::ArrayToMixed
+        }
+        (PhpType::AssocArray { value: source_value, .. }, PhpType::AssocArray { .. })
+            if source_value.codegen_repr() != PhpType::Mixed =>
+        {
+            Op::HashToMixed
+        }
+        (PhpType::Mixed | PhpType::Union(_), _)
+            if value.ir_type == IrType::Heap(IrHeapKind::Mixed) =>
+        {
+            // Whole-boxed sources (a `?array` value flowing through `??`)
+            // unbox the cell payload and convert it with the same
+            // runtime-call coercion declared container returns use. The
+            // conversion borrows the cell and owns a fresh container
+            // reference, so an owning cell must be consumed here.
+            //
+            // The indexed conversion consumes one owned payload reference
+            // and rewrites sole-owner arrays in place, which is only sound
+            // when the cell owns its payload. A borrowed cell (a `?array`
+            // parameter or local) shares its payload with a live caller
+            // array, so it unboxes through the owned-payload coercion —
+            // which retains the payload — and the consuming `ArrayToMixed`
+            // copy-on-write-splits into a private converted copy. The
+            // associative helper returns a fresh hash without consuming the
+            // payload reference, so borrowed hash cells keep the
+            // single-call coercion.
+            let cell_is_owning = ctx.value_is_owning_temporary(value);
+            if !cell_is_owning && matches!(target_ty, PhpType::Array(_)) {
+                let unboxed = ctx.emit_value(
+                    Op::RuntimeCall,
+                    vec![value.value],
+                    None,
+                    PhpType::Array(Box::new(PhpType::Never)),
+                    effects_lookup::runtime_effects(),
+                    Some(span),
+                );
+                return ctx.emit_value(
+                    Op::ArrayToMixed,
+                    vec![unboxed.value],
+                    None,
+                    target_ty.clone(),
+                    Op::ArrayToMixed.default_effects(),
+                    Some(span),
+                );
+            }
+            let converted = ctx.emit_value(
+                Op::RuntimeCall,
+                vec![value.value],
+                None,
+                target_ty.clone(),
+                effects_lookup::runtime_effects(),
+                Some(span),
+            );
+            if cell_is_owning {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            }
+            return converted;
+        }
+        _ => return value,
+    };
+    // Local loads report as *provisional* owners (their compensating releases
+    // are pruned at builder finalization when the slot stays concrete), so
+    // they must be treated as borrowed here: without a real retain the
+    // conversion's copy-on-write split would never trigger and the local's
+    // own array would be boxed in place while its slot type stays concrete.
+    let source_is_consumable = ctx.value_is_owning_temporary(value)
+        && !ctx.value_is_owned_unboxed_local_load(value.value);
+    let source = if source_is_consumable {
+        value
+    } else {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+    };
+    ctx.emit_value(
+        op,
+        vec![source.value],
+        None,
+        target_ty.clone(),
+        op.default_effects(),
+        Some(span),
+    )
 }
 
 /// Emits a branch to a target block when the current block can still fall through.
@@ -14653,7 +14962,11 @@ fn merge_initialized_slots_for_expr(
 }
 
 /// Emits a boolean literal value for control-expression lowering.
-fn emit_bool_literal(
+///
+/// Also emits the trailing warn-on-missing flag that boxed-`Mixed` subscript reads
+/// pass to `__rt_mixed_array_get`, so every producer of such a read builds the
+/// operand the same way.
+pub(crate) fn emit_bool_literal(
     ctx: &mut LoweringContext<'_, '_>,
     value: bool,
     span: Option<crate::span::Span>,

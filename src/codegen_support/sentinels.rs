@@ -147,6 +147,31 @@ pub(crate) fn emit_branch_if_null_container(
     }
 }
 
+/// Replaces the in-band `NULL_SENTINEL` in `value_reg` with a zero pointer, leaving any
+/// other value untouched. Clobbers `scratch_reg` with the sentinel bit pattern. Used where
+/// a null container must be representable by the cheap zero check alone — e.g. the
+/// by-reference foreach iterator source slot, whose live length is re-read every iteration
+/// (issue #556). Zero-pointer inputs are already normal and pass through unchanged.
+pub(crate) fn emit_normalize_null_container_to_zero(
+    emitter: &mut Emitter,
+    value_reg: &str,
+    scratch_reg: &str,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            super::abi::emit_load_int_immediate(emitter, scratch_reg, NULL_SENTINEL);
+            emitter.instruction(&format!("cmp {}, {}", value_reg, scratch_reg)); // does the container carry the in-band null sentinel?
+            emitter.instruction(&format!("csel {}, xzr, {}, eq", value_reg, value_reg)); // fold the sentinel into the canonical zero container pointer
+        }
+        Arch::X86_64 => {
+            super::abi::emit_load_int_immediate(emitter, scratch_reg, NULL_SENTINEL);
+            emitter.instruction(&format!("cmp {}, {}", value_reg, scratch_reg)); // does the container carry the in-band null sentinel?
+            emitter.instruction(&format!("mov {}, 0", scratch_reg));            // materialize the zero replacement without disturbing the comparison flags
+            emitter.instruction(&format!("cmove {}, {}", value_reg, scratch_reg)); // fold the sentinel into the canonical zero container pointer
+        }
+    }
+}
+
 /// Branches to `label` when the tagged scalar in the result registers is PHP null
 /// (tag register == null tag).
 pub(crate) fn emit_branch_if_tagged_scalar_null(emitter: &mut Emitter, label: &str) {
@@ -179,6 +204,46 @@ pub(crate) fn emit_tagged_scalar_to_int_null_as_zero(emitter: &mut Emitter) {
 }
 
 
+/// Materializes the float-slot null marker in the float result register: the canonical
+/// [`NULL_SENTINEL`] word reinterpreted as an IEEE-754 double.
+///
+/// `0x7fff_ffff_ffff_fffe` has an all-ones exponent, its mantissa MSB set, and a non-zero
+/// remaining payload, so as a double it is a *quiet NaN* — no ordinary float arithmetic
+/// produces it, and it differs from PHP's own `NAN` constant (`0x7ff8_0000_0000_0000`), so an
+/// array element that genuinely stores `NAN` still reads back as a hit and never as a miss.
+/// Reusing `NULL_SENTINEL` keeps float slots on the same in-band marker word that every other
+/// unboxed scalar slot already uses instead of inventing a third null mechanism.
+///
+/// Only *silent* element reads (the ones behind `??`, `isset()` and `empty()`) may emit this;
+/// a warned read keeps materializing `0.0` so a plain `$a[$missing]` does not start rendering
+/// as `NAN` in value position. Clobbers the secondary scratch register.
+pub(crate) fn emit_float_null_sentinel(emitter: &mut Emitter) {
+    let scratch = super::abi::secondary_scratch_reg(emitter);
+    super::abi::emit_load_int_immediate(emitter, scratch, NULL_SENTINEL);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("fmov d0, {}", scratch));               // reinterpret the in-band null sentinel word as the float miss marker
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("movq xmm0, {}", scratch));             // reinterpret the in-band null sentinel word as the float miss marker
+        }
+    }
+}
+
+/// Copies the raw bits of the float result register into the integer result register so a
+/// caller can compare them against [`NULL_SENTINEL`] exactly. A bit comparison is required
+/// here: float compare instructions report the sentinel NaN as *unordered*, not equal.
+pub(crate) fn emit_float_result_bits_to_int_result(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("fmov x0, d0");                                  // move the float payload bits where the sentinel comparison can see them
+        }
+        Arch::X86_64 => {
+            emitter.instruction("movq rax, xmm0");                               // move the float payload bits where the sentinel comparison can see them
+        }
+    }
+}
+
 /// High 32 bits of the x86_64 uniform heap-header kind word (`"ELPH"` in ASCII bytes
 /// `0x45 0x4C 0x50 0x48`). Every x86_64 allocation is stamped with this marker; the
 /// refcount and free helpers ignore pointers whose header does not carry it, so an
@@ -208,6 +273,22 @@ mod tests {
     fn null_sentinel_constant_value() {
         assert_eq!(NULL_SENTINEL, 0x7fff_ffff_ffff_fffe_u64 as i64);
         assert_eq!(NULL_SENTINEL, i64::MAX - 1);
+    }
+
+    /// Locks the float reading of the null sentinel: it must be a quiet NaN (so no ordinary
+    /// arithmetic result collides with it) and it must differ from PHP's `NAN` constant (so a
+    /// genuinely stored `NAN` element is never mistaken for a missing key).
+    #[test]
+    fn null_sentinel_reads_as_a_distinct_quiet_nan() {
+        let sentinel = f64::from_bits(NULL_SENTINEL as u64);
+        assert!(sentinel.is_nan(), "float miss marker must be a NaN");
+        // Quiet NaN: mantissa MSB set.
+        assert_ne!(NULL_SENTINEL as u64 & (1 << 51), 0, "must be a quiet NaN");
+        assert_ne!(
+            NULL_SENTINEL as u64,
+            f64::NAN.to_bits(),
+            "must not collide with the canonical NAN a PHP program can store"
+        );
     }
 
     /// Locks the uninitialized-typed-property sentinel bit pattern used in property metadata.

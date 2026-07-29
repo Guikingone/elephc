@@ -34,21 +34,38 @@ pub enum RuntimeCallSignature {
 /// Typed runtime operation selected by backend-neutral EIR lowering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuntimeCallTarget {
+    /// Fetches an intermediate array element in write context, installing an
+    /// empty child container when the addressed parent slot is missing or null.
+    ArrayFetchForWrite,
     /// A one-string-to-one-string transform implemented by the shared runtime.
     UnaryString(UnaryStringRuntime),
     /// A stable runtime function whose target-aware implementation is backend-owned.
     Function(crate::ir::RuntimeFnId),
+    /// A source-sensitive runtime function plus the call site's strict-PHP visibility profile.
+    ProfiledFunction {
+        /// Stable runtime function dispatched by the backend.
+        target: crate::ir::RuntimeFnId,
+        /// Whether strict PHP is effective at the physical call site.
+        strict_php: bool,
+    },
 }
 
 impl RuntimeCallTarget {
     /// Returns the logical signature shared by EIR validation and backend lowering.
     pub fn signature(self) -> Option<RuntimeCallSignature> {
         match self {
+            RuntimeCallTarget::ArrayFetchForWrite => Some(RuntimeCallSignature::Polymorphic {
+                min_operands: 2,
+                max_operands: Some(2),
+            }),
             RuntimeCallTarget::UnaryString(_) => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Str],
                 result: IrType::Str,
             }),
             RuntimeCallTarget::Function(target) => {
+                target.descriptor().logical_signature
+            }
+            RuntimeCallTarget::ProfiledFunction { target, .. } => {
                 target.descriptor().logical_signature
             }
         }
@@ -57,8 +74,10 @@ impl RuntimeCallTarget {
     /// Returns the stable backend-neutral spelling used by textual EIR.
     pub fn as_eir(self) -> &'static str {
         match self {
+            RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
             RuntimeCallTarget::UnaryString(runtime) => runtime.as_eir(),
             RuntimeCallTarget::Function(target) => target.as_eir(),
+            RuntimeCallTarget::ProfiledFunction { target, .. } => target.as_eir(),
         }
     }
 }

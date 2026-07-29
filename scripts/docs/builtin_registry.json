@@ -135,6 +135,432 @@
     "sub_area": "System"
   },
   {
+    "area": "String",
+    "canonical_name": "__elephc_hash_ctx_copy",
+    "description": "Clones a raw incremental hashing context for the hash prelude.",
+    "eval": {
+      "kind": "none",
+      "supported": false
+    },
+    "eval_only": false,
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 423,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_hash_ctx_copy` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/__elephc_hash_ctx_copy.rs",
+      "sig_line": null
+    },
+    "name": "__elephc_hash_ctx_copy",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_hash_ctx_copy"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_crypto"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_hash_ctx_copy"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "__elephc_hash_ctx_copy",
+    "sub_area": "String"
+  },
+  {
+    "area": "String",
+    "canonical_name": "__elephc_hash_ctx_final",
+    "description": "Finalizes a raw incremental hashing context for the hash prelude.",
+    "eval": {
+      "kind": "none",
+      "supported": false
+    },
+    "eval_only": false,
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 423,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_hash_ctx_final` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/__elephc_hash_ctx_final.rs",
+      "sig_line": null
+    },
+    "name": "__elephc_hash_ctx_final",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_hash_ctx_final"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_crypto"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_hash_ctx_final"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "binary",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "__elephc_hash_ctx_final",
+    "sub_area": "String"
+  },
+  {
+    "area": "String",
+    "canonical_name": "__elephc_hash_ctx_init",
+    "description": "Opens a raw incremental hashing context for the hash prelude.",
+    "eval": {
+      "kind": "none",
+      "supported": false
+    },
+    "eval_only": false,
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 423,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_hash_ctx_init` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/__elephc_hash_ctx_init.rs",
+      "sig_line": null
+    },
+    "name": "__elephc_hash_ctx_init",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_hash_ctx_init"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_crypto"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_hash_ctx_init"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "algo",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "__elephc_hash_ctx_init",
+    "sub_area": "String"
+  },
+  {
+    "area": "String",
+    "canonical_name": "__elephc_hash_ctx_update",
+    "description": "Pumps data into a raw incremental hashing context for the hash prelude.",
+    "eval": {
+      "kind": "none",
+      "supported": false
+    },
+    "eval_only": false,
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 423,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_hash_ctx_update` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/__elephc_hash_ctx_update.rs",
+      "sig_line": null
+    },
+    "name": "__elephc_hash_ctx_update",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_hash_ctx_update"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_crypto"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_hash_ctx_update"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "slug": "__elephc_hash_ctx_update",
+    "sub_area": "String"
+  },
+  {
     "area": "Misc",
     "canonical_name": "__elephc_mktime_raw",
     "description": "Internal raw mktime alias used by the synthetic DateTime body.",
@@ -4037,7 +4463,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -8762,22 +9188,8 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
           "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "may_fatal"
         ]
       },
       "lowering": {
@@ -10132,22 +10544,7 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "may_throw"
         ]
       },
       "lowering": {
@@ -11838,25 +12235,7 @@
         "reason": "typed backend operation has no runtime-selected wrapper contract"
       },
       "effects": {
-        "kind": "static",
-        "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
-        ]
+        "kind": "shared"
       },
       "lowering": {
         "kind": "runtime_call",
@@ -12567,22 +12946,7 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "reads_global"
         ]
       },
       "lowering": {
@@ -12915,22 +13279,7 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "reads_global"
         ]
       },
       "lowering": {
@@ -13520,7 +13869,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins.rs",
       "codegen_function": "lower_empty",
-      "codegen_line": 1077,
+      "codegen_line": 1519,
       "notes": [
         "Lowers `empty()` for concrete scalar and array-like operands."
       ],
@@ -14069,6 +14418,121 @@
     },
     "slug": "explode",
     "sub_area": "String"
+  },
+  {
+    "area": "Misc",
+    "canonical_name": "extension_loaded",
+    "description": "Checks whether a named PHP extension is loaded.",
+    "eval": {
+      "area": "network_env",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/network_env/extension_loaded.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "extension",
+          "optional": false
+        }
+      ],
+      "required_param_count": 1,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 423,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.extension_loaded` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/extension_loaded.rs",
+      "sig_line": null
+    },
+    "name": "extension_loaded",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "extension_loaded"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "extension_loaded"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "extension",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "slug": "extension_loaded",
+    "sub_area": "System"
   },
   {
     "area": "IO",
@@ -18733,22 +19197,7 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "reads_global"
         ]
       },
       "lowering": {
@@ -19019,22 +19468,7 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "reads_heap"
         ]
       },
       "lowering": {
@@ -19496,6 +19930,121 @@
     "sub_area": "Class"
   },
   {
+    "area": "Misc",
+    "canonical_name": "get_loaded_extensions",
+    "description": "Returns an array with the names of all loaded modules.",
+    "eval": {
+      "area": "network_env",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/network_env/get_loaded_extensions.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "zend_extensions",
+          "optional": true
+        }
+      ],
+      "required_param_count": 0,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 423,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.get_loaded_extensions` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/get_loaded_extensions.rs",
+      "sig_line": null
+    },
+    "name": "get_loaded_extensions",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "get_loaded_extensions"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "get_loaded_extensions"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "zend_extensions",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "return_type": "array",
+      "variadic": null
+    },
+    "slug": "get_loaded_extensions",
+    "sub_area": "System"
+  },
+  {
     "area": "Class",
     "canonical_name": "get_object_vars",
     "description": "get_object_vars() is available inside eval'd code via the magician interpreter; compiled (AOT) code does not support it yet.",
@@ -19607,22 +20156,7 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "reads_heap"
         ]
       },
       "lowering": {
@@ -20128,22 +20662,8 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
           "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "alloc_concat"
         ]
       },
       "lowering": {
@@ -20465,22 +20985,8 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
           "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "alloc_concat"
         ]
       },
       "lowering": {
@@ -22380,7 +22886,7 @@
   {
     "area": "String",
     "canonical_name": "hash_copy",
-    "description": "Copies the state of an incremental hashing context.",
+    "description": "Clones an incremental hashing context into an independent HashContext object. Provided by the compiler-injected hash prelude in compiled code.",
     "eval": {
       "area": "string",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/string/hash_copy.rs",
@@ -22401,85 +22907,24 @@
       "supported": true,
       "variadic": null
     },
-    "eval_only": false,
+    "eval_only": true,
     "in_catalog": true,
     "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
-      "codegen_line": 423,
-      "notes": [
-        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
-        "Emits the typed EIR target `runtime.hash_copy` through `BuiltinLoweringContext`.",
-        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
-      ],
+      "codegen_file": null,
+      "codegen_function": null,
+      "codegen_line": null,
+      "notes": [],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "src/builtins/string/hash_copy.rs",
+      "sig_file": null,
       "sig_line": null
     },
     "name": "hash_copy",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
-        ]
-      },
-      "lowering": {
-        "kind": "runtime_call",
-        "target": "hash_copy"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "may_alias_arguments"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": [
-          {
-            "kind": "bridge",
-            "name": "elephc_crypto"
-          }
-        ]
-      },
-      "result_type": "declared",
-      "runtime_functions": [
-        "hash_copy"
-      ],
-      "target_strategy": "runtime_call",
-      "target_support": [
-        "macos-aarch64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "validation": {
-        "kind": "signature"
-      }
-    },
+    "semantics": null,
     "sig": {
       "params": [
         {
@@ -22487,7 +22932,7 @@
           "default": null,
           "name": "context",
           "optional": false,
-          "type": "resource"
+          "type": "mixed"
         }
       ],
       "return_type": "mixed",
@@ -22755,7 +23200,7 @@
   {
     "area": "String",
     "canonical_name": "hash_final",
-    "description": "Finalizes an incremental hash and returns the digest string.",
+    "description": "Finalizes an incremental hashing context and returns the digest (hex, or raw bytes when $binary). Provided by the compiler-injected hash prelude in compiled code.",
     "eval": {
       "area": "string",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/string/hash_final.rs",
@@ -22782,85 +23227,24 @@
       "supported": true,
       "variadic": null
     },
-    "eval_only": false,
+    "eval_only": true,
     "in_catalog": true,
     "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
-      "codegen_line": 423,
-      "notes": [
-        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
-        "Emits the typed EIR target `runtime.hash_final` through `BuiltinLoweringContext`.",
-        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
-      ],
+      "codegen_file": null,
+      "codegen_function": null,
+      "codegen_line": null,
+      "notes": [],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "src/builtins/string/hash_final.rs",
+      "sig_file": null,
       "sig_line": null
     },
     "name": "hash_final",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
-        ]
-      },
-      "lowering": {
-        "kind": "runtime_call",
-        "target": "hash_final"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "may_alias_arguments"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": [
-          {
-            "kind": "bridge",
-            "name": "elephc_crypto"
-          }
-        ]
-      },
-      "result_type": "declared",
-      "runtime_functions": [
-        "hash_final"
-      ],
-      "target_strategy": "runtime_call",
-      "target_support": [
-        "macos-aarch64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "validation": {
-        "kind": "signature"
-      }
-    },
+    "semantics": null,
     "sig": {
       "params": [
         {
@@ -22868,17 +23252,17 @@
           "default": null,
           "name": "context",
           "optional": false,
-          "type": "resource"
+          "type": "mixed"
         },
         {
           "by_ref": false,
-          "default": "false",
+          "default": "'false'",
           "name": "binary",
           "optional": true,
-          "type": "bool"
+          "type": "mixed"
         }
       ],
-      "return_type": "string",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "hash_final",
@@ -23045,7 +23429,7 @@
   {
     "area": "String",
     "canonical_name": "hash_init",
-    "description": "Initialize an incremental hashing context.",
+    "description": "Opens an incremental hashing context, returning a HashContext object. Provided by the compiler-injected hash prelude in compiled code; the eval interpreter still returns a resource.",
     "eval": {
       "area": "string",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/string/hash_init.rs",
@@ -23078,85 +23462,24 @@
       "supported": true,
       "variadic": null
     },
-    "eval_only": false,
+    "eval_only": true,
     "in_catalog": true,
     "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
-      "codegen_line": 423,
-      "notes": [
-        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
-        "Emits the typed EIR target `runtime.hash_init` through `BuiltinLoweringContext`.",
-        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
-      ],
+      "codegen_file": null,
+      "codegen_function": null,
+      "codegen_line": null,
+      "notes": [],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "src/builtins/string/hash_init.rs",
+      "sig_file": null,
       "sig_line": null
     },
     "name": "hash_init",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
-        ]
-      },
-      "lowering": {
-        "kind": "runtime_call",
-        "target": "hash_init"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "may_alias_arguments"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": [
-          {
-            "kind": "bridge",
-            "name": "elephc_crypto"
-          }
-        ]
-      },
-      "result_type": "declared",
-      "runtime_functions": [
-        "hash_init"
-      ],
-      "target_strategy": "runtime_call",
-      "target_support": [
-        "macos-aarch64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "validation": {
-        "kind": "signature"
-      }
-    },
+    "semantics": null,
     "sig": {
       "params": [
         {
@@ -23164,21 +23487,21 @@
           "default": null,
           "name": "algo",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         },
         {
           "by_ref": false,
-          "default": "0",
+          "default": "'0'",
           "name": "flags",
           "optional": true,
-          "type": "int"
+          "type": "mixed"
         },
         {
           "by_ref": false,
-          "default": "''",
+          "default": "'\"\"'",
           "name": "key",
           "optional": true,
-          "type": "string"
+          "type": "mixed"
         }
       ],
       "return_type": "mixed",
@@ -23190,7 +23513,7 @@
   {
     "area": "String",
     "canonical_name": "hash_update",
-    "description": "Pumps data into an active incremental hashing context.",
+    "description": "Feeds data into an incremental hashing context. Provided by the compiler-injected hash prelude in compiled code.",
     "eval": {
       "area": "string",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/string/hash_update.rs",
@@ -23217,85 +23540,24 @@
       "supported": true,
       "variadic": null
     },
-    "eval_only": false,
+    "eval_only": true,
     "in_catalog": true,
     "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
-      "codegen_line": 423,
-      "notes": [
-        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
-        "Emits the typed EIR target `runtime.hash_update` through `BuiltinLoweringContext`.",
-        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
-      ],
+      "codegen_file": null,
+      "codegen_function": null,
+      "codegen_line": null,
+      "notes": [],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "src/builtins/string/hash_update.rs",
+      "sig_file": null,
       "sig_line": null
     },
     "name": "hash_update",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
-        ]
-      },
-      "lowering": {
-        "kind": "runtime_call",
-        "target": "hash_update"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "may_alias_arguments"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": [
-          {
-            "kind": "bridge",
-            "name": "elephc_crypto"
-          }
-        ]
-      },
-      "result_type": "declared",
-      "runtime_functions": [
-        "hash_update"
-      ],
-      "target_strategy": "runtime_call",
-      "target_support": [
-        "macos-aarch64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "validation": {
-        "kind": "signature"
-      }
-    },
+    "semantics": null,
     "sig": {
       "params": [
         {
@@ -23303,17 +23565,17 @@
           "default": null,
           "name": "context",
           "optional": false,
-          "type": "resource"
+          "type": "mixed"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "data",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         }
       ],
-      "return_type": "bool",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "hash_update",
@@ -23609,22 +23871,8 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
           "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "alloc_heap"
         ]
       },
       "lowering": {
@@ -26059,24 +26307,7 @@
       },
       "effects": {
         "kind": "static",
-        "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
-        ]
+        "names": []
       },
       "lowering": {
         "kind": "runtime_call",
@@ -26264,24 +26495,7 @@
       },
       "effects": {
         "kind": "static",
-        "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
-        ]
+        "names": []
       },
       "lowering": {
         "kind": "runtime_call",
@@ -26856,24 +27070,7 @@
       },
       "effects": {
         "kind": "static",
-        "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
-        ]
+        "names": []
       },
       "lowering": {
         "kind": "runtime_call",
@@ -28829,22 +29026,7 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "reads_global"
         ]
       },
       "lowering": {
@@ -28928,22 +29110,7 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "reads_global"
         ]
       },
       "lowering": {
@@ -31366,22 +31533,8 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
           "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "alloc_heap"
         ]
       },
       "lowering": {
@@ -31878,22 +32031,8 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
           "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "writes_process"
         ]
       },
       "lowering": {
@@ -33253,22 +33392,7 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "reads_global"
         ]
       },
       "lowering": {
@@ -34564,22 +34688,9 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
           "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
           "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "may_fatal"
         ]
       },
       "lowering": {
@@ -34628,7 +34739,7 @@
   {
     "area": "Misc",
     "canonical_name": "phpversion",
-    "description": "Returns the current PHP version information.",
+    "description": "Returns the targeted PHP language version, or one extension's version.",
     "eval": {
       "area": "network_env",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/network_env/phpversion.rs",
@@ -34637,7 +34748,14 @@
         "values"
       ],
       "kind": "registry",
-      "params": [],
+      "params": [
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "extension",
+          "optional": true
+        }
+      ],
       "required_param_count": 0,
       "supported": true,
       "variadic": null
@@ -34671,24 +34789,7 @@
       },
       "effects": {
         "kind": "static",
-        "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
-        ]
+        "names": []
       },
       "lowering": {
         "kind": "runtime_call",
@@ -34702,7 +34803,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "shared",
       "runtime_functions": [
         "phpversion"
       ],
@@ -34713,12 +34814,21 @@
         "linux-x86_64"
       ],
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": false
       }
     },
     "sig": {
-      "params": [],
-      "return_type": "string",
+      "params": [
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "extension",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "return_type": "string|false",
       "variadic": null
     },
     "slug": "phpversion",
@@ -35849,7 +35959,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -38206,22 +38316,8 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
           "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "writes_process"
         ]
       },
       "lowering": {
@@ -38334,22 +38430,8 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
           "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "writes_process"
         ]
       },
       "lowering": {
@@ -41210,22 +41292,7 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "writes_process"
         ]
       },
       "lowering": {
@@ -41679,22 +41746,8 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
           "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "writes_global"
         ]
       },
       "lowering": {
@@ -41787,22 +41840,8 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
           "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "alloc_heap"
         ]
       },
       "lowering": {
@@ -42248,22 +42287,8 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
           "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "alloc_concat"
         ]
       },
       "lowering": {
@@ -42363,22 +42388,7 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "reads_heap"
         ]
       },
       "lowering": {
@@ -42478,22 +42488,9 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
           "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
           "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "may_warn"
         ]
       },
       "lowering": {
@@ -50224,7 +50221,7 @@
   {
     "area": "String",
     "canonical_name": "strstr",
-    "description": "Returns the portion of a string starting at the first occurrence of a substring.",
+    "description": "Returns the portion of a string starting at the first occurrence of a substring, or false.",
     "eval": {
       "area": "string",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/string/strstr.rs",
@@ -50294,13 +50291,13 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "strstr"
       ],
@@ -50311,7 +50308,8 @@
         "linux-x86_64"
       ],
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": false
       }
     },
     "sig": {
@@ -50338,7 +50336,7 @@
           "type": "bool"
         }
       ],
-      "return_type": "string",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "strstr",
@@ -51719,22 +51717,7 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "reads_process"
         ]
       },
       "lowering": {
@@ -53347,22 +53330,7 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "writes_process"
         ]
       },
       "lowering": {
@@ -53976,22 +53944,9 @@
       "effects": {
         "kind": "static",
         "names": [
-          "reads_local",
-          "writes_local",
           "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
           "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
+          "may_warn"
         ]
       },
       "lowering": {

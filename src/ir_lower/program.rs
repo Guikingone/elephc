@@ -84,6 +84,7 @@ pub(crate) fn lower(
         &fiber_return_sigs,
     );
     include_lowered_runtime_features(&mut module);
+    super::effect_refinement::refine_module(&mut module);
     validate_module(&module)?;
     Ok(module)
 }
@@ -458,8 +459,10 @@ fn eval_literal_call_requires_bridge(
     inst_index: usize,
     inst: &crate::ir::Instruction,
 ) -> bool {
-    let Some(Immediate::Data(data)) = inst.immediate else {
-        return true;
+    let (data, strict_php) = match inst.immediate {
+        Some(Immediate::Data(data)) => (data, false),
+        Some(Immediate::ProfiledData { data, strict_php }) => (data, strict_php),
+        _ => return true,
     };
     let Some(fragment) = module.data.strings.get(data.as_raw() as usize) else {
         return true;
@@ -467,6 +470,7 @@ fn eval_literal_call_requires_bridge(
     let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
         fragment,
         module.source_path.as_deref(),
+        strict_php,
         |name, args| eval_literal_static_function_supported_by_module(module, name, args),
         |receiver, method, args| {
             eval_literal_static_method_supported_by_module(module, receiver, method, args)
@@ -798,6 +802,7 @@ fn collect_literal_eval_aot_function_candidates(
                 crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
                     &fragment,
                     module.source_path.as_deref(),
+                    eval_literal_strict_profile(inst),
                     |name, args| {
                         eval_literal_static_function_supported_by_module(module, name, args)
                     },
@@ -851,10 +856,22 @@ fn eval_literal_fragment_from_inst(
     if inst.op != Op::EvalLiteralCall {
         return None;
     }
-    let Some(Immediate::Data(data)) = inst.immediate else {
-        return None;
+    let data = match inst.immediate {
+        Some(Immediate::Data(data)) | Some(Immediate::ProfiledData { data, .. }) => data,
+        _ => return None,
     };
     module.data.strings.get(data.as_raw() as usize).cloned()
+}
+
+/// Returns the strict-PHP source profile attached to one literal eval instruction.
+fn eval_literal_strict_profile(inst: &crate::ir::Instruction) -> bool {
+    matches!(
+        inst.immediate,
+        Some(Immediate::ProfiledData {
+            strict_php: true,
+            ..
+        })
+    )
 }
 
 /// Iterates every function-like body already materialized into the EIR module.
@@ -876,6 +893,9 @@ fn typed_builtin_target(
 ) -> Option<crate::ir::RuntimeFnId> {
     match inst.immediate {
         Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))) => Some(target),
+        Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. },
+        )) => Some(target),
         _ => None,
     }
 }

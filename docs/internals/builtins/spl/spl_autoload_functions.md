@@ -2,7 +2,7 @@
 title: "spl_autoload_functions() — internals"
 description: "Compiler internals for spl_autoload_functions(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 346
+  order: 348
 ---
 
 ## `spl_autoload_functions()` — internals
@@ -26,7 +26,7 @@ sidebar:
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
 - **Result ownership**: `may_alias_arguments`
-- **Effects**: `static (16 declared effects)`
+- **Effects**: `static (2 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`

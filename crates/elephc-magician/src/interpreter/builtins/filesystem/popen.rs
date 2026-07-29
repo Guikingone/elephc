@@ -117,9 +117,5 @@ fn eval_process_pipe_resource_id(
     handle: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<i64, EvalStatus> {
-    if values.type_tag(handle)? != EVAL_TAG_RESOURCE {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let display_id = eval_int_value(handle, values)?;
-    display_id.checked_sub(1).ok_or(EvalStatus::RuntimeFatal)
+    eval_resource_payload(handle, values)
 }

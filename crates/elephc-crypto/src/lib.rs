@@ -16,6 +16,15 @@
 //!   destructor (driven by compiler scope-cleanup), while `final` finalizes a
 //!   *clone* and leaves the original handle live. This keeps a context that is
 //!   finalized and then dropped at scope exit a single, safe free.
+//! - `final` also RECORDS the finalization on the handle, and
+//!   `elephc_crypto_is_finalized` reports it. PHP 8 rejects `hash_update()`,
+//!   `hash_final()` and `hash_copy()` on an already-finalized context with a
+//!   `TypeError`; the compiled runtime asks this flag and raises that TypeError
+//!   before it ever reaches `update`/`final`/`clone`. The flag is deliberately
+//!   only a REPORT here, not an enforcement: this ABI keeps returning the same
+//!   digest it always did so the policy lives in exactly one place (the runtime
+//!   guard) instead of being split across two layers with different failure
+//!   modes.
 
 mod algos;
 mod hmac;
@@ -135,6 +144,22 @@ impl HashCtx {
     }
 }
 
+/// What a `HashContext` handle actually points at: the running digest state plus
+/// the PHP-visible "has this context already been finalized?" bit.
+///
+/// The bit exists because PHP 8 makes finalization a one-way door — after
+/// `hash_final()` the context is dead to `hash_update()`, `hash_final()` and
+/// `hash_copy()` alike — while this ABI deliberately keeps the handle ALIVE so
+/// scope cleanup can free it exactly once. Recording the transition is what lets
+/// the runtime tell "live context" from "spent context" without reintroducing the
+/// use-after-free that freeing inside `final` would cause.
+struct Ctx {
+    /// The running digest (plain or HMAC-streaming) behind this handle.
+    state: HashCtx,
+    /// Set once `elephc_crypto_final` has produced this context's digest.
+    finalized: bool,
+}
+
 /// Creates a plain hashing context for `name`. Returns a `HashContext` handle,
 /// or null for an unknown algorithm.
 ///
@@ -144,7 +169,8 @@ impl HashCtx {
 pub unsafe extern "C" fn elephc_crypto_init(name_ptr: *const u8, name_len: usize) -> *mut c_void {
     let name = name_str(name_ptr, name_len);
     match make(&name) {
-        Some(s) => Box::into_raw(Box::new(HashCtx::Plain(s))) as *mut c_void,
+        Some(s) => Box::into_raw(Box::new(Ctx { state: HashCtx::Plain(s), finalized: false }))
+            as *mut c_void,
         None => std::ptr::null_mut(),
     }
 }
@@ -173,7 +199,10 @@ pub unsafe extern "C" fn elephc_crypto_init_hmac(
     // just above; note a panic here would abort across the extern "C" boundary.
     let mut inner = make(&name).expect("algo validated by block_key");
     inner.update(&ipad);
-    Box::into_raw(Box::new(HashCtx::Hmac { algo: name, opad_material, inner })) as *mut c_void
+    Box::into_raw(Box::new(Ctx {
+        state: HashCtx::Hmac { algo: name, opad_material, inner },
+        finalized: false,
+    })) as *mut c_void
 }
 
 /// Feeds `data` into the context.
@@ -191,8 +220,8 @@ pub unsafe extern "C" fn elephc_crypto_update(
     if ctx.is_null() {
         return;
     }
-    let ctx = &mut *(ctx as *mut HashCtx);
-    ctx.update(slice(data_ptr, data_len));
+    let ctx = &mut *(ctx as *mut Ctx);
+    ctx.state.update(slice(data_ptr, data_len));
 }
 
 /// Finalizes a *clone* of the context into `out`, leaving the original handle
@@ -206,6 +235,10 @@ pub unsafe extern "C" fn elephc_crypto_update(
 /// handle (which PHP rejects) stays memory-safe instead of being a use-after-free
 /// or a double-free against scope cleanup.
 ///
+/// Finalizing also flips the handle's `finalized` bit, which is what
+/// `elephc_crypto_is_finalized` reports and what the compiled runtime turns into
+/// PHP 8's `TypeError` on the next `hash_update`/`hash_final`/`hash_copy`.
+///
 /// # Safety
 /// `ctx` must be a live handle; `out` must hold 64 bytes.
 #[no_mangle]
@@ -213,10 +246,30 @@ pub unsafe extern "C" fn elephc_crypto_final(ctx: *mut c_void, out_ptr: *mut u8)
     if ctx.is_null() {
         return -1;
     }
-    let ctx = &*(ctx as *mut HashCtx);
-    let digest = ctx.clone_box().finalize();
+    let ctx = &mut *(ctx as *mut Ctx);
+    let digest = ctx.state.clone_box().finalize();
+    ctx.finalized = true;
     std::ptr::copy_nonoverlapping(digest.as_ptr(), out_ptr, digest.len());
     digest.len() as isize
+}
+
+/// Reports whether `ctx` has already produced its digest through
+/// `elephc_crypto_final`. Returns 1 for a finalized context AND for a null
+/// handle, 0 for a context that is still accepting input.
+///
+/// Null maps to 1 on purpose: the single caller is the runtime guard for PHP's
+/// "must be a valid, non-finalized HashContext" `TypeError`, and a null handle is
+/// exactly the "not valid" half of that message. Folding both into one answer
+/// keeps the guard a single branch and makes the failure mode fail-closed.
+///
+/// # Safety
+/// `ctx` must be null or a live handle from init/init_hmac/clone.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_crypto_is_finalized(ctx: *mut c_void) -> i32 {
+    if ctx.is_null() {
+        return 1;
+    }
+    i32::from((*(ctx as *mut Ctx)).finalized)
 }
 
 /// Deep-clones a context, returning a new independent handle (null if input null).
@@ -228,8 +281,9 @@ pub unsafe extern "C" fn elephc_crypto_clone(ctx: *mut c_void) -> *mut c_void {
     if ctx.is_null() {
         return std::ptr::null_mut();
     }
-    let ctx = &*(ctx as *mut HashCtx);
-    Box::into_raw(Box::new(ctx.clone_box())) as *mut c_void
+    let ctx = &*(ctx as *mut Ctx);
+    Box::into_raw(Box::new(Ctx { state: ctx.state.clone_box(), finalized: ctx.finalized }))
+        as *mut c_void
 }
 
 /// Frees a context (scope-exit / error cleanup) without finalizing.
@@ -248,5 +302,5 @@ pub unsafe extern "C" fn elephc_crypto_free(ctx: *mut c_void) {
     if ctx.is_null() {
         return;
     }
-    drop(Box::from_raw(ctx as *mut HashCtx));
+    drop(Box::from_raw(ctx as *mut Ctx));
 }
