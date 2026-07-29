@@ -269,7 +269,7 @@ fn check_instruction_shape(
             checked_int_binop_shape_issue(function, inst)
         }
         Op::Cast => cast_shape_issue(function, inst),
-        Op::ArrayGet => array_get_shape_issue(function, inst),
+        Op::ArrayGet | Op::ArrayGetSilent => array_get_shape_issue(function, inst),
         Op::NullsafeMethodCall => nullsafe_method_call_shape_issue(module, function, inst),
         Op::ClosureNew => {
             closure_new_by_ref_capture_issue(module, function, inst, ref_cell_provenance)
@@ -476,6 +476,13 @@ fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
         (IrType::Heap(IrHeapKind::Mixed), IrType::Str) => {
             source_php == PhpType::Mixed && result_php == PhpType::Str
         }
+        (IrType::TaggedScalar, IrType::I64) => {
+            source_php == PhpType::TaggedScalar
+                && matches!(result_php, PhpType::Int | PhpType::Bool)
+        }
+        (IrType::TaggedScalar, IrType::F64) => {
+            source_php == PhpType::TaggedScalar && result_php == PhpType::Float
+        }
         (IrType::I64, IrType::I64) => {
             matches!(source_php, PhpType::Int | PhpType::Bool) && source_php == result_php
         }
@@ -502,11 +509,10 @@ fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
     None
 }
 
-/// Validates indexed int/bool/string reads supported by `lower_array_get`.
+/// Validates null-capable indexed int/bool/string reads supported by `lower_array_get`.
 ///
-/// Bounds warnings and the PHP null result for an out-of-range dynamic index
-/// remain a runtime-semantic surface; this static gate only proves the in-range
-/// storage contract used by the current getter helpers.
+/// The warning distinction between `ArrayGet` and `ArrayGetSilent` is a separate
+/// runtime diagnostic gate; both opcodes must preserve the same value/null shape.
 fn array_get_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
     let [array, index] = inst.operands.as_slice() else {
         return Some(format!(
@@ -547,10 +553,12 @@ fn array_get_shape_issue(function: &Function, inst: &Instruction) -> Option<Stri
     }
     let result_php = inst.result_php_type.codegen_repr();
     let supported_result = match &element_type {
-        PhpType::Int | PhpType::Bool => {
-            inst.result_type == IrType::I64 && result_php == element_type
+        PhpType::Int => {
+            inst.result_type == IrType::TaggedScalar && result_php == PhpType::TaggedScalar
         }
-        PhpType::Str => inst.result_type == IrType::Str && result_php == PhpType::Str,
+        PhpType::Bool | PhpType::Str => {
+            inst.result_type == IrType::Heap(IrHeapKind::Mixed) && result_php == PhpType::Mixed
+        }
         _ => false,
     };
     if !supported_result {
@@ -1856,6 +1864,7 @@ fn op_is_supported(op: Op) -> bool {
         | Op::HashNew
         | Op::ArrayLen
         | Op::ArrayGet
+        | Op::ArrayGetSilent
         | Op::HashGet
         | Op::ArraySet
         | Op::HashSet
@@ -1943,7 +1952,6 @@ fn op_is_supported(op: Op) -> bool {
         | Op::StrInterpolate
         | Op::WriteStrStdout
         | Op::HashLen
-        | Op::ArrayGetSilent
         | Op::HashGetSilent
         | Op::ArrayIsset
         | Op::HashIsset
@@ -2428,6 +2436,139 @@ mod tests {
         ] {
             assert!(message.contains(expected), "missing {expected:?}: {message}");
         }
+    }
+
+    /// Null-capable array reads are admitted only with the exact Tagged/Mixed
+    /// result shapes, including the silent opcode used by null coalescing.
+    #[test]
+    fn accepts_nullable_array_get_shapes_including_silent_reads() {
+        let mut module = Module::new(Target::wasm());
+        let mut function = Function::new("reads".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let index = builder.emit_const_i64(0);
+            for (op, element, ir_type, php_type, ownership) in [
+                (
+                    Op::ArrayGet,
+                    PhpType::Int,
+                    IrType::TaggedScalar,
+                    PhpType::TaggedScalar,
+                    Ownership::NonHeap,
+                ),
+                (
+                    Op::ArrayGet,
+                    PhpType::Bool,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                ),
+                (
+                    Op::ArrayGetSilent,
+                    PhpType::Str,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                ),
+            ] {
+                let array = builder
+                    .emit(
+                        Op::ArrayNew,
+                        Vec::new(),
+                        Some(Immediate::Capacity(1)),
+                        IrType::Heap(IrHeapKind::Array),
+                        PhpType::Array(Box::new(element)),
+                        Ownership::Owned,
+                    )
+                    .expect("array value");
+                let _ = builder.emit(
+                    op,
+                    vec![array, index],
+                    None,
+                    ir_type,
+                    php_type,
+                    ownership,
+                );
+            }
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        validate_module(&module).expect("nullable array-get shapes must pass the gate");
+    }
+
+    /// Legacy non-null result shapes are rejected for both warning and silent
+    /// reads so no sentinel, truthy bool, or empty-string alias can escape.
+    #[test]
+    fn rejects_non_nullable_array_get_result_shapes() {
+        let mut module = Module::new(Target::wasm());
+        let mut function =
+            Function::new("legacy_reads".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let index = builder.emit_const_i64(0);
+            for (op, element, ir_type, php_type, ownership) in [
+                (
+                    Op::ArrayGet,
+                    PhpType::Int,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                ),
+                (
+                    Op::ArrayGet,
+                    PhpType::Bool,
+                    IrType::I64,
+                    PhpType::Bool,
+                    Ownership::NonHeap,
+                ),
+                (
+                    Op::ArrayGetSilent,
+                    PhpType::Str,
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::MaybeOwned,
+                ),
+            ] {
+                let array = builder
+                    .emit(
+                        Op::ArrayNew,
+                        Vec::new(),
+                        Some(Immediate::Capacity(1)),
+                        IrType::Heap(IrHeapKind::Array),
+                        PhpType::Array(Box::new(element)),
+                        Ownership::Owned,
+                    )
+                    .expect("array value");
+                let _ = builder.emit(
+                    op,
+                    vec![array, index],
+                    None,
+                    ir_type,
+                    php_type,
+                    ownership,
+                );
+            }
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let error =
+            validate_module(&module).expect_err("legacy non-null result shapes must fail");
+        let message = error.to_string();
+        assert_eq!(message.matches("unsupported array_get shape").count(), 2, "{message}");
+        assert_eq!(
+            message
+                .matches("unsupported array_get_silent shape")
+                .count(),
+            1,
+            "{message}"
+        );
     }
 
     /// Verifies `exit`/`die` in a nested function is rejected until WASM can

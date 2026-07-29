@@ -91,7 +91,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::Move | Op::Borrow => lower_forward(ctx, &inst),
         Op::ArrayNew => lower_array_new(ctx, &inst),
         Op::ArrayLen => lower_array_len(ctx, &inst),
-        Op::ArrayGet => lower_array_get(ctx, &inst),
+        Op::ArrayGet | Op::ArrayGetSilent => lower_array_get(ctx, &inst),
         Op::ArrayPush => lower_array_push(ctx, &inst),
         Op::ArraySet => lower_array_set(ctx, &inst),
         Op::HashNew => super::inst_hash::lower_hash_new(ctx, &inst),
@@ -1214,6 +1214,58 @@ fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         }
         return store_result(ctx, inst);
     }
+    if source.ir_type == IrType::TaggedScalar {
+        let WasmRepr::Tagged { payload, tag } = ctx.value_repr(value)?.clone() else {
+            return Err(WasmError::Unsupported(
+                "tagged-scalar cast source has a non-tagged WASM representation".to_string(),
+            ));
+        };
+        match target {
+            IrType::I64 => {
+                ctx.fb
+                    .ins(&format!("local.get {}", tag), "tagged scalar tag");
+                ctx.fb.ins("i32.const 8", "tagged null tag");
+                ctx.fb.ins("i32.eq", "tagged scalar is null?");
+                ctx.fb.ins(
+                    "if (result i64)",
+                    "PHP null casts to zero; otherwise cast the integer payload",
+                );
+                ctx.fb.ins("i64.const 0", "null scalar cast result");
+                ctx.fb.ins("else", "non-null tagged integer");
+                ctx.fb
+                    .ins(&format!("local.get {}", payload), "tagged integer payload");
+                if inst.result_php_type.codegen_repr() == PhpType::Bool {
+                    ctx.fb.ins("i64.const 0", "zero");
+                    ctx.fb.ins("i64.ne", "integer payload truthiness");
+                    ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
+                }
+                ctx.fb.ins("end", "end tagged scalar cast");
+            }
+            IrType::F64 => {
+                ctx.fb
+                    .ins(&format!("local.get {}", tag), "tagged scalar tag");
+                ctx.fb.ins("i32.const 8", "tagged null tag");
+                ctx.fb.ins("i32.eq", "tagged scalar is null?");
+                ctx.fb.ins(
+                    "if (result f64)",
+                    "PHP null casts to 0.0; otherwise widen the integer payload",
+                );
+                ctx.fb.ins("f64.const 0", "null scalar float cast");
+                ctx.fb.ins("else", "non-null tagged integer");
+                ctx.fb
+                    .ins(&format!("local.get {}", payload), "tagged integer payload");
+                ctx.fb.ins("f64.convert_i64_s", "integer payload to float");
+                ctx.fb.ins("end", "end tagged scalar float cast");
+            }
+            other => {
+                return Err(WasmError::Unsupported(format!(
+                    "tagged scalar cast to {:?}",
+                    other
+                )));
+            }
+        }
+        return store_result(ctx, inst);
+    }
 
     match (source.ir_type, target) {
         (IrType::I64, IrType::I64)
@@ -2043,6 +2095,24 @@ fn lower_echo(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                 .ins("call $__rt_mixed_write_stdout", "echo mixed value (tag-dispatched)");
             Ok(())
         }
+        PhpType::TaggedScalar => {
+            let WasmRepr::Tagged { payload, tag } = ctx.value_repr(op0)?.clone() else {
+                return Err(WasmError::Unsupported(
+                    "tagged-scalar echo operand has a non-tagged WASM representation".to_string(),
+                ));
+            };
+            ctx.fb
+                .ins(&format!("local.get {}", tag), "tagged scalar tag");
+            ctx.fb.ins("i32.const 8", "tagged null tag");
+            ctx.fb.ins("i32.ne", "tagged scalar is non-null");
+            ctx.fb.ins("if", "PHP echo emits nothing for null");
+            ctx.fb
+                .ins(&format!("local.get {}", payload), "tagged integer payload");
+            ctx.fb
+                .ins("call $__rt_echo_i64", "echo non-null tagged integer");
+            ctx.fb.ins("end", "end tagged scalar echo");
+            Ok(())
+        }
         other => Err(WasmError::Unsupported(format!("echo of {:?}", other))),
     }
 }
@@ -2193,29 +2263,53 @@ fn lower_array_len(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     store_result(ctx, inst)
 }
 
-/// Lowers `Op::ArrayGet` for scalar (int) arrays via the bounded runtime getter,
-/// which returns the PHP null sentinel for an out-of-range index.
+/// Lowers indexed array reads with an explicit null-capable result representation.
+///
+/// Integers return a `(payload, tag)` scalar pair; booleans and strings return
+/// fresh Mixed cells. `ArrayGetSilent` shares this value path and merely omits
+/// the warning, which belongs to a separate runtime diagnostic gate.
 fn lower_array_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let array = operand(inst, 0)?;
+    let index = operand(inst, 1)?;
     let result = inst
         .result
         .ok_or_else(|| WasmError::Unsupported("array_get without a result".to_string()))?;
+    let element_type = match ctx.value_php_type(array)?.codegen_repr() {
+        PhpType::Array(element) => element.codegen_repr(),
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "array_get source is not an indexed array: {:?}",
+                other
+            )));
+        }
+    };
     let result_repr = ctx.value_repr(result)?.clone();
-    match result_repr {
-        WasmRepr::I64(_) => {
-            ctx.emit_load_value(operand(inst, 0)?)?; // array pointer
-            ctx.emit_load_value(operand(inst, 1)?)?; // index (i64)
+    match (element_type, result_repr) {
+        (PhpType::Int, WasmRepr::Tagged { .. }) => {
+            ctx.emit_load_value(array)?;
+            ctx.emit_load_value(index)?;
             ctx.fb
-                .ins("call $__rt_array_get_int", "indexed array get (int)");
+                .ins("call $__rt_array_get_tagged_int", "indexed array get (tagged int)");
             store_result(ctx, inst)
         }
-        WasmRepr::Str { .. } => {
-            ctx.emit_load_value(operand(inst, 0)?)?; // array pointer
-            ctx.emit_load_value(operand(inst, 1)?)?; // index (i64)
+        (PhpType::Bool, WasmRepr::Ptr(_)) => {
+            ctx.emit_load_value(array)?;
+            ctx.emit_load_value(index)?;
             ctx.fb
-                .ins("call $__rt_array_get_str", "indexed array get (string)");
+                .ins("call $__rt_array_get_mixed_bool", "indexed array get (boxed bool|null)");
             store_result(ctx, inst)
         }
-        other => Err(WasmError::Unsupported(format!("array_get into {:?}", other))),
+        (PhpType::Str, WasmRepr::Ptr(_)) => {
+            ctx.emit_load_value(array)?;
+            ctx.emit_load_value(index)?;
+            ctx.fb
+                .ins("call $__rt_array_get_mixed_str", "indexed array get (boxed string|null)");
+            store_result(ctx, inst)
+        }
+        (element, repr) => Err(WasmError::Unsupported(format!(
+            "array_get element {:?} into {:?}",
+            element, repr
+        ))),
     }
 }
 
@@ -2633,8 +2727,8 @@ fn lower_is_null(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                 .ins("call $__rt_mixed_unbox", "read boxed Mixed tag");
             ctx.fb.ins("drop", "discard high payload");
             ctx.fb.ins("drop", "discard low payload");
-            ctx.fb.ins("i32.const 8", "Mixed null tag");
-            ctx.fb.ins("i32.eq", "boxed value is null");
+            ctx.fb.ins("i64.const 8", "Mixed null tag");
+            ctx.fb.ins("i64.eq", "boxed value is null");
             ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
         }
         (WasmRepr::Tagged { tag, .. }, PhpType::TaggedScalar) => {

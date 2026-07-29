@@ -6525,8 +6525,8 @@ mod tests {
     }
 
     /// Pushes a string literal into a string array, reads it back via ArrayGet,
-    /// and echoes it — exercising `__rt_array_push_str` (persist) + `get_str`
-    /// + `__rt_echo_str` through the full lowering.
+    /// and echoes it — exercising `__rt_array_push_str` (persist),
+    /// `__rt_array_get_mixed_str`, and `__rt_mixed_write_stdout` through the full lowering.
     #[test]
     fn string_array_push_get_echo_lowers() {
         let mut module = Module::new(Target::wasm());
@@ -6559,10 +6559,25 @@ mod tests {
             );
             let idx = b.emit_const_i64(0);
             let g = b
-                .emit(Op::ArrayGet, vec![arr, idx], None, IrType::Str, PhpType::Str, Ownership::Borrowed)
+                .emit(
+                    Op::ArrayGet,
+                    vec![arr, idx],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
                 .unwrap();
             let _ = b.emit(
                 Op::EchoValue,
+                vec![g],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let _ = b.emit(
+                Op::Release,
                 vec![g],
                 None,
                 IrType::Void,

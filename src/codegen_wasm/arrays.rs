@@ -38,7 +38,10 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_PUSH_STR);
     wm.add_raw_func(RT_ARRAY_PUSH_MIXED);
     wm.add_raw_func(RT_ARRAY_GET_INT);
+    wm.add_raw_func(RT_ARRAY_GET_TAGGED_INT);
+    wm.add_raw_func(RT_ARRAY_GET_MIXED_BOOL);
     wm.add_raw_func(RT_ARRAY_GET_STR);
+    wm.add_raw_func(RT_ARRAY_GET_MIXED_STR);
     wm.add_raw_func(RT_ARRAY_ENSURE_UNIQUE);
     wm.add_raw_func(RT_ARRAY_CLONE_SHALLOW);
     wm.add_raw_func(RT_ARRAY_SET_INT);
@@ -135,6 +138,38 @@ const RT_ARRAY_GET_INT: &str = r#"(func $__rt_array_get_int (param $array i32) (
   (i64.load (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $index) (i64.const 8))))))  ;; slot[index]
 "#;
 
+/// `__rt_array_get_tagged_int`: reads an integer as a `(payload, tag)` pair.
+///
+/// A miss returns tag 8 (null) without reserving an i64 payload value, so the
+/// former null sentinel remains a valid, distinguishable PHP integer in-bounds.
+const RT_ARRAY_GET_TAGGED_INT: &str = r#"(func $__rt_array_get_tagged_int (param $array i32) (param $index i64) (result i64) (result i32)
+  (local $len i64)
+  (if (i64.lt_s (local.get $index) (i64.const 0))           ;; negative index -> tagged null
+    (then (return (i64.const 0) (i32.const 8))))             ;; payload 0, null tag
+  (local.set $len (i64.load (local.get $array)))            ;; length
+  (if (i64.ge_u (local.get $index) (local.get $len))        ;; out of bounds -> tagged null
+    (then (return (i64.const 0) (i32.const 8))))             ;; payload 0, null tag
+  (i64.load (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $index) (i64.const 8)))))  ;; payload = slot[index]
+  (i32.const 0))                                             ;; integer tag
+"#;
+
+/// `__rt_array_get_mixed_bool`: reads a boolean into a fresh Mixed cell.
+///
+/// In-range values use tag 3 and a 0/1 payload; misses use tag 8 so truthiness,
+/// `is_null`, casts, and coalescing cannot observe the old integer sentinel.
+const RT_ARRAY_GET_MIXED_BOOL: &str = r#"(func $__rt_array_get_mixed_bool (param $array i32) (param $index i64) (result i32)
+  (local $len i64)
+  (if (i64.lt_s (local.get $index) (i64.const 0))           ;; negative index -> boxed null
+    (then (return (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))))
+  (local.set $len (i64.load (local.get $array)))            ;; length
+  (if (i64.ge_u (local.get $index) (local.get $len))        ;; out of bounds -> boxed null
+    (then (return (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))))
+  (call $__rt_mixed_from_value
+    (i64.const 3)                                            ;; bool tag
+    (i64.load (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $index) (i64.const 8)))))  ;; 0/1 payload
+    (i64.const 0)))                                          ;; unused high payload
+"#;
+
 /// `__rt_array_push_str`: appends a string element, shaping an empty array to
 /// 16-byte string slots, persisting the (possibly transient) string into an owned
 /// heap block, and growing capacity when full. Returns the (possibly new) array.
@@ -179,6 +214,25 @@ const RT_ARRAY_GET_STR: &str = r#"(func $__rt_array_get_str (param $array i32) (
   (local.set $slot (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $index) (i64.const 16)))))  ;; slot = A+24+index*16
   (i32.wrap_i64 (i64.load (local.get $slot)))             ;; result 0: pointer (wrapped from i64)
   (i64.load (i32.add (local.get $slot) (i32.const 8))))   ;; result 1: length
+"#;
+
+/// `__rt_array_get_mixed_str`: reads a string into a fresh Mixed cell.
+///
+/// Boxing preserves the distinction between an in-range empty string (tag 1)
+/// and a missing element (tag 8); `__rt_mixed_from_value` persists string bytes.
+const RT_ARRAY_GET_MIXED_STR: &str = r#"(func $__rt_array_get_mixed_str (param $array i32) (param $index i64) (result i32)
+  (local $len i64)
+  (local $slot i32)
+  (if (i64.lt_s (local.get $index) (i64.const 0))           ;; negative index -> boxed null
+    (then (return (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))))
+  (local.set $len (i64.load (local.get $array)))            ;; length
+  (if (i64.ge_u (local.get $index) (local.get $len))        ;; out of bounds -> boxed null
+    (then (return (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))))
+  (local.set $slot (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $index) (i64.const 16)))))  ;; slot = A+24+index*16
+  (call $__rt_mixed_from_value
+    (i64.const 1)                                            ;; string tag
+    (i64.load (local.get $slot))                             ;; pointer payload
+    (i64.load (i32.add (local.get $slot) (i32.const 8)))))   ;; length payload
 "#;
 
 /// `__rt_array_push_mixed`: appends a kind-5 Mixed-cell pointer, shaping an empty
@@ -614,6 +668,98 @@ mod tests {
   (call $__rt_array_get_int (local.get $a) (i64.const 9)))"#;
         if let Some(o) = run_driver(driver, "t") {
             assert_eq!(o, "9223372036854775806");
+        }
+    }
+
+    /// Tagged integer reads report null for negative/OOB indexes while preserving
+    /// the former sentinel bit pattern as a legitimate in-range integer payload.
+    #[test]
+    fn tagged_int_get_distinguishes_bounds_from_every_payload() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i32)
+  (local $payload i64)
+  (local $tag i32)
+  (local $negative_tag i32)
+  (local $oob_tag i32)
+  (local.set $a (call $__rt_array_new (i64.const 4) (i64.const 16)))
+  (local.set $a (call $__rt_array_push_int (local.get $a) (i64.const 9223372036854775806)))
+  (call $__rt_array_get_tagged_int (local.get $a) (i64.const 0))
+  (local.set $tag)
+  (local.set $payload)
+  (call $__rt_array_get_tagged_int (local.get $a) (i64.const -1))
+  (local.set $negative_tag)
+  (drop)
+  (call $__rt_array_get_tagged_int (local.get $a) (i64.const 1))
+  (local.set $oob_tag)
+  (drop)
+  (i64.extend_i32_u
+    (i32.and
+      (i32.and
+        (i64.eq (local.get $payload) (i64.const 9223372036854775806))
+        (i32.eq (local.get $tag) (i32.const 0)))
+      (i32.and
+        (i32.eq (local.get $negative_tag) (i32.const 8))
+        (i32.eq (local.get $oob_tag) (i32.const 8))))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "1");
+        }
+    }
+
+    /// Boxed boolean reads keep the bool tag in-bounds and use the null tag for
+    /// both negative and positive out-of-bounds indexes.
+    #[test]
+    fn mixed_bool_get_preserves_bool_and_null_tags() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i32)
+  (local $cell i32)
+  (local $in_tag i64)
+  (local $negative_tag i64)
+  (local $oob_tag i64)
+  (local.set $a (call $__rt_array_new (i64.const 4) (i64.const 16)))
+  (local.set $a (call $__rt_array_push_int (local.get $a) (i64.const 1)))
+  (local.set $cell (call $__rt_array_get_mixed_bool (local.get $a) (i64.const 0)))
+  (local.set $in_tag (i64.load (local.get $cell)))
+  (call $__rt_decref_mixed (local.get $cell))
+  (local.set $cell (call $__rt_array_get_mixed_bool (local.get $a) (i64.const -1)))
+  (local.set $negative_tag (i64.load (local.get $cell)))
+  (call $__rt_decref_mixed (local.get $cell))
+  (local.set $cell (call $__rt_array_get_mixed_bool (local.get $a) (i64.const 1)))
+  (local.set $oob_tag (i64.load (local.get $cell)))
+  (call $__rt_decref_mixed (local.get $cell))
+  (call $__rt_decref_array (local.get $a))
+  (i64.add
+    (i64.add
+      (i64.add (i64.mul (local.get $in_tag) (i64.const 100)) (i64.mul (local.get $negative_tag) (i64.const 10)))
+      (local.get $oob_tag))
+    (global.get $_gc_live)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "388");
+        }
+    }
+
+    /// Boxed string reads distinguish an in-range empty string (tag 1) from a
+    /// missing element (tag 8), despite both raw payloads being `(0, 0)`.
+    #[test]
+    fn mixed_string_get_distinguishes_empty_string_from_null() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i32)
+  (local $cell i32)
+  (local $empty_tag i64)
+  (local $missing_tag i64)
+  (local.set $a (call $__rt_array_new (i64.const 4) (i64.const 16)))
+  (local.set $a (call $__rt_array_push_str (local.get $a) (i32.const 0) (i64.const 0)))
+  (local.set $cell (call $__rt_array_get_mixed_str (local.get $a) (i64.const 0)))
+  (local.set $empty_tag (i64.load (local.get $cell)))
+  (call $__rt_decref_mixed (local.get $cell))
+  (local.set $cell (call $__rt_array_get_mixed_str (local.get $a) (i64.const 1)))
+  (local.set $missing_tag (i64.load (local.get $cell)))
+  (call $__rt_decref_mixed (local.get $cell))
+  (call $__rt_decref_array (local.get $a))
+  (i64.add
+    (i64.add (i64.mul (local.get $empty_tag) (i64.const 10)) (local.get $missing_tag))
+    (global.get $_gc_live)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "18");
         }
     }
 

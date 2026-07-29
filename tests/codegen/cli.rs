@@ -778,6 +778,114 @@ echo $f(), $f();
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies null coalescing lowers indexed int/bool/string reads through the
+/// silent opcode with an explicit null-capable Tagged/Mixed result.
+///
+/// Full Wasmer execution of `??` remains blocked by the separate unsupported
+/// `UnsetLocal` capability; this test proves the EIR boundary does not erase null.
+#[test]
+fn test_cli_wasm_null_coalesce_array_reads_keep_nullable_eir() {
+    let dir = make_cli_test_dir("elephc_cli_wasm_array_coalesce_eir");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+echo [10][$argc] ?? 77;
+echo [true][$argc] ?? 77;
+echo ["x"][$argc] ?? 77;
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg("--emit-ir")
+        .arg(&php_path)
+        .output()
+        .expect("failed to emit WASM-target EIR for null coalescing");
+    assert!(
+        output.status.success(),
+        "WASM-target EIR emission failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let eir = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        eir.contains("TaggedScalar php=int|null = array_get_silent"),
+        "int coalesce read lost nullable TaggedScalar metadata: {eir}"
+    );
+    assert_eq!(
+        eir.matches("Heap(Mixed) php=mixed own=owned = array_get_silent")
+            .count(),
+        2,
+        "bool/string coalesce reads must remain boxed nullable values: {eir}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Compiles typed int/bool/string indexed reads from PHP through EIR to WASM and
+/// executes them under Wasmer. Negative/OOB reads remain null through `is_null`
+/// and `echo`; the former integer sentinel remains a valid in-range value.
+#[test]
+fn test_cli_wasm_indexed_array_oob_preserves_php_null() {
+    if Command::new("wasmer").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_array_oob_null");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+echo is_null([10][-1]), ":", [10][-1], ";";
+echo is_null([10][1]), ":", [10][1], ";";
+echo is_null([9223372036854775806][0]), ":", [9223372036854775806][0], ";";
+echo is_null([true][-1]), ":", [true][-1], ";";
+echo is_null([true][1]), ":", [true][1], ";";
+echo is_null([""][0]), ":", [""][0], ";";
+echo is_null(["x"][-1]), ":", ["x"][-1], ";";
+echo is_null(["x"][1]), ":", ["x"][1], ";";
+echo (int)[10][-1], ",", (bool)[10][-1], ",", (float)[10][-1], ";";
+echo (int)[true][-1], ",", (bool)[true][-1], ";";
+echo (int)["x"][-1], ",", (bool)["x"][-1], ",", (string)["x"][-1], ";";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile indexed-array OOB fixture to WASM");
+    assert!(
+        output.status.success(),
+        "indexed-array OOB compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wasm_path = dir.join("main.wasm");
+    let run = Command::new("wasmer")
+        .arg("run")
+        .arg(&wasm_path)
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run indexed-array OOB fixture under Wasmer");
+    assert!(
+        run.status.success(),
+        "indexed-array OOB fixture trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "1:;1:;:9223372036854775806;1:;1:;:;1:;1:;\
+0,,0;0,;0,,;"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `--debug-info` injects DWARF line-table directives into the emitted
 /// assembly: one `.file 1` header and a `.loc 1 <line> <col>` per source marker.
 #[test]

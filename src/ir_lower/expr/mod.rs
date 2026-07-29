@@ -8251,10 +8251,14 @@ fn array_access_result_type(
     }
 }
 
-/// Returns the materialized result type for a PHP array read, including miss-capable int reads.
+/// Returns the materialized result type for a PHP array read, preserving null on a miss.
 pub(crate) fn array_access_element_result_type(element_ty: PhpType) -> PhpType {
-    if crate::codegen::sentinels::null_repr_is_tagged() && matches!(element_ty, PhpType::Int) {
-        PhpType::TaggedScalar
+    if crate::codegen::sentinels::null_repr_is_tagged() {
+        match element_ty {
+            PhpType::Int => PhpType::TaggedScalar,
+            PhpType::Bool | PhpType::Str => PhpType::Mixed,
+            other => other,
+        }
     } else {
         element_ty
     }
