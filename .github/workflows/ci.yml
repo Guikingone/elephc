@@ -703,12 +703,14 @@ jobs:
             runner: ubuntu-24.04
           - target: linux-aarch64
             runner: ubuntu-24.04-arm
-    env:
-      # This cache is deliberately isolated from actions/cache and starts empty.
-      # Only the explicit native command below may fetch/build into it.
-      ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-managed-native-cache
     steps:
       - uses: actions/checkout@v4
+
+      - name: Configure isolated native cache
+        # `runner.temp` is unavailable while GitHub validates job-level `env`;
+        # publish the runner-local path once the job is executing instead.
+        shell: bash
+        run: echo "ELEPHC_NATIVE_CACHE=$RUNNER_TEMP/elephc-managed-native-cache" >> "$GITHUB_ENV"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
