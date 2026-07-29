@@ -25,11 +25,15 @@ Useful options:
 - `--markdown PATH` to write the markdown summary table
 
 The runner builds `target/release/elephc` and `libelephc_magician.a` when
-needed, compiles each `native.php` and `eval.php` fixture once in an isolated
-temporary directory, then measures only repeated binary/PHP execution. Each run
-checks stdout against `expected.txt`. When PHP is installed, the PHP native and
-eval variants are checked against the same output so the benchmark doubles as a
-small parity guard.
+needed, installs the locked managed PCRE2 package used by the eval bridge, and
+copies this directory's `elephc.toml` and `elephc.lock` into each isolated
+temporary project. It then compiles each `native.php` and `eval.php` fixture
+once and measures only repeated binary/PHP execution. Native package setup and
+compilation are excluded from the timings.
+
+Each run checks stdout against `expected.txt`. When PHP is installed, the PHP
+native and eval variants are checked against the same output so the benchmark
+doubles as a small parity guard.
 
 Every case has a `metadata.json` file describing eval invocation counts,
 fragment source size, literal-vs-dynamic source shape, and whether the parse
