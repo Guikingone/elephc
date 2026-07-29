@@ -8,6 +8,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly REPO_ROOT
 readonly ELEPHC="${1:-$REPO_ROOT/target/debug/elephc}"
 readonly FIXTURE="$REPO_ROOT/tests/fixtures/wasm/host_portability.php"
+readonly EMPTY_ARGV_FIXTURE="$REPO_ROOT/tests/fixtures/wasm/empty_argv.php"
 readonly PARTIAL_WRITE_HARNESS="$REPO_ROOT/tests/fixtures/wasm/partial_fd_write.mjs"
 readonly TYPESCRIPT_CONSUMER="$REPO_ROOT/tests/fixtures/wasm/npm_consumer.ts"
 readonly MAX_OUTPUT_BYTES=1048576
@@ -86,9 +87,10 @@ for command in cmp diff node npm od timeout tsc wasmer wasmtime wasm-tools; do
 done
 [[ -x "$ELEPHC" ]] || fail "compiler binary is not executable: $ELEPHC"
 
-mkdir -p "$WORK_DIR/first" "$WORK_DIR/second"
+mkdir -p "$WORK_DIR/first" "$WORK_DIR/second" "$WORK_DIR/empty"
 cp "$FIXTURE" "$WORK_DIR/first/host_portability.php"
 cp "$FIXTURE" "$WORK_DIR/second/host_portability.php"
+cp "$EMPTY_ARGV_FIXTURE" "$WORK_DIR/empty/empty_argv.php"
 
 "$ELEPHC" --target wasm32-wasi --emit npm \
   "$WORK_DIR/first/host_portability.php" \
@@ -102,9 +104,13 @@ cp "$FIXTURE" "$WORK_DIR/second/host_portability.php"
 "$ELEPHC" --target wasm32-wasi --emit-asm \
   "$WORK_DIR/second/host_portability.php" \
   >"$WORK_DIR/second.wat.stdout" 2>"$WORK_DIR/second.wat.stderr"
+"$ELEPHC" --target wasm32-wasi --emit npm \
+  "$WORK_DIR/empty/empty_argv.php" \
+  >"$WORK_DIR/empty.compile.stdout" 2>"$WORK_DIR/empty.compile.stderr"
 
 readonly FIRST_PACKAGE="$WORK_DIR/first/host_portability-npm"
 readonly SECOND_PACKAGE="$WORK_DIR/second/host_portability-npm"
+readonly EMPTY_ARGV_PACKAGE="$WORK_DIR/empty/empty_argv-npm"
 readonly WASM_MODULE="$FIRST_PACKAGE/module.wasm"
 readonly SECOND_WASM_MODULE="$SECOND_PACKAGE/module.wasm"
 readonly FIRST_WAT="$WORK_DIR/first/host_portability.wat"
@@ -112,6 +118,8 @@ readonly SECOND_WAT="$WORK_DIR/second/host_portability.wat"
 
 [[ -f "$WASM_MODULE" ]] || fail "compiler did not publish $WASM_MODULE"
 [[ -f "$SECOND_WASM_MODULE" ]] || fail "compiler did not publish $SECOND_WASM_MODULE"
+[[ -f "$EMPTY_ARGV_PACKAGE/module.wasm" ]] ||
+  fail "compiler did not publish $EMPTY_ARGV_PACKAGE/module.wasm"
 [[ -f "$FIRST_WAT" ]] || fail "compiler did not publish $FIRST_WAT"
 [[ -f "$SECOND_WAT" ]] || fail "compiler did not publish $SECOND_WAT"
 cmp "$WASM_MODULE" "$SECOND_WASM_MODULE" ||
@@ -142,7 +150,9 @@ run_and_assert wasmtime 7 "$WORK_DIR/expected.stdout" "$WORK_DIR/expected.stderr
 run_and_assert node-cli 7 "$WORK_DIR/expected.stdout" "$WORK_DIR/expected.stderr" \
   env NODE_NO_WARNINGS=1 node "$FIRST_PACKAGE/index.mjs" first
 
-printf '2|first\n2|first\n' >"$WORK_DIR/expected-import.stdout"
+node --eval \
+  'process.stdout.write("2|first\n2|first\n2|a\u{1F600}b\n2|\n")' \
+  >"$WORK_DIR/expected-import.stdout"
 run_and_assert node-import 0 \
   "$WORK_DIR/expected-import.stdout" "$WORK_DIR/expected.stderr" \
   env NODE_NO_WARNINGS=1 node --input-type=module --eval '
@@ -154,7 +164,112 @@ run_and_assert node-import 0 \
         throw new Error("run() returned " + status + ", expected 7");
       }
     }
+    const unicodeStatus = await run({
+      args: ["host-portability", "a\uD83D\uDE00b"],
+    });
+    if (unicodeStatus !== 7) {
+      throw new Error("Unicode run() returned " + unicodeStatus + ", expected 7");
+    }
+    const emptyStringStatus = await run({
+      args: ["host-portability", ""],
+    });
+    if (emptyStringStatus !== 7) {
+      throw new Error(
+        "empty-string run() returned " + emptyStringStatus + ", expected 7",
+      );
+    }
   ' "$FIRST_PACKAGE/package.json" "$FIRST_PACKAGE/index.mjs"
+
+run_and_assert node-invalid-args 0 \
+  "$WORK_DIR/expected.stderr" "$WORK_DIR/expected.stderr" \
+  env NODE_NO_WARNINGS=1 node --input-type=module --eval '
+    import assert from "node:assert/strict";
+    import { pathToFileURL } from "node:url";
+    const { run, WasiArgumentError } =
+      await import(pathToFileURL(process.argv[2]));
+    const cases = [
+      {
+        args: null,
+        index: null,
+        message: "Invalid WASI arguments: expected an Array, received null.",
+      },
+      {
+        args: { 0: "x", length: 1 },
+        index: null,
+        message: "Invalid WASI arguments: expected an Array, received object.",
+      },
+      {
+        args: ["prog", 123],
+        index: 1,
+        message: "Invalid WASI argument at index 1: expected a primitive string, received number.",
+      },
+      {
+        args: [new String("x")],
+        index: 0,
+        message: "Invalid WASI argument at index 0: expected a primitive string, received object.",
+      },
+      {
+        args: ["a", , "b"],
+        index: 1,
+        message: "Invalid WASI argument at index 1: expected a primitive string, received undefined.",
+      },
+      {
+        args: ["a\0b"],
+        index: 0,
+        message: "Invalid WASI argument at index 0: argument contains an embedded NUL (U+0000) code unit at offset 1.",
+      },
+      {
+        args: ["a\uD800b"],
+        index: 0,
+        message: "Invalid WASI argument at index 0: argument contains an unpaired high UTF-16 surrogate code unit at offset 1.",
+      },
+      {
+        args: ["a\uDC00b"],
+        index: 0,
+        message: "Invalid WASI argument at index 0: argument contains an unpaired low UTF-16 surrogate code unit at offset 1.",
+      },
+      {
+        args: ["a\uD800"],
+        index: 0,
+        message: "Invalid WASI argument at index 0: argument contains an unpaired high UTF-16 surrogate code unit at offset 1.",
+      },
+      {
+        args: ["\uDC00a"],
+        index: 0,
+        message: "Invalid WASI argument at index 0: argument contains an unpaired low UTF-16 surrogate code unit at offset 0.",
+      },
+      {
+        args: ["\uD800\uD800"],
+        index: 0,
+        message: "Invalid WASI argument at index 0: argument contains an unpaired high UTF-16 surrogate code unit at offset 0.",
+      },
+    ];
+    for (const testCase of cases) {
+      await assert.rejects(
+        run({ args: testCase.args }),
+        (error) => {
+          assert.ok(error instanceof WasiArgumentError);
+          assert.equal(error.name, "WasiArgumentError");
+          assert.equal(error.code, "ERR_ELEPHC_WASI_ARGUMENT");
+          assert.equal(error.argumentIndex, testCase.index);
+          assert.equal(error.message, testCase.message);
+          return true;
+        },
+      );
+    }
+  ' "$FIRST_PACKAGE/package.json" "$FIRST_PACKAGE/index.mjs"
+
+printf '0\n' >"$WORK_DIR/expected-empty-argv.stdout"
+run_and_assert node-empty-argv 0 \
+  "$WORK_DIR/expected-empty-argv.stdout" "$WORK_DIR/expected.stderr" \
+  env NODE_NO_WARNINGS=1 node --input-type=module --eval '
+    import { pathToFileURL } from "node:url";
+    const { run } = await import(pathToFileURL(process.argv[2]));
+    const status = await run({ args: [] });
+    if (status !== 0) {
+      throw new Error("empty-args run() returned " + status + ", expected 0");
+    }
+  ' "$EMPTY_ARGV_PACKAGE/package.json" "$EMPTY_ARGV_PACKAGE/index.mjs"
 
 run_and_assert partial-fd-write 0 \
   "$WORK_DIR/expected.stderr" "$WORK_DIR/expected.stderr" \
