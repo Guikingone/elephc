@@ -522,3 +522,182 @@ echo var_export(123, true);
 }
 
 // --- File I/O: CSV, timestamps, directory listing, temp files, seek/rewind/eof ---
+
+// --- Issue #647: print_r() of a value carrying the null-container sentinel ---
+
+/// Regression for issue #647: the exact repro. `$a[7]` misses, so the Array-typed local
+/// `$arr` carries the in-band null-container sentinel. `print_r($arr)` must print NOTHING
+/// and keep running — PHP's `print_r(null)` is empty output, unlike `var_dump(null)`.
+#[test]
+fn test_print_r_missed_indexed_read_prints_nothing() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['x', 'y']];
+$arr = $a[7];
+print_r($arr);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done\n");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}
+
+/// Regression for issue #647: the same miss taken from a hash source whose value type is
+/// an indexed array reaches the identical `__rt_print_r_indexed` branch.
+#[test]
+fn test_print_r_missed_hash_read_of_array_value_prints_nothing() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = ['k' => ['x', 'y']];
+$arr = $a['zz'];
+print_r($arr);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done\n");
+    assert!(out.stderr.contains(r#"Warning: Undefined array key "zz""#));
+}
+
+/// Regression for issue #647: a hash source whose value type is itself a hash routes to
+/// `__rt_print_r_hash`, the other walker reached through the same unguarded lowering.
+#[test]
+fn test_print_r_missed_hash_read_of_hash_value_prints_nothing() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = ['k' => ['x' => 1]];
+$arr = $a['zz'];
+print_r($arr);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done\n");
+    assert!(out.stderr.contains(r#"Warning: Undefined array key "zz""#));
+}
+
+/// Regression for issue #647: a miss forwarded through `?? null` keeps the sentinel payload
+/// while suppressing the warning; the render must still be silent rather than crash.
+#[test]
+fn test_print_r_missed_read_through_coalesce_null_prints_nothing() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['x', 'y']];
+$arr = $a[7] ?? null;
+print_r($arr);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done\n");
+    assert_eq!(out.stderr, "");
+}
+
+/// Regression for issue #647: the return mode renders into the capture buffer instead of
+/// stdout, so the guard has to leave that buffer empty — PHP's `print_r(null, true)` is `""`.
+#[test]
+fn test_print_r_missed_read_return_mode_yields_empty_string() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['x', 'y']];
+$arr = $a[7];
+$s = print_r($arr, true);
+echo "[", $s, "] len=", strlen($s), "\n";
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "[] len=0\ndone\n");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}
+
+/// Regression for issue #647: the runtime-flag mode picks echo or return at run time from
+/// the same rendering; a false flag must render nothing and still return PHP's `true`.
+#[test]
+fn test_print_r_missed_read_runtime_flag_mode_prints_nothing() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['x', 'y']];
+$arr = $a[7];
+$flag = $argc > 99;
+$r = print_r($arr, $flag);
+echo "[", $r, "]\n";
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "[1]\ndone\n");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}
+
+/// Guard for issue #647: a genuine null local and present indexed/associative arrays keep
+/// their existing renderings, so the added guard does not silence live containers.
+#[test]
+fn test_print_r_null_local_and_present_arrays_are_unchanged() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$n = null;
+print_r($n);
+$a = [['x', 'y']];
+print_r($a[0]);
+$h = ['k' => 'v'];
+print_r($h);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "Array\n(\n    [0] => x\n    [1] => y\n)\nArray\n(\n    [k] => v\n)\ndone\n"
+    );
+    assert_eq!(out.stderr, "");
+}
+
+/// Regression for issue #647: the null-container sentinel must be recognized before the
+/// `Array` header write and the walker call, on every supported target. The lowering had no
+/// null branch at all, so the assertion is on ordering: the sentinel comparison has to
+/// precede the walker call inside the guarded body. Run under `ELEPHC_TEST_TARGET` to cover
+/// the non-host architectures.
+#[test]
+fn test_print_r_array_emits_null_container_guard_before_walker_call() {
+    let dir = make_cli_test_dir("elephc_print_r_null_container_guard");
+    let (user_asm, _runtime_asm, _libs) = compile_source_to_asm_with_options(
+        r#"<?php
+$a = [['x', 'y']];
+$arr = $a[7];
+print_r($arr);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    // The zero check branches to the skip label first, so the label's first mention opens
+    // the guarded body and its definition closes it; the header write and walk sit between.
+    let body_start = user_asm
+        .find("print_r_skip_null_array")
+        .expect("missing print_r null-container skip branch");
+    let body_end = user_asm
+        .match_indices("print_r_skip_null_array")
+        .map(|(pos, _)| pos)
+        .find(|pos| user_asm[*pos..].lines().next().is_some_and(|l| l.ends_with(':')))
+        .expect("missing print_r null-container skip label definition");
+    let body = &user_asm[body_start..body_end];
+
+    let (sentinel_cmp, walker_call) = match target().arch {
+        Arch::AArch64 => ("cmp x0, x10", "bl __rt_print_r_indexed"),
+        Arch::X86_64 => ("cmp rax, r10", "call __rt_print_r_indexed"),
+    };
+    let cmp_pos = body
+        .find(sentinel_cmp)
+        .unwrap_or_else(|| panic!("missing sentinel comparison `{sentinel_cmp}` in:\n{body}"));
+    let call_pos = body
+        .find(walker_call)
+        .unwrap_or_else(|| panic!("missing walker call `{walker_call}` in:\n{body}"));
+    assert!(
+        cmp_pos < call_pos,
+        "sentinel comparison must precede the print_r walker call, got:\n{body}"
+    );
+}
