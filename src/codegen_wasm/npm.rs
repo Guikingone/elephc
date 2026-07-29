@@ -33,7 +33,13 @@ pub fn write_package(
         "version": "0.0.0",
         "description": format!("wasm32-wasi command compiled from {source_stem}.php by elephc"),
         "type": "module",
-        "exports": "./index.mjs",
+        "exports": {
+            ".": {
+                "types": "./index.d.ts",
+                "import": "./index.mjs",
+                "default": "./index.mjs"
+            }
+        },
         "types": "./index.d.ts",
         "files": [
             "index.mjs",
@@ -474,7 +480,9 @@ mod tests {
         .expect("parse package metadata");
         assert_eq!(metadata["name"], "hello-app");
         assert_eq!(metadata["type"], "module");
-        assert_eq!(metadata["exports"], "./index.mjs");
+        assert_eq!(metadata["exports"]["."]["types"], "./index.d.ts");
+        assert_eq!(metadata["exports"]["."]["import"], "./index.mjs");
+        assert_eq!(metadata["exports"]["."]["default"], "./index.mjs");
 
         let loader = fs::read_to_string(package_dir.join("index.mjs")).expect("read loader");
         assert!(loader.contains("new WASI"));
