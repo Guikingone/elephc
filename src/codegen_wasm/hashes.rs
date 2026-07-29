@@ -20,16 +20,17 @@
 //!   bit 15 is the COW flag (so a fresh hash kind word is `3 | 0x8000 = 32771`).
 //! - The 40-byte hash header at `P` is five i64s: count, capacity, value_type,
 //!   head, tail. `head`/`tail` are insertion-order slot indices (-1 when empty).
-//! - Entries are 64 bytes each, slot `i` at `P + 40 + i*64`:
+//! - Entries are 72 bytes each, slot `i` at `P + 40 + i*72`:
 //!     +0 occupied (0 empty / 1 live / 2 tombstone), +8 key_lo, +16 key_hi
 //!     (-1 = int-key sentinel, else string length), +24 value_lo, +32 value_hi,
-//!     +40 value_tag, +48 prev, +56 next (prev/next are the insertion-order list).
-//! - A 32-byte Zend-semantics trailer follows the slots at `P + 40 + capacity*64`:
+//!     +40 value_tag, +48 prev, +56 next (prev/next are the insertion-order list),
+//!     and +64 the logical Zend bucket ordinal used to preserve `nNumUsed` holes.
+//! - A 32-byte Zend-semantics trailer follows the slots at `P + 40 + capacity*72`:
 //!   next-free integer key, logical table mode (uninitialized/packed/mixed),
-//!   logical `nNumUsed`, and logical table size. Keeping the trailer after the slots
-//!   preserves every existing header and entry offset while making append O(1).
-//! - Int keys hash with a Knuth multiplicative mix; string keys with FNV-1a. This
-//!   layout and hashing are byte-identical to the native hash runtime.
+//!   logical `nNumUsed`, and logical table size. Physical probe capacity is independent
+//!   of this logical state; physical resize preserves the trailer and ordinals exactly.
+//! - Int keys hash with a Knuth multiplicative mix; string keys with FNV-1a. The
+//!   split probe/logical representation preserves php-src semantics, not its bytes.
 
 use super::wat::WatModule;
 use crate::web_prelude::PhpVersion;
@@ -43,9 +44,10 @@ pub(super) fn emit_hash_runtime(wm: &mut WatModule) {
 
 /// Emits the hash runtime for one PHP compatibility profile.
 ///
-/// PHP 8.2 initializes `nNextFreeElement` to zero, while PHP 8.3+ uses
-/// `ZEND_LONG_MIN` and remaps that sentinel to zero only for the first append.
-fn emit_hash_runtime_for_version(wm: &mut WatModule, php_version: PhpVersion) {
+/// Mutable HashTables start with `ZEND_LONG_MIN` on every supported PHP profile.
+/// PHP 8.2's zero-valued immutable `zend_empty_array` is represented initially as
+/// an indexed empty array; `Op::ArrayToHash` preserves that origin separately.
+fn emit_hash_runtime_for_version(wm: &mut WatModule, _php_version: PhpVersion) {
     wm.add_raw_func(RT_HASH_FNV1A);
     wm.add_raw_func(RT_HASH_KEY_HASH);
     wm.add_raw_func(RT_HASH_KEY_EQ);
@@ -54,7 +56,7 @@ fn emit_hash_runtime_for_version(wm: &mut WatModule, php_version: PhpVersion) {
     wm.add_raw_func(RT_HASH_ITER_NEXT);
     wm.add_raw_func(RT_HASH_META_ADDR);
     wm.add_raw_func(RT_HASH_ZEND_TABLE_SIZE);
-    wm.add_raw_func(&hash_new_runtime(php_version));
+    wm.add_raw_func(RT_HASH_NEW);
     wm.add_raw_func(RT_HASH_VALIDATE_LAYOUT);
     wm.add_raw_func(RT_HASH_PREFLIGHT_UNION);
     wm.add_raw_func(RT_HASH_GET);
@@ -62,24 +64,17 @@ fn emit_hash_runtime_for_version(wm: &mut WatModule, php_version: PhpVersion) {
     wm.add_raw_func(RT_HASH_RESIZE);
     wm.add_raw_func(RT_HASH_CLONE_SHALLOW);
     wm.add_raw_func(RT_HASH_ENSURE_UNIQUE);
-    wm.add_raw_func(RT_HASH_RECORD_NEW_KEY);
+    wm.add_raw_func(RT_HASH_COMPACT_LOGICAL);
+    wm.add_raw_func(RT_HASH_RESERVE_NEW_KEY);
     wm.add_raw_func(RT_HASH_SET);
     wm.add_raw_func(RT_HASH_UNSET);
     wm.add_raw_func(RT_HASH_APPEND);
     wm.add_raw_func(RT_HASH_UNION);
     wm.add_raw_func(RT_ARRAY_HASH_UNION);
     wm.add_raw_func(RT_HASH_ARRAY_UNION);
+    wm.add_raw_func(RT_ARRAY_TO_HASH);
     wm.add_raw_func(RT_HASH_FREE_DEEP);
     wm.add_raw_func(RT_DECREF_HASH);
-}
-
-/// Renders `__rt_hash_new` with the profile-specific initial next-free value.
-fn hash_new_runtime(php_version: PhpVersion) -> String {
-    let initial_next_free = match php_version {
-        PhpVersion::Php82 => 0,
-        PhpVersion::Php83 | PhpVersion::Php84 | PhpVersion::Php85 => i64::MIN,
-    };
-    RT_HASH_NEW.replace("__INITIAL_NEXT_FREE__", &initial_next_free.to_string())
 }
 
 /// `__rt_hash_fnv1a`: FNV-1a 64-bit hash of the `len` bytes at `ptr`. Each byte is
@@ -240,22 +235,22 @@ const RT_HASH_ITER_NEXT: &str = r#"(func $__rt_hash_iter_next (param $hash i32) 
     (then
       (local.set $next (i64.load (i32.add (local.get $hash) (i32.const 24)))))  ;; next = list head
     (else
-      (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40))     ;; entry = hash+40+cursor*64
-                                 (i32.wrap_i64 (i64.mul (local.get $cursor) (i64.const 64)))))
+      (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40))     ;; entry = hash+40+cursor*72
+                                 (i32.wrap_i64 (i64.mul (local.get $cursor) (i64.const 72)))))
       (local.set $next (i64.load (i32.add (local.get $entry) (i32.const 56))))))  ;; next = entry.next
   (local.get $next)                                            ;; result 0: new cursor (slot index, -1 at end)
   (i64.extend_i32_u (i64.ne (local.get $next) (i64.const -1))))  ;; result 1: has_more (1 unless -1)
 "#;
 
 /// `__rt_hash_meta_addr`: returns the address of the Zend-semantics trailer that
-/// immediately follows the capacity-sized 64-byte entry array.
+/// immediately follows the capacity-sized 72-byte entry array.
 const RT_HASH_META_ADDR: &str = r#"(func $__rt_hash_meta_addr (param $hash i32) (result i32)
   (i32.add
     (i32.add (local.get $hash) (i32.const 40))
     (i32.wrap_i64
       (i64.mul
         (i64.load (i32.add (local.get $hash) (i32.const 8)))
-        (i64.const 64)))))
+        (i64.const 72)))))
 "#;
 
 /// `__rt_hash_zend_table_size`: rounds a capacity hint to php-src's minimum-eight,
@@ -284,8 +279,8 @@ const RT_HASH_NEW: &str = r#"(func $__rt_hash_new (param $capacity i64) (param $
   (local.set $bytes
     (call $__rt_checked_layout
       (local.get $capacity)
-      (i64.const 64)
-      (i64.const 72)))                                      ;; checked 40B header + capacity*64 slots + 32B trailer
+      (i64.const 72)
+      (i64.const 72)))                                      ;; checked 40B header + capacity*72 slots + 32B trailer
   (local.set $p (call $__rt_heap_alloc (local.get $bytes)))  ;; block: refcount=1
   (i64.store (i32.sub (local.get $p) (i32.const 8)) (i64.const 32771))  ;; kind = hash(3) | COW(0x8000)
   (i64.store (local.get $p) (i64.const 0))                   ;; count = 0
@@ -297,12 +292,12 @@ const RT_HASH_NEW: &str = r#"(func $__rt_hash_new (param $capacity i64) (param $
   (block $end (loop $slot
     (br_if $end (i64.ge_u (local.get $i) (local.get $capacity)))  ;; zeroed every slot
     (i64.store
-      (i32.add (i32.add (local.get $p) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 64))))  ;; &slot[i].occupied = P+40+i*64
+      (i32.add (i32.add (local.get $p) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 72))))  ;; &slot[i].occupied = P+40+i*72
       (i64.const 0))                                         ;; occupied = empty
     (local.set $i (i64.add (local.get $i) (i64.const 1)))    ;; next slot
     (br $slot)))                                             ;; next slot
   (local.set $meta (call $__rt_hash_meta_addr (local.get $p)))  ;; trailer after all entry slots
-  (i64.store (local.get $meta) (i64.const __INITIAL_NEXT_FREE__))  ;; profile-specific nNextFreeElement
+  (i64.store (local.get $meta) (i64.const -9223372036854775808))  ;; mutable HashTable nNextFreeElement = ZEND_LONG_MIN
   (i64.store (i32.add (local.get $meta) (i32.const 8)) (i64.const 0))   ;; Zend mode = UNINITIALIZED
   (i64.store (i32.add (local.get $meta) (i32.const 16)) (i64.const 0))  ;; Zend nNumUsed = 0
   (i64.store (i32.add (local.get $meta) (i32.const 24))
@@ -319,7 +314,7 @@ const RT_HASH_VALIDATE_LAYOUT: &str = r#"(func $__rt_hash_validate_layout (param
   (local.set $capacity (i64.load (i32.add (local.get $hash) (i32.const 8))))
   (drop (call $__rt_checked_layout
     (local.get $capacity)
-    (i64.const 64)
+    (i64.const 72)
     (i64.const 72)))                                        ;; header + slots + semantic trailer
   (if (i64.gt_u (local.get $count) (local.get $capacity))
     (then (call $__rt_oom) unreachable)))                   ;; malformed live count
@@ -337,8 +332,8 @@ const RT_HASH_PREFLIGHT_UNION: &str = r#"(func $__rt_hash_preflight_union (param
   (local.set $total (i64.add (local.get $left_count) (local.get $right_count)))
   (drop (call $__rt_checked_layout
     (local.get $total)
-    (i64.const 128)
-    (i64.const 72)))                                        ;; capacity=2*total, 64 bytes per slot
+    (i64.const 144)
+    (i64.const 72)))                                        ;; capacity=2*total, 72 bytes per slot
 )
 "#;
 
@@ -362,7 +357,7 @@ const RT_HASH_GET: &str = r#"(func $__rt_hash_get (param $hash i32) (param $key_
   (local.set $probes (i64.const 0))                          ;; probe counter = 0
   (block $done (loop $probe
     (br_if $done (i64.ge_u (local.get $probes) (local.get $cap)))  ;; probed every slot -> miss
-    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 64)))))  ;; &slot[slot]
+    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 72)))))  ;; &slot[slot]
     (local.set $occ (i64.load (local.get $entry)))           ;; occupied flag
     (if (i64.eqz (local.get $occ))
       (then (return (i32.const 0) (i64.const 0) (i64.const 0) (i64.const 8))))  ;; empty slot -> definitively absent
@@ -386,8 +381,9 @@ const RT_HASH_GET: &str = r#"(func $__rt_hash_get (param $hash i32) (param $key_
 /// encountered, and appends it to the insertion-order list. The bounded full-table
 /// fallback reuses a remembered tombstone when no empty slot exists. Assumes the key
 /// is absent and the table has room — it neither persists strings, resizes, nor
-/// updates an existing key (used by set/resize/clone). Returns the same `hash` pointer.
-const RT_HASH_INSERT_OWNED: &str = r#"(func $__rt_hash_insert_owned (param $hash i32) (param $key_lo i64) (param $key_hi i64) (param $val_lo i64) (param $val_hi i64) (param $val_tag i64) (result i32)
+/// updates an existing key (used by set/resize/clone). `zend_idx` is the logical
+/// php-src bucket ordinal, independent of the physical probe slot. Returns `hash`.
+const RT_HASH_INSERT_OWNED: &str = r#"(func $__rt_hash_insert_owned (param $hash i32) (param $key_lo i64) (param $key_hi i64) (param $val_lo i64) (param $val_hi i64) (param $val_tag i64) (param $zend_idx i64) (result i32)
   (local $cap i64)
   (local $slot i64)
   (local $probes i64)
@@ -406,9 +402,9 @@ const RT_HASH_INSERT_OWNED: &str = r#"(func $__rt_hash_insert_owned (param $hash
         (if (i64.eq (local.get $first_tomb) (i64.const -1))  ;; no empty and no tombstone violates the room contract
           (then unreachable))
         (local.set $slot (local.get $first_tomb))            ;; full table with a tombstone -> reuse it
-        (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 64)))))  ;; &remembered tombstone
+        (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 72)))))  ;; &remembered tombstone
         (br $place)))
-    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 64)))))  ;; &slot[slot]
+    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 72)))))  ;; &slot[slot]
     (local.set $occ (i64.load (local.get $entry)))           ;; occupied flag
     (if (i32.and (i64.eq (local.get $occ) (i64.const 2))
                  (i64.eq (local.get $first_tomb) (i64.const -1)))  ;; first tombstone in this probe chain?
@@ -418,7 +414,7 @@ const RT_HASH_INSERT_OWNED: &str = r#"(func $__rt_hash_insert_owned (param $hash
         (if (i64.ne (local.get $first_tomb) (i64.const -1))  ;; prefer the first earlier tombstone
           (then
             (local.set $slot (local.get $first_tomb))
-            (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 64)))))))  ;; &remembered tombstone
+            (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 72)))))))  ;; &remembered tombstone
         (br $place)))
     (local.set $slot (i64.rem_u (i64.add (local.get $slot) (i64.const 1)) (local.get $cap)))  ;; next bucket (wrap)
     (local.set $probes (i64.add (local.get $probes) (i64.const 1)))    ;; probe counter++
@@ -429,12 +425,13 @@ const RT_HASH_INSERT_OWNED: &str = r#"(func $__rt_hash_insert_owned (param $hash
   (i64.store (i32.add (local.get $entry) (i32.const 24)) (local.get $val_lo))   ;; value_lo
   (i64.store (i32.add (local.get $entry) (i32.const 32)) (local.get $val_hi))   ;; value_hi
   (i64.store (i32.add (local.get $entry) (i32.const 40)) (local.get $val_tag))  ;; value_tag
+  (i64.store (i32.add (local.get $entry) (i32.const 64)) (local.get $zend_idx)) ;; logical Zend bucket ordinal
   (local.set $tail (i64.load (i32.add (local.get $hash) (i32.const 32))))       ;; current tail slot
   (i64.store (i32.add (local.get $entry) (i32.const 48)) (local.get $tail))     ;; prev = old tail
   (i64.store (i32.add (local.get $entry) (i32.const 56)) (i64.const -1))        ;; next = none
   (if (i64.ne (local.get $tail) (i64.const -1))
     (then
-      (local.set $tail_entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $tail) (i64.const 64)))))  ;; &old tail
+      (local.set $tail_entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $tail) (i64.const 72)))))  ;; &old tail
       (i64.store (i32.add (local.get $tail_entry) (i32.const 56)) (local.get $slot)))  ;; old tail's next = this slot
     (else
       (i64.store (i32.add (local.get $hash) (i32.const 24)) (local.get $slot))))  ;; first entry -> head = this slot
@@ -459,19 +456,20 @@ const RT_HASH_RESIZE: &str = r#"(func $__rt_hash_resize (param $hash i32) (resul
   (local.set $newcap (i64.add (local.get $oldcap) (local.get $oldcap)))  ;; double without a wrapping shift
   (if (i64.lt_u (local.get $newcap) (i64.const 8))
     (then (local.set $newcap (i64.const 8))))                ;; minimum capacity 8
-  (drop (call $__rt_checked_layout (local.get $newcap) (i64.const 64) (i64.const 72)))  ;; reject overflow before any allocation/move
+  (drop (call $__rt_checked_layout (local.get $newcap) (i64.const 72) (i64.const 72)))  ;; reject overflow before any allocation/move
   (local.set $oldmeta (call $__rt_hash_meta_addr (local.get $hash)))  ;; preserve semantic trailer across physical rehash
   (local.set $new (call $__rt_hash_new (local.get $newcap) (i64.load (i32.add (local.get $hash) (i32.const 16)))))  ;; fresh larger table, same value_type
   (local.set $cur (i64.load (i32.add (local.get $hash) (i32.const 24))))  ;; cur = old head
   (block $done (loop $walk
     (br_if $done (i64.eq (local.get $cur) (i64.const -1)))   ;; reached end of insertion order
-    (local.set $oe (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 64)))))  ;; &old entry
+    (local.set $oe (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 72)))))  ;; &old entry
     (drop (call $__rt_hash_insert_owned (local.get $new)
       (i64.load (i32.add (local.get $oe) (i32.const 8)))     ;; key_lo
       (i64.load (i32.add (local.get $oe) (i32.const 16)))    ;; key_hi
       (i64.load (i32.add (local.get $oe) (i32.const 24)))    ;; value_lo
       (i64.load (i32.add (local.get $oe) (i32.const 32)))    ;; value_hi
-      (i64.load (i32.add (local.get $oe) (i32.const 40)))))  ;; value_tag (moved, not persisted)
+      (i64.load (i32.add (local.get $oe) (i32.const 40)))    ;; value_tag (moved, not persisted)
+      (i64.load (i32.add (local.get $oe) (i32.const 64)))))  ;; preserve logical bucket ordinal exactly
     (local.set $cur (i64.load (i32.add (local.get $oe) (i32.const 56))))  ;; cur = next
     (br $walk)))                                             ;; next entry
   (local.set $newmeta (call $__rt_hash_meta_addr (local.get $new)))
@@ -501,14 +499,19 @@ const RT_HASH_CLONE_SHALLOW: &str = r#"(func $__rt_hash_clone_shallow (param $ha
   (local $nl i64)
   (local $oldmeta i32)
   (local $newmeta i32)
+  (local $mode i64)
+  (local $zend_idx i64)
+  (local $dense_idx i64)
   (local.set $oldmeta (call $__rt_hash_meta_addr (local.get $hash)))  ;; source semantic trailer
+  (local.set $mode (i64.load (i32.add (local.get $oldmeta) (i32.const 8))))  ;; source logical mode
+  (local.set $dense_idx (i64.const 0))                       ;; next compact MIXED ordinal
   (local.set $new (call $__rt_hash_new
     (i64.load (i32.add (local.get $hash) (i32.const 8)))
     (i64.load (i32.add (local.get $hash) (i32.const 16)))))  ;; fresh hash, same capacity + value_type
   (local.set $cur (i64.load (i32.add (local.get $hash) (i32.const 24))))  ;; cur = old head
   (block $done (loop $walk
     (br_if $done (i64.eq (local.get $cur) (i64.const -1)))   ;; reached end of insertion order
-    (local.set $oe (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 64)))))  ;; &old entry
+    (local.set $oe (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 72)))))  ;; &old entry
     (local.set $klo (i64.load (i32.add (local.get $oe) (i32.const 8))))   ;; key_lo
     (local.set $khi (i64.load (i32.add (local.get $oe) (i32.const 16))))  ;; key_hi
     (if (i64.ge_s (local.get $khi) (i64.const 0))            ;; string key -> own a fresh copy
@@ -532,7 +535,13 @@ const RT_HASH_CLONE_SHALLOW: &str = r#"(func $__rt_hash_clone_shallow (param $ha
             (i32.or (i32.or (i64.eq (local.get $vtag) (i64.const 6)) (i64.eq (local.get $vtag) (i64.const 7)))
                     (i64.eq (local.get $vtag) (i64.const 10))))  ;; refcounted container value
           (then (call $__rt_incref (i32.wrap_i64 (local.get $vlo)))))))  ;; share, bump refcount
-    (drop (call $__rt_hash_insert_owned (local.get $new) (local.get $klo) (local.get $khi) (local.get $vlo) (local.get $vhi) (local.get $vtag)))  ;; place into clone
+    (if (i64.eq (local.get $mode) (i64.const 2))             ;; ordinary MIXED duplication compacts holes
+      (then
+        (local.set $zend_idx (local.get $dense_idx))
+        (local.set $dense_idx (i64.add (local.get $dense_idx) (i64.const 1))))
+      (else
+        (local.set $zend_idx (i64.load (i32.add (local.get $oe) (i32.const 64))))))  ;; PACKED preserves implicit holes
+    (drop (call $__rt_hash_insert_owned (local.get $new) (local.get $klo) (local.get $khi) (local.get $vlo) (local.get $vhi) (local.get $vtag) (local.get $zend_idx)))  ;; place into clone
     (local.set $cur (i64.load (i32.add (local.get $oe) (i32.const 56))))  ;; cur = next
     (br $walk)))                                             ;; next entry
   (local.set $newmeta (call $__rt_hash_meta_addr (local.get $new)))
@@ -545,7 +554,11 @@ const RT_HASH_CLONE_SHALLOW: &str = r#"(func $__rt_hash_clone_shallow (param $ha
       (i64.store (i32.add (local.get $newmeta) (i32.const 24)) (i64.const 8)))  ;; empty duplicate resets to HT_MIN_SIZE
     (else
       (i64.store (i32.add (local.get $newmeta) (i32.const 8)) (i64.load (i32.add (local.get $oldmeta) (i32.const 8))))
-      (i64.store (i32.add (local.get $newmeta) (i32.const 16)) (i64.load (i32.add (local.get $oldmeta) (i32.const 16))))))
+      (if (i64.eq (local.get $mode) (i64.const 2))
+        (then
+          (i64.store (i32.add (local.get $newmeta) (i32.const 16)) (i64.load (local.get $new))))  ;; MIXED clone nNumUsed = live count
+        (else
+          (i64.store (i32.add (local.get $newmeta) (i32.const 16)) (i64.load (i32.add (local.get $oldmeta) (i32.const 16))))))))  ;; PACKED preserves holes
   (local.get $new))
 "#;
 
@@ -566,14 +579,37 @@ const RT_HASH_ENSURE_UNIQUE: &str = r#"(func $__rt_hash_ensure_unique (param $ha
   (local.get $clone))                                        ;; caller now owns the clone
 "#;
 
-/// `__rt_hash_record_new_key`: updates the trailing php-src-compatible logical
-/// `HashTable` state after a key that was known absent has been inserted.
+/// `__rt_hash_compact_logical`: renumbers every live logical bucket densely in
+/// insertion order and returns the resulting `nNumUsed` (the live count).
+///
+/// Physical probe slots and links are untouched. This is php-src's semantic
+/// `zend_hash_rehash()` compaction projected onto Elephc's split representation.
+const RT_HASH_COMPACT_LOGICAL: &str = r#"(func $__rt_hash_compact_logical (param $hash i32) (result i64)
+  (local $cur i64)
+  (local $idx i64)
+  (local $entry i32)
+  (local.set $cur (i64.load (i32.add (local.get $hash) (i32.const 24))))  ;; insertion-order head
+  (local.set $idx (i64.const 0))                               ;; next dense logical bucket
+  (block $done (loop $walk
+    (br_if $done (i64.eq (local.get $cur) (i64.const -1)))     ;; all live entries renumbered
+    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40))
+      (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 72)))))  ;; current physical entry
+    (i64.store (i32.add (local.get $entry) (i32.const 64)) (local.get $idx))  ;; dense Zend ordinal
+    (local.set $idx (i64.add (local.get $idx) (i64.const 1)))  ;; next ordinal
+    (local.set $cur (i64.load (i32.add (local.get $entry) (i32.const 56))))  ;; insertion-order next
+    (br $walk)))
+  (local.get $idx))
+"#;
+
+/// `__rt_hash_reserve_new_key`: updates the trailing php-src-compatible logical
+/// `HashTable` state for a key known to be absent and returns its logical bucket
+/// ordinal. The caller stores that ordinal in the new physical entry.
 ///
 /// Modes are 0 = UNINITIALIZED, 1 = PACKED, and 2 = MIXED. The PACKED branches
 /// reproduce `_zend_hash_index_add_or_update_i`: inserting below `nNumUsed` into
 /// a hole converts to MIXED, in-range extension resets next-free to `h + 1`, and
 /// sparse/string/negative keys use the monotonic MIXED rule.
-const RT_HASH_RECORD_NEW_KEY: &str = r#"(func $__rt_hash_record_new_key (param $hash i32) (param $key_lo i64) (param $key_hi i64)
+const RT_HASH_RESERVE_NEW_KEY: &str = r#"(func $__rt_hash_reserve_new_key (param $hash i32) (param $key_lo i64) (param $key_hi i64) (result i64)
   (local $meta i32)
   (local $mode i64)
   (local $used i64)
@@ -581,12 +617,13 @@ const RT_HASH_RECORD_NEW_KEY: &str = r#"(func $__rt_hash_record_new_key (param $
   (local $next i64)
   (local $old_count i64)
   (local $mixed i32)
+  (local $idx i64)
   (local.set $meta (call $__rt_hash_meta_addr (local.get $hash)))  ;; Zend-state trailer
   (local.set $mode (i64.load (i32.add (local.get $meta) (i32.const 8))))  ;; logical flags
   (local.set $used (i64.load (i32.add (local.get $meta) (i32.const 16)))) ;; logical nNumUsed
   (local.set $size (i64.load (i32.add (local.get $meta) (i32.const 24)))) ;; logical nTableSize
   (local.set $next (i64.load (local.get $meta)))             ;; nNextFreeElement
-  (local.set $old_count (i64.sub (i64.load (local.get $hash)) (i64.const 1)))  ;; count before this insertion
+  (local.set $old_count (i64.load (local.get $hash)))        ;; live count before this insertion
   (local.set $mixed (i32.const 0))                           ;; no mixed insertion selected yet
 
   local.get $key_hi                                         ;; string key?
@@ -606,6 +643,7 @@ const RT_HASH_RECORD_NEW_KEY: &str = r#"(func $__rt_hash_record_new_key (param $
       i32.add
       i64.const 1
       i64.store                                             ;; nNumUsed = 1
+      i64.const 0                                           ;; first mixed bucket ordinal
       return
     end
     i32.const 1
@@ -644,6 +682,7 @@ const RT_HASH_RECORD_NEW_KEY: &str = r#"(func $__rt_hash_record_new_key (param $
       i64.const 1
       i64.add
       i64.store                                             ;; nNumUsed = h + 1
+      local.get $key_lo                                     ;; packed bucket ordinal equals key
       return
     end
     i32.const 1
@@ -695,6 +734,7 @@ const RT_HASH_RECORD_NEW_KEY: &str = r#"(func $__rt_hash_record_new_key (param $
         i64.const 1
         i64.add
         i64.store                                           ;; nNumUsed = h + 1
+        local.get $key_lo                                   ;; packed bucket ordinal equals key
         return
       end
     end
@@ -734,6 +774,7 @@ const RT_HASH_RECORD_NEW_KEY: &str = r#"(func $__rt_hash_record_new_key (param $
         i64.const 1
         i64.add
         i64.store                                           ;; nNumUsed = h + 1
+        local.get $key_lo                                   ;; packed bucket ordinal equals key
         return
       end
     end
@@ -798,7 +839,12 @@ const RT_HASH_RECORD_NEW_KEY: &str = r#"(func $__rt_hash_record_new_key (param $
         local.get $size
         i64.store                                          ;; grow mixed table
       end
+      local.get $hash
+      call $__rt_hash_compact_logical
+      local.set $used                                      ;; every logical resize compacts holes
     end
+    local.get $used
+    local.set $idx                                         ;; reserve current logical tail
     local.get $used
     i64.const 1
     i64.add
@@ -836,7 +882,8 @@ const RT_HASH_RECORD_NEW_KEY: &str = r#"(func $__rt_hash_record_new_key (param $
         i64.store                                          ;; monotonically advance next
       end
     end
-  end)
+  end
+  local.get $idx)
 "#;
 
 /// `__rt_hash_set`: the user-facing `$h[k] = v`. Splits a shared hash (COW), grows
@@ -858,6 +905,7 @@ const RT_HASH_SET: &str = r#"(func $__rt_hash_set (param $hash i32) (param $key_
   (local $count i64)
   (local $need_resize i32)
   (local $newcap i64)
+  (local $zend_idx i64)
   (call $__rt_hash_validate_layout (local.get $hash))        ;; validate physical metadata before COW
   (if (i64.ge_s (local.get $key_hi) (i64.const 0))
     (then
@@ -876,7 +924,7 @@ const RT_HASH_SET: &str = r#"(func $__rt_hash_set (param $hash i32) (param $key_
       (local.set $newcap (i64.add (local.get $cap) (local.get $cap)))
       (if (i64.lt_u (local.get $newcap) (i64.const 8))
         (then (local.set $newcap (i64.const 8))))
-      (drop (call $__rt_checked_layout (local.get $newcap) (i64.const 64) (i64.const 72)))))  ;; prove resize before COW
+      (drop (call $__rt_checked_layout (local.get $newcap) (i64.const 72) (i64.const 72)))))  ;; prove resize before COW
   (local.set $hash (call $__rt_hash_ensure_unique (local.get $hash)))  ;; copy-on-write split
   (if (local.get $need_resize)
     (then (local.set $hash (call $__rt_hash_resize (local.get $hash)))))  ;; grow past 75% load
@@ -886,7 +934,7 @@ const RT_HASH_SET: &str = r#"(func $__rt_hash_set (param $hash i32) (param $key_
   (local.set $matched (i32.const 0))                         ;; no match yet
   (block $stop (loop $probe
     (br_if $stop (i64.ge_u (local.get $probes) (local.get $cap)))  ;; probed every slot
-    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 64)))))  ;; &slot[slot]
+    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 72)))))  ;; &slot[slot]
     (local.set $occ (i64.load (local.get $entry)))           ;; occupied flag
     (br_if $stop (i64.eqz (local.get $occ)))                 ;; empty slot -> key absent
     (if (i64.eq (local.get $occ) (i64.const 1))              ;; live entry?
@@ -943,8 +991,8 @@ const RT_HASH_SET: &str = r#"(func $__rt_hash_set (param $hash i32) (param $key_
           (i32.or (i32.or (i64.eq (local.get $val_tag) (i64.const 6)) (i64.eq (local.get $val_tag) (i64.const 7)))
                   (i64.eq (local.get $val_tag) (i64.const 10))))  ;; own the container value
         (then (call $__rt_incref (i32.wrap_i64 (local.get $val_lo)))))))
-  (local.set $hash (call $__rt_hash_insert_owned (local.get $hash) (local.get $key_lo) (local.get $key_hi) (local.get $val_lo) (local.get $val_hi) (local.get $val_tag)))  ;; place the new entry
-  (call $__rt_hash_record_new_key (local.get $hash) (local.get $key_lo) (local.get $key_hi))  ;; advance/preserve Zend next-free state
+  (local.set $zend_idx (call $__rt_hash_reserve_new_key (local.get $hash) (local.get $key_lo) (local.get $key_hi)))  ;; reserve logical Zend bucket
+  (local.set $hash (call $__rt_hash_insert_owned (local.get $hash) (local.get $key_lo) (local.get $key_hi) (local.get $val_lo) (local.get $val_hi) (local.get $val_tag) (local.get $zend_idx)))  ;; place the new entry
   (local.get $hash))
 "#;
 
@@ -971,9 +1019,8 @@ const RT_HASH_UNSET: &str = r#"(func $__rt_hash_unset (param $hash i32) (param $
   (local $ne i32)
   (local $meta i32)
   (local $used i64)
-  (local $scan i64)
-  (local $packed_used i64)
-  (local $se i32)
+  (local $removed_idx i64)
+  (local $new_used i64)
   (local.set $hash (call $__rt_hash_ensure_unique (local.get $hash)))   ;; copy-on-write split
   (if (i32.eqz (local.get $hash)) (then (return (local.get $hash))))    ;; null hash -> nothing to remove
   (local.set $cap (i64.load (i32.add (local.get $hash) (i32.const 8)))) ;; capacity
@@ -983,7 +1030,7 @@ const RT_HASH_UNSET: &str = r#"(func $__rt_hash_unset (param $hash i32) (param $
   (local.set $matched (i32.const 0))                                   ;; no match yet
   (block $stop (loop $probe
     (br_if $stop (i64.ge_u (local.get $probes) (local.get $cap)))      ;; probed every slot -> stop (absent)
-    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 64)))))  ;; &slot[slot]
+    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 72)))))  ;; &slot[slot]
     (local.set $occ (i64.load (local.get $entry)))                     ;; occupied flag
     (br_if $stop (i64.eqz (local.get $occ)))                           ;; empty slot -> key absent, stop
     (if (i64.eq (local.get $occ) (i64.const 1))                        ;; live entry?
@@ -1011,46 +1058,35 @@ const RT_HASH_UNSET: &str = r#"(func $__rt_hash_unset (param $hash i32) (param $
             (then (call $__rt_decref_any (i32.wrap_i64 (i64.load (i32.add (local.get $mentry) (i32.const 24)))))))))  ;; release container child
       (local.set $prev (i64.load (i32.add (local.get $mentry) (i32.const 48))))  ;; prev slot index
       (local.set $next (i64.load (i32.add (local.get $mentry) (i32.const 56))))  ;; next slot index
+      (local.set $removed_idx (i64.load (i32.add (local.get $mentry) (i32.const 64))))  ;; logical Zend bucket
       (if (i64.ne (local.get $prev) (i64.const -1))                    ;; has a predecessor?
         (then
-          (local.set $pe (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $prev) (i64.const 64)))))  ;; &slot[prev]
+          (local.set $pe (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $prev) (i64.const 72)))))  ;; &slot[prev]
           (i64.store (i32.add (local.get $pe) (i32.const 56)) (local.get $next)))  ;; predecessor.next = next
         (else (i64.store (i32.add (local.get $hash) (i32.const 24)) (local.get $next))))  ;; head = next
       (if (i64.ne (local.get $next) (i64.const -1))                    ;; has a successor?
         (then
-          (local.set $ne (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $next) (i64.const 64)))))  ;; &slot[next]
+          (local.set $ne (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $next) (i64.const 72)))))  ;; &slot[next]
           (i64.store (i32.add (local.get $ne) (i32.const 48)) (local.get $prev)))  ;; successor.prev = prev
         (else (i64.store (i32.add (local.get $hash) (i32.const 32)) (local.get $prev))))  ;; tail = prev
       (i64.store (local.get $mentry) (i64.const 2))                    ;; tombstone the slot (NOT 0 - keeps probe chains)
       (i64.store (local.get $hash) (i64.sub (i64.load (local.get $hash)) (i64.const 1)))  ;; count -= 1
       (local.set $meta (call $__rt_hash_meta_addr (local.get $hash)))
       (local.set $used (i64.load (i32.add (local.get $meta) (i32.const 16))))
-      (if (i32.and
-            (i64.eq (i64.load (i32.add (local.get $meta) (i32.const 8))) (i64.const 1))
-            (i32.and
-              (i64.eq (local.get $key_hi) (i64.const -1))
-              (i64.eq (i64.add (local.get $key_lo) (i64.const 1)) (local.get $used))))
+      (if (i64.eq (i64.add (local.get $removed_idx) (i64.const 1)) (local.get $used))
         (then
-          (local.set $scan (i64.const 0))
-          (local.set $packed_used (i64.const 0))
-          (block $packed_done (loop $packed_scan
-            (br_if $packed_done (i64.ge_u (local.get $scan) (local.get $cap)))
-            (local.set $se (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $scan) (i64.const 64)))))
-            (if (i32.and
-                  (i64.eq (i64.load (local.get $se)) (i64.const 1))
-                  (i64.eq (i64.load (i32.add (local.get $se) (i32.const 16))) (i64.const -1)))
-              (then
-                (if (i64.ge_u (i64.load (i32.add (local.get $se) (i32.const 8))) (local.get $packed_used))
-                  (then
-                    (local.set $packed_used (i64.add (i64.load (i32.add (local.get $se) (i32.const 8))) (i64.const 1)))))))
-            (local.set $scan (i64.add (local.get $scan) (i64.const 1)))
-            (br $packed_scan)))
-          (i64.store (i32.add (local.get $meta) (i32.const 16)) (local.get $packed_used))))))  ;; packed nNumUsed drops across trailing holes only
+          (local.set $new_used (i64.const 0))                        ;; no preceding live bucket
+          (if (i64.ne (local.get $prev) (i64.const -1))
+            (then
+              (local.set $new_used
+                (i64.add (i64.load (i32.add (local.get $pe) (i32.const 64))) (i64.const 1)))))  ;; predecessor ordinal + 1
+          (i64.store (i32.add (local.get $meta) (i32.const 16)) (local.get $new_used))))  ;; collapse every trailing logical hole
+    ))
   (local.get $hash))
 "#;
 
 /// `__rt_hash_append`: the user-facing `$h[] = v`. Loads the persisted
-/// `nNextFreeElement` in O(1), remaps PHP 8.3+'s fresh `ZEND_LONG_MIN` sentinel
+/// `nNextFreeElement` in O(1), remaps the fresh `ZEND_LONG_MIN` sentinel
 /// to zero, rejects an occupied saturated key without mutation, and otherwise
 /// delegates ownership/COW/resize work to `__rt_hash_set`.
 ///
@@ -1105,7 +1141,7 @@ const RT_HASH_UNION: &str = r#"(func $__rt_hash_union (param $a i32) (param $b i
   (local.set $cur (i64.load (i32.add (local.get $b) (i32.const 24))))   ;; cur = b.head (insertion-order start)
   (block $done (loop $walk
     (br_if $done (i64.eq (local.get $cur) (i64.const -1)))              ;; end of b's insertion order
-    (local.set $be (i32.add (i32.add (local.get $b) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 64)))))  ;; &b entry
+    (local.set $be (i32.add (i32.add (local.get $b) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 72)))))  ;; &b entry
     (local.set $klo (i64.load (i32.add (local.get $be) (i32.const 8))))   ;; b key_lo
     (local.set $khi (i64.load (i32.add (local.get $be) (i32.const 16))))  ;; b key_hi
     (call $__rt_hash_get (local.get $result) (local.get $klo) (local.get $khi))  ;; probe result for this key
@@ -1164,7 +1200,7 @@ const RT_ARRAY_HASH_UNION: &str = r#"(func $__rt_array_hash_union (param $a i32)
   (local.set $cap (i64.add (local.get $total) (local.get $total)))     ;; safe after checked worst-case union layout
   (if (i64.lt_s (local.get $cap) (i64.const 16))                        ;; below the minimum capacity?
     (then (local.set $cap (i64.const 16))))                            ;; clamp to 16
-  (drop (call $__rt_checked_layout (local.get $cap) (i64.const 64) (i64.const 72)))  ;; validate minimum-capacity clamp too
+  (drop (call $__rt_checked_layout (local.get $cap) (i64.const 72) (i64.const 72)))  ;; validate minimum-capacity clamp too
   (local.set $result (call $__rt_hash_new (local.get $cap) (i64.const 7)))  ;; fresh mixed-valued result hash
   (local.set $avt (i64.and (i64.shr_u (i64.load (i32.sub (local.get $a) (i32.const 8))) (i64.const 8)) (i64.const 127)))  ;; left value_type tag
   (local.set $i (i64.const 0))                                         ;; left position cursor
@@ -1187,7 +1223,7 @@ const RT_ARRAY_HASH_UNION: &str = r#"(func $__rt_array_hash_union (param $a i32)
   (local.set $cur (i64.load (i32.add (local.get $b) (i32.const 24))))  ;; cur = b.head (insertion-order start)
   (block $rend (loop $rwalk                                           ;; merge each right hash entry
     (br_if $rend (i64.eq (local.get $cur) (i64.const -1)))             ;; end of b's insertion order
-    (local.set $be (i32.add (i32.add (local.get $b) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 64)))))  ;; &b entry
+    (local.set $be (i32.add (i32.add (local.get $b) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 72)))))  ;; &b entry
     (local.set $klo (i64.load (i32.add (local.get $be) (i32.const 8))))   ;; b key_lo
     (local.set $khi (i64.load (i32.add (local.get $be) (i32.const 16))))  ;; b key_hi
     (call $__rt_hash_get (local.get $result) (local.get $klo) (local.get $khi))  ;; already present in result?
@@ -1261,6 +1297,39 @@ const RT_HASH_ARRAY_UNION: &str = r#"(func $__rt_hash_array_union (param $a i32)
   (local.get $result))
 "#;
 
+/// `__rt_array_to_hash`: consumes an indexed-array value and returns associative
+/// hash storage with the same integer-keyed entries. An already-promoted kind-3
+/// value is forwarded unchanged. The `empty_next_zero` flag carries the sole
+/// version-sensitive provenance: an empty literal promoted under PHP 8.2 keeps
+/// immutable `zend_empty_array.nNextFreeElement == 0`; every mutable `HashNew`
+/// and every PHP 8.3+ empty-literal promotion starts from `ZEND_LONG_MIN`.
+///
+/// Indexed mutators that can empty a previously non-empty array (`array_pop`,
+/// `array_shift`, and related runtime calls) remain capability-rejected on WASM.
+/// Before admitting one, the indexed representation must carry its runtime
+/// next-key history instead of reusing this compile-profile literal provenance.
+const RT_ARRAY_TO_HASH: &str = r#"(func $__rt_array_to_hash (param $array i32) (param $empty_next_zero i32) (result i32)
+  (local $kind i32)
+  (local $empty i32)
+  (local $result i32)
+  (local.set $kind
+    (i32.and
+      (i32.wrap_i64 (i64.load (i32.sub (local.get $array) (i32.const 8))))
+      (i32.const 255)))                                          ;; low byte of heap kind
+  (if (i32.eq (local.get $kind) (i32.const 3))
+    (then (return (local.get $array))))                           ;; already promoted
+  (if (i32.ne (local.get $kind) (i32.const 2))
+    (then (call $__rt_oom) unreachable))                         ;; malformed ArrayToHash source
+  (local.set $empty (call $__rt_hash_new (i64.const 0) (i64.const 7)))  ;; empty borrowed right operand
+  (local.set $result (call $__rt_array_hash_union (local.get $array) (local.get $empty)))  ;; copy indexed entries
+  (call $__rt_decref_hash (local.get $empty))                     ;; release temporary empty hash
+  (call $__rt_decref_array (local.get $array))                    ;; conversion consumes indexed source
+  (if (i32.and (local.get $empty_next_zero) (i64.eqz (i64.load (local.get $result))))
+    (then
+      (i64.store (call $__rt_hash_meta_addr (local.get $result)) (i64.const 0))))  ;; PHP 8.2 immutable-empty origin
+  (local.get $result))
+"#;
+
 /// `__rt_hash_free_deep`: releases the children of every live entry (string keys,
 /// string values, and refcounted container values), then frees the block. Walks
 /// all slots; tombstones and empty slots own nothing.
@@ -1275,7 +1344,7 @@ const RT_HASH_FREE_DEEP: &str = r#"(func $__rt_hash_free_deep (param $hash i32)
   (local.set $i (i64.const 0))                               ;; slot cursor = 0
   (block $end (loop $slot
     (br_if $end (i64.ge_u (local.get $i) (local.get $capacity)))  ;; visited every slot
-    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 64)))))  ;; &slot[i]
+    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 72)))))  ;; &slot[i]
     (if (i64.eq (i64.load (local.get $entry)) (i64.const 1)) ;; live entry?
       (then
         (if (i64.ge_s (i64.load (i32.add (local.get $entry) (i32.const 16))) (i64.const 0))  ;; key_hi >= 0 -> string key
@@ -1643,7 +1712,7 @@ mod tests {
         let driver = r#"(func $t (export "t") (result i64)
   (local $h i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
   (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
-  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 42) (i64.const -1) (i64.const 100) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 42) (i64.const -1) (i64.const 100) (i64.const 0) (i64.const 0) (i64.const 0)))
   (call $__rt_hash_get (local.get $h) (i64.const 42) (i64.const -1))
   (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
   (i64.add (i64.mul (i64.extend_i32_u (local.get $found)) (i64.const 1000)) (local.get $vlo)))"#;
@@ -1659,9 +1728,9 @@ mod tests {
         let driver = r#"(func $t (export "t") (result i64)
   (local $h i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
   (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
-  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 1) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0)))
-  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 2) (i64.const -1) (i64.const 20) (i64.const 0) (i64.const 0)))
-  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 3) (i64.const -1) (i64.const 30) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 1) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 2) (i64.const -1) (i64.const 20) (i64.const 0) (i64.const 0) (i64.const 1)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 3) (i64.const -1) (i64.const 30) (i64.const 0) (i64.const 0) (i64.const 2)))
   (call $__rt_hash_get (local.get $h) (i64.const 2) (i64.const -1))
   (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
   (i64.add (i64.mul (i64.extend_i32_u (local.get $found)) (i64.const 1000)) (local.get $vlo)))"#;
@@ -1680,12 +1749,12 @@ mod tests {
   (local $h i32) (local $head i64) (local $headkey i64) (local $count i64)
   (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
   (local.set $h (call $__rt_hash_new (i64.const 4) (i64.const 0)))
-  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 1) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0)))
-  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 2) (i64.const -1) (i64.const 20) (i64.const 0) (i64.const 0)))
-  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 3) (i64.const -1) (i64.const 30) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 1) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 2) (i64.const -1) (i64.const 20) (i64.const 0) (i64.const 0) (i64.const 1)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 3) (i64.const -1) (i64.const 30) (i64.const 0) (i64.const 0) (i64.const 2)))
   (local.set $h (call $__rt_hash_resize (local.get $h)))
   (local.set $head (i64.load (i32.add (local.get $h) (i32.const 24))))
-  (local.set $headkey (i64.load (i32.add (i32.add (i32.add (local.get $h) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $head) (i64.const 64)))) (i32.const 8))))
+  (local.set $headkey (i64.load (i32.add (i32.add (i32.add (local.get $h) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $head) (i64.const 72)))) (i32.const 8))))
   (local.set $count (i64.load (local.get $h)))
   (call $__rt_hash_get (local.get $h) (i64.const 3) (i64.const -1))
   (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
@@ -1706,8 +1775,8 @@ mod tests {
         let driver = r#"(func $t (export "t") (result i64)
   (local $h i32) (local $c i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
   (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
-  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 1) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0)))
-  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 2) (i64.const -1) (i64.const 20) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 1) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 2) (i64.const -1) (i64.const 20) (i64.const 0) (i64.const 0) (i64.const 1)))
   (local.set $c (call $__rt_hash_clone_shallow (local.get $h)))
   (call $__rt_hash_get (local.get $c) (i64.const 2) (i64.const -1))
   (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
@@ -1734,7 +1803,7 @@ mod tests {
   (call $__rt_str_persist (i32.const 400) (i64.const 2))
   (local.set $sl) (local.set $sp)
   (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 1)))
-  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 1) (i64.const -1) (i64.extend_i32_u (local.get $sp)) (local.get $sl) (i64.const 1)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 1) (i64.const -1) (i64.extend_i32_u (local.get $sp)) (local.get $sl) (i64.const 1) (i64.const 0)))
   (call $__rt_hash_get (local.get $h) (i64.const 1) (i64.const -1))
   (local.set $vtag) (local.set $vhi) (local.set $origptr) (local.set $found)
   (local.set $c (call $__rt_hash_clone_shallow (local.get $h)))
@@ -1768,7 +1837,7 @@ mod tests {
         let driver = r#"(func $t (export "t") (result i64)
   (local $h i32) (local $u i32)
   (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
-  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 1) (i64.const -1) (i64.const 9) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 1) (i64.const -1) (i64.const 9) (i64.const 0) (i64.const 0) (i64.const 0)))
   (call $__rt_incref (local.get $h))
   (local.set $u (call $__rt_hash_ensure_unique (local.get $h)))
   (i64.add
@@ -1974,9 +2043,9 @@ mod tests {
         let driver = r#"(func $t (export "t") (result i64)
   (local $h i32) (local $c i64) (local $m i64) (local $acc i64) (local $entry i32)
   (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
-  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 10) (i64.const -1) (i64.const 0) (i64.const 0) (i64.const 0)))
-  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 20) (i64.const -1) (i64.const 0) (i64.const 0) (i64.const 0)))
-  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 30) (i64.const -1) (i64.const 0) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 10) (i64.const -1) (i64.const 0) (i64.const 0) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 20) (i64.const -1) (i64.const 0) (i64.const 0) (i64.const 0) (i64.const 1)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 30) (i64.const -1) (i64.const 0) (i64.const 0) (i64.const 0) (i64.const 2)))
   (local.set $c (i64.const -2))
   (local.set $acc (i64.const 0))
   (block $end (loop $L
@@ -1984,7 +2053,7 @@ mod tests {
     (local.set $m)
     (local.set $c)
     (br_if $end (i64.eqz (local.get $m)))
-    (local.set $entry (i32.add (i32.add (local.get $h) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $c) (i64.const 64)))))
+    (local.set $entry (i32.add (i32.add (local.get $h) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $c) (i64.const 72)))))
     (local.set $acc (i64.add (i64.mul (local.get $acc) (i64.const 100)) (i64.load (i32.add (local.get $entry) (i32.const 8)))))
     (br $L)))
   (local.get $acc))"#;
@@ -2049,29 +2118,69 @@ mod tests {
         }
     }
 
-    /// A negative first integer key follows the selected php-src profile: PHP 8.2
-    /// keeps fresh next-free at 0, while PHP 8.3+ starts at `LONG_MIN` and therefore
-    /// advances `-3` to `-2`. Both reads return `found*100 + value` = 199.
+    /// A directly allocated mutable HashTable starts at `ZEND_LONG_MIN` in every
+    /// supported php-src profile. Therefore `[-3 => 1]; $a[] = 99` appends at -2
+    /// under PHP 8.2, 8.3, 8.4, and 8.5. The bitfield verifies both the fresh
+    /// trailer sentinel and the appended key/value.
     #[test]
-    fn append_after_negative_key_is_php_version_sensitive() {
-        let driver_82 = r#"(func $t (export "t") (result i64)
+    fn mutable_hash_negative_first_key_uses_long_min_in_every_profile() {
+        let driver = r#"(func $t (export "t") (result i64)
   (local $h i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local $sentinel i32)
   (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $sentinel
+    (i64.eq
+      (i64.load (call $__rt_hash_meta_addr (local.get $h)))
+      (i64.const -9223372036854775808)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const -3) (i64.const -1) (i64.const 1) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_append (local.get $h) (i64.const 99) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $h) (i64.const -2) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (i64.add
+    (i64.add
+      (i64.mul (i64.extend_i32_u (local.get $sentinel)) (i64.const 200))
+      (i64.mul (i64.extend_i32_u (local.get $found)) (i64.const 100)))
+    (local.get $vlo)))"#;
+        for version in [
+            PhpVersion::Php82,
+            PhpVersion::Php83,
+            PhpVersion::Php84,
+            PhpVersion::Php85,
+        ] {
+            if let Some(output) = run_driver_for_version(driver, "t", version) {
+                assert_eq!(output, "399", "profile {version:?}");
+            }
+        }
+    }
+
+    /// `ArrayToHash` carries the PHP 8.2 immutable-empty origin explicitly:
+    /// promoting `[]`, setting -3, and appending uses key 0 only when the flag is
+    /// set; the PHP 8.3+ origin appends at -2. A direct mutable HashNew remains
+    /// covered independently by `mutable_hash_negative_first_key_uses_long_min_in_every_profile`.
+    #[test]
+    fn empty_indexed_promotion_preserves_php82_next_zero_origin() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i32) (local $h i32) (local $php82_value i64) (local $newer_value i64)
+  (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local.set $a (call $__rt_array_new (i64.const 0) (i64.const 16)))
+  (local.set $h (call $__rt_array_to_hash (local.get $a) (i32.const 1)))
   (local.set $h (call $__rt_hash_set (local.get $h) (i64.const -3) (i64.const -1) (i64.const 1) (i64.const 0) (i64.const 0)))
   (local.set $h (call $__rt_hash_append (local.get $h) (i64.const 99) (i64.const 0) (i64.const 0)))
   (call $__rt_hash_get (local.get $h) (i64.const 0) (i64.const -1))
   (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
-  (i64.add (i64.mul (i64.extend_i32_u (local.get $found)) (i64.const 100)) (local.get $vlo)))"#;
-        if let Some(o) = run_driver_for_version(driver_82, "t", PhpVersion::Php82) {
-            assert_eq!(o, "199");
-        }
-
-        let driver_85 = driver_82.replace(
-            "(call $__rt_hash_get (local.get $h) (i64.const 0) (i64.const -1))",
-            "(call $__rt_hash_get (local.get $h) (i64.const -2) (i64.const -1))",
-        );
-        if let Some(o) = run_driver_for_version(&driver_85, "t", PhpVersion::Php85) {
-            assert_eq!(o, "199");
+  (local.set $php82_value
+    (i64.add (i64.mul (i64.extend_i32_u (local.get $found)) (i64.const 100)) (local.get $vlo)))
+  (local.set $a (call $__rt_array_new (i64.const 0) (i64.const 16)))
+  (local.set $h (call $__rt_array_to_hash (local.get $a) (i32.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const -3) (i64.const -1) (i64.const 1) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_append (local.get $h) (i64.const 99) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $h) (i64.const -2) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (local.set $newer_value
+    (i64.add (i64.mul (i64.extend_i32_u (local.get $found)) (i64.const 100)) (local.get $vlo)))
+  (i64.add (i64.mul (local.get $php82_value) (i64.const 1000)) (local.get $newer_value)))"#;
+        if let Some(output) = run_driver(driver, "t") {
+            assert_eq!(output, "199199");
         }
     }
 
@@ -2281,6 +2390,226 @@ mod tests {
         }
     }
 
+    /// Mixed-table deletion follows php-src's trailing-hole rule. Removing an
+    /// interior bucket keeps `nNumUsed=4`; deleting the live tail collapses over
+    /// that hole to 3, the next tail deletion collapses to 1, and deleting the
+    /// final bucket resets it to 0. The decimal fold is therefore 4310.
+    #[test]
+    fn mixed_unset_collapses_only_trailing_logical_holes() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $meta i32)
+  (local $u1 i64) (local $u2 i64) (local $u3 i64) (local $u4 i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const -10) (i64.const -1) (i64.const 1) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const -9) (i64.const -1) (i64.const 2) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const -8) (i64.const -1) (i64.const 3) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const -7) (i64.const -1) (i64.const 4) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const -9) (i64.const -1)))
+  (local.set $meta (call $__rt_hash_meta_addr (local.get $h)))
+  (local.set $u1 (i64.load (i32.add (local.get $meta) (i32.const 16))))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const -7) (i64.const -1)))
+  (local.set $u2 (i64.load (i32.add (local.get $meta) (i32.const 16))))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const -8) (i64.const -1)))
+  (local.set $u3 (i64.load (i32.add (local.get $meta) (i32.const 16))))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const -10) (i64.const -1)))
+  (local.set $u4 (i64.load (i32.add (local.get $meta) (i32.const 16))))
+  (i64.add
+    (i64.add (i64.mul (local.get $u1) (i64.const 1000)) (i64.mul (local.get $u2) (i64.const 100)))
+    (i64.add (i64.mul (local.get $u3) (i64.const 10)) (local.get $u4))))"#;
+        if let Some(output) = run_driver(driver, "t") {
+            assert_eq!(output, "4310");
+        }
+    }
+
+    /// A full logical table with size 8, used 8, and live count 7 satisfies
+    /// `used > count + (count >> 5)`, so php-src compacts without growing. The
+    /// new entry gets dense ordinal 7 and the table remains MIXED size 8.
+    #[test]
+    fn mixed_logical_resize_compacts_size_eight_without_growth() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $i i64) (local $meta i32) (local $tail_entry i32) (local $ok i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $i (i64.const 0))
+  (block $done (loop $fill
+    (br_if $done (i64.ge_u (local.get $i) (i64.const 8)))
+    (local.set $h (call $__rt_hash_set (local.get $h)
+      (i64.add (i64.const -100) (local.get $i)) (i64.const -1)
+      (local.get $i) (i64.const 0) (i64.const 0)))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))
+    (br $fill)))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const -99) (i64.const -1)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const -92) (i64.const -1) (i64.const 99) (i64.const 0) (i64.const 0)))
+  (local.set $meta (call $__rt_hash_meta_addr (local.get $h)))
+  (local.set $tail_entry (i32.add (i32.add (local.get $h) (i32.const 40))
+    (i32.wrap_i64 (i64.mul (i64.load (i32.add (local.get $h) (i32.const 32))) (i64.const 72)))))
+  (local.set $ok (i64.mul (i64.extend_i32_u (i64.eq (i64.load (local.get $h)) (i64.const 8))) (i64.const 16)))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $meta) (i32.const 8))) (i64.const 2))) (i64.const 8))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $meta) (i32.const 16))) (i64.const 8))) (i64.const 4))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $meta) (i32.const 24))) (i64.const 8))) (i64.const 2))))
+  (i64.add (local.get $ok) (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $tail_entry) (i32.const 64))) (i64.const 7)))))"#;
+        if let Some(output) = run_driver(driver, "t") {
+            assert_eq!(output, "31");
+        }
+    }
+
+    /// A full logical size-64 table with 63 live buckets does not satisfy the
+    /// compaction threshold (`64 > 63 + 1` is false). php-src doubles to 128,
+    /// compacts the hole, and reserves dense ordinal 63 for the new key.
+    #[test]
+    fn mixed_logical_resize_grows_size_sixty_four_at_threshold() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $i i64) (local $meta i32) (local $tail_entry i32) (local $ok i64)
+  (local.set $h (call $__rt_hash_new (i64.const 64) (i64.const 0)))
+  (local.set $i (i64.const 0))
+  (block $done (loop $fill
+    (br_if $done (i64.ge_u (local.get $i) (i64.const 64)))
+    (local.set $h (call $__rt_hash_set (local.get $h)
+      (i64.add (i64.const -1000) (local.get $i)) (i64.const -1)
+      (local.get $i) (i64.const 0) (i64.const 0)))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))
+    (br $fill)))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const -999) (i64.const -1)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const -936) (i64.const -1) (i64.const 99) (i64.const 0) (i64.const 0)))
+  (local.set $meta (call $__rt_hash_meta_addr (local.get $h)))
+  (local.set $tail_entry (i32.add (i32.add (local.get $h) (i32.const 40))
+    (i32.wrap_i64 (i64.mul (i64.load (i32.add (local.get $h) (i32.const 32))) (i64.const 72)))))
+  (local.set $ok (i64.mul (i64.extend_i32_u (i64.eq (i64.load (local.get $h)) (i64.const 64))) (i64.const 16)))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $meta) (i32.const 8))) (i64.const 2))) (i64.const 8))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $meta) (i32.const 16))) (i64.const 64))) (i64.const 4))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $meta) (i32.const 24))) (i64.const 128))) (i64.const 2))))
+  (i64.add (local.get $ok) (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $tail_entry) (i32.const 64))) (i64.const 63)))))"#;
+        if let Some(output) = run_driver(driver, "t") {
+            assert_eq!(output, "31");
+        }
+    }
+
+    /// Physical load-factor resize is transparent to Zend state. A MIXED table
+    /// with ordinal hole 1 keeps next=-6, mode=2, used=4, size=8, and live
+    /// ordinals 0,2,3 after its probe capacity doubles from 8 to 16.
+    #[test]
+    fn physical_resize_preserves_zend_trailer_and_ordinals() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $meta i32) (local $cur i64) (local $entry i32) (local $ok i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const -10) (i64.const -1) (i64.const 1) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const -9) (i64.const -1) (i64.const 2) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const -8) (i64.const -1) (i64.const 3) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const -7) (i64.const -1) (i64.const 4) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const -9) (i64.const -1)))
+  (local.set $h (call $__rt_hash_resize (local.get $h)))
+  (local.set $meta (call $__rt_hash_meta_addr (local.get $h)))
+  (local.set $ok (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $h) (i32.const 8))) (i64.const 16))) (i64.const 64)))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (local.get $meta)) (i64.const -6))) (i64.const 32))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $meta) (i32.const 8))) (i64.const 2))) (i64.const 16))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $meta) (i32.const 16))) (i64.const 4))) (i64.const 8))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $meta) (i32.const 24))) (i64.const 8))) (i64.const 4))))
+  (local.set $cur (i64.load (i32.add (local.get $h) (i32.const 24))))
+  (local.set $entry (i32.add (i32.add (local.get $h) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 72)))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eqz (i64.load (i32.add (local.get $entry) (i32.const 64))))) (i64.const 2))))
+  (local.set $cur (i64.load (i32.add (local.get $entry) (i32.const 56))))
+  (local.set $entry (i32.add (i32.add (local.get $h) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 72)))))
+  (local.set $ok (i64.add (local.get $ok) (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $entry) (i32.const 64))) (i64.const 2)))))
+  (local.get $ok))"#;
+        if let Some(output) = run_driver(driver, "t") {
+            assert_eq!(output, "127");
+        }
+    }
+
+    /// COW duplication of MIXED storage compacts logical holes in insertion
+    /// order. The source keeps used=4 and ordinals 0,2,3; the clone gets used=3
+    /// and dense ordinals 0,1,2 while preserving next=-6 and size=8.
+    #[test]
+    fn mixed_cow_compacts_logical_holes() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $c i32) (local $meta i32) (local $cur i64) (local $entry i32) (local $ok i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const -10) (i64.const -1) (i64.const 1) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const -9) (i64.const -1) (i64.const 2) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const -8) (i64.const -1) (i64.const 3) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const -7) (i64.const -1) (i64.const 4) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const -9) (i64.const -1)))
+  (call $__rt_incref (local.get $h))
+  (local.set $c (call $__rt_hash_ensure_unique (local.get $h)))
+  (local.set $ok (i64.mul (i64.extend_i32_u (i32.ne (local.get $h) (local.get $c))) (i64.const 256)))
+  (local.set $meta (call $__rt_hash_meta_addr (local.get $h)))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $meta) (i32.const 16))) (i64.const 4))) (i64.const 128))))
+  (local.set $meta (call $__rt_hash_meta_addr (local.get $c)))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $meta) (i32.const 8))) (i64.const 2))) (i64.const 64))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $meta) (i32.const 16))) (i64.const 3))) (i64.const 32))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $meta) (i32.const 24))) (i64.const 8))) (i64.const 16))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (local.get $meta)) (i64.const -6))) (i64.const 8))))
+  (local.set $cur (i64.load (i32.add (local.get $c) (i32.const 24))))
+  (local.set $entry (i32.add (i32.add (local.get $c) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 72)))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eqz (i64.load (i32.add (local.get $entry) (i32.const 64))))) (i64.const 4))))
+  (local.set $cur (i64.load (i32.add (local.get $entry) (i32.const 56))))
+  (local.set $entry (i32.add (i32.add (local.get $c) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 72)))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $entry) (i32.const 64))) (i64.const 1))) (i64.const 2))))
+  (local.set $cur (i64.load (i32.add (local.get $entry) (i32.const 56))))
+  (local.set $entry (i32.add (i32.add (local.get $c) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 72)))))
+  (local.set $ok (i64.add (local.get $ok) (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $entry) (i32.const 64))) (i64.const 2)))))
+  (local.get $ok))"#;
+        if let Some(output) = run_driver(driver, "t") {
+            assert_eq!(output, "511");
+        }
+    }
+
+    /// PACKED COW preserves implicit holes rather than compacting. After deleting
+    /// key 1 from keys 0,1,2, the clone remains mode=PACKED, used=3, count=2,
+    /// with its surviving head/tail ordinals still 0 and 2.
+    #[test]
+    fn packed_cow_preserves_implicit_holes() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $c i32) (local $meta i32) (local $entry i32) (local $ok i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 0) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 1) (i64.const -1) (i64.const 11) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 2) (i64.const -1) (i64.const 12) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const 1) (i64.const -1)))
+  (call $__rt_incref (local.get $h))
+  (local.set $c (call $__rt_hash_ensure_unique (local.get $h)))
+  (local.set $meta (call $__rt_hash_meta_addr (local.get $c)))
+  (local.set $ok (i64.mul (i64.extend_i32_u (i32.ne (local.get $h) (local.get $c))) (i64.const 64)))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $meta) (i32.const 8))) (i64.const 1))) (i64.const 32))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $meta) (i32.const 16))) (i64.const 3))) (i64.const 16))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (local.get $c)) (i64.const 2))) (i64.const 8))))
+  (local.set $entry (i32.add (i32.add (local.get $c) (i32.const 40))
+    (i32.wrap_i64 (i64.mul (i64.load (i32.add (local.get $c) (i32.const 24))) (i64.const 72)))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eqz (i64.load (i32.add (local.get $entry) (i32.const 64))))) (i64.const 4))))
+  (local.set $entry (i32.add (i32.add (local.get $c) (i32.const 40))
+    (i32.wrap_i64 (i64.mul (i64.load (i32.add (local.get $c) (i32.const 32))) (i64.const 72)))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $entry) (i32.const 64))) (i64.const 2))) (i64.const 2))))
+  (i64.add (local.get $ok) (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $meta) (i32.const 24))) (i64.const 8)))))"#;
+        if let Some(output) = run_driver(driver, "t") {
+            assert_eq!(output, "127");
+        }
+    }
+
+    /// COW of an empty formerly-PACKED table resets mode/used/table-size to
+    /// UNINITIALIZED/0/8 while preserving append history. Setting then deleting
+    /// key 5 leaves next=6; the empty clone keeps that next value.
+    #[test]
+    fn empty_cow_resets_layout_but_preserves_next_free() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $c i32) (local $meta i32) (local $source_meta i32) (local $ok i64)
+  (local.set $h (call $__rt_hash_new (i64.const 32) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 5) (i64.const -1) (i64.const 1) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const 5) (i64.const -1)))
+  (local.set $source_meta (call $__rt_hash_meta_addr (local.get $h)))
+  (call $__rt_incref (local.get $h))
+  (local.set $c (call $__rt_hash_ensure_unique (local.get $h)))
+  (local.set $meta (call $__rt_hash_meta_addr (local.get $c)))
+  (local.set $ok (i64.mul (i64.extend_i32_u (i32.ne (local.get $h) (local.get $c))) (i64.const 64)))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $source_meta) (i32.const 8))) (i64.const 1))) (i64.const 32))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eqz (i64.load (i32.add (local.get $meta) (i32.const 8))))) (i64.const 16))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eqz (i64.load (i32.add (local.get $meta) (i32.const 16))))) (i64.const 8))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $meta) (i32.const 24))) (i64.const 8))) (i64.const 4))))
+  (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (local.get $meta)) (i64.const 6))) (i64.const 2))))
+  (i64.add (local.get $ok) (i64.extend_i32_u (i64.eqz (i64.load (local.get $c))))))"#;
+        if let Some(output) = run_driver(driver, "t") {
+            assert_eq!(output, "127");
+        }
+    }
+
     /// `__rt_hash_union` keeps the LEFT operand's value on a key collision and appends the
     /// right operand's new keys. With a = {1:10, 2:20} and b = {2:99, 3:30}, the union is
     /// {1:10, 2:20, 3:30}: key 2 stays 20 (left wins), key 3 is 30 (from b), count is 3.
@@ -2417,7 +2746,7 @@ mod tests {
         (i64.add
           (i64.mul (i64.load (local.get $h)) (i64.const 1000000))
           (i64.mul (local.get $vlo) (i64.const 1000)))
-        (i64.mul (i64.load (i32.add (local.get $h) (i32.const 360))) (i64.const 100)))
+        (i64.mul (i64.load (i32.add (local.get $h) (i32.const 400))) (i64.const 100)))
       (i64.mul (i64.load (i32.add (local.get $h) (i32.const 24))) (i64.const 10)))
     (i64.load (i32.add (local.get $h) (i32.const 32)))))"#;
         if let Some(output) = run_driver(driver, "t") {
@@ -2437,8 +2766,8 @@ mod tests {
   (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 9) (i64.const -1) (i64.const 90) (i64.const 0) (i64.const 0)))
   (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const 1) (i64.const -1)))
   (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 1) (i64.const -1) (i64.const 11) (i64.const 0) (i64.const 0)))
-  (local.set $e5 (i32.add (local.get $h) (i32.const 360)))
-  (local.set $e6 (i32.add (local.get $h) (i32.const 424)))
+  (local.set $e5 (i32.add (local.get $h) (i32.const 400)))
+  (local.set $e6 (i32.add (local.get $h) (i32.const 472)))
   (local.set $ok (i64.mul (i64.extend_i32_u (i64.eq (i64.load (local.get $h)) (i64.const 2))) (i64.const 128)))
   (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $h) (i32.const 24))) (i64.const 6))) (i64.const 64))))
   (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $h) (i32.const 32))) (i64.const 5))) (i64.const 32))))
@@ -2464,8 +2793,8 @@ mod tests {
   (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 9) (i64.const -1) (i64.const 90) (i64.const 0) (i64.const 0)))
   (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const 1) (i64.const -1)))
   (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 17) (i64.const -1) (i64.const 170) (i64.const 0) (i64.const 0)))
-  (local.set $e5 (i32.add (local.get $h) (i32.const 360)))
-  (local.set $e6 (i32.add (local.get $h) (i32.const 424)))
+  (local.set $e5 (i32.add (local.get $h) (i32.const 400)))
+  (local.set $e6 (i32.add (local.get $h) (i32.const 472)))
   (local.set $ok (i64.mul (i64.extend_i32_u (i64.eq (i64.load (local.get $h)) (i64.const 2))) (i64.const 128)))
   (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $h) (i32.const 24))) (i64.const 6))) (i64.const 64))))
   (local.set $ok (i64.add (local.get $ok) (i64.mul (i64.extend_i32_u (i64.eq (i64.load (i32.add (local.get $h) (i32.const 32))) (i64.const 5))) (i64.const 32))))
@@ -2489,16 +2818,16 @@ mod tests {
   (local $h i32) (local $e0 i32) (local $e1 i32) (local $e2 i32) (local $e3 i32)
   (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64) (local $ok i64)
   (local.set $h (call $__rt_hash_new (i64.const 4) (i64.const 0)))
-  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 0) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0)))
-  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 1) (i64.const -1) (i64.const 11) (i64.const 0) (i64.const 0)))
-  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 2) (i64.const -1) (i64.const 12) (i64.const 0) (i64.const 0)))
-  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 3) (i64.const -1) (i64.const 13) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 0) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 1) (i64.const -1) (i64.const 11) (i64.const 0) (i64.const 0) (i64.const 1)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 2) (i64.const -1) (i64.const 12) (i64.const 0) (i64.const 0) (i64.const 2)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 3) (i64.const -1) (i64.const 13) (i64.const 0) (i64.const 0) (i64.const 3)))
   (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const 2) (i64.const -1)))
-  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 6) (i64.const -1) (i64.const 60) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 6) (i64.const -1) (i64.const 60) (i64.const 0) (i64.const 0) (i64.const 4)))
   (local.set $e0 (i32.add (local.get $h) (i32.const 40)))
-  (local.set $e1 (i32.add (local.get $h) (i32.const 104)))
-  (local.set $e2 (i32.add (local.get $h) (i32.const 168)))
-  (local.set $e3 (i32.add (local.get $h) (i32.const 232)))
+  (local.set $e1 (i32.add (local.get $h) (i32.const 112)))
+  (local.set $e2 (i32.add (local.get $h) (i32.const 184)))
+  (local.set $e3 (i32.add (local.get $h) (i32.const 256)))
   (call $__rt_hash_get (local.get $h) (i64.const 6) (i64.const -1))
   (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
   (local.set $ok (i64.mul (i64.extend_i32_u (i64.eq (i64.load (local.get $h)) (i64.const 4))) (i64.const 512)))
@@ -2517,6 +2846,36 @@ mod tests {
         }
     }
 
+    /// Four removals can leave a capacity-4 probe table with four tombstones and
+    /// no empty slot while live count is zero. A normal `hash_set` must complete
+    /// the bounded full-table probe, reuse a tombstone without resizing, and make
+    /// the new value readable from the same physical table.
+    #[test]
+    fn hash_set_reuses_tombstone_when_every_physical_slot_is_deleted() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local.set $h (call $__rt_hash_new (i64.const 4) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 0) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 1) (i64.const -1) (i64.const 11) (i64.const 0) (i64.const 0) (i64.const 1)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 2) (i64.const -1) (i64.const 12) (i64.const 0) (i64.const 0) (i64.const 2)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 3) (i64.const -1) (i64.const 13) (i64.const 0) (i64.const 0) (i64.const 3)))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const 0) (i64.const -1)))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const 1) (i64.const -1)))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const 2) (i64.const -1)))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const 3) (i64.const -1)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 9) (i64.const -1) (i64.const 99) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $h) (i64.const 9) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (i64.add
+    (i64.add
+      (i64.mul (i64.load (local.get $h)) (i64.const 1000))
+      (i64.mul (i64.load (i32.add (local.get $h) (i32.const 8))) (i64.const 100)))
+    (i64.add (i64.mul (i64.extend_i32_u (local.get $found)) (i64.const 10)) (local.get $vlo))))"#;
+        if let Some(output) = run_driver(driver, "t") {
+            assert_eq!(output, "1509");
+        }
+    }
+
     /// Lookup and unset skip a tombstone whose stale string-key pointer is outside
     /// linear memory. Any accidental equality check on occupied=2 would dereference
     /// address 300000 and trap; both operations must instead advance to the empty slot.
@@ -2528,7 +2887,7 @@ mod tests {
   (i32.store8 (i32.const 300) (i32.const 120))
   (local.set $h (call $__rt_hash_new (i64.const 4) (i64.const 0)))
   (local.set $slot (i64.rem_u (call $__rt_hash_key_hash (i64.const 300) (i64.const 1)) (i64.const 4)))
-  (local.set $entry (i32.add (i32.add (local.get $h) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 64)))))
+  (local.set $entry (i32.add (i32.add (local.get $h) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 72)))))
   (i64.store (local.get $entry) (i64.const 2))
   (i64.store (i32.add (local.get $entry) (i32.const 8)) (i64.const 300000))
   (i64.store (i32.add (local.get $entry) (i32.const 16)) (i64.const 1))

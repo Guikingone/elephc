@@ -2,14 +2,15 @@
 //! Lowers the EIR associative-array (hash) instructions — `HashNew`, `HashSet`,
 //! `HashGet`, `HashUnset`, `HashAppend` (`$h[] = v`), and the `$a + $b` union family
 //! (`HashUnion`, plus the cross-representation `ArrayUnion`, `ArrayHashUnion`, and
-//! `HashArrayUnion`) — to WebAssembly for the wasm32-wasi backend, materializing PHP
+//! `HashArrayUnion`, plus indexed-to-hash promotion) — to WebAssembly for the
+//! wasm32-wasi backend, materializing PHP
 //! keys/values into the `(key_lo, key_hi)` / `(val_lo, val_hi, val_tag)` shapes the
 //! `__rt_hash_*` runtime expects and reconstructing reads back into typed locals.
 //!
 //! Called from:
 //! - `crate::codegen_wasm::inst::lower_instruction` for
 //!   `Op::HashNew/HashGet/HashSet/HashUnset/HashAppend/HashUnion/ArrayUnion/`
-//!   `ArrayHashUnion/HashArrayUnion`.
+//!   `ArrayHashUnion/HashArrayUnion/ArrayToHash`.
 //!
 //! Key details:
 //! - The hash runtime (`crate::codegen_wasm::hashes`) owns inbound values itself:
@@ -74,6 +75,34 @@ pub(super) fn lower_hash_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
         .ins(&format!("i64.const {}", value_tag), "hash storage value tag");
     ctx.fb
         .ins("call $__rt_hash_new", "allocate ordered-map hash");
+    store_result(ctx, inst)
+}
+
+/// Lowers `Op::ArrayToHash` by consuming the indexed source and returning a
+/// fresh associative hash, or forwarding storage that was already promoted.
+/// PHP 8.2 alone carries the empty-literal `zend_empty_array` next-key origin;
+/// the runtime applies it only when the promoted source is still empty. Runtime
+/// mutators that can empty indexed storage are still capability-rejected; when
+/// admitted they must add per-array next-key provenance instead of this literal flag.
+pub(super) fn lower_array_to_hash(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let array = operand(inst, 0)?;
+    ctx.emit_load_value(array)?;
+    let empty_next_zero = matches!(
+        crate::codegen_support::compile_php_version(),
+        crate::web_prelude::PhpVersion::Php82
+    );
+    ctx.fb.ins(
+        if empty_next_zero {
+            "i32.const 1"
+        } else {
+            "i32.const 0"
+        },
+        "preserve PHP 8.2 empty-literal next-key origin",
+    );
+    ctx.fb.ins(
+        "call $__rt_array_to_hash",
+        "promote indexed array to ordered-map hash",
+    );
     store_result(ctx, inst)
 }
 
@@ -737,8 +766,8 @@ fn hash_storage_value_type(ctx: &FnCtx, hash: crate::ir::ValueId) -> PhpType {
         .unwrap_or(PhpType::Mixed)
 }
 
-/// Emits the byte address of hash entry `cursor` — `hash + 40 + cursor*64` (a 40-byte
-/// header then 64-byte entries) — into a fresh i32 temp local and returns its name.
+/// Emits the byte address of hash entry `cursor` — `hash + 40 + cursor*72` (a 40-byte
+/// header then 72-byte entries) — into a fresh i32 temp local and returns its name.
 /// `src` is the hash pointer local; `cursor` is the i64 slot-index local.
 fn hash_entry_addr(ctx: &mut FnCtx, src: &str, cursor: &str) -> String {
     let entry = ctx.fresh_temp(ValType::I32);
@@ -746,10 +775,10 @@ fn hash_entry_addr(ctx: &mut FnCtx, src: &str, cursor: &str) -> String {
     ctx.fb.ins("i32.const 40", "skip the 40-byte header");
     ctx.fb.ins("i32.add", "address of the first entry");
     ctx.fb.ins(&format!("local.get {}", cursor), "current slot index");
-    ctx.fb.ins("i64.const 64", "entry stride (bytes)");
-    ctx.fb.ins("i64.mul", "slot * 64");
+    ctx.fb.ins("i64.const 72", "entry stride (bytes)");
+    ctx.fb.ins("i64.mul", "slot * 72");
     ctx.fb.ins("i32.wrap_i64", "byte offset -> i32");
-    ctx.fb.ins("i32.add", "entry = first_entry + slot*64");
+    ctx.fb.ins("i32.add", "entry = first_entry + slot*72");
     ctx.fb.ins(&format!("local.set {}", entry), "hash entry address");
     entry
 }

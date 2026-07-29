@@ -19,7 +19,7 @@ use super::WasmError;
 use crate::codegen::Emit;
 use crate::ir::{
     Function, Immediate, Instruction, IrHeapKind, IrType, Module, Op, RuntimeCallTarget,
-    RuntimeFnId, Terminator, UnaryStringRuntime, ValueDef, ValueId,
+    RuntimeFnId, Terminator, UnaryStringRuntime, ValueDef, ValueId, Ownership,
 };
 use crate::types::PhpType;
 use std::collections::HashSet;
@@ -288,6 +288,7 @@ fn check_instruction_shape(
         }
         Op::Cast => cast_shape_issue(function, inst),
         Op::ArrayGet | Op::ArrayGetSilent => array_get_shape_issue(function, inst),
+        Op::ArrayToHash => array_to_hash_shape_issue(function, inst),
         Op::NullsafeMethodCall => nullsafe_method_call_shape_issue(module, function, inst),
         Op::ClosureNew => {
             closure_new_by_ref_capture_issue(module, function, inst, ref_cell_provenance)
@@ -583,6 +584,78 @@ fn array_get_shape_issue(function: &Function, inst: &Instruction) -> Option<Stri
         return Some(format!(
             "element {element_type:?} cannot lower into {:?}/{result_php:?}",
             inst.result_type
+        ));
+    }
+    None
+}
+
+/// Validates the consuming indexed-array to associative-hash promotion contract.
+///
+/// The runtime consumes an owned/maybe-owned indexed source and returns a
+/// release-tracked hash. Concrete element storage may be preserved exactly or
+/// widened to Mixed, as required by array spread and contextual hash promotion;
+/// the empty-literal `array<never>` placeholder may adopt its contextual value type.
+fn array_to_hash_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
+    let [array] = inst.operands.as_slice() else {
+        return Some(format!(
+            "expected one indexed-array operand, got {}",
+            inst.operands.len()
+        ));
+    };
+    if inst.immediate.is_some() {
+        return Some("promotion must not carry an immediate".to_string());
+    }
+    let Some(source) = function.value(*array) else {
+        return Some("array operand is missing from the value table".to_string());
+    };
+    let source_element = match (source.ir_type, source.php_type.codegen_repr()) {
+        (IrType::Heap(IrHeapKind::Array), PhpType::Array(element)) => {
+            element.codegen_repr()
+        }
+        (ir_type, php_type) => {
+            return Some(format!(
+                "source must be an indexed array, got {ir_type:?}/{php_type:?}"
+            ))
+        }
+    };
+    if !matches!(source.ownership, Ownership::Owned | Ownership::MaybeOwned) {
+        return Some(format!(
+            "consumed source must own a releasable reference, got {:?}",
+            source.ownership
+        ));
+    }
+    let result_value = match inst.result_php_type.codegen_repr() {
+        PhpType::AssocArray { key, value } if key.codegen_repr() == PhpType::Int => {
+            value.codegen_repr()
+        }
+        php_type => {
+            return Some(format!(
+                "result must be AssocArray<Int, T>, got {:?}/{php_type:?}",
+                inst.result_type
+            ))
+        }
+    };
+    if inst.result.is_none() || inst.result_type != IrType::Heap(IrHeapKind::Hash) {
+        return Some(format!(
+            "result must materialize Heap(Hash), got {:?}",
+            inst.result_type
+        ));
+    }
+    if !matches!(
+        inst.result_ownership,
+        Ownership::Owned | Ownership::MaybeOwned
+    ) {
+        return Some(format!(
+            "result must own a releasable hash reference, got {:?}",
+            inst.result_ownership
+        ));
+    }
+    if source_element != PhpType::Void
+        && result_value != source_element
+        && result_value != PhpType::Mixed
+    {
+        return Some(format!(
+            "result value {result_value:?} must preserve {source_element:?} or widen to Mixed"
         ));
     }
     None
@@ -1888,6 +1961,7 @@ fn op_is_supported(op: Op) -> bool {
         | Op::HashSet
         | Op::HashUnset
         | Op::ArrayPush
+        | Op::ArrayToHash
         | Op::HashAppend
         | Op::ArrayUnion
         | Op::HashUnion
@@ -1980,7 +2054,6 @@ fn op_is_supported(op: Op) -> bool {
         | Op::ArrayCloneShallow
         | Op::HashCloneShallow
         | Op::HashSpread
-        | Op::ArrayToHash
         | Op::ArraySetMixedKey
         | Op::ArrayGetMixedKey
         | Op::ArrayGetMixedKeySilent
@@ -3053,6 +3126,160 @@ mod tests {
             1,
             "{message}"
         );
+    }
+
+    /// Indexed-to-hash promotion is admitted with one release-tracked indexed
+    /// source and an owned associative result whose integer-keyed value type is
+    /// preserved. Capability accepts the shape; hash/CLI tests cover production
+    /// lowering and runtime assembly/execution.
+    #[test]
+    fn accepts_shape_complete_array_to_hash() {
+        let mut module = Module::new(Target::wasm());
+        let mut function = Function::new("promote".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let array = builder
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(0)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::Owned,
+                )
+                .expect("array value");
+            let _ = builder.emit(
+                Op::ArrayToHash,
+                vec![array],
+                None,
+                IrType::Heap(IrHeapKind::Hash),
+                PhpType::AssocArray {
+                    key: Box::new(PhpType::Int),
+                    value: Box::new(PhpType::Int),
+                },
+                Ownership::Owned,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        validate_module(&module).expect("shape-complete ArrayToHash must pass planning");
+    }
+
+    /// ArrayToHash rejects malformed arity, source type/ownership, result
+    /// storage/type compatibility, and result ownership at the static capability
+    /// gate instead of falling through to WAT lowering.
+    #[test]
+    fn rejects_invalid_array_to_hash_shapes_before_lowering() {
+        let mut module = Module::new(Target::wasm());
+        let mut function =
+            Function::new("bad_promotions".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let integer = builder.emit_const_i64(1);
+            let array = builder
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(0)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::Owned,
+                )
+                .expect("array value");
+            let borrowed_array = builder
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(0)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::Borrowed,
+                )
+                .expect("borrowed array value");
+            let assoc_int = PhpType::AssocArray {
+                key: Box::new(PhpType::Int),
+                value: Box::new(PhpType::Int),
+            };
+            let _ = builder.emit(
+                Op::ArrayToHash,
+                Vec::new(),
+                None,
+                IrType::Heap(IrHeapKind::Hash),
+                assoc_int.clone(),
+                Ownership::Owned,
+            );
+            let _ = builder.emit(
+                Op::ArrayToHash,
+                vec![integer],
+                None,
+                IrType::Heap(IrHeapKind::Hash),
+                assoc_int.clone(),
+                Ownership::Owned,
+            );
+            let _ = builder.emit(
+                Op::ArrayToHash,
+                vec![array],
+                None,
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(PhpType::Int)),
+                Ownership::Owned,
+            );
+            let _ = builder.emit(
+                Op::ArrayToHash,
+                vec![array],
+                None,
+                IrType::Heap(IrHeapKind::Hash),
+                PhpType::AssocArray {
+                    key: Box::new(PhpType::Int),
+                    value: Box::new(PhpType::Str),
+                },
+                Ownership::Owned,
+            );
+            let _ = builder.emit(
+                Op::ArrayToHash,
+                vec![array],
+                None,
+                IrType::Heap(IrHeapKind::Hash),
+                assoc_int.clone(),
+                Ownership::Borrowed,
+            );
+            let _ = builder.emit(
+                Op::ArrayToHash,
+                vec![borrowed_array],
+                None,
+                IrType::Heap(IrHeapKind::Hash),
+                assoc_int,
+                Ownership::Owned,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let error =
+            validate_module(&module).expect_err("invalid ArrayToHash shapes must fail");
+        let message = error.to_string();
+        assert_eq!(
+            message.matches("unsupported array_to_hash shape").count(),
+            6,
+            "{message}"
+        );
+        for expected in [
+            "expected one indexed-array operand",
+            "source must be an indexed array",
+            "result must be AssocArray<Int, T>",
+            "must preserve Int or widen to Mixed",
+            "result must own a releasable hash reference",
+            "consumed source must own a releasable reference",
+        ] {
+            assert!(message.contains(expected), "missing {expected:?}: {message}");
+        }
     }
 
     /// Verifies `exit`/`die` in a nested function is rejected until WASM can

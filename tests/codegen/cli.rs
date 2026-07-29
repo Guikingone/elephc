@@ -7,6 +7,8 @@
 //! Key details:
 //! - Native help and managed-PCRE2 recovery diagnostics are exercised through subprocesses.
 //! - Non-link modes must remain independent of installed native artifacts.
+//! - Inline PHP fixtures are compiled to native binaries or wasm32-wasi modules,
+//!   and assertions compare stdout or expected failures.
 
 use crate::support::*;
 
@@ -767,6 +769,82 @@ $a[] = 2;
         String::from_utf8_lossy(&run.stderr),
         "PHP Fatal error: Uncaught Error: Cannot add element to the array as the next element is already occupied\n"
     );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Compiles the exact php-src next-free origin split through PHP -> EIR -> WASM
+/// for every supported compatibility profile. PHP 8.2 promotes immutable `[]`
+/// with next=0, while a direct mutable `[-3 => 1]` starts at LONG_MIN; PHP
+/// 8.3-8.5 start both empty-literal and mutable paths at LONG_MIN.
+#[test]
+fn test_cli_wasm_empty_promotion_and_direct_hash_match_php_profiles() {
+    if Command::new("wasmer").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_hash_next_origin");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+$a = [];
+$a[-3] = 1;
+$a[] = 2;
+echo "empty:";
+foreach ($a as $key => $value) {
+    echo $key, ",";
+}
+
+$b = [-3 => 1];
+$b[] = 2;
+echo "|literal:";
+foreach ($b as $key => $value) {
+    echo $key, ",";
+}
+"#,
+    )
+    .unwrap();
+
+    for (version, expected) in [
+        ("8.2", "empty:-3,0,|literal:-3,-2,"),
+        ("8.3", "empty:-3,-2,|literal:-3,-2,"),
+        ("8.4", "empty:-3,-2,|literal:-3,-2,"),
+        ("8.5", "empty:-3,-2,|literal:-3,-2,"),
+    ] {
+        let output = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg("--php-version")
+            .arg(version)
+            .arg(&php_path)
+            .output()
+            .expect("failed to compile hash next-free profile fixture to WASM");
+        assert!(
+            output.status.success(),
+            "PHP {version} hash-origin compilation failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let wasm_path = dir.join("main.wasm");
+        assert!(wasm_path.exists(), "WASM compilation must publish main.wasm");
+        let run = Command::new("wasmer")
+            .arg("run")
+            .arg(&wasm_path)
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run hash-origin fixture under Wasmer");
+        assert!(
+            run.status.success(),
+            "PHP {version} hash-origin fixture trapped: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            expected,
+            "PHP {version}"
+        );
+    }
 
     let _ = fs::remove_dir_all(&dir);
 }

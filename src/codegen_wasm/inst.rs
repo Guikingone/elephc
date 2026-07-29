@@ -94,6 +94,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::ArrayGet | Op::ArrayGetSilent => lower_array_get(ctx, &inst),
         Op::ArrayPush => lower_array_push(ctx, &inst),
         Op::ArraySet => lower_array_set(ctx, &inst),
+        Op::ArrayToHash => super::inst_hash::lower_array_to_hash(ctx, &inst),
         Op::HashNew => super::inst_hash::lower_hash_new(ctx, &inst),
         Op::HashGet => super::inst_hash::lower_hash_get(ctx, &inst),
         Op::HashSet => super::inst_hash::lower_hash_set(ctx, &inst),
