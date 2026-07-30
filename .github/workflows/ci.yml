@@ -465,16 +465,36 @@ jobs:
       - name: Verify WASM capability inventory is in sync
         # W0 (`WASM-COVERAGE-001`): the committed `docs/specs/wasm-inventory.json`
         # must be regenerated from the current EIR identities so the
-        # current-revision capability report never drifts into a stale literal.
+        # baseline never drifts. The exact-revision report and generated summary
+        # are retained separately below.
         run: |
           set -euo pipefail
-          cargo run --quiet --locked --example gen_wasm_inventory > /tmp/wasm-inventory.json
-          if ! diff -q docs/specs/wasm-inventory.json /tmp/wasm-inventory.json >/dev/null; then
+          inventory_dir="$RUNNER_TEMP/wasm-inventory"
+          mkdir -p "$inventory_dir"
+          cargo run --quiet --locked --example gen_wasm_inventory \
+            > "$inventory_dir/baseline.json"
+          if ! diff -q docs/specs/wasm-inventory.json "$inventory_dir/baseline.json" >/dev/null; then
             echo "::error::WASM capability inventory is out of sync with the current EIR identities."
             echo "Run: cargo run --quiet --example gen_wasm_inventory > docs/specs/wasm-inventory.json"
-            diff docs/specs/wasm-inventory.json /tmp/wasm-inventory.json | head -80
+            diff docs/specs/wasm-inventory.json "$inventory_dir/baseline.json" | head -80
             exit 1
           fi
+          cargo run --quiet --locked --example gen_wasm_inventory -- --with-revision \
+            > "$inventory_dir/exact-revision.json"
+          cargo run --quiet --locked --example gen_wasm_inventory -- \
+            --with-revision --summary > "$inventory_dir/summary.txt"
+          jq -e --arg commit "$GITHUB_SHA" \
+            '.metadata.commit == $commit and .metadata.dirty == false' \
+            "$inventory_dir/exact-revision.json" >/dev/null
+          cat "$inventory_dir/summary.txt" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain exact-revision WASM capability inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-capability-inventory-${{ github.sha }}
+          path: ${{ runner.temp }}/wasm-inventory
+          retention-days: 30
+          if-no-files-found: error
 
       - name: Validate WASM hosts and NPM package
         run: scripts/test-wasm-hosts.sh

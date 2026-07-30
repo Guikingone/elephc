@@ -15,12 +15,9 @@
 #![allow(dead_code)]
 
 use super::evidence::op_supported_evidence;
-#[allow(unused_imports)]
-#[allow(unused_imports)]
 use super::schema::{
     Disposition, ExecutionMode, Exclusion, InventoryRow, ShapePredicate, SupportedEvidence,
 };
-use crate::builtins::semantics::BuiltinRequirement;
 use crate::codegen_wasm::capability::{
     runtime_function_is_supported, terminator_is_supported, terminator_name,
     unary_string_name,
@@ -73,7 +70,7 @@ pub(super) fn op_exclusion(op: Op) -> Option<Exclusion> {
 }
 
 
-/// Returns the exclusion contract for a native-only `RuntimeFnId`, if any.
+/// Returns the exclusion contract for an Elephc-only runtime identity, if any.
 pub(super) fn runtime_fn_exclusion(id: RuntimeFnId) -> Option<Exclusion> {
     if matches!(id, RuntimeFnId::Header | RuntimeFnId::HttpResponseCode) {
         return Some(Exclusion {
@@ -84,30 +81,43 @@ pub(super) fn runtime_fn_exclusion(id: RuntimeFnId) -> Option<Exclusion> {
             diagnostic: "--web is not yet supported for --target wasm32-wasi",
         });
     }
-    for requirement in id.requirements() {
-        match requirement {
-            BuiltinRequirement::Bridge(_bridge) => {
-                return Some(Exclusion {
-                    category: "native-bridge-crate",
-                    reason: "runtime function backed by a native bridge staticlib",
-                    owner: "wasm-backend",
-                    removal_gate: "a WASM lowering of the `--with-<crate>` bridge surface",
-                    diagnostic:
-                        "--with-CRATE bridge linking is not supported for --target wasm32-wasi",
-                });
-            }
-            BuiltinRequirement::SystemLibrary(_) | BuiltinRequirement::MacOsLibrary(_) => {
-                return Some(Exclusion {
-                    category: "native-system-library",
-                    reason: "runtime function requires a native system library not in WASI Preview 1",
-                    owner: "wasm-backend",
-                    removal_gate: "a pure-Rust or WASI-provided replacement for the system library",
-                    diagnostic:
-                        "--link, --link-path, and --framework are not supported for --target wasm32-wasi",
-                });
-            }
-            BuiltinRequirement::RuntimeFeature(_) => {}
-        }
+    if matches!(
+        id,
+        RuntimeFnId::ElephcPtrIsNull
+            | RuntimeFnId::ElephcPtrReadString
+            | RuntimeFnId::ElephcPtrWriteString
+            | RuntimeFnId::BufferFree
+            | RuntimeFnId::BufferLen
+            | RuntimeFnId::Ptr
+            | RuntimeFnId::PtrGet
+            | RuntimeFnId::PtrIsNull
+            | RuntimeFnId::PtrNull
+            | RuntimeFnId::PtrOffset
+            | RuntimeFnId::PtrRead8
+            | RuntimeFnId::PtrRead16
+            | RuntimeFnId::PtrRead32
+            | RuntimeFnId::PtrReadString
+            | RuntimeFnId::PtrSet
+            | RuntimeFnId::PtrSizeof
+            | RuntimeFnId::PtrWrite8
+            | RuntimeFnId::PtrWrite16
+            | RuntimeFnId::PtrWrite32
+            | RuntimeFnId::PtrWriteString
+            | RuntimeFnId::ZvalFree
+            | RuntimeFnId::ZvalPack
+            | RuntimeFnId::ZvalType
+            | RuntimeFnId::ZvalUnpack
+            | RuntimeFnId::ClassAttributeArgs
+            | RuntimeFnId::ClassAttributeNames
+            | RuntimeFnId::ClassGetAttributes
+    ) {
+        return Some(Exclusion {
+            category: "elephc-native-extension",
+            reason: "Elephc-only native pointer/buffer/zval/attribute extension; not PHP-visible",
+            owner: "wasm-backend",
+            removal_gate: "an explicit WASM extension ABI with bounds-checked linear-memory semantics",
+            diagnostic: "unsupported runtime function <eir-name>",
+        });
     }
     None
 }
@@ -120,20 +130,21 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
     }
     let (lowerer, tests) = match id {
         RuntimeFnId::GetClass => (
-            "runtime_function_shape_issue::get_class",
-            &["codegen_wasm::capability::tests"][..],
+            "codegen_wasm::classes::lower_get_class",
+            &["codegen_wasm::tests::get_class_object_returns_class_name"][..],
         ),
         RuntimeFnId::ArrayMap => (
-            "runtime_function_shape_issue::array_map",
-            &["codegen_wasm::capability::tests"][..],
+            "codegen_wasm::inst::lower_array_map",
+            &["codegen_wasm::closures::tests::array_map_lowering_via_builtin_call_returns_4220"]
+                [..],
         ),
         RuntimeFnId::Usort => (
-            "runtime_function_shape_issue::usort",
-            &["codegen_wasm::capability::tests"][..],
+            "codegen_wasm::inst::lower_user_sort(usort)",
+            &["codegen_wasm::closures::tests::usort_lowering_writes_back_to_local"][..],
         ),
         RuntimeFnId::ArrayReduce => (
-            "runtime_function_shape_issue::array_reduce",
-            &["codegen_wasm::capability::tests"][..],
+            "codegen_wasm::inst::lower_array_reduce",
+            &["codegen_wasm::closures::tests::array_reduce_lowering_boxes_mixed_result"][..],
         ),
         _ => return None,
     };
@@ -311,7 +322,9 @@ pub(super) fn runtime_call_target_rows() -> Vec<InventoryRow> {
                 backend: "codegen_wasm::runtime",
                 lowerer: "check_runtime_call",
                 producers: &["typed runtime call dispatch"],
-                tests: &["codegen_wasm::capability::tests"],
+                tests: &[
+                    "codegen_wasm::closures::tests::array_map_lowering_via_builtin_call_returns_4220",
+                ],
             }),
             None,
         ),
@@ -322,7 +335,7 @@ pub(super) fn runtime_call_target_rows() -> Vec<InventoryRow> {
                 backend: "codegen_wasm::runtime",
                 lowerer: "check_runtime_call",
                 producers: &["strict-PHP-profiled typed runtime call dispatch"],
-                tests: &["codegen_wasm::capability::tests"],
+                tests: &["codegen_wasm::tests::get_class_object_returns_class_name"],
             }),
             None,
         ),
@@ -365,14 +378,21 @@ pub(super) fn shape_predicates() -> Vec<ShapePredicate> {
         "method_body_signature_shape_issue",
         "method_body_argument_shape_issue",
         "direct_method_result_shape_issue",
+        "mixed_method_issue",
         "runtime_function_shape_issue",
         "get_class_shape_issue",
         "array_map_shape_issue",
         "usort_shape_issue",
         "array_reduce_shape_issue",
         "closure_call_shape_issue",
+        "closure_new_by_ref_capture_issue",
+        "callable_argument_contract_issue",
+        "callable_result_contract_issue",
+        "callable_wrapper_issue",
+        "callable_wrapper_signature_issue",
         "callable_descriptor_invoke_shape_issue",
         "closure_result_shape_issue",
+        "iterator_alias_mutation_issue",
     ]
     .into_iter()
     .map(|name| ShapePredicate {

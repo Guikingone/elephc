@@ -4637,7 +4637,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::IsTruthy
         | Op::InstanceOf
         | Op::IToF
-        | Op::FToI
         | Op::Cast
         | Op::MixedBox
         | Op::MixedTagOf
@@ -4719,6 +4718,7 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::Spaceship
         | Op::TypePredicate
         | Op::IsEmpty
+        | Op::FToI
         | Op::IToStr
         | Op::FToStr
         | Op::BoolToStr

@@ -30,7 +30,10 @@ use crate::ir::{Op, RuntimeFnId, UnaryStringRuntime};
 use std::collections::BTreeMap;
 
 use classify::*;
-use schema::{InventoryRow, NormativePins, ReportMetadata, TestCatalog};
+use schema::{
+    InventoryRow, NormativePins, PhpSrcPin, ReportMetadata, RevisionPin, TestCatalog,
+    ToolchainPins,
+};
 
 pub use schema::{
     AggregateTotals, Disposition, FamilyTotals, InventoryReport, SCHEMA_ID, FROZEN_SPEC_SHA256,
@@ -90,16 +93,32 @@ pub fn build_report() -> InventoryReport {
         excluded += family.excluded;
         missing += family.missing;
     }
-    let (gate, gate_reason) = if missing == 0 {
+    let tests = test_catalog();
+    let evidence_gaps = families
+        .values()
+        .flat_map(|family| &family.rows)
+        .filter(|row| {
+            row.supported
+                .as_ref()
+                .is_some_and(|evidence| {
+                    evidence.backend.is_empty()
+                        || evidence.lowerer.is_empty()
+                        || evidence.producers.is_empty()
+                        || evidence.tests.is_empty()
+                })
+        })
+        .count()
+        + tests.missing_categories.len();
+    let (gate, gate_reason) = if missing == 0 && evidence_gaps == 0 {
         (
             "pass",
-            "no reachable missing identity remains in the declared target surface".to_string(),
+            "no reachable identity or required evidence remains missing".to_string(),
         )
     } else {
         (
             "fail",
             format!(
-                "{missing} missing reachable identities lack a WASM lowerer and are not excluded"
+                "{missing} reachable identities lack a WASM lowerer and {evidence_gaps} required evidence entries are missing"
             ),
         )
     };
@@ -110,24 +129,66 @@ pub fn build_report() -> InventoryReport {
             generator_version: GENERATOR_VERSION,
             commit: None,
             dirty: None,
-            pins: NormativePins {
-                wasm_compliance_sha256: FROZEN_SPEC_SHA256,
-                wasm_core_3_0_tag: "wg-3.0",
-                wasi_preview1_commit: "e840fe45e63b4f227a29fa87df94ab3bbe3d5efb",
-            },
+            pins: normative_pins(),
         },
         families,
         shapes: shape_predicates(),
         execution_modes: execution_modes(),
-        tests: test_catalog(),
+        tests,
         totals: AggregateTotals {
             total,
             supported,
             excluded,
             missing,
+            evidence_gaps,
             gate,
             gate_reason,
             stale_literal_counts_rejected: true,
+        },
+    }
+}
+
+/// Returns every immutable normative and acceptance-tool pin from the frozen specification.
+fn normative_pins() -> NormativePins {
+    NormativePins {
+        wasm_compliance_sha256: FROZEN_SPEC_SHA256,
+        wasm_core_3_0: RevisionPin {
+            tag: "wg-3.0",
+            commit: "9d36019973201a19f9c9ebb0f10828b2fe2374aa",
+        },
+        wasi_preview1_commit: "e840fe45e63b4f227a29fa87df94ab3bbe3d5efb",
+        php_src: &[
+            PhpSrcPin {
+                profile: "8.2",
+                tag: "php-8.2.33",
+                commit: "fa98f62b39a612ae88b7be5d5ea9ff9b794b454b",
+            },
+            PhpSrcPin {
+                profile: "8.3",
+                tag: "php-8.3.33",
+                commit: "a7413fbd1dd4dccda419ca473ce475f084edaadd",
+            },
+            PhpSrcPin {
+                profile: "8.4",
+                tag: "php-8.4.24",
+                commit: "3cb6f7231aed24c4ae77a0d3ee5aeeb2b968ad30",
+            },
+            PhpSrcPin {
+                profile: "8.5",
+                tag: "php-8.5.9",
+                commit: "d6bbf3ed631eea9763a2b790653fc91b69f0af7a",
+            },
+        ],
+        toolchain: ToolchainPins {
+            rust: "1.95.0",
+            wat: "1.252.0",
+            wasmparser: "0.252.0",
+            wasmer: "7.2.1",
+            wasmtime: "47.0.2",
+            wasm_tools: "1.254.0",
+            node: "26.3.0",
+            typescript: "6.0.3",
+            npm: "bundled with Node.js 26.3.0",
         },
     }
 }
@@ -153,19 +214,18 @@ fn test_catalog() -> TestCatalog {
             "codegen_wasm::capability::tests::direct_call_shape_rejects_arity_mismatch_before_lowering",
             "codegen_wasm::capability::tests::rejects_method_on_null_error_without_command_runtime",
         ],
-        differential: vec![
-            "ELEPHC_PHP_CHECK=1 cargo test <filter> (opt-in php-src cross-check)",
-            "php-src 8.2/8.3/8.4/8.5 oracle matrices (W1/W2 retained by CI)",
-        ],
+        differential: vec![],
         ownership: vec![
             "codegen_wasm::tests::exit_runs_owned_local_destructors_before_terminating",
             "codegen_wasm::tests::ref_cell_promotion_is_runtime_idempotent_across_branches",
             "codegen_wasm::tests::acquired_ref_cell_return_survives_owner_epilogue",
         ],
         host: vec![
-            "scripts/test-wasm-hosts.sh (Wasmer 7.2.1, Wasmtime 47.0.2, Node 26.3.0)",
+            "scripts/test-wasm-hosts.sh",
             ".github/workflows/ci.yml::wasm-host-portability",
-            "examples/wasm-wasi/main.php",
+        ],
+        missing_categories: vec![
+            "differential: no durable php-src 8.2/8.3/8.4/8.5 oracle matrix exists yet",
         ],
     }
 }
@@ -183,8 +243,20 @@ pub fn validate_report(report: &InventoryReport) -> Vec<String> {
     if report.metadata.generator_version.is_empty() {
         errors.push("metadata.generator_version is empty".to_string());
     }
-    if report.metadata.pins.wasm_compliance_sha256 != FROZEN_SPEC_SHA256 {
-        errors.push("metadata.pins.wasm_compliance_sha256 does not match the frozen spec".to_string());
+    if report.metadata.pins != normative_pins() {
+        errors.push("metadata.pins does not match the frozen normative/toolchain set".to_string());
+    }
+    match (&report.metadata.commit, report.metadata.dirty) {
+        (None, None) => {}
+        (Some(commit), Some(_)) => {
+            if commit.len() != 40 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                errors.push("metadata.commit is not a full 40-hex Git commit".to_string());
+            }
+        }
+        _ => errors.push(
+            "metadata.commit and metadata.dirty must either both be present or both be absent"
+                .to_string(),
+        ),
     }
     let expected_families = [
         "op",
@@ -246,7 +318,34 @@ pub fn validate_report(report: &InventoryReport) -> Vec<String> {
     if !report.totals.stale_literal_counts_rejected {
         errors.push("totals.stale_literal_counts_rejected is false".to_string());
     }
-    let expected_gate = if report.totals.missing == 0 { "pass" } else { "fail" };
+    let expected_evidence_gaps = report
+        .families
+        .values()
+        .flat_map(|family| &family.rows)
+        .filter(|row| {
+            row.supported
+                .as_ref()
+                .is_some_and(|evidence| {
+                    evidence.backend.is_empty()
+                        || evidence.lowerer.is_empty()
+                        || evidence.producers.is_empty()
+                        || evidence.tests.is_empty()
+                })
+        })
+        .count()
+        + report.tests.missing_categories.len();
+    if report.totals.evidence_gaps != expected_evidence_gaps {
+        errors.push(format!(
+            "totals.evidence_gaps is {}, expected {expected_evidence_gaps}",
+            report.totals.evidence_gaps
+        ));
+    }
+    let expected_gate =
+        if report.totals.missing == 0 && report.totals.evidence_gaps == 0 {
+            "pass"
+        } else {
+            "fail"
+        };
     if report.totals.gate != expected_gate {
         errors.push(format!(
             "totals.gate is {:?}, expected {expected_gate:?} (missing={})",
@@ -261,11 +360,28 @@ pub fn validate_report(report: &InventoryReport) -> Vec<String> {
     }
     if report.tests.positive.is_empty()
         || report.tests.negative.is_empty()
-        || report.tests.differential.is_empty()
         || report.tests.ownership.is_empty()
         || report.tests.host.is_empty()
     {
-        errors.push("tests catalog is missing a positive/negative/differential/ownership/host identifier".to_string());
+        errors.push(
+            "tests catalog is missing a positive/negative/ownership/host identifier".to_string(),
+        );
+    }
+    let differential_gap = report
+        .tests
+        .missing_categories
+        .iter()
+        .any(|category| category.starts_with("differential:"));
+    if report.tests.differential.is_empty() && !differential_gap {
+        errors.push(
+            "tests.differential is empty without an explicit differential evidence gap"
+                .to_string(),
+        );
+    }
+    if !report.tests.differential.is_empty() && differential_gap {
+        errors.push(
+            "tests.differential has durable identifiers but remains marked missing".to_string(),
+        );
     }
     errors
 }
@@ -365,11 +481,12 @@ pub fn human_summary(report: &InventoryReport) -> String {
         out.push_str(&format!("gate: {}\n", report.totals.gate));
     }
     out.push_str(&format!(
-        "totals: {} identities (supported {}, excluded {}, missing {}) — {}\n",
+        "totals: {} identities (supported {}, excluded {}, missing {}, evidence gaps {}) — {}\n",
         report.totals.total,
         report.totals.supported,
         report.totals.excluded,
         report.totals.missing,
+        report.totals.evidence_gaps,
         report.totals.gate_reason,
     ));
     out.push_str("family breakdown:\n");

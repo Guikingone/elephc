@@ -22,15 +22,13 @@ fn main() {
 
     let mut report = elephc::codegen_wasm::inventory::build_report();
     if with_revision {
-        let commit = git_output(&["rev-parse", "HEAD"]);
-        let dirty = !git_output(&["status", "--porcelain"]).is_empty();
+        let commit = git_output(&["rev-parse", "HEAD"])
+            .unwrap_or_else(|error| fail_revision_metadata(&error));
+        let dirty = !git_output(&["status", "--porcelain"])
+            .unwrap_or_else(|error| fail_revision_metadata(&error))
+            .is_empty();
         report.metadata.commit = Some(commit);
         report.metadata.dirty = Some(dirty);
-    }
-
-    if want_summary {
-        println!("{}", elephc::codegen_wasm::inventory::human_summary(&report));
-        return;
     }
 
     let errors = elephc::codegen_wasm::inventory::validate_report(&report);
@@ -42,18 +40,36 @@ fn main() {
         std::process::exit(1);
     }
 
+    if want_summary {
+        println!("{}", elephc::codegen_wasm::inventory::human_summary(&report));
+        return;
+    }
+
     let json = serde_json::to_string_pretty(&report).expect("serialize inventory report");
     println!("{json}");
 }
 
-/// Runs a `git` command and returns its trimmed stdout (empty on failure).
-fn git_output(args: &[&str]) -> String {
-    Command::new("git")
+/// Runs a `git` command and returns trimmed UTF-8 stdout.
+fn git_output(args: &[&str]) -> Result<String, String> {
+    let output = Command::new("git")
         .args(args)
         .output()
-        .ok()
-        .filter(|out| out.status.success())
-        .and_then(|out| String::from_utf8(out.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default()
+        .map_err(|error| format!("failed to execute git {}: {error}", args.join(" ")))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git {} exited with {}: {}",
+            args.join(" "),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    String::from_utf8(output.stdout)
+        .map(|stdout| stdout.trim().to_string())
+        .map_err(|error| format!("git {} returned non-UTF-8 output: {error}", args.join(" ")))
+}
+
+/// Prints a revision-metadata error and terminates without emitting a partial report.
+fn fail_revision_metadata(error: &str) -> ! {
+    eprintln!("WASM inventory revision metadata failed: {error}");
+    std::process::exit(1);
 }

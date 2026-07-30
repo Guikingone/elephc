@@ -14,6 +14,73 @@ use super::*;
 use crate::codegen_wasm::capability::{op_is_supported, runtime_function_is_supported};
 use std::collections::HashSet;
 
+/// Extracts top-level variant names from a repo-owned enum declaration.
+///
+/// The parser is deliberately narrow: the audited enums use Rust identifiers
+/// and optional tuple/struct payloads. It is a CI drift tripwire, not a general
+/// Rust parser.
+fn declared_enum_variants(source: &str, declaration: &str) -> Vec<String> {
+    let declaration_start = source
+        .find(declaration)
+        .unwrap_or_else(|| panic!("missing enum declaration {declaration:?}"));
+    let body_start = source[declaration_start..]
+        .find('{')
+        .map(|offset| declaration_start + offset + 1)
+        .expect("enum declaration has a body");
+    let mut variants = Vec::new();
+    let mut payload_depth = 0usize;
+    for raw_line in source[body_start..].lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with("///") || line.starts_with("#[") {
+            continue;
+        }
+        if payload_depth == 0 && line.starts_with('}') {
+            break;
+        }
+        if payload_depth == 0 {
+            let name = line
+                .split(|character: char| {
+                    matches!(character, ',' | '(' | '{' | '=') || character.is_whitespace()
+                })
+                .next()
+                .unwrap_or_default();
+            if name
+                .bytes()
+                .next()
+                .is_some_and(|byte| byte.is_ascii_uppercase())
+            {
+                variants.push(name.to_string());
+            }
+        }
+        if !line.starts_with("//") {
+            payload_depth += line.bytes().filter(|byte| *byte == b'{').count();
+            payload_depth -= line.bytes().filter(|byte| *byte == b'}').count();
+        }
+    }
+    variants
+}
+
+/// Extracts every capability predicate whose function name ends in `_issue`.
+fn declared_shape_predicates(source: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for line in source.lines().map(str::trim_start) {
+        let Some(fn_offset) = line.find("fn ") else {
+            continue;
+        };
+        let tail = &line[fn_offset + 3..];
+        let name = tail
+            .split(|character: char| character == '(' || character.is_whitespace())
+            .next()
+            .unwrap_or_default();
+        if name.ends_with("_issue") {
+            names.push(name.to_string());
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
 /// Verifies every enumerated identity carries exactly one disposition and
 /// the report validates against the W0 schema.
 #[test]
@@ -80,6 +147,130 @@ fn op_enumeration_has_no_duplicates() {
     }
 }
 
+/// Verifies the three `::all()` enumerators exactly match their enum declarations.
+#[test]
+fn enum_enumerators_match_source_declarations() {
+    let op_declared =
+        declared_enum_variants(include_str!("../../ir/instr.rs"), "pub enum Op");
+    let op_enumerated: Vec<String> = Op::all().iter().map(|op| format!("{op:?}")).collect();
+    assert_eq!(op_enumerated, op_declared, "Op::all() drifted");
+
+    let runtime_declared = declared_enum_variants(
+        include_str!("../../ir/runtime_fn.rs"),
+        "pub enum RuntimeFnId",
+    );
+    let runtime_enumerated: Vec<String> = RuntimeFnId::all()
+        .iter()
+        .map(|id| format!("{id:?}"))
+        .collect();
+    assert_eq!(
+        runtime_enumerated, runtime_declared,
+        "RuntimeFnId::all() drifted"
+    );
+
+    let unary_declared = declared_enum_variants(
+        include_str!("../../ir/runtime_call.rs"),
+        "pub enum UnaryStringRuntime",
+    );
+    let unary_enumerated: Vec<String> = UnaryStringRuntime::all()
+        .iter()
+        .map(|target| format!("{target:?}"))
+        .collect();
+    assert_eq!(
+        unary_enumerated, unary_declared,
+        "UnaryStringRuntime::all() drifted"
+    );
+}
+
+/// Verifies payload enum forms and capability predicates cannot outgrow the inventory.
+#[test]
+fn payload_forms_and_shape_predicates_match_source_declarations() {
+    let runtime_targets = declared_enum_variants(
+        include_str!("../../ir/runtime_call.rs"),
+        "pub enum RuntimeCallTarget",
+    );
+    assert_eq!(
+        runtime_targets,
+        ["ArrayFetchForWrite", "UnaryString", "Function", "ProfiledFunction"]
+    );
+    assert_eq!(
+        runtime_call_target_rows().len(),
+        runtime_targets.len(),
+        "RuntimeCallTarget inventory drifted"
+    );
+
+    let terminators =
+        declared_enum_variants(include_str!("../../ir/block.rs"), "pub enum Terminator");
+    assert_eq!(
+        terminators,
+        [
+            "Br",
+            "CondBr",
+            "Switch",
+            "Return",
+            "Throw",
+            "Fatal",
+            "GeneratorSuspend",
+            "Unreachable",
+        ]
+    );
+    assert_eq!(
+        terminator_representatives().len(),
+        terminators.len(),
+        "Terminator inventory drifted"
+    );
+
+    let declared =
+        declared_shape_predicates(include_str!("../capability.rs"));
+    let mut inventoried: Vec<String> = shape_predicates()
+        .iter()
+        .map(|predicate| predicate.name.to_string())
+        .collect();
+    inventoried.sort();
+    inventoried.dedup();
+    assert_eq!(inventoried, declared, "shape predicate inventory drifted");
+}
+
+/// Verifies every Rust test identifier in the report names a checked-in test function.
+#[test]
+fn rust_test_identifiers_resolve_to_checked_in_tests() {
+    let report = build_report();
+    let rust_sources = [
+        include_str!("../mod.rs"),
+        include_str!("../capability.rs"),
+        include_str!("../closures.rs"),
+    ]
+    .join("\n");
+    let mut identifiers = Vec::new();
+    identifiers.extend(report.tests.positive.iter().copied());
+    identifiers.extend(report.tests.negative.iter().copied());
+    identifiers.extend(report.tests.differential.iter().copied());
+    identifiers.extend(report.tests.ownership.iter().copied());
+    for family in report.families.values() {
+        for row in &family.rows {
+            if let Some(evidence) = &row.supported {
+                identifiers.extend(evidence.tests.iter().copied());
+            }
+        }
+    }
+
+    for identifier in identifiers {
+        let test_name = identifier
+            .rsplit("::")
+            .next()
+            .expect("test identifier has a final segment");
+        assert!(
+            rust_sources.contains(&format!("fn {test_name}(")),
+            "inventory references missing Rust test {identifier:?}"
+        );
+    }
+
+    assert!(include_str!("../../../scripts/test-wasm-hosts.sh").contains("#!/"));
+    assert!(
+        include_str!("../../../.github/workflows/ci.yml").contains("wasm-host-portability:")
+    );
+}
+
 /// Verifies the report rejects stale literal historical counts by deriving
 /// totals from the enumeration rather than copying prose figures.
 #[test]
@@ -124,6 +315,15 @@ fn gate_fails_when_missing_reachable() {
     );
 }
 
+/// Verifies a dispatched lowerer is not reported as supported when every PHP shape is rejected.
+#[test]
+fn float_to_int_remains_missing_until_a_php_shape_is_admitted() {
+    assert!(!op_is_supported(Op::FToI));
+    let row = op_row(Op::FToI);
+    assert_eq!(row.disposition, Disposition::Missing);
+    assert!(row.supported.is_none());
+}
+
 /// Verifies excluded rows carry a complete contract and a matching target
 /// diagnostic, so exclusions are never silently "unsupported".
 #[test]
@@ -150,6 +350,39 @@ fn excluded_rows_carry_complete_contracts() {
     assert!(excluded > 0, "expected native-only exclusions to be recorded");
 }
 
+/// Verifies native implementation requirements never exclude ordinary PHP builtins.
+#[test]
+fn ordinary_php_bridge_and_system_builtins_remain_reachable_gaps() {
+    for id in [
+        RuntimeFnId::Md5,
+        RuntimeFnId::Hash,
+        RuntimeFnId::Sha1,
+        RuntimeFnId::MbStrlen,
+        RuntimeFnId::Gzcompress,
+    ] {
+        assert!(
+            runtime_fn_exclusion(id).is_none(),
+            "ordinary PHP runtime {} must not be excluded",
+            id.as_eir()
+        );
+        assert_eq!(runtime_fn_row(id).disposition, Disposition::Missing);
+    }
+    for id in [
+        RuntimeFnId::Ptr,
+        RuntimeFnId::BufferLen,
+        RuntimeFnId::ZvalPack,
+        RuntimeFnId::ClassAttributeNames,
+        RuntimeFnId::Header,
+    ] {
+        assert_eq!(
+            runtime_fn_row(id).disposition,
+            Disposition::Excluded,
+            "{} is an explicit Elephc/web exclusion",
+            id.as_eir()
+        );
+    }
+}
+
 /// Verifies the report serializes to a well-formed JSON object whose
 /// derived totals and per-family counts match the in-memory report, so the
 /// committed JSON artifact is a faithful encoding.
@@ -165,11 +398,18 @@ fn report_serializes_to_faithful_json() {
         obj["metadata"]["pins"]["wasm_compliance_sha256"],
         FROZEN_SPEC_SHA256
     );
+    assert_eq!(
+        obj["metadata"]["pins"]["wasm_core_3_0"]["commit"],
+        "9d36019973201a19f9c9ebb0f10828b2fe2374aa"
+    );
+    assert_eq!(obj["metadata"]["pins"]["php_src"].as_array().unwrap().len(), 4);
+    assert_eq!(obj["metadata"]["pins"]["toolchain"]["wasmparser"], "0.252.0");
     let totals = &obj["totals"];
     assert_eq!(totals["total"], report.totals.total);
     assert_eq!(totals["supported"], report.totals.supported);
     assert_eq!(totals["excluded"], report.totals.excluded);
     assert_eq!(totals["missing"], report.totals.missing);
+    assert_eq!(totals["evidence_gaps"], report.totals.evidence_gaps);
     assert_eq!(totals["gate"], report.totals.gate);
     assert_eq!(totals["stale_literal_counts_rejected"], true);
     for (name, family) in &report.families {
@@ -183,6 +423,33 @@ fn report_serializes_to_faithful_json() {
             family.rows.len()
         );
     }
+    assert!(validate_report(&report).is_empty());
+}
+
+/// Verifies revision metadata is either absent for the baseline or a full paired record.
+#[test]
+fn revision_metadata_rejects_partial_or_short_git_identity() {
+    let mut report = build_report();
+    report.metadata.commit = Some("abc".to_string());
+    let errors = validate_report(&report);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("must either both be present")),
+        "{errors:?}"
+    );
+
+    report.metadata.dirty = Some(false);
+    let errors = validate_report(&report);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("full 40-hex Git commit")),
+        "{errors:?}"
+    );
+
+    report.metadata.commit =
+        Some("0123456789abcdef0123456789abcdef01234567".to_string());
     assert!(validate_report(&report).is_empty());
 }
 

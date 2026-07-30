@@ -17,11 +17,11 @@ use std::collections::BTreeMap;
 
 /// Schema identifier embedded in every emitted report so consumers can reject
 /// an incompatible revision before interpreting the payload.
-pub const SCHEMA_ID: &str = "elephc.wasm-inventory.v1";
+pub const SCHEMA_ID: &str = "elephc.wasm-inventory.v2";
 
 /// Generator version recorded in the report metadata. Bump when the schema or
 /// disposition classification changes in a way that alters the report shape.
-pub const GENERATOR_VERSION: &str = "w0-1";
+pub const GENERATOR_VERSION: &str = "w0-2";
 
 /// Frozen `docs/specs/wasm-compliance.md` SHA-256 recorded as a normative pin.
 pub const FROZEN_SPEC_SHA256: &str =
@@ -124,15 +124,62 @@ pub struct ExecutionMode {
     pub reachable: bool,
 }
 
+/// One immutable upstream revision identified by release tag and commit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RevisionPin {
+    /// Human-readable immutable release tag.
+    pub tag: &'static str,
+    /// Full upstream Git commit.
+    pub commit: &'static str,
+}
+
+/// One immutable php-src oracle profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PhpSrcPin {
+    /// Elephc `--php-version` profile.
+    pub profile: &'static str,
+    /// php-src release tag.
+    pub tag: &'static str,
+    /// Full php-src Git commit.
+    pub commit: &'static str,
+}
+
+/// Exact acceptance-tool versions required by the frozen specification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ToolchainPins {
+    /// Rust toolchain.
+    pub rust: &'static str,
+    /// `wat` crate.
+    pub wat: &'static str,
+    /// Production `wasmparser` crate.
+    pub wasmparser: &'static str,
+    /// Wasmer CLI/runtime.
+    pub wasmer: &'static str,
+    /// Wasmtime CLI/runtime.
+    pub wasmtime: &'static str,
+    /// `wasm-tools` validator.
+    pub wasm_tools: &'static str,
+    /// Node.js runtime.
+    pub node: &'static str,
+    /// TypeScript compiler.
+    pub typescript: &'static str,
+    /// npm coupling rule; npm is supplied by the pinned Node.js distribution.
+    pub npm: &'static str,
+}
+
 /// Normative and toolchain pins recorded with the report.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NormativePins {
     /// Frozen `docs/specs/wasm-compliance.md` SHA-256.
     pub wasm_compliance_sha256: &'static str,
-    /// WebAssembly Core 3.0 spec tag.
-    pub wasm_core_3_0_tag: &'static str,
+    /// WebAssembly Core 3.0 tag and commit.
+    pub wasm_core_3_0: RevisionPin,
     /// WASI Preview 1 commit.
     pub wasi_preview1_commit: &'static str,
+    /// Exact php-src oracle profiles.
+    pub php_src: &'static [PhpSrcPin],
+    /// Exact acceptance toolchain.
+    pub toolchain: ToolchainPins,
 }
 
 /// Metadata block. The committed baseline leaves the per-revision `commit` and
@@ -165,7 +212,9 @@ pub struct AggregateTotals {
     pub excluded: usize,
     /// Missing identities across every family.
     pub missing: usize,
-    /// `pass` only when no `missing` identity remains reachable.
+    /// Supported rows whose required producer/lowerer/test evidence is incomplete.
+    pub evidence_gaps: usize,
+    /// `pass` only when no reachable identity or required evidence remains missing.
     pub gate: &'static str,
     /// Why the gate passes or fails.
     pub gate_reason: String,
@@ -181,12 +230,15 @@ pub struct TestCatalog {
     pub positive: Vec<&'static str>,
     /// Negative/diagnostic tests asserting unsupported shapes are rejected.
     pub negative: Vec<&'static str>,
-    /// Differential tests against pinned php-src profiles (retained by CI).
+    /// Durable differential tests against pinned php-src profiles.
     pub differential: Vec<&'static str>,
     /// Ownership/GC/COW regression tests.
     pub ownership: Vec<&'static str>,
     /// Three-host (Wasmer/Wasmtime/Node) portability test identifiers.
     pub host: Vec<&'static str>,
+    /// Explicit missing evidence categories. This prevents placeholders from
+    /// being presented as tests that already exist.
+    pub missing_categories: Vec<&'static str>,
 }
 
 /// The full W0 inventory report.
