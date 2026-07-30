@@ -732,6 +732,6 @@ eval('echo PHP_VERSION, "|", PHP_VERSION_ID, "|", PHP_MAJOR_VERSION, "|", PHP_MI
       "|", PHP_RELEASE_VERSION, "|", PHP_EXTRA_VERSION, "|", phpversion(), "\n";');
 echo PHP_VERSION, "|", PHP_VERSION_ID, "|", phpversion(), "\n";
 "#;
-    let out = run_for_profile_with_managed_pcre2("elephc_eval_version_82", source, "8.2");
+    let out = run_for_profile("elephc_eval_version_82", source, "8.2");
     assert_eq!(out, "8.2.0|80200|8|2|0||8.2.0\n8.2.0|80200|8.2.0\n");
 }

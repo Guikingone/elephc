@@ -7601,7 +7601,7 @@ echo ":"; echo function_exists("stream_resolve_include_path");');
 /// Verifies eval regex builtins handle captures, replacement, callbacks, and splitting.
 #[test]
 fn test_eval_dispatches_preg_builtin_calls() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_regex(
         r#"<?php
 eval('$ok = preg_match("/([a-z]+)([0-9]+)/", "id42", $matches);
 echo $ok . ":" . count($matches) . ":" . $matches[0] . ":" . $matches[1] . ":" . $matches[2] . ":";
@@ -7673,7 +7673,7 @@ echo function_exists("preg_match") && function_exists("preg_match_all") && funct
 /// Verifies eval `preg_replace_callback()` accepts general callable forms.
 #[test]
 fn test_eval_preg_replace_callback_accepts_general_callables() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_regex(
         r#"<?php
 echo eval('class EvalPregCallbackBox {
     public $prefix = "";
@@ -7697,7 +7697,7 @@ return preg_replace_callback("/[m]/", $static, "mm");');
 /// Verifies dynamic eval preg callables write by-reference `$matches` arrays.
 #[test]
 fn test_eval_dynamic_preg_callables_write_matches_by_ref() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_regex(
         r#"<?php
 eval('$match = "preg_match";
 $ok = $match("/([a-z]+)([0-9]+)/", "id42", $matches);
@@ -7716,7 +7716,7 @@ echo $okAgain . ":" . $firstClassMatches[0];');
 /// Verifies named eval preg calls write by-reference `$matches` arrays.
 #[test]
 fn test_eval_named_preg_calls_write_matches_by_ref() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_regex(
         r#"<?php
 eval('$named = [];
 $ok = preg_match(pattern: "/([a-z]+)([0-9]+)/", subject: "id42", matches: $named);
@@ -7733,7 +7733,7 @@ echo preg_match(pattern: "/x/", subject: "x", flags: PREG_OFFSET_CAPTURE);');
 /// Verifies eval `call_user_func*()` warns for by-value regex `$matches` outputs.
 #[test]
 fn test_eval_call_user_func_regex_ref_like_builtin_args_warn_and_use_value_copy() {
-    let out = compile_and_run_capture(
+    let out = compile_and_run_capture_with_regex(
         r#"<?php
 eval('$matches = ["old"];
 echo call_user_func("preg_match", "/x/", "x", $matches) . ":" . $matches[0] . "|";

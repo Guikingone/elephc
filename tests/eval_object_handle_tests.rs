@@ -52,6 +52,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
+/// Expected capability reminder for eval fixtures that intentionally omit regex support.
+const EVAL_WITHOUT_REGEX_REMINDER: &str =
+    "warning: dynamic eval was compiled without optional regex support";
+
 /// Creates an isolated temp dir unique across parallel test threads/processes.
 fn make_test_dir(prefix: &str) -> PathBuf {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
@@ -79,15 +83,16 @@ fn elephc_bin() -> String {
 /// Linking also surfaces the HOST linker's warnings, which are environmental rather
 /// than anything elephc emitted: GNU `ld` reports static-glibc notes and the
 /// `.note.GNU-stack` deprecation, while Apple's linker stays silent. Anchoring on
-/// elephc's own line starts isolates its diagnostics — and still surfaces an
-/// UNEXPECTED elephc warning, which an allow-list of known messages would hide.
+/// elephc's own line starts isolates its diagnostics. The intentional eval capability
+/// reminder is excluded exactly; every other compiler warning still surfaces.
 fn elephc_diagnostics(stderr: &str) -> String {
     stderr
         .lines()
         .filter(|line| {
-            line.starts_with("Warning: ")
-                || line.starts_with("warning:")
-                || line.starts_with("warning[")
+            *line != EVAL_WITHOUT_REGEX_REMINDER
+                && (line.starts_with("Warning: ")
+                    || line.starts_with("warning:")
+                    || line.starts_with("warning["))
         })
         .collect::<Vec<_>>()
         .join("\n")
