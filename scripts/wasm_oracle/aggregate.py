@@ -163,6 +163,31 @@ def aggregate_exact(
     environments = {record.environment for record in captures}
     if len(environments) != 1:
         raise AggregateError("all matrix records must use one exact environment")
+    host_platforms = {
+        (record.operating_system, record.architecture) for record in captures
+    }
+    if len(host_platforms) != 1:
+        raise AggregateError(
+            "all matrix records must use one exact host OS and architecture"
+        )
+
+    provenance_groups: dict[tuple[str, str, str], set[Any]] = {}
+    for record in captures:
+        profile_scope = (
+            record.key.profile if record.key.runtime == "php-src" else "*"
+        )
+        group = (profile_scope, record.key.runtime, record.key.host)
+        provenance_groups.setdefault(group, set()).add(record.provenance)
+    inconsistent_provenance = sorted(
+        group
+        for group, provenance in provenance_groups.items()
+        if len(provenance) != 1
+    )
+    if inconsistent_provenance:
+        formatted = ", ".join("/".join(group) for group in inconsistent_provenance)
+        raise AggregateError(
+            "matrix cells used inconsistent runtime provenance: " + formatted
+        )
 
     for fixture_id in fixtures:
         fixture_records = [
@@ -211,6 +236,18 @@ def aggregate_exact(
             "all WASM records must use one exact Elephc source commit"
         )
     elephc_source_commit = next(iter(wasm_commits))
+    compiler_identities = {
+        (
+            record.artifact_provenance.compiler_executable_sha256,
+            record.artifact_provenance.compiler_version,
+        )
+        for record in wasm_artifacts
+        if record.artifact_provenance is not None
+    }
+    if len(compiler_identities) != 1:
+        raise AggregateError(
+            "all WASM records must use one exact compiler executable and version"
+        )
 
     comparisons: list[ComparisonResult] = []
     mismatches: list[ComparisonResult] = []

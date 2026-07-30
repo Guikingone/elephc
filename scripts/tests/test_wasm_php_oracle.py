@@ -622,6 +622,43 @@ class WasmPhpOracleTests(unittest.TestCase):
                 records,
             )
 
+    def test_aggregate_rejects_compiler_and_runtime_provenance_drift(self) -> None:
+        """Every shard must use the same compiler and pinned host executables."""
+
+        fixtures = ("strict-equality-a", "strict-equality-b")
+        records = self.exact_records(fixtures[0]) + self.exact_records(fixtures[1])
+        for index, record in enumerate(records):
+            if record.key.fixture_id != fixtures[1] or record.key.runtime != "wasm":
+                continue
+            artifact = record.artifact_provenance
+            assert artifact is not None
+            records[index] = replace(
+                record,
+                artifact_provenance=replace(
+                    artifact,
+                    compiler_executable_sha256="9" * 64,
+                ),
+            )
+        with self.assertRaisesRegex(AggregateError, "one exact compiler"):
+            aggregate_exact(self.contract, fixtures, records)
+
+        records = self.exact_records(fixtures[0]) + self.exact_records(fixtures[1])
+        node_index = next(
+            index
+            for index, record in enumerate(records)
+            if record.key.fixture_id == fixtures[1]
+            and record.key.host == "node"
+        )
+        records[node_index] = replace(
+            records[node_index],
+            provenance=replace(
+                records[node_index].provenance,
+                executable_sha256="a" * 64,
+            ),
+        )
+        with self.assertRaisesRegex(AggregateError, "runtime provenance"):
+            aggregate_exact(self.contract, fixtures, records)
+
     def test_cli_validates_and_prints_the_contract(self) -> None:
         output = subprocess.run(
             [
