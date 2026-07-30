@@ -28,7 +28,11 @@ from .contract import (
 
 CAPTURE_SCHEMA = "elephc.wasm-oracle.capture.v1"
 MODULE_STATUS_FD_ENV = "ELEPHC_ORACLE_MODULE_STATUS_FD"
-REQUIRED_ENVIRONMENT_KEYS = ("LANG", "LC_ALL", "TZ")
+REQUIRED_ENVIRONMENT = {
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "TZ": "UTC",
+}
 _MODULE_STATUS_MAX_BYTES = 64
 
 
@@ -638,14 +642,11 @@ def _validate_environment(environment: Mapping[str, str]) -> None:
             raise CaptureError("environment contains an invalid key")
         if not isinstance(value, str) or "\x00" in value:
             raise CaptureError(f"environment value for {key!r} is invalid")
-    if set(environment) != set(REQUIRED_ENVIRONMENT_KEYS):
+    if dict(environment) != REQUIRED_ENVIRONMENT:
         raise CaptureError(
-            "environment keys must be exactly "
-            f"{REQUIRED_ENVIRONMENT_KEYS}, got {tuple(sorted(environment))}"
+            "environment must be exactly "
+            f"{REQUIRED_ENVIRONMENT}, got {dict(environment)}"
         )
-    for key in REQUIRED_ENVIRONMENT_KEYS:
-        if not environment[key]:
-            raise CaptureError(f"explicit environment has empty required {key}")
     if MODULE_STATUS_FD_ENV in environment:
         raise CaptureError(f"{MODULE_STATUS_FD_ENV} is reserved by the oracle")
 

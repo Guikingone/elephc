@@ -10,6 +10,7 @@ from .aggregate import (
 from .capture import (
     CAPTURE_SCHEMA,
     MODULE_STATUS_FD_ENV,
+    REQUIRED_ENVIRONMENT,
     CaptureError,
     CaptureRecord,
     CaptureRequest,
@@ -41,6 +42,7 @@ __all__ = [
     "AGGREGATE_SCHEMA",
     "CAPTURE_SCHEMA",
     "MODULE_STATUS_FD_ENV",
+    "REQUIRED_ENVIRONMENT",
     "AggregateError",
     "AggregateResult",
     "CaptureError",

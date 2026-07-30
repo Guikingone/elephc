@@ -42,7 +42,11 @@ class WasmPhpOracleTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.contract = OracleContract.load(REPO_ROOT)
         cls.python_sha256 = sha256_file(PYTHON)
-        cls.environment = {"LANG": "C", "LC_ALL": "C", "TZ": "UTC"}
+        cls.environment = {
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "TZ": "UTC",
+        }
 
     def php_provenance(self, profile: str) -> RuntimeProvenance:
         pin = self.contract.php_src_pin(profile)
@@ -411,7 +415,7 @@ class WasmPhpOracleTests(unittest.TestCase):
     def test_capture_rejects_missing_environment_and_wrong_fixture_hash(self) -> None:
         environment = dict(self.environment)
         environment.pop("TZ")
-        with self.assertRaisesRegex(CaptureError, "keys must be exactly"):
+        with self.assertRaisesRegex(CaptureError, "environment must be exactly"):
             capture_process(
                 self.contract,
                 self.capture_request(
@@ -422,7 +426,18 @@ class WasmPhpOracleTests(unittest.TestCase):
             )
         environment = dict(self.environment)
         environment["PATH"] = "/not-guest-state"
-        with self.assertRaisesRegex(CaptureError, "keys must be exactly"):
+        with self.assertRaisesRegex(CaptureError, "environment must be exactly"):
+            capture_process(
+                self.contract,
+                self.capture_request(
+                    runtime="php-src",
+                    code="pass",
+                    environment=environment,
+                ),
+            )
+        environment = dict(self.environment)
+        environment["LANG"] = "C"
+        with self.assertRaisesRegex(CaptureError, "environment must be exactly"):
             capture_process(
                 self.contract,
                 self.capture_request(
