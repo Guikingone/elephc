@@ -449,8 +449,8 @@ fn test_cli_rejects_emit_ir_output_mode_conflicts() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies `--check --timings` reports per-phase timings for tokenize, parse,
-/// typecheck, and total — without running codegen/assemble/link phases.
+/// Verifies `--check --timings` renders the frontend phase table without
+/// reporting code generation, assembly, or linking phases.
 #[test]
 fn test_cli_timings_reports_check_phases() {
     let dir = make_cli_test_dir("elephc_cli_timings_check");
@@ -471,16 +471,28 @@ fn test_cli_timings_reports_check_phases() {
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Compiler timings:"), "missing timings header: {stderr}");
-    assert!(stderr.contains("tokenize"), "missing tokenize timing: {stderr}");
-    assert!(stderr.contains("parse"), "missing parse timing: {stderr}");
-    assert!(stderr.contains("typecheck"), "missing typecheck timing: {stderr}");
-    assert!(stderr.contains("total"), "missing total timing: {stderr}");
+    assert!(stderr.contains("Compiler timings"), "missing timings header: {stderr}");
+    assert!(stderr.contains("Tokenizing source"), "missing tokenize timing: {stderr}");
+    assert!(stderr.contains("Parsing program"), "missing parse timing: {stderr}");
+    assert!(stderr.contains("Checking types"), "missing typecheck timing: {stderr}");
+    assert!(stderr.contains("Total"), "missing total timing: {stderr}");
+    assert!(
+        !stderr.contains("Generating native code"),
+        "unexpected codegen timing in --check output: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Assembling object file"),
+        "unexpected assemble timing in --check output: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Linking native output"),
+        "unexpected link timing in --check output: {stderr}"
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies `--timings` reports codegen, assemble, link, and total durations
+/// Verifies `--timings` renders the native build phases and total duration
 /// when compiling a full binary, and that the binary is emitted.
 #[test]
 fn test_cli_timings_reports_assemble_and_link() {
@@ -501,18 +513,26 @@ fn test_cli_timings_reports_assemble_and_link() {
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("codegen"), "missing codegen timing: {stderr}");
-    assert!(stderr.contains("assemble"), "missing assemble timing: {stderr}");
-    assert!(stderr.contains("link"), "missing link timing: {stderr}");
-    assert!(stderr.contains("total"), "missing total timing: {stderr}");
+    assert!(
+        stderr.contains("Generating native code"),
+        "missing codegen timing: {stderr}"
+    );
+    assert!(
+        stderr.contains("Assembling object file"),
+        "missing assemble timing: {stderr}"
+    );
+    assert!(
+        stderr.contains("Linking native output"),
+        "missing link timing: {stderr}"
+    );
+    assert!(stderr.contains("Total"), "missing total timing: {stderr}");
     assert!(dir.join("main").exists(), "expected compiled binary to exist");
 
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies the runtime cache: the first compile produces a "runtime-cache miss"
-/// and caches a runtime .o object; the second compile with the same input hits
-/// the cache ("runtime-cache hit") without recompiling the runtime.
+/// Verifies the timing report records `Runtime cache: miss` for the first
+/// compile and `Runtime cache: hit` for the second without rebuilding it.
 #[test]
 fn test_cli_runtime_cache_reuses_runtime_object() {
     let dir = make_cli_test_dir("elephc_cli_runtime_cache");
@@ -534,7 +554,11 @@ fn test_cli_runtime_cache_reuses_runtime_object() {
     );
     let first_stderr = String::from_utf8_lossy(&first.stderr);
     assert!(
-        first_stderr.contains("runtime-cache miss"),
+        first_stderr.contains("Notes"),
+        "expected timing notes after first compile, got stderr={first_stderr}"
+    );
+    assert!(
+        first_stderr.contains("Runtime cache: miss"),
         "expected first compile to miss runtime cache, got stderr={first_stderr}"
     );
 
@@ -565,7 +589,11 @@ fn test_cli_runtime_cache_reuses_runtime_object() {
     );
     let second_stderr = String::from_utf8_lossy(&second.stderr);
     assert!(
-        second_stderr.contains("runtime-cache hit"),
+        second_stderr.contains("Notes"),
+        "expected timing notes after second compile, got stderr={second_stderr}"
+    );
+    assert!(
+        second_stderr.contains("Runtime cache: hit"),
         "expected second compile to hit runtime cache, got stderr={second_stderr}"
     );
 

@@ -224,6 +224,7 @@ pub(crate) fn compile(config: CliConfig) {
     // would not resolve to them (see `opcache_prelude::bake_manifest` for the full argument).
     // The manifest feeds `opcache_get_status().scripts`, `opcache_is_script_cached`, and
     // `opcache_compile_file`.
+    crate::progress::phase("opcache-prelude");
     let phase_started = Instant::now();
     let opcache_manifest = opcache_prelude::collect_manifest(
         filename,
@@ -602,7 +603,7 @@ pub(crate) fn compile(config: CliConfig) {
         }
     };
     timings.record_since("runtime-cache", phase_started);
-    timings.note(format!("runtime-cache {}", runtime_object.status.as_str()));
+    timings.note(format!("Runtime cache: {}", runtime_object.status.as_str()));
 
     crate::progress::phase("codegen");
     let phase_started = Instant::now();
