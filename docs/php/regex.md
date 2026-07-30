@@ -64,6 +64,24 @@ discovered/search path and a copy-paste `recovery:` line containing
 Front-end-only `--check`, `--emit-ir`, and `--emit-asm` paths do not perform the
 final link and therefore do not require an installed artifact.
 
+## Dynamic eval
+
+Regex calls visible in ordinary source are auto-detected. Source passed
+dynamically to `eval()` is opaque, so Magician does not enable PCRE2 merely
+because dynamic eval is present. Opt in explicitly when evaluated code may call
+regex functions:
+
+```bash
+elephc native add pcre2
+elephc --with-regex path/to/program.php
+```
+
+Without `--with-regex` or another statically visible regex use, the program
+still compiles, but regex functions do not exist inside dynamic eval and calls
+to them fail at runtime. Declaring or installing PCRE2 alone does not link it.
+See [`examples/eval_regex/`](https://github.com/illegalstudio/elephc/tree/main/examples/eval_regex)
+for a complete project.
+
 ## Supported functions
 
 | Function | Signature | Description |

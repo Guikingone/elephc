@@ -544,6 +544,12 @@ pub(crate) fn compile(config: CliConfig) {
     }
     timings.record_since("ir-opt", phase_started);
 
+    // Dynamic source is opaque to AOT feature detection. `--with-regex`
+    // explicitly enables the ordinary regex runtime/native requirement and
+    // lets eval setup register that managed provider with Magician.
+    if with_crates.contains("regex") {
+        ir_module.required_runtime_features.regex = true;
+    }
     let mut runtime_features = ir_module.required_runtime_features;
     // `--web` selects the output-capture variant of `__rt_stdout_write`. This is the
     // sole driver of the web runtime feature: it is CLI-driven, not derived from the
@@ -554,10 +560,10 @@ pub(crate) fn compile(config: CliConfig) {
     let runtime_link_requirements =
         codegen::link_requirements_for_runtime_features(runtime_features);
 
-    // `--with-<crate>` force-links each named bridge staticlib (whole-archived,
-    // via `forced_bridge_libs`, so it is not dead-stripped) regardless of feature
-    // auto-detection. Crates with a PHP-surface prelude (pdo/tz/image) also had
-    // that prelude force-injected above, so their classes/functions are available.
+    // Bridge-backed `--with-<name>` values force-link their staticlib
+    // (whole-archived via `forced_bridge_libs`) regardless of feature
+    // auto-detection. Runtime-only capabilities such as regex have already
+    // updated `runtime_features` and intentionally do not map to a bridge.
     let mut forced_bridge_libs: Vec<String> = Vec::new();
     let mut sorted_with_crates: Vec<&String> = with_crates.iter().collect();
     sorted_with_crates.sort();
@@ -767,10 +773,25 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::clear();
     timings.report();
+    if let Some(warning) = dynamic_eval_capability_warning(runtime_features) {
+        eprintln!("{warning}");
+    }
     crate::progress::finish_ok(
         &format!("Compiled '{}' -> '{}'", filename, output_paths.bin.display()),
         timings.elapsed(),
     );
+}
+
+/// Returns the post-link reminder for dynamic eval without optional regex support.
+fn dynamic_eval_capability_warning(
+    runtime_features: codegen::RuntimeFeatures,
+) -> Option<&'static str> {
+    (runtime_features.eval_bridge && !runtime_features.regex).then_some(concat!(
+        "warning: dynamic eval was compiled without optional regex support\n",
+        "evaluated code that uses preg_* or mb_ereg_match() will fail at runtime; enable it with:\n",
+        "  elephc native add pcre2\n",
+        "  elephc --with-regex <source-file>",
+    ))
 }
 
 /// Computes output paths for .s (assembly), .o (object), binary, and .map (source map) files

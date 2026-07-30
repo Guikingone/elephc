@@ -55,6 +55,146 @@ fn assert_scope_eir_aot_without_bridge(
     );
 }
 
+/// Verifies dynamic eval compiles and runs without any native project or PCRE2 artifact.
+#[test]
+fn test_dynamic_eval_without_regex_needs_no_native_project() {
+    let dir = make_cli_test_dir("elephc_dynamic_eval_without_native_project");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$code = $argc > 1 ? $argv[1] : 'echo "eval-ok";';
+eval($code);
+"#,
+    )
+    .unwrap();
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    let compile_stderr = String::from_utf8_lossy(&compile.stderr);
+    assert!(
+        compile.status.success(),
+        "dynamic eval without regex should compile without a native project:\n{compile_stderr}"
+    );
+    assert!(
+        compile_stderr.contains("dynamic eval was compiled without optional regex support")
+            && compile_stderr.contains("elephc --with-regex <source-file>"),
+        "compile output should contain the regex capability reminder:\n{compile_stderr}"
+    );
+    assert!(
+        !compile_stderr.contains("native project error"),
+        "eval-only compilation must not resolve managed PCRE2:\n{compile_stderr}"
+    );
+
+    let run = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run dynamic eval fixture");
+    assert!(
+        run.status.success(),
+        "dynamic eval fixture failed:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "eval-ok");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies unavailable dynamic regex calls compile but fail only when executed.
+#[test]
+fn test_dynamic_eval_regex_without_capability_fails_at_runtime() {
+    let dir = make_cli_test_dir("elephc_dynamic_eval_regex_without_capability");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$code = $argc > 1
+    ? $argv[1]
+    : 'echo function_exists("preg_match") ? "available" : "missing"; preg_match("/a/", "a");';
+eval($code);
+"#,
+    )
+    .unwrap();
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    assert!(
+        compile.status.success(),
+        "opaque dynamic regex usage should not fail compilation:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run dynamic eval regex fixture");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success(), "missing regex capability should fail at runtime");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "missing");
+    assert!(
+        stderr.contains("Fatal error: eval() runtime failed"),
+        "runtime failure should use the eval fatal diagnostic:\n{stderr}"
+    );
+    assert_no_rust_panic_leaked(&stderr);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `--with-regex` registers managed PCRE2 for dynamic eval builtin dispatch.
+#[test]
+fn test_dynamic_eval_with_regex_uses_managed_provider() {
+    let dir = make_cli_test_dir("elephc_dynamic_eval_with_regex");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$code = $argc > 1
+    ? $argv[1]
+    : '$ok = preg_match("/([a-z]+)([0-9]+)/", "id42", $matches); echo (function_exists("preg_match") ? "yes" : "no") . ":" . $ok . ":" . $matches[1] . ":" . $matches[2];';
+eval($code);
+"#,
+    )
+    .unwrap();
+
+    let compile = elephc_cli_command_with_managed_pcre2(&dir)
+        .args(["--quiet", "--with-regex", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    let compile_stderr = String::from_utf8_lossy(&compile.stderr);
+    assert!(
+        compile.status.success(),
+        "dynamic eval with managed regex should compile:\n{compile_stderr}"
+    );
+    assert!(
+        !compile_stderr.contains("dynamic eval was compiled without optional regex support"),
+        "explicit regex capability should suppress the reminder:\n{compile_stderr}"
+    );
+
+    let run = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run managed dynamic eval regex fixture");
+    assert!(
+        run.status.success(),
+        "managed dynamic eval regex fixture failed:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "yes:1:id:42");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a statically detected regex call also exposes the provider to dynamic eval.
+#[test]
+fn test_static_regex_detection_enables_dynamic_eval_regex() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_match("/a/", "cat") . ":";
+$code = $argc > 1 ? $argv[1] : 'echo preg_match("/b/", "cab");';
+eval($code);
+"#,
+    );
+    assert_eq!(out, "1:1");
+}
+
 /// Verifies `eval` is resolved as a language construct, not a PHP-visible callable function.
 #[test]
 fn test_eval_is_not_function_exists_or_callable() {

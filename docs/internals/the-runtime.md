@@ -25,6 +25,11 @@ ABI helpers. It is embedded only when the final EIR module requires the
 `eval_bridge` runtime feature; the presence of a fully native literal
 `eval()` call does not force it into the binary.
 
+Magician's base archive does not reference PCRE2. When static detection or
+`--with-regex` enables the regex runtime, generated eval setup registers the
+managed PCRE2 shim as an opaque provider; otherwise regex builtins are absent
+from dynamic eval dispatch.
+
 The compile-time planner, scope/context lifecycle, eval-specific EIR
 instructions, parse cache, ownership rules, and bridge linking contract are
 documented in [Eval Runtime Architecture](eval-runtime.md). PHP-visible
@@ -508,9 +513,11 @@ unmatched and surplus slots to `[-1, -1]`.
 historic symbol name for compatibility but only materializes a null-terminated
 pattern. `__rt_mb_ereg_match` backs `mb_ereg_match()` through the same shim. The
 whole regex family is emitted only when the program's `RuntimeFeatures` request
-it. A final-link regex or dynamic-eval program resolves the managed `pcre2` package and
-links exact verified archives in shim, POSIX, then 8-bit order. There is no
-production system-PCRE2 fallback; compilation itself never installs a package.
+it. A final-link regex program resolves the managed `pcre2` package and links
+exact verified archives in shim, POSIX, then 8-bit order. Dynamic eval does so
+only when static regex detection or `--with-regex` requests the same feature.
+There is no production system-PCRE2 fallback; compilation itself never installs
+a package.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|

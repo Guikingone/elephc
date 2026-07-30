@@ -627,6 +627,13 @@ detection cannot see indirect usage. It is additive and never disables
 auto-detection. Note that it increases binary size by force-including the whole
 crate.
 
+The CLI also has an explicit runtime-capability exception, `--with-regex`.
+Unlike a bridge flag, it enables `RuntimeFeatures::regex` for opaque dynamic
+eval source and requires the project's managed `pcre2` package; it does not add
+an entry to `BRIDGES`. Keep any future non-bridge `--with-<name>` capability in
+the explicit CLI capability list and document why normal source detection
+cannot see it.
+
 ### 6. Tests
 
 - Unit-test the `BRIDGES`/flag mapping in `src/linker.rs` and the CLI parsing in

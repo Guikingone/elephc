@@ -109,7 +109,7 @@ pub fn runtime_features_for_program_and_classes(
 /// Returns typed final-link requirements for the selected optional runtime features.
 pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<LinkRequirement> {
     let mut requirements = Vec::new();
-    if features.regex || features.eval_bridge {
+    if features.regex {
         requirements.push(LinkRequirement::NativePackage("pcre2"));
     }
     if features.phar_archive {
@@ -123,8 +123,8 @@ pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<
         requirements.push(LinkRequirement::Bridge("elephc_crypto"));
     }
     if features.eval_bridge {
-        // Dynamic eval can call preg_* without a static AOT reference, while the
-        // interpreter itself remains an ordinary table-driven Elephc bridge.
+        // The interpreter remains an ordinary table-driven Elephc bridge.
+        // Regex is a separate optional capability registered only when enabled.
         requirements.push(LinkRequirement::Bridge("elephc_magician"));
     }
     requirements
@@ -996,11 +996,24 @@ mod tests {
         assert!(link_requirements_for_runtime_features(RuntimeFeatures::none()).is_empty());
     }
 
-    /// Verifies eval runtime features request managed PCRE2 plus the magician bridge.
+    /// Verifies eval alone requests only the magician bridge.
     #[test]
-    fn test_eval_runtime_features_require_managed_pcre2_and_magician_bridge() {
+    fn test_eval_runtime_features_require_only_magician_bridge() {
         assert_eq!(
             link_requirements_for_runtime_features(RuntimeFeatures {
+                eval_bridge: true,
+                ..RuntimeFeatures::none()
+            }),
+            vec![LinkRequirement::Bridge("elephc_magician")]
+        );
+    }
+
+    /// Verifies eval plus regex requests both managed PCRE2 and the magician bridge.
+    #[test]
+    fn test_eval_with_regex_requires_managed_pcre2_and_magician_bridge() {
+        assert_eq!(
+            link_requirements_for_runtime_features(RuntimeFeatures {
+                regex: true,
                 eval_bridge: true,
                 ..RuntimeFeatures::none()
             }),

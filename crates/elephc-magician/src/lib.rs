@@ -23,6 +23,7 @@ mod lexer;
 pub mod lower;
 mod parse_cache;
 pub mod parser;
+mod regex_provider;
 pub mod runtime_hooks;
 pub mod scope;
 mod strict_php_mode;
@@ -32,3 +33,4 @@ pub mod value;
 
 pub use interpreter::builtin_metadata;
 pub use ffi::*;
+pub use regex_provider::__elephc_eval_register_regex_provider;

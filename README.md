@@ -88,7 +88,7 @@ I made the project as modular as possible. Every function has its own codegen fi
 
 You can write PHP using the constructs documented in the [docs](docs/). Classes with single inheritance, interfaces, `instanceof`, nullsafe access (`?->`), abstract classes, final classes, methods and typed/static properties, PHP-style static property redeclarations, constructor property promotion, traits, constructors, instance/static methods, case-insensitive PHP symbol lookup for functions/classes/methods, `self::` / `parent::` / `static::` with late static binding, `readonly` properties and classes, enums, PHP 8 attributes on declarations, named arguments, first-class callables, typed function and method parameters and returns, `try` / `catch` / `finally` / `throw`, visibility modifiers, union and nullable types, copy-on-write arrays, associative arrays with PHP insertion order and integer/numeric-string key normalization, array union with `+`, closures, generator functions and generator closures with `yield` / `yield from`, namespaces, includes, compile-time Composer/SPL autoloading, class/introspection helpers, `PDO` database access (`PDO` / `PDOStatement` / `PDOException`) with SQLite, PostgreSQL, and MySQL/MariaDB drivers, image creation and manipulation (GD raster I/O, drawing, transforms/filters, Exif/IPTC metadata, and the `Imagick`/`Gmagick`/Cairo object APIs) on a pure-Rust codec/raster bridge, and PHP 8.1-style `Fiber` coroutines on macOS ARM64, Linux ARM64, and Linux x86_64.
 
-Experimental [`eval()` support](docs/php/eval.md) AOT-lowers eligible literal fragments and falls back to the optional, statically linked Magician interpreter for dynamic fragments. Runnable examples live in [`examples/eval/`](examples/eval/) and [`examples/eval-globals/`](examples/eval-globals/).
+Experimental [`eval()` support](docs/php/eval.md) AOT-lowers eligible literal fragments and falls back to the optional, statically linked Magician interpreter for dynamic fragments. Runnable examples live in [`examples/eval/`](examples/eval/), [`examples/eval-globals/`](examples/eval-globals/), and the opt-in regex example [`examples/eval_regex/`](examples/eval_regex/).
 
 For performance-oriented code, elephc exposes compiler extensions beyond standard PHP — see the Why section above.
 
@@ -222,7 +222,7 @@ elephc --no-ir-opt hot.php
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
-# Force-enable a bridge crate (pdo, tls, crypto, phar, tz, image, eval, web) regardless of auto-detection
+# Force-enable an optional bridge (pdo, tls, crypto, phar, tz, image, eval, web)
 elephc app.php --with-pdo --with-crypto
 # --with-eval force-links Magician; normal eval use is detected automatically
 elephc app.php --with-eval
@@ -230,6 +230,8 @@ elephc app.php --with-eval
 # Declare, lock, and install the managed PCRE2 package for a regex project
 elephc native add pcre2
 elephc regex.php
+# Dynamic eval source needs the explicit regex capability
+elephc --with-regex eval_regex.php
 
 # Reproduce committed native state in CI (add --offline when already cached)
 elephc native install --locked
