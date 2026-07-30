@@ -331,6 +331,13 @@ fn validate_instruction_immediate(
         ICmp | FCmp => require_immediate(inst_id, inst, "comparison predicate", |imm| {
             matches!(imm, Imm::CmpPredicate(_))
         }),
+        StrictEq | StrictNotEq => {
+            if inst.immediate.is_some() {
+                Err(ValidationError::UnexpectedImmediate(inst_id))
+            } else {
+                Ok(())
+            }
+        }
         MixedNumericBinop => require_immediate(inst_id, inst, "mixed numeric op", |imm| {
             matches!(imm, Imm::MixedNumericOp(_))
         }),
@@ -432,6 +439,7 @@ fn validate_opcode_rules(
         FNeg => check_unary(function, inst_id, inst, IrType::F64, "F64"),
         ICmp => check_binary(function, inst_id, inst, IrType::I64, "I64"),
         FCmp => check_binary(function, inst_id, inst, IrType::F64, "F64"),
+        StrictEq | StrictNotEq => validate_strict_compare(inst_id, inst),
         IToF => check_unary(function, inst_id, inst, IrType::I64, "I64"),
         IToStr => check_unary_any(
             function,
@@ -686,6 +694,27 @@ fn check_hash_array_union(
         IrType::Heap(IrHeapKind::Array),
         "Heap(Array)",
     )
+}
+
+/// Validates strict-comparison arity and its exact boolean result contract.
+fn validate_strict_compare(
+    inst_id: InstId,
+    inst: &Instruction,
+) -> Result<(), ValidationError> {
+    check_count(inst_id, inst, 2, "2")?;
+    let result = inst
+        .result
+        .ok_or(ValidationError::InstructionResultMissing(inst_id))?;
+    if inst.result_type != IrType::I64 {
+        return Err(ValidationError::ResultTypeMismatch(result));
+    }
+    if inst.result_php_type != PhpType::Bool {
+        return Err(ValidationError::PhpTypeMismatch(result));
+    }
+    if inst.result_ownership != Ownership::NonHeap {
+        return Err(ValidationError::OwnershipTypeMismatch(result));
+    }
+    Ok(())
 }
 
 /// Validates one exact operand count.

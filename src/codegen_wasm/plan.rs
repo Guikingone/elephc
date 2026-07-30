@@ -15,7 +15,7 @@
 
 use super::{
     arrays, classes, closures, float, function, hashes, heap, methods, mixed, objects, refcount,
-    runtime, symbols, wat, WasmError,
+    runtime, strict, symbols, wat, WasmError,
 };
 use crate::codegen::Emit;
 use crate::ir::Module;
@@ -162,6 +162,7 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
     // global set to `FLOAT_SCRATCH_BASE` so cast/echo/mixed-stdout callers pass
     // `(global.get $__float_scratch)` as the bignum scratch base.
     float::emit_float_runtime(&mut wm, runtime::FLOAT_SCRATCH_BASE as i32);
+    strict::emit_strict_runtime(&mut wm);
 
     // Lower every user function; `main` becomes the WASI `_start` command entry.
     let mut functions: Vec<_> = module.functions.iter().collect();

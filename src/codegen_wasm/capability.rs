@@ -440,6 +440,7 @@ fn check_instruction_shape(
         Op::UnsetLocal => unset_owned_temp_shape_issue(function, inst),
         Op::Cast => cast_shape_issue(function, inst),
         Op::IToStr => int_like_to_string_shape_issue(function, inst),
+        Op::StrictEq | Op::StrictNotEq => strict_compare_shape_issue(function, inst),
         Op::IsTruthy => truthiness_shape_issue(function, inst),
         Op::ArraySet => array_store_shape_issue(function, inst, 2, false),
         Op::ArrayPush => array_store_shape_issue(function, inst, 1, true),
@@ -1242,6 +1243,59 @@ fn int_like_to_string_shape_issue(
             inst.result_php_type.codegen_repr(),
             inst.result_ownership
         ));
+    }
+    None
+}
+
+/// Admits only exact scalar, string, and object shapes for strict comparison.
+fn strict_compare_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
+    let [lhs, rhs] = inst.operands.as_slice() else {
+        return Some(format!(
+            "{} expects two operands, got {}",
+            inst.op.name(),
+            inst.operands.len()
+        ));
+    };
+    if inst.immediate.is_some() {
+        return Some(format!("{} does not accept an immediate", inst.op.name()));
+    }
+    if inst.result.is_none()
+        || inst.result_type != IrType::I64
+        || inst.result_php_type != PhpType::Bool
+        || inst.result_ownership != Ownership::NonHeap
+    {
+        return Some(format!(
+            "{} requires an I64/Bool/NonHeap result, got {:?}/{:?}/{:?}",
+            inst.op.name(),
+            inst.result_type,
+            inst.result_php_type,
+            inst.result_ownership
+        ));
+    }
+    for (side, value_id) in [("lhs", lhs), ("rhs", rhs)] {
+        let Some(value) = function.value(*value_id) else {
+            return Some(format!(
+                "{} {} is missing from the value table",
+                inst.op.name(),
+                side
+            ));
+        };
+        if super::strict::classify_strict_value(
+            value.ir_type,
+            &value.php_type,
+            value.ownership,
+        )
+        .is_none()
+        {
+            return Some(format!(
+                "{} rejects {} shape {:?}/{:?}/{:?}",
+                inst.op.name(),
+                side,
+                value.ir_type,
+                value.php_type,
+                value.ownership
+            ));
+        }
     }
     None
 }
@@ -4678,6 +4732,8 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::FNeg
         | Op::ICmp
         | Op::FCmp
+        | Op::StrictEq
+        | Op::StrictNotEq
         | Op::IsNull
         | Op::IsTruthy
         | Op::InstanceOf
@@ -4757,8 +4813,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::StrEq
         | Op::StrCmp
         | Op::StrLooseEq
-        | Op::StrictEq
-        | Op::StrictNotEq
         | Op::LooseEq
         | Op::LooseNotEq
         | Op::Spaceship
@@ -7647,6 +7701,230 @@ mod tests {
             shape_issue(IrType::I64, PhpType::Float, Ownership::MaybeOwned).is_some()
         );
         assert!(shape_issue(IrType::I64, PhpType::Int, Ownership::Borrowed).is_some());
+    }
+
+    /// Verifies strict equality admits only exact scalar, string, and object
+    /// families with their valid storage ownership.
+    #[test]
+    fn strict_compare_shape_is_exact_and_fail_closed() {
+        type Shape = (IrType, PhpType, Ownership);
+
+        let shape_issue = |
+            op: Op,
+            operand_shapes: Vec<Shape>,
+            immediate: Option<Immediate>,
+            result: Shape,
+        | {
+            let mut function =
+                Function::new("strict_compare".to_string(), IrType::Void, PhpType::Void);
+            {
+                let mut builder = Builder::new(&mut function);
+                let entry = builder.create_named_block("entry", Vec::new());
+                builder.set_entry(entry);
+                builder.position_at_end(entry);
+                let operands = operand_shapes
+                    .into_iter()
+                    .map(|(ir_type, php_type, ownership)| {
+                        builder
+                            .emit(
+                                Op::ConstI64,
+                                Vec::new(),
+                                Some(Immediate::I64(1)),
+                                ir_type,
+                                php_type,
+                                ownership,
+                            )
+                            .expect("strict source")
+                    })
+                    .collect();
+                let _ = builder.emit(
+                    op,
+                    operands,
+                    immediate,
+                    result.0,
+                    result.1,
+                    result.2,
+                );
+                builder.terminate(Terminator::Return { value: None });
+            }
+            let comparison = function
+                .instructions
+                .iter()
+                .find(|instruction| instruction.op == op)
+                .expect("strict comparison");
+            super::strict_compare_shape_issue(&function, comparison)
+        };
+
+        for op in [Op::StrictEq, Op::StrictNotEq] {
+            for operands in [
+                vec![
+                    (IrType::I64, PhpType::Int, Ownership::NonHeap),
+                    (IrType::I64, PhpType::Int, Ownership::NonHeap),
+                ],
+                vec![
+                    (IrType::I64, PhpType::Bool, Ownership::NonHeap),
+                    (IrType::I64, PhpType::False, Ownership::NonHeap),
+                ],
+                vec![
+                    (IrType::I64, PhpType::Void, Ownership::NonHeap),
+                    (IrType::I64, PhpType::Void, Ownership::NonHeap),
+                ],
+                vec![
+                    (IrType::F64, PhpType::Float, Ownership::NonHeap),
+                    (IrType::F64, PhpType::Float, Ownership::NonHeap),
+                ],
+                vec![
+                    (IrType::Str, PhpType::Str, Ownership::Persistent),
+                    (IrType::Str, PhpType::Str, Ownership::MaybeOwned),
+                ],
+                vec![
+                    (
+                        IrType::Heap(IrHeapKind::Object),
+                        PhpType::Object("ParentValue".to_string()),
+                        Ownership::Owned,
+                    ),
+                    (
+                        IrType::Heap(IrHeapKind::Object),
+                        PhpType::Object("ChildValue".to_string()),
+                        Ownership::Borrowed,
+                    ),
+                ],
+                vec![
+                    (IrType::I64, PhpType::Int, Ownership::NonHeap),
+                    (IrType::Str, PhpType::Str, Ownership::Persistent),
+                ],
+                vec![
+                    (
+                        IrType::Heap(IrHeapKind::Object),
+                        PhpType::Object("Value".to_string()),
+                        Ownership::Borrowed,
+                    ),
+                    (IrType::I64, PhpType::Void, Ownership::NonHeap),
+                ],
+            ] {
+                assert_eq!(
+                    shape_issue(
+                        op,
+                        operands,
+                        None,
+                        (IrType::I64, PhpType::Bool, Ownership::NonHeap)
+                    ),
+                    None
+                );
+            }
+
+            for invalid in [
+                (
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                ),
+                (
+                    IrType::TaggedScalar,
+                    PhpType::TaggedScalar,
+                    Ownership::NonHeap,
+                ),
+                (
+                    IrType::Heap(IrHeapKind::Union),
+                    PhpType::Union(vec![PhpType::Int, PhpType::Str]),
+                    Ownership::Owned,
+                ),
+                (
+                    IrType::I64,
+                    PhpType::Resource(None),
+                    Ownership::NonHeap,
+                ),
+                (
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::Borrowed,
+                ),
+                (
+                    IrType::Heap(IrHeapKind::Hash),
+                    PhpType::AssocArray {
+                        key: Box::new(PhpType::Str),
+                        value: Box::new(PhpType::Int),
+                    },
+                    Ownership::Borrowed,
+                ),
+                (
+                    IrType::Heap(IrHeapKind::Iterable),
+                    PhpType::Iterable,
+                    Ownership::Borrowed,
+                ),
+                (IrType::I64, PhpType::Callable, Ownership::Owned),
+                (
+                    IrType::I64,
+                    PhpType::Pointer(None),
+                    Ownership::NonHeap,
+                ),
+                (
+                    IrType::I64,
+                    PhpType::Packed("Packet".to_string()),
+                    Ownership::NonHeap,
+                ),
+                (IrType::I64, PhpType::Int, Ownership::Owned),
+            ] {
+                assert!(
+                    shape_issue(
+                        op,
+                        vec![
+                            invalid,
+                            (IrType::I64, PhpType::Int, Ownership::NonHeap)
+                        ],
+                        None,
+                        (IrType::I64, PhpType::Bool, Ownership::NonHeap)
+                    )
+                    .is_some()
+                );
+            }
+
+            assert!(
+                shape_issue(
+                    op,
+                    vec![(IrType::I64, PhpType::Int, Ownership::NonHeap)],
+                    None,
+                    (IrType::I64, PhpType::Bool, Ownership::NonHeap)
+                )
+                .is_some()
+            );
+            assert!(
+                shape_issue(
+                    op,
+                    vec![
+                        (IrType::I64, PhpType::Int, Ownership::NonHeap),
+                        (IrType::I64, PhpType::Int, Ownership::NonHeap)
+                    ],
+                    Some(Immediate::I64(1)),
+                    (IrType::I64, PhpType::Bool, Ownership::NonHeap)
+                )
+                .is_some()
+            );
+            assert!(
+                shape_issue(
+                    op,
+                    vec![
+                        (IrType::I64, PhpType::Int, Ownership::NonHeap),
+                        (IrType::I64, PhpType::Int, Ownership::NonHeap)
+                    ],
+                    None,
+                    (IrType::F64, PhpType::Float, Ownership::NonHeap)
+                )
+                .is_some()
+            );
+            assert!(
+                shape_issue(
+                    op,
+                    vec![
+                        (IrType::I64, PhpType::Int, Ownership::NonHeap),
+                        (IrType::I64, PhpType::Int, Ownership::NonHeap)
+                    ],
+                    None,
+                    (IrType::I64, PhpType::Bool, Ownership::Owned)
+                )
+                .is_some()
+            );
+        }
     }
 
     /// Float-to-int EIR forms stay outside the public WASM surface until their

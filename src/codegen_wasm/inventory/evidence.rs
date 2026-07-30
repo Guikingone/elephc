@@ -65,6 +65,8 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
         Op::FNeg => &["unary float `-`"],
         Op::ICmp => &["integer comparison"],
         Op::FCmp => &["float comparison"],
+        Op::StrictEq => &["strict equality (`===`)"],
+        Op::StrictNotEq => &["strict inequality (`!==`)"],
         Op::IsNull => &["null comparison or `is_null()` lowering"],
         Op::IsTruthy => &["condition/boolean-context truthiness"],
         Op::InstanceOf => &["`instanceof` with a statically resolved class"],
@@ -156,6 +158,9 @@ fn op_tests(op: Op) -> &'static [&'static str] {
         }
         Op::IDiv => &["codegen_wasm::tests::php_division_returns_float"],
         Op::ICmp => &["codegen_wasm::tests::int_compare_invokes_correctly"],
+        Op::StrictEq | Op::StrictNotEq => {
+            &["codegen_wasm::strict::tests::strict_scalar_equality_opcodes_lower_and_run"]
+        }
         Op::IToStr => {
             &["codegen_wasm::tests::integer_and_boolean_to_string_lowering_matches_php"]
         }
@@ -267,6 +272,7 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::FNeg => "codegen_wasm::inst::lower_float_neg",
         Op::ICmp => "codegen_wasm::inst::lower_int_cmp",
         Op::FCmp => "codegen_wasm::inst::lower_float_cmp",
+        Op::StrictEq | Op::StrictNotEq => "codegen_wasm::strict::lower_strict_compare",
         Op::IToF => "codegen_wasm::inst::lower_itof",
         Op::IToStr => "codegen_wasm::inst::lower_int_like_to_string",
         Op::Cast => "codegen_wasm::inst::lower_cast",
@@ -362,7 +368,12 @@ pub(super) fn op_evidence_group(op: Op) -> &'static str {
         | Op::IShl
         | Op::IShrA => "scalar_int",
         Op::FAdd | Op::FSub | Op::FMul | Op::FDiv | Op::FNeg => "float",
-        Op::ICmp | Op::FCmp | Op::IsNull | Op::IsTruthy => "compare",
+        Op::ICmp
+        | Op::FCmp
+        | Op::StrictEq
+        | Op::StrictNotEq
+        | Op::IsNull
+        | Op::IsTruthy => "compare",
         Op::InstanceOf => "instanceof",
         Op::IToF => "itof",
         Op::IToStr => "string",

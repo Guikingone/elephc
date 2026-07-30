@@ -41,6 +41,7 @@ mod plan;
 mod refcount;
 mod refcell;
 mod runtime;
+mod strict;
 mod symbols;
 mod traps;
 mod transfer;

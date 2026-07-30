@@ -108,6 +108,127 @@ fn cast_variants_reject_target_result_mismatches() {
     }
 }
 
+/// Builds one strict comparison with caller-controlled structural metadata.
+fn strict_compare_function(
+    op: Op,
+    operand_count: usize,
+    immediate: Option<Immediate>,
+    result_type: IrType,
+    result_php_type: PhpType,
+    result_ownership: Ownership,
+) -> Function {
+    let mut function =
+        Function::new("strict_compare".to_string(), IrType::Void, PhpType::Void);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let operands = (0..operand_count)
+            .map(|value| builder.emit_const_i64(value as i64))
+            .collect();
+        let _ = builder.emit(
+            op,
+            operands,
+            immediate,
+            result_type,
+            result_php_type,
+            result_ownership,
+        );
+        builder.terminate(Terminator::Return { value: None });
+    }
+    function
+}
+
+/// Strict comparisons require exactly two operands for both equality variants.
+#[test]
+fn strict_comparisons_reject_invalid_operand_counts() {
+    for op in [Op::StrictEq, Op::StrictNotEq] {
+        for operand_count in [0, 1, 3] {
+            let function = strict_compare_function(
+                op,
+                operand_count,
+                None,
+                IrType::I64,
+                PhpType::Bool,
+                Ownership::NonHeap,
+            );
+            assert!(matches!(
+                validate_function(&function),
+                Err(ValidationError::OperandCountMismatch {
+                    expected: "2",
+                    actual,
+                    ..
+                }) if actual == operand_count
+            ));
+        }
+    }
+}
+
+/// Strict comparisons reject every immediate because PHP `===`/`!==` has none.
+#[test]
+fn strict_comparisons_reject_immediates() {
+    for op in [Op::StrictEq, Op::StrictNotEq] {
+        let function = strict_compare_function(
+            op,
+            2,
+            Some(Immediate::I64(1)),
+            IrType::I64,
+            PhpType::Bool,
+            Ownership::NonHeap,
+        );
+        assert!(matches!(
+            validate_function(&function),
+            Err(ValidationError::UnexpectedImmediate(_))
+        ));
+    }
+}
+
+/// Strict comparisons require the exact I64/Bool/NonHeap result metadata.
+#[test]
+fn strict_comparisons_reject_invalid_results() {
+    for op in [Op::StrictEq, Op::StrictNotEq] {
+        let wrong_ir = strict_compare_function(
+            op,
+            2,
+            None,
+            IrType::F64,
+            PhpType::Float,
+            Ownership::NonHeap,
+        );
+        assert!(matches!(
+            validate_function(&wrong_ir),
+            Err(ValidationError::ResultTypeMismatch(_))
+        ));
+
+        let wrong_php = strict_compare_function(
+            op,
+            2,
+            None,
+            IrType::I64,
+            PhpType::Int,
+            Ownership::NonHeap,
+        );
+        assert!(matches!(
+            validate_function(&wrong_php),
+            Err(ValidationError::PhpTypeMismatch(_))
+        ));
+
+        let wrong_ownership = strict_compare_function(
+            op,
+            2,
+            None,
+            IrType::I64,
+            PhpType::Bool,
+            Ownership::Owned,
+        );
+        assert!(matches!(
+            validate_function(&wrong_ownership),
+            Err(ValidationError::OwnershipTypeMismatch(_))
+        ));
+    }
+}
+
 /// Exact array pointer storage accepts only the corresponding two-member
 /// `array|null` metadata used by nullable container reads.
 #[test]

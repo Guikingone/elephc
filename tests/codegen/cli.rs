@@ -794,6 +794,109 @@ echo $integer . $other_integer . "|" . $true . $false . "|" . $minimum . ":" . $
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Compiles exact strict scalar/string/object equality through the public PHP
+/// frontend for every supported profile and verifies raw output/status/stderr.
+#[test]
+fn test_cli_wasm_strict_equality_matches_php_profiles() {
+    if Command::new("wasmer").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_strict_equality");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function integer_value(int $value): int {
+    return $value;
+}
+function boolean_value(bool $value): bool {
+    return $value;
+}
+function float_value(float $value): float {
+    return $value;
+}
+function string_value(string $value): string {
+    return $value;
+}
+class ChildValue {}
+
+$one = integer_value(1);
+$two = integer_value(2);
+$true = boolean_value(true);
+$false = boolean_value(false);
+$nan = float_value(NAN);
+$positiveZero = float_value(0.0);
+$negativeZero = float_value(-0.0);
+$empty = string_value("");
+$binary = string_value("a\0b\xFF");
+$sameBinary = string_value("a\0b\xFF");
+$prefix = string_value("a\0b");
+$differentBinary = string_value("a\0c\xFF");
+$object = new ChildValue();
+$otherObject = new ChildValue();
+$null = null;
+
+echo $one === integer_value(1); echo ",";
+echo $one !== $two; echo ",";
+echo $true === boolean_value(true); echo ",";
+echo $true !== $false; echo ",";
+echo $one !== string_value("1"); echo ",";
+echo $nan !== $nan; echo ",";
+echo $positiveZero === $negativeZero; echo ",";
+echo $empty === string_value(""); echo ",";
+echo $binary === $sameBinary; echo ",";
+echo $binary !== $prefix; echo ",";
+echo $binary !== $differentBinary; echo ",";
+echo $object !== $null; echo ",";
+echo $object !== $otherObject; echo ",";
+echo $object === $object; echo ",";
+echo $null === null; echo ",";
+echo $false !== $null; echo ",";
+"#,
+    )
+    .unwrap();
+
+    for version in ["8.2", "8.3", "8.4", "8.5"] {
+        let output = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg("--php-version")
+            .arg(version)
+            .arg(&php_path)
+            .output()
+            .expect("failed to compile strict equality to WASM");
+        assert!(
+            output.status.success(),
+            "PHP {version} strict equality compilation failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let run = Command::new("wasmer")
+            .arg("run")
+            .arg(dir.join("main.wasm"))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run strict equality under Wasmer");
+        assert!(
+            run.status.success(),
+            "PHP {version} strict equality trapped: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,"
+        );
+        assert!(
+            run.stderr.is_empty(),
+            "PHP {version}: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Compiles the php-src saturated-array append edge through PHP -> EIR -> WASM
 /// and verifies the command runtime reports the exact failure instead of wrapping
 /// `PHP_INT_MAX` to a negative key or surfacing an unclassified Wasm trap.

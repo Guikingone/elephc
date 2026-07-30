@@ -77,6 +77,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::FNeg => lower_float_neg(ctx, &inst),
         Op::ICmp => lower_int_cmp(ctx, &inst),
         Op::FCmp => lower_float_cmp(ctx, &inst),
+        Op::StrictEq | Op::StrictNotEq => super::strict::lower_strict_compare(ctx, &inst),
         Op::IToF => lower_itof(ctx, &inst),
         Op::IToStr => lower_int_like_to_string(ctx, &inst),
         Op::FToI => lower_ftoi(ctx, &inst),

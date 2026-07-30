@@ -534,6 +534,7 @@ pub(super) fn shape_predicates() -> Vec<ShapePredicate> {
         "forward_transfer_shape_issue",
         "cast_shape_issue",
         "int_like_to_string_shape_issue",
+        "strict_compare_shape_issue",
         "truthiness_shape_issue",
         "array_store_shape_issue",
         "iter_start_shape_issue",

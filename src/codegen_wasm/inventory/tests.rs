@@ -90,6 +90,8 @@ fn test_source(identifier: &str) -> &'static str {
         include_str!("../capability.rs")
     } else if identifier.starts_with("codegen_wasm::closures::tests::") {
         include_str!("../closures.rs")
+    } else if identifier.starts_with("codegen_wasm::strict::tests::") {
+        include_str!("../strict.rs")
     } else {
         panic!("inventory references an unaudited Rust test module {identifier:?}");
     }
@@ -610,6 +612,8 @@ fn supported_lowerer_paths_resolve_to_backend_functions() {
             include_str!("../function.rs")
         } else if lowerer.starts_with("codegen_wasm::values::") {
             include_str!("../values.rs")
+        } else if lowerer.starts_with("codegen_wasm::strict::") {
+            include_str!("../strict.rs")
         } else {
             panic!(
                 "supported row {:?} references unaudited lowerer path {lowerer:?}",

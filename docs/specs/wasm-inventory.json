@@ -301,9 +301,9 @@
     },
     "op": {
       "total": 236,
-      "supported": 96,
+      "supported": 98,
       "excluded": 17,
-      "missing": 123,
+      "missing": 121,
       "rows": [
         {
           "name": "const_i64",
@@ -1361,31 +1361,41 @@
           "name": "strict_eq",
           "family": "op",
           "enum_name": "Op",
-          "disposition": "missing",
-          "producers": [],
+          "disposition": "supported",
+          "producers": [
+            "strict equality (`===`)"
+          ],
           "execution_modes": [
             "command",
             "npm"
           ],
-          "evidence_gaps": [
-            "producers"
-          ],
-          "missing": "ordinary PHP reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::inst",
+            "lowerer": "codegen_wasm::strict::lower_strict_compare",
+            "tests": [
+              "codegen_wasm::strict::tests::strict_scalar_equality_opcodes_lower_and_run"
+            ]
+          }
         },
         {
           "name": "strict_not_eq",
           "family": "op",
           "enum_name": "Op",
-          "disposition": "missing",
-          "producers": [],
+          "disposition": "supported",
+          "producers": [
+            "strict inequality (`!==`)"
+          ],
           "execution_modes": [
             "command",
             "npm"
           ],
-          "evidence_gaps": [
-            "producers"
-          ],
-          "missing": "ordinary PHP reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::inst",
+            "lowerer": "codegen_wasm::strict::lower_strict_compare",
+            "tests": [
+              "codegen_wasm::strict::tests::strict_scalar_equality_opcodes_lower_and_run"
+            ]
+          }
         },
         {
           "name": "loose_eq",
@@ -11725,6 +11735,10 @@
       "disposition": "enforced"
     },
     {
+      "name": "strict_compare_shape_issue",
+      "disposition": "enforced"
+    },
+    {
       "name": "truthiness_shape_issue",
       "disposition": "enforced"
     },
@@ -11881,6 +11895,8 @@
       "codegen_wasm::tests::echo_float_writes_to_stdout",
       "codegen_wasm::tests::echo_string_literal_writes_to_stdout",
       "codegen_wasm::tests::chained_concat_echoes_correctly",
+      "codegen_wasm::strict::tests::strict_scalar_equality_opcodes_lower_and_run",
+      "codegen_wasm::strict::tests::strict_binary_string_equality_is_length_delimited",
       "codegen_wasm::tests::strlen_of_literal_invokes_correctly",
       "codegen_wasm::tests::argc_reports_argument_count",
       "codegen_wasm::tests::exit_with_code_sets_process_status"
@@ -11893,6 +11909,7 @@
       "codegen_wasm::tests::hash_set_mixed_string_cast_fails_closed",
       "codegen_wasm::capability::tests::direct_call_shape_rejects_arity_mismatch_before_lowering",
       "codegen_wasm::capability::tests::int_like_to_string_shape_is_exact",
+      "codegen_wasm::capability::tests::strict_compare_shape_is_exact_and_fail_closed",
       "codegen_wasm::capability::tests::rejects_method_on_null_error_without_command_runtime"
     ],
     "differential": [],
@@ -11911,14 +11928,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 118,
+    "supported": 120,
     "excluded": 47,
-    "missing": 547,
-    "evidence_gaps": 186,
-    "row_evidence_gaps": 185,
+    "missing": 545,
+    "evidence_gaps": 184,
+    "row_evidence_gaps": 183,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "547 reachable identities lack a WASM lowerer; 185 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "545 reachable identities lack a WASM lowerer; 183 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }
