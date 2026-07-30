@@ -15,9 +15,9 @@
 //!   to structured control flow via a br_table dispatch loop (`function`).
 //!   Runtime helpers are emitted as WAT functions preserving the native memory
 //!   layouts so semantics match the native targets.
-//! - Instruction (op) bodies are lowered in a later phase; until then a function
-//!   containing instructions returns `WasmError::Unsupported` rather than emitting
-//!   silently-wrong code. Empty `main` (the P1 gate) lowers and runs end to end.
+//! - A pre-emission capability audit rejects unsupported EIR identities and
+//!   shapes, then exact planning completes every fallible lowering step before
+//!   artifact staging. Accepted plans cannot fail later with `Unsupported`.
 
 mod artifacts;
 mod arrays;
@@ -122,19 +122,18 @@ fn generate_module(module: &Module, emit: Emit) -> Result<String, WasmError> {
 #[cfg(test)]
 mod tests {
     //! Purpose:
-    //! End-to-end tests for the wasm32-wasi control-flow backbone (P1): the
-    //! br_table dispatch loop, block-argument materialization, and terminators.
+    //! End-to-end tests for the complete wasm32-wasi backend boundary, including
+    //! capability auditing, exact lowering plans, instruction and control-flow
+    //! lowering, runtime integration, trap inventory, and Core validation.
     //!
     //! Called from:
     //! - `cargo test` through Rust's test harness.
     //!
     //! Key details:
-    //! - EIR is hand-built with `crate::ir::Builder` using ONLY block parameters
-    //!   and terminators (no instructions), because instruction lowering lands in a
-    //!   later phase. The generated WAT is fully type-validated with `wasmparser`,
-    //!   which catches structural and typing defects (e.g. a result-type mismatch
-    //!   on a value-returning function), and the `main` module is run under
-    //!   `wasmer` when it is available.
+    //! - EIR is hand-built with `crate::ir::Builder` so tests can exercise exact
+    //!   accepted and rejected shapes without depending on frontend lowering.
+    //!   Generated WAT is type-validated with `wasmparser`, and command modules
+    //!   are run under `wasmer` when it is available.
 
     use super::generate_module as generate;
     use super::symbols::user_function_symbol;
@@ -3033,12 +3032,10 @@ mod tests {
         }
     }
 
-    /// Verifies `HashSet` of a Mixed cell holding a float into an INT-typed hash casts
-    /// via `__rt_mixed_cast_int` (S6f): `(int)9.5` truncates toward zero to 9 and
-    /// `(int)7.7` to 7, so `$h[1]+h[2]` echoes "16". A missing cast would mis-store the
-    /// f64 bits as an int and echo a huge value, not "16".
+    /// Verifies Mixed values cannot be silently narrowed into integer hash
+    /// storage before exact per-tag PHP conversion diagnostics are implemented.
     #[test]
-    fn hash_set_mixed_int_cast_lowers() {
+    fn hash_set_mixed_int_cast_fails_closed() {
         let assoc = PhpType::AssocArray {
             key: Box::new(PhpType::Int),
             value: Box::new(PhpType::Int),
@@ -3111,17 +3108,20 @@ mod tests {
             b.terminate(Terminator::Return { value: None });
         }
         module.add_function(f);
-        if let Some(out) = run_main(&module) {
-            assert_eq!(out, "16");
-        }
+        let error = generate(&module, Emit::Executable)
+            .expect_err("Mixed-to-int hash storage must fail capability");
+        assert!(
+            error
+                .to_string()
+                .contains("must exactly match concrete storage Int"),
+            "{error}"
+        );
     }
 
-    /// Verifies `HashSet` of a Mixed cell holding an int into a FLOAT-typed hash casts
-    /// via `__rt_mixed_cast_float` (S6f): `(float)7` -> 7.0, and `7.0 / 2.0` echoes
-    /// "3.5" — a non-integer only a correct f64 widening can produce. Forwarding the
-    /// raw int bits as f64 would render a subnormal ("0"/"3e-322"), not "3.5".
+    /// Verifies Mixed values cannot be silently narrowed into float hash
+    /// storage before exact per-tag PHP conversion diagnostics are implemented.
     #[test]
-    fn hash_set_mixed_float_cast_lowers() {
+    fn hash_set_mixed_float_cast_fails_closed() {
         let assoc = PhpType::AssocArray {
             key: Box::new(PhpType::Int),
             value: Box::new(PhpType::Float),
@@ -3190,18 +3190,20 @@ mod tests {
             b.terminate(Terminator::Return { value: None });
         }
         module.add_function(f);
-        if let Some(out) = run_main(&module) {
-            assert_eq!(out, "3.5");
-        }
+        let error = generate(&module, Emit::Executable)
+            .expect_err("Mixed-to-float hash storage must fail capability");
+        assert!(
+            error
+                .to_string()
+                .contains("must exactly match concrete storage Float"),
+            "{error}"
+        );
     }
 
-    /// Verifies `HashSet` of a Mixed cell holding an int into a STRING-typed hash casts
-    /// via `__rt_mixed_cast_string_ref` (S6f): `(string)42` -> "42". The borrowed cast
-    /// result is persisted once by `__rt_hash_set`, so the cast's no-persist variant
-    /// avoids the double-persist leak that the always-persisting `__rt_mixed_cast_string`
-    /// would cause. Equivalent to `$h[1]=(string)(mixed)42; echo $h[1];` -> "42".
+    /// Verifies Mixed values cannot be silently narrowed into string hash
+    /// storage before exact per-tag PHP conversion diagnostics are implemented.
     #[test]
-    fn hash_set_mixed_string_cast_lowers() {
+    fn hash_set_mixed_string_cast_fails_closed() {
         let assoc = PhpType::AssocArray {
             key: Box::new(PhpType::Int),
             value: Box::new(PhpType::Str),
@@ -3266,9 +3268,14 @@ mod tests {
             b.terminate(Terminator::Return { value: None });
         }
         module.add_function(f);
-        if let Some(out) = run_main(&module) {
-            assert_eq!(out, "42");
-        }
+        let error = generate(&module, Emit::Executable)
+            .expect_err("Mixed-to-string hash storage must fail capability");
+        assert!(
+            error
+                .to_string()
+                .contains("must exactly match concrete storage Str"),
+            "{error}"
+        );
     }
 
     /// Generates and validates a command module, runs it under `wasmer`, and
@@ -4457,19 +4464,13 @@ mod tests {
 
     // ----- P7d1b: Iterable closure captures (by-value) -----
 
-    /// P7d1b Iterable by-value capture (tag 12): main creates an `Op::ArrayNew`
-    /// result typed as `IrType::Heap(IrHeapKind::Iterable)` / `PhpType::Iterable`
-    /// (the underlying runtime object is a real kind-2 array), pushes two int
-    /// elements, captures it by value (`ClosureNew` stamps one i32 ptr + incref for
-    /// the borrowed operand, tag 12), the body loads the capture and returns its
-    /// element count via `Op::ArrayLen`, and the caller `EchoValue`s the int result
-    /// -> "2". Exercises the Iterable accept in `reject_unsupported_capture` (Edit 1),
-    /// the `Heap|Iterable` arm in `stamp_capture_slot` (Edit 2), the `Heap|Iterable`
-    /// borrow arm in `unbox_capture_wat` (Edit 3), and the tag-12 descriptor release
-    /// walk at main exit (Edit 4). The array ptr is a real kind-2 block so
-    /// `__rt_decref_any` dispatches correctly through kind 2 → `__rt_decref_array`.
+    /// Rejects mutation through abstract `Iterable` storage before WAT emission.
+    ///
+    /// The runtime pointer has no statically proven indexed-array layout or
+    /// element representation at that type boundary, so `ArrayPush` cannot
+    /// safely choose a helper or preserve a PHP runtime tag.
     #[test]
-    fn closure_capture_iterable_by_value_e2e() {
+    fn iterable_mutation_without_concrete_storage_fails_closed() {
         let mut module = Module::new(Target::wasm());
         let name_id = module.data.intern_string("__eir_closure_cap_iter_bv");
 
@@ -4575,9 +4576,14 @@ mod tests {
         }
         module.add_function(main);
 
-        if let Some(out) = run_main(&module) {
-            assert_eq!(out, "2");
-        }
+        let error = generate(&module, Emit::Executable)
+            .expect_err("abstract Iterable mutation must fail capability");
+        assert!(
+            error.to_string().contains(
+                "array write requires Array<T>/Heap(Array), got Heap(Iterable)/Iterable"
+            ),
+            "unexpected error: {error}"
+        );
     }
 
     // ----- P2: scalar instruction lowering, observed via wasmer --invoke -----
@@ -5072,10 +5078,10 @@ mod tests {
         }
     }
 
-    /// Verifies a checked integer result can be cast from its Mixed cell back to
-    /// the declared integer type, as emitted for typed function returns.
+    /// Verifies a checked arithmetic Mixed result cannot be narrowed to int
+    /// until overflow-tag conversion and PHP diagnostics are exact.
     #[test]
-    fn checked_integer_result_casts_back_to_declared_int() {
+    fn checked_integer_result_cast_to_int_fails_closed() {
         let mut module = Module::new(Target::wasm());
         let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
         function.flags.is_main = true;
@@ -5125,9 +5131,14 @@ mod tests {
             builder.terminate(Terminator::Return { value: None });
         }
         module.add_function(function);
-        if let Some(output) = run_main(&module) {
-            assert_eq!(output, "42");
-        }
+        let error = generate(&module, Emit::Executable)
+            .expect_err("checked Mixed-to-int cast must fail capability");
+        assert!(
+            error
+                .to_string()
+                .contains("Mixed-to-scalar casts require exact per-tag PHP values and diagnostics"),
+            "{error}"
+        );
     }
 
     /// Verifies unary integer negation.
@@ -5927,13 +5938,10 @@ mod tests {
         }
     }
 
-    /// Verifies `HashSet` of a boxed Mixed value into a concretely BOOL-typed hash
-    /// casts at runtime via `__rt_mixed_cast_bool` (P5d-2c): a Mixed cell holding the
-    /// int 5 stores `true`, one holding 0 stores `false`. Equivalent to
-    /// `$h[1] = (bool)$m5; $h[2] = (bool)$m0; return $h[1]*10 + $h[2];` -> 10. Without
-    /// the cast the lowering would mis-tag the Mixed-cell pointer as an inline scalar.
+    /// Verifies Mixed values cannot be silently narrowed into boolean hash
+    /// storage before exact per-tag PHP conversion behavior is implemented.
     #[test]
-    fn hash_set_mixed_bool_cast_lowers() {
+    fn hash_set_mixed_bool_cast_fails_closed() {
         let assoc = bool_hash_type();
         let mut module = Module::new(Target::wasm());
         let mut f = Function::new("c".to_string(), IrType::I64, PhpType::Int);
@@ -5998,17 +6006,20 @@ mod tests {
             b.terminate(Terminator::Return { value: Some(sum) });
         }
         module.add_function(f);
-        if let Some(o) = invoke(&module, "fn_c", &[]) {
-            assert_eq!(o, "10");
-        }
+        let error = generate(&module, Emit::Executable)
+            .expect_err("Mixed-to-bool hash storage must fail capability");
+        assert!(
+            error
+                .to_string()
+                .contains("must exactly match concrete storage Bool"),
+            "{error}"
+        );
     }
 
-    /// Verifies `HashAppend` (`$h[] = v`) of a boxed Mixed value into a BOOL-typed hash
-    /// also routes through the `__rt_mixed_cast_bool` cast (the same shared
-    /// `materialize_hash_value_tagged` path as `HashSet`): appending a Mixed cell
-    /// holding the string "x" stores `true` at int key 0. Reads it back -> 1.
+    /// Verifies append cannot silently narrow a Mixed cell into boolean hash
+    /// storage before exact per-tag PHP conversion behavior is implemented.
     #[test]
-    fn hash_append_mixed_bool_cast_lowers() {
+    fn hash_append_mixed_bool_cast_fails_closed() {
         let assoc = bool_hash_type();
         let mut module = Module::new(Target::wasm());
         let x = module.data.intern_string("x");
@@ -6061,9 +6072,14 @@ mod tests {
             b.terminate(Terminator::Return { value: Some(g) });
         }
         module.add_function(f);
-        if let Some(o) = invoke(&module, "fn_a", &[]) {
-            assert_eq!(o, "1");
-        }
+        let error = generate(&module, Emit::Executable)
+            .expect_err("Mixed-to-bool hash append must fail capability");
+        assert!(
+            error
+                .to_string()
+                .contains("must exactly match concrete storage Bool"),
+            "{error}"
+        );
     }
 
     /// Verifies overwriting an existing key updates in place and does not grow the
@@ -7777,7 +7793,7 @@ mod tests {
         );
     }
 
-    /// Emits `$obj->$prop` (PropGet) with the given scalar result type and returns it.
+    /// Emits `$obj->$prop` with result ownership matching the runtime storage contract.
     fn emit_prop_get(
         b: &mut Builder,
         obj: ValueId,
@@ -7785,13 +7801,18 @@ mod tests {
         ir: IrType,
         php: PhpType,
     ) -> ValueId {
+        let ownership = if ir.is_refcounted_storage() {
+            Ownership::Owned
+        } else {
+            Ownership::NonHeap
+        };
         b.emit(
             Op::PropGet,
             vec![obj],
             Some(Immediate::Data(prop_data)),
             ir,
             php,
-            Ownership::NonHeap,
+            ownership,
         )
         .expect("PropGet lowers")
     }

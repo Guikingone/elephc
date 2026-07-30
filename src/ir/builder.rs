@@ -2,7 +2,7 @@
 //! Provides the checked construction API for hand-built and lowered EIR.
 //!
 //! Called from:
-//! - Phase 02 tests and future Phase 03 AST-to-EIR lowering.
+//! - `crate::ir_lower` and focused EIR construction tests.
 //!
 //! Key details:
 //! - The builder assigns value/instruction IDs, prevents emission after a

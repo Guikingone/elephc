@@ -7,6 +7,13 @@ sidebar:
 
 ## Compilation pipeline
 
+The diagram shows the complete native path. `wasm32-wasi` still runs constant
+folding and propagation, but temporarily skips constant-control pruning,
+normalization, AST DCE, and EIR optimization so the capability audit sees every
+diagnostic-sensitive coercion. After validated EIR lowering it branches to
+`src/codegen_wasm/`, which exactly plans, assembles, validates, and publishes
+WebAssembly artifacts without the native runtime cache, assembler, or linker.
+
 ```
 PHP source (.php)
     │
@@ -119,13 +126,13 @@ PHP source (.php)
       ▼
 ┌─────────────┐
 │ EIR Lowerer │  src/ir_lower/ + src/ir/
-│             │  Lowers the checked optimized AST into validated EIR.
+│             │  Lowers the checked target-prepared AST into validated EIR.
 └──────┬──────┘
        │
        ▼
 ┌─────────────┐
 │ EIR passes  │  src/ir_passes/
-│             │  Module-level fixed-point pipeline: a cross-function
+│             │  Native module-level fixed-point pipeline: a cross-function
 │             │  small-function inliner interleaved with the per-function
 │             │  pass driver (identity folding, peephole rewrites, constant
 │             │  folding, common-subexpression elimination, loop-invariant
@@ -137,8 +144,8 @@ PHP source (.php)
        │
        ▼
 ┌─────────────┐
-│ EIR Codegen │  src/codegen/ + shared src/codegen_support/abi/
-│             │  Emits target assembly text from EIR.
+│ EIR Codegen │  src/codegen/ or src/codegen_wasm/
+│             │  Emits target assembly or an exactly planned WASM module.
 └──────┬──────┘
      │
      ▼

@@ -18,7 +18,7 @@ use super::calls::{classify_by_ref_source, resolve_direct_call, ByRefSource};
 use super::plan::{self, LoweredWasmPlan};
 use super::transfer;
 use super::WasmError;
-use crate::codegen::Emit;
+use crate::codegen::{literal_default_value, Emit, LiteralDefaultValue};
 use crate::ir::{
     BlockId, Function, Immediate, Instruction, IrHeapKind, IrType, LocalKind, Module,
     Op, Ownership, RuntimeCallTarget, RuntimeFnId, Terminator, UnaryStringRuntime,
@@ -318,13 +318,103 @@ fn scan_function(
             }
             _ => {}
         }
+        if let Some(terminator) = block.terminator.as_ref() {
+            if let Some(issue) = terminator_transfer_shape_issue(function, terminator) {
+                issues.push(format!(
+                    "{collection}::{} block#{}: unsupported terminator transfer shape: {issue}",
+                    function.name,
+                    block.id.as_raw()
+                ));
+            }
+        }
     }
 }
 
-/// Records an exact lowerer-shape defect for the audited P0 instruction subset.
+/// Validates return and control-flow value transfers before WAT emission.
+fn terminator_transfer_shape_issue(
+    function: &Function,
+    terminator: &Terminator,
+) -> Option<String> {
+    let check_edge = |target: BlockId, args: &[ValueId]| -> Option<String> {
+        let Some(block) = function.block(target) else {
+            return Some(format!("branch target {target:?} is missing"));
+        };
+        if block.params.len() != args.len() {
+            return Some(format!(
+                "branch target {target:?} expects {} arguments, got {}",
+                block.params.len(),
+                args.len()
+            ));
+        }
+        for (index, (argument, parameter)) in args.iter().zip(&block.params).enumerate() {
+            let Some(source) = function.value(*argument) else {
+                return Some(format!("branch argument #{index} is missing"));
+            };
+            let Some(destination) = function.value(*parameter) else {
+                return Some(format!("branch parameter #{index} is missing"));
+            };
+            if let Some(issue) = value_transfer_shape_issue(
+                source.ir_type,
+                source.php_type.codegen_repr(),
+                destination.ir_type,
+                destination.php_type.codegen_repr(),
+            ) {
+                return Some(format!("branch argument #{index}: {issue}"));
+            }
+        }
+        None
+    };
+    match terminator {
+        Terminator::Br { target, args } => check_edge(*target, args),
+        Terminator::CondBr {
+            then_target,
+            then_args,
+            else_target,
+            else_args,
+            ..
+        } => check_edge(*then_target, then_args)
+            .or_else(|| check_edge(*else_target, else_args)),
+        Terminator::Switch {
+            cases,
+            default,
+            default_args,
+            ..
+        } => cases
+            .iter()
+            .find_map(|case| check_edge(case.target, &case.args))
+            .or_else(|| check_edge(*default, default_args)),
+        Terminator::GeneratorSuspend {
+            resume,
+            resume_args,
+            ..
+        } => check_edge(*resume, resume_args),
+        Terminator::Return { value: Some(value) } => {
+            let Some(source) = function.value(*value) else {
+                return Some("return value is missing from the value table".to_string());
+            };
+            if source.ir_type != function.return_type {
+                return Some(format!(
+                    "return storage {:?}/{:?} differs from function storage {:?}/{:?}",
+                    source.ir_type,
+                    source.php_type.codegen_repr(),
+                    function.return_type,
+                    function.return_php_type.codegen_repr()
+                ));
+            }
+            None
+        }
+        Terminator::Return { value: None }
+        | Terminator::Throw { .. }
+        | Terminator::Fatal { .. }
+        | Terminator::Unreachable => None,
+    }
+}
+
+/// Records PHP-sensitive lowerer-shape defects before constructing the exact plan.
 ///
-/// Other admitted opcodes still rely on their late lowerer diagnostics until
-/// their operand, immediate, result, and metadata contracts are audited here.
+/// Generic arity, immediate, result, and value-table contracts are enforced by
+/// EIR validation; this pass adds the target-specific semantic restrictions that
+/// decide whether an otherwise valid instruction can be lowered faithfully.
 fn check_instruction_shape(
     module: &Module,
     collection: &str,
@@ -339,15 +429,31 @@ fn check_instruction_shape(
         Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul => {
             checked_int_binop_shape_issue(function, inst)
         }
+        Op::FToI => Some(
+            "implicit float-to-int coercion requires exact profile-specific warning and deprecation diagnostics"
+                .to_string(),
+        ),
+        Op::LoadLocal | Op::StoreLocal => local_transfer_shape_issue(function, inst),
+        Op::LoadGlobal => load_global_shape_issue(module, inst),
+        Op::StoreRefCell => store_ref_cell_shape_issue(function, inst),
+        Op::Move | Op::Borrow | Op::Acquire => forward_transfer_shape_issue(function, inst),
         Op::UnsetLocal => unset_owned_temp_shape_issue(function, inst),
         Op::Cast => cast_shape_issue(function, inst),
+        Op::IsTruthy => truthiness_shape_issue(function, inst),
+        Op::ArraySet => array_store_shape_issue(function, inst, 2, false),
+        Op::ArrayPush => array_store_shape_issue(function, inst, 1, true),
+        Op::IterStart => iter_start_shape_issue(function, inst),
+        Op::IterCurrentValueRef => iter_current_value_ref_shape_issue(function, inst),
         Op::ArrayGet | Op::ArrayGetSilent => {
             array_get_shape_issue(module, function, block, inst)
         }
         Op::HashGet | Op::HashGetSilent => {
             hash_get_shape_issue(module, function, block, inst)
         }
-        Op::HashSet | Op::HashUnset => dynamic_mixed_hash_key_issue(function, inst, 1),
+        Op::HashSet => hash_key_diagnostic_issue(function, inst, 1)
+            .or_else(|| hash_store_value_diagnostic_issue(function, inst, 2)),
+        Op::HashIsset | Op::HashUnset => hash_key_diagnostic_issue(function, inst, 1),
+        Op::HashAppend => hash_store_value_diagnostic_issue(function, inst, 1),
         Op::ArrayToHash => array_to_hash_shape_issue(function, inst),
         Op::Call => {
             direct_call_shape_issue(module, function, inst, ref_cell_provenance)
@@ -355,6 +461,11 @@ fn check_instruction_shape(
         Op::MethodCall | Op::NullsafeMethodCall => {
             method_call_shape_issue(module, function, block, inst)
         }
+        Op::ObjectNew => object_new_shape_issue(module, function, inst),
+        Op::PropGet | Op::NullsafePropGet => {
+            property_get_shape_issue(module, function, inst)
+        }
+        Op::PropSet => property_set_shape_issue(module, function, inst),
         Op::Warn => array_offset_on_null_warning_shape_issue(module, inst),
         Op::ThrowError => method_call_on_null_error_shape_issue(module, inst),
         Op::StaticMethodCall => static_method_call_shape_issue(module, function, inst),
@@ -730,6 +841,162 @@ fn checked_int_binop_shape_issue(function: &Function, inst: &Instruction) -> Opt
     None
 }
 
+/// Reports a conversion that would silently unbox a dynamic Mixed cell.
+///
+/// Boxing and exact copies preserve the source value. `UnboxMixed` delegates to
+/// runtime scalar casts whose per-tag warnings and failures are not complete.
+fn value_transfer_shape_issue(
+    source_ir: IrType,
+    source_php: PhpType,
+    destination_ir: IrType,
+    destination_php: PhpType,
+) -> Option<String> {
+    match transfer::classify_transfer(
+        source_ir,
+        source_php,
+        destination_ir,
+        destination_php,
+    ) {
+        Ok(transfer::TransferKind::UnboxMixed)
+            if matches!(
+                destination_ir,
+                IrType::I64 | IrType::F64 | IrType::Str
+            ) =>
+        {
+            Some(
+                "implicit Mixed-to-scalar transfer requires exact per-tag PHP diagnostics"
+                    .to_string(),
+            )
+        }
+        Ok(transfer::TransferKind::UnboxMixed) => None,
+        Ok(transfer::TransferKind::Copy | transfer::TransferKind::BoxMixed) => None,
+        Err(error) => Some(error.to_string()),
+    }
+}
+
+/// Validates the typed transfer performed by a local load or store.
+fn local_transfer_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
+    let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+        return Some("local transfer requires a LocalSlot immediate".to_string());
+    };
+    let Some(local) = function
+        .locals
+        .iter()
+        .find(|local| local.id == slot)
+    else {
+        return Some(format!("local transfer references missing slot {slot:?}"));
+    };
+    match inst.op {
+        Op::LoadLocal => {
+            if inst.result.is_none() {
+                return Some("local load must materialize a result".to_string());
+            }
+            value_transfer_shape_issue(
+                local.ir_type,
+                local.php_type.codegen_repr(),
+                inst.result_type,
+                inst.result_php_type.codegen_repr(),
+            )
+        }
+        Op::StoreLocal => {
+            let [source] = inst.operands.as_slice() else {
+                return Some(format!(
+                    "local store expects one operand, got {}",
+                    inst.operands.len()
+                ));
+            };
+            let Some(source) = function.value(*source) else {
+                return Some("local store source is missing from the value table".to_string());
+            };
+            value_transfer_shape_issue(
+                source.ir_type,
+                source.php_type.codegen_repr(),
+                local.ir_type,
+                local.php_type.codegen_repr(),
+            )
+        }
+        _ => None,
+    }
+}
+
+/// Admits only `$argc` and `$argv` with the exact source shapes built by WASI.
+fn load_global_shape_issue(module: &Module, inst: &Instruction) -> Option<String> {
+    let Some(Immediate::GlobalName(name)) = inst.immediate else {
+        return Some("global load requires a GlobalName immediate".to_string());
+    };
+    let Some(name) = module.data.global_names.get(name.as_raw() as usize) else {
+        return Some("global load references an unknown name".to_string());
+    };
+    if inst.result.is_none() {
+        return Some(format!("global ${name} load must materialize a result"));
+    }
+    let (source_ir, source_php) = match name.as_str() {
+        "argc" => (IrType::I64, PhpType::Int),
+        "argv" => (
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Str)),
+        ),
+        _ => return Some(format!("global ${name} is not implemented by the WASI runtime")),
+    };
+    value_transfer_shape_issue(
+        source_ir,
+        source_php,
+        inst.result_type,
+        inst.result_php_type.codegen_repr(),
+    )
+}
+
+/// Requires a ref-cell store to preserve the cell payload representation.
+///
+/// The current lowerer only has a partial Mixed narrowing path and otherwise
+/// writes raw operand bits. Any source/target type drift can therefore either
+/// omit PHP coercion diagnostics or corrupt the referenced payload layout.
+fn store_ref_cell_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
+    let [source] = inst.operands.as_slice() else {
+        return Some(format!(
+            "ref-cell store expects one operand, got {}",
+            inst.operands.len()
+        ));
+    };
+    let Some(source) = function.value(*source) else {
+        return Some("ref-cell store source is missing from the value table".to_string());
+    };
+    let source_php = source.php_type.codegen_repr();
+    let target_php = inst.result_php_type.codegen_repr();
+    if source_php != target_php
+        || transfer::validate_storage_pair(source.ir_type, &source.php_type).is_err()
+    {
+        return Some(format!(
+            "ref-cell store value {:?}/{source_php:?} must exactly match payload {target_php:?}",
+            source.ir_type
+        ));
+    }
+    None
+}
+
+/// Validates the typed transfer performed by ownership-only forwarders.
+fn forward_transfer_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
+    let [source] = inst.operands.as_slice() else {
+        return Some(format!(
+            "{} expects one operand, got {}",
+            inst.op.name(),
+            inst.operands.len()
+        ));
+    };
+    let Some(source) = function.value(*source) else {
+        return Some("forwarded source is missing from the value table".to_string());
+    };
+    if inst.result.is_none() {
+        return Some(format!("{} must materialize a result", inst.op.name()));
+    }
+    value_transfer_shape_issue(
+        source.ir_type,
+        source.php_type.codegen_repr(),
+        inst.result_type,
+        inst.result_php_type.codegen_repr(),
+    )
+}
+
 /// Validates the exact source/target pairs implemented by `lower_cast`.
 fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
     let [operand] = inst.operands.as_slice() else {
@@ -741,8 +1008,14 @@ fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
     let Some(source) = function.value(*operand) else {
         return Some("cast source is missing from the value table".to_string());
     };
-    let Some(Immediate::CastTarget(target)) = inst.immediate else {
-        return Some("missing CastTarget immediate".to_string());
+    let (target, explicit) = match inst.immediate {
+        Some(Immediate::CastTarget(target)) => (target, false),
+        Some(Immediate::ExplicitCastTarget(target)) => (target, true),
+        _ => {
+            return Some(
+                "missing CastTarget or ExplicitCastTarget immediate".to_string(),
+            )
+        }
     };
     if inst.result.is_none() || target != inst.result_type {
         return Some(format!(
@@ -753,17 +1026,37 @@ fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
 
     let source_php = source.php_type.codegen_repr();
     let result_php = inst.result_php_type.codegen_repr();
+    let exact_mixed_scalar = source.ir_type == IrType::Heap(IrHeapKind::Mixed)
+        && source_php == PhpType::Mixed
+        && matches!(target, IrType::I64 | IrType::F64 | IrType::Str)
+        && mixed_scalar_cast_source_is_exact(
+            function,
+            *operand,
+            target,
+            &result_php,
+            explicit,
+        );
+    if source.ir_type == IrType::Heap(IrHeapKind::Mixed)
+        && source_php == PhpType::Mixed
+        && matches!(target, IrType::I64 | IrType::F64 | IrType::Str)
+        && !exact_mixed_scalar
+    {
+        return Some(
+            "Mixed-to-scalar casts require exact per-tag PHP values and diagnostics"
+                .to_string(),
+        );
+    }
+    if source.ir_type == IrType::F64
+        && source_php == PhpType::Float
+        && target == IrType::I64
+        && result_php == PhpType::Int
+    {
+        return Some(
+            "float-to-int casts require exact profile-specific out-of-range diagnostics"
+                .to_string(),
+        );
+    }
     let supported = match (source.ir_type, target) {
-        (IrType::Heap(IrHeapKind::Mixed), IrType::I64) => {
-            matches!(&source_php, PhpType::Mixed)
-                && matches!(&result_php, PhpType::Int | PhpType::Bool)
-        }
-        (IrType::Heap(IrHeapKind::Mixed), IrType::F64) => {
-            source_php == PhpType::Mixed && result_php == PhpType::Float
-        }
-        (IrType::Heap(IrHeapKind::Mixed), IrType::Str) => {
-            source_php == PhpType::Mixed && result_php == PhpType::Str
-        }
         (IrType::TaggedScalar, IrType::I64) => {
             source_php == PhpType::TaggedScalar
                 && matches!(result_php, PhpType::Int | PhpType::Bool)
@@ -783,9 +1076,7 @@ fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
         (IrType::I64, IrType::F64) => {
             source_php == PhpType::Int && result_php == PhpType::Float
         }
-        (IrType::F64, IrType::I64) => {
-            source_php == PhpType::Float && result_php == PhpType::Int
-        }
+        (IrType::Heap(IrHeapKind::Mixed), _) if exact_mixed_scalar => true,
         _ => false,
     };
     if !supported {
@@ -795,6 +1086,412 @@ fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
         ));
     }
     None
+}
+
+/// Returns whether a boxed nullable array/hash read proves one exact scalar tag.
+///
+/// Nullable scalar reads use a Mixed cell to retain the hit/miss distinction.
+/// A subsequent cast may unbox the statically declared element tag without a
+/// dynamic PHP coercion; arbitrary Mixed producers remain outside this proof.
+fn mixed_scalar_cast_source_is_exact(
+    function: &Function,
+    source: ValueId,
+    target: IrType,
+    result_php: &PhpType,
+    explicit: bool,
+) -> bool {
+    let mut current = source;
+    for _ in 0..=function.values.len() {
+        let Some(value) = function.value(current) else {
+            return false;
+        };
+        let ValueDef::Instruction { inst, .. } = value.def else {
+            return false;
+        };
+        let Some(defining) = function.instruction(inst) else {
+            return false;
+        };
+        match defining.op {
+            Op::Move | Op::Borrow | Op::Acquire => {
+                let Some(forwarded) = defining.operands.first() else {
+                    return false;
+                };
+                current = *forwarded;
+            }
+            Op::ArrayGet | Op::ArrayGetSilent => {
+                let Some(container) = defining.operands.first().and_then(|id| function.value(*id))
+                else {
+                    return false;
+                };
+                let PhpType::Array(element) = container.php_type.codegen_repr() else {
+                    return false;
+                };
+                return exact_scalar_cast_pair(
+                    &element.codegen_repr(),
+                    target,
+                    result_php,
+                    explicit,
+                );
+            }
+            Op::HashGet | Op::HashGetSilent => {
+                let Some(container) = defining.operands.first().and_then(|id| function.value(*id))
+                else {
+                    return false;
+                };
+                let PhpType::AssocArray { value, .. } = container.php_type.codegen_repr() else {
+                    return false;
+                };
+                return exact_scalar_cast_pair(
+                    &value.codegen_repr(),
+                    target,
+                    result_php,
+                    explicit,
+                );
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Returns whether one declared container element has exact cast semantics for the target.
+fn exact_scalar_cast_pair(
+    element: &PhpType,
+    target: IrType,
+    result_php: &PhpType,
+    explicit: bool,
+) -> bool {
+    let identity = matches!(
+        (element, target, result_php),
+        (PhpType::Bool | PhpType::False, IrType::I64, PhpType::Bool)
+            | (PhpType::Float, IrType::F64, PhpType::Float)
+            | (PhpType::Str, IrType::Str, PhpType::Str)
+    );
+    identity
+        || (explicit
+            && matches!(
+                (element, target, result_php),
+                (
+                    PhpType::Bool | PhpType::False,
+                    IrType::I64,
+                    PhpType::Int | PhpType::Bool
+                ) | (
+                    PhpType::Str,
+                    IrType::I64,
+                    PhpType::Int | PhpType::Bool
+                ) | (PhpType::Str, IrType::Str, PhpType::Str)
+            ))
+}
+
+/// Rejects float and dynamic-Mixed truthiness until warning behavior is exact.
+fn truthiness_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
+    let [operand] = inst.operands.as_slice() else {
+        return None;
+    };
+    let value = function.value(*operand)?;
+    if value.ir_type == IrType::F64
+        || value.ir_type == IrType::Heap(IrHeapKind::Mixed)
+        || matches!(value.php_type.codegen_repr(), PhpType::Float | PhpType::Mixed)
+    {
+        return Some(
+            "float or Mixed truthiness requires exact profile-specific NAN diagnostics"
+                .to_string(),
+        );
+    }
+    None
+}
+
+/// Validates indexed-array write storage against the helper selected by WASM.
+///
+/// The current runtime has exact layouts only for int/bool-like and string
+/// arrays. `ArrayPush` additionally supports an already-boxed Mixed/Union cell;
+/// it does not box a concrete value for a Mixed destination.
+fn array_store_shape_issue(
+    function: &Function,
+    inst: &Instruction,
+    value_index: usize,
+    allow_mixed_cell: bool,
+) -> Option<String> {
+    let Some(array) = inst.operands.first().and_then(|id| function.value(*id)) else {
+        return Some("array write source is missing from the value table".to_string());
+    };
+    let PhpType::Array(element) = array.php_type.codegen_repr() else {
+        return Some(format!(
+            "array write requires Array<T>/Heap(Array), got {:?}/{:?}",
+            array.ir_type,
+            array.php_type.codegen_repr()
+        ));
+    };
+    if array.ir_type != IrType::Heap(IrHeapKind::Array) {
+        return Some(format!(
+            "array write requires Heap(Array), got {:?}",
+            array.ir_type
+        ));
+    }
+    if inst.op == Op::ArraySet {
+        let Some(index) = inst.operands.get(1).and_then(|id| function.value(*id)) else {
+            return Some("array set index is missing from the value table".to_string());
+        };
+        if index.ir_type != IrType::I64
+            || !matches!(
+                index.php_type.codegen_repr(),
+                PhpType::Int | PhpType::Bool | PhpType::False
+            )
+        {
+            return Some(format!(
+                "array set index must be int-like/I64, got {:?}/{:?}",
+                index.ir_type,
+                index.php_type.codegen_repr()
+            ));
+        }
+    }
+    let Some(source) = inst
+        .operands
+        .get(value_index)
+        .and_then(|id| function.value(*id))
+    else {
+        return Some("array write value is missing from the value table".to_string());
+    };
+    let element = element.codegen_repr();
+    let source_php = source.php_type.codegen_repr();
+    let exact = match (&element, source.ir_type, &source_php) {
+        (
+            PhpType::Int | PhpType::Bool | PhpType::False,
+            IrType::I64,
+            PhpType::Int | PhpType::Bool | PhpType::False,
+        ) => element == source_php,
+        (PhpType::Str, IrType::Str, PhpType::Str) => true,
+        (
+            PhpType::Void | PhpType::Never,
+            IrType::I64,
+            PhpType::Int | PhpType::Bool | PhpType::False,
+        ) => true,
+        (PhpType::Void | PhpType::Never, IrType::Str, PhpType::Str) => true,
+        (PhpType::Mixed, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed)
+            if allow_mixed_cell =>
+        {
+            true
+        }
+        (
+            PhpType::Void | PhpType::Never,
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        ) if allow_mixed_cell => true,
+        (PhpType::Union(_), IrType::Heap(IrHeapKind::Union), PhpType::Union(_))
+            if allow_mixed_cell =>
+        {
+            element == source_php
+        }
+        _ => false,
+    };
+    if !exact {
+        return Some(format!(
+            "array write value {:?}/{source_php:?} does not match supported element storage {element:?}",
+            source.ir_type
+        ));
+    }
+    None
+}
+
+/// Validates iterator creation against the concrete layouts implemented by WASM.
+fn iter_start_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
+    let [source] = inst.operands.as_slice() else {
+        return Some(format!(
+            "iterator start expects one source, got {} operands",
+            inst.operands.len()
+        ));
+    };
+    let Some(source) = function.value(*source) else {
+        return Some("iterator source is missing from the value table".to_string());
+    };
+    let source_shape = match (source.ir_type, source.php_type.codegen_repr()) {
+        (IrType::Heap(IrHeapKind::Array), PhpType::Array(element)) => {
+            if matches!(
+                element.codegen_repr(),
+                PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Str
+            ) {
+                None
+            } else {
+                Some(format!(
+                    "indexed foreach element {:?} has no exact WASM load contract",
+                    element.codegen_repr()
+                ))
+            }
+        }
+        (IrType::Heap(IrHeapKind::Hash), PhpType::AssocArray { value, .. }) => {
+            if matches!(
+                value.codegen_repr(),
+                PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Str
+            ) {
+                None
+            } else {
+                Some(format!(
+                    "associative foreach value {:?} has no exact WASM load contract",
+                    value.codegen_repr()
+                ))
+            }
+        }
+        (ir_type, php_type) => Some(format!(
+            "foreach requires a concrete indexed or associative array, got {ir_type:?}/{php_type:?}"
+        )),
+    };
+    if source_shape.is_some() {
+        return source_shape;
+    }
+    iterator_alias_mutation_issue(function, inst, *inst.operands.first()?)
+}
+
+/// Rejects mutations that can invalidate a live iterator snapshot.
+fn iterator_alias_mutation_issue(
+    function: &Function,
+    start: &Instruction,
+    source: ValueId,
+) -> Option<String> {
+    let start_id = start
+        .result
+        .and_then(|result| function.value(result))
+        .and_then(|value| match value.def {
+            ValueDef::Instruction { inst, .. } => Some(inst),
+            _ => None,
+        })?;
+    let source_slot = value_local_origin(function, source);
+    for candidate in function
+        .instructions
+        .iter()
+        .skip(start_id.as_raw() as usize + 1)
+    {
+        if matches!(
+            candidate.op,
+            Op::StoreLocal | Op::UnsetLocal | Op::StoreRefCell
+        ) {
+            if let (
+                Some(source_slot),
+                Some(Immediate::LocalSlot(candidate_slot)),
+            ) = (source_slot, candidate.immediate.as_ref())
+            {
+                if source_slot == candidate_slot.as_raw() {
+                    return Some(format!(
+                        "{} may replace or release the iterated container without retaining a PHP snapshot",
+                        candidate.op.name()
+                    ));
+                }
+            }
+        }
+        let mutates_container = matches!(
+            candidate.op,
+            Op::ArraySet
+                | Op::ArrayPush
+                | Op::HashSet
+                | Op::HashUnset
+                | Op::HashAppend
+                | Op::ArrayToHash
+        );
+        let sorts_container = matches!(
+            candidate.immediate.as_ref(),
+            Some(Immediate::RuntimeCall(
+                RuntimeCallTarget::Function(RuntimeFnId::Usort)
+                    | RuntimeCallTarget::ProfiledFunction {
+                        target: RuntimeFnId::Usort,
+                        ..
+                    }
+            ))
+        );
+        if !mutates_container && !sorts_container {
+            continue;
+        }
+        let Some(target) = candidate.operands.first().copied() else {
+            continue;
+        };
+        let same_value = target == source;
+        let same_slot = source_slot.is_some() && value_local_origin(function, target) == source_slot;
+        if same_value || same_slot {
+            let mutation = if sorts_container {
+                "usort"
+            } else {
+                candidate.op.name()
+            };
+            return Some(format!(
+                "{mutation} may mutate the iterated container without PHP snapshot/COW semantics"
+            ));
+        }
+    }
+    None
+}
+
+/// Traces a value through ownership forwarders to its originating local slot.
+fn value_local_origin(function: &Function, mut value: ValueId) -> Option<u32> {
+    for _ in 0..=function.values.len() {
+        let value_data = function.value(value)?;
+        let ValueDef::Instruction { inst, .. } = value_data.def else {
+            return None;
+        };
+        let instruction = function.instruction(inst)?;
+        match instruction.op {
+            Op::LoadLocal => {
+                let Some(Immediate::LocalSlot(slot)) = instruction.immediate else {
+                    return None;
+                };
+                return Some(slot.as_raw());
+            }
+            Op::Move | Op::Borrow | Op::Acquire => {
+                value = *instruction.operands.first()?;
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Rejects by-reference associative iteration before the indexed-only lowerer.
+fn iter_current_value_ref_shape_issue(
+    function: &Function,
+    inst: &Instruction,
+) -> Option<String> {
+    let [iterator] = inst.operands.as_slice() else {
+        return Some(format!(
+            "by-reference iterator value expects one iterator, got {} operands",
+            inst.operands.len()
+        ));
+    };
+    let Some(iterator) = function.value(*iterator) else {
+        return Some("iterator state is missing from the value table".to_string());
+    };
+    let ValueDef::Instruction { inst: defining, .. } = iterator.def else {
+        return Some("iterator state is not produced by IterStart".to_string());
+    };
+    let Some(start) = function.instruction(defining) else {
+        return Some("iterator start instruction is missing".to_string());
+    };
+    if start.op != Op::IterStart {
+        return Some(format!(
+            "iterator state is produced by {}, not IterStart",
+            start.op.name()
+        ));
+    }
+    let Some(source) = start
+        .operands
+        .first()
+        .and_then(|source| function.value(*source))
+    else {
+        return Some("iterator source is missing from the value table".to_string());
+    };
+    match source.php_type.codegen_repr() {
+        PhpType::Array(element)
+            if matches!(
+                element.codegen_repr(),
+                PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Str
+            ) =>
+        {
+            None
+        }
+        PhpType::AssocArray { .. } => Some(
+            "by-reference foreach over associative arrays has no addressable WASM value-cell contract"
+                .to_string(),
+        ),
+        other => Some(format!(
+            "by-reference foreach requires a concrete supported indexed array, got {other:?}"
+        )),
+    }
 }
 
 /// Validates null-capable indexed int/bool/string reads supported by `lower_array_get`.
@@ -952,19 +1649,18 @@ fn hash_get_shape_issue(
     let Some(key_value) = function.value(*key) else {
         return Some("key operand is missing from the value table".to_string());
     };
-    if let Some(issue) = dynamic_mixed_hash_key_issue(function, inst, 1) {
+    if let Some(issue) = hash_key_diagnostic_issue(function, inst, 1) {
         return Some(issue);
     }
     let key_php = key_value.php_type.codegen_repr();
     let supported_key = matches!(
         (key_value.ir_type, &key_php),
         (IrType::I64, PhpType::Int | PhpType::Bool | PhpType::False)
-            | (IrType::F64, PhpType::Float)
             | (IrType::Str, PhpType::Str)
     );
     if !supported_key {
         return Some(format!(
-            "key must be a statically normalizable int/bool/float/string value, got {:?}/{key_php:?}",
+            "key must be a statically normalizable int/bool/string value, got {:?}/{key_php:?}",
             key_value.ir_type
         ));
     }
@@ -1145,14 +1841,13 @@ fn block_dominates(function: &Function, dominator: BlockId, target: BlockId) -> 
     reachable_block_ids(function).contains(&target.as_raw())
 }
 
-/// Rejects a dynamic Mixed associative key until every runtime tag has an
-/// exact PHP coercion, warning, or fatal path.
+/// Rejects associative keys whose PHP diagnostics are not implemented exactly.
 ///
-/// The current runtime can normalize scalar tags, but treating an array,
-/// object, or callable payload as an integer key silently miscompiles PHP.
-/// This guard applies equally to reads, writes, and `unset`: a silent read only
-/// suppresses an undefined-key warning, never an illegal-offset `TypeError`.
-fn dynamic_mixed_hash_key_issue(
+/// Dynamic Mixed keys need per-tag coercion and fatal behavior. Float keys need
+/// profile-specific precision-loss deprecations and out-of-range warnings.
+/// This guard applies equally to reads, writes, and `unset`: silent reads
+/// suppress only undefined-key warnings, not key-conversion diagnostics.
+fn hash_key_diagnostic_issue(
     function: &Function,
     inst: &Instruction,
     key_index: usize,
@@ -1167,6 +1862,51 @@ fn dynamic_mixed_hash_key_issue(
     if key_value.ir_type == IrType::Heap(IrHeapKind::Mixed) || key_php == PhpType::Mixed {
         return Some(
             "dynamic Mixed associative keys require exact per-tag PHP diagnostics".to_string(),
+        );
+    }
+    if key_value.ir_type == IrType::F64 && key_php == PhpType::Float {
+        return Some(
+            "float associative keys require exact profile-specific implicit-conversion diagnostics"
+                .to_string(),
+        );
+    }
+    None
+}
+
+/// Validates hash element storage against the tag and payload emitted by WASM.
+///
+/// Generic Mixed/Iterable storage preserves the source runtime tag. Concrete
+/// storage must receive the exact same PHP/storage representation; otherwise
+/// the current lowerer either silently casts a Mixed cell or stamps mismatched
+/// raw bits with the destination tag.
+fn hash_store_value_diagnostic_issue(
+    function: &Function,
+    inst: &Instruction,
+    value_index: usize,
+) -> Option<String> {
+    let hash = inst.operands.first().and_then(|id| function.value(*id))?;
+    let PhpType::AssocArray { value: storage, .. } = hash.php_type.codegen_repr() else {
+        return None;
+    };
+    let source = inst
+        .operands
+        .get(value_index)
+        .and_then(|id| function.value(*id))?;
+    let source_php = source.php_type.codegen_repr();
+    let storage = storage.codegen_repr();
+    if matches!(storage, PhpType::Mixed | PhpType::Iterable) {
+        return transfer::validate_storage_pair(source.ir_type, &source.php_type)
+            .err()
+            .map(|error| format!("hash write source has invalid storage: {error}"));
+    }
+    if storage != source_php
+        || transfer::validate_storage_pair(source.ir_type, &source.php_type).is_err()
+    {
+        return Some(
+            format!(
+                "hash write value {:?}/{source_php:?} must exactly match concrete storage {storage:?}",
+                source.ir_type
+            ),
         );
     }
     None
@@ -1208,12 +1948,14 @@ fn array_to_hash_shape_issue(function: &Function, inst: &Instruction) -> Option<
         ));
     }
     let result_value = match inst.result_php_type.codegen_repr() {
-        PhpType::AssocArray { key, value } if key.codegen_repr() == PhpType::Int => {
+        PhpType::AssocArray { key, value }
+            if matches!(key.codegen_repr(), PhpType::Int | PhpType::Mixed) =>
+        {
             value.codegen_repr()
         }
         php_type => {
             return Some(format!(
-                "result must be AssocArray<Int, T>, got {:?}/{php_type:?}",
+                "result must be AssocArray<Int|Mixed, T>, got {:?}/{php_type:?}",
                 inst.result_type
             ))
         }
@@ -1313,26 +2055,26 @@ fn direct_call_shape_issue(
                     parameter.php_type.codegen_repr()
                 ));
             }
-        } else if let Err(error) = transfer::classify_transfer(
+        } else if let Some(issue) = value_transfer_shape_issue(
             value.ir_type,
             value.php_type.codegen_repr(),
             parameter.ir_type,
             parameter.php_type.codegen_repr(),
         ) {
-            return Some(format!("argument #{index}: {error}"));
+            return Some(format!("argument #{index}: {issue}"));
         }
     }
     if let Some(result) = inst.result {
         let Some(value) = owner.value(result) else {
             return Some("call result is missing from the value table".to_string());
         };
-        if let Err(error) = transfer::classify_transfer(
+        if let Some(issue) = value_transfer_shape_issue(
             target.function.return_type,
             target.function.return_php_type.codegen_repr(),
             value.ir_type,
             value.php_type.codegen_repr(),
         ) {
-            return Some(format!("result: {error}"));
+            return Some(format!("result: {issue}"));
         }
     }
     None
@@ -1592,6 +2334,458 @@ fn method_call_shape_issue(
             "receiver must be Object, Mixed, or Union, got {other:?}"
         )),
     }
+}
+
+/// Rejects object construction whose property defaults lack a WASM layout.
+fn object_new_shape_issue(
+    module: &Module,
+    function: &Function,
+    inst: &Instruction,
+) -> Option<String> {
+    let Some(Immediate::Data(class_data)) = inst.immediate else {
+        return Some("object construction requires a class-name Data immediate".to_string());
+    };
+    let Some(class_name) = module
+        .data
+        .class_names
+        .get(class_data.as_raw() as usize)
+    else {
+        return Some("object construction references an unknown class name".to_string());
+    };
+    let Some(class_info) = module.class_infos.get(class_name) else {
+        return Some(format!("object construction references unknown class {class_name}"));
+    };
+    for (index, default) in class_info.defaults.iter().enumerate() {
+        let Some(default) = default else {
+            continue;
+        };
+        let Some((property, property_type)) = class_info.properties.get(index) else {
+            return Some(format!(
+                "class {class_name} default #{index} has no property metadata"
+            ));
+        };
+        let literal = match literal_default_value(
+            &format!("property ${property}"),
+            property_type,
+            &default.kind,
+            "ObjectNew",
+        ) {
+            Ok(literal) => literal,
+            Err(error) => return Some(error.to_string()),
+        };
+        if !matches!(
+            &literal,
+            LiteralDefaultValue::Int(_)
+                | LiteralDefaultValue::Bool(_)
+                | LiteralDefaultValue::Float(_)
+                | LiteralDefaultValue::Null
+                | LiteralDefaultValue::BoxedNull
+                | LiteralDefaultValue::BoxedInt(_)
+                | LiteralDefaultValue::BoxedBool(_)
+                | LiteralDefaultValue::BoxedFloat(_)
+        ) {
+            return Some(format!(
+                "property ${property} has a non-scalar default unsupported by WASM object construction"
+            ));
+        }
+    }
+    let constructor_key = crate::names::php_symbol_key("__construct");
+    match class_info.methods.get(&constructor_key) {
+        None if !inst.operands.is_empty() => {
+            return Some(format!(
+                "class {class_name} has no __construct but received {} arguments",
+                inst.operands.len()
+            ));
+        }
+        None => {}
+        Some(signature) => {
+            if let Some(issue) =
+                method_signature_shape_issue(function, &inst.operands, signature, "__construct")
+            {
+                return Some(issue);
+            }
+            let implementation = class_info
+                .method_impl_classes
+                .get(&constructor_key)
+                .map(String::as_str)
+                .unwrap_or(class_name);
+            let Some(body) = find_method_function(module, implementation, &constructor_key) else {
+                return Some(format!(
+                    "constructor body {implementation}::__construct is missing"
+                ));
+            };
+            if let Some(issue) = method_body_signature_shape_issue(
+                body,
+                signature,
+                IrType::Heap(IrHeapKind::Object),
+            ) {
+                return Some(issue);
+            }
+            for (index, (argument, parameter)) in inst
+                .operands
+                .iter()
+                .zip(body.params.iter().skip(1))
+                .enumerate()
+            {
+                let Some(argument) = function.value(*argument) else {
+                    return Some(format!(
+                        "constructor argument #{index} is missing from the value table"
+                    ));
+                };
+                if argument.ir_type != parameter.ir_type
+                    || argument.php_type.codegen_repr() != parameter.php_type.codegen_repr()
+                {
+                    return Some(format!(
+                        "constructor argument #{index} storage {:?}/{:?} differs from parameter {:?}/{:?}",
+                        argument.ir_type,
+                        argument.php_type.codegen_repr(),
+                        parameter.ir_type,
+                        parameter.php_type.codegen_repr()
+                    ));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Validates property-read result storage against the declared slot layout.
+fn property_get_shape_issue(
+    module: &Module,
+    function: &Function,
+    inst: &Instruction,
+) -> Option<String> {
+    if inst.op == Op::NullsafePropGet {
+        if inst.result.is_none()
+            || inst.result_type != IrType::Heap(IrHeapKind::Mixed)
+            || inst.result_php_type.codegen_repr() != PhpType::Mixed
+        {
+            return Some(format!(
+                "nullsafe property reads require a boxed Mixed result, got {:?}/{:?}",
+                inst.result_type,
+                inst.result_php_type.codegen_repr()
+            ));
+        }
+    }
+    let [receiver] = inst.operands.as_slice() else {
+        return Some(format!(
+            "property get expects one receiver, got {} operands",
+            inst.operands.len()
+        ));
+    };
+    let Some(receiver) = function.value(*receiver) else {
+        return Some("property receiver is missing from the value table".to_string());
+    };
+    let receiver_id = *inst.operands.first()?;
+    if inst.op == Op::NullsafePropGet
+        && nullsafe_receiver_is_definitely_null(function, receiver_id)
+    {
+        return None;
+    }
+    let receiver_php = receiver.php_type.clone();
+    let class_name = match receiver_php {
+        PhpType::Object(class_name) => class_name,
+        PhpType::Union(variants) if inst.op == Op::NullsafePropGet => {
+            let object_classes = variants
+                .into_iter()
+                .filter_map(|variant| match variant {
+                    PhpType::Object(class_name) => Some(class_name),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let [class_name] = object_classes.as_slice() else {
+                return Some(
+                    "nullsafe property receiver union must contain exactly one concrete object class"
+                        .to_string(),
+                );
+            };
+            class_name.clone()
+        }
+        other => {
+            return Some(format!(
+                "property receiver must resolve to a concrete object, got {:?}/{other:?}",
+                receiver.ir_type
+            ));
+        }
+    };
+    let Some(class_info) = module.class_infos.get(&class_name) else {
+        return Some(format!("property receiver class {class_name} is missing"));
+    };
+    let Some(property) = data_string(module, inst) else {
+        return Some("property get requires a valid property-name immediate".to_string());
+    };
+    let Some((property_index, (_, property_type))) = class_info
+        .properties
+        .iter()
+        .enumerate()
+        .find(|(_, (name, _))| name == property)
+    else {
+        if !class_info.allow_dynamic_properties
+            && !class_name
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("stdClass")
+        {
+            return Some(format!(
+                "class {class_name} does not provide dynamic property storage for ${property}"
+            ));
+        }
+        if dynamic_property_initialized_before_read(
+            function,
+            inst,
+            receiver_id,
+            inst.immediate.as_ref(),
+        ) {
+            if inst.result.is_some()
+                && inst.result_type == IrType::Heap(IrHeapKind::Mixed)
+                && inst.result_php_type.codegen_repr() == PhpType::Mixed
+                && matches!(
+                    inst.result_ownership,
+                    Ownership::Owned | Ownership::MaybeOwned
+                )
+            {
+                return None;
+            }
+            return Some(format!(
+                "dynamic property ${property} reads require an owned boxed Mixed result"
+            ));
+        }
+        return Some(format!(
+            "dynamic property ${property} reads require the exact PHP undefined-property warning"
+        ));
+    };
+    if class_info
+        .property_declared_slots
+        .get(property_index)
+        .copied()
+        .unwrap_or(false)
+        && class_info
+            .defaults
+            .get(property_index)
+            .map(|default| default.is_none())
+            .unwrap_or(true)
+    {
+        return Some(format!(
+            "typed property ${property} may be uninitialized and requires an exact PHP fatal check"
+        ));
+    }
+    let property_type = property_type.codegen_repr();
+    if property_type == PhpType::Iterable {
+        return Some(
+            "iterable property reads require runtime tag unboxing before use".to_string(),
+        );
+    }
+    if inst.op == Op::NullsafePropGet {
+        return None;
+    }
+    let result_php = inst.result_php_type.codegen_repr();
+    if result_php != property_type
+        || transfer::validate_storage_pair(inst.result_type, &inst.result_php_type).is_err()
+    {
+        return Some(format!(
+            "property ${property} result {:?}/{result_php:?} must exactly match declared slot {property_type:?}",
+            inst.result_type
+        ));
+    }
+    None
+}
+
+/// Returns whether a nullable receiver is statically a boxed null value.
+fn nullsafe_receiver_is_definitely_null(function: &Function, mut receiver: ValueId) -> bool {
+    for _ in 0..=function.values.len() {
+        let Some(value) = function.value(receiver) else {
+            return false;
+        };
+        let ValueDef::Instruction { inst, .. } = value.def else {
+            return false;
+        };
+        let Some(instruction) = function.instruction(inst) else {
+            return false;
+        };
+        match instruction.op {
+            Op::ConstNull => return true,
+            Op::Move | Op::Borrow | Op::Acquire | Op::MixedBox => {
+                let Some(source) = instruction.operands.first() else {
+                    return false;
+                };
+                receiver = *source;
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Proves an undeclared dynamic property was written earlier in the same block.
+fn dynamic_property_initialized_before_read(
+    function: &Function,
+    read: &Instruction,
+    receiver: ValueId,
+    property: Option<&Immediate>,
+) -> bool {
+    let Some(read_id) = read
+        .result
+        .and_then(|result| function.value(result))
+        .and_then(|value| match value.def {
+            ValueDef::Instruction { inst, .. } => Some(inst),
+            _ => None,
+        })
+    else {
+        return false;
+    };
+    let Some(Immediate::Data(property)) = property else {
+        return false;
+    };
+    let receiver_root = property_receiver_origin(function, receiver);
+    let receiver_slot = value_local_origin(function, receiver_root);
+    let Some((block, read_index)) = function.blocks.iter().find_map(|block| {
+        block
+            .instructions
+            .iter()
+            .position(|candidate| *candidate == read_id)
+            .map(|index| (block, index))
+    }) else {
+        return false;
+    };
+    let mut initialized = false;
+    for candidate_id in block.instructions.iter().take(read_index) {
+        let Some(candidate) = function.instruction(*candidate_id) else {
+            return false;
+        };
+        if initialized
+            && matches!(candidate.op, Op::StoreLocal | Op::UnsetLocal)
+            && matches!(
+                (receiver_slot, candidate.immediate.as_ref()),
+                (Some(slot), Some(Immediate::LocalSlot(candidate_slot)))
+                    if slot == candidate_slot.as_raw()
+            )
+        {
+            initialized = false;
+        }
+        if candidate.op != Op::PropSet
+            || !matches!(candidate.immediate, Some(Immediate::Data(candidate_property)) if candidate_property == *property)
+        {
+            continue;
+        }
+        let Some(candidate_receiver) = candidate.operands.first().copied() else {
+            continue;
+        };
+        let candidate_root = property_receiver_origin(function, candidate_receiver);
+        initialized = candidate_root == receiver_root
+            || (receiver_slot.is_some()
+                && value_local_origin(function, candidate_root) == receiver_slot);
+    }
+    initialized
+}
+
+/// Traces nullable boxing and ownership forwarders to the underlying object receiver.
+fn property_receiver_origin(function: &Function, mut receiver: ValueId) -> ValueId {
+    for _ in 0..=function.values.len() {
+        let Some(value) = function.value(receiver) else {
+            return receiver;
+        };
+        let ValueDef::Instruction { inst, .. } = value.def else {
+            return receiver;
+        };
+        let Some(instruction) = function.instruction(inst) else {
+            return receiver;
+        };
+        if !matches!(
+            instruction.op,
+            Op::Move | Op::Borrow | Op::Acquire | Op::MixedBox
+        ) {
+            return receiver;
+        }
+        let Some(source) = instruction.operands.first() else {
+            return receiver;
+        };
+        receiver = *source;
+    }
+    receiver
+}
+
+/// Validates a declared property write against its exact runtime slot layout.
+///
+/// Mixed properties use the audited boxing path. Concrete properties currently
+/// store the operand representation directly, so any implicit type conversion
+/// must fail closed before WAT generation.
+fn property_set_shape_issue(
+    module: &Module,
+    function: &Function,
+    inst: &Instruction,
+) -> Option<String> {
+    let [receiver, source] = inst.operands.as_slice() else {
+        return Some(format!(
+            "property set expects receiver and value, got {} operands",
+            inst.operands.len()
+        ));
+    };
+    let Some(receiver) = function.value(*receiver) else {
+        return Some("property receiver is missing from the value table".to_string());
+    };
+    let PhpType::Object(class_name) = receiver.php_type.codegen_repr() else {
+        return Some(format!(
+            "property receiver must be a concrete object, got {:?}/{:?}",
+            receiver.ir_type,
+            receiver.php_type.codegen_repr()
+        ));
+    };
+    let Some(class_info) = module.class_infos.get(&class_name) else {
+        return Some(format!("property receiver class {class_name} is missing"));
+    };
+    let Some(property) = data_string(module, inst) else {
+        return Some("property set requires a valid property-name immediate".to_string());
+    };
+    let source_id = *source;
+    let Some(source) = function.value(source_id) else {
+        return Some("property value is missing from the value table".to_string());
+    };
+    if source.ir_type == IrType::Heap(IrHeapKind::Mixed)
+        && matches!(
+            source.php_type.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable
+        )
+        && !matches!(
+            source.ownership,
+            Ownership::Owned | Ownership::Borrowed | Ownership::Persistent
+        )
+        && !(source.ownership == Ownership::MaybeOwned
+            && value_local_origin(function, source_id).is_some())
+    {
+        return Some(format!(
+            "mixed property writes require owned, borrowed, persistent, or local-load provenance, got {:?}",
+            source.ownership
+        ));
+    }
+    let Some((_, property_type)) = class_info
+        .properties
+        .iter()
+        .find(|(name, _)| name == property)
+    else {
+        return None;
+    };
+    let property_type = property_type.codegen_repr();
+    if matches!(
+        property_type,
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable
+    ) {
+        return value_transfer_shape_issue(
+            source.ir_type,
+            source.php_type.codegen_repr(),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        )
+        .map(|issue| format!("mixed property ${property}: {issue}"));
+    }
+    let source_php = source.php_type.codegen_repr();
+    if source_php != property_type
+        || transfer::validate_storage_pair(source.ir_type, &source.php_type).is_err()
+    {
+        return Some(format!(
+            "property ${property} value {:?}/{source_php:?} must exactly match concrete slot {property_type:?}",
+            source.ir_type
+        ));
+    }
+    None
 }
 
 /// Returns whether `class_name` belongs to the class subtree rooted at `ancestor`.
@@ -2368,9 +3562,9 @@ fn value_is_int_array(function: &Function, value: ValueId) -> bool {
 
 /// Validates a direct `ClosureCall` argument buffer and its result unboxing.
 ///
-/// Dynamic descriptors remain admitted because an escaping closure can be
-/// loaded from a mutable local. When the descriptor producer is still visible
-/// in SSA, its wrapper contract is additionally checked statically.
+/// The descriptor must resolve to one statically proven wrapper contract.
+/// Mutable or multi-definition descriptors fail closed until runtime
+/// descriptors carry and validate their full parameter signature.
 fn closure_call_shape_issue(
     module: &Module,
     owner: &Function,
@@ -2397,17 +3591,27 @@ fn closure_call_shape_issue(
     if let Some(issue) = closure_result_shape_issue(owner, inst) {
         return Some(issue);
     }
-    if let Some((target, visible_count)) = static_callable_contract(module, owner, *callable) {
-        if let Some(issue) = callable_wrapper_issue(target, visible_count, arguments.len()) {
-            return Some(issue);
-        }
-        if !callable_return_is_boxable(target) {
-            return Some(format!(
-                "callable return {:?}/{:?} cannot be boxed by the WASM wrapper",
-                target.return_type,
-                target.return_php_type.codegen_repr()
-            ));
-        }
+    let Some((target, visible_count)) = static_callable_contract(module, owner, *callable) else {
+        return Some(
+            "callable descriptor signature is not statically provable before wrapper dispatch"
+                .to_string(),
+        );
+    };
+    if let Some(issue) = callable_wrapper_issue(target, visible_count, arguments.len()) {
+        return Some(issue);
+    }
+    if let Some(issue) = callable_argument_contract_issue(owner, target, visible_count, arguments) {
+        return Some(issue);
+    }
+    if !callable_return_is_boxable(target) {
+        return Some(format!(
+            "callable return {:?}/{:?} cannot be boxed by the WASM wrapper",
+            target.return_type,
+            target.return_php_type.codegen_repr()
+        ));
+    }
+    if let Some(issue) = callable_result_contract_issue(owner, inst, target) {
+        return Some(issue);
     }
     None
 }
@@ -2446,17 +3650,92 @@ fn callable_descriptor_invoke_shape_issue(
     if let Some(issue) = closure_result_shape_issue(owner, inst) {
         return Some(issue);
     }
-    if let Some((target, visible_count)) = static_callable_contract(module, owner, *callable) {
-        if let Some(issue) = callable_wrapper_signature_issue(target, visible_count) {
-            return Some(issue);
-        }
-        if !callable_return_is_boxable(target) {
+    let Some((target, visible_count)) = static_callable_contract(module, owner, *callable) else {
+        return Some(
+            "callable descriptor signature is not statically provable before array dispatch"
+                .to_string(),
+        );
+    };
+    if let Some(issue) = callable_wrapper_signature_issue(target, visible_count) {
+        return Some(issue);
+    }
+    if visible_count != 0 {
+        return Some(format!(
+            "array<mixed> descriptor arguments cannot prove the {} visible parameter tag(s)",
+            visible_count
+        ));
+    }
+    if !callable_return_is_boxable(target) {
+        return Some(format!(
+            "callable return {:?}/{:?} cannot be boxed by the WASM wrapper",
+            target.return_type,
+            target.return_php_type.codegen_repr()
+        ));
+    }
+    if let Some(issue) = callable_result_contract_issue(owner, inst, target) {
+        return Some(issue);
+    }
+    None
+}
+
+/// Requires each wrapper-consumed argument to match its parameter exactly.
+fn callable_argument_contract_issue(
+    owner: &Function,
+    target: &Function,
+    visible_count: usize,
+    arguments: &[ValueId],
+) -> Option<String> {
+    for (index, (argument, parameter)) in arguments
+        .iter()
+        .take(visible_count)
+        .zip(&target.params[..visible_count])
+        .enumerate()
+    {
+        let Some(source) = owner.value(*argument) else {
+            return Some(format!("argument #{index} is missing from the value table"));
+        };
+        if source.ir_type != parameter.ir_type
+            || source.php_type.codegen_repr() != parameter.php_type.codegen_repr()
+        {
             return Some(format!(
-                "callable return {:?}/{:?} cannot be boxed by the WASM wrapper",
-                target.return_type,
-                target.return_php_type.codegen_repr()
+                "argument #{index} {:?}/{:?} requires an implicit wrapper conversion to {:?}/{:?}",
+                source.ir_type,
+                source.php_type.codegen_repr(),
+                parameter.ir_type,
+                parameter.php_type.codegen_repr()
             ));
         }
+    }
+    None
+}
+
+/// Requires a used wrapper result to preserve the statically proven return tag.
+fn callable_result_contract_issue(
+    owner: &Function,
+    inst: &Instruction,
+    target: &Function,
+) -> Option<String> {
+    let Some(result) = inst.result else {
+        return None;
+    };
+    let Some(destination) = owner.value(result) else {
+        return Some("callable result is missing from the value table".to_string());
+    };
+    if destination.ir_type == IrType::Heap(IrHeapKind::Mixed)
+        && destination.php_type.codegen_repr() == PhpType::Mixed
+    {
+        return None;
+    }
+    if destination.ir_type != target.return_type
+        || destination.php_type.codegen_repr() != target.return_php_type.codegen_repr()
+    {
+        return Some(format!(
+            "used callable result {:?}/{:?} requires an implicit wrapper conversion from {:?}/{:?}",
+            destination.ir_type,
+            destination.php_type.codegen_repr(),
+            target.return_type,
+            target.return_php_type.codegen_repr()
+        ));
     }
     None
 }
@@ -2526,6 +3805,19 @@ fn static_callable_contract<'a>(
     owner: &'a Function,
     value: ValueId,
 ) -> Option<(&'a Function, usize)> {
+    static_callable_contract_inner(module, owner, value, 0)
+}
+
+/// Resolves a callable contract with a bounded interprocedural capture walk.
+fn static_callable_contract_inner<'a>(
+    module: &'a Module,
+    owner: &'a Function,
+    value: ValueId,
+    depth: usize,
+) -> Option<(&'a Function, usize)> {
+    if depth > 16 {
+        return None;
+    }
     let mut current = value;
     for _ in 0..=owner.values.len() {
         let value = owner.value(current)?;
@@ -2536,6 +3828,61 @@ fn static_callable_contract<'a>(
         match defining.op {
             Op::Move | Op::Borrow | Op::Acquire => {
                 let [source] = defining.operands.as_slice() else {
+                    return None;
+                };
+                current = *source;
+            }
+            Op::LoadLocal => {
+                let Some(Immediate::LocalSlot(slot)) = defining.immediate else {
+                    return None;
+                };
+                let load_block = owner.blocks.iter().find(|block| {
+                    block.instructions.iter().any(|candidate| *candidate == inst)
+                })?;
+                let stores = owner
+                    .instructions
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, candidate)| {
+                        candidate.op == Op::StoreLocal
+                            && candidate.immediate == Some(Immediate::LocalSlot(slot))
+                    })
+                    .collect::<Vec<_>>();
+                let (store_index, store) = match stores.as_slice() {
+                    [(store_index, store)] => (*store_index, *store),
+                    [] => {
+                        return captured_callable_contract(
+                            module,
+                            owner,
+                            slot,
+                            depth + 1,
+                        )
+                    }
+                    _ => return None,
+                };
+                let store_block = owner.blocks.iter().find(|block| {
+                    block
+                        .instructions
+                        .iter()
+                        .any(|candidate| candidate.as_raw() as usize == store_index)
+                })?;
+                let ordered = if store_block.id == load_block.id {
+                    let store_position = store_block
+                        .instructions
+                        .iter()
+                        .position(|candidate| candidate.as_raw() as usize == store_index)?;
+                    let load_position = load_block
+                        .instructions
+                        .iter()
+                        .position(|candidate| *candidate == inst)?;
+                    store_position < load_position
+                } else {
+                    block_dominates(owner, store_block.id, load_block.id)
+                };
+                if !ordered {
+                    return None;
+                }
+                let [source] = store.operands.as_slice() else {
                     return None;
                 };
                 current = *source;
@@ -2560,10 +3907,106 @@ fn static_callable_contract<'a>(
                 })?;
                 return Some((function, function.params.len()));
             }
+            Op::Call => {
+                let target = resolve_direct_call(module, defining).ok()?;
+                return returned_callable_contract(
+                    module,
+                    target.function,
+                    depth + 1,
+                );
+            }
             _ => return None,
         }
     }
     None
+}
+
+/// Resolves a direct callee whose every reachable return yields one callable contract.
+fn returned_callable_contract<'a>(
+    module: &'a Module,
+    function: &'a Function,
+    depth: usize,
+) -> Option<(&'a Function, usize)> {
+    if depth > 16 {
+        return None;
+    }
+    let reachable = reachable_block_ids(function);
+    let mut resolved: Option<(&'a Function, usize)> = None;
+    for block in &function.blocks {
+        if !reachable.contains(&block.id.as_raw()) {
+            continue;
+        }
+        let Some(Terminator::Return { value: Some(value) }) =
+            block.terminator.as_ref()
+        else {
+            if matches!(
+                block.terminator.as_ref(),
+                Some(Terminator::Return { value: None })
+            ) {
+                return None;
+            }
+            continue;
+        };
+        let contract =
+            static_callable_contract_inner(module, function, *value, depth)?;
+        if let Some((expected, expected_visible)) = resolved {
+            if !std::ptr::eq(expected, contract.0)
+                || expected_visible != contract.1
+            {
+                return None;
+            }
+        } else {
+            resolved = Some(contract);
+        }
+    }
+    resolved
+}
+
+/// Resolves a by-value callable capture when every creator supplies one contract.
+fn captured_callable_contract<'a>(
+    module: &'a Module,
+    closure: &'a Function,
+    slot: crate::ir::LocalSlotId,
+    depth: usize,
+) -> Option<(&'a Function, usize)> {
+    if !closure.flags.is_closure {
+        return None;
+    }
+    let visible_count = closure
+        .params
+        .len()
+        .checked_sub(closure.flags.closure_capture_count)?;
+    let parameter_index = slot.as_raw() as usize;
+    if parameter_index < visible_count || parameter_index >= closure.params.len() {
+        return None;
+    }
+    let capture_index = parameter_index - visible_count;
+    let mut resolved: Option<(&'a Function, usize)> = None;
+    for creator in module
+        .functions
+        .iter()
+        .chain(&module.class_methods)
+        .chain(&module.closures)
+    {
+        for candidate in &creator.instructions {
+            if candidate.op != Op::ClosureNew
+                || data_string(module, candidate) != Some(closure.name.as_str())
+            {
+                continue;
+            }
+            let operand = *candidate.operands.get(capture_index)?;
+            let contract =
+                static_callable_contract_inner(module, creator, operand, depth)?;
+            if let Some((expected, expected_visible)) = resolved {
+                if !std::ptr::eq(expected, contract.0) || expected_visible != contract.1 {
+                    return None;
+                }
+            } else {
+                resolved = Some(contract);
+            }
+        }
+    }
+    resolved
 }
 
 /// Resolves an ordinary or source-profiled data entry in the shared string pool.
@@ -4836,10 +6279,6 @@ mod tests {
     #[test]
     fn exact_plan_rejects_every_representative_late_unsupported_shape() {
         let cases = [
-            (
-                invalid_mixed_transfer_module(),
-                "unboxing a Mixed cell to Tagged",
-            ),
             (invalid_const_str_module(), "unknown string literal"),
             (
                 invalid_capture_count_module(),
@@ -4848,10 +6287,6 @@ mod tests {
             (
                 stale_destructor_metadata_module(),
                 "class MissingDestructorOwner resolved as __destruct impl does not declare it",
-            ),
-            (
-                invalid_branch_arity_module(),
-                "branch arg count 0 != param count 1",
             ),
         ];
 
@@ -4863,6 +6298,32 @@ mod tests {
             assert!(
                 !message.contains("WASM capability audit found"),
                 "the exact plan boundary should surface {expected:?}: {message}"
+            );
+        }
+    }
+
+    /// Verifies malformed value and block transfers fail in the static audit.
+    #[test]
+    fn rejects_invalid_transfers_before_lowering() {
+        let cases = [
+            (
+                invalid_mixed_transfer_module(),
+                "unboxing a Mixed cell to TaggedScalar",
+            ),
+            (
+                invalid_branch_arity_module(),
+                "expects 1 arguments, got 0",
+            ),
+        ];
+
+        for (module, expected) in cases {
+            let error =
+                validate_module(&module).expect_err("malformed transfer must fail capability");
+            let message = error.to_string();
+            assert!(message.contains(expected), "missing {expected:?}: {message}");
+            assert!(
+                message.contains("WASM capability audit found"),
+                "transfer defect must not leak to exact planning: {message}"
             );
         }
     }
@@ -5986,6 +7447,339 @@ mod tests {
         );
     }
 
+    /// Distinguishes source-level PHP casts from implicit coercions for exact
+    /// nullable bool/string container reads while keeping float-to-int closed.
+    #[test]
+    fn explicit_cast_capability_preserves_the_php_coercion_boundary() {
+        let array_get_cast = |element: PhpType, immediate: Immediate| {
+            let mut function =
+                Function::new("cast_boundary".to_string(), IrType::Void, PhpType::Void);
+            {
+                let mut builder = Builder::new(&mut function);
+                let entry = builder.create_named_block("entry", Vec::new());
+                builder.set_entry(entry);
+                builder.position_at_end(entry);
+                let array = builder
+                    .emit(
+                        Op::ArrayNew,
+                        Vec::new(),
+                        Some(Immediate::Capacity(0)),
+                        IrType::Heap(IrHeapKind::Array),
+                        PhpType::Array(Box::new(element)),
+                        Ownership::Owned,
+                    )
+                    .expect("array source");
+                let index = builder.emit_const_i64(0);
+                let mixed = builder
+                    .emit(
+                        Op::ArrayGetSilent,
+                        vec![array, index],
+                        None,
+                        IrType::Heap(IrHeapKind::Mixed),
+                        PhpType::Mixed,
+                        Ownership::Owned,
+                    )
+                    .expect("nullable element");
+                let _ = builder.emit(
+                    Op::Cast,
+                    vec![mixed],
+                    Some(immediate),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                );
+                builder.terminate(Terminator::Return { value: None });
+            }
+            function
+        };
+        let cast_issue = |function: &Function| {
+            let cast = function
+                .instructions
+                .iter()
+                .find(|instruction| instruction.op == Op::Cast)
+                .expect("cast instruction");
+            super::cast_shape_issue(function, cast)
+        };
+
+        for element in [PhpType::Bool, PhpType::Str] {
+            let explicit = array_get_cast(
+                element.clone(),
+                Immediate::ExplicitCastTarget(IrType::I64),
+            );
+            assert_eq!(cast_issue(&explicit), None);
+
+            let implicit = array_get_cast(element, Immediate::CastTarget(IrType::I64));
+            assert!(cast_issue(&implicit).is_some());
+        }
+
+        for immediate in [
+            Immediate::CastTarget(IrType::I64),
+            Immediate::ExplicitCastTarget(IrType::I64),
+        ] {
+            let mut function =
+                Function::new("float_cast_boundary".to_string(), IrType::Void, PhpType::Void);
+            {
+                let mut builder = Builder::new(&mut function);
+                let entry = builder.create_named_block("entry", Vec::new());
+                builder.set_entry(entry);
+                builder.position_at_end(entry);
+                let float = builder.emit_const_f64(1.5);
+                let _ = builder.emit(
+                    Op::Cast,
+                    vec![float],
+                    Some(immediate),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                );
+                builder.terminate(Terminator::Return { value: None });
+            }
+            assert!(cast_issue(&function).is_some());
+        }
+    }
+
+    /// Float-to-int EIR forms stay outside the public WASM surface until their
+    /// context- and profile-specific PHP diagnostics are preserved.
+    #[test]
+    fn rejects_diagnostic_sensitive_float_to_int_operations() {
+        let mut module = Module::new(Target::wasm());
+        let mut function =
+            Function::new("float_to_int".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let float = builder.emit_const_f64(1.5);
+            let _ = builder.emit(
+                Op::FToI,
+                vec![float],
+                None,
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            let _ = builder.emit(
+                Op::Cast,
+                vec![float],
+                Some(Immediate::CastTarget(IrType::I64)),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            let mixed = builder
+                .emit(
+                    Op::MixedBox,
+                    vec![float],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .expect("Mixed float");
+            let _ = builder.emit(
+                Op::IsTruthy,
+                vec![float],
+                None,
+                IrType::I64,
+                PhpType::Bool,
+                Ownership::NonHeap,
+            );
+            let _ = builder.emit(
+                Op::IsTruthy,
+                vec![mixed],
+                None,
+                IrType::I64,
+                PhpType::Bool,
+                Ownership::NonHeap,
+            );
+            let _ = builder.emit(
+                Op::Cast,
+                vec![mixed],
+                Some(Immediate::CastTarget(IrType::I64)),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let error = validate_module(&module).expect_err("float-to-int forms must fail closed");
+        let message = error.to_string();
+        assert!(
+            message.contains(
+                "implicit float-to-int coercion requires exact profile-specific warning and deprecation diagnostics"
+            ),
+            "{message}"
+        );
+        assert!(
+            message.contains(
+                "float-to-int casts require exact profile-specific out-of-range diagnostics"
+            ),
+            "{message}"
+        );
+        assert!(
+            message.contains(
+                "Mixed-to-scalar casts require exact per-tag PHP values and diagnostics"
+            ),
+            "{message}"
+        );
+        assert_eq!(
+            message
+                .matches(
+                    "float or Mixed truthiness requires exact profile-specific NAN diagnostics"
+                )
+                .count(),
+            2,
+            "{message}"
+        );
+    }
+
+    /// Float associative keys are rejected for reads, writes, and `unset`
+    /// because PHP exposes versioned precision-loss and range diagnostics.
+    #[test]
+    fn rejects_float_hash_keys_on_every_operation() {
+        let mut module = Module::new(Target::wasm());
+        let mut function =
+            Function::new("float_hash_keys".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let hash = builder
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(1)),
+                    IrType::Heap(IrHeapKind::Hash),
+                    PhpType::AssocArray {
+                        key: Box::new(PhpType::Float),
+                        value: Box::new(PhpType::Int),
+                    },
+                    Ownership::Owned,
+                )
+                .expect("hash value");
+            let float_key = builder.emit_const_f64(1.5);
+            let integer = builder.emit_const_i64(1);
+            for op in [Op::HashGet, Op::HashGetSilent] {
+                let _ = builder.emit(
+                    op,
+                    vec![hash, float_key],
+                    None,
+                    IrType::TaggedScalar,
+                    PhpType::TaggedScalar,
+                    Ownership::NonHeap,
+                );
+            }
+            let _ = builder.emit(
+                Op::HashSet,
+                vec![hash, float_key, integer],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let _ = builder.emit(
+                Op::HashUnset,
+                vec![hash, float_key],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let error = validate_module(&module).expect_err("float keys must fail closed");
+        let message = error.to_string();
+        assert_eq!(
+            message
+                .matches(
+                    "float associative keys require exact profile-specific implicit-conversion diagnostics"
+                )
+                .count(),
+            4,
+            "{message}"
+        );
+    }
+
+    /// Dynamic hash values cannot be coerced into concrete element storage
+    /// until each runtime tag preserves PHP conversion diagnostics.
+    #[test]
+    fn rejects_dynamic_values_for_concrete_hash_storage() {
+        let mut module = Module::new(Target::wasm());
+        let mut function =
+            Function::new("mixed_hash_values".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let hash = builder
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(1)),
+                    IrType::Heap(IrHeapKind::Hash),
+                    PhpType::AssocArray {
+                        key: Box::new(PhpType::Int),
+                        value: Box::new(PhpType::Int),
+                    },
+                    Ownership::Owned,
+                )
+                .expect("hash value");
+            let key = builder.emit_const_i64(1);
+            let integer = builder.emit_const_i64(2);
+            let mixed = builder
+                .emit(
+                    Op::MixedBox,
+                    vec![integer],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .expect("dynamic Mixed value");
+            let _ = builder.emit(
+                Op::HashSet,
+                vec![hash, key, mixed],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let _ = builder.emit(
+                Op::HashAppend,
+                vec![hash, mixed],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let error =
+            validate_module(&module).expect_err("dynamic concrete hash stores must fail closed");
+        let message = error.to_string();
+        assert_eq!(
+            message
+                .matches(
+                    "hash write value Heap(Mixed)/Mixed must exactly match concrete storage Int"
+                )
+                .count(),
+            2,
+            "{message}"
+        );
+    }
+
     /// Legacy scalar/string result shapes and untracked boxed ownership are
     /// rejected before WAT lowering can erase the missing-key null. Concrete
     /// containers must retain exact pointer storage plus `container|null`
@@ -6227,7 +8021,7 @@ mod tests {
         for expected in [
             "expected one indexed-array operand",
             "source must be an indexed array",
-            "result must be AssocArray<Int, T>",
+            "result must be AssocArray<Int|Mixed, T>",
             "must preserve Int or widen to Mixed",
             "result must own a releasable hash reference",
             "consumed source must own a releasable reference",

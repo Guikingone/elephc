@@ -6255,6 +6255,7 @@ fn emit_normalized_dynamic_instanceof_value(
     Ok(())
 }
 
+/// Unboxes a Mixed value and leaves its object payload or null in the result register.
 fn emit_mixed_instanceof_value_normalization(ctx: &mut FunctionContext<'_>) {
     let object_label = ctx.next_label("instanceof_dynamic_value_object");
     let done = ctx.next_label("instanceof_dynamic_value_done");

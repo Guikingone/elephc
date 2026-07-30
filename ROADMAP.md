@@ -1089,6 +1089,10 @@ statics, and static class properties all reset between requests). Run it with
 - [x] WASI support for I/O
 - [x] NPM package generation
 
+The target remains experimental while the versioned PHP differential and
+remaining capability gates in
+[`docs/specs/wasm-compliance.md`](docs/specs/wasm-compliance.md) are open.
+
 
 ## Deferred ideas
 

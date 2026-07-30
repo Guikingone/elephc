@@ -336,7 +336,8 @@ fn emit_dispatch_loop(ctx: &mut FnCtx) -> Result<()> {
 /// - `CondBr`: emits if/else, each branch materializing args and re-dispatching.
 /// - `Switch`: emits cascaded i64 comparisons; falls through to the default edge.
 /// - `Return`: for main, calls `proc_exit(0)`; for others, loads the value and `return`s.
-/// - `Throw`, `Fatal`, `GeneratorSuspend`: returns `Unsupported` (later phases).
+/// - `Throw`, `Fatal`, `GeneratorSuspend`: defensive `Unsupported` fallbacks;
+///   the capability audit rejects them before this lowerer is entered.
 fn lower_terminator(ctx: &mut FnCtx, term: &Terminator, preceding_op: Option<Op>) -> Result<()> {
     match term {
         Terminator::Unreachable => {

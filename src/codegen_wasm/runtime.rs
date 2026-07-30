@@ -13,7 +13,7 @@
 //!     [8, 16)       `nwritten` cell for `fd_write` / `args_sizes_get` scratch (i32)
 //!     [16, 64)      number-formatting buffer (itoa/ftoa), written back-to-front
 //!     [64, 65600)   legacy concat reservation, retained for stable static-data offsets
-//!   Compile-time data segments and the heap (later phases) start at `RT_SCRATCH_END`.
+//!   Compile-time data segments and the heap start at `RT_SCRATCH_END`.
 //! - `__rt_concat` is heap-backed and bounds-checked. The legacy
 //!   `$__concat_off` cursor remains as an ABI-compatible no-op for existing
 //!   `ConcatReset` lowering; live strings never occupy the shared reservation.

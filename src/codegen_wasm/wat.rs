@@ -275,8 +275,7 @@ impl WatModule {
     ///
     /// # Arguments
     /// * `g` - The global specification.
-    // Consumed by the WAT runtime (heap pointer/GC globals) in a later phase.
-    #[allow(dead_code)]
+    // Used by the runtime, heap, class, object, and closure layouts.
     pub fn add_global(&mut self, g: Global) {
         self.globals.push(g);
     }
@@ -285,8 +284,7 @@ impl WatModule {
     ///
     /// # Arguments
     /// * `seg` - The data segment specification.
-    // Consumed by string-literal / runtime data emission in a later phase.
-    #[allow(dead_code)]
+    // Used by runtime tables, string literals, and class/closure metadata.
     pub fn add_data(&mut self, seg: DataSegment) {
         self.data_segments.push(seg);
     }

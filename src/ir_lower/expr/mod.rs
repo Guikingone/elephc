@@ -8,7 +8,7 @@
 //! Key details:
 //! - Simple scalar operations lower to concrete EIR arithmetic/string opcodes.
 //! - Complex PHP runtime behavior lowers to high-level EIR opcodes with
-//!   conservative effects until Phase 04 gives them target-specific meaning.
+//!   conservative effects consumed by the native and WASM backends.
 
 use crate::ir::{
     BlockId, CmpPredicate, Effects, Immediate, IrHeapKind, IrType, LocalKind, LocalSlotId,
@@ -8649,7 +8649,7 @@ fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, inner: &Expr
     let result = ctx.emit_value(
         Op::Cast,
         vec![value.value],
-        Some(Immediate::CastTarget(value_ir_type(&php_type))),
+        Some(Immediate::ExplicitCastTarget(value_ir_type(&php_type))),
         php_type,
         Op::Cast.default_effects(),
         Some(expr.span),

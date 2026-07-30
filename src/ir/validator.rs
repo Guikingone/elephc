@@ -3,7 +3,7 @@
 //! ownership, and effect invariants.
 //!
 //! Called from:
-//! - Phase 02 tests, future `--emit-ir`, and future IR pass/codegen gates.
+//! - `crate::ir_lower`, EIR optimization debug checks, and validator tests.
 //!
 //! Key details:
 //! - The validator is conservative: uncertain or malformed IR fails early so
@@ -56,6 +56,11 @@ pub enum ValidationError {
     MissingImmediate {
         inst: InstId,
         expected: &'static str,
+    },
+    CastTargetTypeMismatch {
+        inst: InstId,
+        target: IrType,
+        result: IrType,
     },
     UnexpectedImmediate(InstId),
     UnknownRuntimeCallSignature(InstId),
@@ -330,7 +335,7 @@ fn validate_instruction_immediate(
             matches!(imm, Imm::MixedNumericOp(_))
         }),
         Cast => require_immediate(inst_id, inst, "cast target", |imm| {
-            matches!(imm, Imm::CastTarget(_))
+            matches!(imm, Imm::CastTarget(_) | Imm::ExplicitCastTarget(_))
         }),
         TypePredicate => require_immediate(inst_id, inst, "type predicate", |imm| {
             matches!(imm, Imm::TypePredicate(_))
@@ -437,6 +442,7 @@ fn validate_opcode_rules(
         ),
         ResourceToStr => check_unary(function, inst_id, inst, IrType::I64, "I64 resource"),
         FToI | FToStr => check_unary(function, inst_id, inst, IrType::F64, "F64"),
+        Cast => validate_cast(inst_id, inst),
         BoolToStr => check_unary(function, inst_id, inst, IrType::I64, "I64 bool"),
         StrToI | StrToF | StrToNumber | StrLen | StrPersist => {
             check_unary(function, inst_id, inst, IrType::Str, "Str")
@@ -539,6 +545,24 @@ fn validate_opcode_rules(
         }
         RuntimeCall => validate_typed_runtime_call(function, inst_id, inst),
         _ => Ok(()),
+    }
+}
+
+/// Validates the unary shape and target/result agreement of an EIR cast.
+fn validate_cast(inst_id: InstId, inst: &Instruction) -> Result<(), ValidationError> {
+    check_count(inst_id, inst, 1, "1")?;
+    let target = match inst.immediate.as_ref() {
+        Some(Immediate::CastTarget(target) | Immediate::ExplicitCastTarget(target)) => *target,
+        _ => return Ok(()),
+    };
+    if target == inst.result_type {
+        Ok(())
+    } else {
+        Err(ValidationError::CastTargetTypeMismatch {
+            inst: inst_id,
+            target,
+            result: inst.result_type,
+        })
     }
 }
 

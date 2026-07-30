@@ -862,8 +862,8 @@ fn test_cli_wasm_dynamic_closure_argument_prints_42() {
     fs::write(
         &php_path,
         r#"<?php
-$f = function(int $x): int { return $x + 1; };
-echo $f(41);
+$f = function(int $x): int { return $x; };
+echo $f(42);
 "#,
     )
     .unwrap();
@@ -1049,8 +1049,8 @@ echo is_null($callable), ";";
 }
 
 /// Compiles an escaping by-ref closure from PHP source to wasm32-wasi and runs it
-/// twice under Wasmer. The creator's frame is gone before either call, so `23`
-/// proves the closure owns the ref cell instead of dereferencing freed storage.
+/// twice under Wasmer. The creator's frame is gone before either call, so two
+/// successful writes and reads prove the closure owns the ref cell.
 #[test]
 fn test_cli_wasm_escaping_by_ref_closure_survives_creator_return() {
     if Command::new("wasmer").arg("--version").output().is_err() {
@@ -1063,9 +1063,10 @@ fn test_cli_wasm_escaping_by_ref_closure_survives_creator_return() {
         &php_path,
         r#"<?php
 function make() {
-    $x = 1;
+    $x = 0;
     return function() use (&$x) {
-        return ++$x;
+        $x = $x ? 3 : 2;
+        return $x;
     };
 }
 
@@ -1319,6 +1320,312 @@ echo is_null($integerKeys[9]), ":", $integerKeys[7], ";";
             "PHP {version} associative misses must warn exactly once in source order"
         );
     }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies PHP source cannot reach WASM float-to-int or float-key lowering
+/// while their versioned warning and deprecation diagnostics remain incomplete.
+#[test]
+fn test_cli_wasm_rejects_diagnostic_sensitive_float_to_int_paths() {
+    let dir = make_cli_test_dir("elephc_cli_wasm_float_to_int_diagnostics");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+$key = (float) $argv[1];
+echo (int) $key;
+$discard_cast = (int) $key;
+$discard_array = [$key => 1];
+$discard_bool = !$key;
+if ($key) {}
+$discard_nan_not = !NAN;
+$discard_nan_ternary = NAN ? 1 : 2;
+$discard_nan_short = NAN ?: 2;
+if (NAN) {}
+$mixed = $argc > 1 ? $key : "1";
+echo (int) $mixed;
+function wasm_source(bool $flag): mixed { return $flag ? 1.5 : 1; }
+function wasm_sink(int $value): void {}
+wasm_sink(wasm_source($argc > 1));
+$checked = function(int $value): int { return $value + 1; };
+$discard_checked = $checked($argc);
+function wasm_checked_ref(): callable {
+    $value = 1;
+    return function() use (&$value) { return ++$value; };
+}
+$checked_ref = wasm_checked_ref();
+$discard_checked_ref = $checked_ref();
+$values = ["seed" => 1];
+$values[$key] = 2;
+echo $values[$key];
+unset($values[$key]);
+"#,
+    )
+    .unwrap();
+
+    for version in ["8.2", "8.3", "8.4", "8.5"] {
+        let output = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg("--php-version")
+            .arg(version)
+            .arg(&php_path)
+            .output()
+            .expect("failed to compile float-diagnostics fixture");
+        assert!(
+            !output.status.success(),
+            "PHP {version} must reject diagnostic-sensitive float conversions"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(
+                "float-to-int casts require exact profile-specific out-of-range diagnostics"
+            ),
+            "PHP {version}: {stderr}"
+        );
+        assert!(
+            stderr.contains(
+                "float or Mixed truthiness requires exact profile-specific NAN diagnostics"
+            ),
+            "PHP {version}: {stderr}"
+        );
+        assert!(
+            stderr
+                .matches(
+                    "float or Mixed truthiness requires exact profile-specific NAN diagnostics"
+                )
+                .count()
+                >= 6,
+            "PHP {version}: constant NAN truthiness was optimized away: {stderr}"
+        );
+        assert!(
+            stderr.contains(
+                "implicit Mixed-to-scalar transfer requires exact per-tag PHP diagnostics"
+            ),
+            "PHP {version}: {stderr}"
+        );
+        assert!(
+            stderr.contains(
+                "Mixed-to-scalar casts require exact per-tag PHP values and diagnostics"
+            ),
+            "PHP {version}: {stderr}"
+        );
+        assert!(
+            stderr.contains("ref-cell store value"),
+            "PHP {version}: checked arithmetic must not narrow an escaping ref cell: {stderr}"
+        );
+        assert!(
+            stderr.contains(
+                "float associative keys require exact profile-specific implicit-conversion diagnostics"
+            ),
+            "PHP {version}: {stderr}"
+        );
+        assert!(
+            !dir.join("main.wat").exists() && !dir.join("main.wasm").exists(),
+            "PHP {version} rejection must publish no artifact"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies public PHP shapes with incomplete WASM runtime contracts fail closed.
+#[test]
+fn test_cli_wasm_rejects_unproven_object_iterator_and_global_shapes() {
+    let dir = make_cli_test_dir("elephc_cli_wasm_unproven_shapes");
+    let php_path = dir.join("main.php");
+    let cases = [
+        (
+            r#"<?php class C { public string $name = "x"; } echo (new C())->name;"#,
+            "non-scalar default unsupported by WASM object construction",
+        ),
+        (
+            r#"<?php class C { public int $value; } $c = new C(); echo $c->value;"#,
+            "may be uninitialized and requires an exact PHP fatal check",
+        ),
+        (
+            r#"<?php #[AllowDynamicProperties] class C {} $c = new C(); echo $c->missing;"#,
+            "reads require the exact PHP undefined-property warning",
+        ),
+        (
+            r#"<?php class A { public int $x = 1; } class B { public int $x = 2; } $o = $argc > 1 ? new A() : new B(); echo $o?->x;"#,
+            "Nullsafe property access requires a single nullable object type",
+        ),
+        (
+            r#"<?php function m(): mixed { return 1; } $a = [m()]; foreach ($a as $v) { echo $v; }"#,
+            "indexed foreach element Mixed has no exact WASM load contract",
+        ),
+        (
+            r#"<?php $h = ["a" => 1]; foreach ($h as &$v) { $v = 2; }"#,
+            "by-reference foreach over associative arrays",
+        ),
+        (
+            r#"<?php $a = [1, 2]; foreach ($a as $v) { echo $v; $a[] = 3; }"#,
+            "may mutate the iterated container without PHP snapshot/COW semantics",
+        ),
+        (
+            r#"<?php function cmp(int $a, int $b): int { return $a - $b; } $a = [2, 1]; foreach ($a as $v) { echo $v; usort($a, 'cmp'); }"#,
+            "usort may mutate the iterated container without PHP snapshot/COW semantics",
+        ),
+        (
+            r#"<?php function read_custom(): mixed { global $custom; return $custom; } echo read_custom();"#,
+            "global $custom is not implemented by the WASI runtime",
+        ),
+    ];
+
+    for (index, (source, expected)) in cases.iter().enumerate() {
+        fs::write(&php_path, source).unwrap();
+        let output = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg("--php-version")
+            .arg("8.5")
+            .arg(&php_path)
+            .output()
+            .unwrap_or_else(|error| panic!("case #{index} failed to invoke elephc: {error}"));
+        assert!(
+            !output.status.success(),
+            "case #{index} unexpectedly compiled: {source}"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected),
+            "case #{index} missing {expected:?}: {stderr}"
+        );
+        assert!(
+            !dir.join("main.wat").exists() && !dir.join("main.wasm").exists(),
+            "case #{index} rejection published a WASM artifact"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies indexed boolean arrays preserve tag 3 when promoted to hashes.
+#[test]
+fn test_cli_wasm_bool_array_promotion_preserves_boolean_tags() {
+    if Command::new("wasmer").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_bool_array_promotion");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+$a = [false];
+$a["k"] = true;
+echo "[", $a[0], "]";
+$b = [];
+$b[] = false;
+$b["k"] = true;
+echo "[", $b[0], "]";
+$c = [];
+$c[0] = false;
+$c["k"] = true;
+echo "[", $c[0], "]";
+class Flag { public bool $value = false; }
+$flag = new Flag();
+echo "[", $flag->value, "]";
+$flag->value = false;
+echo "[", $flag?->value, "]";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg("--php-version")
+        .arg("8.5")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile boolean-array promotion fixture");
+    assert!(
+        output.status.success(),
+        "boolean-array promotion compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let run = Command::new("wasmer")
+        .arg("run")
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run boolean-array promotion fixture");
+    assert!(
+        run.status.success(),
+        "boolean-array promotion fixture trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "[][][][][]");
+    assert!(
+        run.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a declared mixed property retains a borrowed cell independently of its source.
+#[test]
+fn test_cli_wasm_mixed_property_retains_borrowed_source() {
+    if Command::new("wasmer").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_mixed_property_borrow");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+class Holder { public mixed $value = 1; }
+function make_value(): mixed { return "hello"; }
+function fill(Holder $holder): int {
+    $value = make_value();
+    $holder->value = $value;
+    return 0;
+}
+$holder = new Holder();
+fill($holder);
+echo $holder->value;
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg("--php-version")
+        .arg("8.5")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile borrowed mixed-property fixture");
+    assert!(
+        output.status.success(),
+        "borrowed mixed-property compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let run = Command::new("wasmer")
+        .arg("run")
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run borrowed mixed-property fixture");
+    assert!(
+        run.status.success(),
+        "borrowed mixed-property fixture trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "hello");
+    assert!(
+        run.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }

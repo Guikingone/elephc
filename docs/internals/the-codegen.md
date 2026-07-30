@@ -10,9 +10,11 @@ sidebar:
 `src/eval_aot.rs`; IR model and validation `src/ir/`; shared runtime/ABI support
 `src/codegen_support/`; optional bridge crates under `crates/`.
 
-Codegen is a single EIR pipeline. The checked and optimized AST is always
-lowered into EIR and IR passes run over that module. Native targets then use
-`src/codegen/` to emit assembly, while `wasm32-wasi` uses
+Codegen is a single EIR pipeline. The checked AST is always lowered into EIR.
+Native targets run the complete AST and EIR optimization pipelines, then use
+`src/codegen/` to emit assembly. The current `wasm32-wasi` path retains
+diagnostic-sensitive AST control flow and unoptimized EIR for its capability
+audit, then uses
 `src/codegen_wasm/` to emit a WASI WebAssembly module.
 
 ## Pipeline Position
@@ -27,16 +29,17 @@ PHP source
   -> NameResolver
   -> AST constant folding
   -> Type checker / warnings
-  -> AST optimizer passes
+  -> AST optimizer passes (diagnostic-eliding passes skipped for WASM)
   -> AST -> EIR lowering
   -> EIR validation
-  -> EIR optimization passes
+  -> EIR optimization passes (native targets)
   -> native: EIR -> target assembly -> runtime cache -> assembler / linker
   -> WASM:   EIR -> WAT -> WASM encoding
   -> executable, cdylib, WebAssembly module, or NPM package
 ```
 
-`--emit-ir` stops after lowering and IR optimization, printing the textual EIR.
+`--emit-ir` stops after lowering and any target-enabled IR optimization,
+printing the textual EIR.
 Native builds continue through `codegen::generate_user_asm_from_ir_with_options`
 and link the resulting user object against the cached runtime object.
 `wasm32-wasi` builds instead call `codegen_wasm::generate`, retain the readable

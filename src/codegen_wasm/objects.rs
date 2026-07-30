@@ -35,8 +35,8 @@
 //!   skipped, which is correct for harness blocks holding no refcounted property values).
 //! - PropGet returns an OWNED value (persist/incref) so the MaybeOwned read result is
 //!   independent of the object; PropSet releases the previous slot value (null-safe), retains or
-//!   persists the incoming value, and stores lo + hi. Mixed slots split into MOVE (incoming is
-//!   already a Mixed cell) and BOX (`emit_box_value_into_mixed`).
+//!   persists the incoming value, and stores lo + hi. Mixed slots transfer owned cells, retain
+//!   borrowed/local-loaded cells, and box concrete values through `emit_box_value_into_mixed`.
 
 use super::context::{FnCtx, Result};
 use super::symbols::method_symbol;
@@ -45,7 +45,10 @@ use super::values::WasmRepr;
 use super::wat::{DataSegment, Global, ValType, WatModule};
 use super::WasmError;
 use crate::codegen::{literal_default_value, LiteralDefaultValue};
-use crate::ir::{DataId, Instruction, IrHeapKind, IrType, ValueId};
+use crate::ir::{
+    DataId, Function, Immediate, Instruction, IrHeapKind, IrType, Op, Ownership, ValueDef,
+    ValueId,
+};
 use crate::names::php_symbol_key;
 use crate::types::{ClassInfo, PhpType};
 use std::collections::HashMap;
@@ -591,7 +594,7 @@ pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
         ctx.fb.ins(&format!("i64.store offset={}", off + 8), "zero property slot value_hi (tag)");
     }
 
-    // -- emit scalar property defaults (int/float/bool/null); non-scalar -> Unsupported --
+    // -- emit concrete or boxed scalar property defaults; non-scalars remain unsupported --
     for i in 0..n {
         let Some(Some(expr)) = ci.defaults.get(i) else {
             continue;
@@ -683,9 +686,9 @@ pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
 /// Writes one scalar property default into the object slot at `offset`.
 ///
 /// Int/Bool store the value as i64 and zero the tag word; Float stores the raw f64 bits as i64
-/// (read back by `f64.load`) and zeroes the tag; Null leaves the slot zeroed (already written by
-/// the zeroing loop). Any other `LiteralDefaultValue` variant (string, boxed, array, sentinel) is
-/// rejected as a follow-up sub-phase concern.
+/// (read back by `f64.load`) and zeroes the tag; Null leaves the slot zeroed. Boxed scalar/null
+/// variants allocate an owned Mixed cell and stamp tag 7 in the property slot. Strings, arrays,
+/// and sentinels remain unsupported.
 fn emit_scalar_default(
     ctx: &mut FnCtx,
     obj: &str,
@@ -723,6 +726,25 @@ fn emit_scalar_default(
         LiteralDefaultValue::Null => {
             // The zeroing loop already wrote (0, 0); skip.
         }
+        LiteralDefaultValue::BoxedNull => {
+            emit_boxed_scalar_default(ctx, obj, offset, 8, 0, "null");
+        }
+        LiteralDefaultValue::BoxedInt(value) => {
+            emit_boxed_scalar_default(ctx, obj, offset, 0, *value, "int");
+        }
+        LiteralDefaultValue::BoxedBool(value) => {
+            emit_boxed_scalar_default(ctx, obj, offset, 3, i64::from(*value), "bool");
+        }
+        LiteralDefaultValue::BoxedFloat(value) => {
+            emit_boxed_scalar_default(
+                ctx,
+                obj,
+                offset,
+                2,
+                value.to_bits() as i64,
+                "float",
+            );
+        }
         other => {
             return Err(WasmError::Unsupported(format!(
                 "non-scalar default for property ${} on wasm32-wasi (kind {:?})",
@@ -731,6 +753,42 @@ fn emit_scalar_default(
         }
     }
     Ok(())
+}
+
+/// Boxes one scalar literal and stores its owned Mixed cell in an object property slot.
+fn emit_boxed_scalar_default(
+    ctx: &mut FnCtx,
+    obj: &str,
+    offset: usize,
+    tag: i64,
+    value_lo: i64,
+    description: &str,
+) {
+    ctx.fb
+        .ins(&format!("i64.const {}", tag), &format!("mixed {description} tag"));
+    ctx.fb
+        .ins(&format!("i64.const {}", value_lo), &format!("mixed {description} value"));
+    ctx.fb.ins("i64.const 0", "mixed scalar high word");
+    ctx.fb
+        .ins("call $__rt_mixed_from_value", "box property default into a mixed cell");
+    let cell = ctx.fresh_temp(ValType::I32);
+    ctx.fb
+        .ins(&format!("local.set {}", cell), "save boxed property default cell");
+    ctx.fb
+        .ins(&format!("local.get {}", obj), "object base address");
+    ctx.fb
+        .ins(&format!("local.get {}", cell), "boxed property default cell");
+    ctx.fb
+        .ins("i64.extend_i32_u", "widen mixed cell pointer");
+    ctx.fb
+        .ins(&format!("i64.store offset={}", offset), "store mixed property value_lo");
+    ctx.fb
+        .ins(&format!("local.get {}", obj), "object base address");
+    ctx.fb.ins("i64.const 7", "mixed property runtime tag");
+    ctx.fb.ins(
+        &format!("i64.store offset={}", offset + 8),
+        "store mixed property value_hi",
+    );
 }
 
 /// Boxes a scalar / string / container value into a fresh owned kind-5 Mixed cell via
@@ -831,6 +889,7 @@ pub(super) fn lower_prop_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
         return lower_dyn_prop_get(ctx, inst, object, dyn_off, prop_data);
     }
     let (_, offset, prop_type) = resolve_property_slot(&ci, &property)?;
+    let prop_type = prop_type.codegen_repr();
     let obj_ref = object_ptr_ref(ctx, object)?;
 
     match &prop_type {
@@ -885,11 +944,10 @@ pub(super) fn lower_prop_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
 /// value directly and zero the tag word. Refcounted arms (Str, Array/AssocArray/Object,
 /// Mixed/Union/Iterable) first release the previous slot value (null-safe via
 /// `__rt_decref_any`), then retain + persist the incoming value and store lo (as i64) plus the
-/// hi-word (runtime tag, or string length). The Mixed/Union/Iterable slot splits into MOVE (the
-/// incoming value is already a Mixed cell, stored without incref) and BOX (anything else, boxed
-/// via `emit_box_value_into_mixed`). The ownership pass handles the source temp release; the
-/// backend just stores. Non-object receivers, undeclared properties, and Resource values return
-/// `Unsupported`.
+/// hi-word (runtime tag, or string length). A Mixed/Union/Iterable slot transfers an owned Mixed
+/// cell, retains an independently owned borrowed/local-loaded cell, or boxes a concrete value via
+/// `emit_box_value_into_mixed`. Non-object receivers, undeclared properties, and Resource values
+/// return `Unsupported`.
 pub(super) fn lower_prop_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let object = operand(inst, 0)?;
     let value = operand(inst, 1)?;
@@ -908,6 +966,7 @@ pub(super) fn lower_prop_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
         return lower_dyn_prop_set(ctx, inst, object, value, dyn_off, prop_data);
     }
     let (_, offset, prop_type) = resolve_property_slot(&ci, &property)?;
+    let prop_type = prop_type.codegen_repr();
     let obj_ref = object_ptr_ref(ctx, object)?;
 
     match &prop_type {
@@ -968,15 +1027,36 @@ pub(super) fn lower_prop_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
             ctx.fb.ins(&format!("i32.load offset={}", offset), "load previous slot value ptr");
             ctx.fb.ins("call $__rt_decref_any", "release previous slot value (null-safe)");
             let value_repr = ctx.value_repr(value)?.clone();
-            let value_ir_type = ctx.function.value(value).map(|v| v.ir_type);
-            let is_move = matches!(&value_repr, WasmRepr::Ptr(_))
-                && matches!(value_ir_type, Some(IrType::Heap(IrHeapKind::Mixed)));
-            if is_move {
+            let (value_ir_type, value_ownership) = ctx
+                .function
+                .value(value)
+                .map(|value| (value.ir_type, value.ownership))
+                .ok_or_else(|| {
+                    WasmError::Unsupported("mixed property value is missing".to_string())
+                })?;
+            let is_mixed_cell = matches!(&value_repr, WasmRepr::Ptr(_))
+                && value_ir_type == IrType::Heap(IrHeapKind::Mixed);
+            if is_mixed_cell {
+                if !matches!(
+                    value_ownership,
+                    Ownership::Owned | Ownership::Borrowed | Ownership::Persistent
+                ) && !(value_ownership == Ownership::MaybeOwned
+                    && value_has_local_origin(ctx.function, value))
+                {
+                    return Err(WasmError::Unsupported(format!(
+                        "mixed property write with {:?} ownership",
+                        value_ownership
+                    )));
+                }
                 ctx.emit_load_value(value)?;
                 let cell_tmp = ctx.fresh_temp(ValType::I32);
-                ctx.fb.ins(&format!("local.set {}", cell_tmp), "save mixed cell ptr (MOVE)");
+                ctx.fb.ins(&format!("local.set {}", cell_tmp), "save mixed cell ptr");
+                if value_ownership != Ownership::Owned {
+                    ctx.fb.ins(&format!("local.get {}", cell_tmp), "borrowed mixed cell ptr");
+                    ctx.fb.ins("call $__rt_incref", "retain borrowed mixed cell for property");
+                }
                 ctx.fb.ins(&format!("local.get {}", obj_ref), "object base address");
-                ctx.fb.ins(&format!("local.get {}", cell_tmp), "moved mixed cell ptr");
+                ctx.fb.ins(&format!("local.get {}", cell_tmp), "mixed property cell ptr");
                 ctx.fb.ins("i64.extend_i32_u", "widen cell ptr to i64 lo");
                 ctx.fb.ins(&format!("i64.store offset={}", offset), "store mixed property value_lo (ptr)");
                 ctx.fb.ins(&format!("local.get {}", obj_ref), "object base address");
@@ -1063,12 +1143,10 @@ fn lower_dyn_prop_get(
 /// Lowers `Op::PropSet` of an UNDECLARED property on an ADP / `stdClass` class to a
 /// `__rt_hash_set` against the dynamic-property hash tail.
 ///
-/// The value is materialized as an OWNED boxed Mixed cell: MOVE for a value that is already a
-/// Mixed cell (stored directly), BOX via `emit_box_value_into_mixed` otherwise. `__rt_hash_set`
-/// owns the inbound tag-7 cell by incref'ing it itself, so the materialized temp ref is dropped
-/// with a balancing `__rt_decref_any` after the call (rc 1 -> incref -> 2 -> decref -> 1, owned by
-/// the hash). The (possibly reallocated) hash pointer returned by `__rt_hash_set` is written back
-/// to `[obj + dyn_off]` (stored as i64 for consistency with `lower_object_new`). `PropSet` is void.
+/// A pre-boxed Mixed value is passed directly to `__rt_hash_set`; concrete values are first boxed.
+/// The hash helper retains the cell. An owned or freshly boxed inbound reference is then dropped,
+/// while a borrowed/local-loaded cell keeps its independent source owner. The returned hash pointer
+/// is written back to `[obj + dyn_off]` as i64. `PropSet` is void.
 fn lower_dyn_prop_set(
     ctx: &mut FnCtx,
     _inst: &Instruction,
@@ -1079,16 +1157,32 @@ fn lower_dyn_prop_set(
 ) -> Result<()> {
     let (kptr, klen) = ctx.str_literal(prop_data)?;
     let obj_ref = object_ptr_ref(ctx, object)?;
-    // Materialize the RHS as an owned boxed Mixed cell. MOVE a value that is already a Mixed
-    // cell; BOX anything else (hash_set increfs the tag-7 cell itself).
+    // Reuse an existing Mixed cell or box a concrete value. hash_set retains tag-7 cells.
     let value_repr = ctx.value_repr(value)?.clone();
-    let value_ir_type = ctx.function.value(value).map(|v| v.ir_type);
-    let is_move = matches!(&value_repr, WasmRepr::Ptr(_))
-        && matches!(value_ir_type, Some(IrType::Heap(IrHeapKind::Mixed)));
-    let cell = if is_move {
+    let (value_ir_type, value_ownership) = ctx
+        .function
+        .value(value)
+        .map(|value| (value.ir_type, value.ownership))
+        .ok_or_else(|| WasmError::Unsupported("dynamic property value is missing".to_string()))?;
+    let is_mixed_cell = matches!(&value_repr, WasmRepr::Ptr(_))
+        && value_ir_type == IrType::Heap(IrHeapKind::Mixed);
+    if is_mixed_cell
+        && !matches!(
+            value_ownership,
+            Ownership::Owned | Ownership::Borrowed | Ownership::Persistent
+        )
+        && !(value_ownership == Ownership::MaybeOwned
+            && value_has_local_origin(ctx.function, value))
+    {
+        return Err(WasmError::Unsupported(format!(
+            "dynamic mixed property write with {:?} ownership",
+            value_ownership
+        )));
+    }
+    let cell = if is_mixed_cell {
         ctx.emit_load_value(value)?;
         let c = ctx.fresh_temp(ValType::I32);
-        ctx.fb.ins(&format!("local.set {}", c), "save moved mixed cell ptr");
+        ctx.fb.ins(&format!("local.set {}", c), "save mixed cell ptr");
         c
     } else {
         emit_box_value_into_mixed(ctx, value)?
@@ -1113,12 +1207,41 @@ fn lower_dyn_prop_set(
     ctx.fb.ins(&format!("local.get {}", new_hash), "writeback hash pointer");
     ctx.fb.ins("i64.extend_i32_u", "widen hash ptr to i64 for writeback");
     ctx.fb.ins(&format!("i64.store offset={}", dyn_off), "store back the dyn-prop hash ptr");
-    // `__rt_hash_set` owns the inbound tag-7 cell by incref'ing it itself, so the temp ref we
-    // materialized above (a fresh BOX cell, or a moved value's cell) must be dropped here to keep
-    // the refcount balanced: rc 1 -> hash_set incref -> 2 -> this decref -> 1 (owned by the hash).
-    ctx.fb.ins(&format!("local.get {}", cell), "inbound cell temp for refcount balance");
-    ctx.fb.ins("call $__rt_decref_any", "release the temp ref that __rt_hash_set replaced");
+    // Drop only a freshly materialized or transferred owned reference. Borrowed/local-loaded
+    // cells keep their source owner alongside the new hash owner.
+    if !is_mixed_cell || value_ownership == Ownership::Owned {
+        ctx.fb.ins(&format!("local.get {}", cell), "inbound cell temp for refcount balance");
+        ctx.fb.ins("call $__rt_decref_any", "release the temp ref that __rt_hash_set replaced");
+    }
     Ok(())
+}
+
+/// Traces ownership-forwarding values to a local load that remains an independent owner.
+fn value_has_local_origin(function: &Function, mut value: ValueId) -> bool {
+    for _ in 0..=function.values.len() {
+        let Some(value_data) = function.value(value) else {
+            return false;
+        };
+        let ValueDef::Instruction { inst, .. } = value_data.def else {
+            return false;
+        };
+        let Some(instruction) = function.instruction(inst) else {
+            return false;
+        };
+        match instruction.op {
+            Op::LoadLocal => {
+                return matches!(instruction.immediate, Some(Immediate::LocalSlot(_)));
+            }
+            Op::Move | Op::Borrow | Op::Acquire => {
+                let Some(source) = instruction.operands.first() else {
+                    return false;
+                };
+                value = *source;
+            }
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// Emits a property read that leaves an OWNED Mixed cell pointer (i32) on the stack.
@@ -1177,6 +1300,7 @@ fn emit_prop_get_into_mixed(
     }
     // Declared property: load the slot and box into a Mixed cell.
     let (_, offset, prop_type) = resolve_property_slot(ci, property)?;
+    let prop_type = prop_type.codegen_repr();
     match &prop_type {
         PhpType::Int => {
             ctx.fb.ins("i64.const 0", "mixed tag (int)");

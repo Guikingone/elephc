@@ -232,6 +232,56 @@ fn test_fold_logical_ops_and_not_using_php_truthiness() {
     );
 }
 
+/// Verifies NAN truthiness expressions remain explicit so PHP 8.5 warnings survive folding.
+#[test]
+fn test_fold_preserves_nan_truthiness_diagnostics() {
+    let program = vec![
+        Stmt::echo(Expr::new(
+            ExprKind::Not(Box::new(Expr::float_lit(f64::NAN))),
+            Span::dummy(),
+        )),
+        Stmt::echo(Expr::new(
+            ExprKind::Ternary {
+                condition: Box::new(Expr::float_lit(f64::NAN)),
+                then_expr: Box::new(Expr::int_lit(1)),
+                else_expr: Box::new(Expr::int_lit(2)),
+            },
+            Span::dummy(),
+        )),
+        Stmt::echo(Expr::new(
+            ExprKind::ShortTernary {
+                value: Box::new(Expr::float_lit(f64::NAN)),
+                default: Box::new(Expr::int_lit(2)),
+            },
+            Span::dummy(),
+        )),
+    ];
+
+    let folded = fold_constants(program);
+
+    assert!(matches!(
+        &folded[0].kind,
+        StmtKind::Echo(Expr {
+            kind: ExprKind::Not(_),
+            ..
+        })
+    ));
+    assert!(matches!(
+        &folded[1].kind,
+        StmtKind::Echo(Expr {
+            kind: ExprKind::Ternary { .. },
+            ..
+        })
+    ));
+    assert!(matches!(
+        &folded[2].kind,
+        StmtKind::Echo(Expr {
+            kind: ExprKind::ShortTernary { .. },
+            ..
+        })
+    ));
+}
+
 /// Verifies int(float), float(string), bool(string), string(int) casts fold when result is unambiguous.
 #[test]
 fn test_fold_scalar_casts_when_result_is_unambiguous() {

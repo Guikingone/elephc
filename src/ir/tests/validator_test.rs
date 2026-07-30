@@ -37,6 +37,77 @@ fn well_formed_function_passes() {
     assert!(result.is_ok(), "{result:?}");
 }
 
+/// Both implicit and explicit casts require exactly one EIR operand.
+#[test]
+fn cast_variants_reject_invalid_operand_counts() {
+    for immediate in [
+        Immediate::CastTarget(IrType::I64),
+        Immediate::ExplicitCastTarget(IrType::I64),
+    ] {
+        let mut function =
+            Function::new("bad_cast_arity".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let _ = builder.emit(
+                Op::Cast,
+                Vec::new(),
+                Some(immediate),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        assert!(matches!(
+            validate_function(&function),
+            Err(ValidationError::OperandCountMismatch {
+                expected: "1",
+                actual: 0,
+                ..
+            })
+        ));
+    }
+}
+
+/// Both implicit and explicit cast targets must equal the instruction result type.
+#[test]
+fn cast_variants_reject_target_result_mismatches() {
+    for immediate in [
+        Immediate::CastTarget(IrType::I64),
+        Immediate::ExplicitCastTarget(IrType::I64),
+    ] {
+        let mut function =
+            Function::new("bad_cast_target".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let source = builder.emit_const_i64(1);
+            let _ = builder.emit(
+                Op::Cast,
+                vec![source],
+                Some(immediate),
+                IrType::F64,
+                PhpType::Float,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        assert!(matches!(
+            validate_function(&function),
+            Err(ValidationError::CastTargetTypeMismatch {
+                target: IrType::I64,
+                result: IrType::F64,
+                ..
+            })
+        ));
+    }
+}
+
 /// Exact array pointer storage accepts only the corresponding two-member
 /// `array|null` metadata used by nullable container reads.
 #[test]

@@ -449,17 +449,34 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("opt-post");
     let phase_started = Instant::now();
-    let ast = optimize::prune_constant_control_flow(ast);
+    // WASM capability validation must observe every PHP coercion and diagnostic
+    // boundary; target-agnostic pruning has no profile-aware proof for all of them.
+    let ast = if target.is_wasm() {
+        ast
+    } else {
+        optimize::prune_constant_control_flow(ast)
+    };
     timings.record_since("opt-post", phase_started);
 
     crate::progress::phase("opt-norm");
     let phase_started = Instant::now();
-    let ast = optimize::normalize_control_flow(ast);
+    // Empty control-flow bodies can still observe PHP diagnostics while their
+    // conditions are evaluated (notably PHP 8.5 NAN-to-bool warnings).
+    let ast = if target.is_wasm() {
+        ast
+    } else {
+        optimize::normalize_control_flow(ast)
+    };
     timings.record_since("opt-norm", phase_started);
 
     crate::progress::phase("dce");
     let phase_started = Instant::now();
-    let ast = optimize::eliminate_dead_code(ast);
+    // Keep unused diagnostic-producing expressions until the WASM static gate.
+    let ast = if target.is_wasm() {
+        ast
+    } else {
+        optimize::eliminate_dead_code(ast)
+    };
     timings.record_since("dce", phase_started);
 
     if emit_ir {
@@ -483,7 +500,9 @@ pub(crate) fn compile(config: CliConfig) {
 
         crate::progress::phase("ir-opt");
         let phase_started = Instant::now();
-        if ir_opt {
+        // The WASM capability pass currently runs after IR optimization, so keep
+        // every transfer/coercion visible until that validation boundary.
+        if ir_opt && !target.is_wasm() {
             ir_passes::optimize_module(&mut module);
         }
         timings.record_since("ir-opt", phase_started);
@@ -518,7 +537,8 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("ir-opt");
     let phase_started = Instant::now();
-    if ir_opt {
+    // See the emit-IR path above: WASM must audit the unelided EIR graph.
+    if ir_opt && !target.is_wasm() {
         ir_passes::optimize_module(&mut ir_module);
     }
     timings.record_since("ir-opt", phase_started);

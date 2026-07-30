@@ -1248,7 +1248,7 @@ fn emit_float_to_php_int(ctx: &mut FnCtx) {
         .ins("call $__rt_float_to_int", "apply PHP 64-bit float-to-int semantics");
 }
 
-/// Lowers an explicit EIR cast, including boxed Mixed-to-scalar conversions.
+/// Lowers an internal or explicit EIR cast, including boxed Mixed-to-scalar conversions.
 ///
 /// Checked integer arithmetic returns an owned Mixed cell so an overflow can
 /// promote to float. Typed PHP contexts immediately cast that cell back to the
@@ -1257,7 +1257,7 @@ fn emit_float_to_php_int(ctx: &mut FnCtx) {
 fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let value = operand(inst, 0)?;
     let target = match inst.immediate {
-        Some(Immediate::CastTarget(target)) => target,
+        Some(Immediate::CastTarget(target) | Immediate::ExplicitCastTarget(target)) => target,
         _ => {
             return Err(WasmError::Unsupported(
                 "cast without a CastTarget immediate".to_string(),
@@ -2546,6 +2546,7 @@ fn lower_array_push(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         }
         other => return Err(WasmError::Unsupported(format!("array_push of {:?}", other))),
     }
+    stamp_bool_array_result_type(ctx, array, value)?;
     // The runtime returned the (possibly reallocated) pointer: store it back into
     // the array operand value's local.
     ctx.emit_store_value(array)?;
@@ -2601,6 +2602,7 @@ fn lower_array_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         }
         other => return Err(WasmError::Unsupported(format!("array_set of {:?}", other))),
     }
+    stamp_bool_array_result_type(ctx, array, value)?;
     // The runtime returned the (possibly cloned/reallocated) pointer: store it
     // back into the array operand value's local.
     ctx.emit_store_value(array)?;
@@ -2615,6 +2617,64 @@ fn lower_array_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                 .ins(&format!("local.set {}", slot_ref[0]), "write back to the array slot");
         }
     }
+    Ok(())
+}
+
+/// Preserves the boolean runtime tag after the shared integer array mutators.
+///
+/// The scalar helpers deliberately normalize an empty array to 8-byte slots and
+/// clear its value-type bits. PHP booleans share that payload width with ints,
+/// so the statically typed WASM path must restore tag 3 before promotion to a
+/// hash or any other runtime operation that observes element tags.
+fn stamp_bool_array_result_type(
+    ctx: &mut FnCtx,
+    array: ValueId,
+    value: ValueId,
+) -> Result<()> {
+    let array_is_bool = ctx
+        .function
+        .value(array)
+        .map(|value| value.php_type.codegen_repr())
+        .and_then(|php_type| match php_type {
+            PhpType::Array(element) => Some(matches!(
+                element.codegen_repr(),
+                PhpType::Bool | PhpType::False
+            )),
+            _ => None,
+        })
+        .unwrap_or(false);
+    let value_is_bool = ctx
+        .function
+        .value(value)
+        .map(|value| {
+            matches!(
+                value.php_type.codegen_repr(),
+                PhpType::Bool | PhpType::False
+            )
+        })
+        .unwrap_or(false);
+    if !array_is_bool && !value_is_bool {
+        return Ok(());
+    }
+    let result = ctx.fresh_temp(ValType::I32);
+    ctx.fb
+        .ins(&format!("local.set {}", result), "save mutated boolean array pointer");
+    ctx.fb
+        .ins(&format!("local.get {}", result), "boolean array pointer");
+    ctx.fb.ins("i32.const 8", "kind-word offset");
+    ctx.fb.ins("i32.sub", "address of array kind word");
+    ctx.fb
+        .ins(&format!("local.get {}", result), "boolean array pointer");
+    ctx.fb.ins("i32.const 8", "kind-word offset");
+    ctx.fb.ins("i32.sub", "address of array kind word");
+    ctx.fb.ins("i64.load", "load indexed-array kind word");
+    ctx.fb.ins("i64.const -32513", "clear value-type bits 8..14");
+    ctx.fb.ins("i64.and", "kind word without value type");
+    ctx.fb.ins("i64.const 768", "boolean value type 3 shifted by 8");
+    ctx.fb.ins("i64.or", "stamp boolean value type");
+    ctx.fb.ins("i64.store", "store indexed-array kind word");
+    ctx.fb
+        .ins(&format!("local.get {}", result), "reload mutated boolean array pointer");
     Ok(())
 }
 

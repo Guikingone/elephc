@@ -5,8 +5,6 @@ sidebar:
   order: 13
 ---
 
-# WebAssembly and PHP Compliance Specification
-
 This document is the acceptance contract for Elephc's `wasm32-wasi` target. It
 replaces feature-count claims with externally observable requirements. A phase,
 test count, or generated artifact is not evidence of compliance unless every
@@ -26,12 +24,12 @@ available evidence is insufficient.
 | Independent implementation audits | Partially satisfied | GLM 5.2, Kimi K2.7, and MiniMax M3 independently audited Elephc `b3b399408c9fabcb7b32a428e09d4b7fca09e320` through dedicated Codex instances and accepted the same canonical 24-item registry after four convergence rounds. This establishes the implementation baseline, not approval of the future final revision. |
 | Initial baseline | Partially satisfied | Counts and corpus results were recorded at one compiler revision. They are historical observations, not a generated current-revision coverage report. |
 | Production validation and artifact integrity | Partially satisfied | Production in-process assembly/Core validation, external validation in the shared host job, and transaction-safe WAT/WASM/npm publication exist. Exhaustive invalid-input and rollback-path coverage remains open. |
-| Capability audit | Partially satisfied | Exhaustive identity classification and shape checks for an audited P0 subset exist. Nullable `ArrayGet` and `HashGet` shapes are checked before lowering, including key/source/result representation, ownership, warning-runtime availability, and silent reactor reads. Associative container results retain exact pointer storage with `container|null` PHP metadata, so misses remain null without breaking typed chained consumers; direct calls on exact `Object|null` pointers require a dominating false edge of `IsNull(receiver)`. The only newly admitted static `Warn` is the exact array-offset-on-null boundary, and the only newly admitted static `ThrowError` is the exact method-on-null boundary, both in a main-bearing command module; unrelated messages, import-free reactors, and every catch surface fail closed. Dynamic `Mixed` keys fail closed on reads, writes, and `unset` until their per-tag PHP diagnostics exist. Dynamic Mixed/Union method dispatch enumerates every instantiable class before checking visibility, arity, body ABI, result boxing, and ownership, so an incompatible class cannot fall through as undefined or bypass a non-public method. Other admitted operations still rely on late lowerer diagnostics, so the complete surface is not yet shape-classified. |
+| Capability audit | Partially satisfied | Every EIR identity is classified, cross-cutting transfer/call/branch/local/global/object/property/iterator shape checks run before emission, and acceptance returns an exact fully lowered plan rather than re-running lowering during publication. Nullable `ArrayGet` and `HashGet` shapes preserve exact `container|null` storage; direct calls on exact `Object|null` pointers require a dominating false edge of `IsNull(receiver)`. Dynamic properties are readable only after a same-block write proof or through a statically null nullsafe receiver. The only admitted static `Warn` and `ThrowError` forms are the exact array-offset-on-null and method-on-null boundaries in a main-bearing command module. Dynamic `Mixed` or float keys, scalar float-to-int conversions, generic Mixed-to-scalar conversions, unproved iterator storage/mutation, unsupported globals, and unproved property layouts fail before WAT generation. The remaining gap is exhaustive generated PHP-source reachability evidence, not post-acceptance lowering. |
 | Core trap inventory | Partially satisfied | Production generation lexes the final WAT, requires a marker for every real `unreachable`, assembles the artifact, and proves the marker count equals the final Core operator count. Post-noreturn helper proofs must be final in the same helper body and reject Core 3.0 returns, tail calls, structured branches, typed-reference branches, and exception handlers that could bypass the final trap. OOM, PHP-visible, and explicitly non-public reactor-only sites are closed classes, and non-public sites/reactor modules are rejected at the public command boundary. Exact-revision CI and final independent review remain open. |
-| Typed transfer and control flow | Partially satisfied | Focused transfer and regression tests exist. Exhaustive representation, branch, switch, ownership, and cross-host matrices remain open. |
+| Typed transfer and control flow | Partially satisfied | The canonical storage-pair matrix, local/block/call/return transfer guards, and focused branch regressions exist. Exhaustive PHP-source reachability, switch, ownership, and cross-host matrices remain open. |
 | WASI startup, arguments/environment, I/O, and process status | Partially satisfied | The pinned three-host job proves exact `$argc`/`$argv`, stdout/stderr, `exit(7)`, repeated Node runs, and partial-`fd_write` progress. Environment/preopen mapping, complete byte contracts, and the full status boundary remain open. |
-| Numeric and PHP error semantics | Partially satisfied | Admitted indexed int/bool/string and associative int/bool/float/string misses preserve null and emit ordered key-class-specific stderr warnings on normal reads across the 8.2–8.5 compiler profiles; silent reads omit the warning. A chained read through an intermediate null still evaluates its later index exactly once; normal reads then emit the profile-exact PHP array-offset-on-null warning (`on value of type null` for 8.2, `on null` for 8.3–8.5), while silent reads suppress diagnostics without suppressing index side effects. A method call through a missing object-valued associative key emits the warning, terminates with status 255 and the PHP method-on-null message, and does not evaluate later arguments. The former integer sentinel remains a valid in-range value. Source locations, stack traces, exceptional cleanup, and the complete versioned php-src differential and diagnostics matrices remain open. |
-| Allocator, ownership, COW, and adversarial safety | Partially satisfied | Focused implementation and cleanup tests exist. Exhaustive resource, malformed-state, aliasing, and failure-path evidence remains open. |
+| Numeric and PHP error semantics | Partially satisfied | Admitted indexed int/bool/string and associative int/bool/string-keyed misses preserve null and emit ordered key-class-specific stderr warnings on normal reads across the 8.2–8.5 compiler profiles; silent reads omit the warning. Float values remain valid associative elements, but float keys and scalar float-to-int conversions are rejected until their versioned diagnostics are implemented. A chained read through an intermediate null still evaluates its later index exactly once; normal reads then emit the profile-exact PHP array-offset-on-null warning (`on value of type null` for 8.2, `on null` for 8.3–8.5), while silent reads suppress diagnostics without suppressing index side effects. A method call through a missing object-valued associative key emits the warning, terminates with status 255 and the PHP method-on-null message, and does not evaluate later arguments. The former integer sentinel remains a valid in-range value. Source locations, stack traces, exceptional cleanup, and the complete versioned php-src differential and diagnostics matrices remain open. |
+| Allocator, ownership, COW, and adversarial safety | Partially satisfied | Focused implementation and cleanup tests exist. Boolean indexed arrays stamp their runtime element tag before hash promotion; scalar `mixed` property defaults are boxed; owned cells transfer while borrowed/local-loaded cells are retained independently; and `usort` or direct container mutation during a live `foreach` fails closed. Exhaustive resource, malformed-state, aliasing, and failure-path evidence remains open. |
 | Deterministic artifacts | Partially satisfied | Deterministic IDs have focused tests, and the pinned CI gate compares WAT, WASM, npm trees, and packed archives from independent compiler processes. Relevant map insertion orders and the complete metadata-normalization contract remain open. |
 | PHP differential parity | Open | No committed full-version oracle matrix covers the declared reachable surface. |
 | Wasmer, Wasmtime, Node, and external-validator CI | Satisfied | CI run `30439384471` on Elephc `b3b399408c9` validates and executes one artifact under checksum-pinned Wasmer 7.2.1, Wasmtime 47.0.2, `wasm-tools` 1.254.0, Node 26.3.0, and TypeScript 6.0.3. |
@@ -281,11 +279,14 @@ Acceptance:
   acceptance threshold;
 - no backend `Unsupported` error is first discovered after output publication.
 
-The current shape audit covers checked integer add/subtract/multiply, selected
-casts, indexed `ArrayGet`, associative `HashGet`, `NullsafeMethodCall`, dynamic Mixed/Union method
-dispatch, and the admitted `GetClass`, `ArrayMap`, `Usort`, and `ArrayReduce`
-runtime forms. It does not make the remaining admitted opcodes shape-complete.
-Admitted indexed int/bool/string and associative int/bool/float/string/container
+The current capability boundary exhaustively classifies identities and verifies
+the cross-cutting storage pairs used by locals, globals, block arguments,
+branches, direct and callable calls, returns, reference cells, arrays, hashes,
+objects, properties, iterators, and the admitted runtime forms. Static checks
+are followed by exact in-memory lowering into the immutable plan returned to
+publication, so a successful audit cannot encounter a later backend
+`Unsupported`.
+Admitted indexed int/bool/string and associative int/bool/string-keyed/container
 reads distinguish warning-producing and silent misses while preserving null,
 require ownership consistent with fresh Mixed cells or retained concrete
 container pointers, and conservatively carry the EIR heap-allocation effect.
@@ -300,10 +301,21 @@ exact static `Call to a member function ...() on null` error in a public command
 module, and terminates through the registered PHP fatal helper before any
 method argument is evaluated. General `ThrowError`, `try`/`catch`, reactor
 diagnostics, source locations, traces, and exceptional cleanup remain rejected
-or tracked by `PHP-WASM-ERROR-002`. Dynamic `Mixed` associative keys are
+or tracked by `PHP-WASM-ERROR-002`. Dynamic `Mixed` and float associative keys are
 rejected before WAT generation for `HashGet`, `HashGetSilent`, `HashSet`, and
 `HashUnset`: silent reads suppress only undefined-key warnings, not invalid-key
-type errors. Associative warnings format normalized integer keys without quotes
+type errors, deprecations, or conversion warnings. EIR records source-level PHP
+casts separately from implicit coercions through `ExplicitCastTarget`. Exact
+boolean/string indexed-read casts, including their nullable miss path, are
+admitted only when the declared element tag proves the runtime conversion.
+Scalar `FToI`, diagnostic-sensitive float-to-int casts, generic
+Mixed-to-scalar casts, and implicit narrowing remain rejected until their
+context-, tag-, and profile-specific behavior is implemented.
+For the WASM target, diagnostic-sensitive AST normalization, constant-control
+pruning, dead-code elimination, and EIR optimization are disabled until after
+this boundary. Constant folding and propagation retain every `NAN` truthiness
+operation because PHP 8.5 reports each coercion.
+Associative warnings format normalized integer keys without quotes
 and string keys with quotes. Dynamic
 method candidates include every concrete class exposing the method; mismatched
 arity or non-public visibility is rejected by capability validation instead of

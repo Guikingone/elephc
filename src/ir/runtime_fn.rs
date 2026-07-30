@@ -638,7 +638,6 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayIntersectAssoc |
             RuntimeFnId::ArrayIntersectKey |
             RuntimeFnId::ArrayIsList |
-            RuntimeFnId::ArrayKeyExists |
             RuntimeFnId::ArrayKeyFirst |
             RuntimeFnId::ArrayKeyLast |
             RuntimeFnId::ArrayKeys |
@@ -732,6 +731,11 @@ impl RuntimeFnId {
             RuntimeFnId::Ucfirst |
             RuntimeFnId::Ucwords |
             RuntimeFnId::Wordwrap => crate::ir::Effects::empty(),
+            RuntimeFnId::ArrayKeyExists => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::MAY_WARN.bits()
+                    | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
             RuntimeFnId::Clamp => crate::ir::Effects::MAY_THROW,
             RuntimeFnId::FunctionExists
             | RuntimeFnId::Defined

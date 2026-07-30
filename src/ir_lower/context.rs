@@ -1943,7 +1943,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let Some(inst) = self.builder.value_defining_instruction(value) else {
             return false;
         };
-        if inst.op != Op::Cast || inst.immediate != Some(Immediate::CastTarget(IrType::Str)) {
+        if inst.op != Op::Cast
+            || !matches!(
+                inst.immediate,
+                Some(
+                    Immediate::CastTarget(IrType::Str)
+                        | Immediate::ExplicitCastTarget(IrType::Str)
+                )
+            )
+        {
             return false;
         }
         let Some(source) = inst.operands.first().copied() else {

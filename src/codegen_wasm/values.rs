@@ -112,7 +112,7 @@ impl WasmRepr {
     ///
     /// # Returns
     /// `true` if this is `WasmRepr::Void`, `false` otherwise.
-    // Consumed by instruction lowering (skipping void instruction results) in a later phase.
+    // Kept as the explicit representation predicate used by focused layout tests.
     #[allow(dead_code)]
     pub fn is_void(&self) -> bool {
         matches!(self, WasmRepr::Void)

@@ -164,7 +164,10 @@ pub enum Immediate {
     TypePredicate(PhpTypePredicate),
     MixedNumericOp(MixedNumericOp),
     CmpPredicate(CmpPredicate),
+    /// Target type for an internal representation cast or implicit runtime coercion.
     CastTarget(IrType),
+    /// Target type for a source-level PHP cast such as `(int) $value`.
+    ExplicitCastTarget(IrType),
     TypeName(DataId),
     Capacity(u32),
     WidthBytes(u8),
@@ -538,7 +541,6 @@ impl Op {
             | FCmp
             | StrLen
             | IToF
-            | FToI
             | BoolToStr
             | StrToI
             | StrToF
@@ -590,28 +592,31 @@ impl Op {
             IToStr | FToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate
             | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
             ConcatReset => E::WRITES_GLOBAL,
+            FToI => E::MAY_WARN | E::MAY_FATAL,
             Cast => E::READS_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL,
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
             MixedBox | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | BufferNew | GeneratorNew => {
                 E::ALLOC_HEAP
             }
-            IsNull | IsTruthy | TypePredicate | MixedUnbox | MixedCastBool | MixedCastInt
-            | MixedCastFloat | BufferGet | BufferLen | PackedFieldGet | PtrRead
-            | PtrReadString => {
+            IsNull | TypePredicate | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat
+            | BufferGet | BufferLen | PackedFieldGet | PtrRead | PtrReadString => {
                 E::READS_HEAP | E::MAY_FATAL
             }
+            IsTruthy => E::READS_HEAP | E::MAY_WARN | E::MAY_FATAL,
             ArrayGetSilent => E::READS_HEAP | E::ALLOC_HEAP,
-            HashGetSilent => E::READS_HEAP | E::ALLOC_HEAP,
-            ArrayIsset | HashIsset => E::READS_HEAP,
+            HashGetSilent => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_WARN | E::MAY_FATAL,
+            ArrayIsset => E::READS_HEAP,
+            HashIsset => E::READS_HEAP | E::MAY_WARN | E::MAY_FATAL,
             ArrayGet => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_WARN,
-            HashGet => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_WARN,
+            HashGet => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_WARN | E::MAY_FATAL,
             StrPersist | ArrayEnsureUnique | HashEnsureUnique | ArrayCloneShallow
             | HashCloneShallow | ObjectCloneShallow => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
             ArrayLen | HashLen => E::READS_HEAP,
-            ArrayKeyExists | OffsetExists | PropInitialized | LoadPropRefCell => {
+            ArrayKeyExists => E::READS_HEAP | E::MAY_WARN | E::MAY_FATAL,
+            OffsetExists | PropInitialized | LoadPropRefCell => {
                 E::READS_HEAP
             }
             PropGet | NullsafePropGet => {
@@ -622,9 +627,13 @@ impl Op {
             }
             LoadArrayElemRefCell => E::READS_HEAP | E::MAY_FATAL,
             BindRefCellPtr => E::WRITES_LOCAL,
-            ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
-            | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
-            | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
+            ArraySet | ArrayPush | OffsetUnset | PropSet | DynamicPropSet | BufferSet
+            | BufferFree | PackedFieldSet | PtrWrite | PtrWriteString => {
+                E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP
+            }
+            HashSet | HashUnset | HashAppend => {
+                E::WRITES_HEAP | E::MAY_WARN | E::MAY_FATAL | E::REFCOUNT_OP
+            }
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             ArrayElemAddr | ArraySetMixedKey => {
                 E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP

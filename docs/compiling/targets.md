@@ -70,18 +70,22 @@ Unlike the native macOS/Linux targets, `wasm32-wasi` is **not yet at full
 parity**. It supports a growing subset of the language, and an EIR operation
 that the WebAssembly backend does not yet implement aborts compilation of the
 whole module rather than degrading a single function. The pre-emission
-capability audit classifies known operation and runtime identities. Some
-operand, result, immediate, representation, ownership, callable, and
-control-flow shapes are checked for an audited P0 subset. Other admitted forms
-can still be rejected during in-memory lowering; such a late rejection remains
-a capability gap even though no artifact is published. The audited acceptance
-contract and remaining gaps are tracked in
+capability audit classifies every operation, runtime identity, and terminator,
+then checks cross-cutting operand, result, immediate, representation,
+ownership, callable, object/property, iterator, and control-flow shapes. Static
+acceptance is followed by one exact in-memory planning pass; every fallible
+lowering and identifier-consistency check must succeed before an accepted plan
+exists. Artifact publication consumes that private plan without re-running
+lowering, so a module accepted by the complete gate cannot later fail with a
+backend `Unsupported`. Rejected source remains a target-capability gap even
+though no artifact is published. The audited acceptance contract and remaining
+gaps are tracked in
 [WebAssembly and PHP Compliance](../specs/wasm-compliance.md).
 
 The durable tested inventory currently includes:
 
 - production in-process WAT assembly and Core 3.0 validation;
-- focused artifact publication, P0 shape-audit, and target-capability rejection
+- focused artifact publication, shape-complete capability, and target-capability rejection
   tests;
 - focused typed-transfer, `$argc`, void/Mixed result, block-argument, loop, and
   deterministic-identifier regressions;
