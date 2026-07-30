@@ -1,12 +1,15 @@
 //! Purpose:
-//! Records optional compile-phase durations and notes for CLI timing output.
-//! Keeps timing collection lightweight when the user has not requested `--timings`.
+//! Records compile-phase durations and optional notes for CLI timing output.
+//! Reports each successful phase to the interactive progress renderer while
+//! retaining the full timing table only when the user requests `--timings`.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` around each major compiler phase.
 //!
 //! Key details:
-//! - Disabled timing still accepts calls so pipeline code does not branch around every measurement.
+//! - Phase durations are always measured for interactive completed-step lines.
+//! - Disabled timing skips only table storage/reporting, so pipeline code does
+//!   not branch around every measurement.
 
 use std::time::{Duration, Instant};
 
@@ -21,9 +24,9 @@ pub(crate) struct CompileTimings {
 impl CompileTimings {
     /// Creates a new timing collector.
     ///
-    /// `enabled` controls whether timing data is actually recorded and reported.
-    /// When disabled (the common case), all methods are no-ops so callers need
-    /// not branch on the flag. The internal timer starts immediately.
+    /// `enabled` controls whether detailed timing data is retained and reported.
+    /// Phase completion still reaches the interactive progress renderer when
+    /// disabled. The internal timer starts immediately.
     pub(crate) fn new(enabled: bool) -> Self {
         Self {
             enabled,
@@ -35,11 +38,14 @@ impl CompileTimings {
 
     /// Records the elapsed time since `started_at` for the named phase.
     ///
-    /// No-op when timing collection is disabled. The duration is computed
-    /// immediately at call time via `Instant::elapsed()`.
+    /// The duration is always forwarded to the interactive progress renderer.
+    /// It is retained for the detailed timing report only when collection is
+    /// enabled.
     pub(crate) fn record_since(&mut self, phase: &'static str, started_at: Instant) {
+        let elapsed = started_at.elapsed();
+        crate::progress::finish_phase(phase, elapsed);
         if self.enabled {
-            self.phases.push((phase, started_at.elapsed()));
+            self.phases.push((phase, elapsed));
         }
     }
 
@@ -98,6 +104,7 @@ fn percentage(part: Duration, total: Duration) -> f64 {
     }
 }
 
+/// Applies bold terminal styling only for decorated interactive runs.
 fn style_if(decorated: bool, text: &str) -> String {
     if decorated {
         console::style(text).bold().to_string()
@@ -127,38 +134,62 @@ fn format_phase_line(phase: &str, duration: Duration, total: Duration, decorated
 mod tests {
     use super::*;
 
+    /// Verifies disabled detailed timings do not retain phase samples.
+    #[test]
+    fn disabled_timings_do_not_store_phases() {
+        let mut timings = CompileTimings::new(false);
+        timings.record_since("read", Instant::now());
+        assert!(timings.phases.is_empty());
+    }
+
+    /// Verifies percentage formatting avoids division by zero.
     #[test]
     fn percentage_of_zero_total_is_zero() {
         assert_eq!(percentage(Duration::from_millis(5), Duration::ZERO), 0.0);
     }
 
+    /// Verifies phase shares are computed against total elapsed time.
     #[test]
     fn percentage_computes_share_of_total() {
         let pct = percentage(Duration::from_millis(25), Duration::from_millis(100));
         assert!((pct - 25.0).abs() < 0.001);
     }
 
+    /// Verifies plain timing headers remain byte-identical.
     #[test]
     fn style_if_plain_is_unchanged() {
         assert_eq!(style_if(false, "Compiler timings:"), "Compiler timings:");
     }
 
+    /// Verifies decorated timing headers retain their original text.
     #[test]
     fn style_if_decorated_contains_original_text() {
         assert!(style_if(true, "Compiler timings:").contains("Compiler timings:"));
     }
 
+    /// Verifies plain phase rows omit the decorated percentage column.
     #[test]
     fn format_phase_line_plain_has_no_percentage() {
-        let line = format_phase_line("codegen", Duration::from_millis(10), Duration::from_millis(100), false);
+        let line = format_phase_line(
+            "codegen",
+            Duration::from_millis(10),
+            Duration::from_millis(100),
+            false,
+        );
         assert!(!line.contains('%'));
         assert!(line.contains("codegen"));
         assert!(line.contains("10.00 ms"));
     }
 
+    /// Verifies decorated phase rows include their share of total time.
     #[test]
     fn format_phase_line_decorated_includes_percentage() {
-        let line = format_phase_line("codegen", Duration::from_millis(10), Duration::from_millis(100), true);
+        let line = format_phase_line(
+            "codegen",
+            Duration::from_millis(10),
+            Duration::from_millis(100),
+            true,
+        );
         assert!(line.contains('%'));
         assert!(line.contains("10.0%"));
     }

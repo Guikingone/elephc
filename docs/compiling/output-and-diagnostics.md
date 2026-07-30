@@ -95,9 +95,15 @@ consumers, the second serves tools that want the richer JSON schema.
 
 ## Compile-time diagnostics
 
+On an interactive terminal, each compilation phase starts as a spinner. When
+the phase finishes, elephc keeps a completed line with a checkmark and elapsed
+time, then starts the next phase on a new line. Non-interactive output and
+`--quiet` keep the compact plain output without progress lines.
+
 ### `--timings`
 
-Prints how long each compilation phase took, to stderr. The labels match the
+Prints the detailed timing table with percentages to stderr in addition to the
+interactive completed-phase lines. The labels match the
 [pipeline phases](compilation-pipeline.md).
 
 ```bash

@@ -114,7 +114,7 @@ Linking:
 
 Diagnostics:
   --timings               Report per-phase compile timings to stderr
-  --quiet, -q             Disable the live spinner and colorized output
+  --quiet, -q             Disable progress lines and colorized output
   --source-map            Emit a .map source map alongside the assembly
   --debug-info            Embed DWARF line info for debuggers
 
@@ -158,7 +158,7 @@ pub(crate) struct CliConfig {
     /// the API is available even when feature auto-detection would not trigger.
     /// `--with-web` is folded into `web` instead, since it aliases `--web`.
     pub(crate) with_crates: HashSet<String>,
-    /// Suppresses the live spinner and bridge-library "Linking" event lines,
+    /// Suppresses live/completed progress and bridge-library "Linking" event lines,
     /// forcing plain output regardless of whether stderr is a terminal.
     /// Errors, warnings, and the final success line are unaffected.
     pub(crate) quiet: bool,
