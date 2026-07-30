@@ -603,7 +603,7 @@ pub(crate) fn compile(config: CliConfig) {
         }
     };
     timings.record_since("runtime-cache", phase_started);
-    timings.note(format!("runtime-cache {}", runtime_object.status.as_str()));
+    timings.note(format!("Runtime cache: {}", runtime_object.status.as_str()));
 
     crate::progress::phase("codegen");
     let phase_started = Instant::now();

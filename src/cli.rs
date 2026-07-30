@@ -113,7 +113,7 @@ Linking:
   --with-CRATE            Force-link a bridge crate (pdo, tls, crypto, phar, tz, image, web, eval)
 
 Diagnostics:
-  --timings               Report per-phase compile timings to stderr
+  --timings               Show a per-phase timing table on stderr
   --quiet, -q             Disable progress lines and colorized output
   --source-map            Emit a .map source map alongside the assembly
   --debug-info            Embed DWARF line info for debuggers

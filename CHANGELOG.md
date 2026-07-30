@@ -4,7 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
-- Improved interactive compilation progress: each completed phase now remains visible with an action-oriented label, checkmark, and elapsed time while the next phase starts on a new line; `--quiet` and non-interactive output remain unchanged.
+- Improved compilation diagnostics: each completed interactive phase now remains visible with an action-oriented label, checkmark, and elapsed time while the next phase starts on a new line; `--timings` renders a bordered table with aligned friendly labels, adaptive durations, percentage shares, and a total row, using ASCII borders for non-interactive output.
 - Fixed the supported-target test matrix for managed-PCRE2 programs so eval, dynamic `instanceof`, and regex regressions are validated hermetically without relying on the removed system-library fallback.
 - Fixed managed native dependency downloads leaving temporary files behind when another process won the cache-publication race; successful fallback now cleans up the losing download.
 - Added curated native dependency management through `elephc native`: projects can declare and deterministically lock PCRE2 10.47 and zlib 1.3.2, build verified target/toolchain-specific static artifacts, reinstall them with `--locked --offline`, and link regex programs through an opaque shim without a production system-PCRE2 fallback. Uniform project/recovery diagnostics cover missing, stale, corrupt, offline, and toolchain states; `native doctor` reports cache growth and abandoned staging, while explicit locked `native prune` removes obsolete fingerprints/staging without making `remove` mutate the shared cache.

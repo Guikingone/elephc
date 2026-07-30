@@ -131,7 +131,7 @@ fn format_event(verb: &str, detail: &str) -> String {
 }
 
 /// Translates stable internal phase identifiers into action-oriented CLI text.
-fn phase_label(name: &str) -> &str {
+pub(crate) fn phase_label(name: &str) -> &str {
     match name {
         "read" => "Reading source",
         "tokenize" => "Tokenizing source",
@@ -182,7 +182,7 @@ fn format_completed_phase(name: &str, elapsed: Duration) -> String {
 }
 
 /// Formats short phases in milliseconds and longer phases in seconds.
-fn format_phase_duration(elapsed: Duration) -> String {
+pub(crate) fn format_phase_duration(elapsed: Duration) -> String {
     if elapsed < Duration::from_secs(1) {
         format!("{:.2} ms", elapsed.as_secs_f64() * 1000.0)
     } else {

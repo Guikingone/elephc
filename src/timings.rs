@@ -21,6 +21,49 @@ pub(crate) struct CompileTimings {
     phases: Vec<(&'static str, Duration)>,
 }
 
+/// Box-drawing characters used by the interactive and plain timing tables.
+struct TableChars {
+    horizontal: char,
+    vertical: char,
+    top_left: char,
+    top_join: char,
+    top_right: char,
+    middle_left: char,
+    middle_join: char,
+    middle_right: char,
+    bottom_left: char,
+    bottom_join: char,
+    bottom_right: char,
+}
+
+const UNICODE_TABLE: TableChars = TableChars {
+    horizontal: '─',
+    vertical: '│',
+    top_left: '┌',
+    top_join: '┬',
+    top_right: '┐',
+    middle_left: '├',
+    middle_join: '┼',
+    middle_right: '┤',
+    bottom_left: '└',
+    bottom_join: '┴',
+    bottom_right: '┘',
+};
+
+const ASCII_TABLE: TableChars = TableChars {
+    horizontal: '-',
+    vertical: '|',
+    top_left: '+',
+    top_join: '+',
+    top_right: '+',
+    middle_left: '+',
+    middle_join: '+',
+    middle_right: '+',
+    bottom_left: '+',
+    bottom_join: '+',
+    bottom_right: '+',
+};
+
 impl CompileTimings {
     /// Creates a new timing collector.
     ///
@@ -52,7 +95,7 @@ impl CompileTimings {
     /// Appends an arbitrary informational note to the timing report.
     ///
     /// No-op when timing collection is disabled. The note is printed verbatim
-    /// in order at the top of the report, before any phase timings.
+    /// in order below the timing table.
     pub(crate) fn note(&mut self, note: impl Into<String>) {
         if self.enabled {
             self.notes.push(note.into());
@@ -68,12 +111,10 @@ impl CompileTimings {
 
     /// Prints the collected timing report to stderr.
     ///
-    /// Output is gated behind the `enabled` flag. The report includes all notes
-    /// in insertion order, each phase with its duration in milliseconds, and a
-    /// total elapsed time from when the collector was constructed. Decorated
-    /// runs (see `crate::progress::is_decorated`) bold the header/total row and
-    /// add a per-phase percentage-of-total column; plain runs keep today's exact
-    /// unstyled, no-percentage table — byte-identical to before this task.
+    /// Output is gated behind the `enabled` flag. The report renders friendly
+    /// phase labels, adaptive durations, percentage shares, and a total row.
+    /// Interactive runs use Unicode box drawing and bold header/total rows;
+    /// plain runs use an unstyled ASCII table suitable for logs and pipes.
     pub(crate) fn report(&self) {
         if !self.enabled {
             return;
@@ -82,15 +123,16 @@ impl CompileTimings {
         let decorated = crate::progress::is_decorated();
         let total = self.started_at.elapsed();
 
-        eprintln!("{}", style_if(decorated, "Compiler timings:"));
-        for note in &self.notes {
-            eprintln!("  {}", note);
+        eprintln!("{}", style_if(decorated, "Compiler timings"));
+        eprintln!("{}", render_timing_table(&self.phases, total, decorated));
+        if !self.notes.is_empty() {
+            eprintln!();
+            eprintln!("{}", style_if(decorated, "Notes"));
+            let bullet = if decorated { "•" } else { "-" };
+            for note in &self.notes {
+                eprintln!("  {bullet} {note}");
+            }
         }
-        for (phase, duration) in &self.phases {
-            eprintln!("{}", format_phase_line(phase, *duration, total, decorated));
-        }
-        let total_line = format!("  {:<12} {:>8.2} ms", "total", total.as_secs_f64() * 1000.0);
-        eprintln!("{}", style_if(decorated, &total_line));
     }
 }
 
@@ -113,21 +155,147 @@ fn style_if(decorated: bool, text: &str) -> String {
     }
 }
 
-/// Formats one phase's timing line. Decorated runs add a percentage-of-total
-/// column; plain runs keep today's exact two-column layout (phase + ms) with
-/// no percentage suffix, so plain-mode `--timings` output stays byte-identical
-/// to before this task.
-fn format_phase_line(phase: &str, duration: Duration, total: Duration, decorated: bool) -> String {
-    if decorated {
-        format!(
-            "  {:<12} {:>8.2} ms {:>5.1}%",
-            phase,
-            duration.as_secs_f64() * 1000.0,
-            percentage(duration, total),
-        )
+/// Renders the complete timing table using terminal-appropriate borders.
+fn render_timing_table(
+    phases: &[(&str, Duration)],
+    total: Duration,
+    decorated: bool,
+) -> String {
+    let chars = if decorated {
+        &UNICODE_TABLE
     } else {
-        format!("  {:<12} {:>8.2} ms", phase, duration.as_secs_f64() * 1000.0)
+        &ASCII_TABLE
+    };
+    let rows: Vec<(String, String, String)> = phases
+        .iter()
+        .map(|(phase, duration)| {
+            (
+                crate::progress::phase_label(phase).to_string(),
+                crate::progress::format_phase_duration(*duration),
+                format!("{:.1}%", percentage(*duration, total)),
+            )
+        })
+        .collect();
+    let total_duration = crate::progress::format_phase_duration(total);
+    let total_share = "100.0%";
+
+    let phase_width = rows
+        .iter()
+        .map(|row| row.0.chars().count())
+        .fold("Phase".len().max("Total".len()), usize::max);
+    let duration_width = rows
+        .iter()
+        .map(|row| row.1.len())
+        .fold("Duration".len().max(total_duration.len()), usize::max);
+    let share_width = rows
+        .iter()
+        .map(|row| row.2.len())
+        .fold("Share".len().max(total_share.len()), usize::max);
+
+    let mut lines = Vec::with_capacity(rows.len() + 6);
+    lines.push(format_table_rule(
+        chars,
+        phase_width,
+        duration_width,
+        share_width,
+        chars.top_left,
+        chars.top_join,
+        chars.top_right,
+    ));
+    let header = format_table_row(
+        chars,
+        "Phase",
+        "Duration",
+        "Share",
+        phase_width,
+        duration_width,
+        share_width,
+    );
+    lines.push(style_if(decorated, &header));
+    lines.push(format_table_rule(
+        chars,
+        phase_width,
+        duration_width,
+        share_width,
+        chars.middle_left,
+        chars.middle_join,
+        chars.middle_right,
+    ));
+    for (phase, duration, share) in rows {
+        lines.push(format_table_row(
+            chars,
+            &phase,
+            &duration,
+            &share,
+            phase_width,
+            duration_width,
+            share_width,
+        ));
     }
+    lines.push(format_table_rule(
+        chars,
+        phase_width,
+        duration_width,
+        share_width,
+        chars.middle_left,
+        chars.middle_join,
+        chars.middle_right,
+    ));
+    let total_row = format_table_row(
+        chars,
+        "Total",
+        &total_duration,
+        total_share,
+        phase_width,
+        duration_width,
+        share_width,
+    );
+    lines.push(style_if(decorated, &total_row));
+    lines.push(format_table_rule(
+        chars,
+        phase_width,
+        duration_width,
+        share_width,
+        chars.bottom_left,
+        chars.bottom_join,
+        chars.bottom_right,
+    ));
+    lines.join("\n")
+}
+
+/// Formats one table row with left-aligned phase text and numeric columns right-aligned.
+fn format_table_row(
+    chars: &TableChars,
+    phase: &str,
+    duration: &str,
+    share: &str,
+    phase_width: usize,
+    duration_width: usize,
+    share_width: usize,
+) -> String {
+    let phase = format!("{phase:<phase_width$}");
+    let duration = format!("{duration:>duration_width$}");
+    let share = format!("{share:>share_width$}");
+    format!(
+        "{} {phase} {} {duration} {} {share} {}",
+        chars.vertical, chars.vertical, chars.vertical, chars.vertical,
+    )
+}
+
+/// Formats a horizontal table border or separator for the computed column widths.
+fn format_table_rule(
+    chars: &TableChars,
+    phase_width: usize,
+    duration_width: usize,
+    share_width: usize,
+    left: char,
+    join: char,
+    right: char,
+) -> String {
+    let phase = chars.horizontal.to_string().repeat(phase_width + 2);
+    let duration = chars.horizontal.to_string().repeat(duration_width + 2);
+    let share = chars.horizontal.to_string().repeat(share_width + 2);
+    format!("{left}{phase}{join}{duration}{join}{share}{right}")
 }
 
 #[cfg(test)]
@@ -155,42 +323,63 @@ mod tests {
         assert!((pct - 25.0).abs() < 0.001);
     }
 
-    /// Verifies plain timing headers remain byte-identical.
+    /// Verifies plain timing titles remain unstyled.
     #[test]
     fn style_if_plain_is_unchanged() {
-        assert_eq!(style_if(false, "Compiler timings:"), "Compiler timings:");
+        assert_eq!(style_if(false, "Compiler timings"), "Compiler timings");
     }
 
     /// Verifies decorated timing headers retain their original text.
     #[test]
     fn style_if_decorated_contains_original_text() {
-        assert!(style_if(true, "Compiler timings:").contains("Compiler timings:"));
+        assert!(style_if(true, "Compiler timings").contains("Compiler timings"));
     }
 
-    /// Verifies plain phase rows omit the decorated percentage column.
+    /// Verifies plain reports use ASCII borders, friendly labels, and percentages.
     #[test]
-    fn format_phase_line_plain_has_no_percentage() {
-        let line = format_phase_line(
-            "codegen",
-            Duration::from_millis(10),
+    fn plain_timing_table_is_ascii_and_complete() {
+        let table = render_timing_table(
+            &[("read", Duration::from_millis(25))],
             Duration::from_millis(100),
             false,
         );
-        assert!(!line.contains('%'));
-        assert!(line.contains("codegen"));
-        assert!(line.contains("10.00 ms"));
+        assert!(table.starts_with('+'));
+        assert!(table.ends_with('+'));
+        assert!(table.contains("| Reading source "));
+        assert!(table.contains("25.00 ms"));
+        assert!(table.contains("25.0%"));
+        assert!(table.contains("| Total"));
+        assert!(!table.contains('┌'));
     }
 
-    /// Verifies decorated phase rows include their share of total time.
+    /// Verifies interactive reports use Unicode borders and adaptive durations.
     #[test]
-    fn format_phase_line_decorated_includes_percentage() {
-        let line = format_phase_line(
-            "codegen",
-            Duration::from_millis(10),
-            Duration::from_millis(100),
+    fn decorated_timing_table_uses_unicode_and_friendly_labels() {
+        let table = render_timing_table(
+            &[("ir-opt", Duration::from_millis(1_250))],
+            Duration::from_millis(2_500),
             true,
         );
-        assert!(line.contains('%'));
-        assert!(line.contains("10.0%"));
+        assert!(table.starts_with('┌'));
+        assert!(table.ends_with('┘'));
+        assert!(table.contains('┼'));
+        assert!(table.contains("Optimizing EIR"));
+        assert!(table.contains("1.25 s"));
+        assert!(table.contains("50.0%"));
+    }
+
+    /// Verifies every line in the plain table has the same visible width.
+    #[test]
+    fn plain_timing_table_columns_align() {
+        let table = render_timing_table(
+            &[
+                ("read", Duration::from_micros(500)),
+                ("autoload-run", Duration::from_millis(1_250)),
+            ],
+            Duration::from_millis(2_000),
+            false,
+        );
+        let widths: Vec<usize> = table.lines().map(|line| line.chars().count()).collect();
+        assert!(widths.windows(2).all(|pair| pair[0] == pair[1]));
     }
 }

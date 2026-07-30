@@ -102,12 +102,29 @@ and `--quiet` keep the compact plain output without progress lines.
 
 ### `--timings`
 
-Prints the detailed timing table with percentages to stderr in addition to the
-interactive completed-phase lines. The labels match the
-[pipeline phases](compilation-pipeline.md).
+Prints a bordered timing table to stderr in addition to the interactive
+completed-phase lines. It uses friendly phase labels, adaptive millisecond or
+second durations, percentage shares, and a total row. Interactive terminals
+use Unicode box drawing; non-interactive output and `--quiet` use ASCII borders
+without styling.
 
 ```bash
 elephc --timings hello.php
+```
+
+```text
+Compiler timings
+┌────────────────────────────────┬───────────┬────────┐
+│ Phase                          │  Duration │  Share │
+├────────────────────────────────┼───────────┼────────┤
+│ Reading source                 │   0.54 ms │   0.0% │
+│ Checking types                 │ 155.70 ms │   1.4% │
+│ ...                            │       ... │    ... │
+│ Optimizing EIR                 │    2.78 s │  25.1% │
+│ Generating native code         │    6.66 s │  60.1% │
+├────────────────────────────────┼───────────┼────────┤
+│ Total                          │   11.08 s │ 100.0% │
+└────────────────────────────────┴───────────┴────────┘
 ```
 
 ## Runtime diagnostics
