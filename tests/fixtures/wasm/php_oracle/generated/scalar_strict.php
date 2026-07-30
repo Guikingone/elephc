@@ -6,6 +6,9 @@
 $oracleScalarSeed = 40;
 
 $__oracle_value_000 = $oracleScalarSeed + 2;
+if ($__oracle_value_000 !== (int) $__oracle_value_000) {
+    exit(97);
+}
 $__oracle_payload_000 = (string) $__oracle_value_000;
 echo "@16:scalar_int_value:3:int:", strlen($__oracle_payload_000), ":", $__oracle_payload_000, "\n";
 

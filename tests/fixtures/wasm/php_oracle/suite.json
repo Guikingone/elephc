@@ -1,5 +1,5 @@
 {
-  "$schema": "elephc.wasm-php-oracle-suite.v1",
+  "$schema": "elephc.wasm-php-oracle-suite.v2",
   "references": {
     "inventory": "docs/specs/wasm-inventory.json",
     "specification": "docs/specs/wasm-compliance.md"
@@ -9,11 +9,13 @@
     "encoding": "lengths are unsigned decimal byte counts; id/type are ASCII"
   },
   "execution": {
+    "guest_program": "oracle.php",
     "guest_env": {
       "LANG": "C.UTF-8",
       "LC_ALL": "C.UTF-8",
       "TZ": "UTC"
     },
+    "guest_preopens": {},
     "timeout_seconds": 10,
     "max_output_bytes": 1048576
   },

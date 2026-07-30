@@ -12,7 +12,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
 from .contract import (
@@ -26,7 +26,7 @@ from .contract import (
 )
 
 
-CAPTURE_SCHEMA = "elephc.wasm-oracle.capture.v2"
+CAPTURE_SCHEMA = "elephc.wasm-oracle.capture.v3"
 MODULE_STATUS_FD_ENV = "ELEPHC_ORACLE_MODULE_STATUS_FD"
 REQUIRED_HOST_ENVIRONMENT = {
     "LANG": "C.UTF-8",
@@ -236,10 +236,12 @@ class CaptureRequest:
 
     key: RunKey
     fixture_sha256: str
+    guest_program: str
     logical_arguments: tuple[str, ...]
+    guest_preopens: Mapping[str, str]
     argv: tuple[str, ...]
     cwd: Path
-    env: Mapping[str, str]
+    host_control_environment: Mapping[str, str]
     guest_environment: Mapping[str, str]
     stdin: bytes
     timeout_seconds: float
@@ -261,11 +263,14 @@ class CaptureRecord:
     pinned_php_src_tag_object: str
     pinned_php_src_tag_commit: str
     fixture_sha256: str
+    guest_program: str
     logical_arguments: tuple[str, ...]
+    guest_preopens: tuple[tuple[str, str], ...]
     argv: tuple[str, ...]
     cwd: str
-    environment: tuple[tuple[str, str], ...]
+    host_control_environment: tuple[tuple[str, str], ...]
     guest_environment: tuple[tuple[str, str], ...]
+    process_environment: tuple[tuple[str, str], ...]
     operating_system: str
     architecture: str
     provenance: RuntimeProvenance
@@ -325,6 +330,10 @@ class CaptureRecord:
             for argument in self.logical_arguments
         ):
             raise CaptureError("logical_arguments must contain NUL-free strings")
+        _validate_guest_program(self.guest_program)
+        _validate_guest_preopens(dict(self.guest_preopens))
+        if tuple(sorted(self.guest_preopens)) != self.guest_preopens:
+            raise CaptureError("capture guest_preopens must be sorted and unique")
         try:
             self.provenance.validate_for(self.key, contract)
         except ContractError as error:
@@ -359,13 +368,31 @@ class CaptureRecord:
             raise CaptureError("capture operating_system must be a non-empty string")
         if not isinstance(self.architecture, str) or not self.architecture:
             raise CaptureError("capture architecture must be a non-empty string")
-        _validate_environment(dict(self.environment))
-        if tuple(sorted(self.environment)) != self.environment:
-            raise CaptureError("capture environment must be sorted and unique")
+        _validate_environment(dict(self.host_control_environment))
+        if (
+            tuple(sorted(self.host_control_environment))
+            != self.host_control_environment
+        ):
+            raise CaptureError(
+                "capture host_control_environment must be sorted and unique"
+            )
         _validate_guest_environment(dict(self.guest_environment))
         if tuple(sorted(self.guest_environment)) != self.guest_environment:
             raise CaptureError(
                 "capture guest_environment must be sorted and unique"
+            )
+        if tuple(sorted(self.process_environment)) != self.process_environment:
+            raise CaptureError(
+                "capture process_environment must be sorted and unique"
+            )
+        expected_process_environment = (
+            self.guest_environment
+            if self.key.runtime == "php-src"
+            else self.host_control_environment
+        )
+        if self.process_environment != expected_process_environment:
+            raise CaptureError(
+                "capture process_environment does not match the runtime policy"
             )
 
         stdin = self.stdin.to_bytes()
@@ -440,11 +467,16 @@ class CaptureRecord:
             },
             "command": {
                 "fixture_sha256": self.fixture_sha256,
+                "guest_program": self.guest_program,
                 "logical_arguments": list(self.logical_arguments),
+                "guest_preopens": dict(self.guest_preopens),
                 "argv": list(self.argv),
                 "cwd": self.cwd,
-                "environment": dict(self.environment),
+                "host_control_environment": dict(
+                    self.host_control_environment
+                ),
                 "guest_environment": dict(self.guest_environment),
+                "process_environment": dict(self.process_environment),
                 "stdin": self.stdin.to_dict(),
             },
             "host": {
@@ -513,11 +545,14 @@ class CaptureRecord:
             data["command"],
             {
                 "fixture_sha256",
+                "guest_program",
                 "logical_arguments",
+                "guest_preopens",
                 "argv",
                 "cwd",
-                "environment",
+                "host_control_environment",
                 "guest_environment",
+                "process_environment",
                 "stdin",
             },
             "capture.command",
@@ -555,19 +590,29 @@ class CaptureRecord:
         )
         argv = command["argv"]
         logical_arguments = command["logical_arguments"]
-        environment = command["environment"]
+        guest_preopens = command["guest_preopens"]
+        host_control_environment = command["host_control_environment"]
         guest_environment = command["guest_environment"]
+        process_environment = command["process_environment"]
         if not isinstance(argv, list):
             raise CaptureError("capture.command.argv must be an array")
         if not isinstance(logical_arguments, list):
             raise CaptureError(
                 "capture.command.logical_arguments must be an array"
             )
-        if not isinstance(environment, dict):
-            raise CaptureError("capture.command.environment must be an object")
+        if not isinstance(guest_preopens, dict):
+            raise CaptureError("capture.command.guest_preopens must be an object")
+        if not isinstance(host_control_environment, dict):
+            raise CaptureError(
+                "capture.command.host_control_environment must be an object"
+            )
         if not isinstance(guest_environment, dict):
             raise CaptureError(
                 "capture.command.guest_environment must be an object"
+            )
+        if not isinstance(process_environment, dict):
+            raise CaptureError(
+                "capture.command.process_environment must be an object"
             )
 
         raw_module_i32 = termination["module_i32"]
@@ -612,11 +657,16 @@ class CaptureRecord:
                 "pinned_php_src_tag_commit"
             ],
             fixture_sha256=command["fixture_sha256"],
+            guest_program=command["guest_program"],
             logical_arguments=tuple(logical_arguments),
+            guest_preopens=tuple(sorted(guest_preopens.items())),
             argv=tuple(argv),
             cwd=command["cwd"],
-            environment=tuple(sorted(environment.items())),
+            host_control_environment=tuple(
+                sorted(host_control_environment.items())
+            ),
             guest_environment=tuple(sorted(guest_environment.items())),
+            process_environment=tuple(sorted(process_environment.items())),
             operating_system=host["operating_system"],
             architecture=host["architecture"],
             provenance=RuntimeProvenance.from_dict(data["provenance"]),
@@ -687,6 +737,50 @@ def _validate_guest_environment(environment: Mapping[str, str]) -> None:
             )
 
 
+def _validate_guest_program(program: str) -> None:
+    """Validate the explicit guest-visible argv[0] string."""
+
+    if not isinstance(program, str) or not program or "\x00" in program:
+        raise CaptureError("guest_program must be a non-empty NUL-free string")
+
+
+def _validate_guest_preopens(preopens: Mapping[str, str]) -> None:
+    """Validate explicit guest-to-host directory mappings without inheritance."""
+
+    if not isinstance(preopens, Mapping):
+        raise CaptureError("guest_preopens must be an explicit string mapping")
+    for guest_path, host_path in preopens.items():
+        guest = (
+            PurePosixPath(guest_path)
+            if isinstance(guest_path, str) and "\x00" not in guest_path
+            else None
+        )
+        if (
+            guest is None
+            or not guest_path.startswith("/")
+            or guest_path.startswith("//")
+            or guest_path != str(guest)
+            or ".." in guest.parts
+        ):
+            raise CaptureError(
+                f"guest_preopens contains invalid guest path {guest_path!r}"
+            )
+        host = (
+            Path(host_path)
+            if isinstance(host_path, str) and "\x00" not in host_path
+            else None
+        )
+        if (
+            host is None
+            or not host.is_absolute()
+            or host_path != str(host)
+            or ".." in host.parts
+        ):
+            raise CaptureError(
+                f"guest_preopens host path for {guest_path!r} must be absolute"
+            )
+
+
 def _validate_request(
     contract: OracleContract, request: CaptureRequest
 ) -> tuple[
@@ -711,6 +805,13 @@ def _validate_request(
             raise CaptureError(
                 "logical_arguments must contain only NUL-free strings"
             )
+    _validate_guest_program(request.guest_program)
+    _validate_guest_preopens(request.guest_preopens)
+    for host_path in request.guest_preopens.values():
+        if not Path(host_path).is_dir():
+            raise CaptureError(
+                f"guest_preopens host directory does not exist: {host_path}"
+            )
     for argument in request.argv:
         if not isinstance(argument, str) or "\x00" in argument:
             raise CaptureError("capture argv must contain only NUL-free strings")
@@ -730,8 +831,10 @@ def _validate_request(
     cwd = Path(request.cwd)
     if not cwd.is_absolute() or not cwd.is_dir():
         raise CaptureError("capture cwd must be an existing absolute directory")
-    _validate_environment(request.env)
-    environment = tuple(sorted(request.env.items()))
+    _validate_environment(request.host_control_environment)
+    host_control_environment = tuple(
+        sorted(request.host_control_environment.items())
+    )
     _validate_guest_environment(request.guest_environment)
     guest_environment = tuple(sorted(request.guest_environment.items()))
     if not isinstance(request.stdin, bytes):
@@ -751,7 +854,7 @@ def _validate_request(
         raise CaptureError("WASM capture requires compiler artifact provenance")
     if not isinstance(request.normalization, Normalization):
         raise CaptureError("normalization must be a Normalization instance")
-    return executable, environment, guest_environment
+    return executable, host_control_environment, guest_environment
 
 
 def _read_stream(
@@ -855,10 +958,16 @@ def capture_process(
 ) -> CaptureRecord:
     """Execute one cell with bounded raw capture and an exact WASM i32 side channel."""
 
-    _, environment, guest_environment = _validate_request(contract, request)
-    child_environment = dict(
-        guest_environment if request.key.runtime == "php-src" else environment
+    _, host_control_environment, guest_environment = _validate_request(
+        contract,
+        request,
     )
+    child_environment = dict(
+        guest_environment
+        if request.key.runtime == "php-src"
+        else host_control_environment
+    )
+    process_environment = tuple(sorted(child_environment.items()))
     module_read_fd: int | None = None
     module_write_fd: int | None = None
     pass_fds: tuple[int, ...] = ()
@@ -1002,11 +1111,14 @@ def capture_process(
         pinned_php_src_tag_object=pin.tag_object,
         pinned_php_src_tag_commit=pin.tag_commit,
         fixture_sha256=request.fixture_sha256,
+        guest_program=request.guest_program,
         logical_arguments=request.logical_arguments,
+        guest_preopens=tuple(sorted(request.guest_preopens.items())),
         argv=request.argv,
         cwd=str(request.cwd),
-        environment=environment,
+        host_control_environment=host_control_environment,
         guest_environment=guest_environment,
+        process_environment=process_environment,
         operating_system=platform.system(),
         architecture=platform.machine(),
         provenance=request.provenance,

@@ -8,14 +8,23 @@ $oracleBinaryCopy = "a\0b\xFF";
 $oracleBinaryPrefix = "a\0b";
 
 $__oracle_value_000 = $oracleBinary;
+if ($__oracle_value_000 !== (string) $__oracle_value_000) {
+    exit(97);
+}
 $__oracle_payload_000 = $__oracle_value_000;
 echo "@21:string_binary_payload:6:string:", strlen($__oracle_payload_000), ":", $__oracle_payload_000, "\n";
 
 $__oracle_value_001 = "\0prefix";
+if ($__oracle_value_001 !== (string) $__oracle_value_001) {
+    exit(97);
+}
 $__oracle_payload_001 = $__oracle_value_001;
 echo "@25:string_nul_prefix_payload:6:string:", strlen($__oracle_payload_001), ":", $__oracle_payload_001, "\n";
 
 $__oracle_value_002 = "";
+if ($__oracle_value_002 !== (string) $__oracle_value_002) {
+    exit(97);
+}
 $__oracle_payload_002 = $__oracle_value_002;
 echo "@20:string_empty_payload:6:string:", strlen($__oracle_payload_002), ":", $__oracle_payload_002, "\n";
 
@@ -56,5 +65,8 @@ if ($__oracle_value_006 === true) {
 }
 
 $__oracle_value_007 = "left:right\nnext";
+if ($__oracle_value_007 !== (string) $__oracle_value_007) {
+    exit(97);
+}
 $__oracle_payload_007 = $__oracle_value_007;
 echo "@28:string_colon_newline_payload:6:string:", strlen($__oracle_payload_007), ":", $__oracle_payload_007, "\n";

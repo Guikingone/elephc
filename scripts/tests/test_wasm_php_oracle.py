@@ -120,10 +120,14 @@ class WasmPhpOracleTests(unittest.TestCase):
         return CaptureRequest(
             key=RunKey("strict-equality", profile, runtime, selected_host),
             fixture_sha256=fixture_sha256,
+            guest_program="oracle.php",
             logical_arguments=("--case", "binary"),
+            guest_preopens={},
             argv=(str(PYTHON), "-c", code),
             cwd=REPO_ROOT,
-            env=dict(self.environment if environment is None else environment),
+            host_control_environment=dict(
+                self.environment if environment is None else environment
+            ),
             guest_environment=dict(
                 self.environment
                 if guest_environment is None
@@ -169,11 +173,14 @@ class WasmPhpOracleTests(unittest.TestCase):
             pinned_php_src_tag_object=pin.tag_object,
             pinned_php_src_tag_commit=pin.tag_commit,
             fixture_sha256=fixture_sha256,
+            guest_program="oracle.php",
             logical_arguments=("--case", "binary"),
+            guest_preopens=(),
             argv=("/absolute/oracle-adapter",),
             cwd="/absolute/oracle-work",
-            environment=tuple(sorted(self.environment.items())),
+            host_control_environment=tuple(sorted(self.environment.items())),
             guest_environment=tuple(sorted(self.environment.items())),
+            process_environment=tuple(sorted(self.environment.items())),
             operating_system="test-os",
             architecture="test-architecture",
             provenance=provenance,
@@ -442,8 +449,12 @@ class WasmPhpOracleTests(unittest.TestCase):
             (("ORACLE_CASE", "explicit"),),
         )
         self.assertEqual(
-            dict(record.environment),
+            dict(record.host_control_environment),
             self.environment,
+        )
+        self.assertEqual(
+            dict(record.process_environment),
+            {"ORACLE_CASE": "explicit"},
         )
 
     def test_capture_rejects_missing_environment_and_wrong_fixture_hash(self) -> None:
@@ -490,6 +501,26 @@ class WasmPhpOracleTests(unittest.TestCase):
                 ),
             )
 
+    def test_capture_rejects_implicit_guest_programs_and_preopens(self) -> None:
+        """Require explicit canonical guest argv0 and absolute preopen mappings."""
+
+        request = self.capture_request(runtime="php-src", code="pass")
+        with self.assertRaisesRegex(CaptureError, "guest_program"):
+            capture_process(
+                self.contract,
+                replace(request, guest_program=""),
+            )
+        with self.assertRaisesRegex(CaptureError, "guest path"):
+            capture_process(
+                self.contract,
+                replace(request, guest_preopens={"work": "/absolute/work"}),
+            )
+        with self.assertRaisesRegex(CaptureError, "must be absolute"):
+            capture_process(
+                self.contract,
+                replace(request, guest_preopens={"/work": "relative/work"}),
+            )
+
     def test_capture_record_roundtrip_rejects_unknown_or_corrupt_fields(self) -> None:
         record = self.direct_record(
             fixture_id="strict-equality",
@@ -526,7 +557,9 @@ class WasmPhpOracleTests(unittest.TestCase):
         )
         candidate = replace(
             candidate,
+            guest_program="different.php",
             logical_arguments=("--other",),
+            guest_preopens=(("/work", "/absolute/work"),),
             guest_environment=(("ORACLE_CASE", "different"),),
         )
         result = compare_records(reference, candidate)
@@ -534,7 +567,9 @@ class WasmPhpOracleTests(unittest.TestCase):
         self.assertEqual(
             {difference.field for difference in result.differences},
             {
+                "guest_program",
                 "logical_arguments",
+                "guest_preopens",
                 "guest_environment",
                 "stdout",
                 "module_i32_low_byte",

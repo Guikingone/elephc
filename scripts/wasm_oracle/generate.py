@@ -21,9 +21,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Sequence
 
 
-SUITE_SCHEMA = "elephc.wasm-php-oracle-suite.v1"
+SUITE_SCHEMA = "elephc.wasm-php-oracle-suite.v2"
 MATRIX_SCHEMA = "elephc.wasm-php-oracle-matrix.v1"
-CONTRACT_SCHEMA = "elephc.wasm-php-oracle-contract.v1"
+CONTRACT_SCHEMA = "elephc.wasm-php-oracle-contract.v2"
 FRAME_FORMAT = "@<idlen>:<id>:<typelen>:<type>:<payloadlen>:<payload>\\n"
 FRAME_ENCODING = "lengths are unsigned decimal byte counts; id/type are ASCII"
 EXPECTED_GUEST_ENV = {
@@ -31,12 +31,15 @@ EXPECTED_GUEST_ENV = {
     "LC_ALL": "C.UTF-8",
     "TZ": "UTC",
 }
+EXPECTED_GUEST_PROGRAM = "oracle.php"
+EXPECTED_GUEST_PREOPENS: dict[str, str] = {}
 EXPECTED_TIMEOUT_SECONDS = 10
 EXPECTED_MAX_OUTPUT_BYTES = 1_048_576
 EXPECTED_SHARDS = frozenset(range(4))
 ALLOWED_FRAME_TYPES = frozenset({"bool", "int", "null", "string"})
 ID_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 DECIMAL_PATTERN = re.compile(rb"(?:0|[1-9][0-9]*)\Z")
+INTEGER_PAYLOAD_PATTERN = re.compile(rb"(?:0|-?[1-9][0-9]*)\Z")
 
 
 class OracleDefinitionError(ValueError):
@@ -346,11 +349,23 @@ def load_suite(repo_root: Path | None = None) -> OracleSuite:
         raise OracleDefinitionError("oracle suite execution must be an object")
     require_exact_keys(
         execution,
-        {"guest_env", "timeout_seconds", "max_output_bytes"},
+        {
+            "guest_program",
+            "guest_env",
+            "guest_preopens",
+            "timeout_seconds",
+            "max_output_bytes",
+        },
         "oracle suite execution",
     )
+    if execution["guest_program"] != EXPECTED_GUEST_PROGRAM:
+        raise OracleDefinitionError(
+            "oracle suite guest_program must be exactly oracle.php"
+        )
     if execution["guest_env"] != EXPECTED_GUEST_ENV:
         raise OracleDefinitionError("oracle suite guest_env must be exactly LANG/LC_ALL/TZ")
+    if execution["guest_preopens"] != EXPECTED_GUEST_PREOPENS:
+        raise OracleDefinitionError("oracle suite guest_preopens must be empty")
     if execution["timeout_seconds"] != EXPECTED_TIMEOUT_SECONDS:
         raise OracleDefinitionError("oracle suite timeout_seconds must be exactly 10")
     if execution["max_output_bytes"] != EXPECTED_MAX_OUTPUT_BYTES:
@@ -434,8 +449,12 @@ def render_php(fixture: OracleFixture) -> bytes:
             )
         else:
             conversion = f"(string) {value_name}" if case.value_type == "int" else value_name
+            assertion_cast = "(int)" if case.value_type == "int" else "(string)"
             lines.extend(
                 [
+                    f"if ({value_name} !== {assertion_cast} {value_name}) {{",
+                    "    exit(97);",
+                    "}",
                     f"{payload_name} = {conversion};",
                     (
                         f'echo "{prefix}", strlen({payload_name}), ":", '
@@ -480,7 +499,9 @@ def render_contract(suite: OracleSuite) -> bytes:
             "encoding": FRAME_ENCODING,
         },
         "execution": {
+            "guest_program": EXPECTED_GUEST_PROGRAM,
             "guest_env": EXPECTED_GUEST_ENV,
+            "guest_preopens": EXPECTED_GUEST_PREOPENS,
             "timeout_seconds": EXPECTED_TIMEOUT_SECONDS,
             "max_output_bytes": EXPECTED_MAX_OUTPUT_BYTES,
         },
@@ -603,6 +624,7 @@ def parse_frames(
             raise FrameProtocolError(f"unsupported frame type: {value_type!r}")
         if identifier in seen:
             raise FrameProtocolError(f"duplicate frame ID: {identifier}")
+        validate_frame_payload(value_type, payload)
         seen.add(identifier)
         frames.append(ParsedFrame(identifier, value_type, payload))
 
@@ -633,6 +655,23 @@ def parse_frames(
                     f"expected={expectation.value_type}, actual={frame.value_type}"
                 )
     return frames
+
+
+def validate_frame_payload(value_type: str, payload: bytes) -> None:
+    """Reject payload bytes that cannot canonically represent the declared type."""
+
+    if value_type == "bool" and payload not in {b"0", b"1"}:
+        raise FrameProtocolError("boolean frame payload must be exactly 0 or 1")
+    if value_type == "null" and payload:
+        raise FrameProtocolError("null frame payload must be empty")
+    if value_type == "int":
+        if INTEGER_PAYLOAD_PATTERN.fullmatch(payload) is None:
+            raise FrameProtocolError(
+                f"integer frame payload is not canonical decimal: {payload!r}"
+            )
+        integer = int(payload)
+        if integer < -(1 << 63) or integer > (1 << 63) - 1:
+            raise FrameProtocolError("integer frame payload exceeds signed 64-bit range")
 
 
 def require_identifier_for_frame(identifier: str) -> None:

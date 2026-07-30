@@ -15,6 +15,7 @@ from wasm_oracle import (
     ContractError,
     OracleContract,
     aggregate_exact,
+    aggregate_generated_suite,
     load_capture_record,
 )
 
@@ -68,6 +69,24 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="Create this aggregate JSON file; omit to write to stdout.",
     )
+
+    aggregate_suite = subparsers.add_parser(
+        "aggregate-suite",
+        help="Validate frames and aggregate the exact committed fixture suite.",
+    )
+    aggregate_suite.add_argument(
+        "--record",
+        action="append",
+        required=True,
+        type=Path,
+        help="Path to one capture record; repeat for all 64 suite cells.",
+    )
+    aggregate_suite.add_argument(
+        "--output",
+        required=True,
+        type=Path,
+        help="Create this aggregate JSON file without overwriting it.",
+    )
     return parser
 
 
@@ -112,6 +131,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 load_capture_record(path, contract) for path in arguments.record
             ]
             result = aggregate_exact(contract, arguments.fixture, records)
+            _write_output(arguments.output, result.to_dict())
+        elif arguments.command == "aggregate-suite":
+            records = [
+                load_capture_record(path, contract) for path in arguments.record
+            ]
+            result = aggregate_generated_suite(contract, records)
             _write_output(arguments.output, result.to_dict())
         else:  # pragma: no cover - argparse guarantees a registered command
             raise AggregateError(f"unsupported command: {arguments.command}")

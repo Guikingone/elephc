@@ -5,6 +5,7 @@ from .aggregate import (
     AggregateError,
     AggregateResult,
     aggregate_exact,
+    aggregate_generated_suite,
     load_capture_record,
 )
 from .capture import (
@@ -63,6 +64,7 @@ __all__ = [
     "SUPPORTED_PROFILES",
     "SUPPORTED_RUNTIMES",
     "aggregate_exact",
+    "aggregate_generated_suite",
     "capture_process",
     "compare_records",
     "load_capture_record",

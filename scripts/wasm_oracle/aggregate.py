@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
@@ -15,10 +17,26 @@ from .contract import (
     OracleContract,
     RunKey,
     load_json_file,
+    sha256_file,
+)
+from .generate import (
+    EXPECTED_GUEST_ENV,
+    EXPECTED_MAX_OUTPUT_BYTES,
+    EXPECTED_GUEST_PREOPENS,
+    EXPECTED_GUEST_PROGRAM,
+    EXPECTED_TIMEOUT_SECONDS,
+    FrameExpectation,
+    FrameProtocolError,
+    OracleDefinitionError,
+    check_outputs,
+    fixture_root,
+    load_suite,
+    parse_frames,
+    render_outputs,
 )
 
 
-AGGREGATE_SCHEMA = "elephc.wasm-oracle.aggregate.v2"
+AGGREGATE_SCHEMA = "elephc.wasm-oracle.aggregate.v3"
 
 
 class AggregateError(ValueError):
@@ -160,7 +178,7 @@ def aggregate_exact(
         raise AggregateError("all matrix records must use one exact timeout")
     if len(output_limits) != 1:
         raise AggregateError("all matrix records must use one exact output limit")
-    environments = {record.environment for record in captures}
+    environments = {record.host_control_environment for record in captures}
     if len(environments) != 1:
         raise AggregateError("all matrix records must use one exact environment")
     host_platforms = {
@@ -204,6 +222,18 @@ def aggregate_exact(
         if len(logical_arguments) != 1:
             raise AggregateError(
                 f"fixture {fixture_id!r} has inconsistent logical arguments"
+            )
+        guest_programs = {record.guest_program for record in fixture_records}
+        if len(guest_programs) != 1:
+            raise AggregateError(
+                f"fixture {fixture_id!r} has inconsistent guest programs"
+            )
+        guest_preopens = {
+            record.guest_preopens for record in fixture_records
+        }
+        if len(guest_preopens) != 1:
+            raise AggregateError(
+                f"fixture {fixture_id!r} has inconsistent guest preopens"
             )
         guest_environments = {
             record.guest_environment for record in fixture_records
@@ -304,3 +334,116 @@ def aggregate_exact(
         records=ordered_records,
         comparisons=tuple(comparisons),
     )
+
+
+def aggregate_generated_suite(
+    contract: OracleContract,
+    records: Iterable[CaptureRecord],
+) -> AggregateResult:
+    """Validate committed fixture semantics before aggregating the exact suite."""
+
+    try:
+        suite = load_suite(contract.repo_root)
+        stale_outputs = check_outputs(render_outputs(contract.repo_root))
+    except OracleDefinitionError as error:
+        raise AggregateError(f"invalid generated fixture suite: {error}") from error
+    if stale_outputs:
+        raise AggregateError("; ".join(stale_outputs))
+
+    expected_inventory = contract.inventory_path.relative_to(
+        contract.repo_root
+    ).as_posix()
+    expected_specification = contract.specification_path.relative_to(
+        contract.repo_root
+    ).as_posix()
+    if suite.inventory_path != expected_inventory:
+        raise AggregateError(
+            "fixture suite inventory reference does not match the oracle contract"
+        )
+    if suite.specification_path != expected_specification:
+        raise AggregateError(
+            "fixture suite specification reference does not match the oracle contract"
+        )
+
+    fixtures = {fixture.identifier: fixture for fixture in suite.fixtures}
+    captures = tuple(records)
+    for record in captures:
+        fixture = fixtures.get(record.key.fixture_id)
+        if fixture is None:
+            continue
+        source = (
+            fixture_root(contract.repo_root)
+            / "generated"
+            / f"{fixture.identifier}.php"
+        )
+        try:
+            expected_fixture_sha256 = sha256_file(source)
+            expected_stdin = base64.b64decode(
+                fixture.stdin_base64,
+                validate=True,
+            )
+            observed_stdout = record.normalized_stdout.to_bytes()
+        except (ContractError, CaptureError, binascii.Error) as error:
+            raise AggregateError(
+                f"cannot validate fixture {fixture.identifier!r}: {error}"
+            ) from error
+
+        if record.fixture_sha256 != expected_fixture_sha256:
+            raise AggregateError(
+                f"{record.key.fixture_id}/{record.key.profile}/"
+                f"{record.key.host} fixture hash does not match committed source"
+            )
+        if record.guest_program != EXPECTED_GUEST_PROGRAM:
+            raise AggregateError(
+                f"{record.key.fixture_id}/{record.key.profile}/"
+                f"{record.key.host} guest argv[0] must be exactly 'oracle.php'"
+            )
+        if record.logical_arguments != fixture.logical_args:
+            raise AggregateError(
+                f"{record.key.fixture_id}/{record.key.profile}/"
+                f"{record.key.host} logical arguments do not match the suite"
+            )
+        if dict(record.guest_preopens) != EXPECTED_GUEST_PREOPENS:
+            raise AggregateError(
+                f"{record.key.fixture_id}/{record.key.profile}/"
+                f"{record.key.host} guest preopens must be empty for this suite"
+            )
+        if dict(record.guest_environment) != EXPECTED_GUEST_ENV:
+            raise AggregateError(
+                f"{record.key.fixture_id}/{record.key.profile}/"
+                f"{record.key.host} guest environment does not match the suite"
+            )
+        if record.stdin.to_bytes() != expected_stdin:
+            raise AggregateError(
+                f"{record.key.fixture_id}/{record.key.profile}/"
+                f"{record.key.host} stdin does not match the suite"
+            )
+        if record.timeout_seconds != EXPECTED_TIMEOUT_SECONDS:
+            raise AggregateError(
+                f"{record.key.fixture_id}/{record.key.profile}/"
+                f"{record.key.host} timeout does not match the suite"
+            )
+        if record.output_limit_bytes != EXPECTED_MAX_OUTPUT_BYTES:
+            raise AggregateError(
+                f"{record.key.fixture_id}/{record.key.profile}/"
+                f"{record.key.host} output limit does not match the suite"
+            )
+        if record.normalization.replacements:
+            raise AggregateError(
+                f"{record.key.fixture_id}/{record.key.profile}/"
+                f"{record.key.host} normalization must be empty for this suite"
+            )
+
+        expectations = tuple(
+            FrameExpectation(case.identifier, case.value_type)
+            for case in fixture.cases
+        )
+        try:
+            parse_frames(observed_stdout, expectations)
+        except FrameProtocolError as error:
+            raise AggregateError(
+                f"{record.key.fixture_id}/{record.key.profile}/"
+                f"{record.key.host} has invalid frames: {error}"
+            ) from error
+
+    return aggregate_exact(contract, tuple(fixtures), captures)

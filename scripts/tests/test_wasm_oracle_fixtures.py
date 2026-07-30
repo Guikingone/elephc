@@ -124,6 +124,8 @@ class WasmOracleFixtureTests(unittest.TestCase):
             contract["execution"]["guest_env"],
             {"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "TZ": "UTC"},
         )
+        self.assertEqual(contract["execution"]["guest_program"], "oracle.php")
+        self.assertEqual(contract["execution"]["guest_preopens"], {})
         self.assertEqual(contract["execution"]["timeout_seconds"], 10)
         self.assertEqual(contract["execution"]["max_output_bytes"], 1_048_576)
 
@@ -149,6 +151,18 @@ class WasmOracleFixtureTests(unittest.TestCase):
             self.assertEqual(source.count(" === false) {"), bool_count)
             self.assertGreaterEqual(source.count(":4:bool:1:1\\n"), bool_count)
             self.assertGreaterEqual(source.count(":4:bool:1:0\\n"), bool_count)
+
+    def test_generated_scalar_payloads_check_their_runtime_types(self) -> None:
+        """Guard scalar framing with PHP strict identity against its exact cast."""
+
+        for fixture in self.suite.fixtures:
+            source = (
+                FIXTURE_ROOT / "generated" / f"{fixture.identifier}.php"
+            ).read_text(encoding="utf-8")
+            int_count = sum(case.value_type == "int" for case in fixture.cases)
+            string_count = sum(case.value_type == "string" for case in fixture.cases)
+            self.assertEqual(source.count(" !== (int) "), int_count)
+            self.assertEqual(source.count(" !== (string) "), string_count)
 
     def test_parser_preserves_binary_payload_boundaries(self) -> None:
         """Parse colons, newlines, NUL, and high bytes strictly by declared length."""
@@ -207,6 +221,31 @@ class WasmOracleFixtureTests(unittest.TestCase):
                 encode_frame("typed_case", "int", b"1"),
                 [generate.FrameExpectation("typed_case", "float")],
             )
+
+    def test_parser_rejects_payloads_incompatible_with_declared_types(self) -> None:
+        """Enforce canonical booleans, nulls, and signed 64-bit integer payloads."""
+
+        invalid = (
+            ("bool", b"true"),
+            ("bool", b"2"),
+            ("null", b"null"),
+            ("int", b"01"),
+            ("int", b"+1"),
+            ("int", b"-0"),
+            ("int", str(1 << 63).encode("ascii")),
+        )
+        for value_type, payload in invalid:
+            with self.subTest(value_type=value_type, payload=payload):
+                with self.assertRaises(generate.FrameProtocolError):
+                    generate.parse_frames(
+                        encode_frame("typed_case", value_type, payload)
+                    )
+        self.assertEqual(
+            generate.parse_frames(
+                encode_frame("typed_case", "int", b"-9223372036854775808")
+            )[0].payload,
+            b"-9223372036854775808",
+        )
 
     def test_matrix_validation_rejects_unknown_keys_and_control_ids(self) -> None:
         """Require exact case/matrix schemas and control-free stable identifiers."""

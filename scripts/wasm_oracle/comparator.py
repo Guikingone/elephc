@@ -124,12 +124,28 @@ def compare_records(
                 candidate.fixture_sha256,
             )
         )
+    if reference.guest_program != candidate.guest_program:
+        differences.append(
+            Difference(
+                "guest_program",
+                reference.guest_program,
+                candidate.guest_program,
+            )
+        )
     if reference.logical_arguments != candidate.logical_arguments:
         differences.append(
             Difference(
                 "logical_arguments",
                 list(reference.logical_arguments),
                 list(candidate.logical_arguments),
+            )
+        )
+    if reference.guest_preopens != candidate.guest_preopens:
+        differences.append(
+            Difference(
+                "guest_preopens",
+                dict(reference.guest_preopens),
+                dict(candidate.guest_preopens),
             )
         )
     if reference_stdin != candidate_stdin:
@@ -141,12 +157,12 @@ def compare_records(
             )
         )
 
-    reference_environment = dict(reference.environment)
-    candidate_environment = dict(candidate.environment)
+    reference_environment = dict(reference.host_control_environment)
+    candidate_environment = dict(candidate.host_control_environment)
     if reference_environment != candidate_environment:
         differences.append(
             Difference(
-                "environment",
+                "host_control_environment",
                 reference_environment,
                 candidate_environment,
             )
