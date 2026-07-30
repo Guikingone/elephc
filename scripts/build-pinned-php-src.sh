@@ -338,8 +338,21 @@ from pathlib import Path
 inventory_path = Path(sys.argv[1])
 expected_profiles = ["8.2", "8.3", "8.4", "8.5"]
 
+
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key!r}")
+        result[key] = value
+    return result
+
+
 try:
-    document = json.loads(inventory_path.read_text(encoding="utf-8"))
+    document = json.loads(
+        inventory_path.read_text(encoding="utf-8"),
+        object_pairs_hook=reject_duplicate_keys,
+    )
     schema = document["metadata"]["schema"]
     if schema != "elephc.wasm-inventory.v4":
         raise ValueError(
@@ -417,8 +430,21 @@ import re
 import sys
 from pathlib import Path
 
+
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key!r}")
+        result[key] = value
+    return result
+
+
 try:
-    document = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    document = json.loads(
+        Path(sys.argv[1]).read_text(encoding="utf-8"),
+        object_pairs_hook=reject_duplicate_keys,
+    )
     digest = document["metadata"]["pins"]["wasm_compliance_sha256"]
     if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise ValueError(

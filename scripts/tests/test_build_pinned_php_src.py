@@ -129,6 +129,22 @@ class PinnedPhpSrcBuildTests(unittest.TestCase):
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("tag_commit must be 40 lowercase hex characters", completed.stderr)
 
+    def test_duplicate_inventory_keys_are_rejected_before_fetch(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="elephc-pin-test-") as directory:
+            inventory = Path(directory) / "inventory.json"
+            inventory.write_text(
+                '{"metadata":{},"metadata":{}}',
+                encoding="utf-8",
+            )
+            completed = run(
+                "--inventory",
+                str(inventory),
+                "--verify-pins-only",
+            )
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("duplicate JSON key", completed.stderr)
+
     def test_mismatched_wasm_specification_pin_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory(prefix="elephc-input-test-") as directory:
             root = Path(directory)
