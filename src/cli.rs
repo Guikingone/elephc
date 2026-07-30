@@ -73,6 +73,11 @@ fn wants_help(args: &[String]) -> bool {
     args.iter().any(|a| a == "-h" || a == "--help")
 }
 
+/// Returns true if `-V` or `--version` appears anywhere in the argument list.
+fn wants_version(args: &[String]) -> bool {
+    args.iter().any(|a| a == "-V" || a == "--version")
+}
+
 /// Full `--help` reference text, categorized by section. Printed to stdout
 /// with exit code 0 — this is a successful, requested action, not an error.
 pub(crate) const HELP: &str = "Usage: elephc [OPTIONS] <source-file>
@@ -120,6 +125,7 @@ Diagnostics:
 
 Other:
   -h, --help              Print this help and exit
+  -V, --version           Print the compiler version and exit
   --mascotte              Print an ASCII mascot and a random quote before output
 ";
 
@@ -205,6 +211,10 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     }
     if wants_help(args) {
         println!("{HELP}");
+        process::exit(0);
+    }
+    if wants_version(args) {
+        println!("elephc {}", env!("CARGO_PKG_VERSION"));
         process::exit(0);
     }
 
@@ -1034,6 +1044,22 @@ mod tests {
     fn wants_help_false_without_help_flag() {
         let args = vec!["elephc".into(), "app.php".into()];
         assert!(!wants_help(&args));
+    }
+
+    /// Verifies both compiler-version flag spellings are recognized.
+    #[test]
+    fn wants_version_detects_short_and_long_flags() {
+        let long = vec!["elephc".into(), "--version".into()];
+        let short = vec!["elephc".into(), "-V".into()];
+        assert!(wants_version(&long));
+        assert!(wants_version(&short));
+    }
+
+    /// Verifies ordinary compile arguments do not request compiler-version output.
+    #[test]
+    fn wants_version_false_without_version_flag() {
+        let args = vec!["elephc".into(), "--check".into(), "app.php".into()];
+        assert!(!wants_version(&args));
     }
 
     /// Verifies `--mascotte` is detected anywhere in the argument list.

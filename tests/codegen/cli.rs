@@ -12,6 +12,28 @@
 
 use crate::support::*;
 
+/// Verifies compiler-version output is exact, successful, and independent of a source file.
+#[test]
+fn test_cli_version_reports_cargo_package_version() {
+    let dir = make_cli_test_dir("elephc_cli_version");
+
+    for flag in ["--version", "-V"] {
+        let output = elephc_cli_command(&dir)
+            .arg(flag)
+            .output()
+            .expect("failed to run elephc version command");
+        assert!(output.status.success(), "{flag} should succeed");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            format!("elephc {}\n", env!("CARGO_PKG_VERSION")),
+            "unexpected {flag} stdout"
+        );
+        assert!(output.stderr.is_empty(), "unexpected {flag} stderr");
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies native help is handled before project discovery and bare native is a usage error.
 #[test]
 fn test_cli_native_help_and_bare_usage() {
