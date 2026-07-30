@@ -78,6 +78,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::ICmp => lower_int_cmp(ctx, &inst),
         Op::FCmp => lower_float_cmp(ctx, &inst),
         Op::IToF => lower_itof(ctx, &inst),
+        Op::IToStr => lower_int_like_to_string(ctx, &inst),
         Op::FToI => lower_ftoi(ctx, &inst),
         Op::Cast => lower_cast(ctx, &inst),
         Op::IsTruthy => lower_is_truthy(ctx, &inst),
@@ -1228,6 +1229,61 @@ fn lower_itof(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     ctx.emit_load_value(operand(inst, 0)?)?;
     ctx.fb.ins("f64.convert_i64_s", "int to float");
     store_result(ctx, inst)
+}
+
+/// Lowers integer-backed PHP integers and booleans to scratch-backed strings.
+///
+/// PHP renders integers as decimal text, `true` as `"1"`, and `false` as the
+/// empty string. The returned string length is widened to the EIR `Str` i64
+/// length component before storing the result.
+fn lower_int_like_to_string(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let value = operand(inst, 0)?;
+    let source = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| WasmError::Unsupported(format!("IToStr source {:?} is missing", value)))?;
+    let source_php = source.php_type.codegen_repr();
+    match source_php {
+        PhpType::Int => {
+            ctx.emit_load_value(value)?;
+            ctx.fb.ins(
+                "global.get $__float_scratch",
+                "integer formatting scratch buffer",
+            );
+            ctx.fb
+                .ins("call $__rt_itoa", "format PHP integer as decimal string");
+            ctx.fb
+                .ins("i64.extend_i32_u", "widen integer string length");
+        }
+        PhpType::Bool => {
+            emit_normalized_bool(ctx, value)?;
+            ctx.fb.ins(
+                "global.get $__float_scratch",
+                "boolean formatting scratch buffer",
+            );
+            ctx.fb
+                .ins("call $__rt_itoa", "format normalized PHP boolean");
+            ctx.fb
+                .ins("drop", "discard integer formatter length for PHP boolean");
+            emit_normalized_bool(ctx, value)?;
+        }
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "IToStr for PHP type {:?}",
+                other
+            )));
+        }
+    }
+    store_result(ctx, inst)
+}
+
+/// Pushes one canonical i64 boolean for an integer-backed EIR value.
+fn emit_normalized_bool(ctx: &mut FnCtx, value: ValueId) -> Result<()> {
+    ctx.emit_load_value(value)?;
+    ctx.fb.ins("i64.eqz", "boolean source is zero?");
+    ctx.fb.ins("i32.eqz", "normalize non-zero boolean to one");
+    ctx.fb.ins("i64.extend_i32_u", "widen normalized boolean");
+    Ok(())
 }
 
 /// Lowers `FToI`: float to signed integer (truncate toward zero; NaN -> 0).

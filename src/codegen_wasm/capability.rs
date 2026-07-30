@@ -439,6 +439,7 @@ fn check_instruction_shape(
         Op::Move | Op::Borrow | Op::Acquire => forward_transfer_shape_issue(function, inst),
         Op::UnsetLocal => unset_owned_temp_shape_issue(function, inst),
         Op::Cast => cast_shape_issue(function, inst),
+        Op::IToStr => int_like_to_string_shape_issue(function, inst),
         Op::IsTruthy => truthiness_shape_issue(function, inst),
         Op::ArraySet => array_store_shape_issue(function, inst, 2, false),
         Op::ArrayPush => array_store_shape_issue(function, inst, 1, true),
@@ -1197,6 +1198,47 @@ fn truthiness_shape_issue(function: &Function, inst: &Instruction) -> Option<Str
             "float or Mixed truthiness requires exact profile-specific NAN diagnostics"
                 .to_string(),
         );
+    }
+    None
+}
+
+/// Admits only the integer-backed PHP forms implemented by `lower_int_like_to_string`.
+fn int_like_to_string_shape_issue(
+    function: &Function,
+    inst: &Instruction,
+) -> Option<String> {
+    let [operand] = inst.operands.as_slice() else {
+        return Some(format!(
+            "IToStr expects one operand, got {}",
+            inst.operands.len()
+        ));
+    };
+    if inst.immediate.is_some() {
+        return Some("IToStr does not accept an immediate".to_string());
+    }
+    let Some(source) = function.value(*operand) else {
+        return Some("IToStr source is missing from the value table".to_string());
+    };
+    if source.ir_type != IrType::I64
+        || !matches!(source.php_type.codegen_repr(), PhpType::Int | PhpType::Bool)
+    {
+        return Some(format!(
+            "IToStr requires I64/Int or I64/Bool, got {:?}/{:?}",
+            source.ir_type,
+            source.php_type.codegen_repr()
+        ));
+    }
+    if inst.result.is_none()
+        || inst.result_type != IrType::Str
+        || inst.result_php_type.codegen_repr() != PhpType::Str
+        || inst.result_ownership != Ownership::MaybeOwned
+    {
+        return Some(format!(
+            "IToStr requires a MaybeOwned Str/String result, got {:?}/{:?}/{:?}",
+            inst.result_type,
+            inst.result_php_type.codegen_repr(),
+            inst.result_ownership
+        ));
     }
     None
 }
@@ -4637,6 +4679,7 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::IsTruthy
         | Op::InstanceOf
         | Op::IToF
+        | Op::IToStr
         | Op::Cast
         | Op::MixedBox
         | Op::MixedTagOf
@@ -4719,7 +4762,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::TypePredicate
         | Op::IsEmpty
         | Op::FToI
-        | Op::IToStr
         | Op::FToStr
         | Op::BoolToStr
         | Op::StrToI
@@ -7536,6 +7578,72 @@ mod tests {
             }
             assert!(cast_issue(&function).is_some());
         }
+    }
+
+    /// Verifies the `IToStr` capability admits only integer-backed PHP int/bool
+    /// sources and the exact scratch-string result contract used by the lowerer.
+    #[test]
+    fn int_like_to_string_shape_is_exact() {
+        let shape_issue =
+            |source_ir: IrType, source_php: PhpType, result_ownership: Ownership| {
+                let mut function = Function::new(
+                    "int_like_to_string".to_string(),
+                    IrType::Void,
+                    PhpType::Void,
+                );
+                {
+                    let mut builder = Builder::new(&mut function);
+                    let entry = builder.create_named_block("entry", Vec::new());
+                    builder.set_entry(entry);
+                    builder.position_at_end(entry);
+                    let source = builder
+                        .emit(
+                            Op::ConstI64,
+                            Vec::new(),
+                            Some(Immediate::I64(1)),
+                            source_ir,
+                            source_php,
+                            Ownership::NonHeap,
+                        )
+                        .expect("source value");
+                    let _ = builder.emit(
+                        Op::IToStr,
+                        vec![source],
+                        None,
+                        IrType::Str,
+                        PhpType::Str,
+                        result_ownership,
+                    );
+                    builder.terminate(Terminator::Return { value: None });
+                }
+                let conversion = function
+                    .instructions
+                    .iter()
+                    .find(|instruction| instruction.op == Op::IToStr)
+                    .expect("IToStr instruction");
+                super::int_like_to_string_shape_issue(&function, conversion)
+            };
+
+        assert_eq!(
+            shape_issue(IrType::I64, PhpType::Int, Ownership::MaybeOwned),
+            None
+        );
+        assert_eq!(
+            shape_issue(IrType::I64, PhpType::Bool, Ownership::MaybeOwned),
+            None
+        );
+        assert!(
+            shape_issue(
+                IrType::TaggedScalar,
+                PhpType::TaggedScalar,
+                Ownership::MaybeOwned
+            )
+            .is_some()
+        );
+        assert!(
+            shape_issue(IrType::I64, PhpType::Float, Ownership::MaybeOwned).is_some()
+        );
+        assert!(shape_issue(IrType::I64, PhpType::Int, Ownership::Borrowed).is_some());
     }
 
     /// Float-to-int EIR forms stay outside the public WASM surface until their

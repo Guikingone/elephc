@@ -3531,6 +3531,116 @@ mod tests {
         }
     }
 
+    /// Verifies `IToStr` renders integers, `true`, and `false` with PHP string
+    /// semantics while producing a WAT-valid `(i32 pointer, i64 length)` result.
+    #[test]
+    fn integer_and_boolean_to_string_lowering_matches_php() {
+        let mut module = Module::new(Target::wasm());
+        let colon = module.data.intern_string(":");
+        let pipe = module.data.intern_string("|");
+        let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+
+            let integer = builder.emit_const_i64(-42);
+            let integer_string = builder
+                .emit(
+                    Op::IToStr,
+                    vec![integer],
+                    None,
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::MaybeOwned,
+                )
+                .expect("IToStr should produce a string");
+            let _ = builder.emit(
+                Op::EchoValue,
+                vec![integer_string],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+
+            let colon = builder.emit_const_str(colon);
+            let _ = builder.emit(
+                Op::EchoValue,
+                vec![colon],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+
+            let false_value = builder.emit_const_bool(false);
+            let false_string = builder
+                .emit(
+                    Op::IToStr,
+                    vec![false_value],
+                    None,
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::MaybeOwned,
+                )
+                .expect("false IToStr should produce a string");
+            let _ = builder.emit(
+                Op::EchoValue,
+                vec![false_string],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+
+            let pipe = builder.emit_const_str(pipe);
+            let _ = builder.emit(
+                Op::EchoValue,
+                vec![pipe],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+
+            let true_value = builder.emit_const_bool(true);
+            let true_string = builder
+                .emit(
+                    Op::IToStr,
+                    vec![true_value],
+                    None,
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::MaybeOwned,
+                )
+                .expect("true IToStr should produce a string");
+            let _ = builder.emit(
+                Op::EchoValue,
+                vec![true_string],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let wat = generate(&module, Emit::Executable).expect("IToStr should lower");
+        assert!(
+            wat.contains("format PHP integer as decimal string"),
+            "{wat}"
+        );
+        assert!(wat.contains("format normalized PHP boolean"), "{wat}");
+        assemble_and_validate(&wat);
+        if let Some(output) = run_main(&module) {
+            assert_eq!(output, "-42:|1");
+        }
+    }
+
     /// Verifies `echo "Hello, WASM!"` of a string literal writes the exact bytes to
     /// stdout via a data segment + `__rt_echo_str`.
     #[test]

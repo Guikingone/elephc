@@ -723,6 +723,70 @@ fn test_cli_wasm_ignores_native_codegen_environment_defaults() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Compiles integer and boolean concatenation through PHP -> EIR -> WASM for
+/// every supported PHP profile and verifies `IToStr` matches PHP output.
+#[test]
+fn test_cli_wasm_integer_and_boolean_string_coercion_matches_php_profiles() {
+    if Command::new("wasmer").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_int_bool_string_coercion");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function integer_value(int $value): int {
+    return $value;
+}
+function boolean_value(bool $value): bool {
+    return $value;
+}
+$integer = integer_value(-42);
+$false = boolean_value(false);
+$true = boolean_value(true);
+echo $integer . ":" . $false . "|" . $true;
+"#,
+    )
+    .unwrap();
+
+    for version in ["8.2", "8.3", "8.4", "8.5"] {
+        let output = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg("--php-version")
+            .arg(version)
+            .arg(&php_path)
+            .output()
+            .expect("failed to compile integer/boolean string coercion to WASM");
+        assert!(
+            output.status.success(),
+            "PHP {version} integer/boolean coercion compilation failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let run = Command::new("wasmer")
+            .arg("run")
+            .arg(dir.join("main.wasm"))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run integer/boolean string coercion under Wasmer");
+        assert!(
+            run.status.success(),
+            "PHP {version} integer/boolean coercion trapped: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "-42:|1");
+        assert!(
+            run.stderr.is_empty(),
+            "PHP {version}: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Compiles the php-src saturated-array append edge through PHP -> EIR -> WASM
 /// and verifies the command runtime reports the exact failure instead of wrapping
 /// `PHP_INT_MAX` to a negative key or surfacing an unclassified Wasm trap.

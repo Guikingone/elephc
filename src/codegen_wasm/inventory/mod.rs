@@ -233,6 +233,7 @@ fn test_catalog() -> TestCatalog {
             "codegen_wasm::tests::hash_set_mixed_float_cast_fails_closed",
             "codegen_wasm::tests::hash_set_mixed_string_cast_fails_closed",
             "codegen_wasm::capability::tests::direct_call_shape_rejects_arity_mismatch_before_lowering",
+            "codegen_wasm::capability::tests::int_like_to_string_shape_is_exact",
             "codegen_wasm::capability::tests::rejects_method_on_null_error_without_command_runtime",
         ],
         differential: vec![],

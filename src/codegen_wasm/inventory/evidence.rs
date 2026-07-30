@@ -69,6 +69,7 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
         Op::IsTruthy => &["condition/boolean-context truthiness"],
         Op::InstanceOf => &["`instanceof` with a statically resolved class"],
         Op::IToF => &["implicit integer-to-float representation conversion"],
+        Op::IToStr => &["integer or boolean string coercion"],
         Op::Cast => &["explicit or compiler-required scalar cast"],
         Op::MixedBox => &["boxing a concrete PHP value into Mixed"],
         Op::MixedTagOf => &["runtime type inspection of a Mixed value"],
@@ -155,6 +156,9 @@ fn op_tests(op: Op) -> &'static [&'static str] {
         }
         Op::IDiv => &["codegen_wasm::tests::php_division_returns_float"],
         Op::ICmp => &["codegen_wasm::tests::int_compare_invokes_correctly"],
+        Op::IToStr => {
+            &["codegen_wasm::tests::integer_and_boolean_to_string_lowering_matches_php"]
+        }
         Op::IsNull => {
             &["codegen_wasm::tests::integer_null_sentinel_value_is_not_misclassified"]
         }
@@ -264,6 +268,7 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::ICmp => "codegen_wasm::inst::lower_int_cmp",
         Op::FCmp => "codegen_wasm::inst::lower_float_cmp",
         Op::IToF => "codegen_wasm::inst::lower_itof",
+        Op::IToStr => "codegen_wasm::inst::lower_int_like_to_string",
         Op::Cast => "codegen_wasm::inst::lower_cast",
         Op::IsTruthy => "codegen_wasm::inst::lower_is_truthy",
         Op::IsNull => "codegen_wasm::inst::lower_is_null",
@@ -360,6 +365,7 @@ pub(super) fn op_evidence_group(op: Op) -> &'static str {
         Op::ICmp | Op::FCmp | Op::IsNull | Op::IsTruthy => "compare",
         Op::InstanceOf => "instanceof",
         Op::IToF => "itof",
+        Op::IToStr => "string",
         Op::Cast => "cast",
         Op::MixedBox
         | Op::MixedTagOf
