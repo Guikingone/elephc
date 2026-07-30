@@ -221,6 +221,7 @@ fn render_timing_table(
         chars.middle_join,
         chars.middle_right,
     ));
+    let has_phase_rows = !rows.is_empty();
     for (phase, duration, share) in rows {
         lines.push(format_table_row(
             chars,
@@ -232,15 +233,17 @@ fn render_timing_table(
             share_width,
         ));
     }
-    lines.push(format_table_rule(
-        chars,
-        phase_width,
-        duration_width,
-        share_width,
-        chars.middle_left,
-        chars.middle_join,
-        chars.middle_right,
-    ));
+    if has_phase_rows {
+        lines.push(format_table_rule(
+            chars,
+            phase_width,
+            duration_width,
+            share_width,
+            chars.middle_left,
+            chars.middle_join,
+            chars.middle_right,
+        ));
+    }
     let total_row = format_table_row(
         chars,
         "Total",
@@ -381,5 +384,15 @@ mod tests {
         );
         let widths: Vec<usize> = table.lines().map(|line| line.chars().count()).collect();
         assert!(widths.windows(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    /// Verifies an empty report uses one separator between the header and total row.
+    #[test]
+    fn empty_timing_table_has_no_adjacent_separators() {
+        let table = render_timing_table(&[], Duration::ZERO, false);
+        let lines: Vec<&str> = table.lines().collect();
+        assert_eq!(lines.len(), 5);
+        assert!(lines[1].contains("Phase"));
+        assert!(lines[3].contains("Total"));
     }
 }
