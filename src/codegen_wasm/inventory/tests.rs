@@ -12,6 +12,7 @@
 
 use super::*;
 use crate::codegen_wasm::capability::{op_is_supported, runtime_function_is_supported};
+use crate::ir::{IrHeapKind, IrType};
 use std::collections::HashSet;
 
 /// Extracts top-level variant names from a repo-owned enum declaration.
@@ -81,6 +82,110 @@ fn declared_shape_predicates(source: &str) -> Vec<String> {
     names
 }
 
+/// Resolves one report test identifier to its exact checked-in Rust module.
+fn test_source(identifier: &str) -> &'static str {
+    if identifier.starts_with("codegen_wasm::tests::") {
+        include_str!("../mod.rs")
+    } else if identifier.starts_with("codegen_wasm::capability::tests::") {
+        include_str!("../capability.rs")
+    } else if identifier.starts_with("codegen_wasm::closures::tests::") {
+        include_str!("../closures.rs")
+    } else {
+        panic!("inventory references an unaudited Rust test module {identifier:?}");
+    }
+}
+
+/// Extracts one Rust function item using balanced braces.
+fn function_source<'a>(source: &'a str, name: &str) -> Option<&'a str> {
+    let needle = format!("fn {name}(");
+    let start = source.find(&needle)?;
+    let open = source[start..].find('{')? + start;
+    let mut depth = 0usize;
+    for (offset, byte) in source.as_bytes()[open..].iter().copied().enumerate() {
+        match byte {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&source[start..=open + offset]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Extracts simple function-call identifiers from one Rust function body.
+fn called_function_names(source: &str) -> Vec<String> {
+    let bytes = source.as_bytes();
+    let mut names = Vec::new();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index].is_ascii_alphabetic() || bytes[index] == b'_' {
+            let start = index;
+            index += 1;
+            while index < bytes.len()
+                && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+            {
+                index += 1;
+            }
+            let mut next = index;
+            while next < bytes.len() && bytes[next].is_ascii_whitespace() {
+                next += 1;
+            }
+            if next < bytes.len() && bytes[next] == b'(' {
+                names.push(source[start..index].to_string());
+            }
+        } else {
+            index += 1;
+        }
+    }
+    names
+}
+
+/// Follows same-module helper calls to prove a test or one of its helpers
+/// contains the claimed opcode marker.
+fn function_exercises_marker(
+    source: &str,
+    function: &str,
+    marker: &str,
+    depth: usize,
+    seen: &mut HashSet<String>,
+) -> bool {
+    if depth == 0 || !seen.insert(function.to_string()) {
+        return false;
+    }
+    let Some(body) = function_source(source, function) else {
+        return false;
+    };
+    if body.contains(marker) {
+        return true;
+    }
+    called_function_names(body)
+        .into_iter()
+        .any(|called| function_exercises_marker(source, &called, marker, depth - 1, seen))
+}
+
+/// Returns the canonical Rust source markers that construct one opcode.
+fn op_source_markers(op: Op) -> Vec<String> {
+    let mut markers = vec![format!("Op::{op:?}")];
+    let builder_helper = match op {
+        Op::ConstI64 => Some("emit_const_i64("),
+        Op::ConstF64 => Some("emit_const_f64("),
+        Op::ConstStr => Some("emit_const_str("),
+        Op::ConstNull => Some("emit_const_null("),
+        Op::ConstBool => Some("emit_const_bool("),
+        Op::LoadLocal => Some("emit_load_local("),
+        Op::StoreLocal => Some("emit_store_local("),
+        _ => None,
+    };
+    if let Some(marker) = builder_helper {
+        markers.push(marker.to_string());
+    }
+    markers
+}
+
 /// Verifies every enumerated identity carries exactly one disposition and
 /// the report validates against the W0 schema.
 #[test]
@@ -126,6 +231,15 @@ fn inventory_matches_capability_classifiers() {
         } else {
             assert_eq!(row.disposition, Disposition::Missing, "runtime_fn {:?}", id.as_eir());
         }
+    }
+    for ir_type in ir_type_representatives() {
+        let row = ir_type_row(ir_type);
+        let expected = if ir_type == IrType::Heap(IrHeapKind::Buffer) {
+            Disposition::Excluded
+        } else {
+            Disposition::Supported
+        };
+        assert_eq!(row.disposition, expected, "ir_type {}", ir_type.as_eir());
     }
 }
 
@@ -179,6 +293,24 @@ fn enum_enumerators_match_source_declarations() {
     assert_eq!(
         unary_enumerated, unary_declared,
         "UnaryStringRuntime::all() drifted"
+    );
+
+    let ir_type_variants =
+        declared_enum_variants(include_str!("../../ir/types.rs"), "pub enum IrType");
+    assert_eq!(
+        ir_type_variants,
+        ["I64", "F64", "Str", "TaggedScalar", "Heap", "Void"]
+    );
+    let heap_variants =
+        declared_enum_variants(include_str!("../../ir/types.rs"), "pub enum IrHeapKind");
+    assert_eq!(
+        heap_variants,
+        ["Array", "Hash", "Object", "Mixed", "Iterable", "Union", "Buffer"]
+    );
+    assert_eq!(
+        ir_type_representatives().len(),
+        ir_type_variants.len() - 1 + heap_variants.len(),
+        "IrType concrete-form inventory drifted"
     );
 }
 
@@ -235,12 +367,6 @@ fn payload_forms_and_shape_predicates_match_source_declarations() {
 #[test]
 fn rust_test_identifiers_resolve_to_checked_in_tests() {
     let report = build_report();
-    let rust_sources = [
-        include_str!("../mod.rs"),
-        include_str!("../capability.rs"),
-        include_str!("../closures.rs"),
-    ]
-    .join("\n");
     let mut identifiers = Vec::new();
     identifiers.extend(report.tests.positive.iter().copied());
     identifiers.extend(report.tests.negative.iter().copied());
@@ -255,12 +381,13 @@ fn rust_test_identifiers_resolve_to_checked_in_tests() {
     }
 
     for identifier in identifiers {
+        let source = test_source(identifier);
         let test_name = identifier
             .rsplit("::")
             .next()
             .expect("test identifier has a final segment");
         assert!(
-            rust_sources.contains(&format!("fn {test_name}(")),
+            source.contains(&format!("fn {test_name}(")),
             "inventory references missing Rust test {identifier:?}"
         );
     }
@@ -269,6 +396,107 @@ fn rust_test_identifiers_resolve_to_checked_in_tests() {
     assert!(
         include_str!("../../../.github/workflows/ci.yml").contains("wasm-host-portability:")
     );
+}
+
+/// Verifies every claimed supported-op test reaches the exact opcode directly
+/// or through same-module helpers.
+#[test]
+fn supported_op_test_claims_reach_the_claimed_opcode() {
+    for op in Op::all() {
+        let row = op_row(*op);
+        let Some(evidence) = row.supported else {
+            continue;
+        };
+        if evidence.tests.is_empty() {
+            continue;
+        }
+        let markers = op_source_markers(*op);
+        assert!(
+            evidence.tests.iter().any(|identifier| {
+                let source = test_source(identifier);
+                let function = identifier
+                    .rsplit("::")
+                    .next()
+                    .expect("test identifier has a final segment");
+                markers.iter().any(|marker| {
+                    function_exercises_marker(
+                        source,
+                        function,
+                        marker,
+                        8,
+                        &mut HashSet::new(),
+                    )
+                })
+            }),
+            "supported op {:?} cites tests that do not reach any of {:?}",
+            op.name(),
+            markers
+        );
+    }
+}
+
+/// Verifies supported runtime-function tests reach the exact typed target.
+#[test]
+fn supported_runtime_fn_test_claims_reach_the_claimed_target() {
+    for id in RuntimeFnId::all() {
+        let row = runtime_fn_row(*id);
+        let Some(evidence) = row.supported else {
+            continue;
+        };
+        let marker = format!("RuntimeFnId::{id:?}");
+        assert!(
+            evidence.tests.iter().any(|identifier| {
+                let source = test_source(identifier);
+                let function = identifier
+                    .rsplit("::")
+                    .next()
+                    .expect("test identifier has a final segment");
+                function_exercises_marker(
+                    source,
+                    function,
+                    &marker,
+                    8,
+                    &mut HashSet::new(),
+                )
+            }),
+            "supported runtime function {:?} cites tests that do not reach {marker}",
+            id.as_eir()
+        );
+    }
+}
+
+/// Verifies supported runtime-call-form tests reach the exact payload variant.
+#[test]
+fn supported_runtime_call_form_tests_reach_the_claimed_variant() {
+    for row in runtime_call_target_rows()
+        .into_iter()
+        .filter(|row| row.disposition == Disposition::Supported)
+    {
+        let marker = match row.name.as_str() {
+            "function" => "RuntimeCallTarget::Function",
+            "profiled_function" => "RuntimeCallTarget::ProfiledFunction",
+            other => panic!("unexpected supported runtime-call form {other:?}"),
+        };
+        let evidence = row.supported.expect("supported form has evidence");
+        assert!(
+            evidence.tests.iter().any(|identifier| {
+                let source = test_source(identifier);
+                let function = identifier
+                    .rsplit("::")
+                    .next()
+                    .expect("test identifier has a final segment");
+                function_exercises_marker(
+                    source,
+                    function,
+                    marker,
+                    8,
+                    &mut HashSet::new(),
+                )
+            }),
+            "runtime-call form {:?} cites tests that do not reach {marker}",
+            row.name
+        );
+    }
 }
 
 /// Verifies the report rejects stale literal historical counts by deriving
@@ -284,6 +512,8 @@ fn totals_are_derived_not_copied_from_prose() {
     assert_eq!(rt.total, RuntimeFnId::all().len());
     let un = &report.families["unary_string"];
     assert_eq!(un.total, UnaryStringRuntime::all().len());
+    let ir_type = &report.families["ir_type"];
+    assert_eq!(ir_type.total, ir_type_representatives().len());
     // The supported count is derived from the capability classifier, not
     // copied from the spec prose's historical "90 of 236" figure.
     let derived_supported = Op::all()
@@ -324,6 +554,102 @@ fn float_to_int_remains_missing_until_a_php_shape_is_admitted() {
     assert!(row.supported.is_none());
 }
 
+/// Verifies supported rows never reuse a merely existing but unrelated test
+/// identifier as proof of lowering coverage.
+#[test]
+fn supported_test_evidence_is_identity_specific() {
+    let integer_or = op_row(Op::IBitOr);
+    assert!(
+        integer_or
+            .supported
+            .as_ref()
+            .expect("integer bitwise-or remains supported")
+            .tests
+            .is_empty(),
+        "IBitOr must remain an explicit evidence gap until a lowering test exercises it"
+    );
+    let object_new = op_row(Op::ObjectNew);
+    assert_eq!(
+        object_new
+            .supported
+            .as_ref()
+            .expect("object construction remains supported")
+            .tests,
+        ["codegen_wasm::tests::object_prop_set_overwrites"]
+    );
+}
+
+/// Verifies every supported-row lowerer path resolves to a function in the
+/// backend module named by the path.
+#[test]
+fn supported_lowerer_paths_resolve_to_backend_functions() {
+    let report = build_report();
+    for row in report
+        .families
+        .values()
+        .flat_map(|family| &family.rows)
+        .filter(|row| row.disposition == Disposition::Supported)
+    {
+        let evidence = row.supported.as_ref().expect("supported row has evidence");
+        let lowerer = evidence.lowerer;
+        let source = if lowerer.starts_with("codegen_wasm::inst_hash::") {
+            include_str!("../inst_hash.rs")
+        } else if lowerer.starts_with("codegen_wasm::inst::") {
+            include_str!("../inst.rs")
+        } else if lowerer.starts_with("codegen_wasm::objects::") {
+            include_str!("../objects.rs")
+        } else if lowerer.starts_with("codegen_wasm::methods::") {
+            include_str!("../methods.rs")
+        } else if lowerer.starts_with("codegen_wasm::classes::") {
+            include_str!("../classes.rs")
+        } else if lowerer.starts_with("codegen_wasm::closures::") {
+            include_str!("../closures.rs")
+        } else if lowerer.starts_with("codegen_wasm::refcell::") {
+            include_str!("../refcell.rs")
+        } else if lowerer.starts_with("codegen_wasm::function::") {
+            include_str!("../function.rs")
+        } else if lowerer.starts_with("codegen_wasm::values::") {
+            include_str!("../values.rs")
+        } else {
+            panic!(
+                "supported row {:?} references unaudited lowerer path {lowerer:?}",
+                row.name
+            );
+        };
+        let function = lowerer
+            .rsplit("::")
+            .next()
+            .expect("lowerer path has a final segment")
+            .split('(')
+            .next()
+            .expect("lowerer function has a stable name");
+        assert!(
+            source.contains(&format!("fn {function}(")),
+            "supported row {:?} references missing lowerer {lowerer:?}",
+            row.name
+        );
+    }
+}
+
+/// Verifies producer and execution-mode evidence is carried by rows rather
+/// than being hidden inside the supported-only payload.
+#[test]
+fn row_level_producers_and_execution_modes_are_revision_honest() {
+    let array_map = runtime_fn_row(RuntimeFnId::ArrayMap);
+    assert_eq!(array_map.producers, ["array_map(...)"]);
+    assert_eq!(array_map.execution_modes, ["command", "npm"]);
+
+    let md5 = runtime_fn_row(RuntimeFnId::Md5);
+    assert_eq!(md5.disposition, Disposition::Missing);
+    assert_eq!(md5.producers, ["md5(...)"]);
+    assert_eq!(md5.execution_modes, ["command", "npm"]);
+
+    for row in ir_type_representatives().into_iter().map(ir_type_row) {
+        assert!(!row.producers.is_empty(), "{} lacks a producer", row.name);
+        assert_eq!(row.execution_modes, ["command", "npm"]);
+    }
+}
+
 /// Verifies excluded rows carry a complete contract and a matching target
 /// diagnostic, so exclusions are never silently "unsupported".
 #[test]
@@ -342,6 +668,19 @@ fn excluded_rows_carry_complete_contracts() {
                 assert!(
                     !exclusion.diagnostic.is_empty(),
                     "excluded row {:?} lacks a matching diagnostic",
+                    row.name
+                );
+                let expected = match row.family {
+                    "op" => format!("unsupported op {}", row.name),
+                    "runtime_fn" => {
+                        format!("unsupported runtime function {}", row.name)
+                    }
+                    "ir_type" => format!("unsupported storage type {}", row.name),
+                    other => panic!("unexpected excluded family {other:?}"),
+                };
+                assert_eq!(
+                    exclusion.diagnostic, expected,
+                    "excluded row {:?} diagnostic drifted",
                     row.name
                 );
             }
@@ -410,6 +749,14 @@ fn report_serializes_to_faithful_json() {
     assert_eq!(totals["excluded"], report.totals.excluded);
     assert_eq!(totals["missing"], report.totals.missing);
     assert_eq!(totals["evidence_gaps"], report.totals.evidence_gaps);
+    assert_eq!(
+        totals["row_evidence_gaps"],
+        report.totals.row_evidence_gaps
+    );
+    assert_eq!(
+        totals["catalog_evidence_gaps"],
+        report.totals.catalog_evidence_gaps
+    );
     assert_eq!(totals["gate"], report.totals.gate);
     assert_eq!(totals["stale_literal_counts_rejected"], true);
     for (name, family) in &report.families {

@@ -9,8 +9,8 @@
 //! - `cargo test` through `inventory::tests`.
 //!
 //! Key details:
-//! - Every `Op`, `RuntimeFnId`, `UnaryStringRuntime`, `Terminator`, and
-//!   `RuntimeCallTarget` form is enumerated from the canonical `::all()` lists
+//! - Every `Op`, `RuntimeFnId`, `UnaryStringRuntime`, concrete `IrType`,
+//!   `Terminator`, and `RuntimeCallTarget` form is enumerated
 //!   and classified into exactly one disposition: `supported`, `excluded`, or
 //!   `missing`. Totals are derived from those enumerations, never copied from
 //!   the spec prose's historical counts.
@@ -40,12 +40,36 @@ pub use schema::{
     GENERATOR_VERSION,
 };
 
+/// Derives exact missing-evidence field names for one inventory row.
+fn derive_row_evidence_gaps(row: &InventoryRow) -> Vec<&'static str> {
+    let mut gaps = Vec::new();
+    if row.producers.is_empty() {
+        gaps.push("producers");
+    }
+    if row.execution_modes.is_empty() {
+        gaps.push("execution_modes");
+    }
+    if let Some(evidence) = &row.supported {
+        if evidence.backend.is_empty() {
+            gaps.push("supported.backend");
+        }
+        if evidence.lowerer.is_empty() {
+            gaps.push("supported.lowerer");
+        }
+        if evidence.tests.is_empty() {
+            gaps.push("supported.tests");
+        }
+    }
+    gaps
+}
+
 /// Aggregates a list of rows into per-family supported/excluded/missing totals.
-fn family_totals(rows: Vec<InventoryRow>) -> FamilyTotals {
+fn family_totals(mut rows: Vec<InventoryRow>) -> FamilyTotals {
     let mut supported = 0usize;
     let mut excluded = 0usize;
     let mut missing = 0usize;
-    for row in &rows {
+    for row in &mut rows {
+        row.evidence_gaps = derive_row_evidence_gaps(row);
         match row.disposition {
             Disposition::Supported => supported += 1,
             Disposition::Excluded => excluded += 1,
@@ -75,6 +99,8 @@ pub fn build_report() -> InventoryReport {
         .map(terminator_row)
         .collect();
     let call_target_rows = runtime_call_target_rows();
+    let ir_type_rows: Vec<InventoryRow> =
+        ir_type_representatives().into_iter().map(ir_type_row).collect();
 
     let mut families = BTreeMap::new();
     families.insert("op", family_totals(op_rows));
@@ -82,6 +108,7 @@ pub fn build_report() -> InventoryReport {
     families.insert("unary_string", family_totals(unary_string_rows));
     families.insert("terminator", family_totals(terminator_rows));
     families.insert("runtime_call_target", family_totals(call_target_rows));
+    families.insert("ir_type", family_totals(ir_type_rows));
 
     let mut total = 0usize;
     let mut supported = 0usize;
@@ -94,21 +121,13 @@ pub fn build_report() -> InventoryReport {
         missing += family.missing;
     }
     let tests = test_catalog();
-    let evidence_gaps = families
+    let row_evidence_gaps = families
         .values()
         .flat_map(|family| &family.rows)
-        .filter(|row| {
-            row.supported
-                .as_ref()
-                .is_some_and(|evidence| {
-                    evidence.backend.is_empty()
-                        || evidence.lowerer.is_empty()
-                        || evidence.producers.is_empty()
-                        || evidence.tests.is_empty()
-                })
-        })
-        .count()
-        + tests.missing_categories.len();
+        .filter(|row| !row.evidence_gaps.is_empty())
+        .count();
+    let catalog_evidence_gaps = tests.missing_categories.len();
+    let evidence_gaps = row_evidence_gaps + catalog_evidence_gaps;
     let (gate, gate_reason) = if missing == 0 && evidence_gaps == 0 {
         (
             "pass",
@@ -118,7 +137,7 @@ pub fn build_report() -> InventoryReport {
         (
             "fail",
             format!(
-                "{missing} reachable identities lack a WASM lowerer and {evidence_gaps} required evidence entries are missing"
+                "{missing} reachable identities lack a WASM lowerer; {row_evidence_gaps} rows lack producer/mode/lowerer/test evidence; {catalog_evidence_gaps} required test categories are missing"
             ),
         )
     };
@@ -141,6 +160,8 @@ pub fn build_report() -> InventoryReport {
             excluded,
             missing,
             evidence_gaps,
+            row_evidence_gaps,
+            catalog_evidence_gaps,
             gate,
             gate_reason,
             stale_literal_counts_rejected: true,
@@ -260,6 +281,7 @@ pub fn validate_report(report: &InventoryReport) -> Vec<String> {
     }
     let expected_families = [
         "op",
+        "ir_type",
         "runtime_fn",
         "unary_string",
         "terminator",
@@ -318,22 +340,27 @@ pub fn validate_report(report: &InventoryReport) -> Vec<String> {
     if !report.totals.stale_literal_counts_rejected {
         errors.push("totals.stale_literal_counts_rejected is false".to_string());
     }
-    let expected_evidence_gaps = report
+    let expected_row_evidence_gaps = report
         .families
         .values()
         .flat_map(|family| &family.rows)
-        .filter(|row| {
-            row.supported
-                .as_ref()
-                .is_some_and(|evidence| {
-                    evidence.backend.is_empty()
-                        || evidence.lowerer.is_empty()
-                        || evidence.producers.is_empty()
-                        || evidence.tests.is_empty()
-                })
-        })
-        .count()
-        + report.tests.missing_categories.len();
+        .filter(|row| !row.evidence_gaps.is_empty())
+        .count();
+    let expected_catalog_evidence_gaps = report.tests.missing_categories.len();
+    let expected_evidence_gaps =
+        expected_row_evidence_gaps + expected_catalog_evidence_gaps;
+    if report.totals.row_evidence_gaps != expected_row_evidence_gaps {
+        errors.push(format!(
+            "totals.row_evidence_gaps is {}, expected {expected_row_evidence_gaps}",
+            report.totals.row_evidence_gaps
+        ));
+    }
+    if report.totals.catalog_evidence_gaps != expected_catalog_evidence_gaps {
+        errors.push(format!(
+            "totals.catalog_evidence_gaps is {}, expected {expected_catalog_evidence_gaps}",
+            report.totals.catalog_evidence_gaps
+        ));
+    }
     if report.totals.evidence_gaps != expected_evidence_gaps {
         errors.push(format!(
             "totals.evidence_gaps is {}, expected {expected_evidence_gaps}",
@@ -357,6 +384,22 @@ pub fn validate_report(report: &InventoryReport) -> Vec<String> {
     }
     if report.execution_modes.is_empty() {
         errors.push("execution_modes inventory is empty".to_string());
+    }
+    for family in report.families.values() {
+        for row in &family.rows {
+            for mode in &row.execution_modes {
+                if !report
+                    .execution_modes
+                    .iter()
+                    .any(|candidate| candidate.mode == *mode && candidate.reachable)
+                {
+                    errors.push(format!(
+                        "family {:?} row {:?}: execution mode {:?} is not globally reachable",
+                        row.family, row.name, mode
+                    ));
+                }
+            }
+        }
     }
     if report.tests.positive.is_empty()
         || report.tests.negative.is_empty()
@@ -388,6 +431,13 @@ pub fn validate_report(report: &InventoryReport) -> Vec<String> {
 
 /// Validates a single row's disposition/exclusion/evidence invariants.
 fn validate_row(row: &InventoryRow, family: &str, errors: &mut Vec<String>) {
+    let expected_evidence_gaps = derive_row_evidence_gaps(row);
+    if row.evidence_gaps != expected_evidence_gaps {
+        errors.push(format!(
+            "family {family:?} row {:?}: evidence_gaps {:?} != derived {:?}",
+            row.name, row.evidence_gaps, expected_evidence_gaps
+        ));
+    }
     let exactly_one =
         row.supported.is_some() as usize + row.excluded.is_some() as usize + row.missing.is_some() as usize;
     let expected = match row.disposition {
@@ -481,12 +531,14 @@ pub fn human_summary(report: &InventoryReport) -> String {
         out.push_str(&format!("gate: {}\n", report.totals.gate));
     }
     out.push_str(&format!(
-        "totals: {} identities (supported {}, excluded {}, missing {}, evidence gaps {}) — {}\n",
+        "totals: {} identities (supported {}, excluded {}, missing {}, evidence gaps {} = {} row + {} catalog) — {}\n",
         report.totals.total,
         report.totals.supported,
         report.totals.excluded,
         report.totals.missing,
         report.totals.evidence_gaps,
+        report.totals.row_evidence_gaps,
+        report.totals.catalog_evidence_gaps,
         report.totals.gate_reason,
     ));
     out.push_str("family breakdown:\n");

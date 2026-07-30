@@ -10,19 +10,88 @@
 //!   classifiers; `excluded` is reserved for native-only Elephc extensions
 //!   (ptr, buffer, packed, native `extern`, native bridge/system-library
 //!   requirements, and the web SAPI) with a stable contract and matching CLI
-//!   diagnostic. Ordinary PHP without a WASM lowerer is `missing`, never
-//!   silently `excluded`.
+//!   or capability-audit diagnostic. Ordinary PHP without a WASM lowerer is
+//!   `missing`, never silently `excluded`.
 #![allow(dead_code)]
 
-use super::evidence::op_supported_evidence;
+use super::evidence::{op_source_producers, op_supported_evidence};
 use super::schema::{
     Disposition, ExecutionMode, Exclusion, InventoryRow, ShapePredicate, SupportedEvidence,
 };
+use crate::builtins::registry;
+use crate::builtins::semantics::BuiltinLowering;
 use crate::codegen_wasm::capability::{
     runtime_function_is_supported, terminator_is_supported, terminator_name,
     unary_string_name,
 };
-use crate::ir::{Op, RuntimeFnId, Terminator, UnaryStringRuntime};
+use crate::ir::{
+    IrHeapKind, IrType, Op, RuntimeCallTarget, RuntimeFnId, Terminator,
+    UnaryStringRuntime,
+};
+
+/// Returns the public compilation modes that can reach the WASM capability
+/// audit, whether the row is ultimately lowered or rejected.
+fn public_wasm_modes() -> Vec<&'static str> {
+    vec!["command", "npm"]
+}
+
+/// Returns every checked-in PHP builtin whose registry-owned lowering produces
+/// the requested runtime function.
+fn runtime_fn_producers(id: RuntimeFnId) -> Vec<String> {
+    registry::names()
+        .filter_map(registry::lookup)
+        .filter(|definition| !definition.spec.internal)
+        .filter_map(|definition| match definition.spec.semantics.lowering {
+            BuiltinLowering::Runtime(
+                RuntimeCallTarget::Function(target)
+                | RuntimeCallTarget::ProfiledFunction { target, .. },
+            ) if target == id => Some(format!("{}(...)", definition.name)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Returns every checked-in PHP builtin whose registry-owned lowering produces
+/// the requested unary-string runtime target.
+fn unary_string_producers(target: UnaryStringRuntime) -> Vec<String> {
+    registry::names()
+        .filter_map(registry::lookup)
+        .filter(|definition| !definition.spec.internal)
+        .filter_map(|definition| match definition.spec.semantics.lowering {
+            BuiltinLowering::Runtime(RuntimeCallTarget::UnaryString(candidate))
+                if candidate == target =>
+            {
+                Some(format!("{}(...)", definition.name))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Returns exact source spellings for native-only opcodes excluded from WASM.
+fn excluded_op_producers(op: Op) -> Vec<String> {
+    let source = match op {
+        Op::PtrCast => "ptr_cast<T>(...)",
+        Op::PtrRead => "ptr_read*($pointer)",
+        Op::PtrWrite => "ptr_write*($pointer, $value)",
+        Op::PtrReadString => "ptr_read_string($pointer, $length)",
+        Op::PtrWriteString => "ptr_write_string($pointer, $value)",
+        Op::PtrOffset => "ptr_offset($pointer, $offset)",
+        Op::PtrCheckNonnull => "pointer dereference guard",
+        Op::BufferNew => "buffer<T>(...) construction",
+        Op::BufferLen => "buffer length access",
+        Op::BufferGet => "buffer element read",
+        Op::BufferSet => "buffer element write",
+        Op::BufferFree => "buffer_free($buffer)",
+        Op::PackedFieldGet => "packed-class field read",
+        Op::PackedFieldSet => "packed-class field write",
+        Op::ExternCall => "extern function call",
+        Op::ExternGlobalLoad => "extern global read",
+        Op::ExternGlobalStore => "extern global write",
+        _ => return Vec::new(),
+    };
+    vec![source.to_string()]
+}
 
 /// Returns the exclusion contract for a native-only `Op` variant, if any.
 pub(super) fn op_exclusion(op: Op) -> Option<Exclusion> {
@@ -38,7 +107,7 @@ pub(super) fn op_exclusion(op: Op) -> Option<Exclusion> {
             reason: "elephc-only raw pointer extension; not PHP-visible",
             owner: "wasm-backend",
             removal_gate: "a WASM linear-memory pointer ABI with bounds-checked lowering",
-            diagnostic: "capability audit rejects `ptr` ops as unsupported on wasm32-wasi",
+            diagnostic: format!("unsupported op {}", op.name()),
         }),
         Op::BufferNew
         | Op::BufferLen
@@ -49,21 +118,21 @@ pub(super) fn op_exclusion(op: Op) -> Option<Exclusion> {
             reason: "elephc-only `buffer<T>` extension; not PHP-visible",
             owner: "wasm-backend",
             removal_gate: "a WASM buffer lowering over linear memory",
-            diagnostic: "capability audit rejects `buffer` ops as unsupported on wasm32-wasi",
+            diagnostic: format!("unsupported op {}", op.name()),
         }),
         Op::PackedFieldGet | Op::PackedFieldSet => Some(Exclusion {
             category: "native-packed",
             reason: "elephc-only `packed class` extension; not PHP-visible",
             owner: "wasm-backend",
             removal_gate: "a WASM packed-field storage lowering",
-            diagnostic: "capability audit rejects `packed` ops as unsupported on wasm32-wasi",
+            diagnostic: format!("unsupported op {}", op.name()),
         }),
         Op::ExternCall | Op::ExternGlobalLoad | Op::ExternGlobalStore => Some(Exclusion {
             category: "native-extern",
             reason: "native `extern` FFI requiring host linker libraries",
             owner: "wasm-backend",
             removal_gate: "a WASM component-model import surface and prelude rewriting",
-            diagnostic: "--link, --link-path, and --framework are not supported for --target wasm32-wasi",
+            diagnostic: format!("unsupported op {}", op.name()),
         }),
         _ => None,
     }
@@ -78,7 +147,7 @@ pub(super) fn runtime_fn_exclusion(id: RuntimeFnId) -> Option<Exclusion> {
             reason: "HTTP/web SAPI builtin requiring the --web server entry point",
             owner: "wasm-backend",
             removal_gate: "a WASI HTTP/component-model server surface",
-            diagnostic: "--web is not yet supported for --target wasm32-wasi",
+            diagnostic: format!("unsupported runtime function {}", id.as_eir()),
         });
     }
     if matches!(
@@ -116,7 +185,7 @@ pub(super) fn runtime_fn_exclusion(id: RuntimeFnId) -> Option<Exclusion> {
             reason: "Elephc-only native pointer/buffer/zval/attribute extension; not PHP-visible",
             owner: "wasm-backend",
             removal_gate: "an explicit WASM extension ABI with bounds-checked linear-memory semantics",
-            diagnostic: "unsupported runtime function <eir-name>",
+            diagnostic: format!("unsupported runtime function {}", id.as_eir()),
         });
     }
     None
@@ -128,30 +197,33 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
     if !runtime_function_is_supported(id) {
         return None;
     }
-    let (lowerer, tests) = match id {
+    let (backend, lowerer, tests) = match id {
         RuntimeFnId::GetClass => (
+            "codegen_wasm::classes",
             "codegen_wasm::classes::lower_get_class",
             &["codegen_wasm::tests::get_class_object_returns_class_name"][..],
         ),
         RuntimeFnId::ArrayMap => (
+            "codegen_wasm::inst",
             "codegen_wasm::inst::lower_array_map",
             &["codegen_wasm::closures::tests::array_map_lowering_via_builtin_call_returns_4220"]
                 [..],
         ),
         RuntimeFnId::Usort => (
-            "codegen_wasm::inst::lower_user_sort(usort)",
+            "codegen_wasm::inst",
+            "codegen_wasm::inst::lower_user_sort",
             &["codegen_wasm::closures::tests::usort_lowering_writes_back_to_local"][..],
         ),
         RuntimeFnId::ArrayReduce => (
+            "codegen_wasm::inst",
             "codegen_wasm::inst::lower_array_reduce",
             &["codegen_wasm::closures::tests::array_reduce_lowering_boxes_mixed_result"][..],
         ),
         _ => return None,
     };
     Some(SupportedEvidence {
-        backend: "codegen_wasm::runtime",
+        backend,
         lowerer,
-        producers: &["PHP-visible builtin whose runtime target is lowered on WASM"],
         tests,
     })
 }
@@ -166,6 +238,9 @@ pub(super) fn op_row(op: Op) -> InventoryRow {
             family: "op",
             enum_name: "Op",
             disposition: Disposition::Excluded,
+            producers: excluded_op_producers(op),
+            execution_modes: public_wasm_modes(),
+            evidence_gaps: Vec::new(),
             supported: None,
             excluded: Some(exclusion),
             missing: None,
@@ -177,6 +252,12 @@ pub(super) fn op_row(op: Op) -> InventoryRow {
             family: "op",
             enum_name: "Op",
             disposition: Disposition::Supported,
+            producers: op_source_producers(op)
+                .iter()
+                .map(|producer| (*producer).to_string())
+                .collect(),
+            execution_modes: public_wasm_modes(),
+            evidence_gaps: Vec::new(),
             supported: Some(evidence),
             excluded: None,
             missing: None,
@@ -187,6 +268,12 @@ pub(super) fn op_row(op: Op) -> InventoryRow {
         family: "op",
         enum_name: "Op",
         disposition: Disposition::Missing,
+        producers: op_source_producers(op)
+            .iter()
+            .map(|producer| (*producer).to_string())
+            .collect(),
+        execution_modes: public_wasm_modes(),
+        evidence_gaps: Vec::new(),
         supported: None,
         excluded: None,
         missing: Some("ordinary PHP reachable from the public frontend; WASM lowerer absent"),
@@ -197,12 +284,16 @@ pub(super) fn op_row(op: Op) -> InventoryRow {
 /// Classifies one `RuntimeFnId` into an inventory row with exactly one disposition.
 pub(super) fn runtime_fn_row(id: RuntimeFnId) -> InventoryRow {
     let name = id.as_eir().to_string();
+    let producers = runtime_fn_producers(id);
     if let Some(exclusion) = runtime_fn_exclusion(id) {
         return InventoryRow {
             name,
             family: "runtime_fn",
             enum_name: "RuntimeFnId",
             disposition: Disposition::Excluded,
+            producers,
+            execution_modes: public_wasm_modes(),
+            evidence_gaps: Vec::new(),
             supported: None,
             excluded: Some(exclusion),
             missing: None,
@@ -214,6 +305,9 @@ pub(super) fn runtime_fn_row(id: RuntimeFnId) -> InventoryRow {
             family: "runtime_fn",
             enum_name: "RuntimeFnId",
             disposition: Disposition::Supported,
+            producers,
+            execution_modes: public_wasm_modes(),
+            evidence_gaps: Vec::new(),
             supported: Some(evidence),
             excluded: None,
             missing: None,
@@ -224,6 +318,9 @@ pub(super) fn runtime_fn_row(id: RuntimeFnId) -> InventoryRow {
         family: "runtime_fn",
         enum_name: "RuntimeFnId",
         disposition: Disposition::Missing,
+        producers,
+        execution_modes: public_wasm_modes(),
+        evidence_gaps: Vec::new(),
         supported: None,
         excluded: None,
         missing: Some("ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"),
@@ -238,11 +335,53 @@ pub(super) fn unary_string_row(target: UnaryStringRuntime) -> InventoryRow {
         family: "unary_string",
         enum_name: "UnaryStringRuntime",
         disposition: Disposition::Missing,
+        producers: unary_string_producers(target),
+        execution_modes: public_wasm_modes(),
+        evidence_gaps: Vec::new(),
         supported: None,
         excluded: None,
         missing: Some(
             "ordinary PHP string transform reachable from the public frontend; WASM lowerer absent",
         ),
+    }
+}
+
+/// Returns the PHP/control-flow producer represented by one terminator form.
+fn terminator_producers(terminator: &Terminator) -> Vec<String> {
+    let producer = match terminator {
+        Terminator::Br { .. } => "unconditional control-flow edge",
+        Terminator::CondBr { .. } => "if/loop conditional control flow",
+        Terminator::Switch { .. } => "switch/match dispatch",
+        Terminator::Return { .. } => "return statement or implicit function return",
+        Terminator::Throw { .. } => "throw expression",
+        Terminator::Fatal { .. } => "fatal PHP runtime error",
+        Terminator::GeneratorSuspend { .. } => "yield/yield from suspension",
+        Terminator::Unreachable => "statically unreachable CFG tail",
+    };
+    vec![producer.to_string()]
+}
+
+/// Returns tests that lower and validate the exact terminator form.
+fn terminator_tests(terminator: &Terminator) -> &'static [&'static str] {
+    match terminator {
+        Terminator::Br { .. } => {
+            &["codegen_wasm::tests::br_with_args_lowers_to_valid_wasm"]
+        }
+        Terminator::CondBr { .. } => {
+            &["codegen_wasm::tests::main_condbr_lowers_to_valid_wasm"]
+        }
+        Terminator::Switch { .. } => {
+            &["codegen_wasm::tests::switch_lowers_to_valid_wasm"]
+        }
+        Terminator::Return { .. } => {
+            &["codegen_wasm::tests::echo_integers_writes_to_stdout"]
+        }
+        Terminator::Unreachable => {
+            &["codegen_wasm::tests::main_command_has_a_complete_unreachable_inventory"]
+        }
+        Terminator::Throw { .. }
+        | Terminator::Fatal { .. }
+        | Terminator::GeneratorSuspend { .. } => &[],
     }
 }
 
@@ -256,16 +395,13 @@ pub(super) fn terminator_row(terminator: &Terminator) -> InventoryRow {
             family: "terminator",
             enum_name: "Terminator",
             disposition: Disposition::Supported,
+            producers: terminator_producers(terminator),
+            execution_modes: public_wasm_modes(),
+            evidence_gaps: Vec::new(),
             supported: Some(SupportedEvidence {
                 backend: "codegen_wasm::function",
-                lowerer: "lower_terminator",
-                producers: &["branches", "switch", "return", "unreachable CFG proof"],
-                tests: &[
-                    "codegen_wasm::tests::main_condbr_lowers_to_valid_wasm",
-                    "codegen_wasm::tests::br_with_args_lowers_to_valid_wasm",
-                    "codegen_wasm::tests::switch_lowers_to_valid_wasm",
-                    "codegen_wasm::tests::main_command_has_a_complete_unreachable_inventory",
-                ],
+                lowerer: "codegen_wasm::function::lower_terminator",
+                tests: terminator_tests(terminator),
             }),
             excluded: None,
             missing: None,
@@ -276,6 +412,9 @@ pub(super) fn terminator_row(terminator: &Terminator) -> InventoryRow {
             family: "terminator",
             enum_name: "Terminator",
             disposition: Disposition::Missing,
+            producers: terminator_producers(terminator),
+            execution_modes: public_wasm_modes(),
+            evidence_gaps: Vec::new(),
             supported: None,
             excluded: None,
             missing: Some("ordinary PHP control-flow terminator; WASM lowerer absent"),
@@ -288,12 +427,16 @@ pub(super) fn terminator_row(terminator: &Terminator) -> InventoryRow {
 pub(super) fn runtime_call_target_rows() -> Vec<InventoryRow> {
     let form = |name: &'static str,
                 disposition: Disposition,
+                producers: Vec<String>,
                 supported: Option<SupportedEvidence>,
                 missing: Option<&'static str>| InventoryRow {
         name: name.to_string(),
         family: "runtime_call_target",
         enum_name: "RuntimeCallTarget",
         disposition,
+        producers,
+        execution_modes: public_wasm_modes(),
+        evidence_gaps: Vec::new(),
         supported,
         excluded: None,
         missing,
@@ -302,6 +445,7 @@ pub(super) fn runtime_call_target_rows() -> Vec<InventoryRow> {
         form(
             "array.fetch_for_write",
             Disposition::Missing,
+            vec!["nested array write through an intermediate offset".to_string()],
             None,
             Some(
                 "ordinary PHP nested-array write helper; WASM lowerer absent",
@@ -310,6 +454,17 @@ pub(super) fn runtime_call_target_rows() -> Vec<InventoryRow> {
         form(
             "unary_string",
             Disposition::Missing,
+            registry::names()
+                .filter_map(registry::lookup)
+                .filter(|definition| !definition.spec.internal)
+                .filter(|definition| {
+                    matches!(
+                        definition.spec.semantics.lowering,
+                        BuiltinLowering::Runtime(RuntimeCallTarget::UnaryString(_))
+                    )
+                })
+                .map(|definition| format!("{}(...)", definition.name))
+                .collect(),
             None,
             Some(
                 "ordinary PHP string transform dispatch form; WASM lowerer absent (see unary_string family)",
@@ -318,10 +473,20 @@ pub(super) fn runtime_call_target_rows() -> Vec<InventoryRow> {
         form(
             "function",
             Disposition::Supported,
+            registry::names()
+                .filter_map(registry::lookup)
+                .filter(|definition| !definition.spec.internal)
+                .filter(|definition| {
+                    matches!(
+                        definition.spec.semantics.lowering,
+                        BuiltinLowering::Runtime(RuntimeCallTarget::Function(_))
+                    )
+                })
+                .map(|definition| format!("{}(...)", definition.name))
+                .collect(),
             Some(SupportedEvidence {
-                backend: "codegen_wasm::runtime",
-                lowerer: "check_runtime_call",
-                producers: &["typed runtime call dispatch"],
+                backend: "codegen_wasm::inst",
+                lowerer: "codegen_wasm::inst::lower_runtime_call",
                 tests: &[
                     "codegen_wasm::closures::tests::array_map_lowering_via_builtin_call_returns_4220",
                 ],
@@ -331,10 +496,20 @@ pub(super) fn runtime_call_target_rows() -> Vec<InventoryRow> {
         form(
             "profiled_function",
             Disposition::Supported,
+            registry::names()
+                .filter_map(registry::lookup)
+                .filter(|definition| !definition.spec.internal)
+                .filter(|definition| {
+                    matches!(
+                        definition.spec.semantics.lowering,
+                        BuiltinLowering::Runtime(RuntimeCallTarget::ProfiledFunction { .. })
+                    )
+                })
+                .map(|definition| format!("{}(...)", definition.name))
+                .collect(),
             Some(SupportedEvidence {
-                backend: "codegen_wasm::runtime",
-                lowerer: "check_runtime_call",
-                producers: &["strict-PHP-profiled typed runtime call dispatch"],
+                backend: "codegen_wasm::inst",
+                lowerer: "codegen_wasm::inst::lower_runtime_call",
                 tests: &["codegen_wasm::tests::get_class_object_returns_class_name"],
             }),
             None,
@@ -400,6 +575,96 @@ pub(super) fn shape_predicates() -> Vec<ShapePredicate> {
         disposition: "enforced",
     })
     .collect()
+}
+
+/// Returns one inventory row for a concrete EIR storage type.
+pub(super) fn ir_type_row(ir_type: IrType) -> InventoryRow {
+    let producers = match ir_type {
+        IrType::I64 => vec!["int/bool/callable/pointer/resource storage".to_string()],
+        IrType::F64 => vec!["float storage".to_string()],
+        IrType::Str => vec!["string storage".to_string()],
+        IrType::TaggedScalar => vec!["tagged nullable-scalar storage".to_string()],
+        IrType::Heap(IrHeapKind::Array) => vec!["indexed array storage".to_string()],
+        IrType::Heap(IrHeapKind::Hash) => vec!["associative array storage".to_string()],
+        IrType::Heap(IrHeapKind::Object) => vec!["object/packed-object storage".to_string()],
+        IrType::Heap(IrHeapKind::Mixed) => vec!["mixed value storage".to_string()],
+        IrType::Heap(IrHeapKind::Iterable) => vec!["iterable value storage".to_string()],
+        IrType::Heap(IrHeapKind::Union) => vec!["runtime union storage".to_string()],
+        IrType::Heap(IrHeapKind::Buffer) => vec!["buffer<T> storage".to_string()],
+        IrType::Void => vec!["void/never result storage".to_string()],
+    };
+    if ir_type == IrType::Heap(IrHeapKind::Buffer) {
+        return InventoryRow {
+            name: ir_type.as_eir(),
+            family: "ir_type",
+            enum_name: "IrType",
+            disposition: Disposition::Excluded,
+            producers,
+            execution_modes: public_wasm_modes(),
+            evidence_gaps: Vec::new(),
+            supported: None,
+            excluded: Some(Exclusion {
+                category: "native-buffer",
+                reason: "elephc-only `buffer<T>` storage is not admitted by the WASM ABI",
+                owner: "wasm-backend",
+                removal_gate: "a WASM buffer lowering over linear memory",
+                diagnostic: "unsupported storage type Heap(Buffer)".to_string(),
+            }),
+            missing: None,
+        };
+    }
+    let tests = match ir_type {
+        IrType::I64 => &["codegen_wasm::tests::echo_integers_writes_to_stdout"][..],
+        IrType::F64 => &["codegen_wasm::tests::echo_float_writes_to_stdout"][..],
+        IrType::Str => &["codegen_wasm::tests::echo_string_literal_writes_to_stdout"][..],
+        IrType::Heap(IrHeapKind::Object) => {
+            &["codegen_wasm::tests::get_class_object_returns_class_name"][..]
+        }
+        IrType::Heap(IrHeapKind::Mixed) => {
+            &["codegen_wasm::tests::echo_mixed_float_writes_to_stdout"][..]
+        }
+        IrType::TaggedScalar
+        | IrType::Heap(IrHeapKind::Array)
+        | IrType::Heap(IrHeapKind::Hash)
+        | IrType::Heap(IrHeapKind::Iterable)
+        | IrType::Heap(IrHeapKind::Union)
+        | IrType::Heap(IrHeapKind::Buffer)
+        | IrType::Void => &[],
+    };
+    InventoryRow {
+        name: ir_type.as_eir(),
+        family: "ir_type",
+        enum_name: "IrType",
+        disposition: Disposition::Supported,
+        producers,
+        execution_modes: public_wasm_modes(),
+        evidence_gaps: Vec::new(),
+        supported: Some(SupportedEvidence {
+            backend: "codegen_wasm::values",
+            lowerer: "codegen_wasm::values::WasmRepr::val_types",
+            tests,
+        }),
+        excluded: None,
+        missing: None,
+    }
+}
+
+/// Returns every concrete EIR storage form, expanding `Heap` by heap subkind.
+pub(super) fn ir_type_representatives() -> Vec<IrType> {
+    vec![
+        IrType::I64,
+        IrType::F64,
+        IrType::Str,
+        IrType::TaggedScalar,
+        IrType::Heap(IrHeapKind::Array),
+        IrType::Heap(IrHeapKind::Hash),
+        IrType::Heap(IrHeapKind::Object),
+        IrType::Heap(IrHeapKind::Mixed),
+        IrType::Heap(IrHeapKind::Iterable),
+        IrType::Heap(IrHeapKind::Union),
+        IrType::Heap(IrHeapKind::Buffer),
+        IrType::Void,
+    ]
 }
 
 

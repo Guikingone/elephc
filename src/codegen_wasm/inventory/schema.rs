@@ -17,11 +17,11 @@ use std::collections::BTreeMap;
 
 /// Schema identifier embedded in every emitted report so consumers can reject
 /// an incompatible revision before interpreting the payload.
-pub const SCHEMA_ID: &str = "elephc.wasm-inventory.v2";
+pub const SCHEMA_ID: &str = "elephc.wasm-inventory.v3";
 
 /// Generator version recorded in the report metadata. Bump when the schema or
 /// disposition classification changes in a way that alters the report shape.
-pub const GENERATOR_VERSION: &str = "w0-2";
+pub const GENERATOR_VERSION: &str = "w0-3";
 
 /// Frozen `docs/specs/wasm-compliance.md` SHA-256 recorded as a normative pin.
 pub const FROZEN_SPEC_SHA256: &str =
@@ -52,19 +52,17 @@ pub struct Exclusion {
     pub owner: &'static str,
     /// Condition that must hold before the identity may be re-enabled.
     pub removal_gate: &'static str,
-    /// Matching target diagnostic that already rejects the identity today.
-    pub diagnostic: &'static str,
+    /// Exact stable diagnostic fragment that already rejects the identity today.
+    pub diagnostic: String,
 }
 
-/// Producer and test evidence for a supported identity.
+/// Lowerer and test evidence for a supported identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SupportedEvidence {
     /// Backend module that lowers this identity.
     pub backend: &'static str,
     /// Specific lowerer function or group within the backend.
     pub lowerer: &'static str,
-    /// PHP source constructs that reach this identity.
-    pub producers: &'static [&'static str],
     /// Test identifiers that exercise this identity on WASM.
     pub tests: &'static [&'static str],
 }
@@ -80,6 +78,17 @@ pub struct InventoryRow {
     pub enum_name: &'static str,
     /// Exactly one capability disposition.
     pub disposition: Disposition,
+    /// PHP source constructs or builtins that produce this identity.
+    ///
+    /// An empty list is an explicit evidence gap; generators must never invent
+    /// a generic producer merely to satisfy the schema.
+    pub producers: Vec<String>,
+    /// Public execution modes through which this identity reaches the WASM
+    /// capability audit or lowerer.
+    pub execution_modes: Vec<&'static str>,
+    /// Exact evidence fields still missing for this row.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub evidence_gaps: Vec<&'static str>,
     /// Evidence present when `disposition == Supported`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supported: Option<SupportedEvidence>,
@@ -212,8 +221,12 @@ pub struct AggregateTotals {
     pub excluded: usize,
     /// Missing identities across every family.
     pub missing: usize,
-    /// Supported rows whose required producer/lowerer/test evidence is incomplete.
+    /// Total row-level plus catalog-level evidence gaps.
     pub evidence_gaps: usize,
+    /// Rows whose required producer/mode/lowerer/test evidence is incomplete.
+    pub row_evidence_gaps: usize,
+    /// Required test-catalog categories whose durable evidence is absent.
+    pub catalog_evidence_gaps: usize,
     /// `pass` only when no reachable identity or required evidence remains missing.
     pub gate: &'static str,
     /// Why the gate passes or fails.

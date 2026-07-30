@@ -23,7 +23,212 @@ pub(super) fn op_supported_evidence(op: Op) -> Option<SupportedEvidence> {
     let group = op_evidence_group(op);
     let mut evidence = supported_evidence_for_group(group);
     evidence.lowerer = op_lowerer(op);
+    evidence.tests = op_tests(op);
     Some(evidence)
+}
+
+/// Returns PHP-source producer descriptions for one opcode without inventing
+/// a generic fallback when the source mapping has not been audited yet.
+pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
+    match op {
+        Op::ConstI64 => &["integer literal"],
+        Op::ConstF64 => &["float literal"],
+        Op::ConstStr => &["string literal"],
+        Op::ConstNull => &["null literal"],
+        Op::ConstBool => &["true/false literal"],
+        Op::LoadLocal => &["local variable read"],
+        Op::StoreLocal => &["local variable assignment"],
+        Op::UnsetLocal => &["unset($local)"],
+        Op::LoadRefCell => &["read through a PHP reference"],
+        Op::StoreRefCell => &["assignment through a PHP reference"],
+        Op::PromoteLocalRefCell => &["first by-reference use of a local"],
+        Op::AliasLocalRefCell => &["reference assignment (`$a =& $b`)"],
+        Op::ReleaseLocalRefCell => &["scope exit for a referenced local"],
+        Op::LoadGlobal => &["superglobal/global variable read"],
+        Op::IAdd | Op::ICheckedAdd => &["integer `+`"],
+        Op::ISub | Op::ICheckedSub => &["integer `-`"],
+        Op::IMul | Op::ICheckedMul => &["integer `*`"],
+        Op::IDiv => &["integer operands to PHP `/`"],
+        Op::ISDiv => &["integer `intdiv()`"],
+        Op::ISMod => &["integer `%`"],
+        Op::INeg => &["unary integer `-`"],
+        Op::IBitAnd => &["integer `&`"],
+        Op::IBitOr => &["integer `|`"],
+        Op::IBitXor => &["integer `^`"],
+        Op::IBitNot => &["integer `~`"],
+        Op::IShl => &["integer `<<`"],
+        Op::IShrA => &["integer `>>`"],
+        Op::FAdd => &["float `+`"],
+        Op::FSub => &["float `-`"],
+        Op::FMul => &["float `*`"],
+        Op::FDiv => &["float `/`"],
+        Op::FNeg => &["unary float `-`"],
+        Op::ICmp => &["integer comparison"],
+        Op::FCmp => &["float comparison"],
+        Op::IsNull => &["null comparison or `is_null()` lowering"],
+        Op::IsTruthy => &["condition/boolean-context truthiness"],
+        Op::InstanceOf => &["`instanceof` with a statically resolved class"],
+        Op::IToF => &["implicit integer-to-float representation conversion"],
+        Op::Cast => &["explicit or compiler-required scalar cast"],
+        Op::MixedBox => &["boxing a concrete PHP value into Mixed"],
+        Op::MixedTagOf => &["runtime type inspection of a Mixed value"],
+        Op::StrConcat => &["string concatenation (`.`)"],
+        Op::StrLen => &["`strlen()`"],
+        Op::ConcatReset => &["reset of a compiler-managed concatenation chain"],
+        Op::ArrayNew => &["indexed array literal"],
+        Op::ArrayLen => &["`count()` on an indexed array"],
+        Op::ArrayGet => &["indexed array offset read"],
+        Op::ArrayGetSilent => &["silent indexed array offset read"],
+        Op::ArraySet => &["indexed array offset assignment"],
+        Op::ArrayPush => &["indexed array append (`$array[] = ...`)"],
+        Op::ArrayToHash => &["indexed-to-associative array promotion"],
+        Op::ArrayUnion => &["indexed array union (`+`)"],
+        Op::HashNew => &["associative array literal"],
+        Op::HashGet => &["associative array offset read"],
+        Op::HashGetSilent => &["silent associative array offset read"],
+        Op::HashSet => &["associative array offset assignment"],
+        Op::HashUnset => &["unset of an associative array key"],
+        Op::HashAppend => &["append to an associative array"],
+        Op::HashUnion => &["associative array union (`+`)"],
+        Op::ArrayHashUnion => &["indexed-left/associative-right array union"],
+        Op::HashArrayUnion => &["associative-left/indexed-right array union"],
+        Op::IterStart => &["`foreach` initialization"],
+        Op::IterCurrentKey => &["`foreach` key binding"],
+        Op::IterCurrentValue => &["`foreach` value binding"],
+        Op::IterCurrentValueRef => &["by-reference `foreach` value binding"],
+        Op::IterNext => &["`foreach` loop advance"],
+        Op::IterEnd => &["`foreach` loop completion"],
+        Op::ObjectNew => &["object construction (`new ClassName(...)`)"],
+        Op::PropGet => &["object property read"],
+        Op::PropSet => &["object property assignment"],
+        Op::NullsafePropGet => &["nullsafe property read (`?->property`)"],
+        Op::MethodCall => &["instance method call"],
+        Op::StaticMethodCall => &["static method call"],
+        Op::NullsafeMethodCall => &["nullsafe method call (`?->method(...)`)"],
+        Op::InstanceOfDynamic => &["`instanceof` with a runtime target"],
+        Op::Call => &["user-defined function call"],
+        Op::LanguageConstructCall => &["`exit`/`die` language construct"],
+        Op::RuntimeCall => &["registry-backed PHP builtin call"],
+        Op::ClosureNew => &["closure literal"],
+        Op::ClosureCapture => &["closure `use (...)` capture"],
+        Op::ClosureCall => &["closure invocation"],
+        Op::FirstClassCallableNew => &["first-class callable syntax (`foo(...)`)"],
+        Op::CallableDescriptorInvoke => &["runtime callable invocation"],
+        Op::EchoValue => &["`echo`"],
+        Op::PrintValue => &["`print`"],
+        Op::Warn => &["PHP warning emitted by an admitted operation"],
+        Op::ThrowError => &["PHP fatal `Error` emitted by an admitted operation"],
+        Op::Acquire => &["compiler-inserted retain of a refcounted PHP value"],
+        Op::Release => &["compiler-inserted release of a refcounted PHP value"],
+        Op::Move => &["compiler-inserted ownership move"],
+        Op::Borrow => &["compiler-inserted ownership borrow"],
+        Op::Nop => &["compiler-inserted no-op"],
+        _ => &[],
+    }
+}
+
+/// Returns tests that actually emit and lower the requested opcode.
+fn op_tests(op: Op) -> &'static [&'static str] {
+    match op {
+        Op::ConstI64 => &["codegen_wasm::tests::echo_integers_writes_to_stdout"],
+        Op::ConstF64 => &["codegen_wasm::tests::echo_float_writes_to_stdout"],
+        Op::ConstStr => &["codegen_wasm::tests::echo_string_literal_writes_to_stdout"],
+        Op::ConstBool => &["codegen_wasm::tests::echo_booleans_writes_to_stdout"],
+        Op::LoadLocal | Op::StoreLocal | Op::PromoteLocalRefCell => {
+            &["codegen_wasm::tests::ref_cell_promotion_is_runtime_idempotent_across_branches"]
+        }
+        Op::LoadRefCell | Op::Acquire | Op::Release => {
+            &["codegen_wasm::tests::acquired_ref_cell_return_survives_owner_epilogue"]
+        }
+        Op::StoreRefCell | Op::AliasLocalRefCell => {
+            &["codegen_wasm::tests::ref_cell_alias_string_store_e2e"]
+        }
+        Op::LoadGlobal => &["codegen_wasm::tests::argc_reports_argument_count"],
+        Op::IAdd | Op::ISub | Op::IMul | Op::IBitAnd | Op::ISDiv | Op::ISMod => {
+            &["codegen_wasm::tests::int_arithmetic_invokes_correctly"]
+        }
+        Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul => {
+            &["codegen_wasm::tests::checked_integer_arithmetic_promotes_overflow_to_float"]
+        }
+        Op::IShl | Op::IShrA => {
+            &["codegen_wasm::tests::integer_shifts_match_php_at_word_boundaries"]
+        }
+        Op::IDiv => &["codegen_wasm::tests::php_division_returns_float"],
+        Op::ICmp => &["codegen_wasm::tests::int_compare_invokes_correctly"],
+        Op::IsNull => {
+            &["codegen_wasm::tests::integer_null_sentinel_value_is_not_misclassified"]
+        }
+        Op::FMul => &["codegen_wasm::tests::closure_capture_float_e2e"],
+        Op::MixedBox => &["codegen_wasm::tests::echo_mixed_float_writes_to_stdout"],
+        Op::MixedTagOf => {
+            &["codegen_wasm::tests::checked_integer_arithmetic_promotes_overflow_to_float"]
+        }
+        Op::StrConcat => &["codegen_wasm::tests::chained_concat_echoes_correctly"],
+        Op::StrLen => &["codegen_wasm::tests::strlen_of_literal_invokes_correctly"],
+        Op::ArrayNew | Op::ArrayPush | Op::ArrayGet => {
+            &["codegen_wasm::tests::array_new_push_get_lowers"]
+        }
+        Op::ArrayLen => &["codegen_wasm::tests::array_len_lowers"],
+        Op::ArraySet => &["codegen_wasm::tests::array_set_overwrite_lowers"],
+        Op::ArrayUnion => &["codegen_wasm::tests::array_union_lowers"],
+        Op::ArrayHashUnion => &["codegen_wasm::tests::array_hash_union_lowers"],
+        Op::HashArrayUnion => &["codegen_wasm::tests::hash_array_union_lowers"],
+        Op::HashNew | Op::HashGet | Op::HashSet => {
+            &["codegen_wasm::tests::hash_set_get_int_lowers"]
+        }
+        Op::HashUnion => &["codegen_wasm::tests::hash_union_left_wins_lowers"],
+        Op::HashUnset => &["codegen_wasm::tests::hash_unset_removes_element_lowers"],
+        Op::IterStart
+        | Op::IterCurrentKey
+        | Op::IterCurrentValue
+        | Op::IterNext => &[
+            "codegen_wasm::tests::foreach_echoes_indexed_int_array",
+            "codegen_wasm::tests::foreach_hash_string_keys",
+        ],
+        Op::IterCurrentValueRef => &["codegen_wasm::tests::ref_cell_foreach_ref_int_e2e"],
+        Op::ObjectNew | Op::PropGet | Op::PropSet => {
+            &["codegen_wasm::tests::object_prop_set_overwrites"]
+        }
+        Op::MethodCall => &["codegen_wasm::tests::method_direct_call_returns_value"],
+        Op::StaticMethodCall => {
+            &["codegen_wasm::tests::static_method_named_direct_call"]
+        }
+        Op::NullsafeMethodCall => {
+            &["codegen_wasm::tests::nullsafe_on_object_receiver_dispatches"]
+        }
+        Op::NullsafePropGet => {
+            &["codegen_wasm::tests::nullsafe_prop_get_object_reads_dyn_prop"]
+        }
+        Op::InstanceOf => &["codegen_wasm::tests::instanceof_union_receiver_returns_true"],
+        Op::InstanceOfDynamic => &[
+            "codegen_wasm::tests::instanceof_dynamic_string_target_matches",
+            "codegen_wasm::tests::instanceof_dynamic_object_target_matches",
+        ],
+        Op::Call => &[
+            "codegen_wasm::tests::ref_cell_promotion_is_runtime_idempotent_across_branches",
+            "codegen_wasm::tests::acquired_ref_cell_return_survives_owner_epilogue",
+        ],
+        Op::RuntimeCall => &[
+            "codegen_wasm::closures::tests::array_map_lowering_via_builtin_call_returns_4220",
+            "codegen_wasm::tests::get_class_object_returns_class_name",
+        ],
+        Op::LanguageConstructCall => {
+            &["codegen_wasm::tests::exit_with_code_sets_process_status"]
+        }
+        Op::ClosureNew | Op::ClosureCall => {
+            &["codegen_wasm::tests::closure_capture_float_e2e"]
+        }
+        Op::FirstClassCallableNew => {
+            &["codegen_wasm::tests::first_class_callable_free_fn_e2e"]
+        }
+        Op::EchoValue => &[
+            "codegen_wasm::tests::echo_integers_writes_to_stdout",
+            "codegen_wasm::tests::echo_float_writes_to_stdout",
+            "codegen_wasm::tests::echo_string_literal_writes_to_stdout",
+            "codegen_wasm::tests::echo_booleans_writes_to_stdout",
+        ],
+        _ => &[],
+    }
 }
 
 /// Returns the exact active dispatch lowerer for one admitted opcode.
@@ -116,7 +321,10 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::AliasLocalRefCell => "codegen_wasm::refcell::lower_alias_local_ref_cell",
         Op::ReleaseLocalRefCell => "codegen_wasm::refcell::lower_release_local_ref_cell",
         Op::IterCurrentValueRef => "codegen_wasm::refcell::lower_iter_current_value_ref",
-        _ => "",
+        _ => panic!(
+            "supported opcode {} lacks an exact WASM lowerer inventory entry",
+            op.name()
+        ),
     }
 }
 
@@ -201,186 +409,53 @@ pub(super) fn op_evidence_group(op: Op) -> &'static str {
 }
 
 
-/// Returns the shared evidence record for a supported-group key.
-pub(super) fn supported_evidence_for_group(group: &'static str) -> SupportedEvidence {
-    match group {
-        "const" => SupportedEvidence {
-            backend: "codegen_wasm::inst",
-            lowerer: "lower_const_i64/lower_const_f64/lower_const_str/lower_const_null/lower_const_bool",
-            producers: &["integer/float/string/null/bool literals"],
-            tests: &["codegen_wasm::tests::echo_integers_writes_to_stdout"],
-        },
-        "transfer_local" => SupportedEvidence {
-            backend: "codegen_wasm::inst",
-            lowerer: "lower_load_local/store_local",
-            producers: &["local variable load/store", "unset"],
-            tests: &["codegen_wasm::tests::echo_integers_writes_to_stdout"],
-        },
-        "transfer_refcell" => SupportedEvidence {
-            backend: "codegen_wasm::refcell",
-            lowerer: "refcell lowerers",
-            producers: &["by-reference captures", "refcell load/store/promote"],
-            tests: &[
-                "codegen_wasm::tests::ref_cell_promotion_is_runtime_idempotent_across_branches",
-                "codegen_wasm::tests::acquired_ref_cell_return_survives_owner_epilogue",
-            ],
-        },
-        "transfer_global_load" => SupportedEvidence {
-            backend: "codegen_wasm::inst",
-            lowerer: "lower_load_global",
-            producers: &["superglobal reads in command mode"],
-            tests: &["codegen_wasm::tests::argc_reports_argument_count"],
-        },
-        "scalar_int" => SupportedEvidence {
-            backend: "codegen_wasm::inst",
-            lowerer: "lower_int_binop",
-            producers: &["integer arithmetic and bitwise operators"],
-            tests: &["codegen_wasm::tests::echo_integers_writes_to_stdout"],
-        },
-        "float" => SupportedEvidence {
-            backend: "codegen_wasm::float",
-            lowerer: "lower_float_binop",
-            producers: &["float arithmetic"],
-            tests: &[
-                "codegen_wasm::tests::echo_float_writes_to_stdout",
-                "codegen_wasm::tests::echo_mixed_float_writes_to_stdout",
-            ],
-        },
-        "compare" => SupportedEvidence {
-            backend: "codegen_wasm::inst",
-            lowerer: "lower_compare",
-            producers: &["comparison and truthiness operators"],
-            tests: &["codegen_wasm::tests::echo_integers_writes_to_stdout"],
-        },
-        "instanceof" => SupportedEvidence {
-            backend: "codegen_wasm::classes",
-            lowerer: "lower_instanceof",
-            producers: &["instanceof with a statically resolved class/interface target"],
-            tests: &["codegen_wasm::tests::instanceof_union_receiver_returns_true"],
-        },
-        "itof" => SupportedEvidence {
-            backend: "codegen_wasm::inst",
-            lowerer: "lower_itof",
-            producers: &["integer-to-float representation conversion"],
-            tests: &["codegen_wasm::tests::echo_float_writes_to_stdout"],
-        },
-        "cast" => SupportedEvidence {
-            backend: "codegen_wasm::inst",
-            lowerer: "lower_cast",
-            producers: &["explicit and implicit numeric casts"],
-            tests: &["codegen_wasm::tests::echo_float_writes_to_stdout"],
-        },
-        "mixed" => SupportedEvidence {
-            backend: "codegen_wasm::mixed",
-            lowerer: "mixed box/unbox/tag",
-            producers: &["Mixed cell construction and extraction"],
-            tests: &["codegen_wasm::tests::echo_mixed_float_writes_to_stdout"],
-        },
-        "string" => SupportedEvidence {
-            backend: "codegen_wasm::inst",
-            lowerer: "lower_str_concat/len",
-            producers: &["string concatenation", "strlen"],
-            tests: &[
-                "codegen_wasm::tests::chained_concat_echoes_correctly",
-                "codegen_wasm::tests::strlen_of_literal_invokes_correctly",
-            ],
-        },
-        "array_indexed" => SupportedEvidence {
-            backend: "codegen_wasm::arrays",
-            lowerer: "lower_array_*",
-            producers: &["indexed array literals", "indexed reads/writes", "isset", "append"],
-            tests: &["codegen_wasm::tests::echo_integers_writes_to_stdout"],
-        },
-        "hash" => SupportedEvidence {
-            backend: "codegen_wasm::hashes",
-            lowerer: "lower_hash_*",
-            producers: &["associative array literals", "hash reads/writes/isset/unset/append"],
-            tests: &[
-                "codegen_wasm::tests::hash_set_mixed_int_cast_fails_closed",
-                "codegen_wasm::tests::hash_set_mixed_float_cast_fails_closed",
-                "codegen_wasm::tests::hash_set_mixed_string_cast_fails_closed",
-            ],
-        },
-        "iter" => SupportedEvidence {
-            backend: "codegen_wasm::inst",
-            lowerer: "lower_iter_*",
-            producers: &["foreach over concrete arrays/hashes"],
-            tests: &["codegen_wasm::tests::echo_integers_writes_to_stdout"],
-        },
-        "object" => SupportedEvidence {
-            backend: "codegen_wasm::objects",
-            lowerer: "lower_object_new/prop_get/prop_set",
-            producers: &["object construction", "property reads/writes"],
-            tests: &["codegen_wasm::tests::echo_integers_writes_to_stdout"],
-        },
-        "method" => SupportedEvidence {
-            backend: "codegen_wasm::methods",
-            lowerer: "lower_method_call",
-            producers: &["method calls", "nullsafe method calls", "static method calls"],
-            tests: &[
-                "codegen_wasm::capability::tests::mixed_method_capability_rejects_non_public_candidates",
-            ],
-        },
-        "instanceof_dynamic" => SupportedEvidence {
-            backend: "codegen_wasm::classes",
-            lowerer: "lower_instanceof_dynamic",
-            producers: &["instanceof with a runtime object, Mixed, scalar, or string target"],
-            tests: &[
-                "codegen_wasm::tests::instanceof_dynamic_string_target_matches",
-                "codegen_wasm::tests::instanceof_dynamic_object_target_matches",
-            ],
-        },
-        "call" => SupportedEvidence {
-            backend: "codegen_wasm::calls",
-            lowerer: "lower_call/runtime_call",
-            producers: &["function calls", "language-construct calls", "runtime calls"],
-            tests: &[
-                "codegen_wasm::capability::tests::direct_call_shape_rejects_arity_mismatch_before_lowering",
-            ],
-        },
-        "closure" => SupportedEvidence {
-            backend: "codegen_wasm::closures",
-            lowerer: "lower_closure_*",
-            producers: &["closure creation/capture/call", "first-class callable", "callable invoke"],
-            tests: &["codegen_wasm::tests::echo_integers_writes_to_stdout"],
-        },
-        "echo" => SupportedEvidence {
-            backend: "codegen_wasm::inst",
-            lowerer: "lower_echo",
-            producers: &["echo", "print"],
-            tests: &[
-                "codegen_wasm::tests::echo_integers_writes_to_stdout",
-                "codegen_wasm::tests::echo_string_literal_writes_to_stdout",
-                "codegen_wasm::tests::echo_booleans_writes_to_stdout",
-            ],
-        },
-        "warn" => SupportedEvidence {
-            backend: "codegen_wasm::inst",
-            lowerer: "lower_warn (array-offset-on-null)",
-            producers: &["array offset read through null"],
-            tests: &[
-                "codegen_wasm::capability::tests::accepts_exact_array_offset_on_null_warning_boundary",
-            ],
-        },
-        "throw_error" => SupportedEvidence {
-            backend: "codegen_wasm::inst",
-            lowerer: "lower_throw_error (method-on-null boundary)",
-            producers: &["method call on null in a command module"],
-            tests: &[
-                "codegen_wasm::capability::tests::rejects_method_on_null_error_without_command_runtime",
-            ],
-        },
-        "ownership" => SupportedEvidence {
-            backend: "codegen_wasm::inst",
-            lowerer: "lower_move/borrow/acquire/release/nop",
-            producers: &["ownership transfers", "no-op"],
-            tests: &["codegen_wasm::tests::exit_runs_owned_local_destructors_before_terminating"],
-        },
-        _ => SupportedEvidence {
-            backend: "codegen_wasm::inst",
-            lowerer: "",
-            producers: &["mixed EIR lowering"],
-            tests: &[],
-        },
+/// Shared backend metadata for one lowering family.
+struct EvidenceGroup {
+    backend: &'static str,
+}
+
+/// Returns the shared backend record for a supported-group key.
+fn evidence_for_group(group: &'static str) -> EvidenceGroup {
+    let backend = match group {
+        "const"
+        | "transfer_local"
+        | "transfer_global_load"
+        | "scalar_int"
+        | "float"
+        | "compare"
+        | "itof"
+        | "cast"
+        | "mixed"
+        | "string"
+        | "array_indexed"
+        | "iter"
+        | "call"
+        | "echo"
+        | "warn"
+        | "throw_error"
+        | "ownership" => "codegen_wasm::inst",
+        "transfer_refcell" => "codegen_wasm::refcell",
+        "hash" => "codegen_wasm::inst_hash",
+        "instanceof" | "instanceof_dynamic" => "codegen_wasm::classes",
+        "object" => "codegen_wasm::objects",
+        "method" => "codegen_wasm::methods",
+        "closure" => "codegen_wasm::closures",
+        "other" => "",
+        unknown => panic!("unknown WASM inventory evidence group {unknown:?}"),
+    };
+    EvidenceGroup { backend }
+}
+
+/// Returns the supported row evidence after exact lowerer/test overrides.
+fn supported_evidence_for_group(group: &'static str) -> SupportedEvidence {
+    let group = evidence_for_group(group);
+    assert!(
+        !group.backend.is_empty(),
+        "supported opcode is missing an audited evidence group"
+    );
+    SupportedEvidence {
+        backend: group.backend,
+        lowerer: "",
+        tests: &[],
     }
 }
