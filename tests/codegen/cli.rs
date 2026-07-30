@@ -531,9 +531,8 @@ fn test_cli_timings_reports_assemble_and_link() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies the runtime cache: the first compile produces a "runtime-cache miss"
-/// and caches a runtime .o object; the second compile with the same input hits
-/// the cache ("runtime-cache hit") without recompiling the runtime.
+/// Verifies the timing report records `Runtime cache: miss` for the first
+/// compile and `Runtime cache: hit` for the second without rebuilding it.
 #[test]
 fn test_cli_runtime_cache_reuses_runtime_object() {
     let dir = make_cli_test_dir("elephc_cli_runtime_cache");
@@ -555,7 +554,11 @@ fn test_cli_runtime_cache_reuses_runtime_object() {
     );
     let first_stderr = String::from_utf8_lossy(&first.stderr);
     assert!(
-        first_stderr.contains("runtime-cache miss"),
+        first_stderr.contains("Notes"),
+        "expected timing notes after first compile, got stderr={first_stderr}"
+    );
+    assert!(
+        first_stderr.contains("Runtime cache: miss"),
         "expected first compile to miss runtime cache, got stderr={first_stderr}"
     );
 
@@ -586,7 +589,11 @@ fn test_cli_runtime_cache_reuses_runtime_object() {
     );
     let second_stderr = String::from_utf8_lossy(&second.stderr);
     assert!(
-        second_stderr.contains("runtime-cache hit"),
+        second_stderr.contains("Notes"),
+        "expected timing notes after second compile, got stderr={second_stderr}"
+    );
+    assert!(
+        second_stderr.contains("Runtime cache: hit"),
         "expected second compile to hit runtime cache, got stderr={second_stderr}"
     );
 
