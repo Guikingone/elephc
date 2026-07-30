@@ -1202,7 +1202,10 @@ fn truthiness_shape_issue(function: &Function, inst: &Instruction) -> Option<Str
     None
 }
 
-/// Admits only the integer-backed PHP forms implemented by `lower_int_like_to_string`.
+/// Admits only the stable integer-backed forms implemented by the WASM lowerer.
+///
+/// The shared EIR uses `MaybeOwned` for strings, while the WASM lowerer
+/// materializes an owned heap copy before publishing the result.
 fn int_like_to_string_shape_issue(
     function: &Function,
     inst: &Instruction,
@@ -1234,7 +1237,7 @@ fn int_like_to_string_shape_issue(
         || inst.result_ownership != Ownership::MaybeOwned
     {
         return Some(format!(
-            "IToStr requires a MaybeOwned Str/String result, got {:?}/{:?}/{:?}",
+            "IToStr requires the EIR MaybeOwned Str/String contract, got {:?}/{:?}/{:?}",
             inst.result_type,
             inst.result_php_type.codegen_repr(),
             inst.result_ownership
@@ -7581,7 +7584,7 @@ mod tests {
     }
 
     /// Verifies the `IToStr` capability admits only integer-backed PHP int/bool
-    /// sources and the exact scratch-string result contract used by the lowerer.
+    /// sources and the exact conservative EIR ownership contract.
     #[test]
     fn int_like_to_string_shape_is_exact() {
         let shape_issue =

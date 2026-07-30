@@ -1231,11 +1231,13 @@ fn lower_itof(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     store_result(ctx, inst)
 }
 
-/// Lowers integer-backed PHP integers and booleans to scratch-backed strings.
+/// Lowers integer-backed PHP integers and booleans to stable owned strings.
 ///
 /// PHP renders integers as decimal text, `true` as `"1"`, and `false` as the
-/// empty string. The returned string length is widened to the EIR `Str` i64
-/// length component before storing the result.
+/// empty string. Formatting first uses the shared integer scratch buffer, then
+/// persists the bytes before another conversion can overwrite them. The EIR
+/// keeps its conservative `MaybeOwned` string contract; the WASM value itself
+/// is an owned heap copy and is safe to release through the generic path.
 fn lower_int_like_to_string(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let value = operand(inst, 0)?;
     let source = ctx
@@ -1274,6 +1276,10 @@ fn lower_int_like_to_string(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             )));
         }
     }
+    ctx.fb.ins(
+        "call $__rt_str_persist",
+        "persist formatted PHP string before scratch reuse",
+    );
     store_result(ctx, inst)
 }
 

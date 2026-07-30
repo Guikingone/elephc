@@ -724,7 +724,8 @@ fn test_cli_wasm_ignores_native_codegen_environment_defaults() {
 }
 
 /// Compiles integer and boolean concatenation through PHP -> EIR -> WASM for
-/// every supported PHP profile and verifies `IToStr` matches PHP output.
+/// every supported PHP profile and verifies `IToStr`, including both signed
+/// i64 edges, matches PHP output.
 #[test]
 fn test_cli_wasm_integer_and_boolean_string_coercion_matches_php_profiles() {
     if Command::new("wasmer").arg("--version").output().is_err() {
@@ -743,9 +744,12 @@ function boolean_value(bool $value): bool {
     return $value;
 }
 $integer = integer_value(-42);
+$other_integer = integer_value(123);
+$minimum = integer_value(PHP_INT_MIN);
+$maximum = integer_value(PHP_INT_MAX);
 $false = boolean_value(false);
 $true = boolean_value(true);
-echo $integer . ":" . $false . "|" . $true;
+echo $integer . $other_integer . "|" . $true . $false . "|" . $minimum . ":" . $maximum;
 "#,
     )
     .unwrap();
@@ -776,7 +780,10 @@ echo $integer . ":" . $false . "|" . $true;
             "PHP {version} integer/boolean coercion trapped: {}",
             String::from_utf8_lossy(&run.stderr)
         );
-        assert_eq!(String::from_utf8_lossy(&run.stdout), "-42:|1");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "-42123|1|-9223372036854775808:9223372036854775807"
+        );
         assert!(
             run.stderr.is_empty(),
             "PHP {version}: {}",

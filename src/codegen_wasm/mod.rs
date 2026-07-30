@@ -3641,6 +3641,120 @@ mod tests {
         }
     }
 
+    /// Verifies consecutive dynamic `IToStr` values remain stable when both are
+    /// live across concatenation instead of aliasing the formatter scratch.
+    #[test]
+    fn integer_and_boolean_string_results_are_stable_across_concat() {
+        let mut module = Module::new(Target::wasm());
+        let separator = module.data.intern_string("|");
+        let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+
+            let left = builder.emit_const_i64(-42);
+            let left = builder
+                .emit(
+                    Op::IToStr,
+                    vec![left],
+                    None,
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::MaybeOwned,
+                )
+                .expect("left integer conversion");
+            let right = builder.emit_const_i64(123);
+            let right = builder
+                .emit(
+                    Op::IToStr,
+                    vec![right],
+                    None,
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::MaybeOwned,
+                )
+                .expect("right integer conversion");
+            let integers = builder
+                .emit(
+                    Op::StrConcat,
+                    vec![left, right],
+                    None,
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::MaybeOwned,
+                )
+                .expect("integer concatenation");
+            let _ = builder.emit(
+                Op::EchoValue,
+                vec![integers],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+
+            let separator = builder.emit_const_str(separator);
+            let _ = builder.emit(
+                Op::EchoValue,
+                vec![separator],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+
+            let true_value = builder.emit_const_bool(true);
+            let true_value = builder
+                .emit(
+                    Op::IToStr,
+                    vec![true_value],
+                    None,
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::MaybeOwned,
+                )
+                .expect("true conversion");
+            let false_value = builder.emit_const_bool(false);
+            let false_value = builder
+                .emit(
+                    Op::IToStr,
+                    vec![false_value],
+                    None,
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::MaybeOwned,
+                )
+                .expect("false conversion");
+            let booleans = builder
+                .emit(
+                    Op::StrConcat,
+                    vec![true_value, false_value],
+                    None,
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::MaybeOwned,
+                )
+                .expect("boolean concatenation");
+            let _ = builder.emit(
+                Op::EchoValue,
+                vec![booleans],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        if let Some(output) = run_main(&module) {
+            assert_eq!(output, "-42123|1");
+        }
+    }
+
     /// Verifies `echo "Hello, WASM!"` of a string literal writes the exact bytes to
     /// stdout via a data segment + `__rt_echo_str`.
     #[test]
