@@ -18,6 +18,14 @@ use crate::ir::value::{Ownership, ValueId};
 use crate::span::Span;
 use crate::types::PhpType;
 
+/// Exact PHP 8.2 diagnostic emitted by a normal offset read through a null receiver.
+pub const ARRAY_OFFSET_ON_NULL_WARNING_PHP82: &str =
+    "Warning: Trying to access array offset on value of type null\n";
+
+/// Exact PHP 8.3+ diagnostic emitted by a normal offset read through a null receiver.
+pub const ARRAY_OFFSET_ON_NULL_WARNING: &str =
+    "Warning: Trying to access array offset on null\n";
+
 /// Function-local identifier for an instruction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct InstId(u32);
@@ -593,8 +601,11 @@ impl Op {
             | PtrReadString => {
                 E::READS_HEAP | E::MAY_FATAL
             }
-            ArrayGetSilent | HashGetSilent | ArrayIsset | HashIsset => E::READS_HEAP,
-            ArrayGet | HashGet => E::READS_HEAP | E::MAY_WARN,
+            ArrayGetSilent => E::READS_HEAP | E::ALLOC_HEAP,
+            HashGetSilent => E::READS_HEAP | E::ALLOC_HEAP,
+            ArrayIsset | HashIsset => E::READS_HEAP,
+            ArrayGet => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_WARN,
+            HashGet => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_WARN,
             StrPersist | ArrayEnsureUnique | HashEnsureUnique | ArrayCloneShallow
             | HashCloneShallow | ObjectCloneShallow => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP

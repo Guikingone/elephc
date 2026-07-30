@@ -90,12 +90,14 @@ fn emit_heap_runtime_impl(
         wm.add_raw_func(
             r#"(func $__rt_oom
   (call $__rt_fail (i32.const 6))
-  unreachable)"#,
+  unreachable ;; elephc-trap:deterministic-oom:command-oom
+)"#,
         );
     } else {
         wm.add_raw_func(
             r#"(func $__rt_oom
-  unreachable)"#,
+  unreachable ;; elephc-trap:non-public:reactor-oom
+)"#,
         );
     }
     wm.add_raw_func(RT_CHECKED_LAYOUT);
@@ -115,19 +117,19 @@ fn emit_heap_runtime_impl(
 const RT_CHECKED_LAYOUT: &str = r#"(func $__rt_checked_layout (param $count i64) (param $stride i64) (param $header i64) (result i32)
   (local $remaining i64)
   (if (i64.lt_s (local.get $count) (i64.const 0))
-    (then (call $__rt_oom) unreachable))                       ;; negative element count
+    (then (call $__rt_oom) unreachable))                       ;; elephc-trap:deterministic-oom:layout-negative-count negative element count
   (if (i64.le_s (local.get $stride) (i64.const 0))
-    (then (call $__rt_oom) unreachable))                       ;; zero/negative stride
+    (then (call $__rt_oom) unreachable))                       ;; elephc-trap:deterministic-oom:layout-nonpositive-stride zero/negative stride
   (if (i64.lt_s (local.get $header) (i64.const 0))
-    (then (call $__rt_oom) unreachable))                       ;; negative header
+    (then (call $__rt_oom) unreachable))                       ;; elephc-trap:deterministic-oom:layout-negative-header negative header
   (if (i64.gt_u (local.get $header) (i64.const 4294900720))
-    (then (call $__rt_oom) unreachable))                       ;; header alone exceeds the payload ceiling
+    (then (call $__rt_oom) unreachable))                       ;; elephc-trap:deterministic-oom:layout-header-overflow header alone exceeds the payload ceiling
   (local.set $remaining
     (i64.sub (i64.const 4294900720) (local.get $header)))      ;; safe only after header <= ceiling
   (if (i64.gt_u
         (local.get $count)
         (i64.div_u (local.get $remaining) (local.get $stride)))
-    (then (call $__rt_oom) unreachable))                       ;; multiplication/addition would exceed wasm32
+    (then (call $__rt_oom) unreachable))                       ;; elephc-trap:deterministic-oom:layout-size-overflow multiplication/addition would exceed wasm32
   (i32.wrap_i64
     (i64.add
       (local.get $header)
@@ -151,7 +153,7 @@ const RT_HEAP_ALLOC: &str = r#"(func $__rt_heap_alloc (param $size i32) (result 
   (if (i64.gt_u (local.get $need64) (i64.const 4294900736))
     (then
       (call $__rt_oom)
-      unreachable))                                            ;; request cannot fit below the wasm32 page cap
+      unreachable))                                            ;; elephc-trap:deterministic-oom:heap-request-overflow request cannot fit below the wasm32 page cap
   (local.set $size (i32.wrap_i64 (local.get $size64)))         ;; safe after the widened bound check
   ;; free-list first-fit search; $blk stays 0 (its initial value) if nothing fits
   (local.set $prev (i32.const 0))                                ;; prev = null (free-list scan pointer)
@@ -178,7 +180,7 @@ const RT_HEAP_ALLOC: &str = r#"(func $__rt_heap_alloc (param $size i32) (result 
       (if (i64.gt_u (local.get $newend64) (i64.const 4294901760))
         (then
           (call $__rt_oom)
-          unreachable))                                        ;; keep the one-past-end pointer representable
+          unreachable))                                        ;; elephc-trap:deterministic-oom:heap-end-overflow keep the one-past-end pointer representable
       (if (i64.gt_u (local.get $newend64) (i64.extend_i32_u (global.get $__heap_end))) ;; would overrun the region
         (then
           (local.set $pages64
@@ -186,7 +188,7 @@ const RT_HEAP_ALLOC: &str = r#"(func $__rt_heap_alloc (param $size i32) (result 
           (if (i64.gt_u (local.get $pages64) (i64.const 65535))
             (then
               (call $__rt_oom)
-              unreachable))                                    ;; reserve a representable heap-end sentinel
+              unreachable))                                    ;; elephc-trap:deterministic-oom:heap-page-limit reserve a representable heap-end sentinel
           (local.set $current_pages64 (i64.extend_i32_u (memory.size))) ;; current total pages
           (local.set $pages
             (i32.wrap_i64 (i64.sub (local.get $pages64) (local.get $current_pages64)))) ;; additional pages
@@ -194,7 +196,7 @@ const RT_HEAP_ALLOC: &str = r#"(func $__rt_heap_alloc (param $size i32) (result 
           (if (i32.eq (local.get $grow) (i32.const -1))
             (then
               (call $__rt_oom)
-              unreachable))                                    ;; host refused the requested pages
+              unreachable))                                    ;; elephc-trap:deterministic-oom:memory-grow-failed host refused the requested pages
           (global.set $__heap_end
             (i32.shl (i32.wrap_i64 (local.get $pages64)) (i32.const 16))))) ;; exact grown region end
       (local.set $blk (global.get $__heap_ptr))                  ;; new block at the bump cursor

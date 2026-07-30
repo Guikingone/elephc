@@ -56,9 +56,19 @@ pub(super) fn lower_method_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
 
     let receiver = operand(inst, 0)?;
     let receiver_ty = ctx.value_php_type(receiver)?;
-    let class_name = match receiver_ty {
-        PhpType::Object(c) => c,
-        PhpType::Mixed | PhpType::Union(_) => {
+    let receiver_ir = ctx
+        .function
+        .value(receiver)
+        .map(|value| value.ir_type)
+        .ok_or_else(|| {
+            WasmError::Unsupported(format!("method receiver {:?} has no EIR value", receiver))
+        })?;
+    let static_class = (receiver_ir == IrType::Heap(IrHeapKind::Object))
+        .then(|| exact_static_object_class(&receiver_ty))
+        .flatten();
+    let class_name = match static_class {
+        Some(class_name) => class_name,
+        None if matches!(receiver_ty, PhpType::Mixed | PhpType::Union(_)) => {
             return lower_mixed_method_call(
                 ctx,
                 inst,
@@ -69,10 +79,10 @@ pub(super) fn lower_method_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
                 method_len,
             );
         }
-        other => {
+        None => {
             return Err(WasmError::Unsupported(format!(
                 "method call on non-object receiver {:?}",
-                other
+                receiver_ty
             )));
         }
     };
@@ -135,15 +145,37 @@ pub(super) fn lower_method_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
     Ok(())
 }
 
+/// Returns the statically known class carried either by `Object(C)` or by the
+/// exact pointer-backed nullable form `Object(C)|null`.
+///
+/// Capability validation separately proves that nullable values reach a direct
+/// method call only through the false edge of `IsNull(receiver)`.
+fn exact_static_object_class(receiver: &PhpType) -> Option<String> {
+    match receiver {
+        PhpType::Object(class_name) => Some(class_name.clone()),
+        PhpType::Union(members)
+            if members.len() == 2
+                && members
+                    .iter()
+                    .any(|member| matches!(member, PhpType::Void | PhpType::Never)) =>
+        {
+            members.iter().find_map(|member| match member {
+                PhpType::Object(class_name) => Some(class_name.clone()),
+                _ => None,
+            })
+        }
+        _ => None,
+    }
+}
+
 /// Lowers an `Op::MethodCall` whose receiver is `Mixed`/`Union` (P6f).
 ///
 /// The closed AOT class set is branched explicitly: the receiver cell is unboxed,
 /// and the runtime `class_id` (read from `[obj + 0]`) drives an `i64.eq` if-ladder
 /// over the candidate classes whose method arity matches the call. Each arm
-/// resolves the callee exactly like the single-class `lower_method_call` path
-/// (direct call for non-virtual/final methods, the introducer's dispatch stub
-/// otherwise), passes the unboxed object pointer as `this`, and boxes the callee's
-/// concrete return into a Mixed cell when the result slot is `Mixed`/`Union`.
+/// calls the already-resolved concrete implementation directly, passes the
+/// unboxed object pointer as `this`, and boxes the callee's concrete return into
+/// a Mixed cell when the result slot is `Mixed`/`Union`.
 ///
 /// The unboxed object pointer is BORROWED from the Mixed cell (never freed here);
 /// the receiver cell is released by the EIR ownership pass. No candidates, a
@@ -159,7 +191,7 @@ pub(super) fn lower_mixed_method_call(
     method_ptr: u32,
     method_len: u32,
 ) -> Result<()> {
-    let candidates = mixed_method_candidates(ctx.module, method_key, inst.operands.len());
+    let candidates = mixed_method_candidates(ctx.module, method_key);
     if candidates.is_empty() {
         return Err(WasmError::Unsupported(format!(
             "mixed method {}: no candidate class (P6f)",
@@ -208,7 +240,10 @@ pub(super) fn lower_mixed_method_call(
         "call $__rt_fail_undefined_method",
         "raise PHP fatal for undefined object method",
     );
-    ctx.fb.ins("unreachable", "fatal helper does not return");
+    ctx.fb.ins(
+        "unreachable",
+        "elephc-trap:post-noreturn:mixed-undefined-method fatal helper does not return",
+    );
     ctx.fb.ins("end", "end mixed dispatch merge");
     ctx.fb.ins("else", "receiver is not an object");
     ctx.fb.ins(&format!("i32.const {}", method_ptr), "method-name pointer");
@@ -219,19 +254,22 @@ pub(super) fn lower_mixed_method_call(
         "call $__rt_fail_method_call_non_object",
         "raise PHP fatal for non-object receiver",
     );
-    ctx.fb.ins("unreachable", "fatal helper does not return");
+    ctx.fb.ins(
+        "unreachable",
+        "elephc-trap:post-noreturn:mixed-non-object-method fatal helper does not return",
+    );
     ctx.fb.ins("end", "end receiver object test");
     Ok(())
 }
 
 /// Emits one candidate arm of a mixed/union method dispatch.
 ///
-/// Resolves the callee symbol exactly like `lower_method_call` (direct for
-/// non-virtual/final, the introducer's dispatch stub otherwise), pushes the
-/// unboxed object pointer as `this`, materializes the user arguments in source
-/// order, calls the callee, and either boxes the concrete return into a Mixed
-/// cell (when the result slot is `Mixed`/`Union` and the callee does not already
-/// return a Mixed cell) or stores/forwards the result directly.
+/// Calls one exact implementation selected by the surrounding closed-world
+/// Mixed/Union class-id ladder, then boxes or forwards its result.
+///
+/// The outer ladder has already resolved the runtime class, so calling a shared
+/// virtual stub here would dispatch twice and would incorrectly impose one
+/// implementation's return ABI on covariant overrides in the same subtree.
 fn emit_candidate_call(
     ctx: &mut FnCtx,
     inst: &Instruction,
@@ -246,16 +284,7 @@ fn emit_candidate_call(
         .class_infos
         .get(class_name)
         .ok_or_else(|| WasmError::Unsupported(format!("unknown class {}", class_name)))?;
-    let has_slot = ci.vtable_slots.contains_key(method_key);
-    let is_final = ci.final_methods.contains(method_key);
-    let dynamic = has_slot && !is_final;
-    let callee_symbol = if dynamic {
-        let introducer = resolve_vtable_introducer(ctx, class_name, method_key)?;
-        method_dispatch_symbol(&introducer, method_key)
-    } else {
-        method_symbol(&format!("{}::{}", impl_class, method_name))
-    };
-    let mode = if dynamic { "dispatch" } else { "direct" };
+    let callee_symbol = method_symbol(&format!("{}::{}", impl_class, method_name));
 
     // Authoritative callee return IR type (for boxing) + PHP type (for the tag).
     let callee_fn = find_method_function(&ctx.module.class_methods, impl_class, method_key)
@@ -274,7 +303,7 @@ fn emit_candidate_call(
     }
     ctx.fb.ins(
         &format!("call ${}", callee_symbol),
-        &format!("{}::{} ({})", class_name, method_name, mode),
+        &format!("{}::{} (closed-world direct)", class_name, method_name),
     );
 
     let result_is_boxed = matches!(inst.result_php_type, PhpType::Mixed | PhpType::Union(_));
@@ -300,10 +329,12 @@ fn emit_candidate_call(
 /// ownership pass can see), this function must release that source itself: the Str
 /// and Heap arms call `__rt_decref_any` on the captured pointer *after* `from_value`
 /// (so the cell's incref/persist lands first). `__rt_decref_any` no-ops on static
-/// data-segment strings, so a literal-returning callee is unaffected. The I64/F64
-/// arms store scalars by value with no heap pointer, so they need no release. The
-/// tag mirrors `__rt_mixed_from_value`'s contract (int 0, bool 3, float 2, string 1,
-/// array 4, assoc 5, object 6), matching `lower_mixed_box` in `inst.rs`.
+/// data-segment strings, so a literal-returning callee is unaffected. Callable
+/// returns use the scalar-width ABI but own a kind-6 descriptor, so their I64
+/// arm also releases the source descriptor after tag-10 boxing. Other I64/F64
+/// values are scalars and need no release. The tag mirrors
+/// `__rt_mixed_from_value`'s contract (int 0, bool 3, float 2, string 1, array 4,
+/// assoc 5, object 6, null/void 8, callable 10), matching `lower_mixed_box`.
 fn box_call_result_into_mixed(
     ctx: &mut FnCtx,
     ir: IrType,
@@ -319,11 +350,20 @@ fn box_call_result_into_mixed(
     match ir {
         IrType::I64 => {
             let t = ctx.fresh_temp(ValType::I64);
-            ctx.fb.ins(&format!("local.set {}", t), "capture int/bool return");
-            ctx.fb.ins(&format!("i64.const {}", tag), "mixed tag (int/bool)");
+            ctx.fb.ins(&format!("local.set {}", t), "capture scalar/callable return");
+            ctx.fb.ins(&format!("i64.const {}", tag), "mixed tag (scalar/callable)");
             ctx.fb.ins(&format!("local.get {}", t), "scalar -> lo");
             ctx.fb.ins("i64.const 0", "hi unused");
             ctx.fb.ins("call $__rt_mixed_from_value", "box scalar into a mixed cell");
+            if php.codegen_repr() == PhpType::Callable {
+                ctx.fb
+                    .ins(&format!("local.get {}", t), "callee-owned callable descriptor");
+                ctx.fb.ins("i32.wrap_i64", "callable descriptor pointer");
+                ctx.fb.ins(
+                    "call $__rt_decref_any",
+                    "release callee's owned callable (cell holds its own ref)",
+                );
+            }
         }
         IrType::F64 => {
             let t = ctx.fresh_temp(ValType::F64);
@@ -372,9 +412,7 @@ fn box_call_result_into_mixed(
             ));
         }
         IrType::Void => {
-            // Defensive: a void callee with a boxed result slot should not occur;
-            // box a null so the slot is well-defined rather than leaking stack.
-            ctx.fb.ins("i64.const 8", "mixed tag (null)");
+            ctx.fb.ins(&format!("i64.const {}", tag), "mixed tag (null)");
             ctx.fb.ins("i64.const 0", "lo");
             ctx.fb.ins("i64.const 0", "hi");
             ctx.fb.ins("call $__rt_mixed_from_value", "box null (void callee, mixed result)");
@@ -420,7 +458,7 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FnCtx, inst: &Instruction) ->
             lower_method_call(ctx, inst)
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            let candidates = mixed_method_candidates(ctx.module, &method_key, inst.operands.len());
+            let candidates = mixed_method_candidates(ctx.module, &method_key);
             if candidates.is_empty() {
                 return Err(WasmError::Unsupported(format!(
                     "nullsafe method {}: no candidate class (P6f)",
@@ -488,7 +526,10 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FnCtx, inst: &Instruction) ->
                 "call $__rt_fail_undefined_method",
                 "raise PHP fatal for undefined object method",
             );
-            ctx.fb.ins("unreachable", "fatal helper does not return");
+            ctx.fb.ins(
+                "unreachable",
+                "elephc-trap:post-noreturn:nullsafe-undefined-method fatal helper does not return",
+            );
             ctx.fb.ins("end", "end nullsafe dispatch merge");
             ctx.fb.ins("else", "receiver is neither null nor object");
             ctx.fb.ins(&format!("i32.const {}", method_ptr), "method-name pointer");
@@ -499,7 +540,10 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FnCtx, inst: &Instruction) ->
                 "call $__rt_fail_method_call_non_object",
                 "raise PHP fatal for non-object receiver",
             );
-            ctx.fb.ins("unreachable", "fatal helper does not return");
+            ctx.fb.ins(
+                "unreachable",
+                "elephc-trap:post-noreturn:nullsafe-non-object-method fatal helper does not return",
+            );
             ctx.fb.ins("end", "end receiver object test");
             ctx.fb.ins("end", "end receiver null test");
             Ok(())
@@ -668,9 +712,11 @@ fn resolve_vtable_introducer(ctx: &FnCtx, class_name: &str, method_key: &str) ->
 ///
 /// Each stub's if-ladder covers exactly the concrete classes in the introducer's
 /// subtree that carry the slot, tail-calling the implementation resolved via
-/// `method_impl_classes`. Stubs with no concrete implementer are skipped (such a
-/// method is never dispatched in a valid program); stubs are non-exported and
-/// reached only through `call $<stub>`.
+/// `method_impl_classes`. An incomplete or ABI-heterogeneous subtree is skipped
+/// wholesale: the capability gate rejects typed calls that cannot use one exact
+/// stub signature, while Mixed/Union dispatch calls each selected implementation
+/// directly. Omitting the unusable stub also prevents an unreferenced covariant
+/// override from making the final Core module invalid.
 pub(super) fn emit_method_dispatch_stubs(wm: &mut WatModule, module: &Module) -> Result<()> {
     let mut children: HashMap<String, Vec<String>> = HashMap::new();
     for (name, ci) in &module.class_infos {
@@ -721,6 +767,8 @@ pub(super) fn emit_method_dispatch_stubs(wm: &mut WatModule, module: &Module) ->
             });
             let mut arms: Vec<(u64, String)> = Vec::new();
             let mut sig_fn: Option<&Function> = None;
+            let mut missing_body = false;
+            let mut heterogeneous_abi = false;
             for class_name in &subtree {
                 let class_ci = module
                     .class_infos
@@ -731,13 +779,30 @@ pub(super) fn emit_method_dispatch_stubs(wm: &mut WatModule, module: &Module) ->
                     .get(method_key)
                     .cloned()
                     .unwrap_or_else(|| class_name.clone());
-                if let Some(f) = find_method_function(&module.class_methods, &impl_class, method_key)
-                {
-                    arms.push((class_ci.class_id, function_symbol(f)));
-                    if sig_fn.is_none() {
-                        sig_fn = Some(f);
-                    }
+                let Some(method) = find_method_function(
+                    &module.class_methods,
+                    &impl_class,
+                    method_key,
+                ) else {
+                    missing_body = true;
+                    continue;
+                };
+                if let Some(signature) = sig_fn {
+                    heterogeneous_abi |= signature.return_type != method.return_type
+                        || signature.params.len() != method.params.len()
+                        || signature
+                            .params
+                            .iter()
+                            .zip(&method.params)
+                            .any(|(left, right)| left.ir_type != right.ir_type);
                 }
+                arms.push((class_ci.class_id, function_symbol(method)));
+                if sig_fn.is_none() {
+                    sig_fn = Some(method);
+                }
+            }
+            if missing_body || heterogeneous_abi {
+                continue;
             }
             arms.sort_by(|left, right| {
                 left.0
@@ -862,7 +927,9 @@ fn build_dispatch_stub(stub_symbol: &str, sig_fn: &Function, arms: &[(u64, Strin
         wat.push_str(&format!("    call ${}\n    return))\n", fn_symbol));
     }
 
-    wat.push_str("  ;; closed class set guarantees an arm matched\n");
-    wat.push_str("  unreachable\n)\n");
+    wat.push_str("  ;; invalid/corrupted runtime class id: terminate through the shared failure boundary\n");
+    wat.push_str(
+        "  call $__rt_fail_callable_dispatch\n  unreachable ;; elephc-trap:post-noreturn:closed-method-dispatch-failure\n)\n",
+    );
     wat
 }

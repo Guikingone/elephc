@@ -20,9 +20,11 @@ use super::transfer;
 use super::WasmError;
 use crate::codegen::Emit;
 use crate::ir::{
-    Function, Immediate, Instruction, IrHeapKind, IrType, Module, Op, RuntimeCallTarget,
-    Ownership, RuntimeFnId, Terminator, UnaryStringRuntime, ValueDef, ValueId,
+    BlockId, Function, Immediate, Instruction, IrHeapKind, IrType, LocalKind, Module,
+    Op, Ownership, RuntimeCallTarget, RuntimeFnId, Terminator, UnaryStringRuntime,
+    ValueDef, ValueId,
 };
+use crate::parser::ast::Visibility;
 use crate::types::PhpType;
 use std::collections::HashSet;
 
@@ -35,6 +37,44 @@ use std::collections::HashSet;
 struct RefCellProvenance {
     owned: HashSet<u32>,
     borrowed: HashSet<u32>,
+}
+
+/// Computes the block ids reachable from the function entry through EIR edges.
+fn reachable_block_ids(function: &Function) -> HashSet<u32> {
+    let mut reachable = HashSet::new();
+    let mut pending = vec![function.entry];
+    while let Some(block_id) = pending.pop() {
+        if !reachable.insert(block_id.as_raw()) {
+            continue;
+        }
+        let Some(block) = function.block(block_id) else {
+            continue;
+        };
+        match block.terminator.as_ref() {
+            Some(Terminator::Br { target, .. }) => pending.push(*target),
+            Some(Terminator::CondBr {
+                then_target,
+                else_target,
+                ..
+            }) => {
+                pending.push(*then_target);
+                pending.push(*else_target);
+            }
+            Some(Terminator::Switch { cases, default, .. }) => {
+                pending.push(*default);
+                pending.extend(cases.iter().map(|case| case.target));
+            }
+            Some(Terminator::GeneratorSuspend { resume, .. }) => pending.push(*resume),
+            Some(
+                Terminator::Return { .. }
+                | Terminator::Throw { .. }
+                | Terminator::Fatal { .. }
+                | Terminator::Unreachable,
+            )
+            | None => {}
+        }
+    }
+    reachable
 }
 
 /// Audits every function collection and returns one aggregate diagnostic.
@@ -133,6 +173,7 @@ fn scan_function(
     issues: &mut Vec<String>,
 ) {
     let ref_cell_provenance = collect_ref_cell_provenance(function);
+    let reachable_blocks = reachable_block_ids(function);
     if function.flags.is_main
         && (function.return_type != IrType::Void
             || function.return_php_type.codegen_repr() != PhpType::Void)
@@ -265,6 +306,16 @@ fn scan_function(
                     block.id.as_raw()
                 ));
             }
+            Some(Terminator::Unreachable)
+                if reachable_blocks.contains(&block.id.as_raw())
+                    && !unreachable_has_noreturn_proof(module, function, block) =>
+            {
+                issues.push(format!(
+                    "{collection}::{} block#{}: reachable EIR unreachable terminator lacks a no-return proof",
+                    function.name,
+                    block.id.as_raw()
+                ));
+            }
             _ => {}
         }
     }
@@ -288,15 +339,24 @@ fn check_instruction_shape(
         Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul => {
             checked_int_binop_shape_issue(function, inst)
         }
+        Op::UnsetLocal => unset_owned_temp_shape_issue(function, inst),
         Op::Cast => cast_shape_issue(function, inst),
-        Op::ArrayGet | Op::ArrayGetSilent => array_get_shape_issue(module, function, inst),
+        Op::ArrayGet | Op::ArrayGetSilent => {
+            array_get_shape_issue(module, function, block, inst)
+        }
+        Op::HashGet | Op::HashGetSilent => {
+            hash_get_shape_issue(module, function, block, inst)
+        }
+        Op::HashSet | Op::HashUnset => dynamic_mixed_hash_key_issue(function, inst, 1),
         Op::ArrayToHash => array_to_hash_shape_issue(function, inst),
         Op::Call => {
             direct_call_shape_issue(module, function, inst, ref_cell_provenance)
         }
         Op::MethodCall | Op::NullsafeMethodCall => {
-            method_call_shape_issue(module, function, inst)
+            method_call_shape_issue(module, function, block, inst)
         }
+        Op::Warn => array_offset_on_null_warning_shape_issue(module, inst),
+        Op::ThrowError => method_call_on_null_error_shape_issue(module, inst),
         Op::StaticMethodCall => static_method_call_shape_issue(module, function, inst),
         Op::ClosureCall => closure_call_shape_issue(module, function, inst),
         Op::CallableDescriptorInvoke => {
@@ -317,6 +377,137 @@ fn check_instruction_shape(
             inst.op.name()
         ));
     }
+}
+
+/// Returns whether a reachable EIR `Unreachable` immediately follows the one
+/// admitted static PHP fatal boundary.
+fn unreachable_has_noreturn_proof(
+    module: &Module,
+    function: &Function,
+    block: &crate::ir::BasicBlock,
+) -> bool {
+    let Some(instruction) = block
+        .instructions
+        .last()
+        .and_then(|inst_id| function.instruction(*inst_id))
+    else {
+        return false;
+    };
+    instruction.op == Op::ThrowError
+        && method_call_on_null_error_shape_issue(module, instruction).is_none()
+}
+
+/// Validates the only static `ThrowError` form supported by the public command
+/// backend: the uncaught `Error` produced by an ordinary method call on `null`.
+fn method_call_on_null_error_shape_issue(
+    module: &Module,
+    inst: &Instruction,
+) -> Option<String> {
+    if !module
+        .functions
+        .iter()
+        .any(|function| function.flags.is_main)
+    {
+        return Some(
+            "method-on-null errors require the public WASI command runtime".to_string(),
+        );
+    }
+    if !inst.operands.is_empty() {
+        return Some(format!(
+            "method-on-null error expects no operands, got {}",
+            inst.operands.len()
+        ));
+    }
+    if inst.result.is_some()
+        || inst.result_type != IrType::Void
+        || inst.result_php_type.codegen_repr() != PhpType::Void
+        || inst.result_ownership != Ownership::NonHeap
+    {
+        return Some(
+            "method-on-null error must have a result-free Void/NonHeap shape".to_string(),
+        );
+    }
+    let Some(message) = data_string(module, inst) else {
+        return Some("method-on-null error requires a valid Data immediate".to_string());
+    };
+    if super::inst::method_call_on_null_name_range(message).is_none() {
+        return Some(format!(
+            "unsupported static Error message {message:?}; only method calls on null are admitted"
+        ));
+    }
+    None
+}
+
+/// Validates the only static warning form admitted by the public command backend.
+fn array_offset_on_null_warning_shape_issue(
+    module: &Module,
+    inst: &Instruction,
+) -> Option<String> {
+    if !module
+        .functions
+        .iter()
+        .any(|function| function.flags.is_main)
+    {
+        return Some(
+            "array-offset-on-null warnings require the public WASI command runtime".to_string(),
+        );
+    }
+    if !inst.operands.is_empty() {
+        return Some(format!(
+            "array-offset-on-null warning expects no operands, got {}",
+            inst.operands.len()
+        ));
+    }
+    if inst.result.is_some()
+        || inst.result_type != IrType::Void
+        || inst.result_php_type.codegen_repr() != PhpType::Void
+        || inst.result_ownership != Ownership::NonHeap
+    {
+        return Some(
+            "array-offset-on-null warning must have a result-free Void/NonHeap shape".to_string(),
+        );
+    }
+    let Some(message) = data_string(module, inst) else {
+        return Some(
+            "array-offset-on-null warning requires a valid Data immediate".to_string(),
+        );
+    };
+    if message != crate::codegen_support::runtime::array_offset_on_null_warning() {
+        return Some(format!(
+            "unsupported static warning {message:?}; only array-offset-on-null is admitted"
+        ));
+    }
+    None
+}
+
+/// Admits only the single-use `OwnedTemp` clear used after moving a branch
+/// result out of its hidden merge slot.
+fn unset_owned_temp_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
+    if !inst.operands.is_empty() {
+        return Some(format!(
+            "owned-temp unset must not carry operands, got {}",
+            inst.operands.len()
+        ));
+    }
+    let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+        return Some("owned-temp unset requires a local-slot immediate".to_string());
+    };
+    let Some(local) = function.locals.get(slot.as_raw() as usize) else {
+        return Some(format!("owned-temp unset references missing slot {slot:?}"));
+    };
+    if local.kind != LocalKind::OwnedTemp {
+        return Some(format!(
+            "only OwnedTemp slots may be cleared, got {:?}",
+            local.kind
+        ));
+    }
+    if inst.result.is_some()
+        || inst.result_type != IrType::Void
+        || inst.result_php_type.codegen_repr() != PhpType::Void
+    {
+        return Some("owned-temp unset must not materialize a result".to_string());
+    }
+    None
 }
 
 /// Collects conservative owned/borrowed ref-binding provenance for one function.
@@ -613,6 +804,7 @@ fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
 fn array_get_shape_issue(
     module: &Module,
     function: &Function,
+    block: u32,
     inst: &Instruction,
 ) -> Option<String> {
     if inst.op == Op::ArrayGet
@@ -635,16 +827,22 @@ fn array_get_shape_issue(
     let Some(array_value) = function.value(*array) else {
         return Some("array operand is missing from the value table".to_string());
     };
-    let element_type = match (
-        array_value.ir_type,
-        array_value.php_type.codegen_repr(),
-    ) {
+    let element_type = match (array_value.ir_type, &array_value.php_type) {
         (IrType::Heap(IrHeapKind::Array), PhpType::Array(element)) => {
+            element.codegen_repr()
+        }
+        (IrType::Heap(IrHeapKind::Array), php_type)
+            if guarded_nullable_container_source(function, block, *array, php_type) =>
+        {
+            let Some(PhpType::Array(element)) = exact_nullable_container_member(php_type)
+            else {
+                return Some("guarded nullable source is not an indexed array".to_string());
+            };
             element.codegen_repr()
         }
         (ir_type, php_type) => {
             return Some(format!(
-                "source must be an indexed array, got {ir_type:?}/{php_type:?}"
+                "source must be an indexed array or a proven non-null nullable array, got {ir_type:?}/{php_type:?}"
             ))
         }
     };
@@ -678,6 +876,298 @@ fn array_get_shape_issue(
             "element {element_type:?} cannot lower into {:?}/{result_php:?}",
             inst.result_type
         ));
+    }
+    let ownership_is_supported = match &element_type {
+        PhpType::Int => inst.result_ownership == Ownership::NonHeap,
+        PhpType::Bool | PhpType::Str => matches!(
+            inst.result_ownership,
+            Ownership::Owned | Ownership::MaybeOwned
+        ),
+        _ => false,
+    };
+    if !ownership_is_supported {
+        return Some(format!(
+            "element {element_type:?} result has incompatible ownership {:?}",
+            inst.result_ownership
+        ));
+    }
+    None
+}
+
+/// Validates null-capable associative-array reads supported by `lower_hash_get`.
+///
+/// `HashGet` requires the command runtime for its warning path. Silent reads
+/// remain import-free. The gate excludes dynamic Mixed keys until every PHP key
+/// tag has an exact warning/fatal path, and excludes legacy result shapes that
+/// cannot distinguish a missing key from an in-range PHP value.
+fn hash_get_shape_issue(
+    module: &Module,
+    function: &Function,
+    block: u32,
+    inst: &Instruction,
+) -> Option<String> {
+    if inst.op == Op::HashGet
+        && !module
+            .functions
+            .iter()
+            .any(|candidate| candidate.flags.is_main)
+    {
+        return Some(
+            "warning-producing associative read requires a main-bearing command module"
+                .to_string(),
+        );
+    }
+    let [hash, key] = inst.operands.as_slice() else {
+        return Some(format!(
+            "expected an associative array and key, got {} operands",
+            inst.operands.len()
+        ));
+    };
+    if inst.immediate.is_some() {
+        return Some("hash_get must not carry an immediate".to_string());
+    }
+    let Some(hash_value) = function.value(*hash) else {
+        return Some("hash operand is missing from the value table".to_string());
+    };
+    let value_type = match (hash_value.ir_type, &hash_value.php_type) {
+        (IrType::Heap(IrHeapKind::Hash), PhpType::AssocArray { value, .. }) => {
+            value.codegen_repr()
+        }
+        (IrType::Heap(IrHeapKind::Hash), php_type)
+            if guarded_nullable_container_source(function, block, *hash, php_type) =>
+        {
+            let Some(PhpType::AssocArray { value, .. }) =
+                exact_nullable_container_member(php_type)
+            else {
+                return Some("guarded nullable source is not an associative array".to_string());
+            };
+            value.codegen_repr()
+        }
+        (ir_type, php_type) => {
+            return Some(format!(
+                "source must be an associative array or a proven non-null nullable hash, got {ir_type:?}/{php_type:?}"
+            ))
+        }
+    };
+    let Some(key_value) = function.value(*key) else {
+        return Some("key operand is missing from the value table".to_string());
+    };
+    if let Some(issue) = dynamic_mixed_hash_key_issue(function, inst, 1) {
+        return Some(issue);
+    }
+    let key_php = key_value.php_type.codegen_repr();
+    let supported_key = matches!(
+        (key_value.ir_type, &key_php),
+        (IrType::I64, PhpType::Int | PhpType::Bool | PhpType::False)
+            | (IrType::F64, PhpType::Float)
+            | (IrType::Str, PhpType::Str)
+    );
+    if !supported_key {
+        return Some(format!(
+            "key must be a statically normalizable int/bool/float/string value, got {:?}/{key_php:?}",
+            key_value.ir_type
+        ));
+    }
+    if inst.result.is_none() {
+        return Some("hash_get must materialize its result".to_string());
+    }
+    let result_php = inst.result_php_type.codegen_repr();
+    let tagged_int = value_type == PhpType::Int
+        && inst.result_type == IrType::TaggedScalar
+        && result_php == PhpType::TaggedScalar;
+    let boxed_nullable = matches!(
+        &value_type,
+        PhpType::Bool
+            | PhpType::False
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::Callable
+            | PhpType::Resource(_)
+            | PhpType::Mixed
+            | PhpType::Union(_)
+    ) && inst.result_type == IrType::Heap(IrHeapKind::Mixed)
+        && result_php == PhpType::Mixed;
+    let exact_nullable_container = matches!(
+        &value_type,
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+    ) && inst.result_type == IrType::from_php(&value_type)
+        && php_type_is_exact_nullable_container(&inst.result_php_type, &value_type);
+    if !(tagged_int || boxed_nullable || exact_nullable_container) {
+        return Some(format!(
+            "element {value_type:?} cannot lower into {:?}/{result_php:?}",
+            inst.result_type
+        ));
+    }
+    let ownership_is_supported = if tagged_int {
+        inst.result_ownership == Ownership::NonHeap
+    } else {
+        matches!(
+            inst.result_ownership,
+            Ownership::Owned | Ownership::MaybeOwned
+        )
+    };
+    if !ownership_is_supported {
+        return Some(format!(
+            "element {value_type:?} result has incompatible ownership {:?}",
+            inst.result_ownership
+        ));
+    }
+    None
+}
+
+/// Returns whether PHP result metadata is exactly `container|null` for the
+/// declared associative element type.
+fn php_type_is_exact_nullable_container(actual: &PhpType, container: &PhpType) -> bool {
+    exact_nullable_container_member(actual).is_some_and(|member| member == container)
+}
+
+/// Returns the concrete member of an exact two-member `container|null` union.
+fn exact_nullable_container_member(actual: &PhpType) -> Option<&PhpType> {
+    let PhpType::Union(members) = actual else {
+        return None;
+    };
+    if members.len() != 2
+        || !members
+            .iter()
+            .any(|member| matches!(member, PhpType::Void | PhpType::Never))
+    {
+        return None;
+    }
+    members
+        .iter()
+        .find(|member| {
+            matches!(
+                member,
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+            )
+        })
+}
+
+/// Proves that a nullable container source is consumed only after the false
+/// edge of `IsNull(source)` and that edge dominates the consumer block.
+fn guarded_nullable_container_source(
+    function: &Function,
+    consumer_block: u32,
+    source: ValueId,
+    php_type: &PhpType,
+) -> bool {
+    if exact_nullable_container_member(php_type).is_none() {
+        return false;
+    }
+    function.blocks.iter().any(|guard| {
+        let Some(Terminator::CondBr {
+            cond,
+            then_target: _,
+            else_target,
+            ..
+        }) = guard.terminator.as_ref()
+        else {
+            return false;
+        };
+        if !condition_is_null_probe_of(function, *cond, source) {
+            return false;
+        }
+        let predecessors = block_predecessors(function, *else_target);
+        predecessors.len() == 1
+            && predecessors[0] == guard.id
+            && block_dominates(function, *else_target, BlockId::from_raw(consumer_block))
+    })
+}
+
+/// Returns whether a condition value is defined by `IsNull(source)`.
+fn condition_is_null_probe_of(function: &Function, condition: ValueId, source: ValueId) -> bool {
+    let Some(value) = function.value(condition) else {
+        return false;
+    };
+    let ValueDef::Instruction { inst, .. } = value.def else {
+        return false;
+    };
+    let Some(instruction) = function.instruction(inst) else {
+        return false;
+    };
+    instruction.op == Op::IsNull && instruction.operands.as_slice() == [source]
+}
+
+/// Lists all CFG predecessors of one block in deterministic function order.
+fn block_predecessors(function: &Function, target: BlockId) -> Vec<BlockId> {
+    function
+        .blocks
+        .iter()
+        .filter(|block| terminator_successors(block.terminator.as_ref()).contains(&target))
+        .map(|block| block.id)
+        .collect()
+}
+
+/// Returns the successor blocks named by a terminator.
+fn terminator_successors(terminator: Option<&Terminator>) -> Vec<BlockId> {
+    match terminator {
+        Some(Terminator::Br { target, .. }) => vec![*target],
+        Some(Terminator::CondBr {
+            then_target,
+            else_target,
+            ..
+        }) => vec![*then_target, *else_target],
+        Some(Terminator::Switch { cases, default, .. }) => {
+            let mut successors = cases.iter().map(|case| case.target).collect::<Vec<_>>();
+            successors.push(*default);
+            successors
+        }
+        Some(Terminator::GeneratorSuspend { resume, .. }) => vec![*resume],
+        Some(
+            Terminator::Return { .. }
+            | Terminator::Throw { .. }
+            | Terminator::Fatal { .. }
+            | Terminator::Unreachable,
+        )
+        | None => Vec::new(),
+    }
+}
+
+/// Returns whether every entry-to-target path crosses `dominator`.
+fn block_dominates(function: &Function, dominator: BlockId, target: BlockId) -> bool {
+    if dominator == target {
+        return true;
+    }
+    let mut visited = HashSet::new();
+    let mut pending = vec![function.entry];
+    while let Some(block_id) = pending.pop() {
+        if block_id == dominator || !visited.insert(block_id.as_raw()) {
+            continue;
+        }
+        if block_id == target {
+            return false;
+        }
+        let Some(block) = function.block(block_id) else {
+            continue;
+        };
+        pending.extend(terminator_successors(block.terminator.as_ref()));
+    }
+    reachable_block_ids(function).contains(&target.as_raw())
+}
+
+/// Rejects a dynamic Mixed associative key until every runtime tag has an
+/// exact PHP coercion, warning, or fatal path.
+///
+/// The current runtime can normalize scalar tags, but treating an array,
+/// object, or callable payload as an integer key silently miscompiles PHP.
+/// This guard applies equally to reads, writes, and `unset`: a silent read only
+/// suppresses an undefined-key warning, never an illegal-offset `TypeError`.
+fn dynamic_mixed_hash_key_issue(
+    function: &Function,
+    inst: &Instruction,
+    key_index: usize,
+) -> Option<String> {
+    let Some(key) = inst.operands.get(key_index) else {
+        return None;
+    };
+    let Some(key_value) = function.value(*key) else {
+        return None;
+    };
+    let key_php = key_value.php_type.codegen_repr();
+    if key_value.ir_type == IrType::Heap(IrHeapKind::Mixed) || key_php == PhpType::Mixed {
+        return Some(
+            "dynamic Mixed associative keys require exact per-tag PHP diagnostics".to_string(),
+        );
     }
     None
 }
@@ -898,6 +1388,7 @@ fn by_ref_source_shape_issue(
 fn method_call_shape_issue(
     module: &Module,
     function: &Function,
+    block: u32,
     inst: &Instruction,
 ) -> Option<String> {
     let Some(method_name) = data_string(module, inst) else {
@@ -910,7 +1401,29 @@ fn method_call_shape_issue(
         return Some("receiver operand is missing from the value table".to_string());
     };
     let method_key = crate::names::php_symbol_key(method_name);
-    match receiver_value.php_type.codegen_repr() {
+    let receiver_declared_php = receiver_value.php_type.clone();
+    let mut receiver_php = receiver_declared_php.codegen_repr();
+    if inst.op == Op::MethodCall {
+        if let Some(PhpType::Object(class_name)) =
+            exact_nullable_container_member(&receiver_declared_php)
+        {
+            if receiver_value.ir_type == IrType::Heap(IrHeapKind::Object) {
+                if !guarded_nullable_container_source(
+                    function,
+                    block,
+                    *receiver,
+                    &receiver_declared_php,
+                ) {
+                    return Some(
+                        "exact nullable object receiver lacks a dominating IsNull false-edge proof"
+                            .to_string(),
+                    );
+                }
+                receiver_php = PhpType::Object(class_name.clone());
+            }
+        }
+    }
+    match receiver_php {
         PhpType::Object(class_name) => {
             if receiver_value.ir_type != IrType::Heap(IrHeapKind::Object) {
                 return Some(format!(
@@ -932,27 +1445,54 @@ fn method_call_shape_issue(
             ) {
                 return Some(issue);
             }
-            let implementation = class_info
-                .method_impl_classes
-                .get(&method_key)
-                .map(String::as_str)
-                .unwrap_or(class_name.as_str());
-            let Some(body) = find_method_function(module, implementation, &method_key) else {
-                return Some(format!(
-                    "missing method body {implementation}::{method_name}"
-                ));
+            let dynamic = class_info.vtable_slots.contains_key(&method_key)
+                && !class_info.final_methods.contains(&method_key);
+            let candidates = if dynamic {
+                match dynamic_method_candidates(module, &class_name, &method_key) {
+                    Ok(candidates) => candidates,
+                    Err(issue) => return Some(issue),
+                }
+            } else {
+                vec![(
+                    class_name.clone(),
+                    class_info
+                        .method_impl_classes
+                        .get(&method_key)
+                        .cloned()
+                        .unwrap_or_else(|| class_name.clone()),
+                )]
             };
-            if let Some(issue) = method_body_signature_shape_issue(
-                body,
-                signature,
-                IrType::Heap(IrHeapKind::Object),
-            ) {
-                return Some(issue);
+            for (candidate, implementation) in candidates {
+                let Some(candidate_info) = module.class_infos.get(&candidate) else {
+                    return Some(format!("missing candidate class {candidate}"));
+                };
+                let Some(candidate_signature) = candidate_info.methods.get(&method_key) else {
+                    return Some(format!(
+                        "missing candidate signature {candidate}::{method_name}"
+                    ));
+                };
+                let Some(body) = find_method_function(module, &implementation, &method_key) else {
+                    return Some(format!(
+                        "missing method body {implementation}::{method_name} for dynamic candidate {candidate}"
+                    ));
+                };
+                if let Some(issue) = method_body_signature_shape_issue(
+                    body,
+                    candidate_signature,
+                    IrType::Heap(IrHeapKind::Object),
+                ) {
+                    return Some(issue);
+                }
+                if let Some(issue) = method_body_argument_shape_issue(function, inst, body) {
+                    return Some(issue);
+                }
+                if let Some(issue) =
+                    direct_method_result_shape_issue(inst, body, &candidate_signature.return_type)
+                {
+                    return Some(issue);
+                }
             }
-            if let Some(issue) = method_body_argument_shape_issue(function, inst, body) {
-                return Some(issue);
-            }
-            direct_method_result_shape_issue(inst, body, &signature.return_type)
+            None
         }
         PhpType::Mixed | PhpType::Union(_) => {
             if !matches!(
@@ -985,11 +1525,10 @@ fn method_call_shape_issue(
                 ));
             }
 
-            let candidates =
-                super::classes::mixed_method_candidates(module, &method_key, inst.operands.len());
+            let candidates = super::classes::mixed_method_candidates(module, &method_key);
             if candidates.is_empty() {
                 return Some(format!(
-                    "no closed-world candidate for dynamic method {method_name}"
+                    "no closed-world candidate for dynamic mixed/union method {method_name}"
                 ));
             }
             for (_, class_name, implementation) in candidates {
@@ -1001,6 +1540,15 @@ fn method_call_shape_issue(
                         "missing candidate signature {class_name}::{method_name}"
                     ));
                 };
+                let visibility = class_info
+                    .method_visibilities
+                    .get(&method_key)
+                    .unwrap_or(&Visibility::Public);
+                if visibility != &Visibility::Public {
+                    return Some(format!(
+                        "{class_name}::{method_name} has unsupported {visibility:?} visibility for dynamic mixed/union dispatch"
+                    ));
+                }
                 if let Some(issue) = method_signature_shape_issue(
                     function,
                     arguments,
@@ -1044,6 +1592,86 @@ fn method_call_shape_issue(
             "receiver must be Object, Mixed, or Union, got {other:?}"
         )),
     }
+}
+
+/// Returns whether `class_name` belongs to the class subtree rooted at `ancestor`.
+fn class_descends_from(module: &Module, class_name: &str, ancestor: &str) -> bool {
+    let mut current = Some(class_name);
+    let mut visited = HashSet::new();
+    while let Some(name) = current {
+        if name == ancestor {
+            return true;
+        }
+        if !visited.insert(name.to_string()) {
+            return false;
+        }
+        current = module
+            .class_infos
+            .get(name)
+            .and_then(|class_info| class_info.parent.as_deref());
+    }
+    false
+}
+
+/// Enumerates every concrete implementation required by one generated virtual stub.
+fn dynamic_method_candidates(
+    module: &Module,
+    receiver_class: &str,
+    method_key: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let mut introducer = receiver_class.to_string();
+    let mut visited = HashSet::new();
+    while visited.insert(introducer.clone()) {
+        let Some(parent) = module
+            .class_infos
+            .get(&introducer)
+            .and_then(|class_info| class_info.parent.as_ref())
+        else {
+            break;
+        };
+        let Some(parent_info) = module.class_infos.get(parent) else {
+            return Err(format!("missing parent class {parent}"));
+        };
+        if !parent_info.vtable_slots.contains_key(method_key) {
+            break;
+        }
+        introducer = parent.clone();
+    }
+
+    let mut candidates = module
+        .class_infos
+        .iter()
+        .filter(|(class_name, class_info)| {
+            !class_info.is_abstract
+                && class_info.vtable_slots.contains_key(method_key)
+                && class_descends_from(module, class_name, &introducer)
+        })
+        .map(|(class_name, class_info)| {
+            (
+                class_info.class_id,
+                class_name.clone(),
+                class_info
+                    .method_impl_classes
+                    .get(method_key)
+                    .cloned()
+                    .unwrap_or_else(|| class_name.clone()),
+            )
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+    });
+    if candidates.is_empty() {
+        return Err(format!(
+            "virtual method {receiver_class}::{method_key} has no concrete candidate"
+        ));
+    }
+    Ok(candidates
+        .into_iter()
+        .map(|(_, class_name, implementation)| (class_name, implementation))
+        .collect())
 }
 
 /// Validates true-static and lexical `self::`/`parent::` method calls against
@@ -2532,6 +3160,7 @@ fn op_is_supported(op: Op) -> bool {
         | Op::ConstBool
         | Op::LoadLocal
         | Op::StoreLocal
+        | Op::UnsetLocal
         | Op::LoadRefCell
         | Op::StoreRefCell
         | Op::PromoteLocalRefCell
@@ -2578,6 +3207,7 @@ fn op_is_supported(op: Op) -> bool {
         | Op::ArrayGet
         | Op::ArrayGetSilent
         | Op::HashGet
+        | Op::HashGetSilent
         | Op::ArraySet
         | Op::HashSet
         | Op::HashUnset
@@ -2612,6 +3242,8 @@ fn op_is_supported(op: Op) -> bool {
         | Op::CallableDescriptorInvoke
         | Op::EchoValue
         | Op::PrintValue
+        | Op::Warn
+        | Op::ThrowError
         | Op::Acquire
         | Op::Release
         | Op::Move
@@ -2621,7 +3253,6 @@ fn op_is_supported(op: Op) -> bool {
         | Op::ConstEnumCase
         | Op::LoadCalledClassId
         | Op::DataAddr
-        | Op::UnsetLocal
         | Op::ReleaseLocalSlot
         | Op::StoreGlobal
         | Op::LoadStaticLocal
@@ -2665,7 +3296,6 @@ fn op_is_supported(op: Op) -> bool {
         | Op::StrInterpolate
         | Op::WriteStrStdout
         | Op::HashLen
-        | Op::HashGetSilent
         | Op::ArrayIsset
         | Op::HashIsset
         | Op::ArrayElemAddr
@@ -2740,9 +3370,7 @@ fn op_is_supported(op: Op) -> bool {
         | Op::PrintR
         | Op::ErrorSuppressBegin
         | Op::ErrorSuppressEnd
-        | Op::Warn
         | Op::ThrowException
-        | Op::ThrowError
         | Op::ThrowErrorValue
         | Op::TryPushHandler
         | Op::TryPopHandler
@@ -2773,6 +3401,7 @@ mod tests {
         Builder, DataId, Function, FunctionParam, Immediate, IrHeapKind, IrType, LocalKind, Module,
         Op, Ownership, RuntimeCallTarget, RuntimeFnId, Terminator,
     };
+    use crate::parser::ast::Visibility;
     use crate::span::Span;
     use crate::types::{ClassInfo, FunctionSig, PhpType};
     use std::collections::{HashMap, HashSet};
@@ -2886,6 +3515,223 @@ mod tests {
         }
     }
 
+    /// Builds an instance-method body with the hidden object receiver followed
+    /// by the declared user parameters.
+    fn method_body(class_name: &str, method_name: &str, signature: &FunctionSig) -> Function {
+        let mut body = Function::new(
+            format!("{class_name}::{method_name}"),
+            IrType::Void,
+            PhpType::Void,
+        );
+        body.flags.is_method = true;
+        body.params.push(FunctionParam {
+            name: "this".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Object),
+            php_type: PhpType::Object(class_name.to_string()),
+            by_ref: false,
+            variadic: false,
+        });
+        body.params
+            .extend(signature.params.iter().map(|(name, php_type)| FunctionParam {
+                name: name.clone(),
+                ir_type: match php_type.codegen_repr() {
+                    PhpType::Int | PhpType::Bool => IrType::I64,
+                    other => panic!("unsupported test parameter type {other:?}"),
+                },
+                php_type: php_type.clone(),
+                by_ref: false,
+                variadic: false,
+            }));
+        body
+    }
+
+    /// Builds one dynamic Mixed receiver method call and returns its capability
+    /// issue without requiring the surrounding test EIR to be otherwise complete.
+    fn mixed_method_issue(module: &Module, method_data: DataId) -> Option<String> {
+        let mut caller = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        let instruction_index = caller.instructions.len();
+        {
+            let mut builder = Builder::new(&mut caller);
+            let entry = builder.create_named_block(
+                "entry",
+                vec![(IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed)],
+            );
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let receiver = builder.block_param(entry, 0);
+            let _ = builder.emit(
+                Op::MethodCall,
+                vec![receiver],
+                Some(Immediate::Data(method_data)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+        }
+        super::method_call_shape_issue(
+            module,
+            &caller,
+            0,
+            &caller.instructions[instruction_index],
+        )
+    }
+
+    /// Rejects a dynamic call when a concrete runtime class has the requested
+    /// method but a different arity, instead of misreporting it as undefined.
+    #[test]
+    fn mixed_method_capability_sees_concrete_arity_mismatches() {
+        let method_name = "run";
+        let method_key = crate::names::php_symbol_key(method_name);
+        let mut module = Module::new(Target::wasm());
+        let method_data = module.data.intern_string(method_name);
+
+        let mut zero = minimal_class_info(2);
+        zero.methods.insert(method_key.clone(), void_signature());
+        zero.method_impl_classes
+            .insert(method_key.clone(), "Zero".to_string());
+        module.class_infos.insert("Zero".to_string(), zero);
+        module
+            .class_methods
+            .push(method_body("Zero", method_name, &void_signature()));
+
+        let mut one_signature = void_signature();
+        one_signature
+            .params
+            .push(("value".to_string(), PhpType::Int));
+        one_signature.defaults.push(None);
+        one_signature.ref_params.push(false);
+        one_signature.declared_params.push(true);
+        let mut one = minimal_class_info(1);
+        one.methods
+            .insert(method_key.clone(), one_signature.clone());
+        one.method_impl_classes
+            .insert(method_key, "One".to_string());
+        module.class_infos.insert("One".to_string(), one);
+        module
+            .class_methods
+            .push(method_body("One", method_name, &one_signature));
+
+        let issue = mixed_method_issue(&module, method_data)
+            .expect("different concrete arity must fail the pre-emission gate");
+        assert!(
+            issue.contains("One: run expects 1 arguments, got 0"),
+            "{issue}"
+        );
+    }
+
+    /// Rejects a non-public dynamic Mixed candidate before its exact direct
+    /// implementation call could bypass PHP visibility.
+    #[test]
+    fn mixed_method_capability_rejects_non_public_candidates() {
+        let method_name = "run";
+        let method_key = crate::names::php_symbol_key(method_name);
+        let mut module = Module::new(Target::wasm());
+        let method_data = module.data.intern_string(method_name);
+        let mut class_info = minimal_class_info(1);
+        class_info
+            .methods
+            .insert(method_key.clone(), void_signature());
+        class_info
+            .method_impl_classes
+            .insert(method_key.clone(), "Secret".to_string());
+        class_info
+            .method_visibilities
+            .insert(method_key, Visibility::Private);
+        module.class_infos.insert("Secret".to_string(), class_info);
+
+        let issue = mixed_method_issue(&module, method_data)
+            .expect("private candidate must fail the pre-emission gate");
+        assert!(issue.contains("unsupported Private visibility"), "{issue}");
+    }
+
+    /// Rejects a pointer-backed `Object|null` receiver unless the direct method
+    /// call is dominated by the false edge of `IsNull(receiver)`.
+    #[test]
+    fn method_capability_rejects_unguarded_exact_nullable_object_receiver() {
+        let class_name = "NullableReceiver";
+        let method_name = "run";
+        let method_key = crate::names::php_symbol_key(method_name);
+        let mut module = Module::new(Target::wasm());
+        let method_data = module.data.intern_string(method_name);
+        let mut class_info = minimal_class_info(1);
+        class_info
+            .methods
+            .insert(method_key.clone(), void_signature());
+        class_info
+            .method_impl_classes
+            .insert(method_key, class_name.to_string());
+        module
+            .class_infos
+            .insert(class_name.to_string(), class_info);
+        module
+            .class_methods
+            .push(method_body(class_name, method_name, &void_signature()));
+
+        let nullable = PhpType::Union(vec![
+            PhpType::Object(class_name.to_string()),
+            PhpType::Void,
+        ]);
+        let mut caller = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        let instruction_index = caller.instructions.len();
+        {
+            let mut builder = Builder::new(&mut caller);
+            let entry = builder.create_named_block(
+                "entry",
+                vec![(IrType::Heap(IrHeapKind::Object), nullable)],
+            );
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let receiver = builder.block_param(entry, 0);
+            let _ = builder.emit(
+                Op::MethodCall,
+                vec![receiver],
+                Some(Immediate::Data(method_data)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+        }
+
+        let issue = super::method_call_shape_issue(
+            &module,
+            &caller,
+            0,
+            &caller.instructions[instruction_index],
+        )
+        .expect("unguarded exact nullable object must fail capability");
+        assert!(
+            issue.contains("lacks a dominating IsNull false-edge proof"),
+            "{issue}"
+        );
+    }
+
+    /// Excludes abstract classes from the runtime Mixed dispatch set because no
+    /// valid PHP object can carry their class id.
+    #[test]
+    fn mixed_method_candidates_exclude_abstract_classes() {
+        let method_key = crate::names::php_symbol_key("run");
+        let mut module = Module::new(Target::wasm());
+        let mut abstract_class = minimal_class_info(1);
+        abstract_class.is_abstract = true;
+        abstract_class
+            .methods
+            .insert(method_key.clone(), void_signature());
+        module
+            .class_infos
+            .insert("AbstractBase".to_string(), abstract_class);
+        let mut concrete_class = minimal_class_info(2);
+        concrete_class
+            .methods
+            .insert(method_key.clone(), void_signature());
+        module
+            .class_infos
+            .insert("Concrete".to_string(), concrete_class);
+
+        let candidates = super::super::classes::mixed_method_candidates(&module, &method_key);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].1, "Concrete");
+    }
+
     /// Rejects a same-width callable parameter hidden behind an integer method
     /// signature before direct, static, or dynamic lowering can raw-copy it.
     #[test]
@@ -2946,6 +3792,89 @@ mod tests {
         .expect("same-width PHP return metadata drift must be rejected");
         assert!(issue.contains("return"));
         assert!(issue.contains("Callable"));
+    }
+
+    /// Verifies a typed virtual call is rejected before lowering when any
+    /// concrete class in the shared dispatch subtree lacks its resolved body.
+    #[test]
+    fn rejects_virtual_dispatch_with_missing_descendant_body() {
+        let method_key = crate::names::php_symbol_key("run");
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name("Base");
+        let method_data = module.data.intern_string("run");
+
+        let mut base = minimal_class_info(1);
+        base.methods.insert(method_key.clone(), void_signature());
+        base.method_impl_classes
+            .insert(method_key.clone(), "Base".to_string());
+        base.vtable_slots.insert(method_key.clone(), 0);
+        module.class_infos.insert("Base".to_string(), base);
+
+        let mut child = minimal_class_info(2);
+        child.parent = Some("Base".to_string());
+        child.methods.insert(method_key.clone(), void_signature());
+        child
+            .method_impl_classes
+            .insert(method_key.clone(), "Child".to_string());
+        child.vtable_slots.insert(method_key, 0);
+        module.class_infos.insert("Child".to_string(), child);
+
+        let mut base_body =
+            Function::new("Base::run".to_string(), IrType::Void, PhpType::Void);
+        base_body.flags.is_method = true;
+        base_body.params.push(FunctionParam {
+            name: "this".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Object),
+            php_type: PhpType::Object("Base".to_string()),
+            by_ref: false,
+            variadic: false,
+        });
+        {
+            let mut builder = Builder::new(&mut base_body);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.class_methods.push(base_body);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let receiver = builder
+                .emit(
+                    Op::ObjectNew,
+                    Vec::new(),
+                    Some(Immediate::Data(class_data)),
+                    IrType::Heap(IrHeapKind::Object),
+                    PhpType::Object("Base".to_string()),
+                    Ownership::Owned,
+                )
+                .expect("object allocation result");
+            let _ = builder.emit(
+                Op::MethodCall,
+                vec![receiver],
+                Some(Immediate::Data(method_data)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        let error = validate_module(&module)
+            .expect_err("incomplete virtual dispatch subtree must fail capability");
+        assert!(
+            error
+                .to_string()
+                .contains("missing method body Child::run for dynamic candidate Child"),
+            "{error}"
+        );
     }
 
     /// Builds one terminated void function suitable for collection-audit tests.
@@ -4592,6 +5521,567 @@ mod tests {
         );
     }
 
+    /// Fresh Mixed cells returned for bool/string reads must remain tracked as
+    /// releasable results, while tagged integer reads stay non-heap values.
+    #[test]
+    fn rejects_array_get_result_ownership_mismatches() {
+        let mut module = Module::new(Target::wasm());
+        let mut function =
+            Function::new("ownership_reads".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let index = builder.emit_const_i64(0);
+            for (element, ir_type, php_type, ownership) in [
+                (
+                    PhpType::Int,
+                    IrType::TaggedScalar,
+                    PhpType::TaggedScalar,
+                    Ownership::Borrowed,
+                ),
+                (
+                    PhpType::Bool,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::NonHeap,
+                ),
+                (
+                    PhpType::Str,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Persistent,
+                ),
+            ] {
+                let array = builder
+                    .emit(
+                        Op::ArrayNew,
+                        Vec::new(),
+                        Some(Immediate::Capacity(1)),
+                        IrType::Heap(IrHeapKind::Array),
+                        PhpType::Array(Box::new(element)),
+                        Ownership::Owned,
+                    )
+                    .expect("array value");
+                let _ = builder.emit(
+                    Op::ArrayGet,
+                    vec![array, index],
+                    None,
+                    ir_type,
+                    php_type,
+                    ownership,
+                );
+            }
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let error =
+            validate_module(&module).expect_err("array-read ownership drift must fail");
+        let message = error.to_string();
+        assert_eq!(
+            message.matches("result has incompatible ownership").count(),
+            3,
+            "{message}"
+        );
+    }
+
+    /// Nullable associative reads accept tagged integers, boxed scalar results,
+    /// and precise `container|null` pointers. Warning emission remains reserved
+    /// for the non-silent opcode.
+    #[test]
+    fn accepts_nullable_hash_get_shapes_including_silent_reads() {
+        let mut module = Module::new(Target::wasm());
+        let mut function = Function::new("hash_reads".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let key = builder.emit_const_i64(0);
+            for (op, element, ir_type, php_type, ownership) in [
+                (
+                    Op::HashGet,
+                    PhpType::Int,
+                    IrType::TaggedScalar,
+                    PhpType::TaggedScalar,
+                    Ownership::NonHeap,
+                ),
+                (
+                    Op::HashGet,
+                    PhpType::Bool,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                ),
+                (
+                    Op::HashGetSilent,
+                    PhpType::Float,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                ),
+                (
+                    Op::HashGet,
+                    PhpType::Str,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::MaybeOwned,
+                ),
+                (
+                    Op::HashGetSilent,
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Union(vec![
+                        PhpType::Array(Box::new(PhpType::Int)),
+                        PhpType::Void,
+                    ]),
+                    Ownership::MaybeOwned,
+                ),
+            ] {
+                let hash = builder
+                    .emit(
+                        Op::HashNew,
+                        Vec::new(),
+                        Some(Immediate::Capacity(1)),
+                        IrType::Heap(IrHeapKind::Hash),
+                        PhpType::AssocArray {
+                            key: Box::new(PhpType::Int),
+                            value: Box::new(element),
+                        },
+                        Ownership::Owned,
+                    )
+                    .expect("hash value");
+                let _ = builder.emit(
+                    op,
+                    vec![hash, key],
+                    None,
+                    ir_type,
+                    php_type,
+                    ownership,
+                );
+            }
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let wat = validate_module(&module)
+            .expect("nullable hash-get shapes must pass the gate")
+            .into_wat();
+        assert_eq!(
+            wat.matches("call $__rt_warn_undefined_array_key_int")
+                .count(),
+            3,
+            "only normal reads should call the integer warning arm: {wat}"
+        );
+        assert_eq!(
+            wat.matches("call $__rt_warn_undefined_array_key_str")
+                .count(),
+            3,
+            "only normal reads should call the string warning arm: {wat}"
+        );
+    }
+
+    /// A nullable container pointer cannot feed a typed read unless the
+    /// consumer is dominated by the non-null edge of `IsNull(source)`.
+    #[test]
+    fn rejects_unguarded_nullable_container_consumer() {
+        let mut module = Module::new(Target::wasm());
+        let inner = PhpType::Array(Box::new(PhpType::Int));
+        let outer = PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: Box::new(inner.clone()),
+        };
+        let mut function =
+            Function::new("unguarded_chain".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let hash = builder
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(1)),
+                    IrType::Heap(IrHeapKind::Hash),
+                    outer,
+                    Ownership::Owned,
+                )
+                .expect("outer hash");
+            let key = builder.emit_const_i64(0);
+            let nullable_array = builder
+                .emit(
+                    Op::HashGetSilent,
+                    vec![hash, key],
+                    None,
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Union(vec![inner, PhpType::Void]),
+                    Ownership::MaybeOwned,
+                )
+                .expect("nullable array");
+            let index = builder.emit_const_i64(0);
+            let _ = builder.emit(
+                Op::ArrayGetSilent,
+                vec![nullable_array, index],
+                None,
+                IrType::TaggedScalar,
+                PhpType::TaggedScalar,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let error =
+            validate_module(&module).expect_err("unguarded nullable read must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("source must be an indexed array or a proven non-null nullable array"),
+            "{error}"
+        );
+    }
+
+    /// WASM may clear a consumed hidden owned temp, but must continue rejecting
+    /// `UnsetLocal` for PHP-visible local slots.
+    #[test]
+    fn unset_local_is_limited_to_consumed_owned_temps() {
+        let mut accepted = Module::new(Target::wasm());
+        let mut accepted_function =
+            Function::new("clear_temp".to_string(), IrType::Void, PhpType::Void);
+        accepted_function.flags.is_main = true;
+        let owned_temp = accepted_function.add_local(
+            Some("__temp".to_string()),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::OwnedTemp,
+        );
+        {
+            let mut builder = Builder::new(&mut accepted_function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let _ = builder.emit(
+                Op::UnsetLocal,
+                Vec::new(),
+                Some(Immediate::LocalSlot(owned_temp)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        accepted.add_function(accepted_function);
+        validate_module(&accepted).expect("OwnedTemp clear must lower");
+
+        let mut rejected = Module::new(Target::wasm());
+        let mut rejected_function =
+            Function::new("clear_php_local".to_string(), IrType::Void, PhpType::Void);
+        rejected_function.flags.is_main = true;
+        let php_local = rejected_function.add_local(
+            Some("visible".to_string()),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut rejected_function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let _ = builder.emit(
+                Op::UnsetLocal,
+                Vec::new(),
+                Some(Immediate::LocalSlot(php_local)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        rejected.add_function(rejected_function);
+        let error =
+            validate_module(&rejected).expect_err("PHP-visible local clear must stay rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("only OwnedTemp slots may be cleared"),
+            "{error}"
+        );
+    }
+
+    /// A warning-producing associative read cannot be admitted into an
+    /// import-free reactor because its diagnostic writes through WASI.
+    #[test]
+    fn rejects_warning_hash_get_without_command_runtime() {
+        let mut module = Module::new(Target::wasm());
+        let mut function =
+            Function::new("reactor_hash_read".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let hash = builder
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(1)),
+                    IrType::Heap(IrHeapKind::Hash),
+                    PhpType::AssocArray {
+                        key: Box::new(PhpType::Int),
+                        value: Box::new(PhpType::Int),
+                    },
+                    Ownership::Owned,
+                )
+                .expect("hash value");
+            let key = builder.emit_const_i64(2);
+            let _ = builder.emit(
+                Op::HashGet,
+                vec![hash, key],
+                None,
+                IrType::TaggedScalar,
+                PhpType::TaggedScalar,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let error =
+            validate_module(&module).expect_err("reactor warning read must fail capability");
+        assert!(
+            error.to_string().contains(
+                "warning-producing associative read requires a main-bearing command module"
+            ),
+            "{error}"
+        );
+    }
+
+    /// A silent associative read remains valid in an import-free reactor and
+    /// introduces neither warning helpers nor WASI imports.
+    #[test]
+    fn accepts_silent_hash_get_without_command_runtime() {
+        let mut module = Module::new(Target::wasm());
+        let mut function =
+            Function::new("reactor_silent_hash_read".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let hash = builder
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(1)),
+                    IrType::Heap(IrHeapKind::Hash),
+                    PhpType::AssocArray {
+                        key: Box::new(PhpType::Int),
+                        value: Box::new(PhpType::Int),
+                    },
+                    Ownership::Owned,
+                )
+                .expect("hash value");
+            let key = builder.emit_const_i64(2);
+            let _ = builder.emit(
+                Op::HashGetSilent,
+                vec![hash, key],
+                None,
+                IrType::TaggedScalar,
+                PhpType::TaggedScalar,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let wat = validate_module(&module)
+            .expect("silent reactor hash read must remain supported")
+            .into_wat();
+        assert!(!wat.contains("__rt_warn_undefined_array_key"), "{wat}");
+        assert!(!wat.contains("wasi_snapshot_preview1"), "{wat}");
+    }
+
+    /// Dynamic Mixed associative keys are rejected for reads, writes, and
+    /// `unset` until illegal PHP offset tags have an exact fatal path.
+    #[test]
+    fn rejects_dynamic_mixed_hash_keys_on_every_operation() {
+        let mut module = Module::new(Target::wasm());
+        let mut function =
+            Function::new("mixed_hash_keys".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let hash = builder
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(1)),
+                    IrType::Heap(IrHeapKind::Hash),
+                    PhpType::AssocArray {
+                        key: Box::new(PhpType::Mixed),
+                        value: Box::new(PhpType::Int),
+                    },
+                    Ownership::Owned,
+                )
+                .expect("hash value");
+            let integer = builder.emit_const_i64(1);
+            let mixed_key = builder
+                .emit(
+                    Op::MixedBox,
+                    vec![integer],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .expect("dynamic Mixed key");
+            for op in [Op::HashGet, Op::HashGetSilent] {
+                let _ = builder.emit(
+                    op,
+                    vec![hash, mixed_key],
+                    None,
+                    IrType::TaggedScalar,
+                    PhpType::TaggedScalar,
+                    Ownership::NonHeap,
+                );
+            }
+            let _ = builder.emit(
+                Op::HashSet,
+                vec![hash, mixed_key, integer],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let _ = builder.emit(
+                Op::HashUnset,
+                vec![hash, mixed_key],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let error = validate_module(&module).expect_err("Mixed keys must fail closed");
+        let message = error.to_string();
+        assert_eq!(
+            message
+                .matches("dynamic Mixed associative keys require exact per-tag PHP diagnostics")
+                .count(),
+            4,
+            "{message}"
+        );
+    }
+
+    /// Legacy scalar/string result shapes and untracked boxed ownership are
+    /// rejected before WAT lowering can erase the missing-key null. Concrete
+    /// containers must retain exact pointer storage plus `container|null`
+    /// metadata; boxing them would break typed chained consumers.
+    #[test]
+    fn rejects_non_nullable_hash_get_result_shapes() {
+        let mut module = Module::new(Target::wasm());
+        let mut function =
+            Function::new("legacy_hash_reads".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let key = builder.emit_const_i64(0);
+            for (element, ir_type, php_type, ownership) in [
+                (
+                    PhpType::Int,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                ),
+                (
+                    PhpType::Float,
+                    IrType::F64,
+                    PhpType::Float,
+                    Ownership::NonHeap,
+                ),
+                (
+                    PhpType::Str,
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::MaybeOwned,
+                ),
+                (
+                    PhpType::Bool,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::NonHeap,
+                ),
+                (
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::MaybeOwned,
+                ),
+                (
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                ),
+            ] {
+                let hash = builder
+                    .emit(
+                        Op::HashNew,
+                        Vec::new(),
+                        Some(Immediate::Capacity(1)),
+                        IrType::Heap(IrHeapKind::Hash),
+                        PhpType::AssocArray {
+                            key: Box::new(PhpType::Int),
+                            value: Box::new(element),
+                        },
+                        Ownership::Owned,
+                    )
+                    .expect("hash value");
+                let _ = builder.emit(
+                    Op::HashGetSilent,
+                    vec![hash, key],
+                    None,
+                    ir_type,
+                    php_type,
+                    ownership,
+                );
+            }
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let error =
+            validate_module(&module).expect_err("legacy hash-read shapes must fail");
+        let message = error.to_string();
+        assert_eq!(
+            message
+                .matches("unsupported hash_get_silent shape")
+                .count(),
+            6,
+            "{message}"
+        );
+        assert!(
+            message.contains("result has incompatible ownership"),
+            "{message}"
+        );
+    }
+
     /// Indexed-to-hash promotion is admitted with one release-tracked indexed
     /// source and an owned associative result whose integer-keyed value type is
     /// preserved. Capability accepts the shape; hash/CLI tests cover production
@@ -4968,5 +6458,270 @@ mod tests {
             2,
             "{message}"
         );
+    }
+
+    /// Verifies a reachable EIR `Unreachable` is rejected before WAT lowering.
+    #[test]
+    fn rejects_reachable_unreachable_terminator_without_proof() {
+        let mut module = Module::new(Target::wasm());
+        let mut function =
+            Function::new("reachable_trap".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Unreachable);
+        }
+        module.add_function(function);
+
+        let error =
+            validate_module(&module).expect_err("reachable raw trap must fail capability");
+        assert!(
+            error
+                .to_string()
+                .contains("reachable EIR unreachable terminator lacks a no-return proof"),
+            "{error}"
+        );
+    }
+
+    /// Admits the exact result-free offset-on-null warning in a command module.
+    #[test]
+    fn accepts_exact_array_offset_on_null_warning_boundary() {
+        let mut module = Module::new(Target::wasm());
+        let message = module
+            .data
+            .intern_string(crate::codegen_support::runtime::array_offset_on_null_warning());
+        let mut function =
+            Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let _ = builder.emit(
+                Op::Warn,
+                Vec::new(),
+                Some(Immediate::Data(message)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let wat = validate_module(&module)
+            .expect("exact command warning boundary must lower")
+            .into_wat();
+        assert!(
+            wat.contains("call $__rt_warn_array_offset_on_null"),
+            "{wat}"
+        );
+    }
+
+    /// Rejects unrelated static warning messages at the capability boundary.
+    #[test]
+    fn rejects_unrelated_static_warning_boundary() {
+        let mut module = Module::new(Target::wasm());
+        let message = module.data.intern_string("Warning: unrelated\n");
+        let mut function =
+            Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let _ = builder.emit(
+                Op::Warn,
+                Vec::new(),
+                Some(Immediate::Data(message)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let error =
+            validate_module(&module).expect_err("general static warning must remain unsupported");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported static warning"),
+            "{error}"
+        );
+    }
+
+    /// Rejects the offset-on-null warning in an import-free reactor module.
+    #[test]
+    fn rejects_array_offset_on_null_warning_without_command_runtime() {
+        let mut module = Module::new(Target::wasm());
+        let message = module
+            .data
+            .intern_string(crate::codegen_support::runtime::array_offset_on_null_warning());
+        let mut function =
+            Function::new("reactor".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let _ = builder.emit(
+                Op::Warn,
+                Vec::new(),
+                Some(Immediate::Data(message)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let error =
+            validate_module(&module).expect_err("reactor warning must fail capability");
+        assert!(
+            error
+                .to_string()
+                .contains("require the public WASI command runtime"),
+            "{error}"
+        );
+    }
+
+    /// Admits only the exact method-on-null static `Error` in a command module
+    /// and proves its reachable EIR `Unreachable` through the final helper call.
+    #[test]
+    fn accepts_exact_method_on_null_error_boundary() {
+        let mut module = Module::new(Target::wasm());
+        let message = module
+            .data
+            .intern_string("Call to a member function value() on null");
+        let mut function =
+            Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let _ = builder.emit(
+                Op::ThrowError,
+                Vec::new(),
+                Some(Immediate::Data(message)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Unreachable);
+        }
+        module.add_function(function);
+
+        let wat = validate_module(&module)
+            .expect("exact command fatal boundary must lower")
+            .into_wat();
+        assert!(
+            wat.contains("call $__rt_fail_method_call_non_object"),
+            "{wat}"
+        );
+        assert!(wat.contains("post-noreturn:method-null-error"), "{wat}");
+    }
+
+    /// Rejects unrelated static `Error` messages instead of silently turning
+    /// general catchable PHP errors into process exits.
+    #[test]
+    fn rejects_unrelated_static_throw_error_boundary() {
+        let mut module = Module::new(Target::wasm());
+        let message = module.data.intern_string("unrelated static error");
+        let mut function =
+            Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let _ = builder.emit(
+                Op::ThrowError,
+                Vec::new(),
+                Some(Immediate::Data(message)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Unreachable);
+        }
+        module.add_function(function);
+
+        let error =
+            validate_module(&module).expect_err("general static Error must remain unsupported");
+        let message = error.to_string();
+        assert!(message.contains("unsupported static Error message"), "{message}");
+        assert!(
+            message.contains("reachable EIR unreachable terminator lacks a no-return proof"),
+            "{message}"
+        );
+    }
+
+    /// Rejects the method-on-null fatal opcode in import-free reactor fixtures
+    /// because the PHP diagnostic depends on WASI stderr and `proc_exit`.
+    #[test]
+    fn rejects_method_on_null_error_without_command_runtime() {
+        let mut module = Module::new(Target::wasm());
+        let message = module
+            .data
+            .intern_string("Call to a member function value() on null");
+        let mut function =
+            Function::new("reactor".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let _ = builder.emit(
+                Op::ThrowError,
+                Vec::new(),
+                Some(Immediate::Data(message)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Unreachable);
+        }
+        module.add_function(function);
+
+        let error =
+            validate_module(&module).expect_err("reactor fatal must fail capability");
+        assert!(
+            error
+                .to_string()
+                .contains("require the public WASI command runtime"),
+            "{error}"
+        );
+    }
+
+    /// Verifies an unreachable terminator in a disconnected EIR block retains a
+    /// machine-checkable CFG proof and remains admissible.
+    #[test]
+    fn accepts_unreachable_terminator_in_disconnected_block() {
+        let mut module = Module::new(Target::wasm());
+        let mut function =
+            Function::new("dead_trap".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            let dead = builder.create_named_block("dead", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+            builder.position_at_end(dead);
+            builder.terminate(Terminator::Unreachable);
+        }
+        module.add_function(function);
+
+        validate_module(&module).expect("disconnected raw trap has a CFG proof");
     }
 }

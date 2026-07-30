@@ -899,6 +899,155 @@ echo $f(41);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a Mixed receiver dispatches directly to the selected covariant
+/// override instead of imposing another implementation's WASM return ABI.
+#[test]
+fn test_cli_wasm_mixed_virtual_covariant_return_uses_exact_implementation_abi() {
+    if Command::new("wasmer").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_mixed_covariant_return");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+class A {
+    public function run(): mixed { return 1; }
+}
+class B extends A {
+    public function run(): string { return "x"; }
+}
+function invoke_mixed(mixed $value): mixed {
+    return $value->run();
+}
+echo invoke_mixed(new B());
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile covariant Mixed dispatch to WASM");
+    assert!(
+        output.status.success(),
+        "covariant Mixed dispatch compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wasm_path = dir.join("main.wasm");
+    assert!(wasm_path.exists(), "WASM compilation must publish main.wasm");
+    let run = Command::new("wasmer")
+        .arg("run")
+        .arg(&wasm_path)
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run covariant Mixed dispatch under Wasmer");
+    assert!(
+        run.status.success(),
+        "covariant Mixed dispatch failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "x");
+    assert!(run.stderr.is_empty(), "unexpected stderr: {:?}", run.stderr);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies heterogeneous dynamic method returns box PHP void as null and
+/// transfer callable ownership into the result cell without leaking the
+/// callee-owned descriptor.
+#[test]
+fn test_cli_wasm_mixed_method_void_and_callable_returns_are_balanced() {
+    if Command::new("wasmer").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_mixed_void_callable_return");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+class VoidResult {
+    public function run(): void {}
+}
+class CallableResult {
+    public function run(): callable {
+        return function(): int { return 42; };
+    }
+}
+function invoke_mixed(mixed $value): mixed {
+    return $value->run();
+}
+echo is_null(invoke_mixed(new VoidResult())), ";";
+$callable = invoke_mixed(new CallableResult());
+echo is_null($callable), ";";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile void/callable Mixed dispatch to WASM");
+    assert!(
+        output.status.success(),
+        "void/callable Mixed dispatch compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wasm_path = dir.join("main.wasm");
+    let run = Command::new("wasmer")
+        .arg("run")
+        .arg(&wasm_path)
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run void/callable Mixed dispatch under Wasmer");
+    assert!(
+        run.status.success(),
+        "void/callable Mixed dispatch failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "1;;");
+    assert!(run.stderr.is_empty(), "unexpected stderr: {:?}", run.stderr);
+
+    let emit = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to emit void/callable Mixed dispatch WAT");
+    assert!(
+        emit.status.success(),
+        "void/callable Mixed WAT emission failed: {}",
+        String::from_utf8_lossy(&emit.stderr)
+    );
+    let wat = fs::read_to_string(dir.join("main.wat")).expect("read emitted WAT");
+    assert!(
+        wat.contains("box null (void callee, mixed result)"),
+        "void return did not materialize Mixed(null): {wat}"
+    );
+    let callable_source = wat
+        .find("callee-owned callable descriptor")
+        .expect("callable source ownership marker");
+    let callable_release = wat[callable_source..]
+        .find("call $__rt_decref_any")
+        .map(|offset| callable_source + offset)
+        .expect("callable source release");
+    assert!(
+        callable_release > callable_source,
+        "callable source must be released after result-cell boxing: {wat}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Compiles an escaping by-ref closure from PHP source to wasm32-wasi and runs it
 /// twice under Wasmer. The creator's frame is gone before either call, so `23`
 /// proves the closure owns the ref cell instead of dereferencing freed storage.
@@ -971,6 +1120,8 @@ fn test_cli_wasm_null_coalesce_array_reads_keep_nullable_eir() {
 echo [10][$argc] ?? 77;
 echo [true][$argc] ?? 77;
 echo ["x"][$argc] ?? 77;
+$hash = ["x" => 10];
+echo $hash["missing"] ?? 77;
 "#,
     )
     .unwrap();
@@ -997,6 +1148,10 @@ echo ["x"][$argc] ?? 77;
             .count(),
         2,
         "bool/string coalesce reads must remain boxed nullable values: {eir}"
+    );
+    assert!(
+        eir.contains("TaggedScalar php=int|null = hash_get_silent"),
+        "associative int coalesce read lost nullable TaggedScalar metadata: {eir}"
     );
 
     let _ = fs::remove_dir_all(&dir);
@@ -1080,6 +1235,321 @@ echo (int)["x"][-1], ",", (bool)["x"][-1], ",", (string)["x"][-1], ";";
         assert_eq!(
             actual_stderr, expected_stderr,
             "PHP {version} ordinary indexed misses must warn exactly once in source order"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Compiles typed associative reads through PHP -> EIR -> WASM. Missing string
+/// and integer keys remain PHP null, emit the key-class-specific warning once,
+/// and cannot collide with a valid integer equal to the former sentinel.
+#[test]
+fn test_cli_wasm_hash_reads_preserve_null_and_warn_like_php() {
+    if Command::new("wasmer").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_hash_oob_null");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+$ints = ["hit" => 10];
+$bools = ["hit" => true];
+$floats = ["hit" => 1.5];
+$strings = ["hit" => ""];
+$sentinel = ["hit" => 9223372036854775806];
+$integerKeys = [7 => 10];
+echo is_null($ints["missing"]), ":", $ints["hit"], ";";
+echo is_null($bools["missing"]), ":", $bools["hit"], ";";
+echo is_null($floats["missing"]), ":", $floats["hit"], ";";
+echo is_null($strings["missing"]), ":", $strings["hit"], ";";
+echo is_null($sentinel["hit"]), ":", $sentinel["hit"], ";";
+echo is_null($integerKeys[9]), ":", $integerKeys[7], ";";
+"#,
+    )
+    .unwrap();
+
+    let expected_stderr = [
+        "Warning: Undefined array key \"missing\"",
+        "Warning: Undefined array key \"missing\"",
+        "Warning: Undefined array key \"missing\"",
+        "Warning: Undefined array key \"missing\"",
+        "Warning: Undefined array key 9",
+    ];
+    for version in ["8.2", "8.3", "8.4", "8.5"] {
+        let output = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg("--php-version")
+            .arg(version)
+            .arg(&php_path)
+            .output()
+            .expect("failed to compile associative-read fixture to WASM");
+        assert!(
+            output.status.success(),
+            "PHP {version} associative-read compilation failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let wasm_path = dir.join("main.wasm");
+        let run = Command::new("wasmer")
+            .arg("run")
+            .arg(&wasm_path)
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run associative-read fixture under Wasmer");
+        assert!(
+            run.status.success(),
+            "PHP {version} associative-read fixture trapped: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "1:10;1:1;1:1.5;1:;:9223372036854775806;1:10;",
+            "PHP {version}"
+        );
+        let actual_stderr = String::from_utf8_lossy(&run.stderr)
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual_stderr, expected_stderr,
+            "PHP {version} associative misses must warn exactly once in source order"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies associative reads preserve precise nullable container pointers:
+/// misses remain PHP null, hits remain non-null, and hit containers still feed
+/// typed chained reads.
+#[test]
+fn test_cli_wasm_hash_container_reads_preserve_nullable_php_values() {
+    if Command::new("wasmer").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_hash_container_null");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+class Item {
+    public function value(): int {
+        return 3;
+    }
+}
+$arrays = ["hit" => [1]];
+$hashes = ["hit" => ["x" => 2]];
+$objects = ["hit" => new Item()];
+echo is_null($arrays["missing"]), ":", is_null($arrays["hit"]), ";";
+echo is_null($hashes["missing"]), ":", is_null($hashes["hit"]), ";";
+echo is_null($objects["missing"]), ":", is_null($objects["hit"]), ";";
+echo $arrays["hit"][0], ":", $hashes["hit"]["x"], ";";
+echo $objects["hit"]->value(), ";";
+echo is_null($arrays["hit"][99]), ":", is_null($hashes["hit"]["missing"]), ";";
+"#,
+    )
+    .unwrap();
+
+    let expected_stderr = [
+        "Warning: Undefined array key \"missing\"",
+        "Warning: Undefined array key \"missing\"",
+        "Warning: Undefined array key \"missing\"",
+        "Warning: Undefined array key 99",
+        "Warning: Undefined array key \"missing\"",
+    ];
+    for version in ["8.2", "8.3", "8.4", "8.5"] {
+        let output = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg("--php-version")
+            .arg(version)
+            .arg(&php_path)
+            .output()
+            .expect("failed to compile associative container reads to WASM");
+        assert!(
+            output.status.success(),
+            "PHP {version} associative container compilation failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let wasm_path = dir.join("main.wasm");
+        let run = Command::new("wasmer")
+            .arg("run")
+            .arg(&wasm_path)
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run associative container reads under Wasmer");
+        assert!(
+            run.status.success(),
+            "PHP {version} associative container reads trapped: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "1:;1:;1:;1:2;3;1:1;",
+            "PHP {version}"
+        );
+        let actual_stderr = String::from_utf8_lossy(&run.stderr)
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(actual_stderr, expected_stderr, "PHP {version}");
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies nullable chained reads evaluate their index exactly once before
+/// normal offset-on-null warnings while coalescing reads remain silent.
+#[test]
+fn test_cli_wasm_nullable_chained_reads_preserve_php_index_order() {
+    if Command::new("wasmer").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_nullable_chain_order");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function int_key_side_effect(string $label): int {
+    echo $label;
+    return 0;
+}
+function string_key_side_effect(string $label): string {
+    echo $label;
+    return "inner";
+}
+$arrays = ["hit" => [1]];
+$hashes = ["hit" => ["inner" => 2]];
+echo "A", $arrays["missing-array"][int_key_side_effect("a")], "Z;";
+echo "H", $hashes["missing-hash"][string_key_side_effect("h")], "Z;";
+echo "S", ($arrays["missing-array"][int_key_side_effect("s")] ?? 9), ";";
+echo "T", ($hashes["missing-hash"][string_key_side_effect("t")] ?? 8), ";";
+echo "I", $arrays["hit"][int_key_side_effect("i")], ":";
+echo $hashes["hit"][string_key_side_effect("j")], ";";
+"#,
+    )
+    .unwrap();
+
+    for version in ["8.2", "8.3", "8.4", "8.5"] {
+        let offset_warning = if version == "8.2" {
+            "Warning: Trying to access array offset on value of type null"
+        } else {
+            "Warning: Trying to access array offset on null"
+        };
+        let expected_stderr = [
+            "Warning: Undefined array key \"missing-array\"",
+            offset_warning,
+            "Warning: Undefined array key \"missing-hash\"",
+            offset_warning,
+        ];
+        let output = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg("--php-version")
+            .arg(version)
+            .arg(&php_path)
+            .output()
+            .expect("failed to compile nullable chained reads to WASM");
+        assert!(
+            output.status.success(),
+            "PHP {version} nullable chain compilation failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let wasm_path = dir.join("main.wasm");
+        let run = Command::new("wasmer")
+            .arg("run")
+            .arg(&wasm_path)
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run nullable chained reads under Wasmer");
+        assert!(
+            run.status.success(),
+            "PHP {version} nullable chained reads trapped: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "AaZ;HhZ;Ss9;Tt8;Ii1:j2;",
+            "PHP {version}"
+        );
+        let actual_stderr = String::from_utf8_lossy(&run.stderr)
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(actual_stderr, expected_stderr, "PHP {version}");
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a missing object-valued associative entry raises PHP's method-on-null
+/// warning/fatal pair before evaluating method arguments.
+#[test]
+fn test_cli_wasm_missing_hash_object_method_call_is_php_fatal() {
+    if Command::new("wasmer").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_hash_object_null_fatal");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function side_effect(): int {
+    echo "BAD";
+    return 1;
+}
+class Item {
+    public function value(int $value): int {
+        return $value;
+    }
+}
+$objects = ["hit" => new Item()];
+$objects["missing"]->value(side_effect());
+"#,
+    )
+    .unwrap();
+
+    for version in ["8.2", "8.3", "8.4", "8.5"] {
+        let output = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg("--php-version")
+            .arg(version)
+            .arg(&php_path)
+            .output()
+            .expect("failed to compile missing object method call to WASM");
+        assert!(
+            output.status.success(),
+            "PHP {version} missing object method-call compilation failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let wasm_path = dir.join("main.wasm");
+        let run = Command::new("wasmer")
+            .arg("run")
+            .arg(&wasm_path)
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run missing object method call under Wasmer");
+        assert_eq!(run.status.code(), Some(255), "PHP {version}");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "",
+            "PHP {version}: argument side effects must not run after a null receiver"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stderr),
+            "Warning: Undefined array key \"missing\"\nPHP Fatal error: Uncaught Error: Call to a member function value() on null\n",
+            "PHP {version}"
         );
     }
 

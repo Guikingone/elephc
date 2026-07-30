@@ -1300,9 +1300,42 @@ fn successors(term: &Terminator) -> Vec<BlockId> {
 
 /// Returns true when PHP type metadata can use the given EIR storage type.
 fn php_type_compatible(ir_type: IrType, php_type: &PhpType) -> bool {
+    if exact_nullable_container_storage(ir_type, php_type) {
+        return true;
+    }
     let php_type = php_type.codegen_repr();
     IrType::from_php(&php_type) == ir_type
-        || matches!((ir_type, php_type), (IrType::I64, PhpType::Void))
+        || (ir_type == IrType::I64 && matches!(&php_type, PhpType::Void))
+}
+
+/// Returns whether an exact container pointer stores a two-member
+/// `container|null` PHP union without boxing.
+fn exact_nullable_container_storage(ir_type: IrType, php_type: &PhpType) -> bool {
+    let PhpType::Union(members) = php_type else {
+        return false;
+    };
+    if members.len() != 2
+        || !members
+            .iter()
+            .any(|member| matches!(member, PhpType::Void | PhpType::Never))
+    {
+        return false;
+    }
+    let Some(container) = members
+        .iter()
+        .find(|member| !matches!(member, PhpType::Void | PhpType::Never))
+    else {
+        return false;
+    };
+    matches!(
+        (ir_type, container.codegen_repr()),
+        (IrType::Heap(IrHeapKind::Array), PhpType::Array(_))
+            | (
+                IrType::Heap(IrHeapKind::Hash),
+                PhpType::AssocArray { .. }
+            )
+            | (IrType::Heap(IrHeapKind::Object), PhpType::Object(_))
+    )
 }
 
 /// Returns true when ownership is coherent with storage and PHP type metadata.

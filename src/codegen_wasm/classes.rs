@@ -963,24 +963,25 @@ pub(super) fn lower_get_class(ctx: &mut FnCtx, inst: &Instruction) -> Result<()>
     }
 }
 
-/// Builds the mixed-method-call candidate list for a method name + operand count.
+/// Builds the concrete mixed-method-call candidate list for one method name.
 ///
-/// Scans every class whose `methods[method_key]` matches the call arity (`params`
-/// plus the receiver). `ClassInfo.methods` is flattened with inherited signatures,
-/// so a subclass that inherited the method is a candidate and dispatches to the
-/// inherited impl via `method_impl_classes`. Sorted by `class_id` for a stable
-/// if-ladder. Returns the `(class_id, runtime_class_name, impl_class)` triples: the
-/// runtime class name drives vtable-slot / introducer resolution exactly like the
-/// single-class `lower_method_call` path, and `impl_class` names the implementation.
+/// `ClassInfo.methods` is flattened with inherited signatures, so a subclass
+/// that inherited the method is a candidate and dispatches to the inherited
+/// implementation via `method_impl_classes`. Abstract classes are excluded
+/// because PHP cannot instantiate them. Arity, visibility, and ABI checks stay
+/// in the capability pass; filtering those shapes here would let an admitted
+/// runtime class fall through as an undefined method. Results are sorted by
+/// `class_id` for a stable if-ladder.
 pub(super) fn mixed_method_candidates(
     module: &Module,
     method_key: &str,
-    operand_count: usize,
 ) -> Vec<(u64, String, String)> {
     let mut out: Vec<(u64, String, String)> = Vec::new();
     for (class_name, ci) in &module.class_infos {
-        let Some(sig) = ci.methods.get(method_key) else { continue };
-        if sig.params.len() + 1 != operand_count {
+        if ci.is_abstract {
+            continue;
+        }
+        if !ci.methods.contains_key(method_key) {
             continue;
         }
         let impl_class = ci
@@ -1001,8 +1002,9 @@ pub(super) fn mixed_method_candidates(
 
 /// Computes the runtime mixed-cell tag for a concrete callee return PHP type.
 ///
-/// Mirrors the tags `__rt_mixed_from_value` consumes: int 0, bool 3, float 2, string
-/// 1, array 4, assoc 5, object 6. Other types are not boxed here.
+/// Mirrors the tags `__rt_mixed_from_value` consumes: int 0, bool 3, float 2,
+/// string 1, array 4, assoc 5, object 6, null/void 8, and callable 10. Other
+/// types are not boxed here.
 pub(super) fn mixed_tag_for_php_type(php: &PhpType) -> Option<i64> {
     match php {
         PhpType::Int => Some(0),
@@ -1012,6 +1014,7 @@ pub(super) fn mixed_tag_for_php_type(php: &PhpType) -> Option<i64> {
         PhpType::Array(_) => Some(4),
         PhpType::AssocArray { .. } => Some(5),
         PhpType::Object(_) => Some(6),
+        PhpType::Void => Some(8),
         // A callable is a kind-6 descriptor carried as `WasmRepr::I64`; boxing it into a
         // Mixed cell stores the descriptor pointer under tag 10 so `__rt_mixed_from_value`
         // increfs the descriptor (shared ownership) and the tag-10 release arm dispatches

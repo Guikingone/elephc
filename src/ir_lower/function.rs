@@ -90,6 +90,7 @@ pub(crate) fn lower_main(
         all_global_var_names,
         module.source_path.clone(),
         None,
+        module.target,
         web,
     );
     add_closures(module, closures);
@@ -284,6 +285,7 @@ pub(crate) fn lower_user_function(
         std::collections::HashSet::new(),
         module.source_path.clone(),
         None,
+        module.target,
         web,
     );
     add_closures(module, closures);
@@ -384,6 +386,7 @@ pub(crate) fn lower_class_method(
         std::collections::HashSet::new(),
         module.source_path.clone(),
         None,
+        module.target,
         web,
     );
     add_closures(module, closures);
@@ -449,6 +452,7 @@ pub(crate) fn lower_eval_aot_function(
         collect_global_var_names(body),
         module.source_path.clone(),
         None,
+        module.target,
         module.web,
     );
     add_closures(module, closures);
@@ -554,6 +558,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         collect_global_var_names(body),
         module.source_path.clone(),
         eval_scope_reads,
+        module.target,
         module.web,
     );
     add_closures(module, closures);
@@ -653,6 +658,7 @@ pub(crate) fn lower_property_init_thunk(
         std::collections::HashSet::new(),
         module.source_path.clone(),
         None,
+        module.target,
         web,
     );
     add_closures(module, closures);
@@ -849,6 +855,7 @@ fn lower_closure_function_with_signature(
         collect_global_var_names(body),
         parent.source_path().map(str::to_string),
         None,
+        parent.target,
         parent.web,
     );
     parent.extend_closures(std::iter::once(function).chain(closures));
@@ -890,6 +897,7 @@ fn lower_body_into_function(
         std::collections::HashSet<String>,
         std::collections::BTreeSet<String>,
     )>,
+    target: crate::codegen_support::platform::Target,
     web: bool,
 ) -> Vec<Function> {
     let owner_name = function.name.clone();
@@ -934,6 +942,7 @@ fn lower_body_into_function(
         in_main,
         all_global_var_names,
         source_path,
+        target,
         web,
     );
     ctx.by_ref_return = function_by_ref_return;

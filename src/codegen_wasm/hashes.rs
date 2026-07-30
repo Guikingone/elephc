@@ -261,7 +261,7 @@ const RT_HASH_ZEND_TABLE_SIZE: &str = r#"(func $__rt_hash_zend_table_size (param
   (block $done (loop $grow
     (br_if $done (i64.ge_u (local.get $size) (local.get $capacity)))  ;; rounded up far enough
     (if (i64.ge_u (local.get $size) (i64.const 4294967296))
-      (then unreachable))                                   ;; impossible wasm32 hash capacity
+      (then unreachable))                                   ;; elephc-trap:proven-invariant:hash-capacity-limit impossible wasm32 hash capacity
     (local.set $size (i64.shl (local.get $size) (i64.const 1)))  ;; next power of two
     (br $grow)))
   (local.get $size))
@@ -317,7 +317,7 @@ const RT_HASH_VALIDATE_LAYOUT: &str = r#"(func $__rt_hash_validate_layout (param
     (i64.const 72)
     (i64.const 72)))                                        ;; header + slots + semantic trailer
   (if (i64.gt_u (local.get $count) (local.get $capacity))
-    (then (call $__rt_oom) unreachable)))                   ;; malformed live count
+    (then (call $__rt_oom) unreachable)))                   ;; elephc-trap:deterministic-oom:hash-malformed-live-count malformed live count
 "#;
 
 /// `__rt_hash_preflight_union`: validates the worst-case capacity needed when
@@ -328,7 +328,7 @@ const RT_HASH_PREFLIGHT_UNION: &str = r#"(func $__rt_hash_preflight_union (param
   (if (i64.gt_u
         (local.get $left_count)
         (i64.sub (i64.const 9223372036854775807) (local.get $right_count)))
-    (then (call $__rt_oom) unreachable))                   ;; signed count sum would overflow
+    (then (call $__rt_oom) unreachable))                   ;; elephc-trap:deterministic-oom:hash-union-count-overflow signed count sum would overflow
   (local.set $total (i64.add (local.get $left_count) (local.get $right_count)))
   (drop (call $__rt_checked_layout
     (local.get $total)
@@ -400,7 +400,7 @@ const RT_HASH_INSERT_OWNED: &str = r#"(func $__rt_hash_insert_owned (param $hash
     (if (i64.ge_u (local.get $probes) (local.get $cap))      ;; completed a full table tour?
       (then
         (if (i64.eq (local.get $first_tomb) (i64.const -1))  ;; no empty and no tombstone violates the room contract
-          (then unreachable))
+          (then unreachable))                              ;; elephc-trap:proven-invariant:hash-insert-room-contract preflight guarantees an empty slot or tombstone
         (local.set $slot (local.get $first_tomb))            ;; full table with a tombstone -> reuse it
         (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 72)))))  ;; &remembered tombstone
         (br $place)))
@@ -1193,7 +1193,7 @@ const RT_ARRAY_HASH_UNION: &str = r#"(func $__rt_array_hash_union (param $a i32)
   (local.set $aesz (i64.load (i32.add (local.get $a) (i32.const 16))))
   (drop (call $__rt_checked_layout (local.get $acap) (local.get $aesz) (i64.const 24)))  ;; validate indexed source layout
   (if (i64.gt_u (local.get $alen) (local.get $acap))
-    (then (call $__rt_oom) unreachable))                               ;; malformed indexed length
+    (then (call $__rt_oom) unreachable))                               ;; elephc-trap:deterministic-oom:array-hash-union-malformed-left malformed indexed length
   (call $__rt_hash_validate_layout (local.get $b))                    ;; validate associative source layout
   (call $__rt_hash_preflight_union (local.get $alen) (i64.load (local.get $b)))  ;; validate worst-case result before allocation
   (local.set $total (i64.add (local.get $alen) (i64.load (local.get $b))))
@@ -1266,7 +1266,7 @@ const RT_HASH_ARRAY_UNION: &str = r#"(func $__rt_hash_array_union (param $a i32)
   (local.set $besz (i64.load (i32.add (local.get $b) (i32.const 16))))
   (drop (call $__rt_checked_layout (local.get $bcap) (local.get $besz) (i64.const 24)))  ;; validate indexed source layout
   (if (i64.gt_u (local.get $blen) (local.get $bcap))
-    (then (call $__rt_oom) unreachable))                               ;; malformed indexed length
+    (then (call $__rt_oom) unreachable))                               ;; elephc-trap:deterministic-oom:hash-array-union-malformed-right malformed indexed length
   (call $__rt_hash_preflight_union (i64.load (local.get $a)) (local.get $blen))  ;; worst-case distinct-key result before clone
   (local.set $result (call $__rt_hash_clone_shallow (local.get $a)))   ;; own a copy of the left hash
   (local.set $bvt (i64.and (i64.shr_u (i64.load (i32.sub (local.get $b) (i32.const 8))) (i64.const 8)) (i64.const 127)))  ;; right value_type tag
@@ -1319,7 +1319,7 @@ const RT_ARRAY_TO_HASH: &str = r#"(func $__rt_array_to_hash (param $array i32) (
   (if (i32.eq (local.get $kind) (i32.const 3))
     (then (return (local.get $array))))                           ;; already promoted
   (if (i32.ne (local.get $kind) (i32.const 2))
-    (then (call $__rt_oom) unreachable))                         ;; malformed ArrayToHash source
+    (then (call $__rt_oom) unreachable))                         ;; elephc-trap:deterministic-oom:array-to-hash-malformed-source malformed ArrayToHash source
   (local.set $empty (call $__rt_hash_new (i64.const 0) (i64.const 7)))  ;; empty borrowed right operand
   (local.set $result (call $__rt_array_hash_union (local.get $array) (local.get $empty)))  ;; copy indexed entries
   (call $__rt_decref_hash (local.get $empty))                     ;; release temporary empty hash

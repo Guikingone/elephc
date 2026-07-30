@@ -42,7 +42,7 @@ use super::inst::{operand, store_result, value_source_slot};
 use super::values::WasmRepr;
 use super::wat::ValType;
 use super::WasmError;
-use crate::ir::{Immediate, Instruction, IrHeapKind, IrType};
+use crate::ir::{Immediate, Instruction, IrHeapKind, IrType, Op};
 use crate::types::PhpType;
 
 /// The in-band i64 null marker (`PHP_INT_MAX - 1`) the wasm32-wasi backend uses for
@@ -240,7 +240,12 @@ pub(super) fn lower_hash_append(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
     ctx.fb.ins("i32.eqz", "saturated append key occupied?");
     ctx.fb
         .ins("if", "PHP append failure (non-returning exceptional edge)");
-    if ctx.module.functions.iter().any(|function| function.flags.is_main) {
+    let has_main = ctx
+        .module
+        .functions
+        .iter()
+        .any(|function| function.flags.is_main);
+    if has_main {
         ctx.fb
             .ins("i32.const 7", "occupied next array element failure code");
         ctx.fb.ins(
@@ -248,8 +253,12 @@ pub(super) fn lower_hash_append(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
             "report Cannot add element to the array as occupied",
         );
     }
-    ctx.fb
-        .ins("unreachable", "occupied next array element does not return");
+    let classification = if has_main {
+        "elephc-trap:post-noreturn:hash-append-occupied-tail occupied next array element does not return"
+    } else {
+        "elephc-trap:non-public:reactor-hash-append-occupied import-free reactors are outside the public command surface"
+    };
+    ctx.fb.ins("unreachable", classification);
     ctx.fb.ins("end", "end append failure guard");
     ctx.fb
         .ins(&format!("local.get {}", appended), "successful append pointer");
@@ -361,13 +370,14 @@ pub(super) fn lower_hash_array_union(ctx: &mut FnCtx, inst: &Instruction) -> Res
 /// - a Mixed element is (re)boxed via `__rt_mixed_from_value`: a fresh OWNED cell on a
 ///   hit of any tag, and a null cell on a miss (the runtime returns tag 8, so
 ///   `$h[missing]` boxes to PHP null);
-/// - a container element (array/hash/object) is increfed (null-safe) and returned, or
-///   null on a miss.
+/// - a concrete container element is retained and returned through exact
+///   pointer storage carrying `T|null` PHP metadata.
 ///
 /// All refcounted results are returned OWNED to honor the EIR `MaybeOwned` contract on a
 /// `HashGet` result, so a consumer that releases the value cannot use-after-free the
 /// hash's own stored reference. Every path stays branchless via `select` plus null-safe
-/// runtime calls. Tagged-scalar reads are not yet supported and return `Unsupported`.
+/// runtime calls. Integer reads can also materialize the target's nullable
+/// `(payload, tag)` scalar representation.
 pub(super) fn lower_hash_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let hash = operand(inst, 0)?;
     let key = operand(inst, 1)?;
@@ -377,8 +387,8 @@ pub(super) fn lower_hash_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
     let result_repr = ctx.value_repr(result)?.clone();
     let result_ir = ctx.function.value(result).map(|v| v.ir_type);
 
-    // Reject still-unsupported reprs before emitting the call so the stack stays balanced.
-    if matches!(result_repr, WasmRepr::Tagged { .. } | WasmRepr::Void) {
+    // Reject void before emitting the call so the stack stays balanced.
+    if matches!(result_repr, WasmRepr::Void) {
         return Err(WasmError::Unsupported(format!(
             "hash_get into {:?}",
             result_repr
@@ -423,6 +433,14 @@ pub(super) fn lower_hash_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
             ctx.fb.ins(&format!("local.get {}", found), "found flag (i32 cond)");
             ctx.fb.ins("select", "found ? bits : 0");
             ctx.fb.ins("f64.reinterpret_i64", "payload bits -> float");
+            store_result(ctx, inst)
+        }
+        WasmRepr::Tagged { .. } => {
+            // Nullable integer: the hash runtime already reports the canonical
+            // value tag (0 on a hit, 8 on a miss).
+            ctx.fb.ins(&format!("local.get {}", vlo), "integer payload");
+            ctx.fb.ins(&format!("local.get {}", vtag), "integer/null tag");
+            ctx.fb.ins("i32.wrap_i64", "narrow value tag to i32");
             store_result(ctx, inst)
         }
         WasmRepr::Str { .. } => {
@@ -472,11 +490,55 @@ pub(super) fn lower_hash_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
                 "hash_get into a non-heap pointer".to_string(),
             )),
         },
-        // Tagged/Void were rejected above.
+        // Void was rejected above.
         _ => Err(WasmError::Unsupported(
             "hash_get result reconstruction".to_string(),
         )),
+    }?;
+    if inst.op == Op::HashGet {
+        emit_undefined_hash_key_warning_if_missing(ctx, &key_lo, &key_hi, &found);
     }
+    Ok(())
+}
+
+/// Emits PHP's undefined-array-key warning when a normalized hash lookup misses.
+///
+/// Integer keys use the signed formatter. String keys keep their original bytes
+/// and are quoted, matching PHP's distinct diagnostics for the two key classes.
+fn emit_undefined_hash_key_warning_if_missing(
+    ctx: &mut FnCtx,
+    key_lo: &str,
+    key_hi: &str,
+    found: &str,
+) {
+    ctx.fb
+        .ins(&format!("local.get {found}"), "hash lookup found flag");
+    ctx.fb.ins("i32.eqz", "hash key is missing");
+    ctx.fb.ins("if", "warn only when the hash lookup missed");
+    ctx.fb
+        .ins(&format!("local.get {key_hi}"), "normalized hash key class");
+    ctx.fb.ins("i64.const -1", "integer-key marker");
+    ctx.fb.ins("i64.eq", "missing key is integer?");
+    ctx.fb.ins("if", "format an integer key without quotes");
+    ctx.fb
+        .ins(&format!("local.get {key_lo}"), "missing integer key");
+    ctx.fb.ins(
+        "call $__rt_warn_undefined_array_key_int",
+        "emit PHP undefined integer-key warning",
+    );
+    ctx.fb.ins("else", "format a string key with quotes");
+    ctx.fb
+        .ins(&format!("local.get {key_lo}"), "missing string key pointer");
+    ctx.fb.ins("i32.wrap_i64", "string key pointer -> i32");
+    ctx.fb
+        .ins(&format!("local.get {key_hi}"), "missing string key length");
+    ctx.fb.ins("i32.wrap_i64", "string key length -> i32");
+    ctx.fb.ins(
+        "call $__rt_warn_undefined_array_key_str",
+        "emit PHP undefined string-key warning",
+    );
+    ctx.fb.ins("end", "end normalized key warning dispatch");
+    ctx.fb.ins("end", "continue with the stored null result");
 }
 
 /// Materializes a hash key into two i64 temp locals `(key_lo, key_hi)`.

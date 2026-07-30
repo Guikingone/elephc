@@ -81,7 +81,13 @@ pub(super) fn emit_closure_runtime(wm: &mut WatModule) {
 /// guards. It intentionally has no WASI dependency so library-shaped modules
 /// without a command entry remain valid.
 const RT_FAIL_CALLABLE_DISPATCH: &str =
-    "(func $__rt_fail_callable_dispatch\n  unreachable)";
+    "(func $__rt_fail_callable_dispatch\n  unreachable ;; elephc-trap:non-public:reactor-callable-corruption\n)";
+
+/// Command-module callable failure boundary with deterministic PHP diagnostics.
+const RT_FAIL_CALLABLE_DISPATCH_COMMAND: &str = r#"(func $__rt_fail_callable_dispatch
+  (call $__rt_fail (i32.const 8))
+  unreachable ;; elephc-trap:post-noreturn:command-callable-failure
+)"#;
 
 /// `__rt_callable_descriptor_release`: the kind-6 release entry. Decrements the
 /// descriptor refcount; at zero, walks the capture slots (releasing each refcounted
@@ -1085,12 +1091,19 @@ fn release_cell(ctx: &mut FnCtx, rcell: &str) {
 /// The ladder is UNIFIED (P7d2a): the `module.closures` wrappers take indices `0..N`
 /// (`N = module.closures.len()`), then one FCC wrapper per `fcc_entries` name takes
 /// indices `N..N+M` — exactly the index space `FnCtx::fcc_entry_index` stamps into the
-/// descriptors. Nothing is emitted when there are neither closures nor FCC entries.
+/// descriptors. The shared non-returning dispatch failure boundary is always emitted
+/// because closed virtual-method stubs use it too; the callable ladder itself is omitted
+/// when there are neither closures nor FCC entries.
 pub(super) fn emit_closure_dispatch(
     wm: &mut WatModule,
     module: &Module,
     fcc_entries: &[String],
 ) -> Result<()> {
+    if module.functions.iter().any(|function| function.flags.is_main) {
+        wm.add_raw_func(RT_FAIL_CALLABLE_DISPATCH_COMMAND);
+    } else {
+        wm.add_raw_func(RT_FAIL_CALLABLE_DISPATCH);
+    }
     if module.closures.is_empty() && fcc_entries.is_empty() {
         return Ok(());
     }
@@ -1141,7 +1154,6 @@ pub(super) fn emit_closure_dispatch(
             wrapper_symbol,
         ));
     }
-    wm.add_raw_func(RT_FAIL_CALLABLE_DISPATCH);
     wm.add_raw_func(&build_closure_call_ladder(&arms));
     // The higher-order `array_map($f, $arr)` runtime (`__rt_array_map_callable`)
     // dispatches each element through this `__rt_closure_call` ladder, so it is
@@ -1553,53 +1565,53 @@ fn wat_ins(code: &str, comment: &str) -> String {
 fn append_arg_array_guard(wat: &mut String, required_count: i64) {
     wat.push_str("  ;; validate the complete argument-array header before reading a slot\n");
     wat.push_str(
-        "  (if (i32.lt_u (local.get $args) (i32.add (global.get $__heap_base) (i32.const 16)))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i32.lt_u (local.get $args) (i32.add (global.get $__heap_base) (i32.const 16)))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:call-args-before-heap\n",
     );
     wat.push_str(
-        "  (if (i32.ge_u (local.get $args) (global.get $__heap_ptr))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i32.ge_u (local.get $args) (global.get $__heap_ptr))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:call-args-after-heap\n",
     );
     wat.push_str(
-        "  (if (i32.ne (i32.and (local.get $args) (i32.const 7)) (i32.const 0))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i32.ne (i32.and (local.get $args) (i32.const 7)) (i32.const 0))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:call-args-alignment\n",
     );
     wat.push_str(
-        "  (if (i32.ne (i32.and (i32.wrap_i64 (i64.load (i32.sub (local.get $args) (i32.const 8)))) (i32.const 255)) (i32.const 2))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i32.ne (i32.and (i32.wrap_i64 (i64.load (i32.sub (local.get $args) (i32.const 8)))) (i32.const 255)) (i32.const 2))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:call-args-kind\n",
     );
     wat.push_str(
-        "  (if (i32.eqz (i32.load (i32.sub (local.get $args) (i32.const 12))))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i32.eqz (i32.load (i32.sub (local.get $args) (i32.const 12))))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:call-args-refcount\n",
     );
     wat.push_str("  (local.set $args_size (i32.load (i32.sub (local.get $args) (i32.const 16))))\n");
     wat.push_str(
-        "  (if (i32.lt_u (local.get $args_size) (i32.const 24))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i32.lt_u (local.get $args_size) (i32.const 24))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:call-args-header-size\n",
     );
     wat.push_str(
-        "  (if (i32.ne (i32.and (local.get $args_size) (i32.const 7)) (i32.const 0))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i32.ne (i32.and (local.get $args_size) (i32.const 7)) (i32.const 0))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:call-args-size-alignment\n",
     );
     wat.push_str(
-        "  (if (i64.gt_u (i64.add (i64.extend_i32_u (local.get $args)) (i64.extend_i32_u (local.get $args_size))) (i64.extend_i32_u (global.get $__heap_ptr)))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i64.gt_u (i64.add (i64.extend_i32_u (local.get $args)) (i64.extend_i32_u (local.get $args_size))) (i64.extend_i32_u (global.get $__heap_ptr)))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:call-args-payload-bounds\n",
     );
     wat.push_str("  (local.set $args_len (i64.load (local.get $args)))\n");
     wat.push_str("  (local.set $args_capacity (i64.load offset=8 (local.get $args)))\n");
     wat.push_str(
-        "  (if (i64.lt_s (local.get $args_len) (i64.const 0))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i64.lt_s (local.get $args_len) (i64.const 0))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:call-args-negative-length\n",
     );
     wat.push_str(
-        "  (if (i64.lt_s (local.get $args_capacity) (i64.const 0))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i64.lt_s (local.get $args_capacity) (i64.const 0))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:call-args-negative-capacity\n",
     );
     wat.push_str(
-        "  (if (i64.gt_u (local.get $args_len) (local.get $args_capacity))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i64.gt_u (local.get $args_len) (local.get $args_capacity))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:call-args-length-capacity\n",
     );
     wat.push_str(&format!(
-        "  (if (i64.lt_u (local.get $args_len) (i64.const {}))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i64.lt_u (local.get $args_len) (i64.const {}))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:call-args-arity\n",
         required_count
     ));
     wat.push_str(
-        "  (if (i64.ne (i64.load offset=16 (local.get $args)) (i64.const 16))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i64.ne (i64.load offset=16 (local.get $args)) (i64.const 16))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:call-args-stride\n",
     );
     wat.push_str(
-        "  (if (i64.gt_u (local.get $args_capacity) (i64.extend_i32_u (i32.div_u (i32.sub (local.get $args_size) (i32.const 24)) (i32.const 16))))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i64.gt_u (local.get $args_capacity) (i64.extend_i32_u (i32.div_u (i32.sub (local.get $args_size) (i32.const 24)) (i32.const 16))))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:call-args-capacity-bounds\n",
     );
     wat.push_str(
-        "  (if (i64.ne (local.get $args_len) (i64.const 0))\n    (then\n      (if (i32.ne (i32.and (i32.wrap_i64 (i64.shr_u (i64.load (i32.sub (local.get $args) (i32.const 8))) (i64.const 8))) (i32.const 127)) (i32.const 7))\n        (then (call $__rt_fail_callable_dispatch) unreachable))))\n",
+        "  (if (i64.ne (local.get $args_len) (i64.const 0))\n    (then\n      (if (i32.ne (i32.and (i32.wrap_i64 (i64.shr_u (i64.load (i32.sub (local.get $args) (i32.const 8))) (i64.const 8))) (i32.const 127)) (i32.const 7))\n        (then (call $__rt_fail_callable_dispatch) unreachable)))) ;; elephc-trap:post-noreturn:call-args-value-tag\n",
     );
 }
 
@@ -1613,34 +1625,34 @@ fn build_closure_call_ladder(arms: &[(u32, i64, u32, u32, String)]) -> String {
     wat.push_str("  (local $kind i64)\n");
     wat.push_str("  (local $size i32)\n");
     wat.push_str(
-        "  (if (i32.lt_u (local.get $desc) (i32.add (global.get $__heap_base) (i32.const 16)))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i32.lt_u (local.get $desc) (i32.add (global.get $__heap_base) (i32.const 16)))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:callable-before-heap\n",
     );
     wat.push_str(
-        "  (if (i32.ge_u (local.get $desc) (global.get $__heap_ptr))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i32.ge_u (local.get $desc) (global.get $__heap_ptr))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:callable-after-heap\n",
     );
     wat.push_str(
-        "  (if (i32.ne (i32.and (i32.wrap_i64 (i64.load (i32.sub (local.get $desc) (i32.const 8)))) (i32.const 255)) (i32.const 6))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i32.ne (i32.and (i32.wrap_i64 (i64.load (i32.sub (local.get $desc) (i32.const 8)))) (i32.const 255)) (i32.const 6))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:callable-heap-kind\n",
     );
     wat.push_str(
         "  (local.set $size (i32.load (i32.sub (local.get $desc) (i32.const 16))))\n",
     );
     wat.push_str(
-        "  (if (i32.lt_u (local.get $size) (i32.const 32))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i32.lt_u (local.get $size) (i32.const 32))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:callable-min-size\n",
     );
     wat.push_str(
-        "  (if (i32.ne (i32.and (local.get $size) (i32.const 7)) (i32.const 0))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i32.ne (i32.and (local.get $size) (i32.const 7)) (i32.const 0))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:callable-size-alignment\n",
     );
     wat.push_str(
-        "  (if (i64.gt_u (i64.add (i64.extend_i32_u (local.get $desc)) (i64.extend_i32_u (local.get $size))) (i64.extend_i32_u (global.get $__heap_ptr)))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i64.gt_u (i64.add (i64.extend_i32_u (local.get $desc)) (i64.extend_i32_u (local.get $size))) (i64.extend_i32_u (global.get $__heap_ptr)))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:callable-payload-bounds\n",
     );
     wat.push_str(
-        "  (if (i32.eqz (i32.load (i32.sub (local.get $desc) (i32.const 12))))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i32.eqz (i32.load (i32.sub (local.get $desc) (i32.const 12))))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:callable-refcount\n",
     );
     wat.push_str(&wat_ins("local.get $desc", "validated descriptor pointer"));
     wat.push_str(&wat_ins("i64.load", "descriptor kind = [desc+0]"));
     wat.push_str(&wat_ins("local.set $kind", "save the callable kind"));
     wat.push_str(
-        "  (if (i32.eqz (i32.or (i64.eq (local.get $kind) (i64.const 1)) (i64.eq (local.get $kind) (i64.const 11))))\n    (then (call $__rt_fail_callable_dispatch) unreachable))\n",
+        "  (if (i32.eqz (i32.or (i64.eq (local.get $kind) (i64.const 1)) (i64.eq (local.get $kind) (i64.const 11))))\n    (then (call $__rt_fail_callable_dispatch) unreachable)) ;; elephc-trap:post-noreturn:callable-descriptor-kind\n",
     );
     wat.push_str(&wat_ins("local.get $desc", "descriptor pointer"));
     wat.push_str(&wat_ins("i32.load offset=8", "entry_index = [desc+8]"));
@@ -1691,7 +1703,7 @@ fn build_closure_call_ladder(arms: &[(u32, i64, u32, u32, String)]) -> String {
     ));
     wat.push_str(&wat_ins(
         "unreachable",
-        "failure helper is deliberately non-returning",
+        "elephc-trap:post-noreturn:callable-dispatch-fallback failure helper is deliberately non-returning",
     ));
     wat.push_str(")\n");
     wat

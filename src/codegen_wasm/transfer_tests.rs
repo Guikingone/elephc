@@ -11,7 +11,7 @@
 //!   and validated with `wasmparser`; behavioral tests run under `wasmer` when
 //!   installed.
 
-use super::generate;
+use super::generate_module as generate;
 use crate::codegen::Emit;
 use crate::codegen::platform::Target;
 use crate::ir::{
@@ -640,7 +640,9 @@ fn mixed_heap_unboxing_validates_array_hash_object_and_iterable_tags() {
         .unwrap_or_else(|error| panic!("{name} should lower: {error}"));
         assert!(wat.contains("call $__rt_mixed_unbox"), "{name}\n{wat}");
         assert!(
-            wat.contains("trap on a mixed heap-kind mismatch"),
+            wat.contains(
+                "elephc-trap:non-public:reactor-mixed-heap-mismatch"
+            ),
             "{name}\n{wat}"
         );
         for tag in expected_tags {

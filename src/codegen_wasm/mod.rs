@@ -41,6 +41,7 @@ mod refcount;
 mod refcell;
 mod runtime;
 mod symbols;
+mod traps;
 mod transfer;
 mod values;
 mod wat;
@@ -97,7 +98,25 @@ impl std::error::Error for WasmError {}
 /// The WASI command shape is the only one wired today; the CLI rejects WASM
 /// `Cdylib` output before this function is called.
 pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
-    Ok(capability::validate_module(module, emit)?.into_wat())
+    if !module
+        .functions
+        .iter()
+        .any(|function| function.flags.is_main)
+    {
+        return Err(WasmError::Unsupported(
+            "public wasm32-wasi generation requires a main-bearing command module"
+                .to_string(),
+        ));
+    }
+    generate_module(module, emit)
+}
+
+/// Lowers command modules and private reactor-shaped test fixtures through the
+/// same capability, rendering, trap-inventory, and Core-validation boundary.
+fn generate_module(module: &Module, emit: Emit) -> Result<String, WasmError> {
+    let wat = capability::validate_module(module, emit)?.into_wat();
+    traps::validate_unreachable_inventory(&wat).map_err(WasmError::InvalidModule)?;
+    Ok(wat)
 }
 
 #[cfg(test)]
@@ -117,8 +136,9 @@ mod tests {
     //!   on a value-returning function), and the `main` module is run under
     //!   `wasmer` when it is available.
 
-    use super::generate;
+    use super::generate_module as generate;
     use super::symbols::user_function_symbol;
+    use super::traps::{inventory_unreachable_sites, TrapClass};
     use crate::codegen::platform::Target;
     use crate::codegen::Emit;
     use crate::ir::{
@@ -254,6 +274,36 @@ mod tests {
         assert!(wat.contains("br_table"), "{wat}");
         assert!(wat.contains("call $wasi_proc_exit"), "{wat}");
         assemble_and_validate(&wat);
+    }
+
+    /// Verifies a production command module exposes a complete machine-readable
+    /// trap inventory with no PHP-visible raw Core trap.
+    #[test]
+    fn main_command_has_a_complete_unreachable_inventory() {
+        let wat = generate(&main_condbr_module(), Emit::Executable).expect("main should lower");
+        let inventory =
+            inventory_unreachable_sites(&wat).expect("every emitted trap must be classified");
+        assert!(!inventory.is_empty(), "command runtime must inventory its traps");
+        assert!(
+            inventory
+                .iter()
+                .all(|entry| entry.class != TrapClass::PhpVisible),
+            "{inventory:#?}"
+        );
+    }
+
+    /// Verifies the public API cannot expose import-free reactor semantics that
+    /// are explicitly outside the documented wasm32-wasi command target.
+    #[test]
+    fn public_generation_rejects_reactor_modules() {
+        let error = super::generate(&br_with_args_module(), Emit::Executable)
+            .expect_err("public generation must require a command entry");
+        assert!(
+            error
+                .to_string()
+                .contains("requires a main-bearing command module"),
+            "{error}"
+        );
     }
 
     /// Verifies an unconditional branch with a block argument validates (the
@@ -2219,8 +2269,8 @@ mod tests {
                         Op::ArrayGet,
                         vec![arr, idx],
                         None,
-                        IrType::I64,
-                        PhpType::Int,
+                        IrType::TaggedScalar,
+                        PhpType::TaggedScalar,
                         Ownership::NonHeap,
                     )
                     .unwrap();
@@ -2377,13 +2427,21 @@ mod tests {
                         Op::ArrayGet,
                         vec![arr, idx],
                         None,
-                        IrType::Str,
-                        PhpType::Str,
-                        Ownership::Borrowed,
+                        IrType::Heap(IrHeapKind::Mixed),
+                        PhpType::Mixed,
+                        Ownership::Owned,
                     )
                     .unwrap();
                 let _ = b.emit(
                     Op::EchoValue,
+                    vec![g],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+                let _ = b.emit(
+                    Op::Release,
                     vec![g],
                     None,
                     IrType::Void,
@@ -3035,14 +3093,10 @@ mod tests {
             }
             let h1 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
             let k1 = b.emit_const_i64(1);
-            let g1 = b
-                .emit(Op::HashGet, vec![h1, k1], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
-                .unwrap();
+            let g1 = emit_hash_get_int(&mut b, h1, k1);
             let h2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
             let k2 = b.emit_const_i64(2);
-            let g2 = b
-                .emit(Op::HashGet, vec![h2, k2], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
-                .unwrap();
+            let g2 = emit_hash_get_int(&mut b, h2, k2);
             let sum = b
                 .emit(Op::IAdd, vec![g1, g2], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
                 .unwrap();
@@ -3120,16 +3174,7 @@ mod tests {
             );
             let h1 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
             let k1 = b.emit_const_i64(1);
-            let g = b
-                .emit(
-                    Op::HashGet,
-                    vec![h1, k1],
-                    None,
-                    IrType::F64,
-                    PhpType::Float,
-                    Ownership::NonHeap,
-                )
-                .unwrap();
+            let g = emit_hash_get_float(&mut b, h1, k1);
             let two = b.emit_const_f64(2.0);
             let half = b
                 .emit(Op::FDiv, vec![g, two], None, IrType::F64, PhpType::Float, Ownership::NonHeap)
@@ -3209,16 +3254,7 @@ mod tests {
             );
             let h1 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
             let k1 = b.emit_const_i64(1);
-            let g = b
-                .emit(
-                    Op::HashGet,
-                    vec![h1, k1],
-                    None,
-                    IrType::Str,
-                    PhpType::Str,
-                    Ownership::MaybeOwned,
-                )
-                .unwrap();
+            let g = emit_hash_get_string(&mut b, h1, k1);
             let _ = b.emit(
                 Op::EchoValue,
                 vec![g],
@@ -4214,35 +4250,29 @@ mod tests {
         }
     }
 
-    /// P7d1 Union by-value capture (tag 7): main boxes an int (7) into a kind-5 Mixed
-    /// cell labeled `Union([Int, Void])` and captures it by value into a `Heap(Union)`
-    /// body param, exercising the Union accept in `reject_unsupported_capture`, the
-    /// `Heap|Union` arm in `stamp_capture_slot` (the operand is `Heap(Mixed)` but the
-    /// stamp matches the param's `Heap(Union)` and loads the single-i32 Ptr), and the
-    /// `Heap|Union` arm in `unbox_capture_wat` (incref + push the cell ptr). The body
-    /// cannot return `Heap(Union)` (`box_result_wat` rejects it) and `EchoValue`
-    /// rejects a `Union` php_type, so the body returns `MixedTagOf` (the cell's value
-    /// tag = 0 for an int payload) as an I64, proving the Union cell round-tripped
-    /// with its int tag intact -> "0".
+    /// P7d1 ordinary-union by-value capture: main boxes an int into the canonical
+    /// Mixed storage for `int|string`, captures it by value, and returns its runtime
+    /// value tag. This proves union metadata is normalized consistently at the EIR
+    /// transfer boundary and the captured Mixed cell survives the descriptor round trip.
     #[test]
     fn closure_capture_union_by_value_e2e() {
         let mut module = Module::new(Target::wasm());
         let name_id = module.data.intern_string("__eir_closure_cap_union_bv");
-        let union_ty = PhpType::Union(vec![PhpType::Int, PhpType::Void]);
+        let union_ty = PhpType::Union(vec![PhpType::Int, PhpType::Str]);
 
         let mut body = Function::new("__eir_closure_cap_union_bv".to_string(), IrType::I64, PhpType::Int);
         body.flags.is_closure = true;
         body.flags.closure_capture_count = 1;
         body.params.push(FunctionParam {
             name: "u".to_string(),
-            ir_type: IrType::Heap(IrHeapKind::Union),
+            ir_type: IrType::Heap(IrHeapKind::Mixed),
             php_type: union_ty.clone(),
             by_ref: false,
             variadic: false,
         });
         let slot_u = body.add_local(
             Some("u".to_string()),
-            IrType::Heap(IrHeapKind::Union),
+            IrType::Heap(IrHeapKind::Mixed),
             union_ty.clone(),
             LocalKind::PhpLocal,
         );
@@ -4251,7 +4281,7 @@ mod tests {
             let entry = b.create_named_block("entry", Vec::new());
             b.set_entry(entry);
             b.position_at_end(entry);
-            let uv = b.emit_load_local(slot_u, IrType::Heap(IrHeapKind::Union), union_ty.clone());
+            let uv = b.emit_load_local(slot_u, IrType::Heap(IrHeapKind::Mixed), union_ty.clone());
             let tag = b
                 .emit(
                     Op::MixedTagOf,
@@ -5342,9 +5372,41 @@ mod tests {
 
     // ----- P5c: indexed-array lowering (ArrayNew / ArrayPush / ArrayLen / ArrayGet) -----
 
+    /// Emits an import-free nullable integer read followed by PHP's integer cast.
+    ///
+    /// Reactor fixtures use `ArrayGetSilent` because warning-producing `ArrayGet`
+    /// intentionally requires the command runtime, while both operations share
+    /// the same bounds-aware value path.
+    fn emit_silent_int_array_get(
+        builder: &mut Builder<'_>,
+        array: ValueId,
+        index: ValueId,
+    ) -> ValueId {
+        let tagged = builder
+            .emit(
+                Op::ArrayGetSilent,
+                vec![array, index],
+                None,
+                IrType::TaggedScalar,
+                PhpType::TaggedScalar,
+                Ownership::NonHeap,
+            )
+            .expect("nullable integer array read lowers");
+        builder
+            .emit(
+                Op::Cast,
+                vec![tagged],
+                Some(Immediate::CastTarget(IrType::I64)),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            )
+            .expect("tagged integer result casts to int")
+    }
+
     /// Builds an indexed array `[10, 20, 30]` (ArrayNew + three ArrayPush) reusing
-    /// the same array value, then returns `$a[1]` via ArrayGet — verifying the
-    /// push writeback and the bounded getter through the full lowering.
+    /// the same array value, then returns `$a[1]` through the import-free silent
+    /// getter and integer cast, verifying push writeback and bounded reads.
     #[test]
     fn array_new_push_get_lowers() {
         let mut module = Module::new(Target::wasm());
@@ -5376,9 +5438,7 @@ mod tests {
                 );
             }
             let idx = b.emit_const_i64(1);
-            let g = b
-                .emit(Op::ArrayGet, vec![arr, idx], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
-                .unwrap();
+            let g = emit_silent_int_array_get(&mut b, arr, idx);
             b.terminate(Terminator::Return { value: Some(g) });
         }
         module.add_function(f);
@@ -5471,9 +5531,7 @@ mod tests {
             );
             let a2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Array), PhpType::Array(Box::new(PhpType::Int)));
             let idx = b.emit_const_i64(0);
-            let g = b
-                .emit(Op::ArrayGet, vec![a2, idx], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
-                .unwrap();
+            let g = emit_silent_int_array_get(&mut b, a2, idx);
             b.terminate(Terminator::Return { value: Some(g) });
         }
         module.add_function(f);
@@ -5536,9 +5594,7 @@ mod tests {
             );
             let a2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Array), PhpType::Array(Box::new(PhpType::Int)));
             let idx2 = b.emit_const_i64(1);
-            let g = b
-                .emit(Op::ArrayGet, vec![a2, idx2], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
-                .unwrap();
+            let g = emit_silent_int_array_get(&mut b, a2, idx2);
             b.terminate(Terminator::Return { value: Some(g) });
         }
         module.add_function(f);
@@ -5607,6 +5663,142 @@ mod tests {
         }
     }
 
+    /// Emits a silent nullable integer hash read in its canonical tagged form.
+    fn emit_hash_get_tagged_int(
+        builder: &mut Builder<'_>,
+        hash: ValueId,
+        key: ValueId,
+    ) -> ValueId {
+        builder
+            .emit(
+                Op::HashGetSilent,
+                vec![hash, key],
+                None,
+                IrType::TaggedScalar,
+                PhpType::TaggedScalar,
+                Ownership::NonHeap,
+            )
+            .expect("nullable integer hash read")
+    }
+
+    /// Emits a silent integer hash read and casts PHP null to zero for legacy
+    /// arithmetic-oriented unit fixtures whose key is known to exist.
+    fn emit_hash_get_int(builder: &mut Builder<'_>, hash: ValueId, key: ValueId) -> ValueId {
+        let tagged = emit_hash_get_tagged_int(builder, hash, key);
+        builder
+            .emit(
+                Op::Cast,
+                vec![tagged],
+                Some(Immediate::CastTarget(IrType::I64)),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            )
+            .expect("integer hash read cast")
+    }
+
+    /// Emits a silent boxed boolean hash read, casts it to bool, and releases the
+    /// temporary Mixed cell after the scalar result has been materialized.
+    fn emit_hash_get_bool(builder: &mut Builder<'_>, hash: ValueId, key: ValueId) -> ValueId {
+        let boxed = builder
+            .emit(
+                Op::HashGetSilent,
+                vec![hash, key],
+                None,
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+                Ownership::Owned,
+            )
+            .expect("nullable boolean hash read");
+        let value = builder
+            .emit(
+                Op::Cast,
+                vec![boxed],
+                Some(Immediate::CastTarget(IrType::I64)),
+                IrType::I64,
+                PhpType::Bool,
+                Ownership::NonHeap,
+            )
+            .expect("boolean hash read cast");
+        let _ = builder.emit(
+            Op::Release,
+            vec![boxed],
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        value
+    }
+
+    /// Emits a silent boxed float hash read, casts it to f64, and releases the
+    /// temporary Mixed cell after the scalar result has been materialized.
+    fn emit_hash_get_float(builder: &mut Builder<'_>, hash: ValueId, key: ValueId) -> ValueId {
+        let boxed = builder
+            .emit(
+                Op::HashGetSilent,
+                vec![hash, key],
+                None,
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+                Ownership::Owned,
+            )
+            .expect("nullable float hash read");
+        let value = builder
+            .emit(
+                Op::Cast,
+                vec![boxed],
+                Some(Immediate::CastTarget(IrType::F64)),
+                IrType::F64,
+                PhpType::Float,
+                Ownership::NonHeap,
+            )
+            .expect("float hash read cast");
+        let _ = builder.emit(
+            Op::Release,
+            vec![boxed],
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        value
+    }
+
+    /// Emits a silent boxed string hash read, casts it to an owned string, and
+    /// releases the temporary Mixed cell after the copy has been materialized.
+    fn emit_hash_get_string(builder: &mut Builder<'_>, hash: ValueId, key: ValueId) -> ValueId {
+        let boxed = builder
+            .emit(
+                Op::HashGetSilent,
+                vec![hash, key],
+                None,
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+                Ownership::Owned,
+            )
+            .expect("nullable string hash read");
+        let value = builder
+            .emit(
+                Op::Cast,
+                vec![boxed],
+                Some(Immediate::CastTarget(IrType::Str)),
+                IrType::Str,
+                PhpType::Str,
+                Ownership::MaybeOwned,
+            )
+            .expect("string hash read cast");
+        let _ = builder.emit(
+            Op::Release,
+            vec![boxed],
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        value
+    }
+
     /// Verifies `$h[7] = 100; $h[13] = 200; return $h[7];` through the full
     /// `HashNew`/`HashSet`/`HashGet` lowering: a fresh hash is stored in a slot,
     /// two int-keyed entries are inserted (each via a reload from the SAME slot so the
@@ -5654,9 +5846,7 @@ mod tests {
             }
             let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
             let key = b.emit_const_i64(7);
-            let g = b
-                .emit(Op::HashGet, vec![h, key], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
-                .unwrap();
+            let g = emit_hash_get_int(&mut b, h, key);
             b.terminate(Terminator::Return { value: Some(g) });
         }
         module.add_function(f);
@@ -5665,11 +5855,10 @@ mod tests {
         }
     }
 
-    /// Verifies a `HashGet` on an absent key yields the PHP null sentinel
-    /// (`0x7fff_ffff_ffff_fffe`): `$h[7] = 100; return $h[99];`. The runtime miss path
-    /// returns `(found=0, ...)` and the lowering `select`s the sentinel.
+    /// Verifies a silent `HashGet` on an absent key yields the tagged PHP null
+    /// representation without colliding with an in-range integer payload.
     #[test]
-    fn hash_get_miss_returns_null_sentinel() {
+    fn hash_get_miss_returns_tagged_null() {
         let assoc = int_hash_type();
         let mut module = Module::new(Target::wasm());
         let mut f = Function::new("m".to_string(), IrType::I64, PhpType::Int);
@@ -5708,14 +5897,24 @@ mod tests {
             );
             let h2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
             let miss = b.emit_const_i64(99);
-            let g = b
-                .emit(Op::HashGet, vec![h2, miss], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
-                .unwrap();
-            b.terminate(Terminator::Return { value: Some(g) });
+            let tagged = emit_hash_get_tagged_int(&mut b, h2, miss);
+            let is_null = b
+                .emit(
+                    Op::IsNull,
+                    vec![tagged],
+                    None,
+                    IrType::I64,
+                    PhpType::Bool,
+                    Ownership::NonHeap,
+                )
+                .expect("tagged null check");
+            b.terminate(Terminator::Return {
+                value: Some(is_null),
+            });
         }
         module.add_function(f);
         if let Some(o) = invoke(&module, "fn_m", &[]) {
-            assert_eq!(o, "9223372036854775806");
+            assert_eq!(o, "1");
         }
     }
 
@@ -5785,14 +5984,10 @@ mod tests {
             }
             let h1 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
             let k1 = b.emit_const_i64(1);
-            let g1 = b
-                .emit(Op::HashGet, vec![h1, k1], None, IrType::I64, PhpType::Bool, Ownership::NonHeap)
-                .unwrap();
+            let g1 = emit_hash_get_bool(&mut b, h1, k1);
             let h2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
             let k2 = b.emit_const_i64(2);
-            let g2 = b
-                .emit(Op::HashGet, vec![h2, k2], None, IrType::I64, PhpType::Bool, Ownership::NonHeap)
-                .unwrap();
+            let g2 = emit_hash_get_bool(&mut b, h2, k2);
             let ten = b.emit_const_i64(10);
             let scaled = b
                 .emit(Op::IMul, vec![g1, ten], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
@@ -5862,9 +6057,7 @@ mod tests {
             );
             let h2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
             let k0 = b.emit_const_i64(0);
-            let g = b
-                .emit(Op::HashGet, vec![h2, k0], None, IrType::I64, PhpType::Bool, Ownership::NonHeap)
-                .unwrap();
+            let g = emit_hash_get_bool(&mut b, h2, k0);
             b.terminate(Terminator::Return { value: Some(g) });
         }
         module.add_function(f);
@@ -5918,9 +6111,7 @@ mod tests {
             }
             let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
             let key = b.emit_const_i64(7);
-            let g = b
-                .emit(Op::HashGet, vec![h, key], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
-                .unwrap();
+            let g = emit_hash_get_int(&mut b, h, key);
             b.terminate(Terminator::Return { value: Some(g) });
         }
         module.add_function(f);
@@ -5975,9 +6166,7 @@ mod tests {
             }
             let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
             let key = b.emit_const_i64(5);
-            let g = b
-                .emit(Op::HashGet, vec![h, key], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
-                .unwrap();
+            let g = emit_hash_get_int(&mut b, h, key);
             b.terminate(Terminator::Return { value: Some(g) });
         }
         module.add_function(f);
@@ -6039,7 +6228,7 @@ mod tests {
             let key2 = b.emit_const_str(name);
             let g = b
                 .emit(
-                    Op::HashGet,
+                    Op::HashGetSilent,
                     vec![h2, key2],
                     None,
                     IrType::Heap(IrHeapKind::Mixed),
@@ -6110,9 +6299,7 @@ mod tests {
             );
             let h2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
             let ikey = b.emit_const_i64(7); // int key 7 — must collide with "7"
-            let g = b
-                .emit(Op::HashGet, vec![h2, ikey], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
-                .unwrap();
+            let g = emit_hash_get_int(&mut b, h2, ikey);
             b.terminate(Terminator::Return { value: Some(g) });
         }
         module.add_function(f);
@@ -6173,7 +6360,7 @@ mod tests {
             let miss = b.emit_const_str(bkey);
             let g = b
                 .emit(
-                    Op::HashGet,
+                    Op::HashGetSilent,
                     vec![h2, miss],
                     None,
                     IrType::Heap(IrHeapKind::Mixed),
@@ -6247,9 +6434,7 @@ mod tests {
             );
             let h2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
             let key2 = b.emit_const_str(k);
-            let g = b
-                .emit(Op::HashGet, vec![h2, key2], None, IrType::Str, PhpType::Str, Ownership::MaybeOwned)
-                .unwrap();
+            let g = emit_hash_get_string(&mut b, h2, key2);
             let _ = b.emit(
                 Op::EchoValue,
                 vec![g],
@@ -6266,10 +6451,9 @@ mod tests {
         }
     }
 
-    /// Verifies a hash whose values are indexed arrays round-trips a container through
-    /// the increfing read path: `$h["a"] = [10, 20]; return $h["a"][1];` -> 20. The
-    /// `HashGet` returns the stored array retained (owned), and `ArrayGet` then reads an
-    /// element of it.
+    /// Verifies a hash whose values are indexed arrays preserves exact pointer
+    /// storage with `array|null` metadata: the hit is non-null and the miss is
+    /// null without boxing away the container representation.
     #[test]
     fn hash_array_value_container_read() {
         let inner = PhpType::Array(Box::new(PhpType::Int));
@@ -6335,25 +6519,76 @@ mod tests {
             );
             let h2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
             let key2 = b.emit_const_str(a);
-            let got = b
+            let hit = b
                 .emit(
-                    Op::HashGet,
+                    Op::HashGetSilent,
                     vec![h2, key2],
                     None,
                     IrType::Heap(IrHeapKind::Array),
-                    inner.clone(),
+                    PhpType::Union(vec![inner.clone(), PhpType::Void]),
                     Ownership::MaybeOwned,
                 )
                 .unwrap();
-            let idx = b.emit_const_i64(1);
-            let g = b
-                .emit(Op::ArrayGet, vec![got, idx], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+            let hit_is_null = b
+                .emit(
+                    Op::IsNull,
+                    vec![hit],
+                    None,
+                    IrType::I64,
+                    PhpType::Bool,
+                    Ownership::NonHeap,
+                )
                 .unwrap();
-            b.terminate(Terminator::Return { value: Some(g) });
+            let h3 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let missing_key = b.emit_const_str(module.data.intern_string("missing"));
+            let missing = b
+                .emit(
+                    Op::HashGetSilent,
+                    vec![h3, missing_key],
+                    None,
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Union(vec![inner.clone(), PhpType::Void]),
+                    Ownership::MaybeOwned,
+                )
+                .unwrap();
+            let missing_is_null = b
+                .emit(
+                    Op::IsNull,
+                    vec![missing],
+                    None,
+                    IrType::I64,
+                    PhpType::Bool,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let ten = b.emit_const_i64(10);
+            let weighted_hit = b
+                .emit(
+                    Op::IMul,
+                    vec![hit_is_null, ten],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let result = b
+                .emit(
+                    Op::IAdd,
+                    vec![weighted_hit, missing_is_null],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            b.terminate(Terminator::Return {
+                value: Some(result),
+            });
         }
         module.add_function(f);
         if let Some(o) = invoke(&module, "fn_c", &[]) {
-            assert_eq!(o, "20");
+            assert_eq!(o, "1");
         }
     }
 
@@ -6450,10 +6685,25 @@ mod tests {
                 .unwrap();
             let idx = b.emit_const_i64(1);
             let g = b
-                .emit(Op::ArrayGet, vec![argv, idx], None, IrType::Str, PhpType::Str, Ownership::Borrowed)
+                .emit(
+                    Op::ArrayGet,
+                    vec![argv, idx],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
                 .unwrap();
             let _ = b.emit(
                 Op::EchoValue,
+                vec![g],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let _ = b.emit(
+                Op::Release,
                 vec![g],
                 None,
                 IrType::Void,
@@ -6936,9 +7186,7 @@ mod tests {
             }
             let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
             let key = b.emit_const_i64(2);
-            let g = b
-                .emit(Op::HashGet, vec![h, key], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
-                .unwrap();
+            let g = emit_hash_get_int(&mut b, h, key);
             b.terminate(Terminator::Return { value: Some(g) });
         }
         module.add_function(f);
@@ -6979,9 +7227,7 @@ mod tests {
             let _ = b.emit(Op::HashAppend, vec![h, val7], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
             let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
             let key6 = b.emit_const_i64(6);
-            let g = b
-                .emit(Op::HashGet, vec![h, key6], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
-                .unwrap();
+            let g = emit_hash_get_int(&mut b, h, key6);
             b.terminate(Terminator::Return { value: Some(g) });
         }
         module.add_function(f);
@@ -7023,9 +7269,7 @@ mod tests {
                 .emit(Op::HashUnion, vec![a, bb], None, IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
                 .unwrap();
             let key = b.emit_const_i64(2);
-            let g = b
-                .emit(Op::HashGet, vec![u, key], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
-                .unwrap();
+            let g = emit_hash_get_int(&mut b, u, key);
             b.terminate(Terminator::Return { value: Some(g) });
         }
         module.add_function(f);
@@ -7111,9 +7355,9 @@ mod tests {
                 .emit(Op::ArrayUnion, vec![a, bb], None, IrType::Heap(IrHeapKind::Array), elem.clone(), Ownership::Owned)
                 .unwrap();
             let i0 = b.emit_const_i64(0);
-            let g0 = b.emit(Op::ArrayGet, vec![u, i0], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let g0 = emit_silent_int_array_get(&mut b, u, i0);
             let i2 = b.emit_const_i64(2);
-            let g2 = b.emit(Op::ArrayGet, vec![u, i2], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let g2 = emit_silent_int_array_get(&mut b, u, i2);
             let hundred = b.emit_const_i64(100);
             let g0x = b.emit(Op::IMul, vec![g0, hundred], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
             let total = b.emit(Op::IAdd, vec![g0x, g2], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
@@ -7159,9 +7403,9 @@ mod tests {
                 .emit(Op::ArrayHashUnion, vec![a, bb], None, IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
                 .unwrap();
             let k1 = b.emit_const_i64(1);
-            let g1 = b.emit(Op::HashGet, vec![u, k1], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let g1 = emit_hash_get_int(&mut b, u, k1);
             let k5 = b.emit_const_i64(5);
-            let g5 = b.emit(Op::HashGet, vec![u, k5], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let g5 = emit_hash_get_int(&mut b, u, k5);
             let hundred = b.emit_const_i64(100);
             let g1x = b.emit(Op::IMul, vec![g1, hundred], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
             let total = b.emit(Op::IAdd, vec![g1x, g5], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
@@ -7207,9 +7451,9 @@ mod tests {
                 .emit(Op::HashArrayUnion, vec![a, bb], None, IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
                 .unwrap();
             let k0 = b.emit_const_i64(0);
-            let g0 = b.emit(Op::HashGet, vec![u, k0], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let g0 = emit_hash_get_int(&mut b, u, k0);
             let k2 = b.emit_const_i64(2);
-            let g2 = b.emit(Op::HashGet, vec![u, k2], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let g2 = emit_hash_get_int(&mut b, u, k2);
             let hundred = b.emit_const_i64(100);
             let g0x = b.emit(Op::IMul, vec![g0, hundred], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
             let total = b.emit(Op::IAdd, vec![g0x, g2], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
@@ -7258,18 +7502,17 @@ mod tests {
             let _ = b.emit(Op::HashUnset, vec![h, key2], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
             let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
             let k1 = b.emit_const_i64(1);
-            let g1 = b.emit(Op::HashGet, vec![h, k1], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let g1 = emit_hash_get_int(&mut b, h, k1);
             let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
             let k3 = b.emit_const_i64(3);
-            let g3 = b.emit(Op::HashGet, vec![h, k3], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let g3 = emit_hash_get_int(&mut b, h, k3);
             let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
             let k2 = b.emit_const_i64(2);
-            let g2 = b.emit(Op::HashGet, vec![h, k2], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
-            let missing = b.emit_const_i64(0x7fff_ffff_ffff_fffe);
+            let g2 = emit_hash_get_tagged_int(&mut b, h, k2);
             let removed = b.emit(
-                Op::ICmp,
-                vec![g2, missing],
-                Some(Immediate::CmpPredicate(CmpPredicate::Eq)),
+                Op::IsNull,
+                vec![g2],
+                None,
                 IrType::I64,
                 PhpType::Bool,
                 Ownership::NonHeap,

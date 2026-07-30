@@ -53,6 +53,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::ConcatReset => lower_concat_reset(ctx),
         Op::LoadLocal => lower_load_local(ctx, &inst),
         Op::StoreLocal => lower_store_local(ctx, &inst),
+        Op::UnsetLocal => lower_unset_local(ctx, &inst),
         Op::IAdd => lower_int_binop(ctx, &inst, "i64.add"),
         Op::ISub => lower_int_binop(ctx, &inst, "i64.sub"),
         Op::IMul => lower_int_binop(ctx, &inst, "i64.mul"),
@@ -86,6 +87,8 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::RuntimeCall => lower_runtime_call(ctx, &inst),
         Op::LanguageConstructCall => lower_language_construct_call(ctx, &inst),
         Op::EchoValue | Op::PrintValue => lower_echo(ctx, &inst),
+        Op::Warn => lower_array_offset_on_null_warning(ctx, &inst),
+        Op::ThrowError => lower_method_call_on_null_error(ctx, &inst),
         Op::Acquire => lower_acquire(ctx, &inst),
         Op::Release => lower_release(ctx, &inst),
         Op::Move | Op::Borrow => lower_forward(ctx, &inst),
@@ -96,7 +99,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::ArraySet => lower_array_set(ctx, &inst),
         Op::ArrayToHash => super::inst_hash::lower_array_to_hash(ctx, &inst),
         Op::HashNew => super::inst_hash::lower_hash_new(ctx, &inst),
-        Op::HashGet => super::inst_hash::lower_hash_get(ctx, &inst),
+        Op::HashGet | Op::HashGetSilent => super::inst_hash::lower_hash_get(ctx, &inst),
         Op::HashSet => super::inst_hash::lower_hash_set(ctx, &inst),
         Op::HashUnset => super::inst_hash::lower_hash_unset(ctx, &inst),
         Op::HashAppend => super::inst_hash::lower_hash_append(ctx, &inst),
@@ -222,6 +225,114 @@ pub(super) fn data_immediate(inst: &Instruction) -> Result<DataId> {
             inst.op
         ))),
     }
+}
+
+/// Lowers the capability-proven no-argument offset-on-null warning.
+fn lower_array_offset_on_null_warning(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    if !inst.operands.is_empty()
+        || inst.result.is_some()
+        || inst.result_type != IrType::Void
+        || inst.result_php_type.codegen_repr() != PhpType::Void
+        || inst.result_ownership != Ownership::NonHeap
+    {
+        return Err(WasmError::Unsupported(
+            "invalid array-offset-on-null Warn shape".to_string(),
+        ));
+    }
+    let data = data_immediate(inst)?;
+    let message = ctx
+        .module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .ok_or_else(|| {
+            WasmError::Unsupported(format!(
+                "array-offset-on-null warning: unknown data {:?}",
+                data
+            ))
+        })?;
+    if message != crate::codegen_support::runtime::array_offset_on_null_warning() {
+        return Err(WasmError::Unsupported(format!(
+            "unsupported static Warn message {message:?}"
+        )));
+    }
+    ctx.fb.ins(
+        "call $__rt_warn_array_offset_on_null",
+        "emit PHP array-offset-on-null warning",
+    );
+    Ok(())
+}
+
+const METHOD_CALL_ON_NULL_PREFIX: &str = "Call to a member function ";
+const METHOD_CALL_ON_NULL_SUFFIX: &str = "() on null";
+
+/// Returns the byte range of the method name in the exact static error emitted
+/// for an ordinary method call whose nullable receiver resolved to `null`.
+///
+/// The WASM backend intentionally accepts only this `ThrowError` form. General
+/// catchable `Error` support remains behind the capability gate until WASM
+/// exception handlers preserve PHP `try`/`catch` semantics.
+pub(super) fn method_call_on_null_name_range(message: &str) -> Option<(usize, usize)> {
+    let method = message
+        .strip_prefix(METHOD_CALL_ON_NULL_PREFIX)?
+        .strip_suffix(METHOD_CALL_ON_NULL_SUFFIX)?;
+    if method.is_empty() {
+        return None;
+    }
+    Some((METHOD_CALL_ON_NULL_PREFIX.len(), method.len()))
+}
+
+/// Lowers the capability-proven method-on-null `ThrowError` through the existing
+/// PHP fatal helper.
+///
+/// Capability validation proves the module has no admitted catch surface and
+/// that the following EIR terminator is `Unreachable`. This instruction emits
+/// only the non-returning call; terminator lowering emits the classified Core
+/// `unreachable` immediately after it.
+fn lower_method_call_on_null_error(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    if !inst.operands.is_empty()
+        || inst.result.is_some()
+        || inst.result_type != IrType::Void
+        || inst.result_php_type.codegen_repr() != PhpType::Void
+        || inst.result_ownership != Ownership::NonHeap
+    {
+        return Err(WasmError::Unsupported(
+            "invalid method-on-null ThrowError shape".to_string(),
+        ));
+    }
+    let data = data_immediate(inst)?;
+    let message = ctx
+        .module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .ok_or_else(|| {
+            WasmError::Unsupported(format!(
+                "method-on-null error: unknown data {:?}",
+                data
+            ))
+        })?;
+    let (method_offset, method_len) =
+        method_call_on_null_name_range(message).ok_or_else(|| {
+            WasmError::Unsupported(format!(
+                "unsupported static ThrowError message {message:?}"
+            ))
+        })?;
+    let (message_ptr, _) = ctx.str_literal(data)?;
+    ctx.fb.ins(
+        &format!("i32.const {}", message_ptr + method_offset as u32),
+        "method-name pointer inside static error message",
+    );
+    ctx.fb.ins(
+        &format!("i32.const {}", method_len),
+        "method-name byte length",
+    );
+    ctx.fb.ins("i32.const 8", "Mixed null runtime tag");
+    ctx.fb.ins(
+        "call $__rt_fail_method_call_non_object",
+        "raise PHP fatal for method call on null",
+    );
+    Ok(())
 }
 
 /// Lowers `Op::Call` to a direct WebAssembly call of a user function.
@@ -674,8 +785,17 @@ fn emit_runtime_failure(ctx: &mut FnCtx, failure_code: i32, reason: &str) {
             .ins(&format!("i32.const {}", failure_code), "runtime failure code");
         ctx.fb.ins("call $__rt_fail", reason);
     }
-    ctx.fb
-        .ins("unreachable", "exceptional arithmetic path does not return");
+    let classification = if ctx
+        .module
+        .functions
+        .iter()
+        .any(|function| function.flags.is_main)
+    {
+        "elephc-trap:post-noreturn:arithmetic-failure exceptional arithmetic path does not return"
+    } else {
+        "elephc-trap:non-public:reactor-arithmetic-failure import-free reactors are outside the public command surface"
+    };
+    ctx.fb.ins("unreachable", classification);
 }
 
 /// Lowers PHP integer add/subtract/multiply with overflow promotion to a boxed float.
@@ -979,6 +1099,41 @@ fn lower_store_local(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         return Ok(());
     }
     transfer::emit_transfer_to_slot(ctx, value, slot)
+}
+
+/// Lowers `UnsetLocal` for a consumed owned temporary by clearing every storage
+/// component without releasing the value that was moved out by `LoadLocal`.
+fn lower_unset_local(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let slot = slot_immediate(inst)?;
+    let repr = ctx.slot_repr(slot)?.clone();
+    match repr {
+        WasmRepr::I64(local) => {
+            ctx.fb.ins("i64.const 0", "clear consumed temp");
+            ctx.fb.ins(&format!("local.set {}", local), "");
+        }
+        WasmRepr::F64(local) => {
+            ctx.fb.ins("f64.const 0", "clear consumed temp");
+            ctx.fb.ins(&format!("local.set {}", local), "");
+        }
+        WasmRepr::Ptr(local) => {
+            ctx.fb.ins("i32.const 0", "clear consumed temp");
+            ctx.fb.ins(&format!("local.set {}", local), "");
+        }
+        WasmRepr::Str { ptr, len } => {
+            ctx.fb.ins("i32.const 0", "clear consumed temp pointer");
+            ctx.fb.ins(&format!("local.set {}", ptr), "");
+            ctx.fb.ins("i64.const 0", "clear consumed temp length");
+            ctx.fb.ins(&format!("local.set {}", len), "");
+        }
+        WasmRepr::Tagged { payload, tag } => {
+            ctx.fb.ins("i64.const 0", "clear consumed temp payload");
+            ctx.fb.ins(&format!("local.set {}", payload), "");
+            ctx.fb.ins("i32.const 0", "clear consumed temp tag");
+            ctx.fb.ins(&format!("local.set {}", tag), "");
+        }
+        WasmRepr::Void => {}
+    }
+    Ok(())
 }
 
 /// Lowers `INeg`: computes `0 - x`.
@@ -1999,8 +2154,10 @@ fn lower_exit(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     ctx.fb
         .ins(&format!("local.get {}", status), "restore exit status after cleanup");
     ctx.fb.ins("call $wasi_proc_exit", "WASI proc_exit(code)");
-    ctx.fb
-        .ins("unreachable", "WASI proc_exit is non-returning");
+    ctx.fb.ins(
+        "unreachable",
+        "elephc-trap:post-noreturn:explicit-proc-exit WASI proc_exit is non-returning",
+    );
     Ok(())
 }
 
@@ -2228,8 +2385,30 @@ fn lower_array_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let result = inst
         .result
         .ok_or_else(|| WasmError::Unsupported("array_get without a result".to_string()))?;
-    let element_type = match ctx.value_php_type(array)?.codegen_repr() {
+    let source_php_type = ctx.value_php_type(array)?;
+    let element_type = match &source_php_type {
         PhpType::Array(element) => element.codegen_repr(),
+        PhpType::Union(members) if members.len() == 2 => {
+            let Some(PhpType::Array(element)) = members
+                .iter()
+                .find(|member| matches!(member, PhpType::Array(_)))
+            else {
+                return Err(WasmError::Unsupported(format!(
+                    "array_get nullable source is not an indexed array: {:?}",
+                    source_php_type
+                )));
+            };
+            if !members
+                .iter()
+                .any(|member| matches!(member, PhpType::Void | PhpType::Never))
+            {
+                return Err(WasmError::Unsupported(format!(
+                    "array_get union source is not nullable: {:?}",
+                    source_php_type
+                )));
+            }
+            element.codegen_repr()
+        }
         other => {
             return Err(WasmError::Unsupported(format!(
                 "array_get source is not an indexed array: {:?}",
@@ -2439,9 +2618,9 @@ fn lower_array_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     Ok(())
 }
 
-/// Lowers `Op::MixedBox`: boxes a scalar/string/heap value into a Mixed cell via
-/// `__rt_mixed_from_value`, picking the runtime tag from the operand's type. A
-/// value that is already a Mixed cell is forwarded unchanged.
+/// Lowers `Op::MixedBox`: boxes a scalar/string/heap/tagged value into a Mixed
+/// cell via `__rt_mixed_from_value`, picking the static or runtime tag from the
+/// operand representation. A value already stored as a Mixed cell is forwarded.
 fn lower_mixed_box(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let value = operand(inst, 0)?;
     let repr = ctx.value_repr(value)?.clone();
@@ -2505,9 +2684,23 @@ fn lower_mixed_box(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             }
             _ => Err(WasmError::Unsupported("mixed_box of a non-heap pointer".to_string())),
         },
-        WasmRepr::Tagged { .. } => {
-            Err(WasmError::Unsupported("mixed_box of a tagged scalar".to_string()))
+        WasmRepr::Tagged { payload, tag }
+            if ir == Some(IrType::TaggedScalar) && php == Some(PhpType::TaggedScalar) =>
+        {
+            ctx.fb
+                .ins(&format!("local.get {}", tag), "tagged scalar runtime tag");
+            ctx.fb.ins("i64.extend_i32_u", "tag -> i64");
+            ctx.fb
+                .ins(&format!("local.get {}", payload), "tagged scalar payload");
+            ctx.fb.ins("i64.const 0", "hi unused");
+            ctx.fb
+                .ins("call $__rt_mixed_from_value", "box tagged scalar");
+            store_result(ctx, inst)
         }
+        WasmRepr::Tagged { .. } => Err(WasmError::Unsupported(format!(
+            "mixed_box of invalid tagged storage {:?}/{:?}",
+            ir, php
+        ))),
         WasmRepr::Void => Err(WasmError::Unsupported("mixed_box of void".to_string())),
     }
 }
@@ -2713,12 +2906,29 @@ fn lower_iter_current_value(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 fn lower_is_null(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let op0 = operand(inst, 0)?;
     let repr = ctx.value_repr(op0)?.clone();
-    let php_type = ctx.value_php_type(op0)?.codegen_repr();
-    match (repr, php_type) {
-        (_, PhpType::Void | PhpType::Never) => {
+    let php_type = ctx.value_php_type(op0)?.clone();
+    let ir_type = ctx
+        .function
+        .value(op0)
+        .map(|value| value.ir_type)
+        .ok_or_else(|| WasmError::Unsupported("is_null operand is missing".to_string()))?;
+    match (repr, php_type, ir_type) {
+        (_, PhpType::Void | PhpType::Never, _) => {
             ctx.fb.ins("i64.const 1", "statically null value");
         }
-        (WasmRepr::Ptr(local), PhpType::Mixed | PhpType::Union(_)) => {
+        (WasmRepr::Ptr(local), PhpType::Union(_), IrType::Heap(kind))
+            if kind != IrHeapKind::Mixed =>
+        {
+            ctx.fb
+                .ins(&format!("local.get {}", local), "nullable container pointer");
+            ctx.fb.ins("i32.eqz", "nullable container is null");
+            ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
+        }
+        (
+            WasmRepr::Ptr(local),
+            PhpType::Mixed | PhpType::Union(_),
+            IrType::Heap(IrHeapKind::Mixed),
+        ) => {
             ctx.fb.ins(&format!("local.get {}", local), "boxed value");
             ctx.fb
                 .ins("call $__rt_mixed_unbox", "read boxed Mixed tag");
@@ -2728,7 +2938,7 @@ fn lower_is_null(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             ctx.fb.ins("i64.eq", "boxed value is null");
             ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
         }
-        (WasmRepr::Tagged { tag, .. }, PhpType::TaggedScalar) => {
+        (WasmRepr::Tagged { tag, .. }, PhpType::TaggedScalar, IrType::TaggedScalar) => {
             ctx.fb.ins(&format!("local.get {}", tag), "tagged scalar tag");
             ctx.fb.ins("i32.const 8", "tagged null tag");
             ctx.fb.ins("i32.eq", "tagged scalar is null");

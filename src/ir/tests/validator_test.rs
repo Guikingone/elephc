@@ -9,7 +9,8 @@
 //!   not on assumptions from the builder.
 
 use crate::ir::{
-    validate_function, Builder, Function, IrType, Terminator, ValidationError,
+    validate_function, Builder, Function, Immediate, IrHeapKind, IrType, Op, Ownership,
+    Terminator, ValidationError,
 };
 use crate::types::PhpType;
 
@@ -32,7 +33,65 @@ fn well_formed_function_passes() {
         let value = builder.emit_const_i64(7);
         builder.terminate(Terminator::Return { value: Some(value) });
     }
-    assert!(validate_function(&function).is_ok());
+    let result = validate_function(&function);
+    assert!(result.is_ok(), "{result:?}");
+}
+
+/// Exact array pointer storage accepts only the corresponding two-member
+/// `array|null` metadata used by nullable container reads.
+#[test]
+fn exact_nullable_container_storage_passes() {
+    let mut function =
+        Function::new("nullable_array".to_string(), IrType::Void, PhpType::Void);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let array_type = PhpType::Array(Box::new(PhpType::Int));
+        let _ = builder.emit(
+            Op::ArrayNew,
+            Vec::new(),
+            Some(Immediate::Capacity(0)),
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Union(vec![array_type, PhpType::Void]),
+            Ownership::MaybeOwned,
+        );
+        builder.terminate(Terminator::Return { value: None });
+    }
+    let result = validate_function(&function);
+    assert!(result.is_ok(), "{result:?}");
+}
+
+/// Exact container storage rejects unions with more than one concrete member
+/// because a single pointer representation cannot encode both alternatives.
+#[test]
+fn ambiguous_nullable_container_storage_fails() {
+    let mut function =
+        Function::new("ambiguous_array".to_string(), IrType::Void, PhpType::Void);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let _ = builder.emit(
+            Op::ArrayNew,
+            Vec::new(),
+            Some(Immediate::Capacity(0)),
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Union(vec![
+                PhpType::Array(Box::new(PhpType::Int)),
+                PhpType::Str,
+                PhpType::Void,
+            ]),
+            Ownership::MaybeOwned,
+        );
+        builder.terminate(Terminator::Return { value: None });
+    }
+    assert!(matches!(
+        validate_function(&function),
+        Err(ValidationError::PhpTypeMismatch(_))
+    ));
 }
 
 /// A returned value must match the function's EIR return type.

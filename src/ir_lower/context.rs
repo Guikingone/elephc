@@ -13,6 +13,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use crate::codegen_support::platform::Target;
 use crate::ir::{
     BlockId, Builder, DataId, DataPool, Effects, Function, Immediate, IrType, LocalKind,
     LocalSlotId, Op, Ownership, ValueId,
@@ -98,6 +99,7 @@ const EVAL_ARGV_LOCAL_NAME: &str = "argv";
 pub(crate) struct LoweringContext<'m, 'f> {
     pub builder: Builder<'f>,
     pub data: &'m mut DataPool,
+    pub target: Target,
     pub local_slots: HashMap<String, LocalSlotId>,
     pub local_kinds: HashMap<String, LocalKind>,
     pub local_types: TypeEnv,
@@ -199,12 +201,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         in_main: bool,
         all_global_var_names: HashSet<String>,
         source_path: Option<String>,
+        target: Target,
         web: bool,
     ) -> Self {
         let return_type = return_ir_type(&return_php_type);
         Self {
             builder,
             data,
+            target,
             local_slots: HashMap::new(),
             local_kinds: HashMap::new(),
             local_types: env,
@@ -2332,6 +2336,32 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) -> LoweredValue {
         let ir_type = value_ir_type(&php_type);
+        let ownership = Ownership::for_php_type(&php_type);
+        let value = self
+            .builder
+            .emit_with_effects(
+                op, operands, immediate, ir_type, php_type, ownership, effects, span,
+            )
+            .expect("value opcode produces a value");
+        LoweredValue { value, ir_type }
+    }
+
+    /// Emits a value with an explicit EIR storage type while preserving richer
+    /// PHP metadata.
+    ///
+    /// This is reserved for representations such as `container|null`, where a
+    /// concrete nullable pointer is more precise than the default boxed-Union
+    /// storage selected by `value_ir_type`.
+    pub(crate) fn emit_value_with_ir_type(
+        &mut self,
+        op: Op,
+        operands: Vec<ValueId>,
+        immediate: Option<Immediate>,
+        ir_type: IrType,
+        php_type: PhpType,
+        effects: Effects,
+        span: Option<Span>,
+    ) -> LoweredValue {
         let ownership = Ownership::for_php_type(&php_type);
         let value = self
             .builder

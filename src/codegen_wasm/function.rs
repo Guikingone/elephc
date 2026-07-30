@@ -295,6 +295,10 @@ fn emit_dispatch_loop(ctx: &mut FnCtx) -> Result<()> {
     for k in 0..n {
         ctx.fb.comment(&format!("---- block {} ----", k));
         let inst_ids: Vec<InstId> = ctx.function.blocks[k].instructions.clone();
+        let last_op = inst_ids
+            .last()
+            .and_then(|inst_id| ctx.function.instruction(*inst_id))
+            .map(|instruction| instruction.op);
         for inst_id in inst_ids {
             lower_instruction(ctx, inst_id)?;
         }
@@ -302,7 +306,7 @@ fn emit_dispatch_loop(ctx: &mut FnCtx) -> Result<()> {
             .terminator
             .clone()
             .ok_or_else(|| WasmError::Unsupported(format!("block {} has no terminator", k)))?;
-        lower_terminator(ctx, &terminator)?;
+        lower_terminator(ctx, &terminator, last_op)?;
 
         // Close the wrapper for block k+1; the last block's body sits inside $__default.
         if k + 1 < n {
@@ -311,11 +315,15 @@ fn emit_dispatch_loop(ctx: &mut FnCtx) -> Result<()> {
     }
 
     ctx.fb.raw(")");
-    ctx.fb
-        .ins("unreachable", "$__default: out-of-range dispatch state traps");
+    ctx.fb.ins(
+        "unreachable",
+        "elephc-trap:proven-invariant:dispatch-state-range $__default rejects an out-of-range dispatch state",
+    );
     ctx.fb.raw(")");
-    ctx.fb
-        .ins("unreachable", "dispatch loop is left only via return/proc_exit");
+    ctx.fb.ins(
+        "unreachable",
+        "elephc-trap:proven-invariant:dispatch-loop-tail dispatch loop is left only via return/proc_exit",
+    );
 
     Ok(())
 }
@@ -329,10 +337,15 @@ fn emit_dispatch_loop(ctx: &mut FnCtx) -> Result<()> {
 /// - `Switch`: emits cascaded i64 comparisons; falls through to the default edge.
 /// - `Return`: for main, calls `proc_exit(0)`; for others, loads the value and `return`s.
 /// - `Throw`, `Fatal`, `GeneratorSuspend`: returns `Unsupported` (later phases).
-fn lower_terminator(ctx: &mut FnCtx, term: &Terminator) -> Result<()> {
+fn lower_terminator(ctx: &mut FnCtx, term: &Terminator, preceding_op: Option<Op>) -> Result<()> {
     match term {
         Terminator::Unreachable => {
-            ctx.fb.ins("unreachable", "EIR unreachable");
+            let marker = if preceding_op == Some(Op::ThrowError) {
+                "elephc-trap:post-noreturn:method-null-error method fatal helper does not return"
+            } else {
+                "elephc-trap:proven-invariant:eir-unreachable EIR unreachable terminator"
+            };
+            ctx.fb.ins("unreachable", marker);
             Ok(())
         }
 
@@ -446,8 +459,10 @@ fn lower_terminator(ctx: &mut FnCtx, term: &Terminator) -> Result<()> {
             if ctx.function.flags.is_main {
                 ctx.fb.ins("i32.const 0", "exit status 0");
                 ctx.fb.ins("call $wasi_proc_exit", "WASI proc_exit(0)");
-                ctx.fb
-                    .ins("unreachable", "WASI proc_exit is non-returning");
+                ctx.fb.ins(
+                    "unreachable",
+                    "elephc-trap:post-noreturn:main-proc-exit WASI proc_exit is non-returning",
+                );
             } else {
                 if let Some(v) = value {
                     ctx.emit_load_value(*v)?;

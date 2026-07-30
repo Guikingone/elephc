@@ -36,19 +36,26 @@ fn combined_effects_compose() {
     assert_eq!(effects.names(), vec!["reads_heap", "may_fatal"]);
 }
 
-/// Typed array reads distinguish warning-capable access from silent probing.
+/// Nullable indexed and associative reads retain possible boxing/copy allocation
+/// while distinguishing warning-producing access from silent probing.
 #[test]
 fn array_read_opcodes_have_precise_warning_contracts() {
     assert_eq!(
         Op::ArrayGet.default_effects(),
-        Effects::READS_HEAP | Effects::MAY_WARN
+        Effects::READS_HEAP | Effects::ALLOC_HEAP | Effects::MAY_WARN
     );
-    assert_eq!(Op::ArrayGetSilent.default_effects(), Effects::READS_HEAP);
+    assert_eq!(
+        Op::ArrayGetSilent.default_effects(),
+        Effects::READS_HEAP | Effects::ALLOC_HEAP
+    );
     assert_eq!(
         Op::HashGet.default_effects(),
-        Effects::READS_HEAP | Effects::MAY_WARN
+        Effects::READS_HEAP | Effects::ALLOC_HEAP | Effects::MAY_WARN
     );
-    assert_eq!(Op::HashGetSilent.default_effects(), Effects::READS_HEAP);
+    assert_eq!(
+        Op::HashGetSilent.default_effects(),
+        Effects::READS_HEAP | Effects::ALLOC_HEAP
+    );
 }
 
 /// Dynamic instance calls retain a catchable-error bit until target refinement proves otherwise.

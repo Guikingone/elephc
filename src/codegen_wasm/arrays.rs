@@ -91,7 +91,7 @@ const RT_ARRAY_GROW: &str = r#"(func $__rt_array_grow (param $array i32) (result
   (local.set $esz (i64.load (i32.add (local.get $array) (i32.const 16))))  ;; elem_size
   (drop (call $__rt_checked_layout (local.get $cap) (local.get $esz) (i64.const 24)))  ;; validate the source layout before reading/copying slots
   (if (i64.gt_u (local.get $len) (local.get $cap))
-    (then (call $__rt_oom) unreachable))                     ;; malformed length cannot exceed capacity
+    (then (call $__rt_oom) unreachable))                     ;; elephc-trap:deterministic-oom:array-grow-malformed-length malformed length cannot exceed capacity
   (local.set $newcap (i64.add (local.get $cap) (local.get $cap)))  ;; newcap = cap * 2 (cap is bounded above)
   (if (i64.lt_s (local.get $newcap) (i64.const 8))
     (then (local.set $newcap (i64.const 8))))                ;; minimum capacity 8
@@ -374,9 +374,9 @@ const RT_ARRAY_PREFLIGHT_SET: &str = r#"(func $__rt_array_preflight_set (param $
   (local $esz i64)
   (local $newcap i64)
   (if (i64.lt_s (local.get $index) (i64.const 0))
-    (then (call $__rt_oom) unreachable))                    ;; callers reject negative indexes before preflight
+    (then (call $__rt_oom) unreachable))                    ;; elephc-trap:deterministic-oom:array-set-negative-index callers reject negative indexes before preflight
   (if (i64.eq (local.get $index) (i64.const 9223372036854775807))
-    (then (call $__rt_oom) unreachable))                    ;; index+1 would overflow i64
+    (then (call $__rt_oom) unreachable))                    ;; elephc-trap:deterministic-oom:array-set-index-overflow index+1 would overflow i64
   (drop (call $__rt_checked_layout
     (i64.add (local.get $index) (i64.const 1))
     (local.get $stride)
@@ -386,7 +386,7 @@ const RT_ARRAY_PREFLIGHT_SET: &str = r#"(func $__rt_array_preflight_set (param $
   (local.set $esz (i64.load (i32.add (local.get $array) (i32.const 16))))
   (drop (call $__rt_checked_layout (local.get $cap) (local.get $esz) (i64.const 24)))  ;; validate current allocation metadata
   (if (i64.gt_u (local.get $len) (local.get $cap))
-    (then (call $__rt_oom) unreachable))                    ;; reject malformed source metadata before COW
+    (then (call $__rt_oom) unreachable))                    ;; elephc-trap:deterministic-oom:array-set-malformed-length reject malformed source metadata before COW
   (if
     (i32.and
       (i64.eqz (local.get $len))

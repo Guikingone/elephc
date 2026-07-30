@@ -325,8 +325,28 @@ fn emit_unbox_mixed_to_concrete(
                 .ins(&accepted_tag_test, "mixed tag belongs to destination kind");
             ctx.fb.ins("i32.eqz", "invert accepted-tag predicate");
             ctx.fb.ins("if", "mixed heap-kind mismatch?");
-            ctx.fb
-                .ins("unreachable", "trap on a mixed heap-kind mismatch");
+            if ctx
+                .module
+                .functions
+                .iter()
+                .any(|function| function.flags.is_main)
+            {
+                ctx.fb
+                    .ins("i32.const 9", "Mixed heap-kind TypeError diagnostic");
+                ctx.fb.ins(
+                    "call $__rt_fail",
+                    "raise deterministic PHP TypeError for the mismatch",
+                );
+                ctx.fb.ins(
+                    "unreachable",
+                    "elephc-trap:post-noreturn:mixed-heap-kind-mismatch runtime TypeError helper does not return",
+                );
+            } else {
+                ctx.fb.ins(
+                    "unreachable",
+                    "elephc-trap:non-public:reactor-mixed-heap-mismatch import-free reactors are outside the public command surface",
+                );
+            }
             ctx.fb.ins("end", "end mixed heap-kind validation");
             ctx.fb
                 .ins(&format!("local.get {}", lo_tmp), "load mixed heap pointer");
