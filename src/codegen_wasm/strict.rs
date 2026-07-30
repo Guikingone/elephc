@@ -291,6 +291,7 @@ mod tests {
     #[test]
     fn strict_scalar_equality_opcodes_lower_and_run() {
         let mut module = Module::new(Target::wasm());
+        let delimiter = module.data.intern_string(",");
         let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
         function.flags.is_main = true;
         {
@@ -299,7 +300,12 @@ mod tests {
             builder.set_entry(entry);
             builder.position_at_end(entry);
 
-            for (op, lhs, rhs) in [(Op::StrictEq, 7, 7), (Op::StrictNotEq, 7, 8)] {
+            for (op, lhs, rhs) in [
+                (Op::StrictEq, 7, 7),
+                (Op::StrictNotEq, 7, 8),
+                (Op::StrictEq, 7, 8),
+                (Op::StrictNotEq, 7, 7),
+            ] {
                 let lhs = builder.emit_const_i64(lhs);
                 let rhs = builder.emit_const_i64(rhs);
                 let result = builder
@@ -315,6 +321,15 @@ mod tests {
                 let _ = builder.emit(
                     Op::EchoValue,
                     vec![result],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+                let delimiter = builder.emit_const_str(delimiter);
+                let _ = builder.emit(
+                    Op::EchoValue,
+                    vec![delimiter],
                     None,
                     IrType::Void,
                     PhpType::Void,
@@ -355,7 +370,7 @@ mod tests {
             "strict EIR module failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert_eq!(String::from_utf8_lossy(&output.stdout), "11");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "1,1,,,");
         assert!(output.stderr.is_empty());
     }
 

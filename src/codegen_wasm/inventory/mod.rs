@@ -224,6 +224,7 @@ fn test_catalog() -> TestCatalog {
             "codegen_wasm::tests::chained_concat_echoes_correctly",
             "codegen_wasm::strict::tests::strict_scalar_equality_opcodes_lower_and_run",
             "codegen_wasm::strict::tests::strict_binary_string_equality_is_length_delimited",
+            "codegen::cli::test_cli_wasm_strict_equality_executes_supported_profiles",
             "codegen_wasm::tests::strlen_of_literal_invokes_correctly",
             "codegen_wasm::tests::argc_reports_argument_count",
             "codegen_wasm::tests::exit_with_code_sets_process_status",
@@ -244,6 +245,8 @@ fn test_catalog() -> TestCatalog {
             "codegen_wasm::tests::exit_runs_owned_local_destructors_before_terminating",
             "codegen_wasm::tests::ref_cell_promotion_is_runtime_idempotent_across_branches",
             "codegen_wasm::tests::acquired_ref_cell_return_survives_owner_epilogue",
+            "ir_lower::tests::ownership::match_releases_owned_subject_and_conditions_on_each_normal_edge",
+            "ir_lower::tests::ownership::match_releases_owned_object_subject_and_condition",
         ],
         host: vec![
             "scripts/test-wasm-hosts.sh",

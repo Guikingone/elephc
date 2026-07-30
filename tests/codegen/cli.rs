@@ -795,9 +795,12 @@ echo $integer . $other_integer . "|" . $true . $false . "|" . $minimum . ":" . $
 }
 
 /// Compiles exact strict scalar/string/object equality through the public PHP
-/// frontend for every supported profile and verifies raw output/status/stderr.
+/// frontend for every supported compiler profile and verifies raw execution.
+///
+/// This is target execution coverage; the pinned php-src differential oracle is
+/// a separate W1 gate and must not be inferred from this hand-authored matrix.
 #[test]
-fn test_cli_wasm_strict_equality_matches_php_profiles() {
+fn test_cli_wasm_strict_equality_executes_supported_profiles() {
     if Command::new("wasmer").arg("--version").output().is_err() {
         return;
     }
@@ -853,6 +856,25 @@ echo $object !== $otherObject; echo ",";
 echo $object === $object; echo ",";
 echo $null === null; echo ",";
 echo $false !== $null; echo ",";
+echo $one === $two; echo ",";
+echo $one !== integer_value(1); echo ",";
+echo $nan === $nan; echo ",";
+echo $positiveZero !== $negativeZero; echo ",";
+echo $binary !== $sameBinary; echo ",";
+echo $object !== $object; echo ",";
+echo $one === string_value("1"); echo ",";
+echo match ("need" . string_value("le")) {
+    "needle" . string_value("") => true,
+    default => false,
+}; echo ",";
+echo match ("need" . string_value("le")) {
+    "other" . string_value("") => false,
+    default => true,
+}; echo ",";
+echo match (new ChildValue()) {
+    new ChildValue() => false,
+    default => true,
+}; echo ",";
 "#,
     )
     .unwrap();
@@ -883,10 +905,8 @@ echo $false !== $null; echo ",";
             "PHP {version} strict equality trapped: {}",
             String::from_utf8_lossy(&run.stderr)
         );
-        assert_eq!(
-            String::from_utf8_lossy(&run.stdout),
-            "1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,"
-        );
+        let expected = format!("{}{}{}", "1,".repeat(16), ",".repeat(7), "1,1,1,");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
         assert!(
             run.stderr.is_empty(),
             "PHP {version}: {}",

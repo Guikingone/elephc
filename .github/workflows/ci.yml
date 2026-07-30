@@ -496,6 +496,11 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+      - name: Execute strict PHP equality through the public WASM frontend
+        run: |
+          CARGO_INCREMENTAL=0 cargo test --locked --test codegen_tests \
+            test_cli_wasm_strict_equality_executes_supported_profiles
+
       - name: Validate WASM hosts and NPM package
         run: scripts/test-wasm-hosts.sh
 

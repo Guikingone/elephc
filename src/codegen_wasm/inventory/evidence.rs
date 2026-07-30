@@ -65,7 +65,7 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
         Op::FNeg => &["unary float `-`"],
         Op::ICmp => &["integer comparison"],
         Op::FCmp => &["float comparison"],
-        Op::StrictEq => &["strict equality (`===`)"],
+        Op::StrictEq => &["strict equality (`===`)", "`match` arm selection"],
         Op::StrictNotEq => &["strict inequality (`!==`)"],
         Op::IsNull => &["null comparison or `is_null()` lowering"],
         Op::IsTruthy => &["condition/boolean-context truthiness"],
@@ -159,7 +159,10 @@ fn op_tests(op: Op) -> &'static [&'static str] {
         Op::IDiv => &["codegen_wasm::tests::php_division_returns_float"],
         Op::ICmp => &["codegen_wasm::tests::int_compare_invokes_correctly"],
         Op::StrictEq | Op::StrictNotEq => {
-            &["codegen_wasm::strict::tests::strict_scalar_equality_opcodes_lower_and_run"]
+            &[
+                "codegen_wasm::strict::tests::strict_scalar_equality_opcodes_lower_and_run",
+                "codegen::cli::test_cli_wasm_strict_equality_executes_supported_profiles",
+            ]
         }
         Op::IToStr => {
             &["codegen_wasm::tests::integer_and_boolean_to_string_lowering_matches_php"]
