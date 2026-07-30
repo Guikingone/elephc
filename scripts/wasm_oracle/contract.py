@@ -299,10 +299,11 @@ class RuntimeProvenance:
                     f"{key.profile} php-src commit {self.source_commit} does not match "
                     f"pinned peeled tag commit {pin.tag_commit}"
                 )
-            if self.version != pin.tag:
+            expected_version = pin.tag.removeprefix("php-")
+            if self.version != expected_version:
                 raise ContractError(
                     f"{key.profile} php-src version {self.version!r} does not "
-                    f"match pinned tag {pin.tag!r}"
+                    f"match pinned runtime version {expected_version!r}"
                 )
             for field in ("configure_command", "build_flags"):
                 if field not in configuration:

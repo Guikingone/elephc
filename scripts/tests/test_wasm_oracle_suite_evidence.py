@@ -106,7 +106,7 @@ class WasmOracleSuiteEvidenceTests(unittest.TestCase):
             pin = self.contract.php_src_pin(profile)
             return RuntimeProvenance.create(
                 executable_sha256=self.python_sha256,
-                version=pin.tag,
+                version=pin.tag.removeprefix("php-"),
                 source_commit=pin.tag_commit,
                 build_configuration={
                     "configure_command": "./configure --disable-all",
