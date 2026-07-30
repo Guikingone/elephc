@@ -377,6 +377,24 @@ class WasmPhpOracleTests(unittest.TestCase):
         self.assertTrue(limited.output_limit_exceeded)
         self.assertEqual(limited.stdout.length, 32)
 
+        combined = capture_process(
+            self.contract,
+            self.capture_request(
+                runtime="php-src",
+                code=(
+                    "import os;"
+                    "os.write(1,b'o'*24);"
+                    "os.write(2,b'e'*24)"
+                ),
+                output_limit_bytes=32,
+            ),
+        )
+        self.assertTrue(combined.output_limit_exceeded)
+        self.assertLessEqual(
+            combined.stdout.length + combined.stderr.length,
+            32,
+        )
+
     def test_capture_applies_only_declared_literal_normalization(self) -> None:
         normalization = Normalization(((b"/tmp/source.php", b"<SOURCE>"),))
         record = capture_process(

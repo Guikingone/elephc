@@ -715,17 +715,24 @@ def _read_stream(
     stream: Any,
     limit: int,
     destination: bytearray,
+    combined_length: list[int],
+    combined_lock: threading.Lock,
     exceeded: threading.Event,
     failures: list[BaseException],
 ) -> None:
+    """Capture one pipe while enforcing one combined stdout/stderr byte limit."""
+
     try:
         while True:
             chunk = stream.read(64 * 1024)
             if not chunk:
                 return
-            remaining = max(0, limit - len(destination))
-            destination.extend(chunk[:remaining])
-            if len(chunk) > remaining:
+            with combined_lock:
+                remaining = max(0, limit - combined_length[0])
+                accepted = min(len(chunk), remaining)
+                destination.extend(chunk[:accepted])
+                combined_length[0] += accepted
+            if accepted < len(chunk):
                 exceeded.set()
     except BaseException as error:  # pragma: no cover - defensive thread boundary
         failures.append(error)
@@ -844,6 +851,8 @@ def capture_process(
     stderr = bytearray()
     module_status = bytearray()
     output_exceeded = threading.Event()
+    combined_output_length = [0]
+    combined_output_lock = threading.Lock()
     module_malformed = threading.Event()
     failures: list[BaseException] = []
     threads = [
@@ -858,6 +867,8 @@ def capture_process(
                 process.stdout,
                 request.output_limit_bytes,
                 stdout,
+                combined_output_length,
+                combined_output_lock,
                 output_exceeded,
                 failures,
             ),
@@ -869,6 +880,8 @@ def capture_process(
                 process.stderr,
                 request.output_limit_bytes,
                 stderr,
+                combined_output_length,
+                combined_output_lock,
                 output_exceeded,
                 failures,
             ),
