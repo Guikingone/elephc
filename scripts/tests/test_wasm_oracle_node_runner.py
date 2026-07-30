@@ -37,9 +37,9 @@ class NodeOracleRunnerTests(unittest.TestCase):
                 "export async function run(options) {\n"
                 "  if (JSON.stringify(options.args) !== "
                 'JSON.stringify(["oracle.php", "arg"])) throw new Error("args");\n'
-                "  if (JSON.stringify(options.env) !== "
-                'JSON.stringify({LANG:"C.UTF-8",LC_ALL:"C.UTF-8",TZ:"UTC"})) '
-                'throw new Error("env");\n'
+                '  if (options.env.LANG !== "C.UTF-8" '
+                '|| options.env.LC_ALL !== "C.UTF-8" '
+                '|| options.env.TZ !== "UTC") throw new Error("env");\n'
                 "  if (JSON.stringify(options.preopens) !== "
                 'JSON.stringify({})) throw new Error("preopens");\n'
                 '  process.stdout.write("php-stdout\\n");\n'
@@ -134,8 +134,8 @@ class NodeOracleRunnerTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 255)
         self.assertEqual(status_payload, b"ffffffff\n")
 
-    def test_rejects_extra_guest_environment_entry(self) -> None:
-        """Guest configuration cannot silently inherit or add environment keys."""
+    def test_preserves_explicit_extra_guest_environment_entry(self) -> None:
+        """W6 fixtures may add explicit guest variables without host inheritance."""
 
         def add_secret(config: dict[str, object]) -> None:
             environment = config["env"]
@@ -144,10 +144,10 @@ class NodeOracleRunnerTests(unittest.TestCase):
 
         completed, status_payload = self.run_adapter(config_transform=add_secret)
 
-        self.assertNotEqual(completed.returncode, 0)
-        self.assertEqual(completed.stdout, b"")
-        self.assertEqual(status_payload, b"")
-        self.assertIn(b"oracle guest env keys must be exactly", completed.stderr)
+        self.assertEqual(completed.returncode, 255)
+        self.assertEqual(completed.stdout, b"php-stdout\n")
+        self.assertEqual(completed.stderr, b"")
+        self.assertEqual(status_payload, b"ffffffff\n")
 
     def test_rejects_out_of_range_status_without_control_frame(self) -> None:
         """A status outside i32/u32 cannot be truncated into accepted evidence."""

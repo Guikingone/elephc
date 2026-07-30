@@ -18,7 +18,7 @@ from .contract import (
 )
 
 
-AGGREGATE_SCHEMA = "elephc.wasm-oracle.aggregate.v1"
+AGGREGATE_SCHEMA = "elephc.wasm-oracle.aggregate.v2"
 
 
 class AggregateError(ValueError):
@@ -204,6 +204,13 @@ def aggregate_exact(
         if len(logical_arguments) != 1:
             raise AggregateError(
                 f"fixture {fixture_id!r} has inconsistent logical arguments"
+            )
+        guest_environments = {
+            record.guest_environment for record in fixture_records
+        }
+        if len(guest_environments) != 1:
+            raise AggregateError(
+                f"fixture {fixture_id!r} has inconsistent guest environments"
             )
 
     for record in captures:

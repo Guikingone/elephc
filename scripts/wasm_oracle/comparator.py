@@ -151,6 +151,16 @@ def compare_records(
                 candidate_environment,
             )
         )
+    reference_guest_environment = dict(reference.guest_environment)
+    candidate_guest_environment = dict(candidate.guest_environment)
+    if reference_guest_environment != candidate_guest_environment:
+        differences.append(
+            Difference(
+                "guest_environment",
+                reference_guest_environment,
+                candidate_guest_environment,
+            )
+        )
 
     if reference_stdout != candidate_stdout:
         differences.append(

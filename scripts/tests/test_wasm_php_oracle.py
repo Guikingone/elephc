@@ -123,6 +123,7 @@ class WasmPhpOracleTests(unittest.TestCase):
             argv=(str(PYTHON), "-c", code),
             cwd=REPO_ROOT,
             env=dict(self.environment if environment is None else environment),
+            guest_environment=dict(self.environment),
             stdin=b"\x00stdin\xff",
             timeout_seconds=timeout_seconds,
             output_limit_bytes=output_limit_bytes,
@@ -167,6 +168,7 @@ class WasmPhpOracleTests(unittest.TestCase):
             argv=("/absolute/oracle-adapter",),
             cwd="/absolute/oracle-work",
             environment=tuple(sorted(self.environment.items())),
+            guest_environment=tuple(sorted(self.environment.items())),
             operating_system="test-os",
             architecture="test-architecture",
             provenance=provenance,
@@ -490,12 +492,21 @@ class WasmPhpOracleTests(unittest.TestCase):
             stdout=b"different",
             module_i32_bits=1,
         )
-        candidate = replace(candidate, logical_arguments=("--other",))
+        candidate = replace(
+            candidate,
+            logical_arguments=("--other",),
+            guest_environment=(("ORACLE_CASE", "different"),),
+        )
         result = compare_records(reference, candidate)
         self.assertFalse(result.matched)
         self.assertEqual(
             {difference.field for difference in result.differences},
-            {"logical_arguments", "stdout", "module_i32_low_byte"},
+            {
+                "logical_arguments",
+                "guest_environment",
+                "stdout",
+                "module_i32_low_byte",
+            },
         )
 
     def test_comparator_keeps_host_status_distinct_from_full_node_i32(self) -> None:

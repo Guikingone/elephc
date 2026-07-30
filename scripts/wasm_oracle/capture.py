@@ -26,9 +26,9 @@ from .contract import (
 )
 
 
-CAPTURE_SCHEMA = "elephc.wasm-oracle.capture.v1"
+CAPTURE_SCHEMA = "elephc.wasm-oracle.capture.v2"
 MODULE_STATUS_FD_ENV = "ELEPHC_ORACLE_MODULE_STATUS_FD"
-REQUIRED_ENVIRONMENT = {
+REQUIRED_HOST_ENVIRONMENT = {
     "LANG": "C.UTF-8",
     "LC_ALL": "C.UTF-8",
     "TZ": "UTC",
@@ -240,6 +240,7 @@ class CaptureRequest:
     argv: tuple[str, ...]
     cwd: Path
     env: Mapping[str, str]
+    guest_environment: Mapping[str, str]
     stdin: bytes
     timeout_seconds: float
     output_limit_bytes: int
@@ -264,6 +265,7 @@ class CaptureRecord:
     argv: tuple[str, ...]
     cwd: str
     environment: tuple[tuple[str, str], ...]
+    guest_environment: tuple[tuple[str, str], ...]
     operating_system: str
     architecture: str
     provenance: RuntimeProvenance
@@ -360,6 +362,11 @@ class CaptureRecord:
         _validate_environment(dict(self.environment))
         if tuple(sorted(self.environment)) != self.environment:
             raise CaptureError("capture environment must be sorted and unique")
+        _validate_guest_environment(dict(self.guest_environment))
+        if tuple(sorted(self.guest_environment)) != self.guest_environment:
+            raise CaptureError(
+                "capture guest_environment must be sorted and unique"
+            )
 
         stdin = self.stdin.to_bytes()
         del stdin
@@ -437,6 +444,7 @@ class CaptureRecord:
                 "argv": list(self.argv),
                 "cwd": self.cwd,
                 "environment": dict(self.environment),
+                "guest_environment": dict(self.guest_environment),
                 "stdin": self.stdin.to_dict(),
             },
             "host": {
@@ -509,6 +517,7 @@ class CaptureRecord:
                 "argv",
                 "cwd",
                 "environment",
+                "guest_environment",
                 "stdin",
             },
             "capture.command",
@@ -547,6 +556,7 @@ class CaptureRecord:
         argv = command["argv"]
         logical_arguments = command["logical_arguments"]
         environment = command["environment"]
+        guest_environment = command["guest_environment"]
         if not isinstance(argv, list):
             raise CaptureError("capture.command.argv must be an array")
         if not isinstance(logical_arguments, list):
@@ -555,6 +565,10 @@ class CaptureRecord:
             )
         if not isinstance(environment, dict):
             raise CaptureError("capture.command.environment must be an object")
+        if not isinstance(guest_environment, dict):
+            raise CaptureError(
+                "capture.command.guest_environment must be an object"
+            )
 
         raw_module_i32 = termination["module_i32"]
         module_i32_bits: int | None = None
@@ -602,6 +616,7 @@ class CaptureRecord:
             argv=tuple(argv),
             cwd=command["cwd"],
             environment=tuple(sorted(environment.items())),
+            guest_environment=tuple(sorted(guest_environment.items())),
             operating_system=host["operating_system"],
             architecture=host["architecture"],
             provenance=RuntimeProvenance.from_dict(data["provenance"]),
@@ -642,18 +657,43 @@ def _validate_environment(environment: Mapping[str, str]) -> None:
             raise CaptureError("environment contains an invalid key")
         if not isinstance(value, str) or "\x00" in value:
             raise CaptureError(f"environment value for {key!r} is invalid")
-    if dict(environment) != REQUIRED_ENVIRONMENT:
+    if dict(environment) != REQUIRED_HOST_ENVIRONMENT:
         raise CaptureError(
             "environment must be exactly "
-            f"{REQUIRED_ENVIRONMENT}, got {dict(environment)}"
+            f"{REQUIRED_HOST_ENVIRONMENT}, got {dict(environment)}"
         )
     if MODULE_STATUS_FD_ENV in environment:
         raise CaptureError(f"{MODULE_STATUS_FD_ENV} is reserved by the oracle")
 
 
+def _validate_guest_environment(environment: Mapping[str, str]) -> None:
+    """Validate the explicit logical WASI/PHP environment without inheriting it."""
+
+    if not isinstance(environment, Mapping):
+        raise CaptureError(
+            "guest_environment must be an explicit string mapping"
+        )
+    for key, value in environment.items():
+        if (
+            not isinstance(key, str)
+            or not key
+            or "\x00" in key
+            or "=" in key
+        ):
+            raise CaptureError("guest_environment contains an invalid key")
+        if not isinstance(value, str) or "\x00" in value:
+            raise CaptureError(
+                f"guest_environment value for {key!r} is invalid"
+            )
+
+
 def _validate_request(
     contract: OracleContract, request: CaptureRequest
-) -> tuple[Path, tuple[tuple[str, str], ...]]:
+) -> tuple[
+    Path,
+    tuple[tuple[str, str], ...],
+    tuple[tuple[str, str], ...],
+]:
     if request.key.profile not in contract.profiles:
         raise CaptureError(f"profile {request.key.profile!r} is not pinned")
     expected_module_channel = request.key.host == "node"
@@ -692,6 +732,8 @@ def _validate_request(
         raise CaptureError("capture cwd must be an existing absolute directory")
     _validate_environment(request.env)
     environment = tuple(sorted(request.env.items()))
+    _validate_guest_environment(request.guest_environment)
+    guest_environment = tuple(sorted(request.guest_environment.items()))
     if not isinstance(request.stdin, bytes):
         raise CaptureError("capture stdin must be bytes")
     _number(request.timeout_seconds, "timeout_seconds", positive=True)
@@ -709,7 +751,7 @@ def _validate_request(
         raise CaptureError("WASM capture requires compiler artifact provenance")
     if not isinstance(request.normalization, Normalization):
         raise CaptureError("normalization must be a Normalization instance")
-    return executable, environment
+    return executable, environment, guest_environment
 
 
 def _read_stream(
@@ -813,7 +855,7 @@ def capture_process(
 ) -> CaptureRecord:
     """Execute one cell with bounded raw capture and an exact WASM i32 side channel."""
 
-    _, environment = _validate_request(contract, request)
+    _, environment, guest_environment = _validate_request(contract, request)
     child_environment = dict(environment)
     module_read_fd: int | None = None
     module_write_fd: int | None = None
@@ -962,6 +1004,7 @@ def capture_process(
         argv=request.argv,
         cwd=str(request.cwd),
         environment=environment,
+        guest_environment=guest_environment,
         operating_system=platform.system(),
         architecture=platform.machine(),
         provenance=request.provenance,

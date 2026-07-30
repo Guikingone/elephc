@@ -11,8 +11,8 @@ import { pathToFileURL } from "node:url";
 const CONFIG_SCHEMA = "elephc.wasm-oracle.node-run.v1";
 const STATUS_FD_ENV = "ELEPHC_ORACLE_MODULE_STATUS_FD";
 
-/** Rejects values whose JSON object shape is not exact. */
-function requireExactKeys(value, expected, label) {
+/** Rejects values that are not ordinary JSON objects. */
+function requirePlainObject(value, label) {
   if (
     value === null
     || typeof value !== "object"
@@ -21,6 +21,11 @@ function requireExactKeys(value, expected, label) {
   ) {
     throw new TypeError(`${label} must be a plain JSON object`);
   }
+}
+
+/** Rejects values whose JSON object shape is not exact. */
+function requireExactKeys(value, expected, label) {
+  requirePlainObject(value, label);
   const actual = Object.keys(value);
   if (
     actual.length !== expected.length
@@ -29,6 +34,19 @@ function requireExactKeys(value, expected, label) {
     throw new TypeError(
       `${label} keys must be exactly ${JSON.stringify(expected)} in canonical order`,
     );
+  }
+}
+
+/** Validates a logical guest environment or preopen string record. */
+function requireStringRecord(value, label) {
+  requirePlainObject(value, label);
+  for (const [key, entry] of Object.entries(value)) {
+    if (key.length === 0 || key.includes("\0")) {
+      throw new TypeError(`${label} contains an invalid key`);
+    }
+    if (typeof entry !== "string" || entry.includes("\0")) {
+      throw new TypeError(`${label} ${JSON.stringify(key)} must be a string`);
+    }
   }
 }
 
@@ -58,13 +76,8 @@ function loadCanonicalConfig(path) {
   ) {
     throw new TypeError("oracle config args must contain only strings");
   }
-  requireExactKeys(config.env, ["LANG", "LC_ALL", "TZ"], "oracle guest env");
-  for (const [key, value] of Object.entries(config.env)) {
-    if (typeof value !== "string") {
-      throw new TypeError(`oracle guest env ${key} must be a string`);
-    }
-  }
-  requireExactKeys(config.preopens, [], "oracle guest preopens");
+  requireStringRecord(config.env, "oracle guest env");
+  requireStringRecord(config.preopens, "oracle guest preopens");
   return config;
 }
 
