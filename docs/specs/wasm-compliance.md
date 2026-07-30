@@ -52,6 +52,39 @@ That consensus fixes the implementation baseline only. It is not transferable
 to a later commit: the final revision, evidence manifest, and logs still require
 three independent exact-revision approvals.
 
+### Finalization audit checkpoint
+
+The first finalization audit inspected clean Elephc revision
+`c61ab588c6c860337f10abd8949980d36c267dcf` and specification SHA-256
+`270a956fea81e861d56bbafb804c0c87d78d8092f9fb6c3db8860f3a27ffa251`.
+GLM 5.2, Kimi K2.7, and MiniMax M3 independently returned **BLOCK**. This is
+unanimous evidence that the revision is not merge-ready; it is not an approval
+of every raw finding. The normalized implementation ledger below retains only
+findings that are supported by the effective code, the public contract, or a
+missing durable gate.
+
+The normalization explicitly rejects these audit false positives:
+
+- npm argument validation is behaviorally exercised: the pinned Node job runs
+  embedded-NUL and unpaired-surrogate inputs and checks the typed error before
+  WASI construction;
+- the roadmap checkboxes describe delivered experimental artifacts, while the
+  roadmap, changelog, README, target guide, and CLI still label incomplete
+  parity truthfully;
+- `Immediate::CastTarget` and `Immediate::ExplicitCastTarget` are both covered
+  by the EIR validator, printer, native backend, and WASM backend;
+- the two production `unreachable!` sites audited in the Rust backend are
+  unreachable by their validated representation partitions; generated Core
+  `unreachable` instructions remain governed separately by R1 and R2;
+- the dedicated host job and complete native CI were green for the checkpoint,
+  but that evidence is not transferable to later implementation or squash
+  revisions.
+
+The remaining blockers are substantive: valid PHP remains rejected in several
+families, no complete php-src differential harness or generated current-revision
+coverage report exists, exceptional PHP behavior is not generally catchable,
+and the WASI process/environment boundary is incomplete.
+
 ### Canonical audit taxonomy
 
 The consensus registry uses the following closed classes:
@@ -119,11 +152,95 @@ The three reviewers accepted this dependency order:
 7. regenerate O and run the final exact-revision differential, host, artifact,
    ownership, and reviewer gates.
 
+### Exact finalization implementation ledger
+
+This ledger is normative for implementation. Each package must land with its
+listed code, PHP-source, cross-host, and generated-evidence gates. A package is
+not complete merely because the capability audit rejects the missing behavior.
+
+| Package | Registry coverage | Required implementation | Required durable evidence |
+|---|---|---|---|
+| W0 — normative evidence and generated inventory | O, N3 | Pin every normative revision and tool version; generate the current `Op`, `RuntimeCallTarget`, `RuntimeFnId`, `UnaryStringRuntime`, terminator, shape, PHP-producer, lowerer, test, and exclusion inventory; reject stale hand-maintained counts. | A deterministic machine-readable report committed or retained by CI, a human summary generated from it, schema validation, and a test that every identity has exactly one supported or excluded disposition. |
+| W1 — scalars, strings, casts, and numeric semantics | E, H, P | Implement every scalar and `Mixed` cast by source tag and destination type; implement string comparisons, strict/loose equality, spaceship, indexing, persistence, interpolation, numeric-string conversion, checked mixed arithmetic, float/Mixed truthiness, float keys, and profile-specific float-to-int values, warnings, and deprecations. | Generated PHP 8.2/8.3/8.4/8.5 oracle matrices covering boundary integers, signed zero, `NaN`, infinities, out-of-range values, binary/NUL strings, numeric strings, warning order, stderr, exit status, and owned/borrowed results. `(int) 1.0e20` is mandatory. |
+| W2 — PHP diagnostics, exceptions, and Core traps | G, P, R1, R2 | Replace process-only arithmetic failures with catchable PHP `Error`/`TypeError`/`DivisionByZeroError`/`ArithmeticError` paths; implement throw/catch/finally, suppression, `error_reporting`, source locations, traces, and exceptional cleanup; keep only proven post-noreturn, invariant, deterministic-OOM, or excluded non-public Core traps. | PHP-source caught and uncaught exception matrices, method calls on every non-object tag, warning/fatal ordering, trace normalization, cleanup/heap-balance assertions, and generated trap inventory with binary operator-count parity. |
+| W3 — calls, control flow, and exit/unwind | J, K, L1, L2 | Complete named, spread, variadic, by-reference, method, closure, callable-array, first-class-callable, expression-call, and function-variant shapes; preserve source evaluation and writeback; implement `exit`/`die` from every frame, top-level `return`, cleanup/unwind, and the PHP-int to WASI-i32 status contract. | Positive and negative PHP-source matrices for all call shapes, alias/writeback and ownership tests, nested-frame exit tests, top-level return tests, and Wasmer/Wasmtime/Node status checks for negative, zero, 255, 256, `i32` boundaries, and PHP-int boundaries. |
+| W4 — containers, objects, globals, dynamic execution, and runtimes | B, F, I, K, O | Complete mixed array/hash keys, `isset`, append, spread, list/unpack, reference element access, COW, next-free-key behavior, dynamic construction/properties, clone, static properties, late static binding, globals/statics, supported AOT include/eval guards, generators/iterators, and every PHP-visible builtin/runtime identity admitted by the target. | Full applicable example/codegen corpus replay, php-src array/object/global/generator matrices, tombstone/saturation/COW regressions, and no reachable unsupported inventory entry. |
+| W5 — memory, ownership, and adversarial safety | A, C, M1, M2, M3 | Check every allocation calculation and wasm32 narrowing; validate live allocation starts, alignment, headers, payload bounds, and nested `Mixed` depth/cycles; balance ownership across aliases, calls, exceptions, destructors, COW, cycles, early return, and exit. | Bounded OOM/overflow tests, malformed/interior-pointer tests, double-free defenses, deep/cyclic `Mixed`, closure/object cycles, destructor resurrection, COW-during-borrow, multi-megabyte strings/output, and heap-balance comparisons. |
+| W6 — WASI and npm host contract | D1, D2, J, N1, N3 | Define arguments, environment, preopens, byte encoding, duplicates, missing/empty values, path aliases, repeated/concurrent runs, host exceptions, errno, partial writes, and publication cleanup in one contract; expose PHP-visible environment behavior where declared. | One validated artifact executed on Wasmer, Wasmtime, and Node; typed npm error tests; empty/NUL/Unicode/invalid cases; environment/preopen observations; partial/zero-progress I/O; repeated and concurrent instances; deterministic package/archive checks. |
+| W7 — artifact, corpus, CI, and documentation closure | K, N1, N2, O | Run production assembly/Core validation and transactional publication on the complete matrix; classify every checked-in example and codegen fixture as applicable or explicitly excluded; keep public claims synchronized with generated evidence. | Full native CI, dedicated WASM portability CI, external validation, all applicable examples, machine-readable exclusions with reasons and owners, generated docs, Copilot thread audit, and an exact evidence manifest. |
+| W8 — exact-revision review, publication, and squash | all | Obtain three independent same-hash preliminary LOCKs on the merge-ready unsquashed revision; fetch and rebase onto current `origin/main`; squash the branch only then; publish with an exact force-with-lease; rerun every required gate and obtain three new LOCKs on the final squashed SHA and unchanged spec hash. | Green final CI on the squashed SHA, zero unresolved PR review threads, clean worktree, final evidence manifest, and GLM/Kimi/MiniMax reports whose findings arrays are empty and whose commit/spec fields match exactly. |
+
+#### W0 report schema
+
+The generated coverage report must contain, at minimum:
+
+- the Elephc commit, dirty-state flag, specification hash, generator version,
+  and normative/toolchain pins;
+- every EIR identity with its stable name and enum family;
+- all PHP-source producers and public execution modes that can reach it;
+- the capability disposition and every shape predicate;
+- the exact lowerer or a machine-readable exclusion category, reason, owner,
+  and removal gate;
+- positive, negative, differential, ownership, and host-test identifiers;
+- totals derived from the identities, never copied from this prose.
+
+Native-only Elephc extensions (`ptr`, `buffer`, `packed`, native `extern`,
+native bridge crates, and the web SAPI) may be excluded from `wasm32-wasi`
+only through this report and matching CLI diagnostics. Ordinary PHP supported
+by Elephc's public frontend is not excludable merely because its WASM lowerer is
+missing.
+
+#### W1 and W2 oracle contract
+
+The differential harness must build or use the exact pinned php-src releases,
+run with an explicit INI and extension set, and record stdout, stderr, status,
+value/type shape, locale, time zone, architecture, and path/line normalization.
+It must execute the same logical fixture and arguments through php-src and the
+same validated WASM artifact. Expected output copied by hand into a Rust test
+does not replace this oracle.
+
+The diagnostic runtime must distinguish warnings, catchable throwables,
+uncaught fatals, and deliberate `exit`. Calling `proc_exit(255)` directly is
+valid only after PHP semantics have established that the path is an uncaught
+fatal and every owned frame has been cleaned.
+
+#### W3 exit contract
+
+WASI Preview 1 accepts an unsigned 32-bit exit code. The harness must retain the
+module-level `i32` bit pattern before any shell or host normalization. Each host
+adapter must expose one documented representation, and the PHP-to-WASI mapping
+must be identical across Wasmer, Wasmtime, and Node. The mapping must be derived
+from pinned php-src CLI behavior and explicitly cover negative and out-of-range
+PHP integers rather than relying on `i32.wrap_i64` accidentally.
+
+#### W6 npm dispositions already closed
+
+The implemented `WasiArgumentError` checks for embedded NUL and unpaired UTF-16
+surrogates are retained as D1 evidence. They must not be removed or downgraded
+while W6 adds environment, preopen, thrown-host-error, zero-progress write, and
+concurrent-instance coverage.
+
+#### Implementation and review rule
+
+Before functional implementation begins, GLM 5.2, Kimi K2.7, and MiniMax M3
+must each return `LOCK` for the exact same specification SHA-256. A specification
+review returns `BLOCK` for an omitted requirement, ambiguous acceptance rule,
+or contradiction; implementation status and expected future evidence are not
+specification blockers. Any normative edit restarts the three-model spec vote.
+
+After implementation begins, each code review names its exact Elephc commit and
+the unchanged specification hash. Any functional or normative edit invalidates
+previous implementation LOCKs. Documentation-only evidence updates invalidate
+the exact-revision implementation review but do not restart the specification
+vote unless they change a normative requirement.
+
 ## Normative references
 
 The following sources define separate parts of the contract:
 
 1. [WebAssembly Core Specification 3.0](https://webassembly.github.io/spec/core/intro/introduction.html),
+   frozen at WebAssembly/spec tag `wg-3.0`, commit
+   `9d36019973201a19f9c9ebb0f10828b2fe2374aa`,
    including its [validation rules](https://webassembly.github.io/spec/core/valid/index.html)
    and [numeric execution semantics](https://webassembly.github.io/spec/core/exec/numerics.html),
    is normative for module validation and Core execution.
@@ -136,10 +253,24 @@ The following sources define separate parts of the contract:
    used by this target. Updating that snapshot requires an explicit spec change;
    a moving branch is not reproducible evidence. Preview 2 or component-model
    support requires a separate contract.
-3. Exact commits of [php-src](https://github.com/php/php-src) are normative for
-   PHP-visible behavior. The maintained Elephc profiles are PHP 8.2, 8.3, 8.4,
-   and 8.5; the evidence manifest must map each tested `--php-version` profile
-   to its php-src commit and build configuration.
+3. Exact releases of [php-src](https://github.com/php/php-src) are normative for
+   PHP-visible behavior:
+
+   | Elephc profile | php-src tag | Commit |
+   |---|---|---|
+   | `8.2` | `php-8.2.33` | `fa98f62b39a612ae88b7be5d5ea9ff9b794b454b` |
+   | `8.3` | `php-8.3.33` | `a7413fbd1dd4dccda419ca473ce475f084edaadd` |
+   | `8.4` | `php-8.4.24` | `3cb6f7231aed24c4ae77a0d3ee5aeeb2b968ad30` |
+   | `8.5` | `php-8.5.9` | `d6bbf3ed631eea9763a2b790653fc91b69f0af7a` |
+
+   Updating any profile requires a normative specification edit and a complete
+   differential rerun. The evidence manifest records the build configuration.
+
+4. The acceptance toolchain is Rust `1.95.0`, `wat` `1.252.0`,
+   production `wasmparser` `0.252.0`, Wasmer `7.2.1`, Wasmtime `47.0.2`,
+   `wasm-tools` `1.254.0`, Node.js `26.3.0`, and TypeScript `6.0.3`.
+   Package checks use the npm version shipped with the pinned Node.js runtime.
+   Updating any tool requires a complete Core, host, npm, and determinism rerun.
 
 The [Wasmtime WASI tutorial](https://github.com/bytecodealliance/wasmtime/blob/main/docs/WASI-tutorial.md)
 and [Node.js WASI API](https://nodejs.org/api/wasi.html) are informative host
