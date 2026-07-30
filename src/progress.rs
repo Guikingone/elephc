@@ -58,7 +58,7 @@ pub(crate) fn phase(name: &str) {
         ProgressStyle::with_template("{spinner:.cyan} {msg}")
             .expect("static spinner template is valid"),
     );
-    pb.set_message(name.to_string());
+    pb.set_message(phase_label(name).to_string());
     pb.enable_steady_tick(Duration::from_millis(80));
 
     let mut slot = bar_slot();
@@ -130,12 +130,53 @@ fn format_event(verb: &str, detail: &str) -> String {
     format!("{:>12} {}", console::style(verb).bold().cyan(), detail)
 }
 
+/// Translates stable internal phase identifiers into action-oriented CLI text.
+fn phase_label(name: &str) -> &str {
+    match name {
+        "read" => "Reading source",
+        "tokenize" => "Tokenizing source",
+        "parse" => "Parsing program",
+        "magic-constants" => "Expanding magic constants",
+        "autoload-build" => "Building autoload index",
+        "resolve" => "Resolving includes",
+        "pdo-prelude" => "Configuring PDO support",
+        "tz-prelude" => "Configuring timezone support",
+        "list-id-prelude" => "Loading timezone identifiers",
+        "var-export-prelude" => "Configuring var_export()",
+        "opcache-prelude" => "Configuring OPcache",
+        "image-prelude" => "Configuring image support",
+        "hash-prelude" => "Configuring hash support",
+        "web-prelude" => "Configuring web runtime",
+        "version-prelude" => "Applying PHP version profile",
+        "name-resolve" => "Resolving names",
+        "autoload-run" => "Discovering autoloaded symbols",
+        "opcache-manifest-bake" => "Baking OPcache manifest",
+        "opt-fold" => "Folding constants",
+        "typecheck" => "Checking types",
+        "exports-scan" => "Discovering exports",
+        "opt-prop" => "Propagating constants",
+        "opt-post" => "Pruning constant branches",
+        "opt-norm" => "Normalizing control flow",
+        "dce" => "Eliminating dead code",
+        "ir-lower" => "Lowering program to EIR",
+        "ir-opt" => "Optimizing EIR",
+        "ir-print" => "Rendering EIR",
+        "runtime-cache" => "Preparing runtime object",
+        "codegen" => "Generating native code",
+        "write-asm" => "Writing assembly",
+        "source-map" => "Writing source map",
+        "assemble" => "Assembling object file",
+        "link" => "Linking native output",
+        _ => name,
+    }
+}
+
 /// Formats one successful phase with an adaptive millisecond/second duration.
 fn format_completed_phase(name: &str, elapsed: Duration) -> String {
     format!(
         "{} {} ({})",
         console::style("\u{2713}").bold().green(),
-        name,
+        phase_label(name),
         format_phase_duration(elapsed),
     )
 }
@@ -220,12 +261,18 @@ mod tests {
         assert_eq!(format_phase_duration(Duration::from_millis(1_250)), "1.25 s");
     }
 
-    /// Verifies completed phase lines retain the phase name and elapsed duration.
+    /// Verifies completed phase lines use the friendly label and elapsed duration.
     #[test]
     fn completed_phase_line_contains_name_and_duration() {
         let line = format_completed_phase("typecheck", Duration::from_millis(42));
         assert!(line.contains('\u{2713}'));
-        assert!(line.contains("typecheck"));
+        assert!(line.contains("Checking types"));
         assert!(line.contains("42.00 ms"));
+    }
+
+    /// Verifies unknown future phases remain visible instead of rendering blank text.
+    #[test]
+    fn unknown_phase_label_falls_back_to_internal_name() {
+        assert_eq!(phase_label("new-phase"), "new-phase");
     }
 }
