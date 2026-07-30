@@ -4101,7 +4101,7 @@ fn callable_return_is_boxable(function: &Function) -> bool {
 /// A partial lowering stays rejected when its accepted subset changes PHP-visible
 /// behavior. This keeps the capability audit conservative until the full public
 /// contract is implemented and differentially tested.
-fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
+pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
     match target {
         RuntimeFnId::GetClass
         | RuntimeFnId::ArrayMap
@@ -4545,7 +4545,7 @@ fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
 }
 
 /// Returns the stable name of every unary-string runtime variant.
-fn unary_string_name(target: UnaryStringRuntime) -> &'static str {
+pub(super) fn unary_string_name(target: UnaryStringRuntime) -> &'static str {
     match target {
         UnaryStringRuntime::AddSlashes => "string.add_slashes",
         UnaryStringRuntime::Base64Decode => "string.base64_decode",
@@ -4566,7 +4566,7 @@ fn unary_string_name(target: UnaryStringRuntime) -> &'static str {
 }
 
 /// Returns whether an EIR terminator has an active WASM lowering.
-fn terminator_is_supported(terminator: &Terminator) -> bool {
+pub(super) fn terminator_is_supported(terminator: &Terminator) -> bool {
     match terminator {
         Terminator::Br { .. }
         | Terminator::CondBr { .. }
@@ -4580,7 +4580,7 @@ fn terminator_is_supported(terminator: &Terminator) -> bool {
 }
 
 /// Returns the stable diagnostic name for every EIR terminator.
-fn terminator_name(terminator: &Terminator) -> &'static str {
+pub(super) fn terminator_name(terminator: &Terminator) -> &'static str {
     match terminator {
         Terminator::Br { .. } => "br",
         Terminator::CondBr { .. } => "cond_br",
@@ -4594,7 +4594,7 @@ fn terminator_name(terminator: &Terminator) -> &'static str {
 }
 
 /// Returns whether an EIR opcode has an active WASM dispatch.
-fn op_is_supported(op: Op) -> bool {
+pub(super) fn op_is_supported(op: Op) -> bool {
     match op {
         Op::ConstI64
         | Op::ConstF64

@@ -508,6 +508,49 @@ pub enum Op {
 }
 
 impl Op {
+    /// Every `Op` variant in enum-declaration order, so the WASM capability
+    /// inventory can enumerate the current revision without re-deriving the list.
+    /// Keep in sync with the enum above; the exhaustive `op_is_supported` and
+    /// `Op::name` matches force a revisit whenever a variant is added.
+    pub fn all() -> &'static [Op] {
+        use Op::*;
+        &[
+            Op::ConstI64, ConstF64, ConstStr, ConstNull, ConstBool, ConstClassName, ConstEnumCase, LoadCalledClassId,
+            Op::DataAddr, LoadLocal, StoreLocal, UnsetLocal, LoadRefCell, StoreRefCell, PromoteLocalRefCell, AliasLocalRefCell,
+            Op::ReleaseLocalRefCell, ReleaseLocalSlot, LoadGlobal, StoreGlobal, LoadStaticLocal, StoreStaticLocal, InitStaticLocal, LoadStaticProperty,
+            Op::StoreStaticProperty, LoadReflectionStaticProperty, StoreReflectionStaticProperty, ReflectionStaticPropertyInitialized, IAdd, ISub, IMul, ICheckedAdd,
+            Op::ICheckedSub, ICheckedMul, IDiv, ISDiv, ISMod, IPow, INeg, IBitAnd,
+            Op::IBitOr, IBitXor, IBitNot, IShl, IShrA, FAdd, FSub, FMul,
+            Op::FDiv, FPow, FNeg, MixedNumericBinop, ICmp, FCmp, StrEq, StrCmp,
+            Op::StrLooseEq, StrictEq, StrictNotEq, LooseEq, LooseNotEq, Spaceship, IsNull, IsTruthy,
+            Op::TypePredicate, IsEmpty, InstanceOf, IToF, FToI, IToStr, FToStr, BoolToStr,
+            Op::StrToI, StrToF, StrToNumber, ResourceToStr, Cast, MixedBox, InvokerRefArg, MixedUnbox,
+            Op::MixedTagOf, ArrayToMixed, HashToMixed, MixedCastBool, MixedCastInt, MixedCastFloat, MixedCastString, StrConcat,
+            Op::StrLen, StrPersist, StrCharAt, StrInterpolate, ConcatReset, WriteStrStdout, ArrayNew, HashNew,
+            Op::ArrayLen, HashLen, ArrayGet, ArrayGetSilent, HashGet, HashGetSilent, ArrayIsset, HashIsset,
+            Op::ArrayElemAddr, ArraySet, HashSet, HashUnset, ArrayPush, MixedArrayAppend, HashAppend, ArrayEnsureUnique,
+            Op::HashEnsureUnique, ArrayCloneShallow, HashCloneShallow, ArrayUnion, HashUnion, ArrayHashUnion, HashArrayUnion, HashSpread,
+            Op::ArrayToHash, ArraySetMixedKey, ArrayGetMixedKey, ArrayGetMixedKeySilent, ArrayKeyExists, OffsetExists, OffsetUnset, ListUnpack,
+            Op::IterStart, IterCurrentKey, IterCurrentValue, IterCurrentValueRef, IterNext, IterEnd, IteratorMethodCall, SplRuntimeCall,
+            Op::ObjectNew, EvalObjectNew, ObjectCloneShallow, DynamicObjectNew, DynamicObjectNewMixed, DynamicObjectNewWithoutConstructorMixed, PropGet, PropInitialized,
+            Op::PropSet, LoadPropRefCell, LoadArrayElemRefCell, BindRefCellPtr, DynamicPropGet, DynamicPropSet, NullsafePropGet, NullsafeMethodCall,
+            Op::MethodLookup, MethodCall, StaticMethodCall, EvalStaticMethodCall, EnumBackingStringToInt, EnumBackingMixedToInt, ClassConstant, ScopedConstantGet,
+            Op::ClassAttrNames, ClassAttrArgs, ClassGetAttributes, InstanceOfDynamic, Call, FunctionVariantCall, ClosureBind, LanguageConstructCall,
+            Op::EvalLiteralCall, EvalScopeGet, EvalScopeSet, EvalFunctionCall, EvalFunctionCallArray, EvalFunctionExists, EvalClassExists, EvalConstantExists,
+            Op::EvalConstantFetch, RuntimeCall, ExternCall, ClosureNew, ClosureCapture, ClosureCall, ExprCall, FirstClassCallableNew,
+            Op::CallableArrayNew, CallableDescriptorInvoke, PipeCall, PtrCast, PtrRead, PtrWrite, PtrReadString, PtrWriteString,
+            Op::PtrOffset, PtrCheckNonnull, BufferNew, BufferLen, BufferGet, BufferSet, BufferFree, PackedFieldGet,
+            Op::PackedFieldSet, ExternGlobalLoad, ExternGlobalStore, EchoValue, PrintValue, WriteStdout, VarDump, PrintR,
+            Op::ErrorSuppressBegin, ErrorSuppressEnd, Warn, ThrowException, ThrowError, ThrowErrorValue, TryPushHandler, TryPopHandler,
+            Op::CatchCurrent, CatchBind, FinallyEnter, FinallyExit, FiberRuntimeCall, GeneratorNew, GeneratorYield, GeneratorYieldFrom,
+            Op::GeneratorReturn, IncludeOnceMark, IncludeOnceGuard, FunctionVariantMark, FunctionVariantDispatch, Acquire, Release, GcCollect,
+            Op::Move, Borrow, EnsureOwned, Nop,        ]
+    }
+}
+
+
+
+impl Op {
     /// Returns the conservative default effect set for this opcode.
     pub fn default_effects(self) -> Effects {
         use Effects as E;

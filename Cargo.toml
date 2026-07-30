@@ -36,6 +36,13 @@ path = "src/main.rs"
 name = "gen_builtins"
 path = "tools/gen_builtins.rs"
 
+# W0 normative-evidence exporter: prints the deterministic wasm32-wasi
+# capability inventory JSON (or `--summary`). Mirrors gen_builtins so it can read
+# `elephc::codegen_wasm::inventory` without linking it into the elephc binary.
+[[example]]
+name = "gen_wasm_inventory"
+path = "tools/gen_wasm_inventory.rs"
+
 [dependencies]
 inventory = "0.3"
 # Grows the stack on demand inside the recursive-descent parser so deeply

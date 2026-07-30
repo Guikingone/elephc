@@ -462,6 +462,20 @@ jobs:
       - name: Build WASM compiler
         run: cargo build --locked --bin elephc
 
+      - name: Verify WASM capability inventory is in sync
+        # W0 (`WASM-COVERAGE-001`): the committed `docs/specs/wasm-inventory.json`
+        # must be regenerated from the current EIR identities so the
+        # current-revision capability report never drifts into a stale literal.
+        run: |
+          set -euo pipefail
+          cargo run --quiet --locked --example gen_wasm_inventory > /tmp/wasm-inventory.json
+          if ! diff -q docs/specs/wasm-inventory.json /tmp/wasm-inventory.json >/dev/null; then
+            echo "::error::WASM capability inventory is out of sync with the current EIR identities."
+            echo "Run: cargo run --quiet --example gen_wasm_inventory > docs/specs/wasm-inventory.json"
+            diff docs/specs/wasm-inventory.json /tmp/wasm-inventory.json | head -80
+            exit 1
+          fi
+
       - name: Validate WASM hosts and NPM package
         run: scripts/test-wasm-hosts.sh
 

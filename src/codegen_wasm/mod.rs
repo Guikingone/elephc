@@ -21,6 +21,7 @@
 
 mod artifacts;
 mod arrays;
+pub mod inventory;
 mod calls;
 mod classes;
 mod capability;
