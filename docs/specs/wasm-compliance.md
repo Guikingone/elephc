@@ -256,15 +256,19 @@ The following sources define separate parts of the contract:
 3. Exact releases of [php-src](https://github.com/php/php-src) are normative for
    PHP-visible behavior:
 
-   | Elephc profile | php-src tag | Commit |
-   |---|---|---|
-   | `8.2` | `php-8.2.33` | `fa98f62b39a612ae88b7be5d5ea9ff9b794b454b` |
-   | `8.3` | `php-8.3.33` | `a7413fbd1dd4dccda419ca473ce475f084edaadd` |
-   | `8.4` | `php-8.4.24` | `3cb6f7231aed24c4ae77a0d3ee5aeeb2b968ad30` |
-   | `8.5` | `php-8.5.9` | `d6bbf3ed631eea9763a2b790653fc91b69f0af7a` |
+   | Elephc profile | php-src tag | Annotated tag object | Peeled commit |
+   |---|---|---|---|
+   | `8.2` | `php-8.2.33` | `fa98f62b39a612ae88b7be5d5ea9ff9b794b454b` | `651db3ebfa622cae0c4e6b39766812efbd274ced` |
+   | `8.3` | `php-8.3.33` | `a7413fbd1dd4dccda419ca473ce475f084edaadd` | `4a55da8cb580ba56887c80a42291ebc676d6fb43` |
+   | `8.4` | `php-8.4.24` | `3cb6f7231aed24c4ae77a0d3ee5aeeb2b968ad30` | `fb193d3df72d1ca3b5ef58ec9e9b6ef5bdf18bef` |
+   | `8.5` | `php-8.5.9` | `d6bbf3ed631eea9763a2b790653fc91b69f0af7a` | `dd6e76cce27aaa0ed9f7520648ed1081dfb6af36` |
 
+   Both identities are normative: the tag reference must resolve to the exact
+   annotated-tag object and peeling that object must resolve to the exact commit.
+   The oracle checks out and executes the peeled commit in detached, clean state.
    Updating any profile requires a normative specification edit and a complete
-   differential rerun. The evidence manifest records the build configuration.
+   differential rerun. The evidence manifest records both identities and the
+   build configuration.
 
 4. The acceptance toolchain is Rust `1.95.0`, `wat` `1.252.0`,
    production `wasmparser` `0.252.0`, Wasmer `7.2.1`, Wasmtime `47.0.2`,

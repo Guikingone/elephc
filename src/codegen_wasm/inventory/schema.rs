@@ -17,15 +17,15 @@ use std::collections::BTreeMap;
 
 /// Schema identifier embedded in every emitted report so consumers can reject
 /// an incompatible revision before interpreting the payload.
-pub const SCHEMA_ID: &str = "elephc.wasm-inventory.v3";
+pub const SCHEMA_ID: &str = "elephc.wasm-inventory.v4";
 
 /// Generator version recorded in the report metadata. Bump when the schema or
 /// disposition classification changes in a way that alters the report shape.
-pub const GENERATOR_VERSION: &str = "w0-3";
+pub const GENERATOR_VERSION: &str = "w0-4";
 
 /// Frozen `docs/specs/wasm-compliance.md` SHA-256 recorded as a normative pin.
 pub const FROZEN_SPEC_SHA256: &str =
-    "70362eac5d4368e010ca7dba0007695b6d039df652fa894ac4260a232cc28a63";
+    "5865de45b4c9b4f9e3d6d11f4bb5b9fa088eafaec5a350e0142c1a66e3fad061";
 
 /// Capability disposition assigned to exactly one identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -149,8 +149,10 @@ pub struct PhpSrcPin {
     pub profile: &'static str,
     /// php-src release tag.
     pub tag: &'static str,
-    /// Full php-src Git commit.
-    pub commit: &'static str,
+    /// Full annotated-tag object ID stored at `refs/tags/<tag>`.
+    pub tag_object: &'static str,
+    /// Full peeled commit ID executed by the oracle.
+    pub tag_commit: &'static str,
 }
 
 /// Exact acceptance-tool versions required by the frozen specification.

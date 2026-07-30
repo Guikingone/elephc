@@ -182,22 +182,26 @@ fn normative_pins() -> NormativePins {
             PhpSrcPin {
                 profile: "8.2",
                 tag: "php-8.2.33",
-                commit: "fa98f62b39a612ae88b7be5d5ea9ff9b794b454b",
+                tag_object: "fa98f62b39a612ae88b7be5d5ea9ff9b794b454b",
+                tag_commit: "651db3ebfa622cae0c4e6b39766812efbd274ced",
             },
             PhpSrcPin {
                 profile: "8.3",
                 tag: "php-8.3.33",
-                commit: "a7413fbd1dd4dccda419ca473ce475f084edaadd",
+                tag_object: "a7413fbd1dd4dccda419ca473ce475f084edaadd",
+                tag_commit: "4a55da8cb580ba56887c80a42291ebc676d6fb43",
             },
             PhpSrcPin {
                 profile: "8.4",
                 tag: "php-8.4.24",
-                commit: "3cb6f7231aed24c4ae77a0d3ee5aeeb2b968ad30",
+                tag_object: "3cb6f7231aed24c4ae77a0d3ee5aeeb2b968ad30",
+                tag_commit: "fb193d3df72d1ca3b5ef58ec9e9b6ef5bdf18bef",
             },
             PhpSrcPin {
                 profile: "8.5",
                 tag: "php-8.5.9",
-                commit: "d6bbf3ed631eea9763a2b790653fc91b69f0af7a",
+                tag_object: "d6bbf3ed631eea9763a2b790653fc91b69f0af7a",
+                tag_commit: "dd6e76cce27aaa0ed9f7520648ed1081dfb6af36",
             },
         ],
         toolchain: ToolchainPins {
