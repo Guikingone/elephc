@@ -205,10 +205,25 @@ def resolve_confined(base: Path, relative: str, location: str) -> Path:
 
 
 def load_json(path: Path, location: str) -> Mapping[str, Any]:
-    """Load one UTF-8 JSON object and convert parse failures into contract errors."""
+    """Load one UTF-8 JSON object and reject duplicate keys at every depth."""
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        """Build one JSON object while rejecting ambiguous duplicate member names."""
+
+        document: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in document:
+                raise OracleDefinitionError(
+                    f"{location} contains duplicate JSON key {key!r}"
+                )
+            document[key] = value
+        return document
 
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
+        document = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+        )
     except OSError as error:
         raise OracleDefinitionError(f"cannot read {location}: {path}: {error}") from error
     except (UnicodeError, json.JSONDecodeError) as error:

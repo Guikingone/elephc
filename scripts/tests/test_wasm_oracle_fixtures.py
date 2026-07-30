@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -231,6 +232,21 @@ class WasmOracleFixtureTests(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaises(generate.OracleDefinitionError):
                     generate.require_relative_path(value, "test.path")
+
+    def test_json_loader_rejects_duplicate_keys_at_every_depth(self) -> None:
+        """Reject ambiguous authored JSON even when duplicate keys are nested."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "duplicate.json"
+            path.write_text(
+                '{"outer":{"value":1,"value":2}}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                generate.OracleDefinitionError,
+                "duplicate JSON key 'value'",
+            ):
+                generate.load_json(path, "duplicate fixture")
 
     def test_local_php_syntax_and_frames_are_structurally_valid(self) -> None:
         """When PHP exists, lint/run sources and validate framing without oracle claims."""
