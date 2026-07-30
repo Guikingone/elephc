@@ -856,7 +856,9 @@ def capture_process(
     """Execute one cell with bounded raw capture and an exact WASM i32 side channel."""
 
     _, environment, guest_environment = _validate_request(contract, request)
-    child_environment = dict(environment)
+    child_environment = dict(
+        guest_environment if request.key.runtime == "php-src" else environment
+    )
     module_read_fd: int | None = None
     module_write_fd: int | None = None
     pass_fds: tuple[int, ...] = ()

@@ -108,6 +108,7 @@ class WasmPhpOracleTests(unittest.TestCase):
         output_limit_bytes: int = 1024,
         normalization: Normalization = Normalization(),
         environment: dict[str, str] | None = None,
+        guest_environment: dict[str, str] | None = None,
         fixture_sha256: str = FIXTURE_SHA256,
     ) -> CaptureRequest:
         selected_host = host or ("php-src" if runtime == "php-src" else "node")
@@ -123,7 +124,11 @@ class WasmPhpOracleTests(unittest.TestCase):
             argv=(str(PYTHON), "-c", code),
             cwd=REPO_ROOT,
             env=dict(self.environment if environment is None else environment),
-            guest_environment=dict(self.environment),
+            guest_environment=dict(
+                self.environment
+                if guest_environment is None
+                else guest_environment
+            ),
             stdin=b"\x00stdin\xff",
             timeout_seconds=timeout_seconds,
             output_limit_bytes=output_limit_bytes,
@@ -413,6 +418,33 @@ class WasmPhpOracleTests(unittest.TestCase):
         )
         self.assertEqual(record.stdout.to_bytes(), b"/tmp/source.php\r\n ")
         self.assertEqual(record.normalized_stdout.to_bytes(), b"<SOURCE>\r\n ")
+
+    def test_php_capture_executes_with_the_logical_guest_environment(self) -> None:
+        """php-src sees the guest mapping, not the adapter's host environment."""
+
+        record = capture_process(
+            self.contract,
+            self.capture_request(
+                runtime="php-src",
+                code=(
+                    "import os,sys;"
+                    "sys.stdout.write('|'.join(sorted(os.environ)))"
+                ),
+                guest_environment={"ORACLE_CASE": "explicit"},
+            ),
+        )
+
+        observed = set(record.stdout.to_bytes().decode("ascii").split("|"))
+        self.assertIn("ORACLE_CASE", observed)
+        self.assertTrue({"LANG", "LC_ALL", "TZ"}.isdisjoint(observed))
+        self.assertEqual(
+            record.guest_environment,
+            (("ORACLE_CASE", "explicit"),),
+        )
+        self.assertEqual(
+            dict(record.environment),
+            self.environment,
+        )
 
     def test_capture_rejects_missing_environment_and_wrong_fixture_hash(self) -> None:
         environment = dict(self.environment)
