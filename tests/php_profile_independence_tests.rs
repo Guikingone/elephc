@@ -242,7 +242,7 @@ fn table_predicts_independent(source: &str) -> bool {
     sensitivity::scan(&program, false).is_empty()
 }
 
-/// THE test: for every corpus program, the table's prediction must match what the compiler
+/// THE check: for one corpus program, the table's prediction must match what the compiler
 /// actually does across every maintained profile.
 ///
 /// A failure here means one of two things, and the message says which: the table claims
@@ -250,9 +250,18 @@ fn table_predicts_independent(source: &str) -> bool {
 /// direction, because it means the compiler stayed silent about a real choice), or it claims
 /// dependence for a program whose output never moves (an OVER-BROAD entry — noisy, not
 /// unsound).
-#[test]
-fn table_prediction_matches_observed_behavior() {
-    for case in CORPUS {
+///
+/// One test PER CASE rather than one loop over all of them. A case is an independent claim,
+/// so nextest names the one that broke instead of the loop that contained it, and each gets
+/// its own timeout budget. The loop version compiled `len * 4` programs inside a single test
+/// and blew CI's 60-second per-test cap — 20 seconds of real work per case does not become
+/// acceptable by being summed.
+fn check_case(name: &str) {
+    let case = CORPUS
+        .iter()
+        .find(|candidate| candidate.name == name)
+        .unwrap_or_else(|| panic!("no corpus case named `{name}`"));
+    {
         let predicted_independent = table_predicts_independent(case.source);
 
         // A directory per PROFILE, not per case: the managed-PCRE2 fixture copies read-only
@@ -297,6 +306,66 @@ fn table_prediction_matches_observed_behavior() {
         for dir in &dirs {
             let _ = fs::remove_dir_all(dir);
         }
+    }
+}
+
+/// Generates one `#[test]` per corpus case, and records which names are covered.
+macro_rules! case_tests {
+    ($($name:ident,)*) => {
+        /// Every case name carrying a generated test, cross-checked against [`CORPUS`] by
+        /// `corpus_and_tests_agree` so neither list can quietly outgrow the other.
+        const COVERED: &[&str] = &[$(stringify!($name),)*];
+        $(
+            #[test]
+            fn $name() {
+                check_case(stringify!($name));
+            }
+        )*
+    };
+}
+
+case_tests!(
+    plain_echo,
+    arithmetic_and_strings,
+    array_pipeline,
+    class_and_method,
+    major_release_extra_are_invariant,
+    sapi_is_a_different_axis,
+    version_name_in_a_string,
+    nan_bool_diagnostic_only,
+    ini_get_unrelated_directive,
+    eval_fragment_without_the_version_surface,
+    eval_reads_the_version_surface,
+    eval_calls_phpversion,
+    version_id_printed,
+    version_string_printed,
+    minor_version_printed,
+    phpversion_printed,
+    zend_version_printed,
+    version_gate_branches,
+    opcache_configuration_shape,
+    ini_get_opcache_directive,
+);
+
+/// The corpus and the generated tests name exactly the same cases.
+///
+/// Splitting one loop into per-case tests bought better failure messages at the cost of a new
+/// blind spot: a case added to [`CORPUS`] but not to `case_tests!` would simply never run,
+/// and the file would stay green while covering less. This closes it in both directions.
+#[test]
+fn corpus_and_tests_agree() {
+    for case in CORPUS {
+        assert!(
+            COVERED.contains(&case.name),
+            "corpus case `{}` has no generated test — add it to `case_tests!`",
+            case.name
+        );
+    }
+    for name in COVERED {
+        assert!(
+            CORPUS.iter().any(|case| case.name == *name),
+            "generated test `{name}` has no corpus case"
+        );
     }
 }
 

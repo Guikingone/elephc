@@ -215,11 +215,19 @@ fn table_predicts_independent(source: &str) -> bool {
     sensitivity::scan(&program, true).is_empty()
 }
 
-/// THE test: for every probe, the table's `--web` prediction must match what the compiler
+/// THE check: for one probe, the table's `--web` prediction must match what the compiler
 /// actually serves across every maintained profile.
-#[test]
-fn session_table_prediction_matches_served_behavior() {
-    for case in CORPUS {
+///
+/// One test PER PROBE rather than one loop, for the same reason as the CLI half: a probe is
+/// an independent claim, and four compile-serve cycles is already most of a per-test timeout
+/// budget. Summing five of them into one test is how a suite that does real work gets
+/// terminated for looking hung.
+fn check_probe(name: &str) {
+    let case = CORPUS
+        .iter()
+        .find(|candidate| candidate.name == name)
+        .unwrap_or_else(|| panic!("no session probe named `{name}`"));
+    {
         let dir = make_test_dir(&format!("elephc_sess_{}", case.name));
         let predicted_independent = table_predicts_independent(case.source);
 
@@ -253,6 +261,51 @@ fn session_table_prediction_matches_served_behavior() {
         );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// Generates one `#[test]` per session probe, and records which names are covered.
+macro_rules! probe_tests {
+    ($($name:ident,)*) => {
+        /// Every probe name carrying a generated test, cross-checked against [`CORPUS`] by
+        /// `session_corpus_and_tests_agree`.
+        const COVERED: &[&str] = &[$(stringify!($name),)*];
+        $(
+            #[test]
+            fn $name() {
+                check_probe(stringify!($name));
+            }
+        )*
+    };
+}
+
+probe_tests!(
+    plain_response,
+    session_name_is_not_versioned,
+    cookie_params_shape,
+    cookie_params_partitioned_roundtrip,
+    create_id_long_prefix,
+);
+
+/// The probe corpus and the generated tests name exactly the same probes.
+///
+/// Per-probe tests trade a loop for a second list, and a second list can fall behind. A probe
+/// added to [`CORPUS`] but not to `probe_tests!` would simply never run while the file stayed
+/// green — the failure mode this file exists to prevent, reappearing one level up.
+#[test]
+fn session_corpus_and_tests_agree() {
+    for case in CORPUS {
+        assert!(
+            COVERED.contains(&case.name),
+            "session probe `{}` has no generated test — add it to `probe_tests!`",
+            case.name
+        );
+    }
+    for name in COVERED {
+        assert!(
+            CORPUS.iter().any(|case| case.name == *name),
+            "generated test `{name}` has no session probe"
+        );
     }
 }
 
