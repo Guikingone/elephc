@@ -9638,7 +9638,13 @@ fn lower_array_access_from_value(
     if matches!(array_value.ir_type, IrType::Heap(IrHeapKind::Array))
         && packed_array_key_needs_associative_get(index, index_value.ir_type)
     {
-        return lower_packed_array_associative_get(ctx, array_value, index_value, expr);
+        return lower_packed_array_associative_get(
+            ctx,
+            array_value,
+            index_value,
+            expr,
+            warn_on_missing,
+        );
     }
     // Gradual typing: a bare scalar receiver (`false[0]`, `null["k"]`, `5[0]`, `5.5[0]`) is a
     // PHP miss read (`Warning` + `null`), never a fatal (checker-accepted at the `ArrayAccess`
@@ -9647,7 +9653,13 @@ fn lower_array_access_from_value(
     // transient `Mixed` cell before the shared boxed-Mixed reader can dispatch on its tag —
     // mirroring the packed-array associative-get boxing step just above.
     if scalar_receiver_needs_mixed_box(ctx, &array_value) {
-        return lower_scalar_receiver_associative_get(ctx, array_value, index_value, expr);
+        return lower_scalar_receiver_associative_get(
+            ctx,
+            array_value,
+            index_value,
+            expr,
+            warn_on_missing,
+        );
     }
     let mut index_value = index_value;
     let op = match array_value.ir_type {
@@ -9743,11 +9755,16 @@ fn packed_array_key_needs_associative_get(index: &Expr, index_ir_type: IrType) -
 /// the element for integer keys, and yields a boxed `Mixed(null)` for genuine string keys —
 /// exactly PHP's behavior for a list indexed by a string. The transient box is released after
 /// the read so the array's retained reference is balanced; the owned `Mixed` result is returned.
+///
+/// `warn_on_missing` is forwarded as the reader's third operand: `__rt_mixed_array_get` takes
+/// receiver, key, and the undefined-offset warning flag, so a silent read (`isset()`, `??`,
+/// `@`) must pass `false` here exactly as the generic subscript path does.
 fn lower_packed_array_associative_get(
     ctx: &mut LoweringContext<'_, '_>,
     array_value: LoweredValue,
     index_value: LoweredValue,
     expr: &Expr,
+    warn_on_missing: bool,
 ) -> LoweredValue {
     let mixed_array = ctx.emit_value(
         Op::MixedBox,
@@ -9757,9 +9774,10 @@ fn lower_packed_array_associative_get(
         Op::MixedBox.default_effects(),
         Some(expr.span),
     );
+    let warning_flag = emit_bool_literal(ctx, warn_on_missing, Some(expr.span));
     let result = ctx.emit_value(
         Op::RuntimeCall,
-        vec![mixed_array.value, index_value.value],
+        vec![mixed_array.value, index_value.value, warning_flag.value],
         None,
         PhpType::Mixed,
         Op::RuntimeCall.default_effects(),
@@ -9794,11 +9812,15 @@ fn scalar_receiver_needs_mixed_box(ctx: &LoweringContext<'_, '_>, array_value: &
 /// any payload tag that is not an indexed array, hash, or object — exactly PHP's miss behavior.
 /// The transient box is released after the read; scalars carry no refcounted payload of their
 /// own, so only the transient box itself needs releasing.
+///
+/// `warn_on_missing` is forwarded as the reader's third operand, mirroring the packed-array
+/// associative get: `@$x[0]` on a `false` receiver must stay silent while a bare `$x[0]` warns.
 fn lower_scalar_receiver_associative_get(
     ctx: &mut LoweringContext<'_, '_>,
     array_value: LoweredValue,
     index_value: LoweredValue,
     expr: &Expr,
+    warn_on_missing: bool,
 ) -> LoweredValue {
     let mixed_scalar = ctx.emit_value(
         Op::MixedBox,
@@ -9808,9 +9830,10 @@ fn lower_scalar_receiver_associative_get(
         Op::MixedBox.default_effects(),
         Some(expr.span),
     );
+    let warning_flag = emit_bool_literal(ctx, warn_on_missing, Some(expr.span));
     let result = ctx.emit_value(
         Op::RuntimeCall,
-        vec![mixed_scalar.value, index_value.value],
+        vec![mixed_scalar.value, index_value.value, warning_flag.value],
         None,
         PhpType::Mixed,
         Op::RuntimeCall.default_effects(),
@@ -11792,9 +11815,17 @@ fn lower_list_unpack_expr(
     let get_op = super::stmt::list_unpack_get_op(source.ir_type);
     for (index, var) in vars.iter().enumerate() {
         let index_value = super::stmt::lower_list_unpack_index(ctx, index, span);
+        let mut operands = vec![source.value, index_value.value];
+        // Boxed `Mixed`/nullable sources read through `__rt_mixed_array_get`, which takes an
+        // explicit warn-on-missing flag as its third operand. Mirrors the statement form: a
+        // destructuring read is an ordinary read, so a short source warns like `$src[$i]` would.
+        if matches!(get_op, Op::RuntimeCall) {
+            let warning_flag = emit_bool_literal(ctx, true, Some(span));
+            operands.push(warning_flag.value);
+        }
         let item = ctx.emit_value(
             get_op,
-            vec![source.value, index_value.value],
+            operands,
             None,
             item_type.clone(),
             get_op.default_effects(),
