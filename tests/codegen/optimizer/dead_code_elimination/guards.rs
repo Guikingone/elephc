@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for outer guards, excluded guards, composite guards.
+//! - Submodules group focused fixtures for outer/excluded/composite/range/relational guards.
 
 use super::*;
 
@@ -15,3 +15,7 @@ mod outer_guards;
 mod excluded_guards;
 #[path = "guards/composite_guards.rs"]
 mod composite_guards;
+#[path = "guards/range_guards.rs"]
+mod range_guards;
+#[path = "guards/relational_guards.rs"]
+mod relational_guards;

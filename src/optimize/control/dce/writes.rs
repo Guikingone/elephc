@@ -10,7 +10,7 @@
 
 use super::*;
 use super::guards::{clear_guards_for_name, extend_guards};
-use super::state::GuardState;
+use super::state::{GuardState, RelSide};
 
 /// Invalidates guard state for any variable written by a statement.
 /// Collects all written variable names from the statement and removes
@@ -373,6 +373,20 @@ fn invalidate_guards_for_written_names(guards: &mut GuardState, written: &[Strin
     guards
         .excluded_guards
         .retain(|known| !written.iter().any(|written_name| written_name == &known.name));
+    guards
+        .range_guards
+        .retain(|known| !written.iter().any(|written_name| written_name == &known.name));
+    guards.relational_guards.retain(|known| {
+        let mentions_left = match &known.left {
+            RelSide::Var(name) => written.iter().any(|written_name| written_name == name),
+            RelSide::Int(_) => false,
+        };
+        let mentions_right = match &known.right {
+            RelSide::Var(name) => written.iter().any(|written_name| written_name == name),
+            RelSide::Int(_) => false,
+        };
+        !mentions_left && !mentions_right
+    });
     guards
         .condition_guards
         .retain(|known| !known.names.iter().any(|name| written.iter().any(|written_name| written_name == name)));
